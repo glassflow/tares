@@ -41,12 +41,12 @@ def _count_words(n: int, one: str, many: str | None = None) -> str:
 def _context(store, catalog, now, include_hidden: bool, hide=()) -> dict:
     """What the home page reads before it words a service, read once."""
     t = now or now_utc()
-    items = sre.list_services(store, catalog, now, include_hidden=include_hidden)
+    items = sre.list_services(store, catalog, now, include_hidden=include_hidden, hide=hide)
     state = watch.compute(store, catalog, now)
     roles = sre.roles(store, catalog, include_paused=True, hide=hide)
     why = watch.judge(store, catalog, t, roles["watchers"])
     pairs = sre_home._watchers(store, catalog, roles, why, t)
-    spots = sre.blind_spots(store, catalog, now)
+    spots = sre.blind_spots(store, catalog, now, hide)
     active = store.list_incidents("active", limit=50, hide=hide)
     return {
         "t": t, "items": items, "state": state, "spots": spots, "pairs": pairs,
@@ -121,13 +121,16 @@ def services_screen(store, catalog, now=None, include_hidden: bool = False, hide
 
 
 # ── one service ──────────────────────────────────────────────────────────────
-def _chart(store, catalog, name: str, window: str, t) -> dict:
+def _chart(store, catalog, name: str, window: str, t, hide=()) -> dict:
     since, until, bucket_s = sre.series_for(window, t)
-    traffic = [n for _at, n in store.event_series(name, since, until, bucket_s)]
-    errors = [n for _at, n in store.event_series(name, since, until, bucket_s, errors_only=True)]
+    gone = sre.hidden_sources(store, hide)
+    left_out = {"skip": gone} if gone else {}
+    traffic = [n for _at, n in store.event_series(name, since, until, bucket_s, **left_out)]
+    errors = [n for _at, n in store.event_series(name, since, until, bucket_s, errors_only=True,
+                                                 **left_out)]
     # an error is an event: never more errors than traffic in a bucket
     errors = [min(e, a) for e, a in zip(errors, traffic)]
-    marks = sre.deploys(store, catalog, name, since, limit=DEPLOYS_SHOWN)
+    marks = sre.deploys(store, catalog, name, since, limit=DEPLOYS_SHOWN, hide=hide)
     return {"window": window, "since": sre._iso(since), "until": sre._iso(until),
             "bucket_seconds": bucket_s, "errors": errors, "traffic": traffic,
             "deploys": [{"at": d["at"], "label": sre_home._deploy_label(d), "repo": d.get("repo")}
@@ -164,11 +167,11 @@ def _raised(store, catalog, name: str, t, hide=()) -> tuple:
     return out, len(found)
 
 
-def _repos(store, catalog, name: str, settings: dict, item: dict, t) -> list:
+def _repos(store, catalog, name: str, settings: dict, item: dict, t, hide=()) -> list:
     linked = sre._linked_repos(settings, name)
     if not linked:
         return []
-    last = sre.github_repos(store, catalog)
+    last = sre.github_repos(store, catalog, hide)
     own = {name, *item.get("merged", [])}
     out = []
     for repo in linked:
@@ -195,7 +198,7 @@ def service_screen(store, catalog, name: str, window: str = "24h", now=None, hid
     answers with the service it is merged into. ValueError for a window that is not 1h, 24h or 7d."""
     if window not in WINDOWS:
         raise ValueError(f"no window {window!r}: use one of {', '.join(WINDOWS)}")
-    found = sre.get_service(store, catalog, name, now)
+    found = sre.get_service(store, catalog, name, now, hide)
     if found is None:
         return None
     name = found["name"]
@@ -224,7 +227,7 @@ def service_screen(store, catalog, name: str, window: str = "24h", now=None, hid
         "hidden": row["hidden"], "watched": row["watched"], "watch_words": row["watch_words"],
         "signals_words": row["signals_words"], "feeds_words": row["feeds_words"],
         "last_words": row["last_words"], "events_24h_words": row["events_24h_words"],
-        "chart": _chart(store, catalog, name, window, t),
+        "chart": _chart(store, catalog, name, window, t, hide),
         "incidents": shown, "incidents_total": total, "incidents_open": open_,
         "raised": raised, "raised_total": raised_total,
         "blind_spots_words": _blind_words(item, mine, _watch_row(ctx, name)),
@@ -232,11 +235,11 @@ def service_screen(store, catalog, name: str, window: str = "24h", now=None, hid
                          "action": {"label": s["fix"]["label"],
                                     "to": sre_home.NOTES_PLACE.get(s["fix"]["action"], "/settings")}}
                         for s in mine],
-        "repos": _repos(store, catalog, name, settings, item, t),
+        "repos": _repos(store, catalog, name, settings, item, t, hide),
         "settings": {"display_name": own.get("display") or "", "hidden": bool(own.get("hidden")),
                      "merged_into": own.get("merged_into"), "merged_names": list(item.get("merged", [])),
                      "merge_options": options,
-                     "repo_options": sorted(sre.github_repos(store, catalog)),
+                     "repo_options": sorted(sre.github_repos(store, catalog, hide)),
                      "updated_by": own.get("updated_by")}}
 
 

@@ -142,7 +142,8 @@ def build(store, catalog, service: str | None = None, hide=(), exclude=None, ski
     """The whole screen. `service`: the one service to show (already resolved by the caller)."""
     now = now_utc()
     today = now.astimezone(timezone.utc).date()
-    names = [service] if service else [i["name"] for i in sre.list_services(store, catalog)]
+    names = ([service] if service
+             else [i["name"] for i in sre.list_services(store, catalog, hide=hide)])
     stored = {s["name"]: s for s in store.list_all_skills() if s["name"].startswith(PREFIX)}
     mem_sources = [s.name for s in catalog.sources.values() if s.connector == "memory"
                    and s.name not in skip_sources]
@@ -176,7 +177,7 @@ def register(app, store, h, ctx):
             raise HTTPException(404, "There are no runbooks on this kind of cell")
 
     def resolve(service: str) -> str:
-        item = sre.get_service(store, runtime.catalog, service)
+        item = sre.get_service(store, runtime.catalog, service, None, h.hidden_ids())
         if item is None:
             raise HTTPException(404, f"No service called {service[:80]!r}")
         return item["name"]

@@ -273,8 +273,10 @@ def _compute(store, catalog, now) -> dict:
     def rec(name):
         return recs.setdefault(name, {"feeds": {}, "ever": set(), "labels": {}})
 
-    def feed(name, source, kind, n10, n24, last):
-        f = rec(name)["feeds"].setdefault((source, kind), [0, 0, None])
+    def feed(name, source, kind, n10, n24, last, raw):
+        r = rec(name)
+        r.setdefault("raw", {}).setdefault(raw, set()).add(source)   # what the view hides (TR-906)
+        f = r["feeds"].setdefault((source, kind), [0, 0, None])
         f[0] += n10
         f[1] += n24
         f[2] = _later(f[2], last)
@@ -284,10 +286,11 @@ def _compute(store, catalog, now) -> dict:
         if r["source"] in deploy_sources:
             owner = repo_owner.get(r["value"])
             if owner:
-                feed(owner, r["source"], "deploys", r["n10"], r["n24"], r["last"])
+                feed(owner, r["source"], "deploys", r["n10"], r["n24"], r["last"], r["value"])
             continue
         kind = signal_kind(src.connector, r["event_type"], "metric" if r["is_metric"] else None)
-        feed(canonical(r["value"], settings), r["source"], kind, r["n10"], r["n24"], r["last"])
+        feed(canonical(r["value"], settings), r["source"], kind, r["n10"], r["n24"], r["last"],
+             r["value"])
     # services silent for a day: last seen, and what feeds them, from the maintained counters
     for sname, label in spec.items():
         src = catalog.sources[sname]
@@ -301,7 +304,9 @@ def _compute(store, catalog, now) -> dict:
             else:
                 name = canonical(e["value"], settings)
                 kind = signal_kind(src.connector)
-            rec(name)["ever"].add((sname, kind, e["last_ingest"]))
+            r = rec(name)
+            r["ever"].add((sname, kind, e["last_ingest"]))
+            r.setdefault("raw", {}).setdefault(e["value"], set()).add(sname)
     # services seen only through another: a via label's value names one (TR-747)
     known = set(recs)
     for sname, labels in _via_labels(store, svc_sources).items():
@@ -311,7 +316,9 @@ def _compute(store, catalog, now) -> dict:
                     continue
                 name, carrier = canonical(via_name(value, known, ns), settings), canonical(carrier, settings)
                 if name not in known and name != carrier:
-                    rec(name).setdefault("via", set()).add(carrier)
+                    r = rec(name)
+                    r.setdefault("via", set()).add(carrier)
+                    r.setdefault("via_src", {}).setdefault(carrier, set()).add(sname)
     return {"recs": recs, "settings": settings, "since_24h": since_24h,
             "svc_sources": svc_sources}
 
@@ -340,6 +347,47 @@ def _compute_cached(store, catalog, now) -> dict:
     return value
 
 
+def hidden_sources(store, hide) -> set[str]:
+    """The sources whose every project is in `hide`: a person who cannot see those projects sees
+    none of what these sources send. A source shared with a project they can see stays."""
+    if not hide:
+        return set()
+    return {n for n, uids in store.source_memberships().items() if uids and set(uids) <= set(hide)}
+
+
+def _view(store, c: dict, hide) -> dict:
+    """The computed services `c` as a person who cannot see the projects in `hide` sees them:
+    without the feeds of sources only those projects hold, and without a service nothing else
+    feeds. `c` is the one shared cache entry, so this copies and never changes it; with nothing
+    to hide it is `c` itself."""
+    gone = hidden_sources(store, hide)
+    if not gone:
+        return c
+    recs, hidden_raw = {}, set()
+    for name, r in c["recs"].items():
+        feeds = {k: v for k, v in r["feeds"].items() if k[0] not in gone}
+        ever = {e for e in r["ever"] if e[0] not in gone}
+        via_src = r.get("via_src", {})
+        via = {x for x in r.get("via", ()) if not (via_src.get(x) and via_src[x] <= gone)}
+        if not feeds and not ever and not via:
+            continue
+        hidden_raw |= {n for n, srcs in r.get("raw", {}).items() if srcs <= gone}
+        out = {"feeds": feeds, "ever": ever, "labels": r["labels"]}
+        if via:
+            out["via"] = via
+        recs[name] = out
+    for r in recs.values():   # a carrier that is itself hidden is not named either
+        if "via" in r:
+            r["via"] = {x for x in r["via"] if x in recs or x not in c["recs"]}
+            if not r["via"]:
+                del r["via"]
+        r["hide_raw"] = hidden_raw
+    recs = {n: r for n, r in recs.items() if r["feeds"] or r["ever"] or r.get("via")}
+    return {"recs": recs, "settings": c["settings"], "since_24h": c["since_24h"],
+            "svc_sources": {s: lbl for s, lbl in c["svc_sources"].items() if s not in gone},
+            "base": c.get("base", c), "gone": frozenset(gone)}
+
+
 def _item(name: str, r: dict, settings: dict, include_hidden: bool) -> dict | None:
     st = settings.get(name) or {}
     if st.get("hidden") and not include_hidden:
@@ -358,8 +406,9 @@ def _item(name: str, r: dict, settings: dict, include_hidden: bool) -> dict | No
         pairs = []
     if not pairs:
         pairs = sorted({(s, k) for s, k, _t in r["ever"]})
+    skip = r.get("hide_raw") or ()
     merged = sorted(n for n in settings if n != name and settings[n].get("merged_into")
-                    and canonical(n, settings) == name)
+                    and canonical(n, settings) == name and n not in skip)
     item = {"name": name, "display": st.get("display") or name, "hidden": bool(st.get("hidden")),
             "merged": merged, "signals": sorted({k for _s, k in pairs}),
             "feeds": [{"name": s, "kind": k} for s, k in pairs],
@@ -369,29 +418,30 @@ def _item(name: str, r: dict, settings: dict, include_hidden: bool) -> dict | No
     return item
 
 
-def list_services(store, catalog, now=None, include_hidden: bool = False) -> list[dict]:
-    """The services the cell receives data for, busiest first (events in 24 hours, then name)."""
-    c = _compute_cached(store, catalog, now)
+def list_services(store, catalog, now=None, include_hidden: bool = False, hide=()) -> list[dict]:
+    """The services the cell receives data for, busiest first (events in 24 hours, then name).
+    `hide`: the project ids the caller cannot see; what only those projects feed is left out."""
+    c = _view(store, _compute_cached(store, catalog, now), hide)
     out = [i for n, r in c["recs"].items()
            if (i := _item(n, r, c["settings"], include_hidden)) is not None]
     out.sort(key=lambda i: (-i["events_24h"], i["name"]))
-    found = roles(store, catalog)["watchers"]
+    found = roles(store, catalog, hide=hide)["watchers"]
     for i in out:
         _watched(store, catalog, i, found)
     return out
 
 
-def get_service(store, catalog, name: str, now=None) -> dict | None:
+def get_service(store, catalog, name: str, now=None, hide=()) -> dict | None:
     """One service (hidden ones too, and a merged name resolves to what it is merged into): the
     list item plus by_feed (the numbers per feed) and the label names seen on its events in 24
-    hours. None when the cell knows no such service."""
-    c = _compute_cached(store, catalog, now)
+    hours. None when the cell knows no such service, or none the caller can see (`hide`)."""
+    c = _view(store, _compute_cached(store, catalog, now), hide)
     name = canonical(name, c["settings"])
     r = c["recs"].get(name)
     if r is None:
         return None
     item = _item(name, r, c["settings"], True)
-    _watched(store, catalog, item)
+    _watched(store, catalog, item, roles(store, catalog, hide=hide)["watchers"])
     ever = {}
     for sname, kind, t in r["ever"]:
         ever[(sname, kind)] = _later(ever.get((sname, kind)), t)
@@ -405,9 +455,9 @@ def get_service(store, catalog, name: str, now=None) -> dict | None:
     scope = {s: (label, [name, *item["merged"]]) for s, label in c["svc_sources"].items()}
     item["labels"] = store.service_label_names(scope, c["since_24h"], MAX_LABELS)
     item["repos"] = _linked_repos(c["settings"], name)
-    last = deploys(store, catalog, name, None, limit=1)
+    last = deploys(store, catalog, name, None, limit=1, hide=hide)
     item["last_deploy"] = {"at": last[0]["at"], "text": last[0]["text"]} if last else None
-    item["blind_spots"] = [b for b in _spots(store, catalog, c, now) if b["service"] == name]
+    item["blind_spots"] = [b for b in _spots(store, catalog, c, now, hide) if b["service"] == name]
     return item
 
 
@@ -640,17 +690,19 @@ def set_via_labels(store, body) -> dict:
 
 
 # ── code changes: the repos a service is built from, and its deploys (TR-747) ─
-def github_sources(catalog) -> list[str]:
+def github_sources(catalog, gone=()) -> list[str]:
     """The sources that hold GitHub events: the two GitHub connectors, and a webhook that
-    declares the contract's `repo` label."""
-    return [s.name for s in catalog.sources.values() if s.connector in DEPLOY_CONNECTORS or (
-        s.connector == "webhook" and any(isinstance(x, dict) and x.get("name") == "repo"
-                                         for x in (s.config or {}).get("labels") or []))]
+    declares the contract's `repo` label. `gone`: sources to leave out (a viewer's hidden ones)."""
+    return [s.name for s in catalog.sources.values() if s.name not in gone and (
+        s.connector in DEPLOY_CONNECTORS or (
+            s.connector == "webhook" and any(isinstance(x, dict) and x.get("name") == "repo"
+                                             for x in (s.config or {}).get("labels") or [])))]
 
 
-def github_repos(store, catalog) -> dict:
-    """{repo: when it last sent}, every repo a GitHub-type source has sent events for."""
-    names = github_sources(catalog)
+def github_repos(store, catalog, hide=()) -> dict:
+    """{repo: when it last sent}, every repo a GitHub-type source has sent events for.
+    `hide`: the project ids the caller cannot see; their sources' repos are left out."""
+    names = github_sources(catalog, hidden_sources(store, hide))
     if not names:
         return {}
     return {e["value"]: e["last_ingest"] for e in store.list_entities("repo", sources=names, limit=10000)}
@@ -677,20 +729,23 @@ def _linked_repos(settings: dict, name: str) -> list[str]:
                    for r in st["repos"]})
 
 
-def exists(store, catalog, name: str) -> bool:
-    return canonical(name, store.service_settings()) in _compute_cached(store, catalog, None)["recs"]
+def exists(store, catalog, name: str, hide=()) -> bool:
+    c = _view(store, _compute_cached(store, catalog, None), hide)
+    return canonical(name, store.service_settings()) in c["recs"]
 
 
 def deploys(store, catalog, name: str, since, limit: int = 50, detail: bool = False,
-            until=None) -> list[dict]:
+            until=None, hide=()) -> list[dict]:
     """The pushes, merges and commits of the repos linked to `name`, newest first, from `since`
     on (None for ever) and before `until` (None for no end): {at, repo, kind: push | merge | commit, text, url}. `detail` adds author,
     branch and commits."""
     repos = _linked_repos(store.service_settings(), name)
+    gone = hidden_sources(store, hide)
     follow = [s.name for s in catalog.sources.values()
-              if s.connector == "github" and not (s.config or {}).get("branch")]
+              if s.connector == "github" and not (s.config or {}).get("branch") and s.name not in gone]
     return [{**d, "at": _iso(d["at"])} for d in
-            store.deploy_events(github_sources(catalog), repos, since, limit, follow, detail, until)]
+            store.deploy_events(github_sources(catalog, gone), repos, since, limit, follow, detail,
+                                until)]
 
 
 # ── blind spots (TR-747) ─────────────────────────────────────────────────────
@@ -734,7 +789,7 @@ def _silent(store, c: dict, items: dict, now) -> list[dict]:
     return out
 
 
-def _stale_rules(store, catalog, c: dict, now) -> list[dict]:
+def _stale_rules(store, catalog, c: dict, now, hide=()) -> list[dict]:
     """Rules that have not matched for RULE_DAYS days, with the filter field that no longer
     arrives when there is one."""
     from . import goal
@@ -744,7 +799,11 @@ def _stale_rules(store, catalog, c: dict, now) -> list[dict]:
     cut = now - timedelta(days=RULE_DAYS)
     made, fired = store.trigger_created(), store.fired_since(cut)
     overrides, out = _overrides(store), []
+    gone = c.get("gone") or frozenset()
     for trig in catalog.triggers:
+        if hide and ((trig.sources and set(trig.sources) <= gone) or (
+                (uids := store.projects_using("trigger", trig.name)) and set(uids) <= set(hide))):
+            continue   # a rule only the caller's hidden projects hold
         born = goal._aware(made.get(trig.name))
         if (trig.paused or is_scheduled(trig) or list(trig.sources) == [FINDINGS_SOURCE]
                 or born is None or born >= cut or trig.name in fired):
@@ -766,7 +825,7 @@ def _stale_rules(store, catalog, c: dict, now) -> list[dict]:
     return out
 
 
-def _blind(store, catalog, c: dict, now) -> list[dict]:
+def _blind(store, catalog, c: dict, now, hide=()) -> list[dict]:
     """The blind spots of the computed services, in the order they are listed."""
     from .goal import join_words
     settings = c["settings"]
@@ -777,12 +836,12 @@ def _blind(store, catalog, c: dict, now) -> list[dict]:
                  "Only errors at the ingress show it. Connect its own logs to see why it fails.",
                  None, "Connect its logs", "connect") for n, i in sorted(items.items())
            if i.get("seen_via")]
-    rules = _stale_rules(store, catalog, c, now)
+    rules = _stale_rules(store, catalog, c, now, hide)
     tied = {canonical(raw, settings) for raw, st in settings.items() if st["repos"]}
     loose = [n for n, i in sorted(items.items()) if i["signals"] and n not in tied]
     if not loose:
         code = []
-    elif not github_repos(store, catalog):
+    elif not github_repos(store, catalog, hide):
         code = [_spot("no_deploys", None, None, "No code changes are connected",
                       "Deploys cannot be shown next to a service until GitHub is connected.",
                       None, "Connect GitHub", "connect")]
@@ -793,16 +852,22 @@ def _blind(store, catalog, c: dict, now) -> list[dict]:
     return silent + via + sorted(rules, key=lambda b: (b["service"] or "", b["rule"])) + code
 
 
-def _spots(store, catalog, c: dict, now) -> list[dict]:
-    """The blind spots, kept with the computed services `c`: the same 30 seconds, the same writes
-    drop them."""
-    if "blind" not in c:
-        c["blind"] = _blind(store, catalog, c, now or now_utc())
-    return c["blind"]
+def _spots(store, catalog, c: dict, now, hide=()) -> list[dict]:
+    """The blind spots, kept with the computed services: the same 30 seconds, the same writes
+    drop them. They live on the shared cache entry, one answer per set of hidden projects, so two
+    viewers never read each other's."""
+    base = c.get("base", c)
+    key = (frozenset(hide), c.get("gone", frozenset()))
+    spots = base.setdefault("blind", {})
+    if key not in spots:
+        spots[key] = _blind(store, catalog, c, now or now_utc(), hide)
+    return spots[key]
 
 
-def blind_spots(store, catalog, now=None) -> list[dict]:
+def blind_spots(store, catalog, now=None, hide=()) -> list[dict]:
     """What the cell cannot see, as [{kind, service, rule, title, detail, since, fix}]: services
     silent for a day, services seen only through another, rules that matched nothing for 30
-    days, and services whose deploys are not tied to them. Hidden services produce nothing."""
-    return _spots(store, catalog, _compute_cached(store, catalog, now), now)
+    days, and services whose deploys are not tied to them. Hidden services produce nothing, and
+    `hide` (the project ids the caller cannot see) takes out what only those projects hold."""
+    c = _view(store, _compute_cached(store, catalog, now), hide)
+    return _spots(store, catalog, c, now, hide)

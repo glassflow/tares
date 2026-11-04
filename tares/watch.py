@@ -400,11 +400,15 @@ def _watcher_block(store, w: dict, j: dict, trig, agent: dict, now) -> dict:
             "resets_on": resets.isoformat() if resets else None}
 
 
-def view(store, catalog, now=None) -> dict:
+def view(store, catalog, now=None, hide=()) -> dict:
     """The body of GET /api/watch: the stored state of every service and a fresh look at each
-    watcher."""
+    watcher. `hide`: the project ids the caller cannot see; their services and watchers are left
+    out."""
     t = now or now_utc()
     rows = store.watch_rows()
+    if hide and sre.hidden_sources(store, hide):
+        visible = set(sre._view(store, sre._compute_cached(store, catalog, now), hide)["recs"])
+        rows = {n: r for n, r in rows.items() if n in visible}
     settings = store.service_settings()
     agents = {a["name"]: a for a in store.list_catalog_agents()}
     services = []
@@ -420,7 +424,7 @@ def view(store, catalog, now=None) -> dict:
             "for_words": ("for " + goal.span_words((t - since).total_seconds())) if since else None,
             "told": {"at": sre._iso(r["told_at"]), "where": r["told_where"]}
             if r["told_at"] and r["told_where"] else None})
-    found = sre.roles(store, catalog, include_paused=True)["watchers"]
+    found = sre.roles(store, catalog, include_paused=True, hide=hide)["watchers"]
     why = judge(store, catalog, t, found)
     triggers = {x.name: x for x in catalog.triggers}
     watchers, seen = [], set()
