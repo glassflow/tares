@@ -1123,6 +1123,14 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         """`rows` kept to the caller's own crews on a team cell (see factory_team.own_stations)."""
         return factory_team.own_stations(team_reader(), request, rows)
 
+    def own_desk(request: Request, rows: list[dict]) -> list[dict]:
+        """`rows` (open desk items) kept to the caller's person on a team cell."""
+        return factory_team.own_desk(team_reader(), request, rows)
+
+    def own_tickets(request: Request, tickets: dict, projects: list[dict]) -> dict:
+        """`tickets` ({project: tickets}) kept to the caller's person on a team cell."""
+        return factory_team.own_tickets(team_reader(), request, tickets, projects)
+
     def team_projects(request: Request, open_ps: list, tickets: dict, rows: list, which: str,
                       now=None, waiting: list | None = None) -> dict:
         """The team's version of the home's `projects` (TR-739): lead, members, scope, what is
@@ -2799,4 +2807,5 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
 
     return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
                            team_home=team_home, team_projects=team_projects, own_stations=own_stations,
+                           own_desk=own_desk, own_tickets=own_tickets,
                            hidden_ids=lambda: h.hidden_ids())

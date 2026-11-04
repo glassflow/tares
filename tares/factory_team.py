@@ -423,7 +423,7 @@ def _crew_label(t: Team, crew: dict) -> str:
     return f"{who}'s crew" if who else "A crew"
 
 
-def _crew_doing(stations: list[dict]) -> str:
+def _crew_doing(stations: list[dict], own: bool = True) -> str:
     live = [s for s in stations if s["state"] != "ended"]
     building = list(dict.fromkeys(s["project_name"] for s in live
                                   if s["state"] == "working" and s["role"] == "builder"
@@ -434,7 +434,11 @@ def _crew_doing(stations: list[dict]) -> str:
         return "At work."
     waiting = next((s for s in live if s["state"] == "waiting"), None)
     if waiting:
-        return waiting.get("state_reason") or "Waiting for an answer."
+        # a station of a project carries its reason only when the reader sees that project (the
+        # stations rows do that). One with no project (an orchestrator) is not tied to one, so
+        # another crew's reason is not shown: it may name a project the reader cannot see
+        reason = waiting.get("state_reason") if own or waiting.get("project") else None
+        return reason or "Waiting for an answer."
     return "Idle." if live else "Not running."
 
 
@@ -451,7 +455,7 @@ def crews(t: Team) -> tuple[list[dict], list[str]]:
         row = {"id": cr["id"], "name": label, "machine": cr["machine"], "person": _ref(cr["person"]) or t.person(cr["person_id"]),
                "last_seen": fh._iso(fh._dt(cr["last_seen"])), "heard": fh.plain_ago(cr["last_seen"], t.now),
                "working": sum(1 for s in cr["stations"] if s["state"] == "working"),
-               "doing": _crew_doing(cr["stations"])}
+               "doing": _crew_doing(cr["stations"], cr["person_id"] == t.me["id"])}
         (own if cr["person_id"] == t.me["id"] else others).append(row)
     return own + others, [label for _, label in sorted(quiet)]
 
@@ -520,6 +524,27 @@ def own_stations(c, request, rows: list[dict]) -> list[dict]:
         return rows
     me = c.work_person(request)["id"]
     return [s for s in rows if (s["person"] or {}).get("id") == me]
+
+
+def own_desk(c, request, rows: list[dict]) -> list[dict]:
+    """The open desk items addressed to the caller's person, for the crew's open questions on the
+    home. Every item for a caller the single-person home answers."""
+    if not _applies(c, request):
+        return rows
+    me = c.work_person(request)["id"]
+    return [d for d in rows if c.desk_is_mine(d, me)]
+
+
+def own_tickets(c, request, tickets: dict[str, list[dict]], projects: list[dict]) -> dict[str, list[dict]]:
+    """{project: the tickets that are the caller's person's} (assigned to them, or to their project's
+    lead when unassigned), so the crew's work and the stations' held tickets are the caller's, never
+    another crew's that reuses a station name. Every ticket for a caller the single-person home
+    answers."""
+    if not _applies(c, request):
+        return tickets
+    me = c.work_person(request)["id"]
+    by_id = {p["id"]: p for p in projects}
+    return {pid: [t for t in ts if c.is_mine(t, me, by_id.get(pid))] for pid, ts in tickets.items()}
 
 
 def team_home(c, request, now) -> dict:
