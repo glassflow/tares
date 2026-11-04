@@ -195,7 +195,9 @@ class Engine:
             self.store.log_project(uid, "bootstrap_failed", _errtext(e))
         return self.get(uid)
 
-    def update(self, uid: str, params: dict) -> dict:
+    def update(self, uid: str, params: dict, gone=None) -> dict:
+        """`gone(kind, name)`: an object the caller may not see; naming one in a custom project's
+        list answers as one that does not exist (TR-944)."""
         inst = self._require(uid)
         if _is_default(inst["template"]):
             raise ProjectError("the default project has no settings to edit; move objects into "
@@ -205,7 +207,7 @@ class Engine:
         template.preflight(params, self.store)
         plan = template.plan(params)
         if _is_custom(inst["template"]):
-            return self._update_custom(uid, inst, params, plan)
+            return self._update_custom(uid, inst, params, plan, gone)
         # rows keyed `+kind:name` were added to this project by hand, not planned: a re-plan
         # leaves them alone
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
@@ -702,7 +704,8 @@ class Engine:
                 gone.append(o)
         self._delete_objects(gone, purge_events=False, uid=uid)
 
-    def _update_custom(self, uid: str, inst: dict, params: dict, plan: list[PlannedObject]) -> dict:
+    def _update_custom(self, uid: str, inst: dict, params: dict, plan: list[PlannedObject],
+                       gone=None) -> dict:
         # a skill is used through the project's skills, a doc through its docs, not its object
         # list (P-TR-216, TR-403)
         existing = {(o["kind"], o["key"]): o for o in self.store.list_project_objects(uid)
@@ -723,7 +726,7 @@ class Engine:
         removed = self._release_closure(uid, removed, plan, current)
         # validate before the first write: the additions must exist and be free
         for o in added:
-            if o.name not in current[o.kind]:
+            if o.name not in current[o.kind] or (gone and gone(o.kind, o.name)):
                 raise ProjectError(f"{o.kind} {o.name!r} does not exist")
         try:
             self._release(uid, removed)

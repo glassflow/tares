@@ -1017,12 +1017,15 @@ def make_app() -> FastAPI:
         uids = store.projects_using(kind, name)
         return bool(uids) and set(uids) <= hidden
 
+    def _is_hidden(kind: str, name: str, hidden: set[str]) -> bool:
+        return bool(hidden) and (name in _hidden_sources(hidden) if kind == "source"
+                                 else _owned_by_hidden(kind, name, hidden))
+
     def _gone_if_hidden(kind: str, name: str, message: str) -> None:
         """A named object that belongs only to private projects the caller cannot see answers a
-        write exactly as one that is not there: the same 404 and the same body (TR-944)."""
-        hidden = _hidden_ids()
-        if hidden and (name in _hidden_sources(hidden) if kind == "source"
-                       else _owned_by_hidden(kind, name, hidden)):
+        write exactly as one that is not there: the same 404 and the same body (TR-944). A name
+        in a request body is treated the same way: left out of the set it is checked against."""
+        if _is_hidden(kind, name, _hidden_ids()):
             _err(KeyError(message), 404)
 
     # Auth off (no token) → no middleware, the instance is fully open (local default). Auth on →
@@ -1232,6 +1235,7 @@ def make_app() -> FastAPI:
     def subscribe(req: SubReq, request: Request):
         if req.trigger not in {t.name for t in runtime.catalog.triggers}:
             _err(KeyError(f"unknown trigger {req.trigger!r}"), 404)
+        _gone_if_hidden("trigger", req.trigger, f"unknown trigger {req.trigger!r}")
         url = req.url.strip()
         if url.startswith(SLACK_URL_PREFIX):
             # A Slack subscription is checked at creation, not at the first firing: an unroutable
@@ -2842,7 +2846,8 @@ def make_app() -> FastAPI:
             _err(ValueError(VIEWS_REMOVED), 400)
         raw = {**body.model_dump(exclude={"view", "project"}), "name": name}
         try:
-            validate_trigger_dict(raw, set(runtime.catalog.sources))
+            # a source only private projects use is not there for this caller (TR-944)
+            validate_trigger_dict(raw, set(runtime.catalog.sources) - _hidden_sources(_hidden_ids()))
         except CatalogError as e:
             _err(e)
         return raw
@@ -2937,8 +2942,13 @@ def make_app() -> FastAPI:
         """Validate against the live catalog, including the loop guard (an agent may not be woken by
         the findings source it writes into). Any trigger, MCP server and handoff target on the
         cell will do (P-TR-216: parts are shared); the project's wiring says how it uses them."""
-        triggers = {t["name"]: t for t in store.list_catalog_triggers()}
-        servers = {m["name"]: m for m in store.list_mcp_servers()}
+        # what only private projects use is not there for this caller: a name in the body answers
+        # as an unknown one (TR-944)
+        hidden = _hidden_ids()
+        triggers = {t["name"]: t for t in store.list_catalog_triggers()
+                    if not _is_hidden("trigger", t["name"], hidden)}
+        servers = {m["name"]: m for m in store.list_mcp_servers()
+                   if not _is_hidden("mcp_server", m["name"], hidden)}
         raw = {**body.model_dump(exclude={"project"}), **({"name": name} if name else {})}
         try:
             validate_agent_dict(raw, set(triggers), triggers, set(servers))
@@ -2952,7 +2962,8 @@ def make_app() -> FastAPI:
                 check_handoff_targets(raw["name"], raw["handoffs"],
                                       {a["name"]: a.get("owned_by")
                                        for a in store.list_catalog_agents()
-                                       if a["name"] != raw["name"]}, uid)
+                                       if a["name"] != raw["name"]
+                                       and not _is_hidden("agent", a["name"], hidden)}, uid)
             except CatalogError as e:
                 _err(e)
         return raw
@@ -4122,7 +4133,8 @@ def make_app() -> FastAPI:
             if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
                 return projects.set_goal(uid, body.goal)
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            out = projects.update(uid, params)
+            hidden = _hidden_ids()
+            out = projects.update(uid, params, gone=lambda kind, name: _is_hidden(kind, name, hidden))
             if "goal" in given:
                 projects.set_goal(uid, body.goal)
                 out = {**projects.get(uid), "report": out["report"]}
@@ -4158,6 +4170,7 @@ def make_app() -> FastAPI:
         name = str((body or {}).get("name") or "").strip()
         if not name:
             _err(ValueError("name is required"), 400)
+        _gone_if_hidden("source", name, f"unknown source {name!r}")
         try:
             return projects.add_source(uid, name)
         except Exception as e:

@@ -123,7 +123,8 @@ def seed(ids):
     for rid, agent, trig, u in (("run-secret", "secret-agent", "secret-trig", secret),
                                 ("run-open", "open-agent", "open-trig", team),
                                 ("run-shared-secret", "shared-agent", "shared-trig", secret),
-                                ("run-shared-open", "shared-agent", "shared-trig", team)):
+                                ("run-shared-open", "shared-agent", "shared-trig", team),
+                                ("run-noproject", "open-agent", "open-trig", None)):
         store.start_agent_run(rid, agent, trig, "d-" + rid, "service-a", "h", project=u)
         store.finish_agent_run(rid, "ok", finding="done")
     now = now_utc()
@@ -207,6 +208,19 @@ async def checks(B, ids):
         ck("a run of the open project, on the same agent, still reruns", r.status_code == 201,
            f"{r.status_code} {r.text[:120]}")
 
+        r = await cx.post(url("open-agent", "run-noproject"), headers=KIM)
+        ck("a run that belongs to no project, on an open agent, still reruns", r.status_code == 201,
+           f"{r.status_code} {r.text[:120]}")
+        # the name is checked before the body: a body that is wrong too must not tell a hidden
+        # trigger from an unknown one
+        bad = {"name": "something-else", "sources": ["open-src"], "condition": COND}
+        r = await cx.put(f"{B}/api/triggers/secret-trig", headers=KIM, json=bad)
+        gone = await cx.put(f"{B}/api/triggers/nobody-here", headers=KIM, json=bad)
+        ck("a hidden trigger with a wrong body: the unknown-name answer, not the body's",
+           r.status_code == gone.status_code == 404
+           and shape(r.text, "secret-trig") == shape(gone.text, "nobody-here"),
+           f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
+
         print("== a rule proposal ==")
         for decision in ("reject", "accept"):
             r = await cx.post(f"{B}/api/rule-proposals/{ids['rule_secret']}/{decision}",
@@ -216,6 +230,78 @@ async def checks(B, ids):
                r.status_code == gone.status_code == 404
                and shape(r.text, ids["rule_secret"]) == shape(gone.text, "rp_nobody"),
                f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
+
+        print("== a hidden name in the body answers as an unknown name (TR-944) ==")
+        team = ids["team"]
+        sub = {"url": "https://example.org/hook"}
+        # (label, method, path, body with {n} for the name asked about, the hidden name)
+        cases = [
+            ("add a source to a project", "POST", f"/api/projects/{team}/sources",
+             {"name": "{n}"}, "secret-src"),
+            ("a new trigger that reads it", "POST", "/api/triggers",
+             {"name": "new-trig", "sources": ["{n}"], "condition": COND}, "secret-src"),
+            ("an open trigger changed to read it", "PUT", "/api/triggers/open-trig",
+             {"name": "open-trig", "sources": ["{n}"], "condition": COND}, "secret-src"),
+            ("a new agent woken by it", "POST", "/api/agents/builtin",
+             {"name": "new-agent", "trigger": "{n}", "prompt": "Look."}, "secret-trig"),
+            ("a new agent using its MCP server", "POST", "/api/agents/builtin",
+             {"name": "new-agent", "trigger": "open-trig", "prompt": "Look.",
+              "mcp_servers": ["{n}"]}, "secret-mcp"),
+            ("a new agent that hands off to it", "POST", "/api/agents/builtin",
+             {"name": "new-agent", "trigger": "open-trig", "prompt": "Look.",
+              "handoffs": [{"verdict": "escalate", "agent": "{n}"}]}, "secret-agent"),
+            ("an open agent moved to its trigger", "PUT", "/api/agents/builtin/open-agent",
+             {"name": "open-agent", "trigger": "{n}", "prompt": "Look."}, "secret-trig"),
+            ("an open agent given its MCP server", "PUT", "/api/agents/builtin/open-agent",
+             {"name": "open-agent", "trigger": "open-trig", "prompt": "Look.",
+              "mcp_servers": ["{n}"]}, "secret-mcp"),
+            ("an open agent handing off to it", "PUT", "/api/agents/builtin/open-agent",
+             {"name": "open-agent", "trigger": "open-trig", "prompt": "Look.",
+              "handoffs": [{"verdict": "escalate", "agent": "{n}"}]}, "secret-agent"),
+            ("a project list that adds a source", "PUT", f"/api/projects/{team}",
+             {"objects": [{"kind": "source", "name": "{n}"}]}, "secret-src"),
+            ("a project list that adds a trigger", "PUT", f"/api/projects/{team}",
+             {"objects": [{"kind": "trigger", "name": "{n}"}]}, "secret-trig"),
+            ("a project list that adds an agent", "PUT", f"/api/projects/{team}",
+             {"objects": [{"kind": "agent", "name": "{n}"}]}, "secret-agent"),
+            ("a project list that adds an MCP server", "PUT", f"/api/projects/{team}",
+             {"objects": [{"kind": "mcp_server", "name": "{n}"}]}, "secret-mcp"),
+            ("a subscription to the trigger", "POST", "/subscribe",
+             {"trigger": "{n}", **sub}, "secret-trig"),
+        ]
+        def fill(v, n):
+            if isinstance(v, str):
+                return v.replace("{n}", n)
+            if isinstance(v, list):
+                return [fill(x, n) for x in v]
+            if isinstance(v, dict):
+                return {k: fill(x, n) for k, x in v.items()}
+            return v
+        for label, meth, path, body, hidden in cases:
+            gone = await cx.request(meth, B + path, headers=KIM, json=fill(body, "nobody-here"))
+            r = await cx.request(meth, B + path, headers=KIM, json=fill(body, hidden))
+            ck(f"{label}: as unknown as a name that does not exist",
+               r.status_code == gone.status_code and r.status_code in (400, 404)
+               and shape(r.text, hidden) == shape(gone.text, "nobody-here"),
+               f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
+        proj = (await cx.get(f"{B}/api/projects/{team}", headers=ROOT)).json()
+        ck("nothing hidden joined the open project",
+           not any(o["name"].startswith("secret-") for o in proj.get("objects", [])),
+           str(proj.get("objects"))[:200])
+        trigs = {t["name"]: t for t in (await cx.get(f"{B}/api/triggers", headers=ROOT)).json()}
+        ck("no trigger was created and the open trigger still reads its own source",
+           "new-trig" not in trigs and trigs["open-trig"]["sources"] == ["open-src"], str(trigs)[:200])
+        agents = (await cx.get(f"{B}/api/agents/builtin", headers=ROOT)).json()
+        agents = {a["name"]: a for a in (agents if isinstance(agents, list) else agents["agents"])}
+        ck("no agent was created and the open agent is unchanged",
+           "new-agent" not in agents and agents["open-agent"]["trigger"] == "open-trig"
+           and not agents["open-agent"].get("mcp_servers") and not agents["open-agent"].get("handoffs"),
+           str(agents.get("open-agent"))[:200])
+        subs = (await cx.get(f"{B}/api/subscriptions", headers=ROOT)).json()
+        ck("no subscription was added to the hidden trigger",
+           not any(x["trigger"] == "secret-trig" for x in subs), str(subs)[:200])
+        r = await cx.post(f"{B}/subscribe", headers=KIM, json={"trigger": "open-trig", **sub})
+        ck("a subscription to an open trigger still works", r.status_code == 200, f"{r.status_code} {r.text[:100]}")
 
         print("== nothing was changed ==")
         def names(r, k):
@@ -257,6 +343,14 @@ async def checks(B, ids):
                 ck(f"{who}: {label}", r.status_code != 404, f"{r.status_code} {r.text[:100]}")
             r = await cx.post(url("secret-agent", "run-secret"), headers=hd)
             ck(f"{who}: agent rerun", r.status_code == 201, f"{r.status_code} {r.text[:100]}")
+        for who, hd in (("Ann", ANN), ("the system credential", ROOT)):
+            for label, meth, path, body, hidden in cases:
+                if label not in ("add a source to a project", "a new agent woken by it",
+                                 "a subscription to the trigger"):
+                    continue   # the rest would rewire the open objects the deletes below use
+                r = await cx.request(meth, B + path, headers=hd, json=fill(body, hidden))
+                ck(f"{who}: {label} reaches the object", r.status_code != 404,
+                   f"{r.status_code} {r.text[:100]}")
         r = await cx.post(f"{B}/api/rule-proposals/{ids['rule_secret']}/reject", headers=ANN, json={})
         ck("Ann: reject the hidden proposal", r.status_code == 200, f"{r.status_code} {r.text[:100]}")
         for label, meth, path, kind, hidden, _open in ROUTES:
