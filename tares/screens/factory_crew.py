@@ -79,11 +79,11 @@ def register(app, store, h, ctx):
         out.sort(key=lambda x: -x["_share"])
         return [{k: v for k, v in x.items() if k != "_share"} for x in out[:_MAX_BY_PROJECT]]
 
-    def standup(now) -> dict | None:
+    def standup(now, hidden) -> dict | None:
         """One line from the ledger over the last day; null when nothing moved."""
         try:
             rep = standup_mod.facts(store, now - timedelta(days=1), now,
-                                    lambda uid: project_progress(store, uid))
+                                    lambda uid: project_progress(store, uid), hide=hidden)
         except Exception:
             return None
         ps = rep["projects"]
@@ -185,12 +185,13 @@ def register(app, store, h, ctx):
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
         plan["by_project"] = by_project(names, now)
         proposals = [{"id": r["id"], "text": r["text"], "from": "the reviewer",
-                      "when": ago(r["created_at"], now)} for r in store.list_rule_proposals("open")]
+                      "when": ago(r["created_at"], now)} for r in store.list_rule_proposals("open")
+                     if r.get("project") not in hidden]
         releaser = None if settings.get("releaser") is False else first("releaser")
         return {"summary": summary, "talk_to": first("orchestrator"), "reviewer": first("reviewer"),
                 "releaser": releaser, "builders": builders, "how_far": _how(settings),
                 "pacing": _pacing(fx.pace(), now), "plan": plan, "rule_proposals": proposals,
-                "standup": standup(now), "now": now.isoformat()}
+                "standup": standup(now, hidden), "now": now.isoformat()}
 
     @app.get("/api/factory/crew")
     def get_crew_page():

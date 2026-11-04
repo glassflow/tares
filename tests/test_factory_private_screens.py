@@ -108,12 +108,22 @@ async def main():
         for uid in (atlas, vault):
             store.create_doc(uid, "memory", "Memory", "# Memory\n\n- a line\n" if uid == atlas
                              else "# Memory\n\n- Zephyrvault launch plan\n")
-        store.add_desk_item(vault, "Zephyrvault launch plan, go?", "", [], "yes", "it is ready", "", [],
+        dk_vault = store.add_desk_item(vault, "Zephyrvault launch plan, go?", "", [], "yes", "it is ready", "", [],
                             False, "crew-orchestrator", [], now_utc() - timedelta(hours=1),
                             to_person_id=pid["kim"])
-        store.add_desk_item(atlas, "Which colour for Atlas?", "", ["blue"], "blue", "it reads", "", [],
+        dk_atlas = store.add_desk_item(atlas, "Which colour for Atlas?", "", ["blue"], "blue", "it reads", "", [],
                             False, "crew-orchestrator", [], now_utc() - timedelta(hours=1),
                             to_person_id=pid["kim"])
+
+        # both projects were handed to the crew, so the crew page's standup line names them; and the
+        # reviewer offered a rule from each
+        for uid in (atlas, vault):
+            store.set_handover(uid, [{"path": "/w/crew", "name": "example-org/service-a"}], None, None,
+                               now_utc())
+        store.upsert_rule_proposal("example-org/service-a", "missing-tests", vault, "project",
+                                   "Zephyrvault: always rotate keys", [], now_utc())
+        store.upsert_rule_proposal("example-org/service-a", "no-docs", atlas, "project",
+                                   "Atlas: write the docs page", [], now_utc())
 
         # Lee's crew has a builder on Vault
         r = await call("root", "POST", "/api/sources", {"name": "claude_code", "connector": "claude_code",
@@ -131,7 +141,14 @@ async def main():
                   "factory_station": "atlas-build-m1", "factory_crew": "l", "crew": "l",
                   "factory_machine": "m2", "machine": "m2", "tares_project": atlas},
                  {"type": "session_state", "sessionId": "l2", "cwd": "/w/crew", "state": "idle",
-                  "reason": "", "timestamp": stamp(2)}]
+                  "reason": "", "timestamp": stamp(2)},
+                 # the crew's orchestrator, idle
+                 {"type": "session_station", "sessionId": "l3", "cwd": "/w/crew", "timestamp": stamp(1),
+                  "station": "crew-orchestrator", "role": "orchestrator", "parent": "",
+                  "factory_station": "crew-orchestrator", "factory_crew": "l", "crew": "l",
+                  "factory_machine": "m2", "machine": "m2"},
+                 {"type": "session_state", "sessionId": "l3", "cwd": "/w/crew", "state": "idle",
+                  "reason": "", "timestamp": stamp(1)}]
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                      headers={**keys["lee"], "Content-Type": "application/x-ndjson"}) as cx:
             await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n")
@@ -140,8 +157,12 @@ async def main():
         # a grant given on Vault, in the project's own grants document
         store.create_doc(vault, "grants", "Grants", '# Grants\n\n- "Zephyrvault may read the status of a '
                          'commit" (2026-11-01)\n')
+        # Vault's desk question was answered once; a line in the grants of Atlas points at that answer
+        d_label = f"D{dk_vault['number']} A"
+        store.add_decision(vault, dk_vault["id"], "Zephyrvault launch plan, go?", d_label, "yes", False,
+                           "project", False, None, True, [], now_utc())
         store.create_doc(atlas, "grants", "Grants", '# Grants\n\n- "Atlas may read the status of a '
-                         'commit" (2026-11-01)\n')
+                         f'commit" (2026-11-01)\n- "{d_label}" (2026-11-02)\n')
 
         lists = ["/api/factory/projects", "/api/factory/tickets", "/api/factory/reviews",
                  "/api/factory/docs", "/api/factory/crew", "/api/factory/settings", "/api/home"]
@@ -192,6 +213,12 @@ async def main():
         r = await get("lee", "/api/factory/settings")
         ck("Lee reads the grant of Vault on the settings page", "zephyrvault" in json.dumps(r.json()).lower(),
            r.text[:200])
+        ck("Lee reads the question behind the grant that points at the answer on Vault",
+           "launch plan" in json.dumps(r.json()).lower(), r.text[:300])
+        r = await get("kim", "/api/factory/settings")
+        g = next((g for g in r.json().get("crew", {}).get("grants", []) if str(g.get("text")).startswith("D")), None)
+        ck("Kim sees the grant that points at the answer on Vault, without the question", bool(g)
+           and not g.get("question") and not leaks(r.json()), g)
         r = await get("lee", "/api/factory/crew")
         ck("Lee sees the builder of Vault on the crew page", "zephyrvault-build-m1" in json.dumps(r.json()),
            r.text[:300])
@@ -230,6 +257,36 @@ async def main():
         r = await get("kim", f"/api/factory/projects/{vault}")
         ck("made a team project, Kim opens it", r.status_code == 200, (r.status_code, r.text[:120]))
         store.set_project_scope(vault, "private")
+
+        print("== only the question of Vault is open ==")
+        store.close_desk_item(dk_atlas["id"], "answered", None, now_utc())
+
+        def find(body, key):
+            if isinstance(body, dict):
+                if key in body:
+                    return body[key]
+                for v in body.values():
+                    got = find(v, key)
+                    if got is not None:
+                        return got
+            elif isinstance(body, list):
+                for v in body:
+                    got = find(v, key)
+                    if got is not None:
+                        return got
+            return None
+
+        r = await get("kim", "/api/factory/crew")
+        m = r.json().get("talk_to")
+        ck("Kim: the orchestrator reports an empty desk, the question of Vault is not hers",
+           bool(m) and m.get("doing") == "Desk empty.", m)
+        r = await get("kim", "/api/home")
+        ck("Kim: the home page counts no question on the desk", find(r.json(), "desk_open") == 0,
+           find(r.json(), "desk_open"))
+        r = await get("lee", "/api/factory/crew")
+        m = r.json().get("talk_to")
+        ck("Lee: the orchestrator does not report an empty desk, the question of Vault is open",
+           bool(m) and m.get("doing") != "Desk empty.", m)
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

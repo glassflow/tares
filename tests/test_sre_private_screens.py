@@ -38,6 +38,7 @@ import httpx
 
 from fixtures.sre_cell import build
 from tares import incidents, sre_home
+from tares import slack as slack_mod
 from tares.screens.sre_runbooks import skill_name
 
 P = F = 0
@@ -106,6 +107,13 @@ async def main():
             store.put_in_project("agent", a, vault)
         store.set_wake(vault, "watch-zephyr", "zephyr-seer", enabled=True)
         store.set_handoffs(vault, "zephyr-seer", handoffs)
+        # Edgewatch's own watcher, wired after the private one: a teammate edits and raises this one
+        store.upsert_catalog_trigger("watch-edge", ["prod-otlp"], {"every": "30m"}, {}, "30m")
+        store.upsert_catalog_agent("edge-seer", "watch-edge", "Look at edge-proxy.", budget_usd=20.0,
+                                   budget_period="month", concludes=True)
+        store.put_in_project("trigger", "watch-edge", open_uid)
+        store.put_in_project("agent", "edge-seer", open_uid)
+        store.set_wake(open_uid, "watch-edge", "edge-seer", enabled=True)
         runtime.reload_catalog()
 
         def run(rid, agent, key, finding, at, project):
@@ -130,6 +138,19 @@ async def main():
             store.sc.execute("UPDATE agent_runs SET skills = ? WHERE id = ?",
                              [json.dumps([skill_name("service-a")]), "i-shared"])
         shown = incident("edge-proxy", open_uid, "i-open", "502s on edge-proxy.", 20)
+        # an incident that belongs to no project (made before projects): everyone sees it
+        legacy = incident("docs-site", None, "i-legacy", "docs-site was slow.", 15)
+
+        def raised(rid, agent, trigger, service, project, minutes):
+            at = base - timedelta(minutes=minutes)
+            store.start_agent_run(rid, agent, trigger, "", service, "h", project=project)
+            store.finish_agent_run(rid, "ok", finding=f"{service} returns errors.", outcome="finding",
+                                   verdict="investigate")
+            with store._swrite:
+                store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, rid])
+
+        raised("z-raised", "zephyr-seer", "watch-zephyr", "zephyr-api", vault, 12)
+        raised("e-raised", "edge-seer", "watch-edge", "edge-proxy", open_uid, 11)
 
         print("== a teammate who is not on Zephyrwatch ==")
         r = await get("kim", "/api/sre/incidents")
@@ -139,7 +160,16 @@ async def main():
            secret not in json.dumps(body) and shared not in json.dumps(body))
         ck("the list names nothing of the project", not leaks(body), str(leaks(body)))
         ck("the open incident is there", shown in json.dumps(body))
-        ck("the counts leave them out", body["counts"]["open"] == 1, str(body["counts"]))
+        ck("and the one that belongs to no project", legacy in json.dumps(body))
+        ck("the counts leave them out", body["counts"]["open"] == 2, str(body["counts"]))
+        r = await get("kim", "/api/sre/incidents", show="all")
+        ck("the raised findings list holds the open project's and not the private one's",
+           r.status_code == 200 and "e-raised" in json.dumps(r.json())
+           and "z-raised" not in json.dumps(r.json()) and not leaks(r.json()), r.text[:300])
+        r = await get("kim", "/api/sre/incidents", service="Zephyr-API")
+        ck("a filter on a private service by another spelling is empty too",
+           r.status_code == 200 and sum(len(g["items"]) for g in r.json()["groups"]) == 0
+           and r.json()["counts"] == {"open": 0, "on_it": 0, "resolved": 0}, r.text[:200])
         r = await get("kim", "/api/sre/incidents", service="zephyr-api")
         ck("a filter on its service is empty", r.status_code == 200 and not leaks(r.json())
            and sum(len(g["items"]) for g in r.json()["groups"]) == 0, r.text[:200])
@@ -164,6 +194,46 @@ async def main():
             if r.status_code == 200:
                 ck(f"{path} names nothing of the project", not leaks(r.json(), vault),
                    str(leaks(r.json(), vault)))
+        r = await get("kim", "/api/home")
+        home = r.json()
+        ck("the home counts only what she can see", home["headline"]["text"] == "2 incidents open"
+           and home["incidents_more"] == 0 and len(home["incidents"]) == 2,
+           f"{home['headline']['text']} more={home['incidents_more']}")
+        r = await get("kim", "/api/sre/services")
+        rows = {x["name"]: x for x in r.json()["services"]}
+        ck("a shared service with a private incident reads as normal on the services page",
+           rows["service-a"]["state"] == "normal", rows["service-a"]["state"])
+        ck("the watch words come from the watchers she can see",
+           all("10 minutes" not in x["watch_words"] for x in rows.values()),
+           str([x["watch_words"] for x in rows.values()]))
+        r = await call("kim", "PUT", "/api/sre/settings/watching", {"budget_usd": 7})
+        ck("a change to the watcher touches the one she can see, not the private one",
+           (store.get_catalog_agent("zephyr-seer", project=vault) or {}).get("budget_usd") == 25.0
+           and (store.get_catalog_agent("edge-seer", project=open_uid) or {}).get("budget_usd") == 7.0,
+           f"{r.status_code} {r.text[:160]}")
+        store.upsert_catalog_agent("edge-seer", "watch-edge", "Look at edge-proxy.", budget_usd=20.0,
+                                   budget_period="month", concludes=True)
+        r = await call("kim", "POST", "/api/home/actions/raise_budget", {"amount_usd": 5})
+        ck("raising the budget answers", r.status_code == 200, f"{r.status_code} {r.text[:160]}")
+        ck("it raises the watcher she can see and not the private one",
+           (store.get_catalog_agent("zephyr-seer", project=vault) or {}).get("budget_usd") == 25.0
+           and (store.get_catalog_agent("edge-seer", project=open_uid) or {}).get("budget_usd") == 25.0,
+           str([(a, (store.get_catalog_agent(a) or {}).get("budget_usd")) for a in ("zephyr-seer", "edge-seer")]))
+        ck("and the home it answers with names nothing of the private project",
+           r.status_code == 200 and not leaks(r.json(), vault), str(leaks(r.json(), vault)))
+        # the Start checklist counts the Slack channel of an investigator she can see; the private
+        # one has a channel and the cell has a token, so a leak would tick that step
+        store.upsert_catalog_agent("zephyr-digger", "watch-zephyr", "Find the cause.", slack_channel="#zephyr",
+                                   budget_usd=25.0, concludes=True)
+        runtime.reload_catalog()
+        store.set_setting(slack_mod.SETTING_KEY, "xoxb-test-not-a-real-token")
+        try:
+            r = await call("kim", "POST", "/api/home/start/hide")
+            steps = {x["key"]: x for x in r.json().get("steps", [])} if r.status_code == 200 else {}
+            ck("her Start checklist does not count the private investigator's channel",
+               r.status_code == 200 and steps.get("slack", {}).get("done") is False, r.text[:300])
+        finally:
+            store.set_setting(slack_mod.SETTING_KEY, None)
         r = await get("kim", "/api/sre/services/service-a")
         ck("a shared service's page opens", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
         if r.status_code == 200:
@@ -174,14 +244,24 @@ async def main():
         ck("and count no read by a private agent",
            all(x["used_words"] is None for x in r.json()["services"]), r.text[:200])
         r = await call("kim", "POST", "/api/sre/runbooks/service-a/lines", {"text": "check the queue"})
-        ck("a runbook line cannot be written into the private project", r.status_code == 409
-           and "zephyr" not in r.text.lower(), f"{r.status_code} {r.text[:120]}")
+        rb = skill_name("service-a")
+        ck("a runbook line is written into the project she can see and not the private one",
+           r.status_code == 200 and "zephyr" not in r.text.lower()
+           and "check the queue" in ((store.get_skill(open_uid, rb) or {}).get("body") or "")
+           and "check the queue" not in ((store.get_skill(vault, rb) or {}).get("body") or ""),
+           f"{r.status_code} {r.text[:120]}")
 
         print("== the people who can see Zephyrwatch ==")
         for who in ("lee", "root"):
             r = await get(who, "/api/sre/incidents")
             ck(f"{who} sees the incident", secret in json.dumps(r.json()))
-            ck(f"{who}: the counts", r.json()["counts"]["open"] == 3, str(r.json()["counts"]))
+            ck(f"{who}: the counts", r.json()["counts"]["open"] == 4, str(r.json()["counts"]))
+            r = await get(who, "/api/sre/incidents", show="all")
+            ck(f"{who}: both raised findings", "z-raised" in json.dumps(r.json())
+               and "e-raised" in json.dumps(r.json()), r.text[:200])
+            r = await get(who, "/api/sre/services")
+            ck(f"{who}: the shared service reads as having an incident",
+               {x["name"]: x for x in r.json()["services"]}["service-a"]["state"] == "incident")
             r = await get(who, f"/api/sre/incidents/{secret}")
             ck(f"{who} opens its page", r.status_code == 200, r.text[:120])
             r = await get(who, "/api/sre/settings")

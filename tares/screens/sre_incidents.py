@@ -233,12 +233,14 @@ def register(app, store, h, ctx):
     def not_found():
         return HTTPException(404, "No incident with that id")
 
-    def service_filter(value: str, settings: dict, hidden=()) -> str:
-        """The incident service key a `service` filter names (its key or its display name)."""
+    def service_filter(value: str, settings: dict) -> str:
+        """The incident service key a `service` filter names (its key or its display name). It
+        reads every key: a private project's service resolves, and the lists it feeds leave its
+        incidents out."""
         want = (value or "").strip().lower()
         if not want:
             return ""
-        for s in store.incident_services(hide=hidden):
+        for s in store.incident_services():
             if want in (s.lower(), goal.service_name(s, settings).lower()):
                 return s
         return want
@@ -289,7 +291,7 @@ def register(app, store, h, ctx):
                 raise HTTPException(400, "before must be a time such as 2026-10-01T12:00:00Z")
         now = _aware(now or incidents.clock())
         settings = store.service_settings()
-        key = service_filter(service, settings, hidden)
+        key = service_filter(service, settings)
         wanted = [s for s, _label in GROUPS if state in ("", "all", s)]
         if cut is not None:   # a later page of the resolved ones only
             wanted = [s for s in wanted if s == "resolved"]
