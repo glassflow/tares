@@ -109,6 +109,7 @@ test_private_raw_routes
 test_private_reads
 test_private_routes
 test_private_services
+test_private_writes
 test_project_access
 test_project_keys
 test_project_timeline
@@ -139,6 +140,7 @@ test_slack_verify
 test_spec_signoff
 test_sre_home
 test_sre_home_note_link
+test_sre_home_read_key
 test_sre_incident_hold
 test_sre_incidents
 test_sre_private_screens
@@ -159,6 +161,7 @@ test_upgrade_hard_stop
 test_usage
 test_vercel
 test_watch_escalate
+test_watch_scan_edition
 test_watch_state
 test_wiring
 test_words_sync

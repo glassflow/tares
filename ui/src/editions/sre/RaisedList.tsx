@@ -5,11 +5,13 @@ import type { HomeRaised } from "./Home.api";
 
 /** "Last things raised": what the watcher raised, how it came out, and the person's answer to
  *  whether it was worth raising. An item nobody can answer for links to its note instead. */
-export function RaisedList({ items, note, busy, onAnswer }: {
+export function RaisedList({ items, note, busy, canAct = true, onAnswer }: {
   items: HomeRaised[];
   note: string | null;
   /** The answer in flight ("<id>:worth-yes" or "<id>:worth-no"), or null. */
   busy: string | null;
+  /** False for a read-only key: the question is not asked. */
+  canAct?: boolean;
   onAnswer: (id: string, worth: boolean) => void;
 }) {
   return (
@@ -34,7 +36,7 @@ export function RaisedList({ items, note, busy, onAnswer }: {
                 <div className="flex flex-wrap items-center gap-2 text-[13px]">
                   {r.worth != null ? (
                     <span className="text-muted-foreground" data-testid="raised-answer">{r.worth ? "You said it was worth raising." : "You said it was not worth raising."}</span>
-                  ) : r.can_answer ? (
+                  ) : r.can_answer && canAct ? (
                     <>
                       <span className="text-muted-foreground">Was this worth raising?</span>
                       <Button variant="secondary" className="h-8 text-[13px]!" busy={yes} disabled={busy !== null && !yes} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>

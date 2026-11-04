@@ -515,8 +515,11 @@ async def daemon_checks(B, ids):
 
         print("== the default project is private to Bob: no default for him ==")
         r = await cx.post(f"{B}/api/agents/builtin/orphan/enable", headers=B_)
-        ck("Bob: turning on an agent nobody owns asks him to name a project",
-           r.status_code == 400 and "name the project" in r.text and p1 not in r.text, f"{r.status_code} {r.text[:200]}")
+        gone = await cx.post(f"{B}/api/agents/builtin/no-such-agent/enable", headers=B_)
+        ck("Bob: turning on an agent that sits in p1's default is as unknown as a missing one (TR-944)",
+           r.status_code == gone.status_code == 404 and p1 not in r.text
+           and r.text.replace("orphan", "X") == gone.text.replace("no-such-agent", "X"),
+           f"{r.status_code} {r.text[:200]} / {gone.status_code} {gone.text[:120]}")
         r = await cx.post(f"{B}/api/agents/builtin/orphan/enable", headers=A_)
         ck("Ann: the default is hers, so she is not asked", "name the project" not in r.text, f"{r.status_code} {r.text[:200]}")
         ck("... and Bob's refusal wrote nothing into p1",

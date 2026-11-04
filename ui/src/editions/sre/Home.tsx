@@ -1,6 +1,9 @@
 import * as React from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { ApiError } from "../../api";
+import { useEdition } from "../edition";
+
 import {
   Banner, Button, EmptyState, ListSection, ServiceRows, Skeleton, type ServiceRowItem,
 } from "../../components/edition";
@@ -43,6 +46,9 @@ const DEMO_FAILED = (
     <Link to={DEMO_SETUP_TO} className="underline underline-offset-2" data-testid="start-notice-link">set it up step by step</Link>.
   </>
 );
+
+/** Said when the cell refuses a click because of the key, not because anything broke. */
+const readOnlyWords = (key?: string) => `${key ? `The key ${key}` : "This key"} can only read, so it cannot change anything here. Sign in with a key that can.`;
 
 const asRow = (s: HomeService): ServiceRowItem => ({
   id: s.name,
@@ -125,13 +131,14 @@ function Today({ home }: { home: SreHome }) {
 
 export default function Home() {
   const named = useSample();
+  const { credentialName } = useEdition();
   const sample = isHomeSample(named) ? named : null;
   const { data, error, reload } = usePagePolling<SreHome>(() => (sample ? sampleHome(sample) : sreHome()), POLL_MS);
 
   // What the person's last action changed, until the next answer from the cell replaces it.
   const [shown, setShown] = React.useState<{ base: SreHome; home: SreHome } | null>(null);
   const [busy, setBusy] = React.useState<string | null>(null);
-  const [failed, setFailed] = React.useState(false);
+  const [failed, setFailed] = React.useState<false | "error" | "read_only">(false);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
   const demoTimer = React.useRef<ReturnType<typeof setTimeout>>();
   React.useEffect(() => () => { clearTimeout(timer.current); clearTimeout(demoTimer.current); }, []);
@@ -160,8 +167,8 @@ export default function Home() {
       const next = (await run()) ?? undefined;
       if (next) setShown({ base: data, home: next });
       if (refresh && !sample) { clearTimeout(timer.current); timer.current = setTimeout(reload, REFRESH_MS); }
-    } catch {
-      setFailed(true);
+    } catch (e) {
+      setFailed(e instanceof ApiError && e.status === 403 ? "read_only" : "error");
       // The write may have gone through: read the cell again rather than wait for the next poll.
       if (refresh && !sample) { clearTimeout(timer.current); timer.current = setTimeout(reload, REFRESH_MS); }
     } finally {
@@ -184,8 +191,8 @@ export default function Home() {
       reload();
       clearTimeout(demoTimer.current);
       demoTimer.current = setTimeout(() => { demoWait.current = false; reload(); setDoing(null); }, DEMO_WAIT_MS);
-    } catch {
-      setStartNote(DEMO_FAILED);
+    } catch (e) {
+      setStartNote(e instanceof ApiError && e.status === 403 ? readOnlyWords(credentialName) : DEMO_FAILED);
       setDoing(null);
     }
   };
@@ -212,13 +219,14 @@ export default function Home() {
 
   if (!home) return banner ? <div className="grid gap-6" data-testid="sre-home">{banner}</div> : <div data-testid="sre-home"><Loading /></div>;
 
+  const canAct = home.can_act !== false;
   const isNew = home.headline.tone === "new";
   const off = !home.watch.on && !isNew;
   const top = (
     <>
-      {off && <WatchPanel watch={home.watch} busy={busy} onWayOut={wayOut} />}
+      {off && <WatchPanel watch={home.watch} busy={busy} canAct={canAct} onWayOut={wayOut} />}
       {home.incidents.map((i) => (
-        <IncidentCard key={i.id} incident={i} busy={busy} onPickUp={(id) => change(id, "on_it")} onResolve={(id) => change(id, "resolved")} />
+        <IncidentCard key={i.id} incident={i} busy={busy} canAct={canAct} onPickUp={(id) => change(id, "on_it")} onResolve={(id) => change(id, "resolved")} />
       ))}
       {home.incidents_more > 0 && (
         <p className="m-0! text-[13px]"><Link to="/incidents" className="text-foreground underline underline-offset-2" data-testid="incidents-more">{home.incidents_more} more open</Link></p>
@@ -239,7 +247,7 @@ export default function Home() {
     <>
       {top}
       <ServicesBox home={home} />
-      <RaisedList items={home.raised} note={home.raised_note} busy={busy} onAnswer={answer} />
+      <RaisedList items={home.raised} note={home.raised_note} busy={busy} canAct={canAct} onAnswer={answer} />
     </>
   );
 
@@ -255,9 +263,11 @@ export default function Home() {
   return (
     <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
       {banner}
-      {failed && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
+      {!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}
+      {failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}
+      {failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
       {home.start?.show && (
-        <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={doStart} doing={doing} notice={startNote}
+        <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={canAct ? doStart : undefined} doing={doing} notice={startNote}
                         hide={sample ? () => Promise.resolve() : undefined} />
       )}
       {home.start && (
