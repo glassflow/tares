@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
 from .. import factory_api
@@ -169,7 +169,7 @@ def register(app, store, h, ctx):
         return station_roles(rows), rows
 
     @app.get("/api/factory/projects/{uid}")
-    def factory_project(uid: str):
+    def factory_project(uid: str, request: Request):
         """The whole project page in one read (404 for a project that is not a software factory
         project, and for a draft, which opens at its setup on today's page)."""
         p = store.get_project(uid)
@@ -252,7 +252,7 @@ def register(app, store, h, ctx):
                 why = "waits for " + ", ".join(rd[pick["id"]]["blocked_by"] or ["an earlier ticket"])
             nxt = {"ticket": refs[pick["id"]], "title": clean(pick["title"]), "why": why}
 
-        waiting = [w for w in fh.waiting_items(store, ctx.fx, now)
+        waiting = [w for w in fh.waiting_items(store, fh.for_caller(ctx.fx, request), now)
                    if (w.get("project") or {}).get("id") == uid]
         for w in waiting:        # ids, links and what a button does stay as they are
             for k in ("label", "title", "detail", "meta"):

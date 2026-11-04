@@ -14,8 +14,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from fastapi import Request
+
 from ..envelope import now_utc
-from ..factory_home import (_STATE_ORDER, _count, _dt, plain_ago, project_row,
+from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
                             waiting_items)
 
 # the order of the list: what needs you first, finished last
@@ -82,7 +84,7 @@ def row_for(p: dict, tickets: list[dict], handover: dict | None, waiting: list[d
 
 def register(app, store, h, ctx):
     @app.get("/api/factory/projects")
-    def factory_projects():
+    def factory_projects(request: Request):
         """{projects: [row], counts: {all, building, waiting_on_you, not_started, ready_to_close,
         done}, now}. Sorted by state (waiting on you, building, not started, ready to close, done),
         newest activity first within a state."""
@@ -93,7 +95,7 @@ def register(app, store, h, ctx):
         ids = [p["id"] for p in projects]
         tickets = store.tickets_by_project(ids)
         milestones = store.milestones_by_project(ids)
-        waiting = waiting_items(store, fx, now)
+        waiting = waiting_items(store, for_caller(fx, request), now)
         rows = [row_for(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
                         milestones[p["id"]]) for p in projects]
         rows.sort(key=lambda r: (ORDER[r["state"]],

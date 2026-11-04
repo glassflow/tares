@@ -23,11 +23,11 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
 from ..envelope import now_utc
-from ..factory_home import _dt, plain_ago, waiting_items
+from ..factory_home import _dt, for_caller, plain_ago, waiting_items
 from .factory_project import _pr_out, _review_out, station_roles, ticket_state, who_words
 from .factory_projects import ORDER, row_for
 
@@ -63,7 +63,7 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/tickets")
     def factory_tickets(project: str | None = None, milestone: str | None = None,
                         state: str | None = None, q: str | None = None, sort: str = "new",
-                        limit: int = DEFAULT_LIMIT, offset: int = 0):
+                        limit: int = DEFAULT_LIMIT, offset: int = 0, *, request: Request):
         """{tickets, total, offset, limit, more, counts, projects, milestones, hidden_canceled,
         now}. See the module note for the query."""
         want = _state_param(state)
@@ -91,7 +91,7 @@ def register(app, store, h, ctx):
         roles = station_roles(station_rows)
 
         # the projects in the order of the Projects page: what needs you first, finished last
-        waiting = waiting_items(store, fx, now)
+        waiting = waiting_items(store, for_caller(fx, request), now)
         stations = fx.stations() if fx else []
         ranked = []
         for p in projects:

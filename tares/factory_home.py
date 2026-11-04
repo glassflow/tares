@@ -452,6 +452,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
 
 _cache: dict = {}
 _cache_lock = threading.Lock()
+_GEN = [0]      # bumped by clear_cache, so a read that was building then does not store
 
 
 def projects_view(request) -> str:
@@ -480,6 +481,7 @@ def for_caller(fx, request):
 def clear_cache() -> None:
     """Forget every kept home, so the next read shows a change made just now."""
     with _cache_lock:
+        _GEN[0] += 1
         _cache.clear()
 
 
@@ -502,9 +504,12 @@ def build(store, fx=None, request=None, now=None) -> dict:
         hit = _cache.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
+        gen = _GEN[0]
     out = home(store, fx, now_utc(), key[1], request)
     with _cache_lock:
-        _cache[key] = (time.monotonic(), out)
+        # a clear_cache() that landed while this was building means the body may be stale
+        if gen == _GEN[0]:
+            _cache[key] = (time.monotonic(), out)
     return out
 
 

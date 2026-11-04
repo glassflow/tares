@@ -9,6 +9,7 @@ read. The cell's own credential still sets the default, which a second person wh
 Run: .venv/bin/python tests/test_factory_crew_scope.py
 """
 import asyncio
+import json
 import os
 import sys
 import tempfile
@@ -91,6 +92,63 @@ async def main():
         ck("a second person sees the cell's default", other["settings"][0] != "L4-ship", str(other))
         ck("on every screen", other["home"]["autonomy"] != "L4-ship"
            and MERGES not in other["crew"]["text"] and MERGES not in other["reviews"], str(other))
+
+        print("== what waits on the person follows the saved how-far ==")
+        from tares import claude_usage, factory as factory_mod
+        from tares.envelope import now_utc
+        store.set_project_kind("prj-x", "software_factory")
+        store.update_project("prj-x", status="active")
+        t = store.create_ticket("prj-x", "tares", "Page", repo="example-org/svc")
+        store.update_ticket(t, stage="review", pr={
+            "url": "https://github.com/example-org/svc/pull/7", "number": 7, "repo": "example-org/svc",
+            "head": "cccc333", "ci": "success", "title": "PR: Page"})
+        store.add_review("prj-x", t, None, "cccc333", "pass", "ran the tests", None, "crew-reviewer",
+                         [], {}, factory_mod.finding_kind, now_utc())
+
+        async def waits(who):
+            """Does the pull request wait on this person: the Projects row, the project page?"""
+            rows = (await call(who, "GET", "/api/factory/projects")).json()["projects"]
+            row = [x for x in rows if x["id"] == "prj-x"][0]
+            pg = (await call(who, "GET", "/api/factory/projects/prj-x")).json()
+            return ("PR to review" in row["meta"],
+                    any(w["kind"] == "prs_to_review" for w in pg["waiting"]))
+
+        ck("under the cell's L3-review default a passed PR waits on the second person on the Projects row and the project page",
+           await waits("kim") == (True, True), str(await waits("kim")))
+        ck("the owner who saved L4-ship has the crew merge it: nothing waits on the Projects row and the project page",
+           await waits("alex") == (False, False), str(await waits("alex")))
+
+        print("== pacing follows the saved value ==")
+        from datetime import timedelta
+        soon = (now_utc() + timedelta(hours=1)).isoformat()
+        store.set_setting(claude_usage.PLAN_SETTING, json.dumps({"at": now_utc().isoformat(), "plan": {"limits": [
+            {"kind": "session", "label": "5-hour", "percent": 96, "resets_at": soon,
+             "severity": "high", "active": True}]}}))
+        fh_clear = __import__("tares.factory_home", fromlist=["clear_cache"]).clear_cache
+        fh_clear()
+        a = (await call("alex", "GET", "/api/factory/settings")).json()["crew"]
+        k = (await call("kim", "GET", "/api/factory/settings")).json()["crew"]
+        ck("Settings tells the owner the crew is slowed", "96%" in a["pace_text"], a["pace_text"])
+        ck("and tells the second person pacing is off", "Pacing is off" in k["pace_text"], k["pace_text"])
+        ca = (await call("alex", "GET", "/api/factory/crew")).json()
+        ck("the Crew page says so for the owner only",
+           bool(ca.get("pacing")) and not (await call("kim", "GET", "/api/factory/crew")).json().get("pacing"),
+           str(ca.get("pacing")))
+
+        print("== a save that lands while the home is being built is not lost to the kept copy ==")
+        from tares import factory_home as fh
+        real = fh.home
+        def slow_home(*a, **k):
+            out = real(*a, **k)
+            fh.clear_cache()          # the owner's save lands while this read is still building
+            return out
+        fh.home = slow_home
+        try:
+            fh.clear_cache()
+            await call("kim", "GET", "/api/home")
+        finally:
+            fh.home = real
+        ck("the build that was overtaken by a clear is not kept", not fh._cache, str(list(fh._cache)))
 
         print("== the cell's own credential sets the default ==")
         r = await call("root", "PUT", "/api/crew/settings", {"autonomy": "L3-review"})
