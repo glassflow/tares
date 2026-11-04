@@ -155,6 +155,55 @@ async def main():
            and "already merged" not in r.text, f"{r.status_code} {r.text[:160]} vs {unk.status_code} {unk.text[:160]}")
         await call("kim", "PATCH", "/api/services/service-a", {"merged_into": None})
         store.set_service("zephyr-api", "test", merged_into=None)
+        # a chain of Zephyrwatch's own services ends in service-a: Kim's merge of service-a would
+        # make it longer than the limit, though she sees none of the links
+        chain = ["zephyr-w1", "zephyr-w2", "zephyr-w3", "zephyr-w4", "zephyr-w5"]
+        tw = base - timedelta(minutes=2)
+        for w in chain:
+            store.append([Envelope(source="zephyr-logs", source_type=source_type_for("otlp"),
+                                   key_value=w, event_type="INFO", text=f"{w} handled 1",
+                                   event_time=tw, payload={}, labels={"service": w}, ingest_time=tw)])
+        sre_home.clear_cache()
+        for a, b in zip(chain[1:], chain):
+            store.set_service(a, "test", merged_into=b)
+        store.set_service(chain[0], "test", merged_into="service-a")
+        r = await call("kim", "PATCH", "/api/services/service-a", {"merged_into": "edge-proxy"})
+        ck("a merge that makes a chain too long through links she cannot see is refused",
+           r.status_code == 400 and "chain of more than" in r.text and "zephyr" not in r.text
+           and not (store.service_settings().get("service-a") or {}).get("merged_into"),
+           f"{r.status_code} {r.text[:200]}")
+        r = await call("kim", "PATCH", "/api/services/service-a", {"merged_into": "zephyr-w1"})
+        ck("a merge that would close a loop through a link she cannot see is refused",
+           r.status_code == 400 and "chain of more than" in r.text
+           and not (store.service_settings().get("service-a") or {}).get("merged_into"),
+           f"{r.status_code} {r.text[:200]}")
+        r = await call("lee", "PATCH", "/api/services/service-a", {"merged_into": "edge-proxy"})
+        ck("and Lee, who sees them, is refused the same", r.status_code == 400
+           and "chain of more than" in r.text, f"{r.status_code} {r.text[:200]}")
+        # a hidden name merged into service-a resolves to it and is written, so a merge that closes
+        # a loop through the hidden chain is refused for it too
+        r = await call("kim", "PATCH", "/api/services/zephyr-w1", {"merged_into": "zephyr-w5"})
+        ck("a hidden name that resolves to a service she sees is refused a merge that closes a loop",
+           r.status_code == 400 and "chain of more than" in r.text
+           and (store.service_settings().get("zephyr-w1") or {}).get("merged_into") == "service-a",
+           f"{r.status_code} {r.text[:200]} {(store.service_settings().get('zephyr-w1') or {}).get('merged_into')}")
+        # two of Zephyrwatch's services linked to each other only: Kim's merge of one into the
+        # other would close a loop, and she must get the answer for a name nothing has
+        for w in ("zephyr-x1", "zephyr-x2"):
+            store.append([Envelope(source="zephyr-logs", source_type=source_type_for("otlp"),
+                                   key_value=w, event_type="INFO", text=f"{w} handled 1",
+                                   event_time=tw, payload={}, labels={"service": w}, ingest_time=tw)])
+        sre_home.clear_cache()
+        store.set_service("zephyr-x2", "test", merged_into="zephyr-x1")
+        r = await call("kim", "PATCH", "/api/services/zephyr-x1", {"merged_into": "zephyr-x2"})
+        unk = await call("kim", "PATCH", "/api/services/nosuch-a", {"merged_into": "nosuch-b"})
+        ck("a hidden name answers a merge as an unknown name does, not with a refusal about its links",
+           r.status_code == unk.status_code == 404 and alike(r, unk, "zephyr-x1", "nosuch-a")
+           and "chain of more than" not in r.text, f"{r.status_code} {r.text[:160]} vs {unk.status_code} {unk.text[:160]}")
+        store.set_service("zephyr-x2", "test", merged_into=None)
+        for w in chain:
+            store.set_service(w, "test", merged_into=None)
+        sre_home.clear_cache()
         r = await call("kim", "PATCH", "/api/services/service-a", {"display": "Service A"})
         ck("a shared service still takes a change", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
         await call("kim", "PATCH", "/api/services/service-a", {"display": None})
@@ -312,6 +361,29 @@ async def main():
            and "kim-laptop" in names, str(names))
         r = await call("lee", "GET", "/api/sre/settings")
         ck("Lee's People page lists it", "zephyr-reader" in [k["name"] for k in r.json()["people"]["keys"]])
+        print("== the Tools list and the key count ==")
+        store.upsert_catalog_source("example-gh", source_type_for("github_app"), "github_app", "1h", {
+            "labels": [{"name": "repo", "field": "repo", "primary": True}]})
+        runtime.reload_catalog()
+        r = await call("kim", "GET", "/api/sre/settings")
+        tools = [t["name"] for t in r.json()["tools"]["rows"]]
+        ck("Kim's Tools list leaves out the sources only Zephyrwatch holds",
+           r.status_code == 200 and "zephyr-gh" not in tools and "example-gh" in tools
+           and "zephyr" not in json.dumps(r.json()["tools"]), str(tools))
+        r = await call("lee", "GET", "/api/sre/settings")
+        tools = [t["name"] for t in r.json()["tools"]["rows"]]
+        ck("Lee's Tools list has it", "zephyr-gh" in tools and "example-gh" in tools, str(tools))
+        live = [k for k in store.list_api_keys() if not k.get("revoked_at")]
+        shared = [k for k in live if k.get("project") != vault]
+        ck("the cell has a key for Zephyrwatch besides the others", len(live) == len(shared) + 1,
+           f"{len(live)} {len(shared)}")
+        r = await call("kim", "GET", "/api/factory/settings")
+        ck("Kim's key count leaves out the project key",
+           r.status_code == 200 and r.json()["people"]["keys"]["count"] == len(shared),
+           f"{r.status_code} {r.text[:200]}")
+        r = await call("lee", "GET", "/api/factory/settings")
+        ck("Lee's count has it", r.status_code == 200 and r.json()["people"]["keys"]["count"] == len(live),
+           f"{r.status_code} {r.text[:200]}")
         r = await call("kim", "PUT", "/api/sre/settings/people", {"revoke": zkey})
         unk = await call("kim", "PUT", "/api/sre/settings/people", {"revoke": "nokey000"})
         ck("Kim revoking it there answers as for a key that is not there",

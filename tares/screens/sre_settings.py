@@ -371,14 +371,15 @@ def _notes(store, watcher, inv, channels, problem) -> dict:
             ]}
 
 
-def _tools(store, runtime, now) -> dict:
+def _tools(store, runtime, now, hide=()) -> dict:
     catalog = runtime.catalog
+    blind = sre.hidden_sources(store, hide)   # sources only a private project holds
     names = [s.name for s in catalog.sources.values()]
     got = goal._health_for(runtime.health_snapshot() or {}, store, names)
     rows = []
     for s in sorted(catalog.sources.values(), key=lambda x: x.name):
         kind = TOOL_KINDS.get(s.connector)
-        if kind is None:
+        if kind is None or s.name in blind:
             continue
         st = goal.source_state(store, s, got.get(s.name), now)
         ok = st["state"] in ("receiving", "waiting")
@@ -445,7 +446,7 @@ def settings_screen(store, runtime, can_edit: bool, channels, problem, workspace
         "watching": _watching(store, runtime, watcher, t, models),
         "investigating": _investigating(store, runtime, watcher, inv, t, models),
         "notes": _notes(store, watcher, inv, channels, problem),
-        "tools": _tools(store, runtime, t),
+        "tools": _tools(store, runtime, t, hide),
         "people": _people(store, can_edit, workspace, hide),
         "edition": _edition(store, can_edit),
         "advanced": _advanced(),
