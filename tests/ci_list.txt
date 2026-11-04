@@ -104,6 +104,7 @@ test_pickup
 test_plugin_challenger
 test_postgres
 test_pricing
+test_private_admin_routes
 test_private_raw_routes
 test_private_reads
 test_private_routes

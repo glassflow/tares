@@ -1846,13 +1846,26 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                              "WHERE trigger = ?", [now_utc(), name])
         return agents
 
-    def clear_catalog(self) -> None:
+    def clear_catalog(self, keep: dict | None = None, keep_projects=()) -> None:
+        """Delete the catalog's objects and every project's wiring. `keep`: {kind: names} to leave
+        (the objects a caller cannot see, kind source, trigger, agent or mcp_server);
+        `keep_projects`: ids of projects whose wiring stays."""
+        keep = keep or {}
         with self._swrite:
-            self.sc.execute("DELETE FROM catalog_sources")
-            self.sc.execute("DELETE FROM catalog_triggers")
-            self.sc.execute("DELETE FROM catalog_agents")
-            self.sc.execute("DELETE FROM mcp_servers")
-            self.sc.execute("DELETE FROM project_wiring")
+            for table, kind in (("catalog_sources", "source"), ("catalog_triggers", "trigger"),
+                                ("catalog_agents", "agent"), ("mcp_servers", "mcp_server")):
+                names = sorted(keep.get(kind) or ())
+                if names:
+                    self.sc.execute(f"DELETE FROM {table} WHERE name NOT IN "
+                                    f"({','.join('?' * len(names))})", names)
+                else:
+                    self.sc.execute(f"DELETE FROM {table}")
+            ids = sorted(keep_projects)
+            if ids:
+                self.sc.execute("DELETE FROM project_wiring WHERE project NOT IN "
+                                f"({','.join('?' * len(ids))})", ids)
+            else:
+                self.sc.execute("DELETE FROM project_wiring")
 
     # ── Tares agents (a prompt attached to a trigger; enabled ⟺ subscribed) ──
     def upsert_catalog_agent(self, name: str, trigger: str, prompt: str,

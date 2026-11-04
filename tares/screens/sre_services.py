@@ -281,7 +281,7 @@ def register(app, store, h, ctx):
         def write():
             try:
                 sre.patch_service(store, runtime.catalog, name,
-                                  {SETTINGS_FIELDS[k]: v for k, v in body.items()}, who)
+                                  {SETTINGS_FIELDS[k]: v for k, v in body.items()}, who, hide)
             except LookupError:
                 raise HTTPException(404, f"No service called {name}")
             except ValueError as e:
