@@ -331,6 +331,45 @@ function cleanEnv(home, dist) {
     }
   }
 
+  // ── a read key on a new cell (TR-895 F1): the start step cannot be clicked, and nothing is sent ──
+  console.log("== read key, new cell ==");
+  {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-sre-home-e2e-read-new-"));
+    execFileSync(python, [path.join(__dirname, "seed-sre-home.py"), home, "new-cell"], { cwd: REPO, encoding: "utf8", env: { ...process.env, PYTHONPATH: REPO } });
+    const root = "e2e-root-token";
+    const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env: { ...cleanEnv(home, dist), TARES_AUTH_TOKEN: root } });
+    try {
+      ck("read key, new cell: daemon up", await waitFor(`${BASE}/health`));
+      const made = async (name, scopes) => (await (await fetch(`${BASE}/api/keys`, {
+        method: "POST", headers: { Authorization: `Bearer ${root}`, "Content-Type": "application/json" }, body: JSON.stringify({ name, scopes }),
+      })).json()).secret;
+      const open = async (secret) => {
+        const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+        await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch (e) { /* none */ } }, secret);
+        const page = await ctx.newPage();
+        const posts = [];
+        page.on("request", (r) => { if (r.method() !== "GET") posts.push(`${r.method()} ${new URL(r.url()).pathname}`); });
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("start-checklist").waitFor();
+        return { ctx, page, posts };
+      };
+      const viewer = await open(await made("viewer", ["read"]));
+      const doBtn = viewer.page.getByTestId("start-do");
+      ck("read key, new cell: the start step has buttons, all disabled", (await doBtn.count()) >= 1 && (await doBtn.evaluateAll((els) => els.every((e) => e.disabled))));
+      await doBtn.first().click({ force: true }).catch(() => {});
+      await viewer.page.waitForTimeout(400);
+      ck("read key, new cell: a click sends nothing and shows no failure", viewer.posts.length === 0 && (await viewer.page.getByTestId("start-error").count()) === 0, viewer.posts.join(","));
+      await viewer.ctx.close();
+      const ops = await open(await made("ops", ["admin"]));
+      ck("admin key, new cell: a start button can be clicked", (await ops.page.getByTestId("start-do").evaluateAll((els) => els.some((e) => !e.disabled))));
+      await ops.ctx.close();
+    } finally {
+      daemon.kill();
+      await waitGone(`${BASE}/health`);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
   // ── the sample states: they need no data ─────────────────────────────────
   console.log("== sample states ==");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-sre-home-e2e-sample-"));

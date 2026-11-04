@@ -267,7 +267,7 @@ export default function Home() {
       {failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}
       {failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
       {home.start?.show && (
-        <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={doStart} doing={doing} notice={startNote}
+        <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={canAct ? doStart : undefined} doing={doing} notice={startNote}
                         hide={sample ? () => Promise.resolve() : undefined} />
       )}
       {home.start && (
