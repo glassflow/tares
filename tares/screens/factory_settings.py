@@ -209,7 +209,9 @@ def register(app, store, h, ctx):
         pace = safe(fx.pace, {}) or {}
         given, total = grants(now)
         value, _ = edition_mod.edition(store)
-        keys = [k for k in safe(store.list_api_keys, []) or [] if not k.get("revoked_at")]
+        hidden = h.hidden_ids()   # a private project's keys are not counted for a non-member
+        keys = [k for k in safe(store.list_api_keys, []) or []
+                if not k.get("revoked_at") and k.get("project") not in hidden]
         team = _text(os.getenv("TARES_WORKSPACE_URL"))
         return {
             "can_change": can_change,

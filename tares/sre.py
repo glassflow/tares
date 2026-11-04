@@ -577,14 +577,16 @@ MAX_DISPLAY = 100
 MAX_NAME = 200
 
 
-def check_merge(settings: dict, name: str, target: str) -> None:
+def check_merge(settings: dict, name: str, target: str, chain_only: bool = False) -> None:
     """Refuse a merge of `name` into `target` that would lose or hide data. A service can only be
     merged into one that is not merged elsewhere, and the chain it makes must stay within MAX_HOPS
-    hops, or the services at its far end would show up as separate rows."""
-    if target == name:
+    hops, or the services at its far end would show up as separate rows.
+    `chain_only` skips the first two refusals: the one that names where the target is merged
+    (a caller who cannot see that must not read it), and the self-merge already answered."""
+    if target == name and not chain_only:
         raise ValueError(f"{name} cannot be merged into itself: pick a different service")
     onward = (settings.get(target) or {}).get("merged_into")
-    if onward:
+    if onward and not chain_only:
         raise ValueError(f"{target} is already merged into {onward}, so {name} cannot be merged "
                          f"into it: merge {name} into {onward} instead")
     links = {n: st["merged_into"] for n, st in settings.items() if st.get("merged_into")}
@@ -651,6 +653,10 @@ def patch_service(store, catalog, name: str, body, by: str, hide=()) -> dict:
                 n for r in raw["recs"].values() for n, srcs in r.get("raw", {}).items()
                 if srcs and srcs <= blind}
             check_merge({n: st for n, st in settings.items() if n not in gone}, name, target)
+            # the links of services they cannot see still count toward the chain and the loop; the
+            # refusal names only the two they gave. A hidden target that is itself merged is taken
+            # like a name nothing has (a merge into a new name is allowed), so it is not refused.
+            check_merge(settings, name, target, chain_only=True)
         changes["merged_into"] = target
     # the same test GET /api/services/{name} applies, so a name that answers 404 there does here
     if canonical(name, settings) not in seen:
