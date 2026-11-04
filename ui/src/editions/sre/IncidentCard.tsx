@@ -9,10 +9,12 @@ const K = "font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foregrou
 
 /** One open incident: what is failing, the likely cause and the next step, the errors around it
  *  with a mark for each deploy, and the buttons that act on it. */
-export function IncidentCard({ incident: i, busy, onPickUp, onResolve }: {
+export function IncidentCard({ incident: i, busy, canAct = true, onPickUp, onResolve }: {
   incident: HomeIncident;
   /** The incident action in flight ("<id>:on_it"), or null. */
   busy: string | null;
+  /** False for a read-only key: the buttons that change the incident are left out. */
+  canAct?: boolean;
   onPickUp: (id: string) => void;
   onResolve: (id: string) => void;
 }) {
@@ -58,9 +60,9 @@ export function IncidentCard({ incident: i, busy, onPickUp, onResolve }: {
           </p>
           <div className="flex flex-wrap gap-2">
             <Button asChild variant="secondary"><Link to={`/timeline?service=${encodeURIComponent(i.service)}`} data-testid="incident-timeline">Open the timeline</Link></Button>
-            <Button variant="secondary" busy={busy === `${i.id}:resolve`} disabled={busy !== null && busy !== `${i.id}:resolve`}
-              onClick={() => onResolve(i.id)} data-testid="incident-resolve">Mark resolved</Button>
-            {!pickedUp && (
+            {canAct && <Button variant="secondary" busy={busy === `${i.id}:resolve`} disabled={busy !== null && busy !== `${i.id}:resolve`}
+              onClick={() => onResolve(i.id)} data-testid="incident-resolve">Mark resolved</Button>}
+            {canAct && !pickedUp && (
               <Button busy={busy === `${i.id}:on_it`} disabled={busy !== null && busy !== `${i.id}:on_it`}
                 onClick={() => onPickUp(i.id)} data-testid="incident-on-it">I&apos;m on it</Button>
             )}

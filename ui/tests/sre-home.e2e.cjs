@@ -284,6 +284,53 @@ function cleanEnv(home, dist) {
     }
   }
 
+  // ── a read key (TR-895): the buttons are not there, and the page names the key ──
+  console.log("== read key ==");
+  {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-sre-home-e2e-read-key-"));
+    execFileSync(python, [path.join(__dirname, "seed-sre-home.py"), home, "one-incident"], { cwd: REPO, encoding: "utf8", env: { ...process.env, PYTHONPATH: REPO } });
+    const root = "e2e-root-token";
+    const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env: { ...cleanEnv(home, dist), TARES_AUTH_TOKEN: root } });
+    try {
+      ck("read key: daemon up", await waitFor(`${BASE}/health`));
+      const made = async (name, scopes) => (await (await fetch(`${BASE}/api/keys`, {
+        method: "POST", headers: { Authorization: `Bearer ${root}`, "Content-Type": "application/json" }, body: JSON.stringify({ name, scopes }),
+      })).json()).secret;
+      const open = async (secret) => {
+        const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+        await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch (e) { /* none */ } }, secret);
+        const page = await ctx.newPage();
+        await page.goto(`${BASE}/`, { waitUntil: "load" });
+        await page.getByTestId("incident-card").waitFor();
+        return { ctx, page };
+      };
+      const viewer = await open(await made("viewer", ["read"]));
+      ck("read key: the card is there to read", (await viewer.page.getByTestId("incident-title").count()) === 1);
+      ck("read key: no Mark resolved and no I'm on it", (await viewer.page.getByTestId("incident-resolve").count()) === 0 && (await viewer.page.getByTestId("incident-on-it").count()) === 0);
+      const note = await text(viewer.page.getByTestId("home-read-only"));
+      ck("read key: one note names the key and says it can only read", /viewer/.test(note) && /can only read/.test(note), note);
+      ck("read key: no failure message", (await viewer.page.getByTestId("home-action-error").count()) === 0);
+      await common(viewer.page, "read key", 1440);
+      await viewer.ctx.close();
+      const ops = await open(await made("ops", ["admin"]));
+      ck("admin key: both buttons, no note", (await ops.page.getByTestId("incident-resolve").count()) === 1 && (await ops.page.getByTestId("incident-on-it").count()) === 1 && (await ops.page.getByTestId("home-read-only").count()) === 0);
+      await ops.ctx.close();
+      // a key that can read when the page loads but is refused when it clicks (it was changed meanwhile): the refusal names the key
+      const late = await made("late-viewer", ["admin"]);
+      const lp = await open(late);
+      await lp.page.route("**/api/incidents/*/on_it", (r) => r.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ detail: "this credential lacks the 'admin' scope" }) }));
+      await lp.page.getByTestId("incident-on-it").click();
+      await lp.page.getByTestId("home-action-error").waitFor();
+      const refused = await text(lp.page.getByTestId("home-action-error"));
+      ck("a refused click names the key and does not say try again", /late-viewer/.test(refused) && /can only read/.test(refused) && !/try again/i.test(refused), refused);
+      await lp.ctx.close();
+    } finally {
+      daemon.kill();
+      await waitGone(`${BASE}/health`);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }
+
   // ── the sample states: they need no data ─────────────────────────────────
   console.log("== sample states ==");
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-sre-home-e2e-sample-"));
