@@ -5,6 +5,7 @@ import { ApiError } from "../../api";
 import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
+import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
@@ -382,5 +383,11 @@ export default function FactorySettings() {
   const { search } = useLocation();
   const q = new URLSearchParams(search);
   if (q.has("tab") || q.has("cloud")) return <Navigate to={`/settings/advanced${search}`} replace />;
-  return <SettingsPage />;
+  return <SettingsGate />;
+}
+
+// A key that can only read is refused by the cell, so the page does not ask.
+function SettingsGate() {
+  const refused = useSettingsRefused(isSample(useSample()));
+  return refused ? <SettingsRefused testId="factory-settings-refused" /> : <SettingsPage />;
 }

@@ -1,8 +1,8 @@
 """The AI SRE Settings page (TR-764): GET /api/sre/settings and PUT /api/sre/settings/{group}.
 
 The seven groups in order, every editable part saved and shown again, the sentence that says
-which part was saved and which was not when one fails, who may write (a read key may load the
-page and gets 403 on every write, and sees no revoke data), the words (no `trial`, no forbidden
+which part was saved and which was not when one fails, who may open the page and write (a read key gets
+403 on the page and on every write, an admin key gets both), the words (no `trial`, no forbidden
 word, no em dash, "1 minute ago" and "10 minutes"), a new cell that says plainly that nothing has
 been spent and that Slack is not connected, the budget reset wording, the edition switch and the
 keys, and a platform cell that still answers 404 and changes nothing.
@@ -194,14 +194,13 @@ async def main():
         # ── who may write ───────────────────────────────────────────────────
         print("== who may write ==")
         r = await get(rc)
-        eq("a read key may load the page", r.status_code, 200)
-        rb = r.json()
-        eq("and it cannot edit", (rb["can_edit"], rb["edition"]["can_switch"], rb["people"]["editable"]),
-           (False, False, False))
-        ck("it sees no key ids and no revoke", all("id" not in k and "can_revoke" not in k
-                                                   for k in rb["people"]["keys"]) and rb["people"]["keys"],
-           rb["people"]["keys"])
-        ck("while the admin does", all(k["id"] and k["can_revoke"] for k in b["people"]["keys"]) and b["people"]["keys"],
+        eq("a read key is refused the page", r.status_code, 403)
+        ck("and gets nothing of it", "people" not in r.text and "watching" not in r.text, r.text[:200])
+        r = await get(cx)
+        eq("an admin key still gets the page", r.status_code, 200)
+        eq("and may edit it", (r.json()["can_edit"], r.json()["edition"]["can_switch"], r.json()["people"]["editable"]),
+           (True, True, True))
+        ck("it sees the key ids and revoke", all(k["id"] and k["can_revoke"] for k in b["people"]["keys"]) and b["people"]["keys"],
            b["people"]["keys"])
         before = store.get_catalog_agent("watcher", project=UID)
         for group, body in (("watching", {"every": "5m"}), ("investigating", {"cooldown": "2h"}),

@@ -6,6 +6,7 @@ import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type 
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
+import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import {
@@ -521,7 +522,12 @@ function applyLocal(s: SreSettings, group: FieldGroupName, values: Values): SreS
   return { ...s, [group]: { ...g, fields } };
 }
 
-export default function Settings() {
+export default function SettingsGate() {
+  const refused = useSettingsRefused(asSample(useSample()) !== null);
+  return refused ? <SettingsRefused testId="sre-settings-refused" /> : <Settings />;
+}
+
+function Settings() {
   const named = useSample();
   const sample = asSample(named);
   const { toast } = useToast();
