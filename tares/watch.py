@@ -8,7 +8,7 @@ set up, or the schedule has stopped ticking.
 
 `compute` is the answer now. `sync` compares it with the `watch_state` table and keeps the table
 current, returning the services that changed. `post` tells Slack about each change once, on a cell
-whose edition is sre; every other cell keeps the rows and says nothing. `run` is the daemon loop.
+whose edition is sre; every other cell keeps the rows and says nothing. `run` is the daemon loop; on a cell that does not use the AI SRE it keeps no rows.
 """
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ _SYNC_LOCK = threading.Lock()
 _POST_LOCK = threading.Lock()
 _ATTEMPTS: dict[str, float] = {}   # service -> when a post for it last failed or was tried
 clock = time.monotonic             # the retry clock; a test replaces it instead of sleeping
-EVERY_TICK: list = []              # hook(store, catalog, changes), called after each sync
+EVERY_TICK: list = []              # hook(store, catalog, changes), called after each pass
 
 
 def _aware(dt):
@@ -462,10 +462,26 @@ def uses_sre(store, catalog) -> bool:
     return bool(sre.roles(store, catalog, include_paused=True)["watchers"])
 
 
+def _forget(store) -> None:
+    """A cell that does not use the AI SRE keeps no watch state: rows left from when it did (a
+    watcher removed, an AI SRE cell switched to another edition) would go on saying "watched"."""
+    with _SYNC_LOCK:
+        rows = store.watch_rows()
+        if rows:
+            store.delete_watch_rows(list(rows))
+            for name in rows:
+                _ATTEMPTS.pop(name, None)
+
+
 def _tick(store, catalog) -> None:
     # the look reads 24 hours of events for every service; a cell that does not use the AI SRE
-    # skips it (TR-896). The hooks stay: they read the incident tables, not the events.
-    changes = sync(store, catalog) if uses_sre(store, catalog) else []
+    # skips it and drops what an earlier look left (TR-896). The hooks stay on every cell: they
+    # read the incident tables, not the events.
+    if uses_sre(store, catalog):
+        changes = sync(store, catalog)
+    else:
+        _forget(store)
+        changes = []
     for hook in list(EVERY_TICK):
         try:
             hook(store, catalog, changes)
@@ -475,8 +491,9 @@ def _tick(store, catalog) -> None:
 
 
 async def run(runtime, stop: asyncio.Event) -> None:
-    """The daemon's watch: every TARES_WATCH_SECONDS (60) look at who is watching, keep the table
-    current and tell Slack what changed. It reads the live catalog each pass and never stops on
+    """The daemon's watch: every TARES_WATCH_SECONDS (60), on a cell that uses the AI SRE, look at
+    who is watching, keep the table current and tell Slack what changed; on any cell run the tick
+    hooks. It reads the live catalog each pass and never stops on
     an error."""
     while not stop.is_set():
         try:

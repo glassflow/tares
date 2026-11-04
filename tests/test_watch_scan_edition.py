@@ -26,7 +26,7 @@ os.environ["ANTHROPIC_API_KEY"] = "sk-ant-test-not-a-real-key"
 
 from fixtures.sre_cell import build
 from tares import edition as edition_mod
-from tares import sre_store, watch as W
+from tares import sre, sre_store, watch as W
 from tares.config import catalog_from_db
 from tares.envelope import now_utc
 from tares.store import Store
@@ -105,6 +105,34 @@ ck("on factory: no scan", tick(s)[0] == 0)
 s.set_setting(edition_mod.EDITION_SETTING, "sre")
 scans, _h, rows = tick(s)
 ck("switched to the AI SRE, the next tick scans and keeps state", scans == 1 and rows > 0, f"{scans} {rows}")
+
+print("== a cell that stops using the AI SRE keeps no watch state ==")
+s = cell("sre-to-factory", "sre", watcher=True)
+ck("on the AI SRE it keeps state", tick(s)[2] > 0)
+s.set_setting(edition_mod.EDITION_SETTING, "factory")
+scans, hooks, rows = tick(s)
+ck("switched to factory, the next tick scans nothing and drops every row", (scans, rows) == (0, 0), f"{scans} {rows}")
+ck("and the watch view says nothing is watched, not some", W.view(s, catalog_from_db(s))["watching"] == "nothing",
+   W.view(s, catalog_from_db(s))["watching"])
+
+s = cell("platform-loses-watcher", None, watcher=True)
+ck("a platform cell with a watcher keeps state", tick(s)[2] > 0)
+s.delete_catalog_trigger("watch-prod")
+ck("its last watcher is gone", not sre.roles(s, catalog_from_db(s), include_paused=True)["watchers"])
+scans, hooks, rows = tick(s)
+ck("the next tick scans nothing and drops every row", (scans, rows) == (0, 0), f"{scans} {rows}")
+ck("the hooks still run", hooks == 1, str(hooks))
+ck("a service has no watch state", W.service_state(s, s.watch_rows(), "service-a", {}, now_utc())["watched"] is None)
+
+print("== a watcher that is only paused still counts ==")
+s = cell("platform-paused", None, watcher=True)
+uid = "prj-" + __import__("fixtures.sre_cell", fromlist=["PROJECT"]).PROJECT
+s.update_project(uid, status="paused")
+cat = catalog_from_db(s)
+ck("the project is paused: no running watcher, one listed when asked",
+   not sre.roles(s, cat)["watchers"] and len(sre.roles(s, cat, include_paused=True)["watchers"]) == 1)
+scans, _h, rows = tick(s)
+ck("a platform cell whose only watcher is paused still scans, so its page can say why", scans == 1 and rows > 0, f"{scans} {rows}")
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
