@@ -180,6 +180,13 @@ async def main():
         r = await call("lee", "PATCH", "/api/services/service-a", {"merged_into": "edge-proxy"})
         ck("and Lee, who sees them, is refused the same", r.status_code == 400
            and "chain of more than" in r.text, f"{r.status_code} {r.text[:200]}")
+        # a hidden name merged into service-a resolves to it and is written, so a merge that closes
+        # a loop through the hidden chain is refused for it too
+        r = await call("kim", "PATCH", "/api/services/zephyr-w1", {"merged_into": "zephyr-w5"})
+        ck("a hidden name that resolves to a service she sees is refused a merge that closes a loop",
+           r.status_code == 400 and "chain of more than" in r.text
+           and (store.service_settings().get("zephyr-w1") or {}).get("merged_into") == "service-a",
+           f"{r.status_code} {r.text[:200]} {(store.service_settings().get('zephyr-w1') or {}).get('merged_into')}")
         # two of Zephyrwatch's services linked to each other only: Kim's merge of one into the
         # other would close a loop, and she must get the answer for a name nothing has
         for w in ("zephyr-x1", "zephyr-x2"):
