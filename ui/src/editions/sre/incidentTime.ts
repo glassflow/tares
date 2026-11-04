@@ -10,7 +10,7 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 
 /** "14:20" */
-export const clock = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+export const clock = (ms: number) => (Number.isFinite(ms) ? new Date(ms).toISOString().slice(11, 16) : "");
 
 /** A rough length of time, as the cell says it: "less than a minute", "45 minutes", "3 days". */
 export function spanWords(ms: number) {

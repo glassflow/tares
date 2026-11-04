@@ -58,7 +58,7 @@ const WRITTEN = new Set<TimelineItem["kind"]>(["deploy", "incident", "alert"]);
 // ── time, always UTC
 const pad = (n: number) => String(n).padStart(2, "0");
 const ms = (t: string) => Date.parse(t);
-const clockSeconds = (t: string) => new Date(t).toISOString().slice(11, 19);
+const clockSeconds = (t: string) => (Number.isNaN(Date.parse(t)) ? "" : new Date(t).toISOString().slice(11, 19));
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

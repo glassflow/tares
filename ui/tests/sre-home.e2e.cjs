@@ -176,6 +176,28 @@ function cleanEnv(home, dist) {
         }
       }
       if (state === "all-quiet") {
+        // Read the note (TR-894): it opens the incident the check was filed under, not the check
+        // The link shows for a person who cannot answer (a read key): the same home, with can_answer off
+        const ro = await ctx.newPage();
+        await ro.route("**/api/home", async (r) => {
+          const res = await r.fetch();
+          const body = await res.json();
+          body.raised = (body.raised || []).map((x) => ({ ...x, can_answer: false }));
+          await r.fulfill({ response: res, json: body });
+        });
+        await ro.goto(`${BASE}/`, { waitUntil: "load" });
+        await ro.getByTestId("raised").waitFor();
+        const filed = ro.getByTestId("raised-row").filter({ has: ro.getByTestId("read-note") });
+        const loose = ro.getByTestId("raised-row").filter({ hasNot: ro.getByTestId("read-note") });
+        ck("all-quiet: only the check filed under an incident has Read the note", (await filed.count()) === 1 && (await loose.count()) === 1, `${await filed.count()} / ${await loose.count()}`);
+        const href = await filed.getByTestId("read-note").getAttribute("href");
+        ck("all-quiet: Read the note goes to an incident id, not the run id", /^\/incidents\/inc_[0-9a-f]+$/.test(href || "") && !(href || "").includes(await filed.getAttribute("data-run")), href);
+        const there = await ctx.newPage();
+        await there.goto(`${BASE}${href}`, { waitUntil: "load" });
+        await there.getByTestId("status-line").or(there.getByTestId("incident-missing")).first().waitFor();
+        ck("all-quiet: and that page opens the incident", (await there.getByTestId("incident-missing").count()) === 0 && (await there.getByTestId("status-line").count()) === 1);
+        await there.close();
+        await ro.close();
         // Yes on a raised item: the answer is sent and shown
         const row = page.getByTestId("raised-row").first();
         const rid = await row.getAttribute("data-run");

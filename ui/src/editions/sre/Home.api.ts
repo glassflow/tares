@@ -92,8 +92,10 @@ export interface HomeService {
 }
 
 export interface HomeRaised {
-  /** The id of the check; the worth route and the incident page take it. */
+  /** The id of the check; the worth route takes it. */
   id: string;
+  /** The incident the check's note was filed under, which the incident page takes; null when none. */
+  incident_id: string | null;
   at: string;
   /** "14:09" for today, "29 Sep" for an earlier day. */
   when_words: string;

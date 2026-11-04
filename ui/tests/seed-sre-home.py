@@ -4,6 +4,7 @@ The shared fixture (tests/fixtures/sre_cell.py) writes the cell: edge-proxy, ser
 writes the runs, findings and incidents of one state:
   watcher-off     the watcher used its $25 budget this month; its last check was a while ago
   all-quiet       the watcher checked a few minutes ago and found nothing; one old thing was raised
+                  (the older of the two raised checks sits in a resolved incident, the other in none)
   one-incident    all-quiet, and service-a has an open incident with a note and a post in Slack
   many-incidents  five open incidents (the page shows three and says "2 more")
   new-cell        nothing connected at all
@@ -83,6 +84,12 @@ try:
                  outcome="no_op")
         raised("seed-old-1", "edge-proxy", 3 * 24 * 60)
         raised("seed-old-2", "docs-site", 4 * 24 * 60)
+        if state == "all-quiet":
+            # seed-old-1 was filed under an incident that is now resolved; seed-old-2 under none
+            old = at(3 * 24 * 60)
+            inc = store.create_incident("edge-proxy", uid, old, state="resolved",
+                                        resolved_at=old + timedelta(minutes=12), resolution="itself")
+            store.add_incident_note(inc["id"], "seed-old-1", old)
     if state == "one-incident":
         open_incident("service-a", 40)
     if state == "many-incidents":
