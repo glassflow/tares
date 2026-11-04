@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
-from fastapi import Query
+from fastapi import Query, Request
 
 from .. import factory_home as fh
 from .. import factory_waiting as fw
@@ -89,13 +89,13 @@ def _row(q: dict, now, milestones: dict[str, list[dict]]) -> dict:
 
 def register(app, store, h, ctx):
     @app.get("/api/factory/reviews")
-    def factory_reviews(project: str = Query("")):
+    def factory_reviews(request: Request, project: str = Query("")):
         """{waiting_for_you: [row], with_the_crew: [row], autonomy_text, project, now}. Both lists
         have the longest waiting first. `?project=<id>` keeps one project's pull requests; an id
         the cell does not know gives two empty lists. `project` is {id, name} of the filter, or
         null."""
         now = now_utc()
-        fx = ctx.fx
+        fx = fh.for_caller(ctx.fx, request)
         shown = None
         if project:
             hidden = h.hidden_ids()

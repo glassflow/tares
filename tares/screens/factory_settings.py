@@ -25,7 +25,7 @@ from .. import linear as linear_mod
 from .. import providers as providers_mod
 from .. import builtin_agents
 from ..envelope import now_utc
-from ..factory_home import _count, _dt, _how_far, plain_ago
+from ..factory_home import _count, _dt, _how_far, for_caller, plain_ago
 from .factory_docs import ago
 
 GRANT_LINE = re.compile(r'^\s*-\s+"(.*)"\s+\((\d{4}-\d{2}-\d{2})\)\s*$')
@@ -201,11 +201,12 @@ def register(app, store, h, ctx):
         now = now_utc()
         scopes = getattr(request.state, "scopes", None)
         can_change = scopes is None or "admin" in scopes
-        s = safe(ctx.fx.settings, {}) or {}
+        fx = for_caller(ctx.fx, request)
+        s = safe(fx.settings, {}) or {}
         how = _how_far(s)
         builders = s.get("builders_max")
         builders = builders if isinstance(builders, int) and 1 <= builders <= 20 else 3
-        pace = safe(ctx.fx.pace, {}) or {}
+        pace = safe(fx.pace, {}) or {}
         given, total = grants(now)
         value, _ = edition_mod.edition(store)
         keys = [k for k in safe(store.list_api_keys, []) or [] if not k.get("revoked_at")]
