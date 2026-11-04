@@ -38,6 +38,7 @@ test_factory_builder
 test_factory_close
 test_factory_crew
 test_factory_crew_page
+test_factory_crew_scope
 test_factory_crew_standup
 test_factory_desk
 test_factory_docs_page

@@ -399,6 +399,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
     is addressed to the caller's person (TR-739); its keys replace the single-person ones."""
+    fx = for_caller(fx, request)
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else dict(factory_mod.CREW_DEFAULTS)
     team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
@@ -467,6 +468,19 @@ def _cache_key(store, request) -> tuple:
     cred = getattr(state, "credential", None) or {}
     return (id(store), cred.get("name") or "open", (cred.get("person") or {}).get("id"),
             projects_view(request))
+
+
+def for_caller(fx, request):
+    """`fx` with the crew's settings and pacing read for the caller (a person's own over the
+    cell's default), so a screen shows what the caller saved. Unchanged without a request."""
+    bind = getattr(fx, "for_request", None)
+    return bind(request) if bind is not None and request is not None else fx
+
+
+def clear_cache() -> None:
+    """Forget every kept home, so the next read shows a change made just now."""
+    with _cache_lock:
+        _cache.clear()
 
 
 def drop_cache(store, request) -> None:

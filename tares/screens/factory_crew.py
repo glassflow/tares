@@ -14,13 +14,15 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from fastapi import Request
+
 from .. import claude_usage
 from .. import factory as factory_mod
 from .. import standup as standup_mod
 from ..envelope import now_utc
 from ..factory_api import project_progress
 from ..factory_home import (_STALE_MINUTES, _count, _dt, _how_far, _minutes, _plan, _resets,
-                            crew_member, heard_ago, plain_wait)
+                            crew_member, for_caller, heard_ago, plain_wait)
 from .factory_docs import ago
 
 _SHOWN_ROLES = ("orchestrator", "reviewer", "releaser", "builder")
@@ -111,10 +113,11 @@ def register(app, store, h, ctx):
         return {"text": f"In the last day: {', '.join(parts)}. Projects that moved: {names}.",
                 "when": "The last 24 hours"}
 
-    def build() -> dict:
+    def build(request) -> dict:
         now = now_utc()
-        stations = fx.stations()
-        settings = fx.settings()
+        fx_ = for_caller(fx, request)
+        stations = fx_.stations()
+        settings = fx_.settings()
         projects = {p["id"]: p for p in store.list_projects() if p.get("kind") == "software_factory"}
         names = {pid: p["name"] for pid, p in projects.items()}
         open_ids = [pid for pid, p in projects.items() if p["status"] != "done"]
@@ -187,11 +190,11 @@ def register(app, store, h, ctx):
         releaser = None if settings.get("releaser") is False else first("releaser")
         return {"summary": summary, "talk_to": first("orchestrator"), "reviewer": first("reviewer"),
                 "releaser": releaser, "builders": builders, "how_far": _how(settings),
-                "pacing": _pacing(fx.pace(), now), "plan": plan, "rule_proposals": proposals,
+                "pacing": _pacing(fx_.pace(), now), "plan": plan, "rule_proposals": proposals,
                 "standup": standup(now), "now": now.isoformat()}
 
     @app.get("/api/factory/crew")
-    def get_crew_page():
+    def get_crew_page(request: Request):
         """The Crew page in one read. `talk_to`, `reviewer` and `releaser` are a member or null
         (not started, or no releaser by choice); `builders` are grouped by project, ended builders
         of finished projects left out, helpers counted under the builder that started them.
@@ -199,4 +202,4 @@ def register(app, store, h, ctx):
         ended), state_text, doing, heard, memory_pct, memory_text, helpers}; `station` is for the
         detail call and is never shown. `pacing` is a sentence while the plan presses on the crew,
         else null. `rule_proposals` are the open ones, `standup` is null when nothing moved."""
-        return build()
+        return build(request)

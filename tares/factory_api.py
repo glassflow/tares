@@ -22,6 +22,7 @@ from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
+from . import factory_home
 from . import factory_team
 from .envelope import now_utc
 from .factory_store import MapChanged
@@ -320,6 +321,7 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         except docs_mod.DocError as e:
             h.err(e)
         store.set_setting(key, json.dumps(out))
+        factory_home.clear_cache()   # the home card shows the change on the next read
         return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
 
     # ── grants (TR-419): the person's words, dated; shared, and per project ───
@@ -2807,7 +2809,17 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
-    return SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
-                           team_home=team_home, team_projects=team_projects, own_stations=own_stations,
-                           own_desk=own_desk, own_tickets=own_tickets,
-                           hidden_ids=lambda: h.hidden_ids())
+    fx = SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
+                         team_home=team_home, team_projects=team_projects, own_stations=own_stations,
+                         own_desk=own_desk, own_tickets=own_tickets,
+                         hidden_ids=lambda: h.hidden_ids())
+
+    def for_request(request):
+        """This fx with `settings` and `pace` read for the caller: a person's own over the cell's
+        default, the scope `PUT /api/crew/settings` writes. A screen that shows the crew's
+        settings reads them through this, or it shows the default and the control snaps back."""
+        return SimpleNamespace(**{**vars(fx), "settings": lambda: settings(request),
+                                  "pace": lambda: pace(request)})
+
+    fx.for_request = for_request
+    return fx
