@@ -314,6 +314,17 @@ function cleanEnv(extra) {
         return (await crew.getByTestId("start-copy").innerText()).trim() === "Copied";
       })());
 
+      // A cell served over plain http has no clipboard: Copy does nothing, says nothing false, throws nothing
+      await page.waitForFunction(() => document.querySelector("[data-key=crew] [data-testid=start-copy]").textContent.trim() === "Copy", null, { timeout: 2800 });
+      const crashes = [];
+      page.on("pageerror", (e) => crashes.push(String(e)));
+      await page.evaluate(() => { window.__copied.length = 0; Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined }); });
+      await crew.getByTestId("start-copy").click();
+      await page.waitForTimeout(400);
+      ck("live: with no clipboard, Copy does not say Copied", (await crew.getByTestId("start-copy").innerText()).trim() === "Copy");
+      ck("live: and the page throws nothing", crashes.length === 0, crashes.join(" | "));
+      ck("live: and the command is still on the page to select", (await crew.locator("code").innerText()).trim() === "tares factory crew up");
+
       // Hide that fails: the list comes back with a line saying why
       await page.route("**/api/home/start/hide", (r) => r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) }));
       await list(page).getByRole("button", { name: "Hide this list" }).click();

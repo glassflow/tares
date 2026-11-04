@@ -240,6 +240,27 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       await ctx.close();
     }
 
+    // 2b. a line with no timestamp (TR-894): the page keeps its other lines and shows the odd one without a time
+    {
+      const { ctx, page } = await newPage(1440);
+      await page.route((u) => u.pathname === RAW, async (route) => {
+        const res = await route.fetch();
+        const body = await res.json();
+        body.rows[0].at = null;
+        await route.fulfill({ response: res, json: body });
+      });
+      await page.goto(`${BASE}/timeline`, { waitUntil: "load" });
+      await row(page, warn.id).waitFor();
+      const r = row(page, warn.id);
+      await r.getByTestId("timeline-open-raw").click();
+      await r.getByTestId("timeline-raw-footer").waitFor({ timeout: 8000 }).catch(() => {});
+      eq("no timestamp: the lines still show, 20 of them", await r.getByTestId("timeline-raw-row").count(), 20);
+      eq("no timestamp: the odd line has an empty time", (await r.getByTestId("timeline-raw-row").first().evaluate((e) => e.firstElementChild.textContent.trim())), "");
+      ck("no timestamp: the other lines keep theirs", /^\d\d:\d\d:\d\d$/.test(await r.getByTestId("timeline-raw-row").nth(1).evaluate((e) => e.firstElementChild.textContent.trim())));
+      ck("no timestamp: the page is still there", (await page.getByTestId("timeline-sub").count()) === 1);
+      await ctx.close();
+    }
+
     // 3. service: one service, the last hour, picked on the page
     for (const width of [1440, 390]) {
       const { ctx, page } = await newPage(width);

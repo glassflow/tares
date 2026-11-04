@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ApiError } from "../../api";
 import { useEdition } from "../edition";
+import { copyText } from "../copyText";
 import { useSample } from "../sample";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
@@ -631,7 +632,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const onAction = (a: HomeAction, item?: HomeItem) => {
     if (a.do === "copy") {
       const text = typeof a.text === "string" ? a.text : "";
-      navigator.clipboard.writeText(text).then(
+      copyText(text).then(
         () => {
           toast("Copied. Paste it in Claude Code to hand the project over.");
           if (!item) return;
