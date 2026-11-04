@@ -107,6 +107,7 @@ test_pricing
 test_private_raw_routes
 test_private_reads
 test_private_routes
+test_private_writes
 test_project_access
 test_project_keys
 test_project_timeline
