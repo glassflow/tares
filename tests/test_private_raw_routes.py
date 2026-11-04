@@ -103,6 +103,12 @@ async def main():
                                    budget_usd=25.0, budget_period="month", concludes=True)
         store.put_in_project("trigger", "watch-zephyr", vault)
         store.put_in_project("agent", "zephyr-seer", vault)
+        # a private trigger and watcher on the shared source too
+        store.upsert_catalog_trigger("watch-zephyr-shared", ["prod-otlp"], {"every": "20m"}, {}, "20m")
+        store.upsert_catalog_agent("zephyr-shared-seer", "watch-zephyr-shared", "Look at zephyr-api.",
+                                   budget_usd=5.0, budget_period="month", concludes=True)
+        store.put_in_project("trigger", "watch-zephyr-shared", vault)
+        store.put_in_project("agent", "zephyr-shared-seer", vault)
         # and a trigger Edgewatch owns on the shared source
         store.upsert_catalog_trigger("watch-edge", ["prod-otlp"], {"every": "30m"}, {}, "30m")
         store.upsert_catalog_agent("edge-seer", "watch-edge", "Look at edge-proxy.",
