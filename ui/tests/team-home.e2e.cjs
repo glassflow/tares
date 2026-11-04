@@ -537,6 +537,28 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("Kim gives Notes back to Alex"), back.status === 200, JSON.stringify(back));
       ctl.posts.length = 0;
 
+      // TR-895 F2: a key that can only read is told so, not that the lead must do it
+      {
+        const made = await api("POST", "/api/keys", { name: "reader-laptop", scopes: ["read"], person: { email: "alex-seed@example.com", name: "Alex" } });
+        ck(t("a read key was made for Alex"), made.status === 200 || made.status === 201, JSON.stringify(made));
+        ids.keys.reader = made.body.secret;
+        const rd = await open("reader", 1440);
+        await rd.page.goto(`${BASE}/`, { waitUntil: "load" });
+        await rd.page.getByTestId("factory-home").waitFor();
+        await settle(rd.page);
+        const rrow = rd.page.getByTestId("waiting-on-row").filter({ hasText: "Portal" });
+        await rrow.getByRole("button", { name: "Hand over anyway" }).click();
+        await rd.page.getByTestId("handover-dialog").waitFor();
+        await rd.page.getByTestId("handover-reason").fill("Kim is out until Monday.");
+        await rd.page.getByTestId("handover-confirm").click();
+        const rerr = rd.page.getByTestId("dialog-error");
+        await rerr.waitFor({ timeout: 5000 }).catch(() => {});
+        const rtext = (await rerr.count()) ? (await rerr.innerText()).trim() : "";
+        ck(t("a read key is told it can only read, naming the key"), rtext === "The key reader-laptop can only read, so it cannot hand a project over. Sign in with a key that can.", rtext);
+        await checkWords(rd.page, ck, t("read key refusal"));
+        await rd.ctx.close();
+      }
+
       // F6: Portal, as its lead
       await portal.getByRole("button", { name: "Hand over anyway" }).click();
       await dialog.waitFor();

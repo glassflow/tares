@@ -4,10 +4,12 @@ import { agoWords, atWords, money, plural } from "./homeWords";
 
 /** The panel at the top of the page while the watcher is off: why, for how long, what it last said,
  *  and the button that starts it again. */
-export function WatchPanel({ watch, busy, onWayOut }: {
+export function WatchPanel({ watch, busy, canAct = true, onWayOut }: {
   watch: HomeWatch;
   /** The action in flight, or null. */
   busy: string | null;
+  /** False for a read-only key: the buttons are left out. */
+  canAct?: boolean;
   onWayOut: (w: HomeWayOut) => void;
 }) {
   const title = watch.reason_words ? `The watcher is off: ${watch.reason_words}` : "The watcher is off";
@@ -49,7 +51,7 @@ export function WatchPanel({ watch, busy, onWayOut }: {
             {watch.told ? <>Told <span data-user-text>{watch.told.where}</span> {atWords(watch.told.at)}.</> : "Nobody was told."}
           </p>
           <div className="flex flex-wrap gap-2">
-            {watch.ways_out.map((w) => (
+            {canAct && watch.ways_out.map((w) => (
               <Button key={w.action} variant={w.primary ? "primary" : "secondary"} busy={busy === w.action} disabled={busy !== null && busy !== w.action}
                 onClick={() => onWayOut(w)} data-testid={`way-out-${w.action}`}>
                 {w.label}
