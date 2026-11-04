@@ -127,6 +127,15 @@ def seed(ids):
                                 ("run-noproject", "open-agent", "open-trig", None)):
         store.start_agent_run(rid, agent, trig, "d-" + rid, "service-a", "h", project=u)
         store.finish_agent_run(rid, "ok", finding="done")
+    store.upsert_skill(secret, "secret-skill", "Hidden know-how.", "Hidden steps.")
+    store.upsert_skill(team, "open-skill", "Open know-how.", "Open steps.")
+    store.start_agent_run("run-both", "shared-agent", "shared-trig", "d-both", "service-a", "h",
+                          project=secret)
+    store.add_run_projects("run-both", [secret, team])
+    store.finish_agent_run("run-both", "ok", finding="done")
+    store.start_agent_run("run-secret-free", "secret-agent", "secret-trig", "d-free", "service-a",
+                          "h", project=None)
+    store.finish_agent_run("run-secret-free", "ok", finding="done")
     now = now_utc()
     ids["rule_secret"] = store.upsert_rule_proposal("example-org/repo-a", "secret-kind", secret,
                                                     "project", "Rule A", ["Secret T1"], now)["id"]
@@ -221,6 +230,20 @@ async def checks(B, ids):
            and shape(r.text, "secret-trig") == shape(gone.text, "nobody-here"),
            f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
 
+        print("== a run is hidden only when every project it belongs to is hidden ==")
+        def worth(run):
+            return cx.put(f"{B}/api/findings/{run}/worth", headers=KIM, json={"worth": True})
+        r, gone = await worth("run-secret-free"), await worth("run-nobody-here")
+        ck("a run with no project of its own, of a hidden agent: as unknown as a run that is not there",
+           r.status_code == gone.status_code == 404
+           and shape(r.text, "run-secret-free") == shape(gone.text, "run-nobody-here"),
+           f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
+        r = await worth("run-both")
+        ck("a run in a hidden project and an open one is still Kim's to read", r.status_code != 404,
+           f"{r.status_code} {r.text[:100]}")
+        r = await worth("run-shared-secret")
+        ck("a run only in the hidden project is not", r.status_code == 404, f"{r.status_code} {r.text[:100]}")
+
         print("== a rule proposal ==")
         for decision in ("reject", "accept"):
             r = await cx.post(f"{B}/api/rule-proposals/{ids['rule_secret']}/{decision}",
@@ -268,6 +291,18 @@ async def checks(B, ids):
              {"objects": [{"kind": "mcp_server", "name": "{n}"}]}, "secret-mcp"),
             ("a subscription to the trigger", "POST", "/subscribe",
              {"trigger": "{n}", **sub}, "secret-trig"),
+            ("a new project that takes a source", "POST", "/api/projects",
+             {"template": "custom", "name": "made-from-{n}", "objects": [{"kind": "source", "name": "{n}"}]},
+             "secret-src"),
+            ("a new project that takes a trigger", "POST", "/api/projects",
+             {"template": "custom", "name": "made-from-{n}", "objects": [{"kind": "trigger", "name": "{n}"}]},
+             "secret-trig"),
+            ("a new project that takes an agent", "POST", "/api/projects",
+             {"template": "custom", "name": "made-from-{n}", "objects": [{"kind": "agent", "name": "{n}"}]},
+             "secret-agent"),
+            ("a new project that takes an MCP server", "POST", "/api/projects",
+             {"template": "custom", "name": "made-from-{n}", "objects": [{"kind": "mcp_server", "name": "{n}"}]},
+             "secret-mcp"),
         ]
         def fill(v, n):
             if isinstance(v, str):
@@ -284,6 +319,9 @@ async def checks(B, ids):
                r.status_code == gone.status_code and r.status_code in (400, 404)
                and shape(r.text, hidden) == shape(gone.text, "nobody-here"),
                f"{r.status_code} {r.text[:100]} / {gone.status_code} {gone.text[:100]}")
+        made = [p["name"] for p in (await cx.get(f"{B}/api/projects", headers=ROOT)).json()["projects"]]
+        ck("no project was made from a hidden object", not any(n.startswith("made-from-") for n in made),
+           str(made)[:200])
         proj = (await cx.get(f"{B}/api/projects/{team}", headers=ROOT)).json()
         ck("nothing hidden joined the open project",
            not any(o["name"].startswith("secret-") for o in proj.get("objects", [])),
@@ -303,6 +341,67 @@ async def checks(B, ids):
         r = await cx.post(f"{B}/subscribe", headers=KIM, json={"trigger": "open-trig", **sub})
         ck("a subscription to an open trigger still works", r.status_code == 200, f"{r.status_code} {r.text[:100]}")
 
+        print("== the guided setup does not find what Kim cannot see ==")
+        def plan_of(**part):
+            return {"goal": "Keep an eye on things.", "name": "Guided", "who": "tares", **part}
+        async def setup_check(plan):
+            r = await cx.post(f"{B}/api/setup/check", headers=KIM, json={"plan": plan})
+            j = r.json()
+            return r, j, [x["message"] for x in j.get("problems", [])]
+        def missing(msgs, word):
+            return [m for m in msgs if word in m]
+        for label, key, kind, hidden, openn, word in (
+                ("a source", "watches", "source", "secret-src", "open-src", "no source called"),
+                ("an MCP server", "tools", "mcp_server", "secret-mcp", "open-mcp", "no MCP server called")):
+            def one(n):
+                item = {"key": "x1", "existing": True, "name": n}
+                if key == "tools":
+                    item.update(enabled=True, url="")
+                return plan_of(**{key: [item]})
+            _r, _j, gone = await setup_check(one("nobody-here"))
+            _r, _j, hid = await setup_check(one(hidden))
+            _r, _j, opn = await setup_check(one(openn))
+            ck(f"check, {label} named as existing: a hidden one is as missing as an unknown one",
+               len(missing(gone, word)) == 1 and [shape(m, hidden) for m in missing(hid, word)]
+               == [shape(m, "nobody-here") for m in missing(gone, word)], f"{hid} / {gone}")
+            ck(f"check, {label} named as existing: an open one is found", not missing(opn, word), str(opn))
+        _r, j, _m = await setup_check(plan_of(agents=[
+            {"key": "a1", "existing": True, "name": "secret-agent", "trigger": "k1"}]))
+        ck("check, an agent named as existing: a hidden one is not taken, nor its instructions copied",
+           j["plan"]["agents"][0]["existing"] is False and j["plan"]["agents"][0]["prompt"] == ""
+           and "Look." not in str(j["plan"]["agents"]), str(j["plan"]["agents"])[:200])
+        _r, j, _m = await setup_check(plan_of(agents=[
+            {"key": "a1", "existing": True, "name": "open-agent", "trigger": "k1"}]))
+        ck("check, an agent named as existing: an open one is taken as it is",
+           j["plan"]["agents"][0]["existing"] is True and j["plan"]["agents"][0]["prompt"] == "Look.",
+           str(j["plan"]["agents"])[:200])
+        _r, j, _m = await setup_check(plan_of(skills=[
+            {"key": "s1", "existing": True, "name": "secret-skill"}]))
+        ck("check, a skill named as existing: a hidden one is not taken, nor its body copied",
+           j["plan"]["skills"][0]["existing"] is False and "Hidden" not in str(j["plan"]["skills"]),
+           str(j["plan"]["skills"])[:200])
+        _r, j, _m = await setup_check(plan_of(skills=[
+            {"key": "s1", "existing": True, "name": "open-skill"}]))
+        ck("check, a skill named as existing: an open one is taken as it is",
+           j["plan"]["skills"][0]["existing"] is True and j["plan"]["skills"][0]["body"] == "Open steps.",
+           str(j["plan"]["skills"])[:200])
+
+        def full_plan(src):
+            return plan_of(
+                watches=[{"key": "w1", "existing": True, "name": src}],
+                wakes=[{"key": "k1", "name": "look", "sources": [src], "condition": COND}],
+                agents=[{"key": "a1", "name": "looker", "trigger": "look", "prompt": "Look."}])
+        r = await cx.post(f"{B}/api/setup/apply", headers=KIM, json={"plan": full_plan("secret-src")})
+        gone = await cx.post(f"{B}/api/setup/apply", headers=KIM, json={"plan": full_plan("nobody-here")})
+        ck("apply, a hidden source: refused as an unknown one is, and nothing is made",
+           r.status_code == gone.status_code == 422
+           and shape(r.text, "secret-src") == shape(gone.text, "nobody-here"),
+           f"{r.status_code} {r.text[:160]} / {gone.status_code} {gone.text[:160]}")
+        made = [p["name"] for p in (await cx.get(f"{B}/api/projects", headers=ROOT)).json()["projects"]]
+        ck("apply made no project", "Guided" not in made, str(made)[:200])
+        r = await cx.post(f"{B}/api/setup/apply", headers=KIM, json={"plan": full_plan("open-src")})
+        ck("apply, an open source: sets the project up", r.status_code in (200, 201), f"{r.status_code} {r.text[:160]}")
+
         print("== nothing was changed ==")
         def names(r, k):
             j = r.json()
@@ -317,7 +416,7 @@ async def checks(B, ids):
            {"secret-agent", "open-agent", "shared-agent"} <= names(await cx.get(f"{B}/api/agents/builtin", headers=ROOT), "agents"))
         runs = (await cx.get(f"{B}/api/agents/builtin/secret-agent/runs", headers=ROOT)).json()
         rows = runs if isinstance(runs, list) else runs.get("runs", [])
-        ck("the private agent has the one run it had", len(rows) == 1, str(runs)[:200])
+        ck("the private agent has the two runs it had", len(rows) == 2, str(runs)[:200])
         sec = (await cx.get(f"{B}/api/rule-proposals", headers=ROOT)).json()["proposals"]
         ck("the hidden proposal is still open", any(p["id"] == ids["rule_secret"] and p["state"] == "open"
                                                      for p in sec), str(sec)[:200])

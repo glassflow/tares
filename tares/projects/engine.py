@@ -138,8 +138,10 @@ class Engine:
 
     # ── write side ───────────────────────────────────────────────────────────
     def create(self, template_key: str, params: dict, name: str | None = None,
-               goal: str | None = None) -> dict:
-        """`goal`: what the project is for, one line; none given = the template's GOAL."""
+               goal: str | None = None, gone=None) -> dict:
+        """`goal`: what the project is for, one line; none given = the template's GOAL.
+        `gone(kind, name)`: an object the caller may not see; naming one in a custom project's
+        list answers as one that does not exist (TR-944)."""
         if template_key == "default":
             raise ProjectError("every cell has one default project; Tares creates it")
         template = get_template(template_key)
@@ -167,7 +169,7 @@ class Engine:
             if not _is_custom(template.key):
                 self._check_ownership(uid, plan, before)
             if _is_custom(template.key):
-                self._adopt(uid, plan, before)
+                self._adopt(uid, plan, before, gone)
             else:
                 self._apply(uid, plan)
         except Exception as e:
@@ -624,14 +626,14 @@ class Engine:
             self.store.upsert_skill(uid, name, description, body)
 
     # ── custom projects: adopt and release instead of create and delete ─────
-    def _adopt(self, uid: str, objs: list[PlannedObject], existing: dict) -> None:
+    def _adopt(self, uid: str, objs: list[PlannedObject], existing: dict, gone=None) -> None:
         """Take objects that already exist into this project. Checks everything first (the object
         exists; a trigger, agent or MCP server is in the default project or already here), then
         writes; a failure part-way releases what this call took, so membership is never left
         half applied. What an object needs comes along from the default project: an agent's
         trigger and MCP servers, a trigger's agents and its sources."""
         for o in objs:
-            if o.name not in existing[o.kind]:
+            if o.name not in existing[o.kind] or (gone and gone(o.kind, o.name)):
                 raise ProjectError(f"{o.kind} {o.name!r} does not exist")
         done: list[PlannedObject] = []
         # sources last: a source leaves the default project only once no trigger there reads it,

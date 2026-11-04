@@ -631,25 +631,31 @@ def _filter_problems(filters: list) -> list[str]:
 
 
 def normalize(raw, store, catalog, prev: dict | None = None,
-              draft: str | None = None) -> tuple[dict, list[str]]:
+              draft: str | None = None, gone=None) -> tuple[dict, list[str]]:
     """(plan, errors). The plan comes back in canonical shape: names made unique against the
     catalog (references follow a rename), configs normalized, knobs applied, sentences and the
     summary derived. `errors` are plain sentences; empty means the plan applies as it is.
-    `draft`: the draft project the plan is for (its own name is not taken)."""
-    plan, probs = _normalize(raw, store, catalog, prev, draft)
+    `draft`: the draft project the plan is for (its own name is not taken). `gone(kind, name)`:
+    an object the caller may not see (it belongs only to private projects they are not on); a
+    plan that names one as existing is told it is not there, as for any unknown name (TR-944)."""
+    plan, probs = _normalize(raw, store, catalog, prev, draft, gone)
     return plan, probs.texts()
 
 
-def check(raw, store, catalog, draft: str | None = None) -> tuple[dict, list[dict]]:
+def check(raw, store, catalog, draft: str | None = None, gone=None) -> tuple[dict, list[dict]]:
     """(plan, problems) for the console: the plan normalized exactly as apply normalizes it, and
     what stops it from applying, per item ({where, message}). No model call."""
-    plan, probs = _normalize(raw, store, catalog, None, draft)
+    plan, probs = _normalize(raw, store, catalog, None, draft, gone)
     return plan, probs.public()
 
 
 def _normalize(raw, store, catalog, prev: dict | None,
-               draft: str | None = None) -> tuple[dict, _Problems]:
+               draft: str | None = None, gone=None) -> tuple[dict, _Problems]:
     probs = _Problems()
+    # an object the caller cannot see is not there for them: "existing" finds only the rest. Names
+    # still count as taken for a new object, so a plan never overwrites what it cannot see.
+    def seen(kind: str, name: str) -> bool:
+        return not (gone and gone(kind, name))
     if not isinstance(raw, dict):
         probs.add("plan", "The plan is not an object.")
         return {}, probs
@@ -681,9 +687,9 @@ def _normalize(raw, store, catalog, prev: dict | None,
     prev_wakes = {w.get("key"): w for w in (prev or {}).get("wakes") or [] if isinstance(w, dict)}
 
     # watches
-    catalog_sources = catalog.sources
+    catalog_sources = {n: c for n, c in catalog.sources.items() if seen("source", n)}
     src_map: dict[str, str] = {}
-    taken = set(catalog_sources)
+    taken = set(catalog.sources)
     watches, phr_sources, seen_watch = [], dict(catalog_sources), set()
     for i, w in enumerate(x for x in plan.get("watches") or [] if isinstance(x, dict)):
         w = dict(w)
@@ -777,7 +783,8 @@ def _normalize(raw, store, catalog, prev: dict | None,
     watch_names = {w["name"] for w in watches}
 
     # tools
-    servers = {m["name"]: m for m in store.list_mcp_servers()}
+    all_servers = {m["name"]: m for m in store.list_mcp_servers()}
+    servers = {n: m for n, m in all_servers.items() if seen("mcp_server", n)}
     tool_map: dict[str, str] = {}
     tools, taken_tools = [], set()
     for i, t in enumerate(x for x in plan.get("tools") or [] if isinstance(x, dict)):
@@ -808,7 +815,7 @@ def _normalize(raw, store, catalog, prev: dict | None,
                 t["url"] = found["url"]
                 t["existing"] = True
             else:
-                nm = _unique(nm, set(servers) | taken_tools)
+                nm = _unique(nm, set(all_servers) | taken_tools)
                 t["existing"] = False
         # an MCP server already on the cell joins this project too; it stays in the others. It
         # is on: someone set it up already, so there is nothing to turn on (Remove drops it)
@@ -831,7 +838,8 @@ def _normalize(raw, store, catalog, prev: dict | None,
 
     # skills
     skills, seen_skills = [], set()
-    on_cell = {x["name"]: x for x in store.list_all_skills()}
+    all_skills = {x["name"]: x for x in store.list_all_skills()}
+    on_cell = {n: x for n, x in all_skills.items() if seen("skill", n)}
     for i, sk in enumerate(x for x in plan.get("skills") or [] if isinstance(x, dict)):
         sk = dict(sk)
         sk["key"] = str(sk.get("key") or f"s{i + 1}")
@@ -847,7 +855,7 @@ def _normalize(raw, store, catalog, prev: dict | None,
         sk["existing"] = False
         # a new skill never takes the name of one on Tares: that one is shared, and would change
         # for every project that uses it
-        sk["name"] = _unique(slug(orig) or f"skill-{i + 1}", seen_skills | set(on_cell))
+        sk["name"] = _unique(slug(orig) or f"skill-{i + 1}", seen_skills | set(all_skills))
         seen_skills.add(sk["name"])
         try:
             _n, sk["description"], sk["body"] = _skills.validate(sk["name"], sk.get("description"),
@@ -943,7 +951,7 @@ def _normalize(raw, store, catalog, prev: dict | None,
     taken = {a["name"] for a in store.list_catalog_agents()}
     agents, names = [], []
     raw_agents = [x for x in plan.get("agents") or [] if isinstance(x, dict)]
-    catalog_agents = {x["name"]: x for x in store.list_catalog_agents()}
+    catalog_agents = {x["name"]: x for x in store.list_catalog_agents() if seen("agent", x["name"])}
     for i, a in enumerate(raw_agents):
         orig = str(a.get("name") or "").strip()
         if a.get("existing") and orig in catalog_agents:

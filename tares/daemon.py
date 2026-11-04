@@ -4031,7 +4031,9 @@ def make_app() -> FastAPI:
                             "software_factory"))
         try:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
-            out = projects.create(body.template, params, name=body.name or None, goal=body.goal)
+            hidden = _hidden_ids()
+            out = projects.create(body.template, params, name=body.name or None, goal=body.goal,
+                                  gone=lambda kind, name: _is_hidden(kind, name, hidden))
         except Exception as e:
             _uc_err(e)
         # the person who makes a project leads it; the system credential is no person, so a
@@ -4501,8 +4503,10 @@ def make_app() -> FastAPI:
         raw = body.get("plan")
         if not isinstance(raw, dict):
             _err(ValueError("plan is required"))
+        hidden = _hidden_ids()
         plan, problems = setup_flow.check(raw, store, runtime.catalog,
-                                          draft=body.get("project") or None)
+                                          draft=body.get("project") or None,
+                                          gone=lambda kind, name: _is_hidden(kind, name, hidden))
         return {"plan": plan, "problems": problems}
 
     # ── drafts: a project being planned lives on the cell from the first "Plan it" ─────────
@@ -4699,7 +4703,9 @@ def make_app() -> FastAPI:
             _draft_or_404(str(draft))
             if str(draft) in _planning_tasks:
                 _err(ValueError("Tares is still planning this project"), 409)
-        plan, errors = setup_flow.normalize(raw, store, runtime.catalog, draft=draft)
+        hidden = _hidden_ids()
+        plan, errors = setup_flow.normalize(raw, store, runtime.catalog, draft=draft,
+                                            gone=lambda kind, name: _is_hidden(kind, name, hidden))
         if errors:
             _err(ValueError("This plan cannot be set up: " + " ".join(errors)), 422)
         try:
