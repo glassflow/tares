@@ -265,6 +265,21 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Private projects stay private on the settings pages and merge checks: the SRE Tools list leaves out their sources, a merge counts the links of services you cannot see, and the key count leaves out their keys.
+- Admin routes no longer reveal or change what a private project holds: renaming or merging its services, the catalog export and import, and the key list and key changes answer a non-member as for a name that does not exist.
+- A person outside a private project can no longer change, pause, delete, test or rerun its sources, triggers, agents, MCP servers or runs, or decide its rule proposals; those answer as if they were not there.
+- Services, repos, watch rows, blind spots and deploys of a private project no longer show to people outside it.
+- Private projects stay out of the raw incident, timeline, findings, feedback, usage, dependents and skill or doc use routes.
+- Private projects no longer show on the factory and AI SRE screens to teammates who are not on them; their pages answer not found and their lists leave them out.
+- A key that can only read is now refused the Settings pages of the factory and AI SRE editions, in the console and in the API.
+- The AI SRE home no longer shows a read-only key buttons it cannot use, and says which key can only read when a click is refused.
+- A person signed in with a login can now answer or allow a desk item that has no addressee, instead of getting "not addressed to you".
+- A cell switched to the SRE edition no longer gets the AI SRE demo project added; only a brand-new cell is seeded with it.
+- A factory cell no longer scans a day of events for every service each minute; the scan runs on AI SRE cells, and on platform cells that have a watcher.
+- The incident backfill on first start is about 20 times faster, so a cell with many past findings starts without waiting on it.
+- Factory settings you save as a signed-in person now show on the Settings, Crew and Reviews pages and the home card after a reload.
+- The AI SRE home page's "Read the note" link opens the incident, the Timeline menu item opens the Timeline, a finding with no time no longer blanks the incident page, and Copy buttons no longer fail on a cell served over plain http.
+- The AI SRE console no longer goes blank or prints "NaN" when a time is missing, and copy buttons no longer throw on a cell served over plain http.
 - The console's e2e runner in CI no longer reports a passing suite as timed out when its timer fires just as the suite ends, and its own test fails instead of hanging if the timeout kill breaks.
 - The AI SRE Start checklist stays hidden after you are renamed and is no longer shared by two people with the same name, and the factory home greets you by your own name.
 - A grant that was declined stays declined when the project lead adds the same words, and two requests settling one grant no longer remove the line of a grant that is in effect.
