@@ -4,6 +4,7 @@ import { api } from "../api";
 import { Close, Search } from "../components/icons";
 import { Picker, usePolling } from "../components/bits";
 import type { LabelFacet, TimelineEventRow } from "../types";
+import { copyText } from "../editions/copyText";
 
 // Explore — the hero, selector-first. Pick an entity on the left to start a selector, optionally
 // narrow it with more label=value constraints (strict AND), and read everything matching across
@@ -104,9 +105,7 @@ export default function Explore() {
 
   const copy = () => {
     if (payload === undefined) return;
-    navigator.clipboard?.writeText(payload);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    copyText(payload).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
   };
 
   // Left picker: one axis (label) → a group of its values. Split into "read & alert by" (primary

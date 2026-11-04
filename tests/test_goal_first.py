@@ -649,8 +649,8 @@ async def main():
         ext = by_entity["search-api"]
         eq("an external finding is a result", (ext["id"], ext["external"], ext["chain"],
                                                ext["kind"]),
-           (ext_id, True, ["outside-bot"], "no_action"))
-        eq("today", res["today"], {"looked_at": 6, "found": 2, "spent_usd": 0.05})
+           (ext_id, True, ["outside-bot"], "action"))   # TR-745: a note with no verdict waits
+        eq("today", res["today"], {"looked_at": 6, "found": 3, "spent_usd": 0.05})
         eq("no more pages", res["next_before"], None)
         no_em_dash("the results", res)
 

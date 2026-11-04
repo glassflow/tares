@@ -58,7 +58,7 @@ function startDaemon(port, auth) {
   const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
   const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "s.duckdb"),
                 TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(port), TARES_HOST: "127.0.0.1",
-                TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };
+                TARES_EDITION: "platform", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };
   delete env.TARES_AUTH_TOKEN;
   if (auth) env.TARES_AUTH_TOKEN = ROOT;
   const d = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], { cwd: REPO, env, stdio: "ignore" });

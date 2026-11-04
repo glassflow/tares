@@ -6,6 +6,7 @@ import IngestSetup from "../components/IngestSetup";
 import ProjectBadge from "../components/ProjectBadge";
 import SourceForm from "../components/SourceForm";
 import type { ConnectorSpec } from "../types";
+import { copyText } from "../editions/copyText";
 
 type Created = { name: string; key: string; authKey?: string; keyErr?: string };
 
@@ -215,9 +216,7 @@ function CopyText({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button onClick={() => {
-      navigator.clipboard?.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      copyText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
     }}>{copied ? "copied" : "copy"}</button>
   );
 }
@@ -237,9 +236,7 @@ function IngestUrl({ connector, sourceKey, authKey }: {
       <div className="ingest-url">
         <code className="mono">{url}</code>
         <button onClick={() => {
-          navigator.clipboard?.writeText(url);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
+          copyText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
         }}>{copied ? "copied" : "copy"}</button>
       </div>
       {connector === "otlp"

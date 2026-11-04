@@ -55,7 +55,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
       </td>
       <td>{g.project && g.project !== ctx.id ? `${KIND_TEXT[g.kind]}, ${ctx.projectName(g.project)}` : KIND_TEXT[g.kind]}</td>
       <td>{g.given_by?.name ?? <span className="dim">not recorded</span>}</td>
-      <td className="help">{g.consents.map((c) => c.name).join(", ")}</td>
+      <td className="help">{g.consents.filter((c) => !c.declined).map((c) => c.name).join(", ")}</td>
       <td>{g.in_effect ? <span className="badge ok">In effect</span>
         : g.state === "waiting" ? <span className="badge paused">Waiting for {waitingNames(g) || "no one"}</span> : g.state}</td>
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>

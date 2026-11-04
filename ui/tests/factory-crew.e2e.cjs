@@ -1,0 +1,301 @@
+/*
+ * Browser e2e for TR-736: the factory Crew page (/crew).
+ *
+ * The page shows who is on the crew by role (the one you talk to, the reviewer, the releaser, the
+ * builders of each project), what each is doing, how heard from, how full its memory is, how far the
+ * crew may go, the Claude plan, the rules the reviewer proposes (accept or reject from here) and the
+ * standup. "Show what it did" opens a member's lines, its terminal command and a way to ask for a new
+ * memory reading; those are read only when the fold is opened. No station name shows outside the fold.
+ * Raw HTML in a line or a rule is shown as text. Pacing shows as a sentence. At 390 px nothing scrolls
+ * sideways. Every state shows only words from words.json (the crew's own words are exempt).
+ *
+ * Seeds a scratch factory cell (tests/seed-factory-crew.py, invented names), then runs the real daemon
+ * on it, serving the built console. The sample states (?sample=<name>, with the sample flag in
+ * localStorage) need no data.
+ * Run:  npm run build && node tests/factory-crew.e2e.cjs     (from ui/, tares installed in ../.venv)
+ * Set SHOTS_DIR to keep a screenshot of every state at 1440 and 390 px.
+ * TARES_E2E_CHROME points Playwright at another Chrome binary when its own download is missing.
+ */
+const http = require("http");
+const { spawn, execFileSync } = require("child_process");
+const fs = require("fs");
+const os = require("os");
+const path = require("path");
+
+const UI_DIR = path.resolve(__dirname, "..");
+const REPO = path.resolve(UI_DIR, "..");
+const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { checkWords, expectOneCall } = require("./words.cjs");
+
+const PORT = Number(process.env.TARES_E2E_PORT || 8851);
+const BASE = `http://127.0.0.1:${PORT}`;
+const SHOTS = process.env.SHOTS_DIR;
+const SAMPLES = ["busy", "fold", "l3", "pace", "quiet", "none", "many", "long", "load", "err"];
+
+let pass = 0, fail = 0;
+const ck = (label, cond, detail = "") => {
+  cond ? pass++ : fail++;
+  console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
+};
+
+async function waitFor(url, tries = 100) {
+  for (; tries > 0; tries--) {
+    const ok = await new Promise((res) => http.get(url, (r) => { r.resume(); res(true); }).on("error", () => res(false)));
+    if (ok) return true;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
+(async () => {
+  const bin = path.join(REPO, ".venv/bin");
+  const tares = fs.existsSync(path.join(bin, "tares")) ? path.join(bin, "tares") : "tares";
+  const python = fs.existsSync(path.join(bin, "python")) ? path.join(bin, "python") : "python3";
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-factory-crew-e2e-"));
+  const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
+  const ids = JSON.parse(execFileSync(python, [path.join(__dirname, "seed-factory-crew.py"), home, String(PORT),
+    String(PORT + 1), dist, tares], { cwd: REPO, encoding: "utf8" }).trim().split("\n").pop());
+  ck("seeded the projects and the crew", !!ids["project-x"] && !!ids["project-y"] && !!ids["project-d"]);
+
+  const env = { ...process.env, TARES_EDITION: "factory", TARES_HOME: home, TARES_PORT: String(PORT), TARES_MCP_PORT: String(PORT + 1),
+                TARES_UI_DIST: dist, TARES_OTLP_GRPC_PORT: "off", PYTHONPATH: REPO };   // the venv installs the main checkout; this runs the code under test
+  for (const k of ["TARES_AUTH_TOKEN", "TARES_DB", "TARES_CATALOG", "TARESD_URL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"]) delete env[k];
+  const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore", env });
+  let browser;
+  try {
+    ck("daemon up", await waitFor(`${BASE}/health`));
+    browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
+    const newPage = async (width, sampleFlag = false) => {
+      const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 } });
+      if (sampleFlag) await ctx.addInitScript(() => { try { localStorage.setItem("taresSamples", "1"); } catch (e) { /* none */ } });
+      return { ctx, page: await ctx.newPage() };
+    };
+    const shot = async (page, n) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, n), fullPage: true }); };
+    const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(150); };
+    const member = (page, text) => page.getByTestId("crew-member").filter({ hasText: text });
+    const heads = (page) => page.locator("[data-testid=factory-crew] h2").allInnerTexts().then((a) => a.map((t) => t.trim()));
+    const api = (p, init) => fetch(BASE + p, { headers: { "content-type": "application/json" }, ...init });
+
+    const { ctx, page } = await newPage(1440);
+
+    // 1. one read call; the page, in the order of the mock
+    const one = expectOneCall(page, "/api/factory/crew");
+    const detailCalls = [];
+    page.on("request", (r) => { if (/\/api\/crew\//.test(r.url())) detailCalls.push(`${r.method()} ${new URL(r.url()).pathname}${new URL(r.url()).search}`); });
+    await page.goto(`${BASE}/crew`, { waitUntil: "load" });
+    await page.getByTestId("crew-builders").waitFor();
+    await settle(page);
+    await one(ck, "/crew");
+    ck("the page has its heading", await page.getByRole("heading", { name: "Crew", exact: true }).isVisible());
+    ck("the sections, in order", JSON.stringify(await heads(page)) === JSON.stringify(["The one you talk to", "Reviewer", "Releaser", "Builders",
+       "Rules the crew proposes", "Standup", "How far it may go", "Claude plan"]), JSON.stringify(await heads(page)));
+    ck("the summary says the crew works and when it was heard", /^Working, last heard \d+ seconds? ago$/.test((await page.getByTestId("crew-summary").innerText()).trim()),
+       await page.getByTestId("crew-summary").innerText());
+    ck("the menu has Crew, and it is the current one",
+       (await page.locator('nav[aria-label="Main"] a[aria-current="page"]').allInnerTexts()).map((t) => t.trim()).join() === "Crew");
+
+    // 2. members
+    const lead = page.getByTestId("crew-member").first();
+    ck("the one you talk to: working, heard seconds ago, memory 82% full",
+       (await lead.getAttribute("data-state")) === "working" && /The one you talk to · Working/.test(await lead.innerText())
+       && /Heard \d+ seconds? ago/.test(await lead.innerText()) && /Memory 82% full/.test(await lead.innerText()), await lead.innerText());
+    ck("the reviewer is idle", /Reviewer · Idle for 1 minute/.test(await member(page, "Reviewer").first().innerText()), await member(page, "Reviewer").first().innerText());
+    ck("the releaser is idle for two hours", /Releaser · Idle for 2 hours/.test(await member(page, "Releaser").first().innerText()));
+    const groups = await page.getByTestId("crew-builders").evaluate((s) => [...s.querySelectorAll("[data-user-text]")].filter((e) => e.parentElement.className.includes("wash-2"))
+      .map((e) => [e.textContent, e.nextElementSibling.textContent]));
+    ck("builders sit in their projects: project-x (3), project-y (1); the finished project's builder is left out",
+       JSON.stringify(groups) === JSON.stringify([["project-x", "3"], ["project-y", "1"]]), JSON.stringify(groups));
+    ck("the count says how many are on the crew now", /3 on the crew now/.test(await page.getByTestId("crew-builders").innerText()));
+    const m1 = member(page, "Working on Footer");
+    ck("a working builder with a helper", (await m1.count()) === 1 && /1 helper/.test(await m1.innerText()) && (await m1.getAttribute("data-state")) === "working", await m1.innerText());
+    const m2 = member(page, "Waiting for the review of Search box");
+    ck("an idle builder says what it waits for", (await m2.count()) === 1 && /Idle for 8 minutes/.test(await m2.innerText()));
+    const mold = page.getByTestId("crew-member").and(page.locator("[data-state=ended]"));
+    ck("an ended builder: finished, no memory, no fold", (await mold.count()) === 1 && /Finished its work\./.test(await mold.innerText())
+       && (await mold.getByTestId("member-fold").count()) === 0 && (await mold.getByTestId("memory-bar").count()) === 0 && /Ended 1 day ago/.test(await mold.innerText()));
+    const y = member(page, "Not heard from in 2 hours");
+    ck("a builder not heard from for two hours says so", (await y.count()) === 1 && (await y.getAttribute("data-state")) === "not heard" && /Memory 88% full/.test(await y.innerText()));
+    const bars = await page.getByTestId("memory-bar").evaluateAll((b) => b.map((x) => [x.getAttribute("aria-valuenow"), x.className.includes("--warn") ? "warn" : x.className.includes("bg-foreground") ? "ink" : "?"]));
+    ck("a memory bar is amber from 80%, ink below", JSON.stringify(bars) === JSON.stringify([["82", "warn"], ["41", "ink"], ["58", "ink"], ["63", "ink"], ["88", "warn"]]), JSON.stringify(bars));
+    const body = await page.getByTestId("factory-crew").innerText();
+    ck("no station name, session or version shows outside the fold", !/project-x-build|crew-orchestrator|crew-reviewer|crew-releaser|ctx|claude_version|\bv\d+\.\d+/.test(body)
+       && !/\bsession\b/i.test(body), body.slice(0, 200));
+    ck("no member's lines were read before a fold was opened", detailCalls.length === 0, detailCalls.join(", "));
+
+    // 3. how far, plan, standup
+    const how = await page.getByTestId("crew-how-far").innerText();
+    ck("how far it may go, with the link to Settings", /You approve each merge\./.test(how) && /Releases wait for you\./.test(how)
+       && (await page.getByTestId("crew-how-far").getByRole("link", { name: "Change in Settings" }).getAttribute("href")) === "/settings#crew", how);
+    const plan = await page.getByTestId("crew-plan").innerText();
+    ck("the plan: both limits and the share of each project", /Current 5 hours\s+1% used, resets /.test(plan) && /This week\s+11% used, resets /.test(plan)
+       && /\d+%, (\$\d+|under \$1) at API prices/.test(plan), plan);
+    ck("the standup says what moved", /^In the last day: .*project-x/.test((await page.getByTestId("crew-standup").locator("[data-user-text]").innerText()).trim()),
+       await page.getByTestId("crew-standup").innerText());
+    ck("pace and grants are not set here: no switch, no pace control, no pacing banner", (await page.getByRole("switch").count()) === 0
+       && (await page.getByRole("checkbox").count()) === 0 && (await page.getByText(/^pace\b/i).count()) === 0 && (await page.getByTestId("crew-pacing").count()) === 0);
+
+    // 4. rules: markup is text; reject one, accept the other
+    const rules = page.getByTestId("crew-rule");
+    ck("two rules the reviewer proposes", (await rules.count()) === 2 && /^Rules the crew proposes\s*2$/m.test(await page.getByTestId("crew-rules").innerText()), `${await rules.count()}`);
+    const markup = rules.filter({ hasText: "on a red check" });
+    ck("markup in a rule shows as text", /<i>on a red check<\/i>/.test(await markup.innerText()) && (await markup.locator("i").count()) === 0);
+    ck("each rule says who and when", /From the reviewer, 6 hours ago/.test(await markup.innerText()));
+    await checkWords(page, ck, "live");
+    await shot(page, "live-1440.png");
+    const rejected = page.waitForResponse((r) => /\/api\/rule-proposals\/.+\/reject$/.test(r.url()) && r.request().method() === "POST");
+    await markup.getByRole("button", { name: "Reject" }).click();
+    ck("Reject is one POST that answers 200", (await rejected).status() === 200);
+    await settle(page);
+    ck("the rejected rule is gone", (await rules.count()) === 1 && !/red check/.test(await page.getByTestId("crew-rules").innerText()));
+    const accepted = page.waitForResponse((r) => /\/api\/rule-proposals\/.+\/accept$/.test(r.url()) && r.request().method() === "POST");
+    await rules.first().getByRole("button", { name: "Accept" }).click();
+    ck("Accept is one POST that answers 200", (await accepted).status() === 200);
+    await settle(page);
+    ck("no rules are left, and it says so", /No rules are proposed\./.test(await page.getByTestId("crew-rules").innerText()) && (await rules.count()) === 0);
+
+    // 5. the fold
+    const fold = m1.getByTestId("member-fold");
+    ck("the fold is closed, its button says Show what it did", (await fold.innerText()) === "Show what it did" && (await fold.getAttribute("aria-expanded")) === "false");
+    const detailRead = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\?recent=30$/.test(r.url()));
+    await fold.click();
+    ck("opening it reads that member's lines, once", (await detailRead).status() === 200);
+    await m1.getByTestId("member-detail").locator("pre").waitFor();
+    const lines = await m1.getByTestId("member-detail").locator("pre").innerText();
+    ck("its lines are text, markup included", lines.includes("<script>alert(1)</script> & more") && (await m1.locator("pre script").count()) === 0, lines);
+    ck("the lines are exempt from the words rule", (await m1.locator("pre").getAttribute("data-words-exempt")) !== null);
+    ck("it says how to open the member in a terminal", /Open in a terminal/.test(await m1.getByTestId("member-detail").innerText())
+       && (await m1.getByTestId("member-detail").locator("code").innerText()) === "tares factory crew attach project-x-build-m1");
+    ck("the button says Hide what it did", (await fold.innerText()) === "Hide what it did");
+    await checkWords(page, ck, "live, fold open");
+    await shot(page, "live-fold-1440.png");
+    const asked = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\/context$/.test(r.url()) && r.request().method() === "POST");
+    await m1.getByRole("button", { name: "Read memory again" }).click();
+    ck("Read memory again is one POST that answers 200", (await asked).status() === 200);
+    ck("and says it was asked", /Asked\. It answers in a few seconds\./.test(await m1.innerText()));
+    await fold.click();
+    ck("closing the fold hides the lines", (await m1.getByTestId("member-detail").count()) === 0);
+    ck("the lines were read once for the one fold that was opened", detailCalls.filter((c) => c.startsWith("GET")).length === 1, detailCalls.join(", "));
+
+    // 6. an error, then Retry
+    await page.route("**/api/factory/crew", (r) => r.abort());
+    await page.goto(`${BASE}/crew`, { waitUntil: "load" });
+    await page.getByRole("button", { name: "Retry" }).waitFor();
+    ck("a cell that does not answer: the crew did not load, and Retry", /The crew did not load\./.test(await page.getByTestId("factory-crew").innerText()));
+    await checkWords(page, ck, "live error");
+    await page.unroute("**/api/factory/crew");
+    await page.getByRole("button", { name: "Retry" }).click();
+    await page.getByTestId("crew-builders").waitFor();
+    ck("Retry brings the crew back", (await page.getByRole("button", { name: "Retry" }).count()) === 0 && (await page.getByTestId("crew-member").count()) >= 5);
+    await ctx.close();
+
+    // 7. the sample flag is needed: without it the address alone loads the cell
+    {
+      const { ctx: c, page: p } = await newPage(1440);
+      await p.goto(`${BASE}/crew?sample=busy`, { waitUntil: "load" });
+      await p.getByTestId("crew-builders").waitFor();
+      ck("without the sample flag ?sample= shows the cell's crew", !/Handing out the tickets of project-x/.test(await p.getByTestId("factory-crew").innerText())
+         && /Working on Footer/.test(await p.getByTestId("factory-crew").innerText()));
+      await c.close();
+    }
+
+    // 8. L4 with no releaser and a window at 86%: the sentence, no Releaser, the new words
+    {
+      const put = await api("/api/crew/settings", { method: "PUT", body: JSON.stringify({ autonomy: "L4-ship", releaser: false, builders_max: 4, pace: true }) });
+      ck("the crew's settings are changed", put.status === 200, `${put.status}`);
+      const now = new Date();
+      const line = { type: "claude_plan", timestamp: now.toISOString(), usage_report: { session: { total_cost_usd: 0 }, rate_limits: { limits: [
+        { kind: "session", group: "session", percent: 86, scope: null, resets_at: new Date(now.getTime() + 2 * 3600e3).toISOString(), severity: "normal", is_active: true },
+        { kind: "weekly_all", group: "weekly", percent: 61, scope: null, resets_at: new Date(now.getTime() + 2 * 86400e3).toISOString(), severity: "normal", is_active: false }],
+        extra_usage: { is_enabled: false, monthly_limit: null } } } };
+      const ing = await fetch(`${BASE}/ingest/claude_code`, { method: "POST", headers: { "content-type": "application/x-ndjson" }, body: JSON.stringify(line) + "\n" });
+      ck("a plan reading at 86% is sent", ing.status < 300, `${ing.status}`);
+      const { ctx: c, page: p } = await newPage(1440);
+      await p.goto(`${BASE}/crew`, { waitUntil: "load" });
+      await p.getByTestId("crew-pacing").waitFor();
+      const t = await p.getByTestId("crew-pacing").innerText();
+      ck("pacing is a sentence at the top, naming the window and when it ends", /^Pacing: the 5-hour window is at 86%, so no new builder starts until /.test(t.trim()), t);
+      ck("no Releaser now, and the words follow", JSON.stringify(await heads(p)).indexOf("Releaser") < 0
+         && /The crew merges after its review and green CI\./.test(await p.getByTestId("crew-how-far").innerText())
+         && /No releases\. Up to 4 builders at once\./.test(await p.getByTestId("crew-how-far").innerText()));
+      ck("the 5-hour bar is amber", await p.getByTestId("crew-plan").locator("[role=progressbar]").first().evaluate((b) => b.className.includes("--warn")));
+      await checkWords(p, ck, "live paced");
+      await shot(p, "live-paced-1440.png");
+      await c.close();
+    }
+
+    // 9. the live page at 390 px
+    {
+      const { ctx: c, page: p } = await newPage(390);
+      await p.goto(`${BASE}/crew`, { waitUntil: "load" });
+      await p.getByTestId("crew-builders").waitFor();
+      await settle(p);
+      ck("390: the page does not scroll sideways", (await overflow(p)) <= 0, `${await overflow(p)}px`);
+      const first = p.getByTestId("crew-member").first();
+      const pos = await first.evaluate((r) => {
+        const title = r.querySelector("[data-user-text]").getBoundingClientRect();
+        const heard = [...r.querySelectorAll("div")].find((d) => /^Heard /.test(d.textContent) && d.children.length === 0).getBoundingClientRect();
+        return { sameLeft: Math.abs(title.left - heard.left) < 1, below: heard.top >= title.bottom - 1 };
+      });
+      ck("390: heard sits under the title", pos.sameLeft && pos.below, JSON.stringify(pos));
+      await p.getByTestId("member-fold").first().click();
+      await p.getByTestId("member-detail").first().locator("pre").waitFor();
+      ck("390: an open fold does not scroll sideways", (await overflow(p)) <= 0, `${await overflow(p)}px`);
+      await checkWords(p, ck, "390 live");
+      await shot(p, "live-390.png");
+      await c.close();
+    }
+
+    // 10. every sample state at 1440 and 390: its words, no sideways scroll, a screenshot
+    for (const width of [1440, 390]) {
+      for (const name of SAMPLES) {
+        const { ctx: c, page: p } = await newPage(width, true);
+        const tag = `${width} sample ${name}`;
+        await p.goto(`${BASE}/crew?sample=${name}`, { waitUntil: "load" });
+        if (name === "load") await p.getByTestId("crew-loading").waitFor();
+        else if (name === "err") await p.getByRole("button", { name: "Retry" }).waitFor();
+        else await p.getByTestId("factory-crew").getByRole("heading", { name: "How far it may go" }).waitFor();
+        await settle(p);
+        const text = await p.getByTestId("factory-crew").innerText();
+        if (name === "load") ck(`${tag}: it is the loading state, no crew`, (await p.getByTestId("crew-member").count()) === 0 && (await p.getByTestId("crew-loading").isVisible()));
+        if (name === "err") ck(`${tag}: it says the crew did not load and offers Retry`, /The crew did not load\./.test(text) && (await p.getByRole("button", { name: "Retry" }).count()) === 1 && (await p.getByTestId("crew-member").count()) === 0, text);
+        if (name === "busy") ck(`${tag}: 2 groups, 8 members, no Releaser`, (await p.getByTestId("crew-member").count()) === 8 && !/Releaser/.test(text), `${await p.getByTestId("crew-member").count()}`);
+        if (name === "fold") {
+          await p.getByTestId("member-fold").nth(3).click();
+          await p.getByTestId("member-detail").locator("pre").waitFor();
+          ck(`${tag}: the lines show as text`, /<b>not markup<\/b>/.test(await p.getByTestId("member-detail").locator("pre").innerText()) && (await p.locator("pre b").count()) === 0);
+          ck(`${tag}: the attach command shows`, /tares factory crew attach /.test(await p.getByTestId("member-detail").locator("code").innerText()));
+          await checkWords(p, ck, `${tag} open`);
+          await shot(p, `crew-fold-open-${width}.png`);
+        }
+        if (name === "l3") ck(`${tag}: a Releaser, a reviewer waiting for you, and the L3 words`, /Releaser/.test(text) && /Waiting for you/.test(text) && /You approve each merge\./.test(text), text);
+        if (name === "pace") ck(`${tag}: the pacing banner and no switch`, (await p.getByTestId("crew-pacing").isVisible()) && (await p.getByRole("switch").count()) === 0);
+        if (name === "quiet") ck(`${tag}: everybody is not heard from, with no standup yet`, (await p.getByTestId("crew-member").and(p.locator("[data-state='not heard']")).count()) === 4 && /Nothing moved in the last day\./.test(text), text);
+        if (name === "none") ck(`${tag}: not started, how to start it, no other section`, /The crew is not started\./.test(text) && (await p.getByTestId("crew-not-started").locator("code").innerText()) === "tares factory crew up"
+           && JSON.stringify(await heads(p)) === JSON.stringify(["The one you talk to", "How far it may go"]) && (await p.getByTestId("crew-member").count()) === 0, JSON.stringify(await heads(p)));
+        if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("wash-2")).length)) === 4);
+        if (name === "long") ck(`${tag}: long names and texts wrap inside the page`, (await overflow(p)) <= 0);
+        ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+        await checkWords(p, ck, tag);
+        await shot(p, `crew-${name}-${width}.png`);
+        await c.close();
+      }
+    }
+    // a sample rule is taken off the page (the sample has no cell to write to)
+    {
+      const { ctx: c, page: p } = await newPage(1440, true);
+      await p.goto(`${BASE}/crew?sample=busy`, { waitUntil: "load" });
+      await p.getByTestId("crew-rules").waitFor();
+      await p.getByTestId("crew-rule").first().getByRole("button", { name: "Reject" }).click();
+      await settle(p);
+      ck("sample: Reject takes the rule off the page", (await p.getByTestId("crew-rule").count()) === 1);
+      await c.close();
+    }
+  } finally {
+    if (browser) await browser.close();
+    daemon.kill();
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  console.log(`\n${pass} passed, ${fail} failed`);
+  process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(1); });

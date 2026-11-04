@@ -15,8 +15,14 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 ## Tests
 
 Tests are plain Python scripts, not pytest. Run one with `python tests/test_x.py`; it exits
-non-zero on failure. CI runs the list in `tests/ci_run.py` (in parallel shards); add a new test file to that
-list or it never runs.
+non-zero on failure. CI runs the tests named in `tests/ci_list.txt` (Python) and
+`tests/factory/ci_list.txt` (bash), in parallel shards (`tests/ci_run.py`). A new test adds its line
+there, in its sorted place (byte order, `LC_ALL=C sort`); never list tests in ci.yml.
+The console's browser suites (`ui/tests/*.e2e.cjs`) are named in `ui/tests/e2e_suites.txt`, same rule (sorted,
+one name per line); the `e2e` job runs them in shards (`tests/ci_e2e.py`, one port per suite). Run one by hand with
+`cd ui && npm run build && TARES_E2E_PORT=<free port> node tests/<name>.e2e.cjs`.
+A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
+`tests/test_*.py` in neither file.
 
 ```bash
 uv venv && uv pip install -e ".[otlp-grpc]"
@@ -54,7 +60,8 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_MAX_DB_SIZE` | storage limit `/api/usage` and `/health` measure against; unset = the volume the database sits on |
 | `TARES_INGEST_PAUSE_PCT` | share of the limit at which ingest is refused (507) and polls pause; default 95 |
 | `TARES_SLACK_BOT_TOKEN`, `TARES_SLACK_SIGNING_SECRET` | the Slack surface |
-| `TARES_SEED_PROJECT` | template of the project to seed on first boot (`TARES_SEED_USECASE` still read) |
+| `TARES_EDITION` | the cell's edition on its first start: factory, sre or platform; after that the value saved in the cell wins and Settings, Edition changes it |
+| `TARES_SEED_PROJECT` | template of the project to seed on a brand-new cell, one with no projects yet; otherwise skipped (`TARES_SEED_USECASE` still read) |
 | `TARES_WEBHOOK_ALLOW_PRIVATE` | let a project key subscribe a webhook on an internal address (loopback, private, link-local); off by default |
 | `TARES_AGENT_DAILY_CAP` | runs per Tares agent per day (default 50); a value saved under Settings, Agents wins over it |
 | `TARES_TRACING_ENABLED` | agent tracing on/off (a console setting wins over it) |

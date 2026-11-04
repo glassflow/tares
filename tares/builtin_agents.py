@@ -42,6 +42,13 @@ from .envelope import now_utc
 from .models import ModelError, Provider, add_usage, empty_usage, tool_call_in_text, tool_message
 from .pricing import price_usage
 from .reads import resolve_read, resolve_sources_full
+from .store import Store, day_month_words, month_name
+
+
+def _clock() -> datetime:
+    """Now, for the monthly budget check (a test moves it across the 1st)."""
+    return datetime.now(timezone.utc)
+
 
 MODEL = os.getenv("TARES_AGENT_MODEL", "claude-sonnet-4-6")
 # The model choices the console offers per agent. The instance default (TARES_AGENT_MODEL) is
@@ -324,6 +331,14 @@ CONCLUDE_DEF = {
         "next_step": {"type": "string", "description": "at most 300 characters: what a person "
                                                        "should do now; empty when nothing needs "
                                                        "doing"},
+        "what_changed": {"type": "string", "description": "at most 60 characters, what moved, "
+                                                          "in the reader's terms, lower case, "
+                                                          "e.g. 5xx errors up 12x"},
+        "since": {"type": "string", "description": "when it started, ISO 8601 UTC, from the "
+                                                   "evidence"},
+        "failing": {"type": "string", "description": "at most 200 characters: what is failing"},
+        "likely_cause": {"type": "string", "description": "at most 200 characters: the most "
+                                                          "likely cause, or empty when unknown"},
         "produced": {"type": "array", "items": {"type": "string"},
                      "description": "anything you produced that Tares cannot see from your "
                                     "tool calls, one short line each; usually leave empty"}},
@@ -337,9 +352,13 @@ CONCLUDE_GUIDANCE = (
     "\n\nWhen you call conclude, also give `headline`: one line of at most 100 characters "
     "saying what you found, in the reader's terms (for example: Payment provider outage). And "
     "give `next_step`: what a person should do now, in at most 300 characters; leave it empty "
-    "when nothing needs doing.")
+    "when nothing needs doing. With a finding, also give `what_changed` (what moved, in at most "
+    "60 characters), `since` (when it started, ISO 8601 UTC), `failing` and `likely_cause` (at "
+    "most 200 characters each).")
 HEADLINE_MAX = 100
 NEXT_STEP_MAX = 300
+WHAT_CHANGED_MAX = 60
+PART_MAX = 200
 
 
 def for_projects(agent: dict, projects: list[str]) -> dict:
@@ -402,6 +421,27 @@ def _one_line(text, limit: int) -> str | None:
     return t or None
 
 
+def parts_of(concluded: dict) -> dict:
+    """The conclude parts `finish_agent_run` stores (TR-745), under the column names."""
+    return {"what_changed": concluded.get("what_changed"), "since_at": concluded.get("since"),
+            "failing": concluded.get("failing"), "likely_cause": concluded.get("likely_cause")}
+
+
+def parse_since(value) -> datetime | None:
+    """`since` as an aware UTC time; None when it is empty, unparsable or in the future."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    return None if dt > datetime.now(timezone.utc) else dt
+
+
 def parse_conclude(args: dict, verdicts: list[str] | None = None) -> tuple[dict | None, str | None]:
     """The `conclude` call as an outcome, or the error the model gets back to try again.
     `verdicts`: the only ones a finding may carry, and it must carry one (none given: any)."""
@@ -422,6 +462,10 @@ def parse_conclude(args: dict, verdicts: list[str] | None = None) -> tuple[dict 
             "label": str(args.get("label") or "").strip() or None,
             "headline": _one_line(args.get("headline"), HEADLINE_MAX),
             "next_step": _one_line(args.get("next_step"), NEXT_STEP_MAX),
+            "what_changed": _one_line(args.get("what_changed"), WHAT_CHANGED_MAX),
+            "since": parse_since(args.get("since")),
+            "failing": _one_line(args.get("failing"), PART_MAX),
+            "likely_cause": _one_line(args.get("likely_cause"), PART_MAX),
             "produced": args.get("produced") or []}, None
 
 
@@ -878,12 +922,20 @@ class AgentRunner:
             await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
                                            SKIPPED_DAILY_CAP, msg, refused_dispatch, run_id=run_id)
             return "capped", msg
-        # The agent's own budget, when set: lifetime spend from the run log. Checked before any
-        # model call, so a capped run costs nothing; the message says where to raise it.
+        # The agent's own budget, when set: spend from the run log, this calendar month's for a
+        # monthly budget (TR-770), else lifetime. Checked before any model call, so a capped run
+        # costs nothing; the message says where to raise it. Store.agent_budget_spend is the one
+        # rule, so the runner, project health and the watch state agree.
         budget = agent.get("budget_usd")
-        if budget and self.store.agent_cost_total(agent["name"]) >= float(budget):
-            msg = (f"budget of ${float(budget):.2f} for this agent reached; "
-                   f"raise or clear it under Configuration, Advanced")
+        now = _clock()
+        if budget and self.store.agent_budget_spend(agent, now) >= float(budget):
+            if agent.get("budget_period") == "month":
+                msg = (f"budget of ${float(budget):.2f} for {month_name(now)} reached; it starts "
+                       f"again on {day_month_words(Store.budget_resets_on(agent, now))}, or raise "
+                       f"it under Configuration, Advanced")
+            else:
+                msg = (f"budget of ${float(budget):.2f} for this agent reached; "
+                       f"raise or clear it under Configuration, Advanced")
             self.store.finish_agent_run(run_id, "capped", error=msg)
             obs.set_attribute(_tracing.SKIPPED_REASON, "budget")
             await self._write_back_skipped(agent, trigger_name, (callback_key, callback_labels),
@@ -943,7 +995,8 @@ class AgentRunner:
                                         finding=concluded["summary"] or None,
                                         external_tools=external_used, outcome="no_op",
                                         headline=concluded.get("headline"),
-                                        next_step=concluded.get("next_step"))
+                                        next_step=concluded.get("next_step"),
+                                        **parts_of(concluded))
             return "ok", None
         if not finding:
             msg = "the model returned no conclusion"
@@ -976,12 +1029,14 @@ class AgentRunner:
                                           run_id=run_id, model=model,
                                           dispatch_id=dispatch_id,
                                           headline=concluded.get("headline"),
-                                          next_step=concluded.get("next_step")) or [])
+                                          next_step=concluded.get("next_step"),
+                                          parts=concluded) or [])
         self.store.finish_agent_run(run_id, "ok", rounds=rounds, tool_calls=tool_calls,
                                     finding=finding, external_tools=external_used,
                                     outcome="finding", verdict=verdict,
                                     headline=concluded.get("headline"),
-                                    next_step=concluded.get("next_step"))
+                                    next_step=concluded.get("next_step"),
+                                    **parts_of(concluded))
         if (agent.get("webhook_url") or "").strip():
             delivery, derr = await self._webhook(agent, {
                 "event": "finding",
@@ -1087,7 +1142,9 @@ class AgentRunner:
         skills = self._project_skills(agent)
         skill_names = [sk["name"] for sk in skills]
         system = (agent["prompt"] + (conclude_instructions(agent) if offers_conclude(agent) else "")
-                  + (_skills.prompt_section(skills) if skills else ""))
+                  + (_skills.prompt_section(skills) if skills else "")
+                  + (self._not_worth_section(agent) if not handoff
+                     and self._is_scheduled(trigger_name) else ""))
         # set to conclude: the run may not end without it (asked for it once more, below)
         must_conclude = bool(agent.get("concludes"))
         verdicts = verdict_words(agent)
@@ -1263,6 +1320,19 @@ class AgentRunner:
                     out.append(sk)
         return out
 
+    def _not_worth_section(self, agent: dict) -> str:
+        """The watcher's recent "not worth raising" cases (TR-746), told to a scheduled check on an
+        AI SRE cell and to nobody else. Any other edition's prompt is exactly the agent's own."""
+        try:
+            from .edition import edition
+            if edition(self.store)[0] != "sre":
+                return ""
+            from . import feedback
+            return feedback.prompt_section(self.store, agent["name"])
+        except Exception as e:  # noqa: BLE001 — a missing hint must never lose the run
+            print(f"[agent {agent.get('name')}] not-worth section: {type(e).__name__}: {e}")
+            return ""
+
     def _is_scheduled(self, trigger_name: str) -> bool:
         """Whether the run was woken by a schedule trigger (TR-320), which ticks for all its
         sources rather than trips for an entity."""
@@ -1369,26 +1439,92 @@ class AgentRunner:
 
     async def record_external(self, project: str, agent_label: str, key: str, finding: str,
                               verdict: str | None = None, label: str | None = None,
-                              headline: str | None = None, next_step: str | None = None) -> str:
+                              headline: str | None = None, next_step: str | None = None,
+                              what_changed: str | None = None, since=None,
+                              failing: str | None = None, likely_cause: str | None = None,
+                              practice: bool = False) -> str:
         """An external agent's finding (TR-336): a run of kind external in the project, ended
         with this finding, plus the finding event every read and findings trigger sees, exactly
-        like a Tares agent's. Returns the run id."""
+        like a Tares agent's. A practice finding (it answers the guided setup's practice firing)
+        is flagged from the start, so no incident takes its note. Returns the run id."""
         run_id = "run_" + uuid.uuid4().hex[:12]
         self.store.start_agent_run(run_id, agent_label, "", "", key, "", None,
-                                   woken_by="external", project=project)
+                                   woken_by="external", project=project, practice=practice)
         self.store.add_run_projects(run_id, [project])
         await self._ingest_finding(agent_label, "", key, finding, "", verdict=verdict,
                                    label=label, run_id=run_id, project=project,
                                    headline=headline, next_step=next_step)
         self.store.finish_agent_run(run_id, "ok", finding=finding, outcome="finding",
-                                    verdict=verdict, headline=headline, next_step=next_step)
+                                    verdict=verdict, headline=headline, next_step=next_step,
+                                    what_changed=what_changed, since_at=since, failing=failing,
+                                    likely_cause=likely_cause)
+        self._note_incident({"name": agent_label, "owned_by": project}, key, finding, verdict,
+                            label, run_id)
         return run_id
+
+    def _note_incident(self, agent: dict, key: str, finding: str, verdict: str | None,
+                       label: str | None, run_id: str | None) -> dict | None:
+        """File the run's note under an incident when it is one (TR-744): the incident it
+        joined or opened, else None. It writes the incident tables only, on every edition, and
+        a failure is printed and never breaks the run (the rule `_hand_off` follows)."""
+        if not run_id:
+            return None
+        try:
+            from . import incidents
+            run = self.store.get_agent_run(run_id)
+            if run is None:
+                return None
+            # the run row is still open when its note is recorded: judge it as it will end
+            run = {**run, "status": "ok", "outcome": "finding", "verdict": verdict,
+                   "finding": finding}
+            catalog = self.runtime.catalog
+            if not incidents.is_note(self.store, catalog, agent, run):
+                return None
+            return incidents.on_note(self.store, catalog, agent, run_id, key, label, run=run)
+        except Exception as e:
+            print(f"[agent {agent.get('name')}] incident: {type(e).__name__}: {e}")
+            return None
+
+    def _thread_of(self, incident: dict | None, run_id: str | None, channel: str) -> str | None:
+        """The `ts` of the message a joined note is posted under: the incident's first message,
+        when this note is not that message's own and it sits in this agent's channel. AI SRE cells
+        only; every other edition posts each note as a message of its own, as before."""
+        try:
+            from .edition import edition
+            slack = (incident or {}).get("slack") or {}
+            if not slack.get("ts") or slack.get("channel") != channel:
+                return None
+            if edition(self.store)[0] != "sre":
+                return None
+            notes = self.store.incident_notes(incident["id"])
+            if not notes or notes[0]["run_id"] == run_id:
+                return None
+            return str(slack["ts"])
+        except Exception as e:
+            print(f"[agent] incident thread: {type(e).__name__}: {e}")
+            return None
+
+    def _keep_slack(self, incident: dict | None, run_id: str | None, posted: dict) -> None:
+        """Store where a note was posted: on the note, and on the incident when it has no
+        message yet (the first note posted). A pure addition, on every edition."""
+        if not incident or not posted.get("ts"):
+            return
+        try:
+            channel, ts = posted.get("channel"), posted["ts"]
+            if run_id:
+                self.store.set_note_slack(run_id, channel, ts)
+            # only the first note's message is what a click rebuilds, so only it is the incident's
+            notes = self.store.incident_notes(incident["id"])
+            if not incident.get("slack") and notes and notes[0]["run_id"] == run_id:
+                self.store.set_incident_slack(incident["id"], channel, ts)
+        except Exception as e:
+            print(f"[agent] incident slack: {type(e).__name__}: {e}")
 
     async def _record(self, agent: dict, trigger_name: str, key: str, finding: str,
                       verdict: str | None = None, label: str | None = None,
                       run_id: str | None = None, model: str | None = None,
                       dispatch_id: str | None = None, headline: str | None = None,
-                      next_step: str | None = None) -> list:
+                      next_step: str | None = None, parts: dict | None = None) -> list:
         """Record the finding, then notify. Returns the notifications delivered, as results.
         The finding names the run and the firing it came from, in its payload and its labels, so
         a firing it trips later can be traced back to this run (TR-330)."""
@@ -1407,13 +1543,60 @@ class AgentRunner:
         hook = agent.get("slack_webhook")
         # what the Slack message shows beside the note (TR-275)
         meta = {"verdict": verdict, "model": model, "run_id": run_id, "when": now_utc().isoformat()}
+        meta.update(self._title_meta(key, finding, headline, parts or {}))
+        incident = self._note_incident(agent, key, finding, verdict, label, run_id)
         if channel:
-            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta):
+            posted: dict = {}
+            thread_ts = self._thread_of(incident, run_id, channel)
+            meta = {**meta, **self._button_meta(incident, run_id, verdict)}
+            if await self._slack_channel(agent["name"], channel, trigger_name, key, finding, meta,
+                                         thread_ts=thread_ts, posted=posted):
+                self._keep_slack(incident, run_id, posted)
                 return [{"kind": "slack", "label": f"Slack {channel}"}]
         elif hook:
             if await self._slack(agent["name"], hook, trigger_name, key, finding, meta):
                 return [{"kind": "slack", "label": "Slack webhook"}]
         return []
+
+    def _button_meta(self, incident: dict | None, run_id: str | None, verdict: str | None) -> dict:
+        """What the Slack message needs for its buttons that act (TR-762), on an AI SRE cell only:
+        the incident (on the message that opens it, the one a click rebuilds), this cell's
+        workspace slug and the run a "Was this worth raising?" answer is about, when a person
+        can answer it. Every other edition gets nothing, and so the message it always had."""
+        try:
+            from . import feedback, incidents, slack as _slack_mod
+            from .edition import edition
+            if edition(self.store)[0] != "sre":
+                return {}
+            out: dict = {"workspace": _slack_mod.cell_workspace()}
+            if incident:
+                notes = self.store.incident_notes(incident["id"])
+                if notes and notes[0]["run_id"] == run_id:
+                    out["incident"] = incidents.view(self.store, incident)
+            if run_id and feedback.answerable(
+                    self.store, run_id, {"status": "ok", "outcome": "finding", "verdict": verdict}):
+                out["worth_run"] = run_id
+            return out
+        except Exception as e:   # buttons must never cost the notification
+            print(f"[agent] slack buttons: {type(e).__name__}: {e}")
+            return {}
+
+    def _title_meta(self, key: str, finding: str, headline: str | None, parts: dict) -> dict:
+        """The Slack title and service of a finding (TR-745), on an AI SRE cell only: the other
+        editions keep the message as it was, with the entity as its header."""
+        try:
+            from . import goal
+            from .edition import edition
+            if edition(self.store)[0] != "sre":
+                return {}
+            now = now_utc()
+            settings = self.store.service_settings()
+            tp = goal.title_parts_of(key, parts.get("what_changed"), headline or finding,
+                                     parts.get("since"), now, settings)
+            return {"title": goal.title(tp, now), "service": tp["service"]}
+        except Exception as e:   # a title must never cost the notification
+            print(f"[agent] finding title: {type(e).__name__}: {e}")
+            return {}
 
     def _write_back_in_flight(self, agent: dict, trigger_name: str, key: str,
                               dispatch_id: str | None, going: str | None) -> None:
@@ -1494,12 +1677,17 @@ class AgentRunner:
         return "failed", f"after {attempts} attempts: {err}"
 
     async def _slack_channel(self, agent_name: str, channel: str, trigger_name: str,
-                             key: str, finding: str, meta: dict | None = None) -> bool:
+                             key: str, finding: str, meta: dict | None = None,
+                             thread_ts: str | None = None, posted: dict | None = None) -> bool:
         """Post the finding through the workspace bot (`chat.postMessage`): the entity, a grid of
         fields, the note and buttons in the channel (TR-275). A note too long for one message
         block gets an excerpt in the channel and the full note as a reply in the message's thread,
         so it cannot fill the channel; a shorter one is posted whole, with no thread. The credential is the one bot token the
         instance holds, and the target is a channel picked from a list.
+
+        `thread_ts` posts the note as a reply under that message (a note joining an incident,
+        TR-744). `posted`, when given, is filled with the channel and `ts` Slack answered, so the
+        caller can keep them; the return value stays whether the note went out.
 
         One attempt, verdict from `slack.classify` (Slack answers HTTP 200 with ok:false), failure
         printed — a notification failing must never lose the finding, which is already stored."""
@@ -1514,8 +1702,11 @@ class AgentRunner:
         headers = {"authorization": f"Bearer {token}"}
         try:
             async with httpx.AsyncClient(timeout=15) as cx:
+                body = {"channel": channel, **msg}
+                if thread_ts:
+                    body["thread_ts"] = thread_ts
                 r = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage",
-                                  json={"channel": channel, **msg}, headers=headers)
+                                  json=body, headers=headers)
                 try:
                     data = r.json()
                 except Exception:
@@ -1525,11 +1716,13 @@ class AgentRunner:
                     print(f"[agent {agent_name}] slack: {error}")
                     return False
                 ts = (data or {}).get("ts")
+                if posted is not None and ts:
+                    posted.update({"channel": (data or {}).get("channel") or channel, "ts": ts})
                 if threaded and ts:
                     # The full note under the message. Failing here still leaves the finding in
                     # the channel with its excerpt and buttons, so the post counts as delivered.
                     r2 = await cx.post(f"{_slack_mod.API_BASE}/chat.postMessage", headers=headers,
-                                       json={"channel": channel, "thread_ts": ts,
+                                       json={"channel": channel, "thread_ts": thread_ts or ts,
                                              "text": f"Full note from {agent_name} on {key}",
                                              "blocks": _slack_mod.build_finding_thread(finding),
                                              "unfurl_links": False, "unfurl_media": False})

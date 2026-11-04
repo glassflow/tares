@@ -6,6 +6,61 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A first-run edition notice now also shows when the cell keeps its state in Postgres, and the edition chooser tells you when your choice was saved but the cell did not answer afterwards.
+- The AI SRE home shows the demo service as soon as "Try the demo service" finishes, and a failed demo start links to the step-by-step setup.
+- The AI SRE home shows a line after you hide the Start list, with a button to show it again.
+- CI now runs the console's browser end-to-end suites on every pull request.
+- On a team cell, the home's Your crew card shows your own crew's stations only.
+- The team home's side column shows your crew's limit in words, the team's other crews, and the repos you own.
+- The team home's Projects section has a Mine and Team switch, locks on private projects, who leads each one, and a line for private projects you are not on.
+- The team home lists the projects you lead that wait on other people, and lets you hand one over anyway with a reason.
+- On a team's console, Waiting for you now lets you answer, sign off, agree to, decline and allow from the page.
+- The home of a team cell lists what is waiting for you with who each item is from.
+- `GET /api/home` on a cell with more than one person adds the projects with lead, members, scope and a Mine and Team split (`?projects=mine|team`; a private project the person is not on shows only its lead's name), their crew then the team's crews (crews silent for a day named apart), and how far a crew may go. A project everyone has signed off on no longer counts as one the lead waits on, and a private project's desk items no longer count in the crew's open questions.
+- `GET /api/home` on a cell with more than one person adds "you are waiting on" for the projects the person leads (which repo owner has not signed off, which repo has no owner, which question is open, with a "Hand over anyway" action) and the repos they own, and its `summary` says who they are waiting on. A private project the person is not on no longer counts in the home. A cell of one person returns what it did before.
+- `GET /api/home` on a cell with more than one person answers for the person of the key: what is addressed to them (a spec question, a sign-off, a grant to agree to, a desk item, a milestone to check, pull requests to review), each with who it comes from, and a `summary` sentence. A cell of one person returns what it did before.
+- People can answer a question, agree to or decline a grant and sign off from the console, and the console marks answers given there.
+- Start checklist: if you hide it, the Home keeps a "Show it again" button so you can bring it back.
+- Console: the AI SRE home shows a Get started checklist (model, connected logs or metrics, services, watching, Slack channel, and a test incident once the demo is running) with a Try the demo service button; Hide this list keeps it away for you.
+- A fresh Tares now asks which one it is for, Software Factory or AI SRE: in the terminal on `tares up`, or in the console on first open (Docker, no terminal). `--edition` and `TARES_EDITION` skip the question, and an install that already has data stays Platform and is never asked.
+- Console: a new factory cell shows a "Get your factory going" list on its home: sign in from Claude Code, connect GitHub, connect Linear or GitHub Issues, start the crew, write a first spec. Each row ticks from the cell's own state, and the list goes when all five are done or when you hide it, in any browser.
+- Console: on an AI SRE cell, Settings (`/settings`) holds what is watched and how often, the model, budget and when it starts again, where notes go, the tools, the people and keys, and the edition. `GET /api/sre/settings` serves it in one call and `PUT /api/sre/settings/{group}` saves a group, and a failed save says which part was saved and which was not.
+- Console: on an AI SRE cell, Runbooks and memory (`/runbooks`) shows for each service what the investigator should know: lines people add and remove from the page, each with who and when, and the agents' own notes below. The investigator reads a service's lines on its next check. `GET /api/sre/runbooks` serves it in one call; `POST /api/sre/runbooks/{service}/lines` and `DELETE /api/sre/runbooks/{service}/lines/{index}` change it.
+- `GET /api/sre/timeline` answers the AI SRE Timeline page: what happened to the services, newest first, as windows of 10 minutes (an hour past two days) with the normal ones folded into one line, the deploys of linked repos, alerts, checks, incidents and metric steps, 200 items a page with `before` to page on. `GET /api/sre/timeline/raw` lists the events behind a window.
+- Console: on an AI SRE cell, `GET /api/sre/services` lists every service as one row (state, what it is, how it is watched, where its data comes from, a 24 hour spark), with `?hidden=1` to include hidden ones; `GET /api/sre/services/{name}` answers a service page with a traffic and error chart (1h, 24h or 7d) marked with deploys from its linked repos, its incidents, what the watcher raised and its blind spots; `PUT /api/sre/services/{name}/settings` renames, hides, merges or links repos for a service. The console has a Services page and a page per service.
+- Console: on an AI SRE cell, `GET /api/sre/incidents` lists the incidents by state (open, someone on it, the 20 latest resolved) with who has each and for how long, `GET /api/sre/incidents/{id}` answers one incident's whole page (the note, the evidence, the errors chart with deploys, the Slack message with its link, who was on it and "Was this worth raising?"), and `POST /api/sre/incidents/{id}/{action}` takes it, resolves it, reopens it or answers worth. `incidents` keeps the link Slack gives for its message.
+- Console: `GET /api/factory/projects/{id}` answers a factory project's whole page in one read: where it stands, what waits for you on it, how many tickets are in each state, the few moving now, the next ticket, milestones as compact rows with their counts and a link to their tickets, decisions, open calls, documents, the command that opens a builder's session and where the tickets live. The page is at `/projects/<id>` on a factory cell.
+- Console: on a factory cell, Settings (`/settings`) gathers the tools the crew uses, how far it may go, how many builders work at once, second check and pacing, what you allowed, model and budget, access keys, the edition and the way to every other setting, and changes each from the page. `GET /api/factory/settings` serves it in one call.
+- Console: a factory cell has a Reviews page at `/reviews` with every pull request in review, across projects: the ones that wait for you to merge and, folded, the ones with the crew, oldest first, with the reviewer's verdict, CI and the milestone each holds up. `GET /api/factory/reviews` answers it, and Home's "PRs to review" and the page now share one rule for what waits for you.
+- Console: on a factory cell, Crew (`/crew`) shows who is on the crew by role, what each is doing and when it was last heard, builders grouped by project, how far the crew may go, the Claude plan with each project's share, the rules the reviewer proposes (accept or reject) and the standup. `GET /api/factory/crew` serves it.
+- Console: a factory cell has a home page at `/`: a greeting, what waits for you, your projects with their progress, the crew and its memory, your Claude plan use and the connected tools. It shows sample data behind the sample flag, and live data otherwise.
+- Console: the factory home now shows live data, refreshed every 15 seconds, and its buttons work: Copy, Keep the crew's calls, Allow a permission, and Close a finished project. The factory Start address goes to the home page.
+- MCP: on a Software Factory cell an agent sees outcome tools first (`what_needs_me`, `how_is_project`, `start_project`, `hand_project_to_crew`) and the building-block tools (connections, raw data, rules) only when an admin turns them on under Settings, Access and API keys, Agent tools; an AI SRE cell keeps `read`. `what_needs_me` and `how_is_project` show on a factory cell only. Crew stations see every tool. The list is a tidy view, not a permission boundary: the daemon checks every call with the caller's key. `GET/PUT /api/settings/mcp` and `mcp_object_tools` on `/api/whoami`.
+- Console: on a factory cell, Docs and memory (`/docs`) shows the crew's shared rules and memory and each project's spec, plan, rules and memory, with who wrote each memory line and when, and adds a line from the page. `GET /api/factory/docs` and `GET /api/factory/docs/{id}` serve it; the daemon's own API reference moves from `/docs` to `/api/reference`.
+- Console: on a factory cell, Projects (`/projects`) lists every project as one row with its goal, state, current milestone, tickets merged and blocked, repos and last activity, filtered by state, and closes a project whose tickets are all merged. `GET /api/factory/projects` serves it in one call.
+- Console: on factory and AI SRE cells, Settings, Advanced (`/settings/advanced`) lists Connections, Explore, All resources, Connect and Reads, and one route table holds every page of both editions with a fallback until its page exists. Old addresses keep working; platform cells are unchanged.
+- `GET /api/home` on an AI SRE cell returns the home page in one call: a headline, whether and why nobody is watching, the open incidents with their chart, the services with one state each, who is on watch and the blind spots. `POST /api/home/actions/raise_budget` adds to a spent watcher's budget and turns it back on.
+- Console: the factory and AI SRE editions get their own frame, a header with search and an account menu, and a left menu that lists only the pages that exist. The platform edition keeps the console as it was.
+- Incident notes belong to incidents that someone can take and resolve (`/api/incidents`).
+- `GET /api/services` lists the services a cell receives data for.
+- `PATCH /api/services/{name}` renames, hides or merges a service, and `PUT /api/settings/service-labels` says which label names the services in each source. The computed list is kept for 30 seconds and every change drops it.
+- Each cell has an edition: factory, sre or platform. Existing cells stay as they are unless `TARES_EDITION` is set when they first start with no edition stored.
+- Findings carry a title, what is failing, the likely cause and an outcome. `GET /api/findings` lists them across projects, and a project's results take `show=worth` to leave out the quiet checks.
+- `GET /api/projects` and a project's summary say `ready_to_close` for a factory project that is still open with every ticket merged or otherwise finished.
+- `GET /api/home` on a factory cell returns the home page in one call: a headline, what waits for you, the open projects, the crew, the Claude plan and the connected tools.
+- On a factory cell, what waits for you on `GET /api/home` now lists the pull requests the reviewer passed, projects ready to hand to the crew, calls the crew made without you, questions and permission requests on the desk, and milestones whose tickets all merged, oldest first.
+- Console: shadcn/ui primitives on Radix, themed with the Tares tokens, with a /dev/components gallery (part 1 of the component library).
+- A service's event counts over time, all events or only errors, in buckets (`SreStore.event_series`, and `event_series_many` for every service in one query), and one rule for what counts as an error (`sre.is_error`). Nothing in the console reads them yet.
+- `GET /api/blind-spots` lists silent services, services seen only through another, deploys not tied to a service and rules that match nothing. `PATCH /api/services/{name}` takes `repos`, and `GET /api/services/{name}/deploys` and `GET /api/repos` follow.
+- AI SRE cells tell Slack when nobody is watching a service, and when watching starts again. `GET /api/watch` says who watches what and why a watcher stopped.
+- "Was this worth raising?": a person answers yes or no on what a watcher raised (`PUT /api/findings/{id}/worth`, `DELETE` takes it back), results carry the counts and your own answer, `GET /api/watchers/hit-rate` gives each watcher's hit rate, `GET /api/feedback/export` exports the answers with the firing id, and an AI SRE watcher's prompt lists its recent "not worth it" cases.
+- Console: `GET /api/factory/tickets` lists the tickets of every factory project, one page at a time: filter by project, milestone, state (or the three that move now) and text, sort by newest, oldest or ref, with the count of each state, the projects and milestones to choose from and how many canceled tickets are hidden.
+- Console: on a factory cell, a project ready to close sorts after what holds the crew up and no longer sets the headline's age, its row says "Ready for 3 days", the Close dialog and the Keep and Close toasts use the Projects page's words, and an Allow for a crew station never offers to limit the grant to one project (`may_limit` on the Allow action).
+- Console: a Tickets place in the factory sidebar lists every ticket of every project as a Board, a List or Swimlanes, with filters kept in the address.
+- Console: the factory edition has a page for each ticket: its reviews and findings, checks, calls and decisions, history and working notes, what it depends on, its pull request, and the command that opens its builder's session.
+- On AI SRE cells the Slack message of a finding has buttons: "I'm on it", Resolve and Reopen on the incident, and "Worth raising" / "Not worth it" on what a watcher raised. A click changes the incident or records the answer, replaces the message and says who did it in its thread, and a change made in the console shows in Slack too. Works on self-hosted cells now, and on Tares Cloud after TR-763.
+- Console: on AI SRE cells the home page (`/`) is now the AI SRE home: why the watcher is off when it is, open incidents with their next step, what was raised and waits for a verdict, the services on watch and the blind spots, read from `GET /api/home` and refreshed every 30 seconds. Start now opens the home page.
+- MCP: on an AI SRE cell an agent sees outcome tools first (`what_is_broken`, `how_is_service`, `what_happened`, `mark_incident`) and `read` keeps working. `mark_incident` follows the console's rules: a change the incident's state does not allow is refused in words, and `what_is_broken` shows the new state at once. A read-only key is refused with the daemon's own sentence. Crew stations see every tool.
 - The spec skill brings in the area owners. It reads `list_areas`, asks the owner of a repo with
   `ask_area` instead of guessing, folds the answers into the spec, gives every ticket its `repo`
   (now also in a single-repo project, so the sign-off check sees it) and assigns it to that repo's
@@ -177,6 +232,16 @@ the project follows [Semantic Versioning](https://semver.org/).
   field to add one line.
 
 ### Changed
+- Agents can have a monthly budget (`budget_period: month`, resets on the 1st UTC); existing budgets stay lifetime.
+- An agent's page shows this month's spend next to a monthly budget (`budget_spent_usd` on `GET /api/agents/builtin`), and a test pins the month boundary in UTC.
+- CI reads its test list from tests/ci_list.txt.
+- Plugin 0.6.1: builders mock a screen first and wait for approval; the reviewer compares screenshots of every state with the approved mock.
+- Plugin 0.6.2: the orchestrator keeps a builder's mock as the project doc "Mock: <screen>" and puts its desk item on the project, so the approval shows in `list_decisions`.
+- Plugin 0.6.3: the Tares skill says an agent on a Software Factory cell sees outcome tools first and the building-block tools only when an admin turns them on.
+- Plugin 0.6.4: the Tares skill names the four tools an agent sees first on an AI SRE cell (`what_is_broken`, `how_is_service`, `what_happened`, `mark_incident`) and says `read` keeps working there.
+- The factory and AI SRE console editions have a words list (`ui/src/editions/words.json`) and checks
+  that fail CI when an edition screen shows an internal name such as source, trigger or run, or an em
+  dash. `tares.words` runs the same check over API JSON.
 - The Crew page shows every person's crews, you first. Each crew lists its name, machine, when it was
   last seen and its stations with what each is on; crews not seen for a day fold under "Not seen
   recently". Stations are told apart by crew, so two crews with a `crew-reviewer` no longer open each
@@ -200,6 +265,32 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- Private projects stay private on the settings pages and merge checks: the SRE Tools list leaves out their sources, a merge counts the links of services you cannot see, and the key count leaves out their keys.
+- Admin routes no longer reveal or change what a private project holds: renaming or merging its services, the catalog export and import, and the key list and key changes answer a non-member as for a name that does not exist.
+- A person outside a private project can no longer change, pause, delete, test or rerun its sources, triggers, agents, MCP servers or runs, or decide its rule proposals; those answer as if they were not there.
+- Services, repos, watch rows, blind spots and deploys of a private project no longer show to people outside it.
+- Private projects stay out of the raw incident, timeline, findings, feedback, usage, dependents and skill or doc use routes.
+- Private projects no longer show on the factory and AI SRE screens to teammates who are not on them; their pages answer not found and their lists leave them out.
+- A key that can only read is now refused the Settings pages of the factory and AI SRE editions, in the console and in the API.
+- The AI SRE home no longer shows a read-only key buttons it cannot use, and says which key can only read when a click is refused.
+- A person signed in with a login can now answer or allow a desk item that has no addressee, instead of getting "not addressed to you".
+- A cell switched to the SRE edition no longer gets the AI SRE demo project added; only a brand-new cell is seeded with it.
+- A factory cell no longer scans a day of events for every service each minute; the scan runs on AI SRE cells, and on platform cells that have a watcher.
+- The incident backfill on first start is about 20 times faster, so a cell with many past findings starts without waiting on it.
+- Factory settings you save as a signed-in person now show on the Settings, Crew and Reviews pages and the home card after a reload.
+- The AI SRE home page's "Read the note" link opens the incident, the Timeline menu item opens the Timeline, a finding with no time no longer blanks the incident page, and Copy buttons no longer fail on a cell served over plain http.
+- The AI SRE console no longer goes blank or prints "NaN" when a time is missing, and copy buttons no longer throw on a cell served over plain http.
+- The console's e2e runner in CI no longer reports a passing suite as timed out when its timer fires just as the suite ends, and its own test fails instead of hanging if the timeout kill breaks.
+- The AI SRE Start checklist stays hidden after you are renamed and is no longer shared by two people with the same name, and the factory home greets you by your own name.
+- A grant that was declined stays declined when the project lead adds the same words, and two requests settling one grant no longer remove the line of a grant that is in effect.
+- On a team cell, Your crew on the home counts only the questions addressed to you and the tickets that are yours, and another person's crew that waits shows "Waiting for an answer." instead of its reason.
+- The team home records which option you clicked when you answer a question. A sign-off over more than 20 tickets says how many more there are. An option answer you let stand keeps the option's text as the grant, not its letter. A refused sign-off or decline shows its reason once, in the box. In a sample, the buttons that open a box open it and say nothing was sent.
+- The Crew page standup line now counts only what happened in the last 24 hours: tickets done, started, sent to review, blocked and new questions, not what has been standing for days.
+- An incident someone else is on can no longer be taken over by pressing "I'm on it"; the screen says who is on it.
+- A crew's line on the team home no longer shows the reason of a station that also works on a project you cannot see.
+- A grant that was declined stays declined: a consent that comes after the decline, or at the same moment, no longer puts it back in effect, and the grants list no longer shows a person who declined as having agreed.
+- Incident notes no longer show No action when the note has a numbered next step. A finding with no verdict now counts as a note that waits for a person, on every edition.
+- Console: the line chart and sparkline skip values that are not numbers instead of drawing them as zero, sort points by time, and draw one point as a short segment; y labels show the decimals small values need, marks can be listed as text, and disabled controls and focused fields now match the rest of the console.
 - Plugin: the station and spec skills keep working against a Tares before 1.56. That Tares has no
   `my_work`, area or people tools, so the orchestrator there works from `crew_projects` and
   `list_tickets` as before, and the spec skips area owners and sign-offs. `tares factory crew up`
@@ -319,7 +410,6 @@ plugin 0.6.1.
   4 GB on a Mac after two days of crew use. Set `TARES_DUCKDB_MEMORY_LIMIT` (for example `2GB`) to
   change it; a container limit still sets it to 60% of that limit. The cap also sets
   `TARES_DUCKDB_THREADS` to 2 unless you set it.
-
 ## [1.54.0] - 2026-10-28
 
 Grok can review a challenger session instead of Codex, and xAI is one of the model provider

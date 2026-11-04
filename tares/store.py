@@ -19,6 +19,7 @@ import duckdb
 from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
 from .factory_store import FACTORY_SCHEMA, FactoryStore
+from .sre_store import SRE_SCHEMA, SreStore
 
 # the URL a Tares agent's subscription had before the wiring moved onto projects (config.agent_url)
 AGENT_PREFIX = "tares://agent/"
@@ -390,6 +391,8 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS external_tools JSON",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS max_rounds INTEGER",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS budget_usd DOUBLE",
+    # NULL reads as lifetime, so no backfill (TR-770)
+    "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS budget_period TEXT",
     "ALTER TABLE catalog_agents ADD COLUMN IF NOT EXISTS daily_cap INTEGER",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS max_rounds INTEGER",
     # extra, non-secret headers an MCP server wants on every request (toolset selection, read-only
@@ -478,6 +481,12 @@ _MIGRATIONS = [
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS next_step TEXT",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_at TIMESTAMPTZ",
     "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS handled_by TEXT",
+    # TR-745: the parts of a finding an agent gives with `conclude`: what moved, when it started,
+    # what is failing and the likely cause. NULL on every earlier row; goal.py derives them.
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS what_changed TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS since_at TIMESTAMPTZ",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS failing TEXT",
+    "ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS likely_cause TEXT",
     # The guided project setup: the plan a project was set up from and how far the person got
     # ({plan, step, practice_run}, NULL for any other project), and a practice mark on the runs
     # and firings "Try it" makes. A practice result is shown, never counted: today's totals and
@@ -512,6 +521,8 @@ _MIGRATIONS = [
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS pr JSON",
     # The GitHub repo (owner/name) a ticket changes, when its project spans several (TR-456)
     "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS repo TEXT",
+    # Who last changed a shared skill, when a person did it from a page (TR-753); NULL otherwise
+    "ALTER TABLE shared_skills ADD COLUMN IF NOT EXISTS updated_by TEXT",
     # The person a key belongs to (a people.id); NULL = a key made before people existed, or one
     # nobody has bound yet. The cell reads who is calling from this, never from a header.
     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS person_id TEXT",
@@ -732,6 +743,20 @@ def _bound_duckdb_memory(con, path: str) -> None:
         print(f"taresd: could not bound DuckDB memory ({e})")
 
 
+_MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September",
+           "October", "November", "December")
+
+
+def month_name(when) -> str:
+    """"October" for a date or datetime in October (English whatever the machine's locale)."""
+    return _MONTHS[when.month - 1]
+
+
+def day_month_words(when) -> str:
+    """"1 Nov": the day a monthly budget starts again."""
+    return f"{when.day} {_MONTHS[when.month - 1][:3]}"
+
+
 class StoreUnavailable(RuntimeError):
     """The database could not be opened or initialized — locked by another daemon, permissions,
     a full disk, a corrupt file. Raised instead of the raw DuckDB error so taresd can start in
@@ -743,7 +768,7 @@ class StoreUnavailable(RuntimeError):
         self.path = path
 
 
-class Store(FactoryStore, ClaudeUsageStore):
+class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def __init__(self, path: str = "tares.duckdb", state_dsn: str | None = None):
         # One DuckDB connection, used under self._lock from whichever thread a request runs on.
         # State (every table but state_db.EVENT_TABLES) is read through self.sc: the same DuckDB
@@ -819,7 +844,7 @@ class Store(FactoryStore, ClaudeUsageStore):
     @staticmethod
     def _ddl() -> list[str]:
         return ([s for s in _SCHEMA.strip().split(";") if s.strip()] + list(_MIGRATIONS)
-                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA))
+                + list(FACTORY_SCHEMA) + list(CLAUDE_USAGE_SCHEMA) + list(SRE_SCHEMA))
 
     def _state_tables(self) -> list[str]:
         return sorted(t for t in self._tables_of(self.con) if t not in state_db.EVENT_TABLES)
@@ -841,6 +866,17 @@ class Store(FactoryStore, ClaudeUsageStore):
         self._challenges_fill()
         self._init_source_stats()
         self._init_entity_counts()
+        self._incidents_backfill()
+
+    def _incidents_backfill(self) -> None:
+        """Give the notes written before incidents were tracked their incidents (TR-744). Writes
+        the incident tables only; once per rule version, so a start with nothing to do is one
+        settings read. A failure is printed and never stops the start."""
+        try:
+            from . import incidents
+            incidents.backfill(self)
+        except Exception as e:
+            print(f"taresd: incident backfill: {type(e).__name__}: {e}")
 
     @staticmethod
     def _tables_of(con) -> set:
@@ -1810,13 +1846,26 @@ class Store(FactoryStore, ClaudeUsageStore):
                              "WHERE trigger = ?", [now_utc(), name])
         return agents
 
-    def clear_catalog(self) -> None:
+    def clear_catalog(self, keep: dict | None = None, keep_projects=()) -> None:
+        """Delete the catalog's objects and every project's wiring. `keep`: {kind: names} to leave
+        (the objects a caller cannot see, kind source, trigger, agent or mcp_server);
+        `keep_projects`: ids of projects whose wiring stays."""
+        keep = keep or {}
         with self._swrite:
-            self.sc.execute("DELETE FROM catalog_sources")
-            self.sc.execute("DELETE FROM catalog_triggers")
-            self.sc.execute("DELETE FROM catalog_agents")
-            self.sc.execute("DELETE FROM mcp_servers")
-            self.sc.execute("DELETE FROM project_wiring")
+            for table, kind in (("catalog_sources", "source"), ("catalog_triggers", "trigger"),
+                                ("catalog_agents", "agent"), ("mcp_servers", "mcp_server")):
+                names = sorted(keep.get(kind) or ())
+                if names:
+                    self.sc.execute(f"DELETE FROM {table} WHERE name NOT IN "
+                                    f"({','.join('?' * len(names))})", names)
+                else:
+                    self.sc.execute(f"DELETE FROM {table}")
+            ids = sorted(keep_projects)
+            if ids:
+                self.sc.execute("DELETE FROM project_wiring WHERE project NOT IN "
+                                f"({','.join('?' * len(ids))})", ids)
+            else:
+                self.sc.execute("DELETE FROM project_wiring")
 
     # ── Tares agents (a prompt attached to a trigger; enabled ⟺ subscribed) ──
     def upsert_catalog_agent(self, name: str, trigger: str, prompt: str,
@@ -1832,7 +1881,9 @@ class Store(FactoryStore, ClaudeUsageStore):
                              handoffs: list[dict] | None = None,
                              concludes: bool | None = None,
                              verdicts: list[dict] | None = None,
-                             github: str | None = None) -> None:
+                             github: str | None = None,
+                             budget_period: str | None = None) -> None:
+        # budget_period: None and "lifetime" both store NULL (lifetime); "month" resets on the 1st
         # handoffs, concludes, verdicts, github: None keeps what is stored (a caller that does
         # not know about them, such as a template re-plan, must not wipe them); [] / False / ""
         # clears
@@ -1843,14 +1894,15 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "(name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, max_rounds, budget_usd, "
                 "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, "
-                "created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "budget_period, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (name) DO UPDATE SET trigger = excluded.trigger, "
                 "prompt = excluded.prompt, slack_webhook = excluded.slack_webhook, "
                 "model = excluded.model, slack_channel = excluded.slack_channel, "
                 "webhook_url = excluded.webhook_url, webhook_token = excluded.webhook_token, "
                 "mcp_servers = excluded.mcp_servers, max_rounds = excluded.max_rounds, "
                 "budget_usd = excluded.budget_usd, "
+                "budget_period = excluded.budget_period, "
                 "webhook_key_label = excluded.webhook_key_label, "
                 "provider = excluded.provider, daily_cap = excluded.daily_cap, "
                 "handoffs = COALESCE(excluded.handoffs, catalog_agents.handoffs), "
@@ -1865,7 +1917,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                  None if handoffs is None else json.dumps(handoffs),
                  None if concludes is None else bool(concludes),
                  None if verdicts is None else json.dumps(verdicts),
-                 None if github is None else github, ts, ts],
+                 None if github is None else github,
+                 "month" if budget_period == "month" else None, ts, ts],
             )
             # the agent's trigger and handoffs are the wiring of the project that made it
             # (P-TR-216); one not placed yet is wired when it is (_wire_owner)
@@ -1929,7 +1982,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             rows = self.sc.execute(
                 "SELECT name, trigger, prompt, slack_webhook, model, slack_channel, "
                 "webhook_url, webhook_token, mcp_servers, updated_at, max_rounds, budget_usd, owned_by, customized, "
-                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github "
+                "webhook_key_label, provider, daily_cap, handoffs, concludes, verdicts, github, budget_period "
                 "FROM catalog_agents ORDER BY name"
             ).fetchall()
             wiring = self.sc.execute(
@@ -1959,7 +2012,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                 "handoffs": hands.get((where, r[0]), [] if w or (where, r[0]) in hands
                                       else (json.loads(r[17]) if r[17] else [])),
                 "concludes": bool(r[18]), "verdicts": json.loads(r[19]) if r[19] else [],
-                "github": r[20] or "", "enabled": bool(on)})
+                "github": r[20] or "", "enabled": bool(on),
+                "budget_period": r[21] or "lifetime"})
         return out
 
     def get_catalog_agent(self, name: str, project: str | None = None) -> dict | None:
@@ -2009,17 +2063,21 @@ class Store(FactoryStore, ClaudeUsageStore):
                          finding: str | None = None, error: str | None = None,
                          external_tools: list[str] | None = None, outcome: str | None = None,
                          verdict: str | None = None, headline: str | None = None,
-                         next_step: str | None = None) -> None:
+                         next_step: str | None = None, what_changed: str | None = None,
+                         since_at=None, failing: str | None = None,
+                         likely_cause: str | None = None) -> None:
         with self._swrite:
             self.sc.execute(
                 "UPDATE agent_runs SET status = ?, rounds = ?, tool_calls = ?, finding = ?, "
                 "error = ?, external_tools = ?, outcome = ?, verdict = ?, headline = ?, "
-                "next_step = ?, finished_at = ?, "
+                "next_step = ?, what_changed = ?, since_at = ?, failing = ?, likely_cause = ?, "
+                "finished_at = ?, "
                 "duration_ms = CAST(date_diff('millisecond', started_at, ?) AS INTEGER) "
                 "WHERE id = ?",
                 [status, rounds, tool_calls, finding, error,
                  json.dumps(external_tools or []), outcome, verdict, headline or None,
-                 next_step or None, now_utc(), now_utc(), run_id],
+                 next_step or None, what_changed or None, since_at or None, failing or None,
+                 likely_cause or None, now_utc(), now_utc(), run_id],
             )
 
     def record_run_usage(self, run_id: str, model: str, input_tokens: int, output_tokens: int,
@@ -2056,7 +2114,8 @@ class Store(FactoryStore, ClaudeUsageStore):
                "model, input_tokens, output_tokens, cache_creation_input_tokens, "
                "cache_read_input_tokens, cost_usd, delivery, delivery_error, provider, "
                "outcome, verdict, results, woken_by, parent_run_id, project, skills, "
-               "headline, next_step, handled_at, handled_by, practice "
+               "headline, next_step, handled_at, handled_by, practice, "
+               "what_changed, since_at, failing, likely_cause "
                "FROM agent_runs ")
         where, params = [], []
         if where_sql:
@@ -2070,7 +2129,7 @@ class Store(FactoryStore, ClaudeUsageStore):
             params.append(status)
         if where:
             sql += "WHERE " + " AND ".join(where) + " "
-        sql += "ORDER BY started_at DESC LIMIT ? OFFSET ?"
+        sql += "ORDER BY started_at DESC, id DESC LIMIT ? OFFSET ?"   # id: runs that started together page in a fixed order
         params += [int(limit), max(0, int(offset))]
         with self._sread:
             rows = self.sc.execute(sql, params).fetchall()
@@ -2087,7 +2146,8 @@ class Store(FactoryStore, ClaudeUsageStore):
              "woken_by": r[26], "parent_run_id": r[27], "project": r[28],
              "skills": json.loads(r[29]) if r[29] else [],
              "headline": r[30], "next_step": r[31], "handled_at": r[32], "handled_by": r[33],
-             "practice": bool(r[34])}
+             "practice": bool(r[34]), "what_changed": r[35], "since_at": r[36],
+             "failing": r[37], "likely_cause": r[38]}
             for r in rows
         ]
 
@@ -2300,6 +2360,40 @@ class Store(FactoryStore, ClaudeUsageStore):
             r = self.sc.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
                                  "WHERE agent = ?", [agent]).fetchone()
         return float(r[0] or 0)
+
+    @staticmethod
+    def month_start(now: datetime | None = None) -> datetime:
+        """The first of `now`'s month at 00:00 UTC: where a monthly budget starts counting."""
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        now = now.astimezone(timezone.utc)
+        return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+    def agent_cost_since(self, agent: str, since: datetime) -> float:
+        """Spend of one agent from `since` on, from the run log."""
+        with self._sread:
+            r = self.sc.execute("SELECT COALESCE(SUM(cost_usd), 0) FROM agent_runs "
+                                 "WHERE agent = ? AND started_at >= ?", [agent, since]).fetchone()
+        return float(r[0] or 0)
+
+    def agent_budget_spend(self, agent: dict, now: datetime | None = None) -> float:
+        """The spend an agent's `budget_usd` is compared with: this calendar month's for
+        `budget_period` "month", all of it otherwise. The runner, project health and anything
+        that words a budget read this one rule (TR-770)."""
+        if agent.get("budget_period") == "month":
+            return self.agent_cost_since(agent["name"], self.month_start(now))
+        return self.agent_cost_total(agent["name"])
+
+    @classmethod
+    def budget_resets_on(cls, agent: dict, now: datetime | None = None):
+        """The day a monthly budget starts again (the 1st of next month, UTC); None for a
+        lifetime budget, which never does."""
+        if agent.get("budget_period") != "month":
+            return None
+        start = cls.month_start(now)
+        return (start.replace(year=start.year + 1, month=1) if start.month == 12
+                else start.replace(month=start.month + 1)).date()
 
     def agent_runs_today(self, agent: str, exclude_run_id: str | None = None,
                          include_practice: bool = True) -> int:
@@ -2755,16 +2849,19 @@ class Store(FactoryStore, ClaudeUsageStore):
             self._use_skill(project, name)
         return True
 
-    def upsert_skill(self, project: str, name: str, description: str, body: str) -> bool:
+    def upsert_skill(self, project: str, name: str, description: str, body: str,
+                     updated_by: str | None = None) -> bool:
         """Create or replace the skill (shared: every project that uses it sees the change), and
-        have the project use it. Returns True when the project did not have it before."""
+        have the project use it. Returns True when the project did not have it before.
+        `updated_by` is who changed it, when a person did (a page, TR-753); NULL otherwise."""
         ts = now_utc()
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO shared_skills (name, description, body, made_by, created_at, "
-                "updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE SET "
-                "description = excluded.description, body = excluded.body, "
-                "updated_at = excluded.updated_at", [name, description, body, project, ts, ts])
+                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (name) DO UPDATE "
+                "SET description = excluded.description, body = excluded.body, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                [name, description, body, project, ts, ts, updated_by])
             return self._use_skill(project, name)
 
     def delete_skill(self, project: str, name: str) -> bool:
@@ -3246,6 +3343,25 @@ class Store(FactoryStore, ClaudeUsageStore):
             for n in json.loads(names or "[]"):
                 if agent not in out.setdefault(n, []):
                     out[n].append(agent)
+        return out
+
+    def skill_load_counts(self, agents: list[str], days: int = 7) -> dict[str, dict[str, int]]:
+        """{skill: {agent: runs}}: how many runs of `agents` in the last `days` loaded each skill
+        (skill_loads says which agents did, not how often)."""
+        if not agents:
+            return {}
+        from datetime import timedelta
+        since = now_utc() - timedelta(days=days)
+        marks = ", ".join("?" for _ in agents)
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT agent, skills FROM agent_runs WHERE agent IN ({marks}) "
+                "AND skills IS NOT NULL AND started_at >= ?", [*agents, since]).fetchall()
+        out: dict[str, dict[str, int]] = {}
+        for agent, names in rows:
+            for n in set(json.loads(names or "[]")):
+                per = out.setdefault(n, {})
+                per[agent] = per.get(agent, 0) + 1
         return out
 
     # ── project membership: every object is in a project ─────────────────────
@@ -3818,7 +3934,7 @@ class Store(FactoryStore, ClaudeUsageStore):
                 f"WHERE id IN (SELECT * FROM pr) {b.format(col='started_at')}"
                 "AND COALESCE(dispatch_id, '') = '' "
                 "AND NOT COALESCE(r.parent_run_id IN (SELECT * FROM pr), FALSE)"
-                ") ORDER BY ts DESC, id DESC LIMIT ?",
+                ") AS roots ORDER BY ts DESC, id DESC LIMIT ?",
                 [project, project, *args, *args, int(limit)]).fetchall()
 
     def dispatches_where(self, column: str, values: list, project: str | None = None) -> list[dict]:

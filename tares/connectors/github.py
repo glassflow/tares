@@ -168,6 +168,15 @@ class GithubConnector(Connector):
                     meta = await self._get(cx, f"{api}/repos/{repo}", token, {}, "meta", repo)
                     self._default_branch = (meta or {}).get("default_branch") or "main"
                 branch = self._default_branch
+            elif not getattr(self, "_default_branch", None):
+                # a branch named in the config (discovery fills in the default branch's name) may
+                # still be the default: look it up once, and go without the answer if GitHub
+                # will not give it
+                try:
+                    meta = await self._get(cx, f"{api}/repos/{repo}", token, {}, "meta", repo)
+                    self._default_branch = (meta or {}).get("default_branch") or ""
+                except ValueError:
+                    pass
             commits = await self._get(cx, f"{api}/repos/{repo}/commits", token,
                                       {"per_page": limit, "sha": branch}, f"c:{branch}", repo)
             new = []
@@ -198,7 +207,8 @@ class GithubConnector(Connector):
                         print(f"[github {self.cfg.name}] pull requests not readable ({e}); "
                               "commits only. Give the token Pull requests: read, or set prs off")
                         self._prs_warned = True
-        envs = [self._commit_envelope({**commit, "_branch": branch}, repo)
+        on_default = bool(branch) and branch == getattr(self, "_default_branch", None)
+        envs = [self._commit_envelope({**commit, "_branch": branch, "_on_default": on_default}, repo)
                 for commit in reversed(new)]  # chronological
         return sorted(envs + prs, key=lambda e: e.event_time)
 
@@ -299,9 +309,14 @@ class GithubConnector(Connector):
             repo = _normalize_repo(c.get("repo"))
         except ValueError:
             repo = c.get("repo")
-        return {"repo": repo, "branch": c.get("branch") or commit.get("_branch") or "",
-                "author": login, "author_name": cm_author.get("name"),
-                "sha": commit.get("sha", "")}
+        ctx = {"repo": repo, "branch": c.get("branch") or commit.get("_branch") or "",
+               "author": login, "author_name": cm_author.get("name"),
+               "sha": commit.get("sha", "")}
+        if commit.get("_on_default") or (not c.get("branch") and commit.get("_branch")):
+            # the poller followed the repo's default branch, whatever its name: none configured,
+            # or the one discovery filled in
+            ctx["on_default_branch"] = True
+        return ctx
 
     def _commit_envelope(self, commit: dict, repo_or_ctx) -> Envelope:
         sha = commit.get("sha", "")

@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import IngestSetup from "./IngestSetup";
 import type { Source } from "../types";
+import { copyText } from "../editions/copyText";
 
 export function CopyableUrl({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
@@ -9,9 +10,7 @@ export function CopyableUrl({ url }: { url: string }) {
     <div className="ingest-url">
       <code className="mono">{url}</code>
       <button onClick={() => {
-        navigator.clipboard?.writeText(url);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        copyText(url).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
       }}>{copied ? "copied" : "copy"}</button>
     </div>
   );

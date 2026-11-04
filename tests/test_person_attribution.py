@@ -161,7 +161,8 @@ async def auth_on():
             r = await cx.post(f"{B}/api/desk", headers=A, json={
                 "question": "shop-build-m1 was refused a command. Allow it?",
                 "recommendation": "allow", "why": "needed", "project": uid,
-                "station": "shop-build-m1", "command": "gh pr merge 12 --squash"})
+                "station": "shop-build-m1", "command": "gh pr merge 12 --squash",
+                "to": pid["Ben"]})
             pq = r.json()
             desk = (await cx.get(f"{B}/api/desk", headers=Bn)).json()["desk"]
             ck("desk listing: both asked by Ann", len(desk) == 2

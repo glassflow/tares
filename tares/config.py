@@ -136,7 +136,8 @@ class AgentCfg:
     webhook_key_label: str = ""   # the write-back reports this label's value as `key`, else the entity
     mcp_servers: list = dc_field(default_factory=list)   # registry names this agent may use
     max_rounds: int | None = None   # model rounds per run; None = default for the agent's shape
-    budget_usd: float | None = None  # lifetime spend cap in USD; None = no budget
+    budget_usd: float | None = None  # spend cap in USD over budget_period; None = no budget
+    budget_period: str = "lifetime"  # "lifetime" (all spend) or "month" (resets on the 1st, UTC)
     daily_cap: int | None = None     # runs per rolling 24h; None = the instance-wide cap
     concludes: bool = False   # every run ends with the conclude tool, whatever the prompt says
     verdicts: list = dc_field(default_factory=list)   # [{verdict, when}]: the only ones it may give
@@ -275,6 +276,7 @@ def _agent_from_dict(a: dict, enabled: bool = False) -> AgentCfg:
         mcp_servers=list(a.get("mcp_servers") or []),
         max_rounds=(int(a["max_rounds"]) if a.get("max_rounds") not in (None, "") else None),
         budget_usd=(float(a["budget_usd"]) if a.get("budget_usd") not in (None, "") else None),
+        budget_period=a.get("budget_period") or "lifetime",
         daily_cap=(int(a["daily_cap"]) if a.get("daily_cap") not in (None, "") else None),
         concludes=bool(a.get("concludes")),
         verdicts=normalize_verdicts(a["name"], a.get("verdicts")),
@@ -372,42 +374,81 @@ def validate_mcp_server_dict(m: dict) -> None:
             raise CatalogError(f"mcp_server {m['name']!r}: header {k!r} must be a header name")
 
 
-def import_yaml_to_db(store, text: str, engine=None) -> dict:
+def hidden_objects(store, hide) -> dict:
+    """{kind: names} of what only the projects in `hide` hold: sources, triggers, agents, MCP
+    servers and skills (an object another project also holds is not hidden), and the names of
+    those projects. Empty sets when `hide` is empty."""
+    out: dict[str, set] = {k: set() for k in ("source", "trigger", "agent", "mcp_server",
+                                              "skill", "project")}
+    hide = set(hide or ())
+    if not hide:
+        return out
+    out["source"] = {n for n, uids in store.source_memberships().items()
+                     if uids and set(uids) <= hide}
+    for kind, rows in (("trigger", store.list_catalog_triggers()),
+                       ("agent", store.list_catalog_agents()),
+                       ("mcp_server", store.list_mcp_servers()),
+                       ("skill", store.list_all_skills())):
+        for r in rows:
+            uids = store.projects_using(kind, r["name"])
+            if uids and set(uids) <= hide:
+                out[kind].add(r["name"])
+    out["project"] = {p["name"] for p in store.list_projects() if p["id"] in hide}
+    return out
+
+
+def import_yaml_to_db(store, text: str, engine=None, hide=()) -> dict:
     """Validate and write a YAML catalog into the store. Returns counts.
 
     `engine` (a projects.engine.Engine) is needed only when the document carries a `projects:`
-    section; without one, projects in the document are an error rather than silently skipped."""
-    return import_catalog_dict(store, yaml.safe_load(text) or {}, engine=engine)
+    section; without one, projects in the document are an error rather than silently skipped.
+    `hide`: see import_catalog_dict."""
+    return import_catalog_dict(store, yaml.safe_load(text) or {}, engine=engine, hide=hide)
 
 
-def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> dict:
+def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True, hide=()) -> dict:
     """The dict form of import_yaml_to_db; also what the project engine applies a plan through,
     so a project's objects go through exactly the validation and writes a catalog import does.
 
     `assign`: place the imported objects in projects (the object's `project`, else the default
-    project). The engine passes False: it owns what it applies and places it itself."""
+    project). The engine passes False: it owns what it applies and places it itself.
+
+    `hide`: the project ids the caller cannot see (TR-998). An object of the document that has the
+    name of one only those projects hold is left unwritten, and so is whatever hangs on it, and
+    the answer counts it as written: the caller learns nothing from it. A name the store holds
+    only for them is as unknown to the document's references as one it never had, and a project
+    they cannot see is as unknown as a project that does not exist."""
     raw = fold_legacy_views(raw or {})
     sources = raw.get("sources", []) or []
     triggers = raw.get("triggers", []) or []
     agents = raw.get("agents", []) or []
     mcp_servers = raw.get("mcp_servers", []) or []
+    hid = hidden_objects(store, hide)
+    hide = set(hide or ())
     for m in mcp_servers:
         validate_mcp_server_dict(m)
     skills = _validated_skills(raw.get("skills", []) or [])
 
     # validate the whole document before writing anything. Names already in the store count as
     # known (a merge import may add a trigger over existing sources).
-    names = {s["name"] for s in sources} | {s["name"] for s in store.list_catalog_sources()}
+    names = ({s["name"] for s in sources}
+             | {s["name"] for s in store.list_catalog_sources() if s["name"] not in hid["source"]})
     for s in sources:
         validate_source_dict(s)
     for t in triggers:
         validate_trigger_dict(t, names)
-    trigger_names = {t["name"] for t in triggers} | {t["name"] for t in store.list_catalog_triggers()}
-    all_triggers = {t["name"]: t for t in store.list_catalog_triggers()}
+    trigger_names = ({t["name"] for t in triggers}
+                     | {t["name"] for t in store.list_catalog_triggers()
+                        if t["name"] not in hid["trigger"]})
+    all_triggers = {t["name"]: t for t in store.list_catalog_triggers()
+                    if t["name"] not in hid["trigger"]}
     all_triggers.update({t["name"]: t for t in triggers})
     server_names = ({m["name"] for m in mcp_servers}
-                    | {m["name"] for m in store.list_mcp_servers()})
-    agent_names = {a["name"] for a in agents} | {a["name"] for a in store.list_catalog_agents()}
+                    | {m["name"] for m in store.list_mcp_servers()
+                       if m["name"] not in hid["mcp_server"]})
+    agent_names = ({a["name"] for a in agents}
+                   | {a["name"] for a in store.list_catalog_agents()
+                      if a["name"] not in hid["agent"]})
     for a in agents:
         validate_agent_dict(a, trigger_names, all_triggers, server_names)
         check_handoff_targets(a["name"], normalize_handoffs(a["name"], a.get("handoffs")),
@@ -429,12 +470,31 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                            ("mcp_server", mcp_servers)):
             for o in objs:
                 for ref in _project_refs(o):
-                    if _resolve_project(store, ref) is None and ref not in declared:
+                    if _resolve_project(store, ref, hide) is None and ref not in declared:
                         raise CatalogError(f"{kind} {o['name']!r}: unknown project {ref!r}")
         for sk in skills:
             ref = sk["project"]
-            if ref and _resolve_project(store, ref) is None and ref not in declared:
+            if ref and _resolve_project(store, ref, hide) is None and ref not in declared:
                 raise CatalogError(f"skill {sk['name']!r}: unknown project {ref!r}")
+
+    answered = {"sources": [x["name"] for x in sources], "triggers": [x["name"] for x in triggers],
+                "agents": [x["name"] for x in agents],
+                "mcp_servers": [x["name"] for x in mcp_servers],
+                "projects": [u["name"] for u in projects], "skills": [x["name"] for x in skills]}
+    if hide:
+        # what is left of the document once the caller's blind spots are taken out: the objects
+        # with a hidden name, then what hangs on them (a trigger on a dropped source, an agent on
+        # a dropped trigger or server), the projects and skills with a hidden name
+        sources = [x for x in sources if x["name"] not in hid["source"]]
+        triggers = [x for x in triggers if x["name"] not in hid["trigger"]
+                    and not set(x["sources"]) & hid["source"]]
+        dropped_trg = hid["trigger"] | (set(answered["triggers"]) - {x["name"] for x in triggers})
+        mcp_servers = [x for x in mcp_servers if x["name"] not in hid["mcp_server"]]
+        agents = [x for x in agents if x["name"] not in hid["agent"]
+                  and x.get("trigger") not in dropped_trg
+                  and not set(x.get("mcp_servers") or []) & hid["mcp_server"]]
+        skills = [x for x in skills if x["name"] not in hid["skill"]]
+        projects = [u for u in projects if u.get("name") not in hid["project"]]
 
     from .connectors import normalize_config, source_type_for
     for s in sources:
@@ -463,6 +523,7 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
                                     else None),
                                    webhook_key_label=a.get("webhook_key_label"),
                                    provider=a.get("provider"),
+                                   budget_period=a.get("budget_period"),
                                    daily_cap=(int(a["daily_cap"])
                                               if a.get("daily_cap") not in (None, "") else None),
                                    # absent keeps what is stored (see upsert_catalog_agent)
@@ -489,7 +550,8 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
     if assign:
         # objects naming a project that already exists go there before the projects below are
         # applied, so a template re-plan finds them where the document put them
-        placed = _place_imported(store, sources, triggers, agents, mcp_servers, only_existing=True)
+        placed = _place_imported(store, sources, triggers, agents, mcp_servers, only_existing=True,
+                                hide=hide)
 
     # Projects are created (or, by name, updated) through the engine so they own their objects
     # like a console-created instance would.
@@ -519,34 +581,31 @@ def import_catalog_dict(store, raw: dict, engine=None, assign: bool = True) -> d
 
     if assign:
         _place_imported(store, sources, triggers, agents, mcp_servers, only_existing=False,
-                        skip=placed)
+                        skip=placed, hide=hide)
         # everything the document left without a project lands in the default project, and a
         # trigger's sources join its project (the same pass the store runs at every start)
         store.normalize_projects()
         for a in agents:
             _turn_on_where_placed(store, a)
         # the wiring each project holds, as exported; it wins over the agents' own fields
-        _import_wiring(store, raw.get("wiring") or [])
+        _import_wiring(store, raw.get("wiring") or [], hide)
         # skills last: the projects they name exist now, and a skill in the document wins over
         # the one a template planned under the same name
         for sk in skills:
-            uid = _resolve_project(store, sk["project"]) if sk["project"] \
+            uid = _resolve_project(store, sk["project"], hide) if sk["project"] \
                 else store.default_project_id()
+            if uid is None:
+                continue   # a project the caller cannot see, declared by the document
             store.upsert_skill(uid, sk["name"], sk["description"], sk["body"])
             for ref in sk.get("used_by") or []:
-                other = _resolve_project(store, ref)
+                other = _resolve_project(store, ref, hide)
                 if other is not None:
                     store.use_skill(other, sk["name"])
 
-    return {"sources": len(sources), "triggers": len(triggers),
-            "agents": len(agents), "mcp_servers": len(mcp_servers), "projects": len(projects),
-            "skills": len(skills),
-            "names": {"sources": [s["name"] for s in sources],
-                      "triggers": [t["name"] for t in triggers],
-                      "agents": [a["name"] for a in agents],
-                      "mcp_servers": [m["name"] for m in mcp_servers],
-                      "projects": [u["name"] for u in projects],
-                      "skills": [s["name"] for s in skills]}}
+    return {"sources": len(answered["sources"]), "triggers": len(answered["triggers"]),
+            "agents": len(answered["agents"]), "mcp_servers": len(answered["mcp_servers"]),
+            "projects": len(answered["projects"]), "skills": len(answered["skills"]),
+            "names": answered}
 
 
 DEFAULT_PROJECT_NAME = "Default"
@@ -589,17 +648,20 @@ def _project_refs(o: dict) -> list[str]:
     return out
 
 
-def _resolve_project(store, ref: str) -> str | None:
+def _resolve_project(store, ref: str, hide=()) -> str | None:
     """A project id from an id or a name. The default project answers to its name on every cell,
-    so an export from one cell names the right project on another."""
+    so an export from one cell names the right project on another. A project in `hide` (the
+    caller cannot see it) is not found."""
     if not ref:
         return None
     if ref == DEFAULT_PROJECT_NAME:
-        return store.default_project_id()
-    if store.get_project(ref) is not None:
-        return ref
-    p = store.get_project_by_name(ref)
-    return p["id"] if p else None
+        uid = store.default_project_id()
+    elif store.get_project(ref) is not None:
+        uid = ref
+    else:
+        p = store.get_project_by_name(ref)
+        uid = p["id"] if p else None
+    return None if uid in hide else uid
 
 
 def _turn_on_where_placed(store, a: dict) -> None:
@@ -610,10 +672,10 @@ def _turn_on_where_placed(store, a: dict) -> None:
         store.set_agent_enabled(a["name"], bool(a.get("enabled", False)), project=row["owned_by"])
 
 
-def _import_wiring(store, wiring: list) -> None:
+def _import_wiring(store, wiring: list, hide=()) -> None:
     """`wiring:` from an export: [{project, wake, agent, enabled}] and [{project, agent, verdict,
     to, cooldown}], by project name. A row naming a project or part that is not here is skipped."""
-    by_name = {p["name"]: p["id"] for p in store.list_projects()}
+    by_name = {p["name"]: p["id"] for p in store.list_projects() if p["id"] not in hide}
     hands: dict[tuple, list] = {}
     for w in wiring:
         if not isinstance(w, dict):
@@ -632,7 +694,7 @@ def _import_wiring(store, wiring: list) -> None:
 
 
 def _place_imported(store, sources, triggers, agents, mcp_servers, only_existing: bool,
-                    skip: set | None = None) -> set:
+                    skip: set | None = None, hide=()) -> set:
     """Put each imported object that names a project into it. Returns the (kind, name) placed."""
     placed = set()
     skip = skip or set()
@@ -642,9 +704,11 @@ def _place_imported(store, sources, triggers, agents, mcp_servers, only_existing
             if (kind, o["name"]) in skip:
                 continue
             for ref in _project_refs(o):
-                uid = _resolve_project(store, ref)
+                uid = _resolve_project(store, ref, hide)
                 if uid is None:
-                    if only_existing:
+                    if only_existing or _resolve_project(store, ref) is not None:
+                        # one the caller cannot see is as good as not yet made: its objects
+                        # stay out of it, and nothing says that it is there
                         continue
                     raise CatalogError(f"{kind} {o['name']!r}: unknown project {ref!r}")
                 store.put_in_project(kind, o["name"], uid)
@@ -652,7 +716,8 @@ def _place_imported(store, sources, triggers, agents, mcp_servers, only_existing
     return placed
 
 
-def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool = False) -> str:
+def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool = False,
+                      hide=()) -> str:
     """Serialize the catalog to portable YAML.
 
     `sources`: optional allow-list of source names to include (None = all). A partial export stays
@@ -664,10 +729,16 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
 
     `include_secrets`: when False (default), connector secrets (github `token`, postgres `dsn`) are
     OMITTED — the export is safe to share/commit, and the operator re-enters them on the target
-    (the source form's blank-to-keep handles this). When True, real secret values are emitted."""
+    (the source form's blank-to-keep handles this). When True, real secret values are emitted.
+
+    `hide`: the project ids the caller cannot see (TR-998). What only those projects hold is
+    left out, and so are the projects themselves, their wiring and whatever names them; an object
+    another project also holds stays, listed without them."""
     from .connectors import secret_field_names
     want = set(sources) if sources is not None else None
-    project_names = {p["id"]: p["name"] for p in store.list_projects()}
+    hide = set(hide or ())
+    hid = hidden_objects(store, hide)
+    project_names = {p["id"]: p["name"] for p in store.list_projects() if p["id"] not in hide}
     members = store.source_memberships()
 
     def _pname(uid):
@@ -675,7 +746,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
 
     src_out, kept_sources = [], set()
     for s in store.list_catalog_sources():
-        if want is not None and s["name"] not in want:
+        if (want is not None and s["name"] not in want) or s["name"] in hid["source"]:
             continue
         kept_sources.add(s["name"])
         config = s["config"]
@@ -692,6 +763,8 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     trig_out = []
     for t in store.list_catalog_triggers():
         if want is not None and not set(t["sources"]).issubset(kept_sources):
+            continue
+        if t["name"] in hid["trigger"] or set(t["sources"]) & hid["source"]:
             continue
         if not t["sources"]:
             # left by the upgrade when its view was already gone: it could not be imported
@@ -725,7 +798,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
                                         or str(m["auth_value"]).startswith("credential:github/"))
             else {}),
          **({"headers": m["headers"]} if m.get("headers") else {})}
-        for m in store.list_mcp_servers()
+        for m in store.list_mcp_servers() if m["name"] not in hid["mcp_server"]
     ]
 
     agent_out = [
@@ -737,9 +810,11 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
          **({"slack_channel": a["slack_channel"]} if a.get("slack_channel") else {}),
          **({"webhook_url": a["webhook_url"]} if a.get("webhook_url") else {}),
          **({"webhook_key_label": a["webhook_key_label"]} if a.get("webhook_key_label") else {}),
-         **({"mcp_servers": a["mcp_servers"]} if a.get("mcp_servers") else {}),
+         **({"mcp_servers": [n for n in a["mcp_servers"] if n not in hid["mcp_server"]]}
+            if [n for n in a.get("mcp_servers") or [] if n not in hid["mcp_server"]] else {}),
          **({"max_rounds": a["max_rounds"]} if a.get("max_rounds") else {}),
          **({"budget_usd": a["budget_usd"]} if a.get("budget_usd") else {}),
+         **({"budget_period": "month"} if a.get("budget_period") == "month" else {}),
          **({"daily_cap": a["daily_cap"]} if a.get("daily_cap") else {}),
          **({"handoffs": a["handoffs"]} if a.get("handoffs") else {}),
          **({"concludes": True} if a.get("concludes") else {}),
@@ -751,7 +826,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
             if include_secrets and a.get("webhook_token") else {}),
          **({"enabled": True} if a.get("enabled") else {})}
         for a in store.list_catalog_agents()
-        if not a["trigger"] or a["trigger"] in kept_triggers
+        if a["name"] not in hid["agent"] and (not a["trigger"] or a["trigger"] in kept_triggers)
     ]
 
     doc = {"sources": src_out, "triggers": trig_out}
@@ -769,7 +844,7 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
              "agent": {x["name"]: x.get("owned_by") for x in store.list_catalog_agents()},
              "mcp_server": {x["name"]: x.get("owned_by") for x in store.list_mcp_servers()}}
     for u in store.list_projects():
-        if u.get("status") == "draft":   # still being planned: nothing of it exists yet
+        if u.get("status") == "draft" or u["id"] in hide:   # draft: nothing of it exists yet
             continue
         goal = {"goal": u["goal"]} if u.get("goal") else {}
         if u["template"] == "default":
@@ -795,6 +870,8 @@ def export_db_to_yaml(store, sources: list | None = None, include_secrets: bool 
     # a skill once, by the project that made it (else its first user), with the others using it
     skill_out = []
     for sk in store.list_all_skills():
+        if sk["name"] in hid["skill"]:
+            continue
         users = [n for n in (_pname(p) for p in sk.get("projects") or []) if n]
         home = _pname(sk["project"]) if _pname(sk["project"]) in users else (users[0] if users else None)
         if home is None:
@@ -1255,6 +1332,8 @@ def validate_agent_dict(a: dict, trigger_names: set, triggers: dict | None = Non
         if b <= 0:
             raise CatalogError(f"agent {a['name']!r}: budget_usd must be above zero "
                                "(or empty for no budget)")
+    if a.get("budget_period") not in (None, "", "lifetime", "month"):
+        raise CatalogError(f"agent {a['name']!r}: budget_period must be lifetime or month")
     dc = a.get("daily_cap")
     if dc not in (None, ""):
         try:

@@ -22,6 +22,8 @@ from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
+from . import factory_home
+from . import factory_team
 from .envelope import now_utc
 from .factory_store import MapChanged
 
@@ -233,12 +235,13 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
             "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
-def register(app, store, h: SimpleNamespace) -> None:
+def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
     """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
     cc_source(), global_ids(create), current_person(request), is_system(request), is_admin(request),
     area_owner(repo) -> the person who owns that GitHub repo (`owner/name`, any case) or None
     (TR-627); is_admin(request) says whether the credential has the admin scope (the system
-    credential does, and so does everyone with auth off)."""
+    credential does, and so does everyone with auth off). Returns the crew readers the home page
+    shares."""
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)
@@ -318,6 +321,7 @@ def register(app, store, h: SimpleNamespace) -> None:
         except docs_mod.DocError as e:
             h.err(e)
         store.set_setting(key, json.dumps(out))
+        factory_home.clear_cache()   # the home card shows the change on the next read
         return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
 
     # ── grants (TR-419): the person's words, dated; shared, and per project ───
@@ -408,7 +412,13 @@ def register(app, store, h: SimpleNamespace) -> None:
         to the giver) takes effect now."""
         if g["state"] == "waiting" and not waiting_for(g):
             mirror_in(g, by)   # first: a failure leaves it waiting, to settle on the next try
-            store.update_grant_row(g["id"], state="active")
+            if not store.activate_waiting_grant(g["id"]):
+                now = store.get_grant_row(g["id"])
+                if now is not None and now["state"] == "active":
+                    return now   # another settle took it into effect first: its line stays
+                # declined or revoked since it was read: it stays so, and its line comes back out
+                mirror_out(g, by)
+                h.err(ValueError(f"{g['id']} is no longer waiting"), 409)
             g = store.get_grant_row(g["id"])
         return g
 
@@ -430,7 +440,9 @@ def register(app, store, h: SimpleNamespace) -> None:
                 "given_by": ref(g["given_by"]) if g["given_by"] else None,
                 "holder": ref(g["holder_person_id"]) if g["holder_person_id"] else None,
                 "areas": g["areas"],
-                "consents": [{**ref(c["person_id"]), "at": c["at"]} for c in g["consents"]],
+                "consents": [{**ref(c["person_id"]), "at": c["at"],
+                             **{k: c[k] for k in ("via", "declined", "reason") if c.get(k)}}
+                            for c in g["consents"]],
                 "waiting_for": waiting_for(g), "in_effect": g["state"] == "active"}
 
     def grants_view(rows: list[dict]) -> list[dict]:
@@ -480,6 +492,8 @@ def register(app, store, h: SimpleNamespace) -> None:
                 take("project", p["id"], store.get_doc(p["id"], d["id"])["body"])
         store.set_setting(GRANTS_MIGRATED_SETTING, "1")
 
+    grants_doc_lock = threading.RLock()   # one writer at a time on a grants doc's text
+
     def mirror_in(g: dict, by: str) -> None:
         """A team or project grant in effect, into the grants doc that readers of the docs use."""
         if g["kind"] == "personal":
@@ -500,12 +514,13 @@ def register(app, store, h: SimpleNamespace) -> None:
             doc_id = d["id"] if d else None
         if not doc_id:
             return
-        doc = store.get_doc(None, doc_id) if uid is None else store.get_doc(uid, doc_id)
-        keep = [ln for ln in doc["body"].splitlines()
-                if not any(w == g["words"] for w, _ in legacy_lines(ln))]
-        text = "\n".join(keep) + "\n"
-        if text != doc["body"]:
-            store.update_doc(doc_id, body=text, by=by)
+        with grants_doc_lock:   # read and write as one step: a line added meanwhile is kept
+            doc = store.get_doc(None, doc_id) if uid is None else store.get_doc(uid, doc_id)
+            keep = [ln for ln in doc["body"].splitlines()
+                    if not any(w == g["words"] for w, _ in legacy_lines(ln))]
+            text = "\n".join(keep) + "\n"
+            if text != doc["body"]:
+                store.update_doc(doc_id, body=text, by=by)
 
     def visible_grant(g: dict, request: Request) -> bool:
         """May this caller read this grant? Personal: its holder. Project: whoever can see the
@@ -575,7 +590,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         if waiting is not None:
             # the lead's (or an admin's) own add of words that sit waiting for someone else's
             # consent: it takes effect, with the areas and owner consents of this add
-            store.update_grant_row(waiting["id"], state="active", areas=areas, needs_lead=False)
+            # only while it still waits: a decline that came since the read must stay a decline
+            if not store.activate_waiting_grant(waiting["id"], areas=areas, needs_lead=False):
+                row = store.get_grant_row(waiting["id"])
+                if row is not None and row["state"] == "active":
+                    return row, False   # another add took it into effect first
+                h.err(ValueError(f"{waiting['id']} is no longer waiting"), 409)
             row = store.get_grant_row(waiting["id"])
             mirror_in(row, by)
             return row, True
@@ -661,8 +681,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         entry = {"person_id": person["id"] if person else "system", "at": now_utc().isoformat()}
         if how == "admin":
             entry["as"] = "admin"
+        if console_via(request):
+            entry["via"] = "console"
         consents = g["consents"] + [entry]
-        store.update_grant_row(g["id"], consents=consents)
+        # only while it still waits: a decline that came since the read must stay a decline
+        if not store.consent_waiting_grant(g["id"], consents):
+            h.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to consent to"), 409)
         g = settle({**g, "consents": consents}, h.by(request, None))
         if g["state"] == "waiting":
             g = store.get_grant_row(g["id"])
@@ -693,6 +717,38 @@ def register(app, store, h: SimpleNamespace) -> None:
             mirror_out(g, h.by(request, None))
         return {"grant": grants_view([g])[0]}
 
+    @app.post("/api/grants/{gid}/decline")
+    def decline_grant(gid: str, request: Request, body: dict = Body(default={})):
+        """{reason?}: someone a waiting grant waits for says no (TR-740). The grant ends as a
+        revoked one, so every reader keeps working, and the consents list keeps who declined, when,
+        from where and why. Only someone it is waiting for may; a grant that is not waiting
+        answers 409."""
+        deny(request, "grants")
+        g = grant_or_404(gid, request, consenting=True)
+        person = h.current_person(request)
+        if g["state"] != "waiting":
+            h.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to decline"), 409)
+        how = waits_for_me(g, request)
+        if how is None:
+            names = ", ".join(w["name"] or w["id"] for w in waiting_for(g))
+            h.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
+                                  "one of them"), 403)
+        reason = str(body.get("reason") or "").strip()
+        if len(reason) > 1000:
+            h.err(ValueError("keep the reason to 1000 characters"))
+        entry = {"person_id": person["id"] if person else "system", "at": now_utc().isoformat(),
+                 "declined": True}
+        if reason:
+            entry["reason"] = reason
+        if how == "admin":
+            entry["as"] = "admin"
+        if console_via(request):
+            entry["via"] = "console"
+        # a waiting grant was never in effect, so there is nothing to take out of the grants doc
+        if not store.decline_waiting_grant(g["id"], g["consents"] + [entry]):
+            h.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to decline"), 409)
+        return {"grant": grants_view([store.get_grant_row(g["id"])])[0]}
+
     def append_grant(uid: str | None, line: str, by: str) -> bool:
         """One grant line into the shared grants (uid None) or the project's own."""
         if uid is None:
@@ -708,9 +764,10 @@ def register(app, store, h: SimpleNamespace) -> None:
             else:
                 doc_id = d["id"]
             include_shared_grants(uid)
-        text, added = docs_mod.append_line(store.get_doc(None, doc_id)["body"], line)
-        if added:
-            store.update_doc(doc_id, body=text, by=by)
+        with grants_doc_lock:   # read and write as one step: a line removed meanwhile stays removed
+            text, added = docs_mod.append_line(store.get_doc(None, doc_id)["body"], line)
+            if added:
+                store.update_doc(doc_id, body=text, by=by)
         return added
 
     try:
@@ -793,7 +850,12 @@ def register(app, store, h: SimpleNamespace) -> None:
             for st in out:
                 if st["projects"] and set(st["projects"]) <= hidden:
                     continue
-                st["projects"] = [u for u in st["projects"] if u not in hidden]
+                seen = [u for u in st["projects"] if u not in hidden]
+                if len(seen) != len(st["projects"]) or st["project"] in hidden:
+                    # the station also works on a project the caller cannot see: its reason
+                    # may name that project, so none of it is shown
+                    st["state_reason"] = None
+                st["projects"] = seen
                 if st["project"] in hidden:
                     st["project"], st["project_name"] = None, None
                 kept.append(st)
@@ -860,6 +922,18 @@ def register(app, store, h: SimpleNamespace) -> None:
         one) also has the items from before they were addressed."""
         to = d.get("to_person_id")
         return to == me or (me == "local" and not to)
+
+    def desk_can_act(d: dict, me: str, request: Request) -> bool:
+        """Who may answer or allow a desk item from the console (TR-898): the person it is
+        addressed to. An item from before items were addressed has no one: an admin key, the
+        project's lead and `local` may act on it, nobody else (a key that can only ingest must not
+        grant a permission). The lists (`desk_is_mine`) still show it to `local` only."""
+        to = d.get("to_person_id")
+        if to:
+            return to == me
+        if me == "local" or h.is_admin(request):
+            return True
+        return leads(store.get_project(d["project"]) if d.get("project") else None, me)
 
     def leads(p: dict | None, me: str) -> bool:
         lead = (p or {}).get("lead_person_id")
@@ -969,23 +1043,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         watch reads this (TR-674); a person's own `pace` setting counts for that person."""
         return pace(request)
 
-    @app.get("/api/crew/my-work")
-    def my_work(request: Request, crew: str | None = None, project: str | None = None):
-        """What belongs to the caller's person (TR-633), across the projects that have an open
-        hand-over and that the caller can see: `ready` (their tickets that can start),
-        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
-        lead's, or `local`'s when the project has no lead), and `led_projects` with the milestones
-        whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
-        `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
-        can see, finished or not; `project` (an id or a name) keeps only that project's, and one
-        that does not exist, or that the caller cannot see, answers 404. Question numbers restart
-        per project, so a caller working on one project asks for it by name."""
-        me = work_person(request)
-        try:
-            crew_name = crew_name_of(request, crew)
-        except ValueError as e:
-            h.err(e)
-        hidden = h.hidden_ids()
+    def work_of(me: dict, hidden: set, want: str = "", detail: bool = False) -> dict:
+        """What belongs to person `me` ({id, name}) as GET /api/crew/my-work gives it: `ready`,
+        `in_progress`, `led_projects`, `desk` and `spec_questions`, leaving out the projects in
+        `hidden`. `want` (a project id) keeps only that project's spec questions. `detail` adds,
+        to each led project, its `project_id` and `milestones` ([{id, name, checks, since}]) for
+        the home page; the route does not ask for it."""
         ready, doing, led = [], [], []
         for uid in store.handed_over_projects(finished=False, taken=False):
             p = store.get_project(uid)
@@ -1004,18 +1067,49 @@ def register(app, store, h: SimpleNamespace) -> None:
                     ready.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "repo": t.get("repo") or ""})
             if leads(p, me["id"]):
-                ms = []
+                ms, full = [], []
                 for m in store.list_milestones(uid):
                     mine = [t for t in tickets if t["milestone"] == m["id"]
                             and t["status"] != "canceled"]
                     if mine and all(factory_mod.delivered(t) for t in mine):
                         ms.append(m["name"])
-                led.append({"project": p["name"], "milestones_ready_to_check": ms})
+                        full.append({"id": m["id"], "name": m["name"], "checks": len(m["checks"]),
+                                     "since": max((t["updated_at"] for t in mine
+                                                   if t.get("updated_at")), default=None)
+                                     or m["updated_at"]})
+                led.append({"project": p["name"], "milestones_ready_to_check": ms,
+                            **({"project_id": uid, "milestones": full} if detail else {})})
         desk = [{k: d[k] for k in ("label", "project_name", "question", "options", "recommendation",
                                    "why", "context", "blocks", "tickets", "blocking", "created_at")}
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
         names = {x["id"]: x["name"] for x in store.list_projects()}
+        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
+                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
+                  "asked_at": q["asked_at"]}
+                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
+                 if q["project"] in names and q["project"] not in hidden
+                 and (not want or q["project"] == want)]
+        return {"ready": ready, "in_progress": doing, "led_projects": led, "desk": desk,
+                "spec_questions": asked}
+
+    @app.get("/api/crew/my-work")
+    def my_work(request: Request, crew: str | None = None, project: str | None = None):
+        """What belongs to the caller's person (TR-633), across the projects that have an open
+        hand-over and that the caller can see: `ready` (their tickets that can start),
+        `in_progress` (their tickets a station holds; a ticket with no assignee is its project
+        lead's, or `local`'s when the project has no lead), and `led_projects` with the milestones
+        whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
+        `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
+        can see, finished or not; `project` (an id or a name) keeps only that project's, and one
+        that does not exist, or that the caller cannot see, answers 404. Question numbers restart
+        per project, so a caller working on one project asks for it by name."""
+        me = work_person(request)
+        try:
+            crew_name = crew_name_of(request, crew)
+        except ValueError as e:
+            h.err(e)
+        hidden = h.hidden_ids()
         want = (project or "").strip()
         if want:
             # an id or an exact name; a project the caller cannot see is as unknown as a mistyped one
@@ -1024,14 +1118,39 @@ def register(app, store, h: SimpleNamespace) -> None:
                 h.err(ValueError(f"no project {want!r} you can see: use a project id or its exact "
                                "name"), 404)
             want = wp["id"]
-        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
-                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
-                  "asked_at": q["asked_at"]}
-                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
-                 if q["project"] in names and q["project"] not in hidden
-                 and (not want or q["project"] == want)]
-        return {"person": me, "crew": crew_name, "ready": ready, "in_progress": doing,
-                "led_projects": led, "desk": desk, "spec_questions": asked}
+        return {"person": me, "crew": crew_name, **work_of(me, hidden, want)}
+
+    def team_reader() -> SimpleNamespace:
+        """What factory_team reads of this module (TR-739)."""
+        return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
+                               work_person=work_person, my_projects=my_projects, queue=queue,
+                               settings=settings, signoff_state=signoff_state,
+                               waits_for_me=waits_for_me, desk_is_mine=desk_is_mine,
+                               is_mine=is_mine, leads=leads, stored=stored, crews_of=crews_of)
+
+    def team_home(request: Request, now=None) -> dict:
+        """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
+        one person: see factory_team. It reads what this module holds; the route stays in daemon.py."""
+        return factory_team.team_home(team_reader(), request, now or now_utc())
+
+    def own_stations(request: Request, rows: list[dict]) -> list[dict]:
+        """`rows` kept to the caller's own crews on a team cell (see factory_team.own_stations)."""
+        return factory_team.own_stations(team_reader(), request, rows)
+
+    def own_desk(request: Request, rows: list[dict]) -> list[dict]:
+        """`rows` (open desk items) kept to the caller's person on a team cell."""
+        return factory_team.own_desk(team_reader(), request, rows)
+
+    def own_tickets(request: Request, tickets: dict, projects: list[dict]) -> dict:
+        """`tickets` ({project: tickets}) kept to the caller's person on a team cell."""
+        return factory_team.own_tickets(team_reader(), request, tickets, projects)
+
+    def team_projects(request: Request, open_ps: list, tickets: dict, rows: list, which: str,
+                      now=None, waiting: list | None = None) -> dict:
+        """The team's version of the home's `projects` (TR-739): lead, members, scope, what is
+        the caller's, the Mine and Team counts; {} on a cell of one person."""
+        return factory_team.team_projects(team_reader(), request, open_ps, tickets, rows, which,
+                                          now or now_utc(), waiting or [])
 
     @app.get("/api/crew/projects")
     def crew_projects(request: Request):
@@ -1509,6 +1628,12 @@ def register(app, store, h: SimpleNamespace) -> None:
                         "title": t["title"], "holder": t["holder"],
                         "repo": t.get("repo") or (t["pr"] or {}).get("repo"),
                         "pr": (t["pr"] or {}).get("url"), "head": (t["pr"] or {}).get("head"),
+                        # the pull request's number, its own title (`title` is the ticket's), what
+                        # CI said when Tares last read it (success, failure, pending, none, or
+                        # null before a read) and the ticket's milestone (TR-735)
+                        "number": (t["pr"] or {}).get("number"),
+                        "pr_title": (t["pr"] or {}).get("title"),
+                        "ci": (t["pr"] or {}).get("ci"), "milestone": t["milestone"],
                         "waiting_since": since,
                         "blocks_milestone": blocks,
                         "layer1_clean": layer["clean"],
@@ -1906,8 +2031,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(PermissionError("a rule is the person's call: accept or reject it in the "
                                   "console"), 403)
         rp = store.get_rule_proposal(pid)
-        if rp is None:
-            h.err(KeyError(f"no rule proposal {pid!r}"), 404)
+        if rp is None or rp.get("project") in h.hidden_ids():
+            h.err(KeyError(f"no rule proposal {pid!r}"), 404)   # a private project's reads as none
         if rp["state"] != "open":
             h.err(ValueError(f"already {rp['state']}"), 409)
         if decision == "reject":
@@ -2082,23 +2207,15 @@ def register(app, store, h: SimpleNamespace) -> None:
                                   "owner of the repos it names"), 403)
         return "project", d["project"], areas, not (admin or leads_it)
 
-    @app.post("/api/desk/{ref}/answer")
-    async def desk_answer(ref: str, request: Request, body: dict = Body(...)):
-        """{words, choice?, standing?, scope?: project|all, grant_kind?: project|personal, kept?:
-        [A<n>], overturned?: {A<n>: words}}: the person's answer, their words as typed. Tares
-        looks for those words in what the person the item is addressed to typed in their own
-        recorded sessions, whichever station or session that was (TR-634). Words not found yet
-        are a retryable error: the recording can take a minute to arrive. An item from before
-        items were addressed is matched as before: in the orchestrator's session, or from a
-        person's own session in any session. A standing answer that matches becomes a grant
-        given by that person: a project grant (the default; `scope` all makes it a team grant,
-        which needs an admin) or, with `grant_kind` personal, one for their own machine. A
-        project grant that reaches into repos other people own waits for their consent. An
-        assumption batch keeps or overturns each assumption."""
-        deny(request, "desk")
-        d = desk_or_404(ref)
-        if d["state"] != "open":
-            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+    def console_via(request: Request) -> str | None:
+        """"console" for a person acting on the page (no station header), else None. A crew
+        session always sends its station header; an unlabelled Claude session holding a person's
+        key looks the same as the console, which is the accepted risk of `desk_allow` too."""
+        return None if caller(request)["station"] else "console"
+
+    def parse_answer(d: dict, body: dict) -> dict:
+        """The fields of a desk answer, checked: {words, scope, grant_kind, choice, letter,
+        standing, kept, over}. Shared by the session route (/answer) and the console's (/reply)."""
         words = str(body.get("words") or "").strip()
         if not words:
             h.err(ValueError("words: the person's reply exactly as they typed it"))
@@ -2129,6 +2246,89 @@ def register(app, store, h: SimpleNamespace) -> None:
                 h.err(ValueError(f"{words} is {factory_mod.OPTION_LETTERS[letter]}) {picked}, "
                                  f"not {choice!r}"))
             choice = picked
+        standing = bool(body.get("standing"))
+        # a letter stands for the option it picked: a standing answer keeps that option, never "A"
+        grant_words = choice if letter is not None else words
+        if standing:
+            try:
+                factory_mod.grant_line(grant_words, now_utc().date().isoformat())
+            except docs_mod.DocError as e:
+                h.err(e)
+        over = body.get("overturned") or {}
+        if not isinstance(over, dict):
+            h.err(ValueError("overturned is {A<n>: the person's words}"))
+        return {"words": words, "scope": scope, "grant_kind": grant_kind, "choice": choice,
+                "letter": letter, "grant_words": grant_words,
+                "standing": standing, "kept": [str(a) for a in body.get("kept") or []], "over": over}
+
+    def assumption_plan(d: dict, kept: list[str], over: dict) -> list[tuple]:
+        """An assumption batch: every assumption of the item kept or overturned, with the
+        person's words for an overturned one. [(assumption, "kept"|"overturned", words)]."""
+        plan = []
+        for ref_a, st, w in [(a, "kept", None) for a in kept] + [
+                (a, "overturned", str(w)) for a, w in over.items()]:
+            a = store.get_assumption(d["project"], ref_a) if d["project"] else None
+            if a is None or a["label"] not in d["assumptions"]:
+                h.err(KeyError(f"{ref_a!r} is not one of {d['label']}'s assumptions: "
+                               + (", ".join(d["assumptions"]) or "it has none")), 404)
+            if a["state"] != "open":
+                h.err(ValueError(f"{a['label']} was already {a['state']}"), 409)
+            plan.append((a, st, w))
+        missing = set(d["assumptions"]) - {a["label"] for a, _, _ in plan}
+        if d["assumptions"] and missing:
+            h.err(ValueError("the answer must keep or overturn every assumption of "
+                             f"{d['label']}; left out: " + ", ".join(sorted(missing))))
+        return plan
+
+    def record_answer(d: dict, a: dict, plan: list[tuple], giver: str | None, grant,
+                      by: str, matched: bool, session: str | None, via: str | None,
+                      person_id: str | None) -> dict:
+        """Write a desk answer that has been accepted: the grant a standing answer becomes, the
+        assumptions it decides, the decision, and the item closed. The response of /answer and
+        /reply."""
+        granted = False
+        row = None
+        if grant:
+            kind, grant_project, areas, needs_lead = grant
+            row, _ = put_grant(kind, a["grant_words"], grant_project, giver, areas, needs_lead, by)
+            granted = row["state"] == "active"   # one waiting for consent is not in effect yet
+        changed = []
+        for asm, st, w in plan:
+            store.decide_assumption(asm["id"], st, w, d["label"], now_utc())
+            changed.append({"label": asm["label"], "state": st, "tickets": asm["tickets"]})
+        dec = store.add_decision(d["project"], d["id"], d["question"], a["words"],
+                                 a["choice"][:300], a["standing"], a["scope"],
+                                 matched, session, granted,
+                                 d["tickets"], now_utc(), via=via, person_id=person_id)
+        store.close_desk_item(d["id"], "answered", None, now_utc())
+        by_id = {t["id"]: t for t in store.list_tickets(d["project"])} if d["project"] else {}
+        follow = [{"assumption": c["label"],
+                   "tickets": [factory_mod.label(by_id[x]) for x in c["tickets"] if x in by_id]}
+                  for c in changed if c["state"] == "overturned"]
+        return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
+                "matched": matched, "recorded": True, "granted": granted,
+                "grant": grants_view([row])[0] if grant else None, "assumptions": changed,
+                "follow_up": follow, "unheard": []}
+
+    @app.post("/api/desk/{ref}/answer")
+    async def desk_answer(ref: str, request: Request, body: dict = Body(...)):
+        """{words, choice?, standing?, scope?: project|all, grant_kind?: project|personal, kept?:
+        [A<n>], overturned?: {A<n>: words}}: the person's answer, their words as typed. Tares
+        looks for those words in what the person the item is addressed to typed in their own
+        recorded sessions, whichever station or session that was (TR-634). Words not found yet
+        are a retryable error: the recording can take a minute to arrive. An item from before
+        items were addressed is matched as before: in the orchestrator's session, or from a
+        person's own session in any session. A standing answer that matches becomes a grant
+        given by that person: a project grant (the default; `scope` all makes it a team grant,
+        which needs an admin) or, with `grant_kind` personal, one for their own machine. A
+        project grant that reaches into repos other people own waits for their consent. An
+        assumption batch keeps or overturns each assumption."""
+        deny(request, "desk")
+        d = desk_or_404(ref)
+        if d["state"] != "open":
+            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+        a = parse_answer(d, body)
+        words, letter, over = a["words"], a["letter"], a["over"]
         from datetime import timedelta
         import asyncio
         # only what the person typed after the question was asked can answer it; their machine's
@@ -2141,18 +2341,8 @@ def register(app, store, h: SimpleNamespace) -> None:
         labeled = bool(caller(request)["station"])
         sessions = store.role_sessions("orchestrator") if labeled and not to else None
         giver = to or person_of(request)
-        standing = bool(body.get("standing"))
-        grant = None
-        if standing:
-            try:
-                factory_mod.grant_line(words, now_utc().date().isoformat())
-            except docs_mod.DocError as e:
-                h.err(e)
-            grant = standing_grant(d, giver, scope, grant_kind, request)
-        kept = [str(a) for a in body.get("kept") or []]
-        over = body.get("overturned") or {}
-        if not isinstance(over, dict):
-            h.err(ValueError("overturned is {A<n>: the person's words}"))
+        grant = (standing_grant(d, giver, a["scope"], a["grant_kind"], request)
+                 if a["standing"] else None)
 
         def look():
             turns = store.person_turns(h.cc_source(), sessions, since, to)
@@ -2170,22 +2360,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             await asyncio.sleep(1.0)
             waited += 1.0
             turns, hit, heard = await asyncio.to_thread(look)  # scans events
-        # an assumption batch: every listed assumption kept or overturned, with the person's words
-        plan = []
-        for ref_a, st, w in [(a, "kept", None) for a in kept] + [
-                (a, "overturned", str(w)) for a, w in over.items()]:
-            a = store.get_assumption(d["project"], ref_a) if d["project"] else None
-            if a is None or a["label"] not in d["assumptions"]:
-                h.err(KeyError(f"{ref_a!r} is not one of {d['label']}'s assumptions: "
-                               + (", ".join(d["assumptions"]) or "it has none")), 404)
-            if a["state"] != "open":
-                h.err(ValueError(f"{a['label']} was already {a['state']}"), 409)
-            plan.append((a, st, w))
-        missing = set(d["assumptions"]) - {a["label"] for a, _, _ in plan}
-        if d["assumptions"] and missing:
-            h.err(ValueError("the answer must keep or overturn every assumption of "
-                             f"{d['label']}; left out: " + ", ".join(sorted(missing))))
-        unheard = [a["label"] for a, st, w in plan if st == "overturned"
+        plan = assumption_plan(d, a["kept"], over)
+        unheard = [x["label"] for x, st, w in plan if st == "overturned"
                    and not (factory_mod.words_match(w, turns)
                             or factory_mod._plain(w) in factory_mod._plain(words))]
         if (hit is None or unheard) and to:
@@ -2197,29 +2373,34 @@ def register(app, store, h: SimpleNamespace) -> None:
             return {"desk_item": desk_out(d), "matched": False, "granted": False,
                     "recorded": False, "assumptions": [], "follow_up": [],
                     "unheard": unheard}
-        granted = False
-        if grant:
-            kind, grant_project, areas, needs_lead = grant
-            row, _ = put_grant(kind, words, grant_project, giver, areas, needs_lead,
-                               "the person, on the desk")
-            granted = row["state"] == "active"   # one waiting for consent is not in effect yet
-        changed = []
-        for a, st, w in plan:
-            store.decide_assumption(a["id"], st, w, d["label"], now_utc())
-            changed.append({"label": a["label"], "state": st, "tickets": a["tickets"]})
-        dec = store.add_decision(d["project"], d["id"], d["question"], words,
-                                 choice[:300], standing, scope,
-                                 hit is not None, hit["session"] if hit else None, granted,
-                                 d["tickets"], now_utc(), person_id=to or person_of(request))
-        store.close_desk_item(d["id"], "answered", None, now_utc())
-        by_id = {t["id"]: t for t in store.list_tickets(d["project"])} if d["project"] else {}
-        follow = [{"assumption": c["label"],
-                   "tickets": [factory_mod.label(by_id[x]) for x in c["tickets"] if x in by_id]}
-                  for c in changed if c["state"] == "overturned"]
-        return {"desk_item": desk_out(desk_or_404(d["id"])), "decision": dec,
-                "matched": True, "recorded": True, "granted": granted,
-                "grant": grants_view([row])[0] if grant else None, "assumptions": changed,
-                "follow_up": follow, "unheard": []}
+        return record_answer(d, a, plan, giver, grant, "the person, on the desk", True,
+                             hit["session"], None, to or person_of(request))
+
+    @app.post("/api/desk/{ref}/reply")
+    def desk_reply(ref: str, request: Request, body: dict = Body(...)):
+        """{words, choice?, standing?, scope?: project|all, grant_kind?: project|personal, kept?:
+        [A<n>], overturned?: {A<n>: words}}: the person the item is addressed to answers it from
+        the console (TR-740). The same fields and checks as /answer, but their words are taken as
+        typed: there is no recorded session to find them in. Recorded as made in the console,
+        and a standing answer becomes a grant like one typed in a session. Refused from any crew
+        station, and for anyone but the person the item is addressed to (an item with no
+        addressee: an admin key, the project's lead or `local`)."""
+        if caller(request)["station"]:
+            h.err(PermissionError("a person answers this in the console"), 403)
+        me = work_person(request)
+        d = desk_or_404(ref)
+        if not desk_can_act(d, me["id"], request):
+            who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
+            h.err(PermissionError(f"{d['label']} is for {who}: only they answer it" if who else
+                                  f"{d['label']} is not addressed to you"), 403)
+        if d["state"] != "open":
+            h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
+        a = parse_answer(d, body)
+        grant = (standing_grant(d, me["id"], a["scope"], a["grant_kind"], request)
+                 if a["standing"] else None)
+        plan = assumption_plan(d, a["kept"], a["over"])
+        return record_answer(d, a, plan, me["id"], grant, "the person, in the console", False,
+                             None, "console", me["id"])
 
     @app.post("/api/desk/{ref}/allow")
     def desk_allow(ref: str, request: Request, body: dict = Body(...)):
@@ -2232,7 +2413,12 @@ def register(app, store, h: SimpleNamespace) -> None:
         if caller(request)["station"]:
             h.err(PermissionError("a permission is the person's to allow: they allow it in the "
                                   "console"), 403)
+        me = work_person(request)
         d = desk_or_404(ref)
+        if not desk_can_act(d, me["id"], request):
+            who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
+            h.err(PermissionError(f"{d['label']} is for {who}: only they allow it" if who else
+                                  f"{d['label']} is not addressed to you"), 403)
         if d["state"] != "open":
             h.err(ValueError(f"{d['label']} is already {d['state']}"), 409)
         if not d.get("command"):
@@ -2303,7 +2489,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             out.append({"repo": repo, "owner": {"id": o["id"], "name": o["name"]} if o else None,
                         "is_lead": is_lead, "exempt": "solo" if solo else "lead" if is_lead else None,
                         "signed_off": bool(o and row and row["person_id"] == o["id"]),
-                        "at": row["at"] if row else None})
+                        "at": row["at"] if row else None,
+                        "via": row["via"] if row else None})
         return out
 
     def signoff_gaps(uid: str, p: dict) -> list[str]:
@@ -2370,7 +2557,8 @@ def register(app, store, h: SimpleNamespace) -> None:
             h.err(ValueError("answer: your reply to the question"))
         if len(answer) > 4000:
             h.err(ValueError("keep the answer to 4000 characters"))
-        if not store.answer_spec_question(uid, q["id"], answer, me["id"], now_utc()):
+        if not store.answer_spec_question(uid, q["id"], answer, me["id"], now_utc(),
+                                         via=console_via(request)):
             h.err(ValueError(f"{q['id']} is already answered"), 409)
         return store.get_spec_question(uid, q["id"])
 
@@ -2393,7 +2581,7 @@ def register(app, store, h: SimpleNamespace) -> None:
                   403)
         if repo not in ticket_repos(uid):
             h.err(ValueError(f"the project has no tickets in {repo}"), 409)
-        store.add_signoff(uid, repo, me["id"], now_utc())
+        store.add_signoff(uid, repo, me["id"], now_utc(), via=console_via(request))
         return {"signoffs": signoff_state(uid, p)}
 
     @app.get("/api/projects/{uid}/signoffs")
@@ -2613,7 +2801,10 @@ def register(app, store, h: SimpleNamespace) -> None:
         if d["project"] not in (uid, None):
             h.err(ValueError(f"{d['label']} was asked about another project"), 409)
         dec = next((x for x in store.list_decisions(None) if x["desk_item"] == d["id"]), None)
-        if d["state"] != "answered" or dec is None or not dec["matched"]:
+        # the person's own words count: matched against their session, or typed by them in the console
+        said = dec is not None and (dec["matched"] or (dec.get("via") == "console" and dec.get("person")
+                                  and not d.get("command")))
+        if d["state"] != "answered" or not said:
             h.err(ValueError(f"{d['label']} has no answer from the person yet: record their words "
                              "with desk_answer first"), 409)
         store.finish_handover(uid, dec["words"], d["label"], by, now_utc(), person_of(request))
@@ -2630,3 +2821,18 @@ def register(app, store, h: SimpleNamespace) -> None:
         ho = store.get_handover(uid) or {}
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
+
+    fx = SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
+                         team_home=team_home, team_projects=team_projects, own_stations=own_stations,
+                         own_desk=own_desk, own_tickets=own_tickets,
+                         hidden_ids=lambda: h.hidden_ids())
+
+    def for_request(request):
+        """This fx with `settings` and `pace` read for the caller: a person's own over the cell's
+        default, the scope `PUT /api/crew/settings` writes. A screen that shows the crew's
+        settings reads them through this, or it shows the default and the control snaps back."""
+        return SimpleNamespace(**{**vars(fx), "settings": lambda: settings(request),
+                                  "pace": lambda: pace(request)})
+
+    fx.for_request = for_request
+    return fx

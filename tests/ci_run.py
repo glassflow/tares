@@ -1,46 +1,22 @@
-"""Run CI's test list, or one shard of it.
+"""Run CI's tests, or one shard of them.
 
     python tests/ci_run.py                       # everything, in order
     python tests/ci_run.py --shard 2 --of 5      # the 2nd of 5 shards (1-based)
     python tests/ci_run.py --suite postgres ...  # the list for the Postgres run
 
-Every test file CI runs is listed here; add a new one or it never runs. Shards are balanced by
+The tests are the ones named in tests/ci_list.txt (tests/<name>.py) and tests/factory/ci_list.txt
+(tests/factory/<name>_test.sh, the factory CLI against a real Tares). Shards are balanced by
 WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT_WEIGHT. A test
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
-failure, like the shell loop it replaced."""
+failure."""
 import argparse
 import os
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-
-PYTHON = """
-test_labels test_normalize test_auth test_api_keys test_pricing test_agents test_catalog_sync
-test_cli test_status test_usage test_slack test_slack_verify test_slack_finding_post test_slack_ask
-test_degraded test_loki test_projects test_project_timeline test_rius_rca test_rca_callback_anchor
-test_ingest_bypass_cooldown test_agent_stats test_agent_conclude test_schedule_trigger
-test_watch_escalate test_run_results test_model_provider test_openai_provider test_model_providers
-test_metrics test_ai_sre_demo test_seed test_session_flow test_challenger_workflow
-test_plugin_challenger test_clean_env test_tracing test_agent_runs_filter test_delete_cascade
-test_agent_build test_builder_flow test_http_poll test_agent_daily_cap test_skipped_write_back
-test_projects_activity test_projects_unit_upgrade test_upgrade_hard_stop test_startup_fill
-test_duckdb_memory test_skills test_handoffs test_project_keys test_goal_first test_setup_flow
-test_resources test_wiring test_github_credentials test_github_app test_cloud_connect test_docs
-test_linear test_github_tickets test_factory_mcp test_session_project test_pickup test_factory_plan
-test_factory_crew test_factory_ledger test_crew_standup test_factory_build test_factory_review
-test_factory_builder test_factory_repomap test_factory_desk test_factory_repos test_factory_setup
-test_factory_takeover test_mcp_station_headers test_login test_homebrew_formula test_claude_usage
-test_factory_batching test_state_postgres test_crews test_my_work test_desk_person test_people test_owner_claims_local
-test_recording_person test_person_attribution test_project_access test_areas test_grants_teams
-test_private_routes test_private_reads test_personal_docs test_personal_limits test_ticket_assignee
-test_teams_e2e test_spec_signoff
-""".split()
-
-# tests/factory/<name>_test.sh: the factory CLI, in bash, against a real Tares
-FACTORY = """
-parse guard heavy tidy spec session tares crew usage freeze idle_wake pace claude_update lsp crewname
-""".split()
+PY_LIST = os.path.join(HERE, "ci_list.txt")
+SH_LIST = os.path.join(HERE, "factory", "ci_list.txt")
 
 # Not in the Postgres run: they are about the DuckDB file itself.
 DUCKDB_ONLY = {"test_duckdb_memory", "test_state_postgres"}
@@ -55,9 +31,14 @@ WEIGHT = {
 }
 
 
+def names(path):
+    with open(path) as f:
+        return [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
+
+
 def items(suite):
-    py = [t for t in PYTHON if suite == "duckdb" or t not in DUCKDB_ONLY]
-    return py + [f"factory:{t}" for t in FACTORY]
+    py = [t for t in names(PY_LIST) if suite == "duckdb" or t not in DUCKDB_ONLY]
+    return py + [f"factory:{t}" for t in names(SH_LIST)]
 
 
 def shard(all_items, n, of):

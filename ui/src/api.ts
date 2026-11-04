@@ -1,4 +1,5 @@
 import type {
+  Edition, EditionSettings,
   AgentInfo,
   ApiKey, ExternalAgent, Person, Whoami,
   CatalogDescribe, ConnectorSpec, DiscoverProposal, DispatchDetail, DispatchLogEntry, Entity, EnvScan,
@@ -8,7 +9,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -152,7 +153,7 @@ function unauthorized() {
   window.dispatchEvent(new Event("tares-auth-required"));
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
@@ -363,6 +364,17 @@ export const api = {
     request<{ ok: boolean; configured: boolean }>("/api/settings/anthropic-key",
       { method: "DELETE" }),
 
+  // The cell's edition (TR-724): read by anyone through whoami, changed by an admin.
+  edition: () => request<EditionSettings>("/api/settings/edition"),
+  setEdition: (edition: Edition) =>
+    request<EditionSettings & { ok: boolean }>("/api/settings/edition",
+      { method: "PUT", body: JSON.stringify({ edition }) }),
+  // Whether agents over MCP see the building-block tools (TR-757); null clears the choice.
+  mcpSettings: () => request<{ object_tools: boolean }>("/api/settings/mcp"),
+  setMcpObjectTools: (object_tools: boolean | null) =>
+    request<{ ok: boolean; object_tools: boolean }>("/api/settings/mcp",
+      { method: "PUT", body: JSON.stringify({ object_tools }) }),
+
   // Runs per agent per day (TR-325): the console value, else the environment, else the default.
   agentLimits: () => request<AgentLimits>("/api/settings/agents"),
   setAgentLimits: (body: { daily_cap: number | string | null }) =>
@@ -477,6 +489,10 @@ export const api = {
     request<{ ok: boolean; source: string }>("/remember", { method: "POST", body: JSON.stringify(body) }),
   projectSummary: (id: string) =>
     request<ProjectSummary>(`/api/projects/${encodeURIComponent(id)}/summary`),
+  // close a factory project whose tickets are all finished; `words` is what the person said
+  finishProject: (id: string, words: string) =>
+    request<{ project: string; name: string; finished: unknown }>(
+      `/api/projects/${encodeURIComponent(id)}/finish`, { method: "POST", body: JSON.stringify({ words }) }),
   // the project's threads, newest first; page with `before` = the previous page's next_before
   projectTimeline: (id: string, q: { trigger?: string; agent?: string; outcome?: string;
                                      entity?: string; before?: string | null; limit?: number } = {}) =>
@@ -604,6 +620,9 @@ export const api = {
   allowDesk: (ref: string, words: string, scope: "project" | "all") =>
     request<DeskAllowed>(`/api/desk/${encodeURIComponent(ref)}/allow`,
       { method: "POST", body: JSON.stringify({ words, scope }) }),
+  deskReply: (ref: string, body: DeskReplyBody) =>
+    request<DeskReplied>(`/api/desk/${encodeURIComponent(ref)}/reply`,
+      { method: "POST", body: JSON.stringify(body) }),
   projectDecisions: (id: string) =>
     request<{ decisions: Decision[] }>(`/api/projects/${encodeURIComponent(id)}/decisions`),
   reviewQueue: () => request<{ queue: QueueItem[]; now: string }>("/api/review-queue"),
@@ -627,6 +646,9 @@ export const api = {
     request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),
   consentGrant: (id: string) =>
     request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" }),
+  declineGrant: (id: string, reason?: string) =>
+    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/decline`,
+      { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
   revokeGrant: (id: string) =>
     request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
   personalDocs: () => request<PersonalDocs>("/api/docs/personal"),
@@ -660,6 +682,12 @@ export const api = {
       `/api/projects/${encodeURIComponent(id)}/crew`),
   projectQuestions: (id: string) =>
     request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`),
+  answerQuestion: (id: string, qid: string, answer: string) =>
+    request<SpecQuestion>(`/api/projects/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`,
+      { method: "POST", body: JSON.stringify({ answer }) }),
+  signOff: (id: string, repo: string) =>
+    request<{ signoffs: SignoffRow[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`,
+      { method: "POST", body: JSON.stringify({ repo }) }),
   projectSignoffs: (id: string) =>
     request<{ signoffs: SignoffRow[]; waiting_for: string[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`),
   projectSessions: (id: string) =>
@@ -813,7 +841,8 @@ export type AgentBody = {
   name: string; trigger: string; prompt: string; project?: string;
   slack_webhook?: string; slack_webhook_clear?: boolean; model?: string; provider?: string;
   slack_channel?: string; webhook_url?: string; webhook_token?: string; mcp_servers?: string[];
-  max_rounds?: number | null; budget_usd?: number | null; webhook_key_label?: string;
+  max_rounds?: number | null; budget_usd?: number | null; budget_period?: "lifetime" | "month";
+  webhook_key_label?: string;
   handoffs?: Handoff[];
 };
 

@@ -1,0 +1,1070 @@
+"""Storage for the AI SRE edition, mixed into Store.
+
+TR-742: the services a cell knows. Which services exist comes from the data (a source's service
+label, see tares/sre.py); the `services` table holds only what a person changed about one: a
+display name, hidden, merged into another, and the repos whose deploys belong to it.
+"""
+from __future__ import annotations
+
+import json
+import math
+import uuid
+from datetime import timedelta, timezone
+
+from .envelope import now_utc
+
+SRE_SCHEMA = [
+    """CREATE TABLE IF NOT EXISTS services (
+      name        TEXT PRIMARY KEY,
+      display     TEXT,
+      hidden      BOOLEAN,
+      merged_into TEXT,
+      repos       JSON,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
+    # TR-743: whether anybody is watching each service, and whether Slack was told. One row per
+    # service; a service that is no longer known has its row removed (tares/watch.py).
+    """CREATE TABLE IF NOT EXISTS watch_state (
+      service    TEXT PRIMARY KEY,
+      watched    BOOLEAN,
+      reason     TEXT,
+      since      TIMESTAMPTZ,
+      agent      TEXT,
+      project    TEXT,
+      told_at    TIMESTAMPTZ,
+      told_where TEXT
+    )""",
+    # TR-744: incidents. An incident is the run of notes an investigator wrote about one service
+    # while it was still the same trouble: it is open, someone is on it, or it is resolved.
+    """CREATE TABLE IF NOT EXISTS incidents (
+      id           TEXT PRIMARY KEY,
+      service      TEXT,
+      project      TEXT,
+      state        TEXT,
+      opened_at    TIMESTAMPTZ,
+      last_note_at TIMESTAMPTZ,
+      owner        TEXT,
+      owner_name   TEXT,
+      owner_at     TIMESTAMPTZ,
+      resolved_at  TIMESTAMPTZ,
+      resolved_by  TEXT,
+      resolved_by_name TEXT,
+      resolution   TEXT,
+      slack        JSON,
+      updated_at   TIMESTAMPTZ
+    )""",
+    """CREATE TABLE IF NOT EXISTS incident_notes (
+      run_id        TEXT PRIMARY KEY,
+      incident_id   TEXT,
+      joined_at     TIMESTAMPTZ,
+      slack_channel TEXT,
+      slack_ts      TEXT
+    )""",
+    """CREATE TABLE IF NOT EXISTS incident_log (
+      incident_id TEXT, at_time TIMESTAMPTZ, action TEXT, by_id TEXT, by_name TEXT, via TEXT
+    )""",
+    # TR-751: the link to the incident's Slack message, asked of Slack once and kept. It is added
+    # here and not in store._MIGRATIONS because that list runs before the incidents table exists.
+    "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS slack_url TEXT",
+    # TR-746: "Was this worth raising?" One answer per person per result; `watcher` is the agent
+    # at the root of the chain that raised it, `dispatch_id` the firing that woke it.
+    """CREATE TABLE IF NOT EXISTS finding_feedback (
+      run_id      TEXT,
+      person      TEXT,
+      person_name TEXT,
+      worth       BOOLEAN,
+      note        TEXT,
+      via         TEXT,
+      watcher     TEXT,
+      watcher_run TEXT,
+      dispatch_id TEXT,
+      project     TEXT,
+      answered_at TIMESTAMPTZ,
+      PRIMARY KEY (run_id, person)
+    )""",
+]
+
+INCIDENT_COLS = ("id", "service", "project", "state", "opened_at", "last_note_at", "owner",
+                 "owner_name", "owner_at", "resolved_at", "resolved_by", "resolved_by_name",
+                 "resolution", "slack", "updated_at", "slack_url")
+_INCIDENT_SELECT = "SELECT " + ", ".join(INCIDENT_COLS) + " FROM incidents "
+
+FEEDBACK_COLS = ("run_id", "person", "person_name", "worth", "note", "via", "watcher",
+                 "watcher_run", "dispatch_id", "project", "answered_at")
+
+UNSET = object()   # a field left out of set_service keeps its value; None clears it
+
+
+class SreStore:
+    """Methods Store gains for the AI SRE edition. Expects self.con, self._lock, self.sc,
+    self._sread and self._swrite."""
+
+    # ── services: what a person changed about one ─────────────────────────────
+    def service_settings(self) -> dict[str, dict]:
+        """name -> {display, hidden, merged_into, repos, updated_at, updated_by}, every row."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT name, display, hidden, merged_into, repos, updated_at, updated_by "
+                "FROM services").fetchall()
+        out = {}
+        for name, display, hidden, merged_into, repos, at, by in rows:
+            try:
+                repo_list = json.loads(repos) if isinstance(repos, str) else (repos or [])
+            except ValueError:
+                repo_list = []
+            out[name] = {"display": display or None, "hidden": bool(hidden),
+                         "merged_into": merged_into or None,
+                         "repos": [str(r) for r in repo_list] if isinstance(repo_list, list) else [],
+                         "updated_at": at, "updated_by": by}
+        return out
+
+    def set_service(self, name: str, by: str, *, display=UNSET, hidden=UNSET, merged_into=UNSET,
+                    repos=UNSET) -> dict:
+        """Create or change one service's row. Only the fields given change; None clears one
+        (display, merged_into, repos) or turns hidden off. Returns the row as stored."""
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("a service needs a name")
+        with self._swrite:
+            row = self.sc.execute(
+                "SELECT display, hidden, merged_into, repos FROM services WHERE name = ?",
+                [name]).fetchone()
+            cur = {"display": row[0], "hidden": bool(row[1]), "merged_into": row[2],
+                   "repos": row[3]} if row else {"display": None, "hidden": False,
+                                                 "merged_into": None, "repos": None}
+            if display is not UNSET:
+                cur["display"] = (str(display).strip() or None) if display is not None else None
+            if hidden is not UNSET:
+                cur["hidden"] = bool(hidden)
+            if merged_into is not UNSET:
+                cur["merged_into"] = (str(merged_into).strip() or None) if merged_into else None
+            if repos is not UNSET:
+                cur["repos"] = json.dumps([str(r) for r in repos]) if repos else None
+            vals = [cur["display"], cur["hidden"], cur["merged_into"], cur["repos"], now_utc(), by]
+            if row:
+                self.sc.execute(
+                    "UPDATE services SET display = ?, hidden = ?, merged_into = ?, repos = ?, "
+                    "updated_at = ?, updated_by = ? WHERE name = ?", vals + [name])
+            else:
+                self.sc.execute(
+                    "INSERT INTO services (display, hidden, merged_into, repos, updated_at, "
+                    "updated_by, name) VALUES (?, ?, ?, ?, ?, ?, ?)", vals + [name])
+        self.clear_services_cache()   # every writer, not only the routes: a change shows at once
+        return self.service_settings()[name]
+
+    def clear_services_cache(self) -> None:
+        """Forget the computed services (tares/sre.py keeps them for 30 seconds). The counter
+        lets a compute that started before the write see that it must not be kept."""
+        self.__dict__["services_gen"] = self.__dict__.get("services_gen", 0) + 1
+        self.__dict__.setdefault("services_cache", {}).clear()
+
+    # ── services: what arrived, from the events (DuckDB only) ─────────────────
+    def service_window_counts(self, spec: dict[str, str], since_10m, since_24h) -> list[dict]:
+        """One scan of the last 24 hours. `spec` maps a source to the label that names a service
+        in it. One row per (source, label value, 'span' or None, is a metric): the count since
+        `since_10m` (n10), the count since `since_24h` (n24) and the newest ingest_time. Events
+        live in DuckDB only, so this reads self.con under self._lock and joins no state table."""
+        from .store import _FIELD_RE, _label_expr
+        if not spec:
+            return []
+        sources = sorted(spec)
+        for label in spec.values():
+            if not _FIELD_RE.match(label):
+                raise ValueError(f"bad label name {label!r}")
+        case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
+               + " END"
+        ph = ", ".join(["?"] * len(sources))
+        sql = (f"SELECT source, {case} AS svc, "
+               "CASE WHEN event_type = 'span' THEN 'span' END AS etype, "
+               "json_extract_string(payload, '$.metricType') IS NOT NULL AS is_metric, "
+               "COUNT(*) FILTER (WHERE ingest_time >= ?) AS n10, COUNT(*) AS n24, "
+               "MAX(ingest_time) AS last "
+               f"FROM events WHERE ingest_time >= ? AND source IN ({ph}) "
+               "GROUP BY source, svc, etype, is_metric")
+        params = [*sources, since_10m, since_24h, *sources]
+        with self._lock:
+            rows = self.con.execute(sql, params).fetchall()
+        return [{"source": r[0], "value": r[1], "event_type": r[2], "is_metric": bool(r[3]),
+                 "n10": int(r[4]), "n24": int(r[5]), "last": r[6]}
+                for r in rows if r[1] not in (None, "")]
+
+    def memory_notes(self, sources: list[str], per_key: int = 20,
+                     exclude=None) -> dict[str, list[tuple]]:
+        """{key: [(event_time, text, payload)]}, newest first, at most `per_key` for each key, of
+        the events the agents wrote with remember() into the memory `sources` (TR-753). Events
+        live in DuckDB only, so this reads self.con under self._lock and joins nothing. `exclude`
+        (the caller's read_exclude) leaves out the notes of private projects the caller cannot see."""
+        if not sources:
+            return {}
+        ph = ", ".join(["?"] * len(sources))
+        esql, eparams = self._exclude(exclude, sources)
+        sql = ("SELECT key_value, event_time, text, payload FROM (SELECT key_value, event_time, "
+               "text, payload, ROW_NUMBER() OVER (PARTITION BY key_value ORDER BY event_time DESC) "
+               f"AS rn FROM events WHERE source IN ({ph}){esql}) WHERE rn <= ? "
+               "ORDER BY key_value, event_time DESC")
+        with self._lock:
+            rows = self.con.execute(sql, [*sources, *eparams, int(per_key)]).fetchall()
+        out: dict[str, list[tuple]] = {}
+        for key, at, text, payload in rows:
+            out.setdefault(key, []).append((at, text, payload))
+        return out
+
+    def service_label_names(self, scope: dict[str, tuple], since_24h, limit: int = 20) -> list[str]:
+        """The label names on the events of one service in the last 24 hours. `scope` maps a
+        source to (the label naming a service in it, the raw service names to match)."""
+        from .store import _label_expr
+        names: set[str] = set()
+        with self._lock:
+            for source, (label, values) in scope.items():
+                if not values:
+                    continue
+                ph = ", ".join(["?"] * len(values))
+                rows = self.con.execute(
+                    f"SELECT DISTINCT unnest(json_keys(labels)) FROM events WHERE source = ? "
+                    f"AND ingest_time >= ? AND {_label_expr(label)} IN ({ph})",
+                    [source, since_24h, *values]).fetchall()
+                names.update(r[0] for r in rows if r[0])
+        return sorted(names)[:limit]
+
+    # ── services: event counts over time (TR-767) ─────────────────────────────
+    def _series_scope(self, services: list[str], skip=()):
+        """What a chart over `services` reads: ({service: the raw names counted for it}, {source:
+        the label naming a service in it}). A service that is merged into another is charted as
+        that one, and a service counts every name merged into it. The settings (a state table)
+        are read first and only names go into the events query. `skip`: sources left out (the
+        ones a viewer cannot see)."""
+        from . import sre
+        from .config import catalog_from_db
+        settings = self.service_settings()
+        overrides = sre._overrides(self)
+        spec = {}
+        for s in catalog_from_db(self).sources.values():
+            label = sre.service_label(s, overrides)
+            if label and s.name not in skip:
+                spec[s.name] = label
+        names = {}
+        for svc in services:
+            top = sre.canonical(svc, settings)
+            names[svc] = {top, svc} | {n for n in settings if sre.canonical(n, settings) == top}
+        return names, spec
+
+    def _series_query(self, spec, names, since, until, bucket_s, errors_only):
+        """(source, raw service name, bucket start, count) rows for the sources in `spec` and the
+        raw `names`. Events live in DuckDB only, so this reads self.con under self._lock."""
+        from . import sre
+        from .store import _label_expr
+        sources = sorted(spec)
+        case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
+               + " END"
+        ph_s = ", ".join(["?"] * len(sources))
+        ph_n = ", ".join(["?"] * len(names))
+        sql = (f"SELECT source, svc, b, COUNT(*) FROM (SELECT source, {case} AS svc, "
+               "time_bucket(INTERVAL '" + str(int(bucket_s)) + " seconds', ingest_time, ?) AS b "
+               f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s})")
+        params = [*sources, since, since, until, *sources]
+        if errors_only:
+            where, wparams = sre.is_error_where(spec)
+            sql += f" AND {where}"
+            params += wparams
+        sql += f") WHERE svc IN ({ph_n}) GROUP BY source, svc, b"
+        params += sorted(names)
+        with self._lock:
+            return self.con.execute(sql, params).fetchall()
+
+    @staticmethod
+    def _series_points(since, until, bucket_s) -> list:
+        if since.tzinfo is None or until.tzinfo is None:
+            raise ValueError("since and until need a time zone: a naive time would be read "
+                             "as the server's local time")
+        if not isinstance(bucket_s, int) or isinstance(bucket_s, bool) or bucket_s < 1 \
+                or until <= since:
+            raise ValueError("a series needs a window that ends after it starts and a bucket "
+                             "of a whole number of seconds, at least one")
+        n = math.ceil((until - since).total_seconds() / bucket_s)
+        return [(since + timedelta(seconds=i * bucket_s)).astimezone(timezone.utc).isoformat()
+                for i in range(n)]
+
+    def event_series_many(self, services: list[str], since, until, bucket_s: int,
+                          errors_only: bool = False,
+                          skip=()) -> dict[str, list[tuple[str, int]]]:
+        """For each service, [(bucket start as ISO text, events)] over [since, until) in buckets
+        of `bucket_s` seconds aligned to `since`, with 0 for a bucket where nothing arrived.
+        errors_only counts only what sre.is_error_where says is an error. A service counts the
+        services merged into it. One query for all of them. It counts the events of the
+        service's own sources by arrival time (ingest_time); the deploy events that the services
+        table matches to a service through its repos are not in it, so a service with repos can
+        show fewer here than events_24h there."""
+        labels = self._series_points(since, until, bucket_s)
+        services = list(dict.fromkeys(services))
+        out = {svc: [0] * len(labels) for svc in services}
+        if services:
+            names, spec = self._series_scope(services, skip)
+            every = set().union(*names.values())
+            if spec:
+                owners = {}
+                for svc, group in names.items():
+                    for n in group:
+                        owners.setdefault(n, []).append(svc)
+                for _src, raw, b, n in self._series_query(spec, every, since, until, bucket_s,
+                                                          errors_only):
+                    i = int((b - since).total_seconds() // bucket_s)
+                    if 0 <= i < len(labels):
+                        for svc in owners.get(raw, ()):
+                            out[svc][i] += int(n)
+        return {svc: list(zip(labels, counts)) for svc, counts in out.items()}
+
+    def event_series(self, service: str, since, until, bucket_s: int,
+                     errors_only: bool = False, skip=()) -> list[tuple[str, int]]:
+        """event_series_many for one service."""
+        left_out = {"skip": skip} if skip else {}
+        return self.event_series_many([service], since, until, bucket_s, errors_only,
+                                      **left_out)[service]
+
+    # ── the timeline: raw rows, alerts, metrics, incident changes (TR-752) ────
+    def _event_case(self, spec: dict[str, str]) -> tuple[str, list, list[str]]:
+        """(SQL naming the service of an event of the sources in `spec`, its params, the
+        sources in the order used)."""
+        from .store import _label_expr
+        sources = sorted(spec)
+        case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
+               + " END"
+        return case, list(sources), sources
+
+    @staticmethod
+    def _json_of(value) -> dict:
+        if isinstance(value, dict):
+            return value
+        try:
+            out = json.loads(value) if isinstance(value, str) else {}
+        except ValueError:
+            return {}
+        return out if isinstance(out, dict) else {}
+
+    def service_events(self, services: list[str], since, until, limit: int, exclude=None,
+                       skip_sources=()) -> tuple[list[dict], int]:
+        """The events of `services` that arrived in [since, until) (by ingest_time), newest first:
+        ([{service, source, at, event_type, text, labels, payload}], how many there are in all).
+        A service counts the services merged into it, the same names event_series_many counts.
+        Events live in DuckDB only, so this reads self.con under self._lock and joins no state
+        table. `exclude` (the caller's read_exclude) leaves out the rows of private projects the
+        caller cannot see, and `skip_sources` the sources that belong only to those projects."""
+        names, spec = self._series_scope(list(dict.fromkeys(services)), skip_sources)
+        every = sorted(set().union(*names.values())) if names else []
+        if not spec or not every:
+            return [], 0
+        case, cparams, sources = self._event_case(spec)
+        ph_s, ph_n = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(every))
+        inner = (f"SELECT source, {case} AS svc, ingest_time, event_type, text, labels, payload "
+                 f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s})")
+        base = [*cparams, since, until, *sources]
+        skip = sorted(set(skip_sources or ()))
+        if skip:
+            inner += f" AND source NOT IN ({', '.join(['?'] * len(skip))})"
+            base += skip
+        esql, eparams = self._exclude(exclude, sources)
+        if esql:
+            inner += esql
+            base += eparams
+        with self._lock:
+            total = self.con.execute(
+                f"SELECT COUNT(*) FROM ({inner}) WHERE svc IN ({ph_n})", [*base, *every]
+            ).fetchone()[0]
+            rows = self.con.execute(
+                f"SELECT * FROM ({inner}) WHERE svc IN ({ph_n}) ORDER BY ingest_time DESC LIMIT ?",
+                [*base, *every, int(limit)]).fetchall()
+        owner = {}
+        for svc, group in names.items():
+            for n in group:
+                owner.setdefault(n, svc)
+        return ([{"service": owner.get(r[1], r[1]), "source": r[0], "at": r[2], "event_type": r[3],
+                  "text": r[4] or "", "labels": self._json_of(r[5]), "payload": self._json_of(r[6])}
+                 for r in rows], int(total))
+
+    def alert_events(self, sources: list[str], since, until, limit: int = 2000) -> list[dict]:
+        """The events of the alert `sources` from [since, until) by event_time, newest first:
+        [{source, at, event_type, text, key, labels, payload}]. DuckDB only."""
+        if not sources:
+            return []
+        ph = ", ".join(["?"] * len(sources))
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT source, event_time, event_type, text, key_value, labels, payload "
+                f"FROM events WHERE source IN ({ph}) AND event_time >= ? AND event_time < ? "
+                "ORDER BY event_time DESC LIMIT ?", [*sources, since, until, int(limit)]).fetchall()
+        return [{"source": r[0], "at": r[1], "event_type": r[2], "text": r[3] or "", "key": r[4],
+                 "labels": self._json_of(r[5]), "payload": self._json_of(r[6])} for r in rows]
+
+    def metric_buckets(self, services: list[str], since, until, bucket_s: int,
+                       prometheus: list[str] = (), limit: int = 20000, skip=()) -> list[dict]:
+        """The average value of each metric of `services` per bucket of `bucket_s` seconds
+        (aligned to `since`) in [since, until): [{service, metric, bucket, value, unit}],
+        oldest first (past `limit` buckets it is the oldest that are dropped). A metric is an
+        OTLP event with a metricType or any event of the `prometheus` sources; its value is
+        payload.value, asDouble or asInt. DuckDB only."""
+        names, spec = self._series_scope(list(dict.fromkeys(services)), skip)
+        every = sorted(set().union(*names.values())) if names else []
+        if not spec or not every:
+            return []
+        case, cparams, sources = self._event_case(spec)
+        prom = [s for s in prometheus if s in spec]
+        ph_s, ph_n = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(every))
+        is_metric = "json_extract_string(payload, '$.metricType') IS NOT NULL"
+        if prom:
+            is_metric = f"({is_metric} OR source IN ({', '.join(['?'] * len(prom))}))"
+        value = ("TRY_CAST(COALESCE(json_extract_string(payload, '$.value'), "
+                 "json_extract_string(payload, '$.asDouble'), "
+                 "json_extract_string(payload, '$.asInt')) AS DOUBLE)")
+        sql = ("SELECT svc, event_type, b, AVG(v), MAX(unit) FROM (SELECT "
+               f"{case} AS svc, event_type, "
+               f"time_bucket(INTERVAL '{int(bucket_s)} seconds', ingest_time, ?) AS b, "
+               f"{value} AS v, json_extract_string(payload, '$.unit') AS unit "
+               f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s}) "
+               f"AND {is_metric}) WHERE svc IN ({ph_n}) AND v IS NOT NULL "
+               "GROUP BY svc, event_type, b ORDER BY b DESC LIMIT ?")
+        params = [*cparams, since, since, until, *sources, *prom, *every, int(limit)]
+        with self._lock:
+            rows = self.con.execute(sql, params).fetchall()
+        owner = {}
+        for svc, group in names.items():
+            for n in group:
+                owner.setdefault(n, svc)
+        return [{"service": owner.get(r[0], r[0]), "metric": r[1], "bucket": r[2],
+                 "value": float(r[3]), "unit": r[4] or ""} for r in reversed(rows)]
+
+    def incident_changes(self, since, until, services: list[str] | None = None,
+                         limit: int = 200, hide=()) -> tuple[list[dict], dict[str, list[dict]]]:
+        """The incidents that were opened before `until` and touched at or after `since` (newest
+        first), with their log rows inside [since, until): (incidents, {incident id: [log rows
+        {at, action, by_id, by_name, via}, oldest first]}). `services` keeps the incidents of
+        those service keys; `hide` leaves out the incidents of those projects. State tables only;
+        `?` placeholders, so it runs on either store."""
+        where, args = ["opened_at < ?", "COALESCE(updated_at, opened_at) >= ?"], [until, since]
+        clause, ids = self._unhidden(hide)
+        if clause:
+            where.append(clause)
+            args += ids
+        if services is not None:
+            if not services:
+                return [], {}
+            where.append(f"service IN ({', '.join(['?'] * len(services))})")
+            args += list(services)
+        with self._sread:
+            rows = self.sc.execute(
+                _INCIDENT_SELECT + "WHERE " + " AND ".join(where) + " ORDER BY opened_at DESC, id "
+                "LIMIT ?", args + [int(limit)]).fetchall()
+            incs = [self._incident(r) for r in rows]
+            log: dict[str, list[dict]] = {i["id"]: [] for i in incs}
+            if incs:
+                ph = ", ".join(["?"] * len(incs))
+                for r in self.sc.execute(
+                        "SELECT incident_id, at_time, action, by_id, by_name, via FROM incident_log "
+                        f"WHERE incident_id IN ({ph}) AND at_time >= ? AND at_time < ? "
+                        "ORDER BY at_time", [*log, since, until]).fetchall():
+                    log[r[0]].append({"at": r[1], "action": r[2], "by_id": r[3], "by_name": r[4],
+                                      "via": r[5]})
+        return incs, log
+
+    # ── watching: whether anybody is watching each service (TR-743) ───────────
+    def watch_rows(self) -> dict[str, dict]:
+        """service -> {watched, reason, since, agent, project, told_at, told_where}, every row."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT service, watched, reason, since, agent, project, told_at, told_where "
+                "FROM watch_state").fetchall()
+        return {r[0]: {"watched": bool(r[1]), "reason": r[2], "since": r[3], "agent": r[4],
+                       "project": r[5], "told_at": r[6], "told_where": r[7]} for r in rows}
+
+    def set_watch_row(self, service: str, **fields) -> None:
+        """Create or change one service's row: only the fields given change (watched, reason,
+        since, agent, project, told_at, told_where); None clears one."""
+        cols = ("watched", "reason", "since", "agent", "project", "told_at", "told_where")
+        bad = sorted(set(fields) - set(cols))
+        if bad:
+            raise ValueError(f"no such watch field: {', '.join(bad)}")
+        with self._swrite:
+            row = self.sc.execute(
+                "SELECT watched, reason, since, agent, project, told_at, told_where "
+                "FROM watch_state WHERE service = ?", [service]).fetchone()
+            cur = dict(zip(cols, row)) if row else dict.fromkeys(cols)
+            cur.update(fields)
+            vals = [bool(cur["watched"]) if cur["watched"] is not None else None,
+                    *(cur[c] for c in cols[1:])]
+            if row:
+                self.sc.execute(
+                    "UPDATE watch_state SET watched = ?, reason = ?, since = ?, agent = ?, "
+                    "project = ?, told_at = ?, told_where = ? WHERE service = ?", vals + [service])
+            else:
+                self.sc.execute(
+                    "INSERT INTO watch_state (watched, reason, since, agent, project, told_at, "
+                    "told_where, service) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", vals + [service])
+
+    def delete_watch_rows(self, services: list[str]) -> None:
+        with self._swrite:
+            for s in services:
+                self.sc.execute("DELETE FROM watch_state WHERE service = ?", [s])
+
+    def mark_told(self, services: list[str], at, where: str) -> list[str]:
+        """Say Slack was told about these services at `at`, in `where`. Only a row not told yet
+        changes, and the services that did are returned, so two posts for one change cannot both
+        count."""
+        done = []
+        with self._swrite:
+            for s in services:
+                row = self.sc.execute(
+                    "SELECT 1 FROM watch_state WHERE service = ? AND told_at IS NULL",
+                    [s]).fetchone()
+                if row:
+                    self.sc.execute(
+                        "UPDATE watch_state SET told_at = ?, told_where = ? WHERE service = ? "
+                        "AND told_at IS NULL", [at, where, s])
+                    done.append(s)
+        return done
+
+    def trigger_created_at(self, name: str):
+        """When a trigger was made (None for one the catalog does not hold)."""
+        with self._sread:
+            row = self.sc.execute("SELECT created_at FROM catalog_triggers WHERE name = ?",
+                                  [name]).fetchone()
+        return row[0] if row else None
+
+    # ── incidents (TR-744) ────────────────────────────────────────────────────
+    @staticmethod
+    def _unhidden(hide) -> tuple[str, list]:
+        """The WHERE part that leaves out the incidents of the projects in `hide` (a private
+        project the caller cannot see, TR-892): ("", []) when there are none."""
+        ids = sorted(hide or ())
+        if not ids:
+            return "", []
+        return f"(project IS NULL OR project NOT IN ({', '.join(['?'] * len(ids))}))", ids
+
+    @staticmethod
+    def _incident(row) -> dict:
+        out = dict(zip(INCIDENT_COLS, row))
+        slack = out["slack"]
+        try:
+            slack = json.loads(slack) if isinstance(slack, str) else slack
+        except ValueError:
+            slack = None
+        out["slack"] = slack if isinstance(slack, dict) and slack.get("channel") else None
+        return out
+
+    def create_incident(self, service: str, project: str | None, at, *, state: str = "open",
+                        resolved_at=None, resolution: str | None = None) -> dict:
+        """A new incident whose first note is at `at`. `state` is open, except for one made
+        already resolved (the backfill's old ones)."""
+        iid = "inc_" + uuid.uuid4().hex[:10]
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO incidents (id, service, project, state, opened_at, last_note_at, "
+                "resolved_at, resolution, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [iid, service, project, state, at, at, resolved_at, resolution, at])
+        return self.get_incident(iid)
+
+    def get_incident(self, incident_id: str) -> dict | None:
+        with self._sread:
+            row = self.sc.execute(_INCIDENT_SELECT + "WHERE id = ?", [incident_id]).fetchone()
+        return self._incident(row) if row else None
+
+    def open_incident_for(self, service: str, since, until=None) -> dict | None:
+        """The newest incident of `service` that is not resolved and had a note at or after
+        `since`. With `until`, only one opened at or before it: the backfill files an old note
+        and an incident that began after that note is not its incident."""
+        sql = (_INCIDENT_SELECT + "WHERE service = ? AND state <> 'resolved' AND "
+               "last_note_at >= ? ")
+        args = [service, since]
+        if until is not None:
+            sql += "AND opened_at <= ? "
+            args.append(until)
+        with self._sread:
+            row = self.sc.execute(sql + "ORDER BY last_note_at DESC LIMIT 1", args).fetchone()
+        return self._incident(row) if row else None
+
+    def add_incident_note(self, incident_id: str, run_id: str, at) -> bool:
+        """File a run's note under an incident and move the incident's last note up to `at`.
+        False when the run is filed already."""
+        with self._swrite:
+            if self.sc.execute("SELECT 1 FROM incident_notes WHERE run_id = ?",
+                               [run_id]).fetchone():
+                return False
+            self.sc.execute("INSERT INTO incident_notes (run_id, incident_id, joined_at) "
+                            "VALUES (?, ?, ?)", [run_id, incident_id, at])
+            self.sc.execute(
+                "UPDATE incidents SET last_note_at = ?, updated_at = ? WHERE id = ? "
+                "AND (last_note_at IS NULL OR last_note_at < ?)", [at, at, incident_id, at])
+        return True
+
+    def set_note_slack(self, run_id: str, channel: str | None, ts: str | None) -> None:
+        with self._swrite:
+            self.sc.execute("UPDATE incident_notes SET slack_channel = ?, slack_ts = ? "
+                            "WHERE run_id = ?", [channel, ts, run_id])
+
+    def set_incident_slack(self, incident_id: str, channel: str, ts: str) -> None:
+        with self._swrite:   # a new message has a new link: the one kept is dropped
+            self.sc.execute("UPDATE incidents SET slack = ?, slack_url = NULL WHERE id = ?",
+                            [json.dumps({"channel": channel, "ts": ts}), incident_id])
+
+    def set_incident_slack_url(self, incident_id: str, url: str | None) -> None:
+        """Keep the link Slack gave for the incident's message (TR-751)."""
+        with self._swrite:
+            self.sc.execute("UPDATE incidents SET slack_url = ? WHERE id = ?", [url, incident_id])
+
+    def incident_services(self, hide=()) -> list[str]:
+        """The services that have an incident (`hide`: not counting those of these projects)."""
+        clause, ids = self._unhidden(hide)
+        with self._sread:
+            rows = self.sc.execute("SELECT DISTINCT service FROM incidents"
+                                   + (" WHERE " + clause if clause else ""), ids).fetchall()
+        return sorted(r[0] for r in rows if r[0])
+
+    def notes_of(self, incident_ids: list[str]) -> dict[str, list[dict]]:
+        """incident id -> its notes, oldest first: {run_id, joined_at, slack_channel, slack_ts}."""
+        out: dict[str, list[dict]] = {i: [] for i in incident_ids}
+        if not incident_ids:
+            return out
+        ph = ", ".join(["?"] * len(incident_ids))
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT incident_id, run_id, joined_at, slack_channel, slack_ts FROM "
+                f"incident_notes WHERE incident_id IN ({ph}) ORDER BY joined_at, run_id",
+                list(incident_ids)).fetchall()
+        for iid, run_id, at, ch, ts in rows:
+            out[iid].append({"run_id": run_id, "joined_at": at, "slack_channel": ch,
+                             "slack_ts": ts})
+        return out
+
+    def incident_notes(self, incident_id: str) -> list[dict]:
+        return self.notes_of([incident_id])[incident_id]
+
+    def incident_for_run(self, run_id: str) -> dict | None:
+        """The incident a run's note was filed under, if any."""
+        with self._sread:
+            row = self.sc.execute(
+                "SELECT incident_id FROM incident_notes WHERE run_id = ?", [run_id]).fetchone()
+        return self.get_incident(row[0]) if row else None
+
+    def set_incident_state(self, incident_id: str, state: str, by_id: str | None,
+                           by_name: str | None, via: str, *, at=None,
+                           resolution: str | None = None, expect: str | None = None):
+        """Move an incident to `state` and log it. on_it names who took it; resolved names who
+        closed it (nobody, with resolution "itself"); open clears both. `expect` makes it a
+        compare-and-set on the current state. Returns the incident as stored, or None when it
+        is unknown or was not in the state `expect` asked for."""
+        if state not in ("open", "on_it", "resolved"):
+            raise ValueError(f"no such incident state: {state}")
+        at = at or now_utc()
+        with self._swrite:
+            row = self.sc.execute("SELECT state FROM incidents WHERE id = ?",
+                                  [incident_id]).fetchone()
+            if row is None or (expect is not None and row[0] != expect):
+                return None
+            if state == "on_it":
+                sql = ("UPDATE incidents SET state = 'on_it', owner = ?, owner_name = ?, "
+                       "owner_at = ?, resolved_at = NULL, resolved_by = NULL, "
+                       "resolved_by_name = NULL, resolution = NULL, updated_at = ? WHERE id = ?")
+                args = [by_id, by_name, at, at, incident_id]
+                action = "on_it"
+            elif state == "resolved":
+                sql = ("UPDATE incidents SET state = 'resolved', resolved_at = ?, "
+                       "resolved_by = ?, resolved_by_name = ?, resolution = ?, updated_at = ? "
+                       "WHERE id = ?")
+                args = [at, by_id, by_name, resolution or ("person" if by_id else "itself"),
+                        at, incident_id]
+                action = "resolved_itself" if resolution == "itself" else "resolved"
+            else:
+                sql = ("UPDATE incidents SET state = 'open', owner = NULL, owner_name = NULL, "
+                       "owner_at = NULL, resolved_at = NULL, resolved_by = NULL, "
+                       "resolved_by_name = NULL, resolution = NULL, updated_at = ? WHERE id = ?")
+                args = [at, incident_id]
+                action = "reopened"
+            self.sc.execute(sql, args)
+            self._log_incident(incident_id, action, by_id, by_name, via, at)
+        return self.get_incident(incident_id)
+
+    def _log_incident(self, incident_id, action, by_id, by_name, via, at) -> None:
+        """The log insert, for a caller already holding the state write lock."""
+        self.sc.execute(
+            "INSERT INTO incident_log (incident_id, at_time, action, by_id, by_name, via) "
+            "VALUES (?, ?, ?, ?, ?, ?)", [incident_id, at or now_utc(), action, by_id, by_name,
+                                          via])
+
+    def log_incident(self, incident_id: str, action: str, by_id: str | None,
+                     by_name: str | None, via: str, at=None) -> None:
+        with self._swrite:
+            self._log_incident(incident_id, action, by_id, by_name, via, at)
+
+    def incident_log(self, incident_id: str) -> list[dict]:
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT at_time, action, by_id, by_name, via FROM incident_log WHERE incident_id = ? "
+                "ORDER BY at_time", [incident_id]).fetchall()
+        return [{"at": r[0], "action": r[1], "by_id": r[2], "by_name": r[3], "via": r[4]}
+                for r in rows]
+
+    def last_reopened(self, incident_ids: list[str]) -> dict:
+        """incident id -> when a person last reopened it (the newest `reopened` log row), for the
+        ones that were."""
+        if not incident_ids:
+            return {}
+        ph = ", ".join(["?"] * len(incident_ids))
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT incident_id, at_time FROM incident_log WHERE action = 'reopened' "
+                f"AND incident_id IN ({ph})", list(incident_ids)).fetchall()
+        out: dict = {}
+        for iid, at in rows:
+            if at is not None and (iid not in out or at > out[iid]):
+                out[iid] = at
+        return out
+
+    def list_incidents(self, state: str | None = None, service: str | None = None,
+                       limit: int = 50, before=None, offset: int = 0, hide=()) -> list[dict]:
+        """Newest note first. `state` is open, on_it, resolved or active (open and on_it);
+        `before` keeps the incidents whose last note is older than it; `offset` pages; `hide`
+        leaves out the incidents of those projects."""
+        where, args = [], []
+        clause, ids = self._unhidden(hide)
+        if clause:
+            where.append(clause)
+            args += ids
+        if state == "active":
+            where.append("state <> 'resolved'")
+        elif state:
+            where.append("state = ?")
+            args.append(state)
+        if service:
+            where.append("service = ?")
+            args.append(service)
+        if before is not None:
+            where.append("last_note_at < ?")
+            args.append(before)
+        sql = _INCIDENT_SELECT + ("WHERE " + " AND ".join(where) + " " if where else "")
+        with self._sread:
+            rows = self.sc.execute(sql + "ORDER BY last_note_at DESC, id LIMIT ? OFFSET ?",
+                                   args + [int(limit), max(0, int(offset))]).fetchall()
+        return [self._incident(r) for r in rows]
+
+    def incident_counts(self, service: str | None = None, hide=()) -> dict:
+        where, args = [], []
+        if service:
+            where.append("service = ?")
+            args.append(service)
+        clause, ids = self._unhidden(hide)
+        if clause:
+            where.append(clause)
+            args += ids
+        sql = "SELECT state, COUNT(*) FROM incidents" + (" WHERE " + " AND ".join(where) if where else "")
+        with self._sread:
+            rows = self.sc.execute(sql + " GROUP BY state", args).fetchall()
+        got = {r[0]: int(r[1]) for r in rows}
+        return {s: got.get(s, 0) for s in ("open", "on_it", "resolved")}
+
+    def delete_backfilled_incidents(self) -> int:
+        """Remove the incidents the backfill made with their notes and log rows: the ones it
+        closed (resolution before_tracking) and the ones it left open that nobody has touched
+        since (every log row is the backfill's). Returns how many incidents went."""
+        pick = ("SELECT id FROM incidents WHERE resolution = 'before_tracking' "
+                "OR (state = 'open' AND id NOT IN "
+                "(SELECT incident_id FROM incident_log WHERE via <> 'backfill'))")
+        with self._swrite:
+            n = self.sc.execute(f"SELECT COUNT(*) FROM ({pick}) AS gone").fetchone()[0]
+            if n:   # three statements, not three per incident
+                for table, col in (("incident_notes", "incident_id"), ("incident_log", "incident_id"),
+                                   ("incidents", "id")):
+                    self.sc.execute(f"DELETE FROM {table} WHERE {col} IN ({pick})")
+        return int(n)
+
+    # ── the backfill's bulk path (TR-897): decide in memory, write in a few big statements ──
+    def kept_open_incidents(self) -> list[dict]:
+        """The incidents a backfill must join notes to when they fit: every one not resolved."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT id, service, opened_at, last_note_at FROM incidents "
+                "WHERE state <> 'resolved' ORDER BY last_note_at").fetchall()
+        return [{"id": r[0], "service": r[1], "opened_at": r[2], "last_note_at": r[3]}
+                for r in rows]
+
+    def filed_run_ids(self) -> set:
+        """The runs whose note already sits in an incident."""
+        with self._sread:
+            return {r[0] for r in self.sc.execute("SELECT run_id FROM incident_notes").fetchall()}
+
+    def agents_of_runs(self, run_ids) -> dict[str, str]:
+        """run id -> the agent that ran it, for the ids that exist."""
+        return {r[0]: r[1] for r in self._chunked_select(
+            "SELECT id, agent FROM agent_runs WHERE id IN ({ph})", run_ids)}
+
+    def projects_of_runs(self, run_ids) -> dict[str, list[str]]:
+        """run id -> its projects (what run_projects returns for one), for runs that have any."""
+        out: dict[str, list[str]] = {}
+        for run_id, project in sorted(self._chunked_select(
+                "SELECT run_id, project FROM run_projects WHERE run_id IN ({ph})", run_ids)):
+            out.setdefault(run_id, []).append(project)
+        return out
+
+    def _chunked_select(self, sql: str, ids, size: int = 500) -> list:
+        ids = list(dict.fromkeys(i for i in ids if i))
+        out = []
+        for i in range(0, len(ids), size):
+            part = ids[i:i + size]
+            with self._sread:
+                out += self.sc.execute(sql.format(ph=", ".join(["?"] * len(part))), part).fetchall()
+        return out
+
+    def write_backfill(self, made: list[dict], notes: list[tuple], log: list[tuple],
+                       bumped: list[tuple], size: int = 200) -> None:
+        """Store what a backfill decided. `made`: new incidents ({id, service, project, state,
+        opened_at, last_note_at, resolved_at, resolution}); `notes`: (run_id, incident_id,
+        joined_at); `log`: (incident_id, at_time, action, via, by_name); `bumped`: (incident_id,
+        last_note_at) for kept incidents a note joined. Each kind goes in as a few batches under
+        one hold of the write lock. Nothing here is atomic: a pass that stops halfway is redone by
+        the next one, which deletes the backfill's incidents first and files again. A kept
+        incident that a stopped pass bumped keeps its later last note time, which only moves it
+        later and is the time the next pass computes again."""
+        def insert(table, cols, rows):
+            # one multi-row INSERT per batch: far cheaper than a statement per row, on DuckDB
+            # and on Postgres alike
+            row = "(" + ", ".join(["?"] * len(cols)) + ")"
+            for i in range(0, len(rows), size):
+                part = rows[i:i + size]
+                self.sc.execute(f"INSERT INTO {table} ({', '.join(cols)}) VALUES "
+                                + ", ".join([row] * len(part)),
+                                [v for r in part for v in r])
+        with self._swrite:
+            insert("incidents", ("id", "service", "project", "state", "opened_at", "last_note_at",
+                                 "resolved_at", "resolution", "updated_at"),
+                   [(i["id"], i["service"], i["project"], i["state"], i["opened_at"],
+                     i["last_note_at"], i["resolved_at"], i["resolution"], i["last_note_at"])
+                    for i in made])
+            insert("incident_notes", ("run_id", "incident_id", "joined_at"), notes)
+            insert("incident_log", ("incident_id", "at_time", "action", "by_id", "by_name", "via"),
+                   [(iid, at, action, None, by, via) for iid, at, action, via, by in log])
+            if bumped:
+                self.sc.executemany("UPDATE incidents SET last_note_at = ?, updated_at = ? "
+                                    "WHERE id = ?", [(at, at, iid) for iid, at in bumped])
+
+    def services_carrying(self, spec: dict[str, str], label: str, value: str, since) -> list[tuple]:
+        """[(service, count)] by count: which service the events with `label` = `value` since
+        `since` belong to. `spec` maps a source to the label that names a service in it. Events
+        live in DuckDB only: this reads self.con under self._lock and joins no state table."""
+        from .store import _label_expr
+        if not spec:
+            return []
+        sources = sorted(spec)
+        case = "CASE source " + " ".join(f"WHEN ? THEN {_label_expr(spec[s])}" for s in sources) \
+               + " END"
+        ph = ", ".join(["?"] * len(sources))
+        sql = (f"SELECT {case} AS svc, COUNT(*) AS n FROM events WHERE ingest_time >= ? "
+               f"AND source IN ({ph}) AND {_label_expr(label)} = ? GROUP BY svc ORDER BY n DESC")
+        with self._lock:
+            rows = self.con.execute(sql, [*sources, since, *sources, value]).fetchall()
+        return [(r[0], int(r[1])) for r in rows if r[0] not in (None, "")]
+
+    # ── "Was this worth raising?" (TR-746) ────────────────────────────────────
+    def set_feedback(self, run_id: str, person: str, person_name: str | None, worth: bool,
+                     note: str | None, via: str, watcher: str, watcher_run: str,
+                     dispatch_id: str | None, project: str | None) -> None:
+        """One person's answer on one result; answering again replaces it."""
+        vals = [person_name, bool(worth), note or None, via, watcher, watcher_run, dispatch_id,
+                project, now_utc()]
+        with self._swrite:
+            if self.sc.execute("SELECT 1 FROM finding_feedback WHERE run_id = ? AND person = ?",
+                               [run_id, person]).fetchone():
+                self.sc.execute(
+                    "UPDATE finding_feedback SET person_name = ?, worth = ?, note = ?, via = ?, "
+                    "watcher = ?, watcher_run = ?, dispatch_id = ?, project = ?, answered_at = ? "
+                    "WHERE run_id = ? AND person = ?", vals + [run_id, person])
+            else:
+                self.sc.execute(
+                    "INSERT INTO finding_feedback (person_name, worth, note, via, watcher, "
+                    "watcher_run, dispatch_id, project, answered_at, run_id, person) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", vals + [run_id, person])
+
+    def clear_feedback(self, run_id: str, person: str) -> bool:
+        """Take one person's answer back. False when they had none."""
+        with self._swrite:
+            if not self.sc.execute("SELECT 1 FROM finding_feedback WHERE run_id = ? AND person = ?",
+                                   [run_id, person]).fetchone():
+                return False
+            self.sc.execute("DELETE FROM finding_feedback WHERE run_id = ? AND person = ?",
+                            [run_id, person])
+        return True
+
+    @staticmethod
+    def _feedback_row(row) -> dict:
+        out = dict(zip(FEEDBACK_COLS, row))
+        out["worth"] = bool(out["worth"])
+        return out
+
+    def feedback_for(self, run_ids: list[str]) -> dict[str, list[dict]]:
+        """run id -> its answers, oldest first (every id asked about is a key)."""
+        out: dict[str, list[dict]] = {r: [] for r in run_ids}
+        if not run_ids:
+            return out
+        ph = ", ".join(["?"] * len(out))
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT " + ", ".join(FEEDBACK_COLS) + f" FROM finding_feedback "
+                f"WHERE run_id IN ({ph}) ORDER BY answered_at, person", list(out)).fetchall()
+        for row in rows:
+            out[row[0]].append(self._feedback_row(row))
+        return out
+
+    def watcher_hit_rates(self, since) -> list[dict]:
+        """[{watcher, project, answered, yes, no}] for the answers given at or after `since`. A
+        person who answered several results of one watcher run counts once, by their latest answer
+        (an answer on a result with no watcher run counts on its own)."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT watcher, project, COALESCE(watcher_run, run_id), person, worth, answered_at "
+                "FROM finding_feedback WHERE answered_at >= ?", [since]).fetchall()
+        latest: dict = {}
+        for watcher, project, run, person, worth, at in rows:
+            key = (watcher, project, run, person)
+            if key not in latest or at >= latest[key][0]:
+                latest[key] = (at, bool(worth))
+        counts: dict = {}
+        for (watcher, project, _run, _person), (_at, worth) in latest.items():
+            c = counts.setdefault((watcher, project), [0, 0])
+            c[0] += 1
+            c[1] += 1 if worth else 0
+        return [{"watcher": w, "project": p, "answered": n, "yes": y, "no": n - y}
+                for (w, p), (n, y) in sorted(counts.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1])))]
+
+    def recent_not_worth(self, watcher: str, since, limit: int = 5) -> list[dict]:
+        """The newest "not worth it" answers on what `watcher` raised, one per result."""
+        with self._sread:
+            rows = self.sc.execute(
+                "SELECT " + ", ".join(FEEDBACK_COLS) + " FROM finding_feedback "
+                "WHERE watcher = ? AND answered_at >= ? AND worth = ? ORDER BY answered_at DESC, person",
+                [watcher, since, False]).fetchall()
+        out, seen = [], set()
+        for row in rows:
+            if row[0] not in seen and len(out) < limit:
+                seen.add(row[0])
+                out.append(self._feedback_row(row))
+        return out
+
+    def feedback_export(self, since=None) -> list[dict]:
+        """Every answer at or after `since` (all when None), oldest first."""
+        sql = "SELECT " + ", ".join(FEEDBACK_COLS) + " FROM finding_feedback "
+        args = []
+        if since is not None:
+            sql += "WHERE answered_at >= ? "
+            args.append(since)
+        with self._sread:
+            rows = self.sc.execute(sql + "ORDER BY answered_at, run_id, person", args).fetchall()
+        return [self._feedback_row(r) for r in rows]
+
+    # ── blind spots (TR-747) ──────────────────────────────────────────────────
+    def labels_carried(self, sources: list[str], labels: tuple) -> dict[str, list[str]]:
+        """{source: the labels among `labels` its events carry}, from the maintained counter."""
+        if not sources:
+            return {}
+        sph, lph = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(labels))
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT DISTINCT source, label FROM entity_counts WHERE source IN ({sph}) "
+                f"AND label IN ({lph})", [*sources, *labels]).fetchall()
+        out: dict[str, list[str]] = {}
+        for source, label in rows:
+            out.setdefault(source, []).append(label)
+        return {s: sorted(v) for s, v in out.items()}
+
+    def via_values(self, source: str, svc_label: str, via_label: str, since) -> list[tuple]:
+        """[(service, via value, namespace)]: which services' events (in `source`, since `since`)
+        carry which value of `via_label`, with the event's namespace label. Events live in DuckDB
+        only: this reads self.con under self._lock and joins no state table."""
+        from .store import _label_expr
+        via = _label_expr(via_label)
+        sql = (f"SELECT {_label_expr(svc_label)}, {via}, json_extract_string(labels, '$.namespace') "
+               f"FROM events WHERE source = ? AND ingest_time >= ? AND {via} IS NOT NULL "
+               "GROUP BY 1, 2, 3")
+        with self._lock:
+            rows = self.con.execute(sql, [source, since]).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows if r[0] not in (None, "") and r[1] != ""]
+
+    def counts_since(self, wants: list[tuple]) -> list[int]:
+        """For each (source, label, values, since): how many events of the source have the label
+        in `values` from `since` on. One scan for all of them."""
+        from .store import _label_expr
+        if not wants:
+            return []
+        terms, params = [], []
+        for source, label, values, since in wants:
+            ph = ", ".join(["?"] * len(values))
+            terms.append(f"COUNT(*) FILTER (WHERE source = ? AND {_label_expr(label)} IN ({ph}) "
+                         "AND ingest_time >= ?)")
+            params += [source, *values, since]
+        sources = sorted({w[0] for w in wants})
+        sql = (f"SELECT {', '.join(terms)} FROM events WHERE ingest_time >= ? "
+               f"AND source IN ({', '.join(['?'] * len(sources))})")
+        with self._lock:
+            row = self.con.execute(sql, [*params, min(w[3] for w in wants), *sources]).fetchone()
+        return [int(n) for n in row]
+
+    def deploy_events(self, sources: list[str], repos: list[str], since, limit: int,
+                      follow_default: list[str] = (), detail: bool = False,
+                      until=None) -> list[dict]:
+        """The pushes, merges and commits of `repos` (in the GitHub-type `sources`) from `since` on
+        (None for ever) and before `until` (None for no end), newest first. A push or commit counts when it is on the default branch:
+        its on_default_branch label says so, else its branch is main or master, else it has none.
+        `follow_default` names the polling sources that follow the repo's default branch: their
+        commits from before the poller stamped the label count whatever the branch is called.
+        `detail` adds author, branch and commits (the push's commit count) to each row."""
+        from .store import _label_expr
+        if not sources or not repos:
+            return []
+        repo, action, branch = _label_expr("repo"), _label_expr("action"), _label_expr("branch")
+        main = _label_expr("on_default_branch")
+        sph, rph = ", ".join(["?"] * len(sources)), ", ".join(["?"] * len(repos))
+        follow = list(follow_default)
+        follow_sql = f"OR source IN ({', '.join(['?'] * len(follow))}) " if follow else ""
+        extra = (f", {_label_expr('author')}, {branch}, {_label_expr('commits')}" if detail else "")
+        sql = (f"SELECT event_time, {repo}, event_type, {action}, text, "
+               f"COALESCE(json_extract_string(payload, '$.html_url'), {_label_expr('url')}){extra} "
+               f"FROM events WHERE source IN ({sph}) AND {repo} IN ({rph}) "
+               + ("AND event_time >= ? " if since is not None else "")
+               + ("AND event_time < ? " if until is not None else "")
+               + f"AND ((event_type = 'pull_request' AND {action} = 'merged') "
+               f"OR (event_type IN ('push', 'commit') AND COALESCE({main}, CASE WHEN {branch} IS "
+               f"NULL OR {branch} IN ('main', 'master') {follow_sql}THEN 'true' END, 'false') = 'true')) "
+               "ORDER BY event_time DESC LIMIT ?")
+        params = ([*sources, *repos] + ([since] if since is not None else [])
+                  + ([until] if until is not None else []) + follow + [int(limit)])
+        with self._lock:
+            rows = self.con.execute(sql, params).fetchall()
+        kinds = {"pull_request": "merge", "push": "push", "commit": "commit"}
+        out = [{"at": r[0], "repo": r[1], "kind": kinds[r[2]], "text": r[4] or "", "url": r[5]}
+               for r in rows]
+        if detail:
+            for d, r in zip(out, rows):
+                d["author"], d["branch"] = r[6] or None, r[7] or None
+                d["commits"] = int(r[8]) if str(r[8] or "").isdigit() else None
+        return out
+
+    def labels_last_seen(self, labels: list[str], sources: list[str]) -> dict[str, object]:
+        """{label: the newest ingest_time of an event of `sources` that carried it}. A label that
+        went past the counter's size limit is missing, so is one nothing carried."""
+        if not labels or not sources:
+            return {}
+        lph, sph = ", ".join(["?"] * len(labels)), ", ".join(["?"] * len(sources))
+        with self._lock:
+            rows = self.con.execute(
+                f"SELECT label, MAX(last_ingest) FROM entity_counts WHERE label IN ({lph}) "
+                f"AND source IN ({sph}) GROUP BY label", [*labels, *sources]).fetchall()
+        return dict(rows)
+
+    def trigger_created(self) -> dict:
+        """{trigger name: when it was made}."""
+        with self._sread:
+            return dict(self.sc.execute("SELECT name, created_at FROM catalog_triggers").fetchall())
+
+    def fired_since(self, since) -> set:
+        """The triggers that fired from `since` on, by the dispatch log or the per-key state."""
+        with self._sread:
+            a = self.sc.execute("SELECT DISTINCT trigger FROM dispatch_log WHERE fired_at >= ?",
+                                [since]).fetchall()
+            b = self.sc.execute("SELECT DISTINCT trigger FROM trigger_state WHERE last_fired >= ?",
+                                [since]).fetchall()
+        return {r[0] for r in a + b}

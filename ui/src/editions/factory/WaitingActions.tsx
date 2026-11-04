@@ -1,0 +1,152 @@
+import * as React from "react";
+
+import { Button, Checkbox, Dialog, Textarea } from "../../components/edition";
+import type { HomeAction, HomeItem, HomeWaitingOn } from "./home.types";
+
+// The panels and dialogs behind Answer, Sign off, Decline and Hand over anyway on the team home. Each is told what
+// to show and calls back; the page (FactoryHome.tsx) makes the call and shows a refusal under the row.
+
+const ANSWER_MAX = 4000;
+const REASON_MAX = 1000;
+const OVERRIDE_MAX = 500;   // the daemon keeps this much of a hand-over reason
+
+/** The words a person gives an answer, the option they picked (if they clicked one), and whether it stands for next time. */
+export interface AnswerGiven { words: string; choice?: string; standing: boolean }
+
+const LETTERS = "ABCDEFGH";
+/** A click on an option. A crew question reads a one-letter reply as a pick by position, so a click sends the position and
+ *  the option as the choice; a spec question takes the option's own words. */
+export function optionAnswer(options: string[], index: number, desk: boolean): { words: string; choice?: string } {
+  const o = options[index];
+  return desk && index < LETTERS.length ? { words: LETTERS[index], choice: o } : { words: o, choice: o };
+}
+
+/** Answer, open under its row: one button per option, or a text box and Send. */
+export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
+  item: HomeItem; action: HomeAction; busy: boolean;
+  onSend: (given: AnswerGiven) => void; onCancel: () => void;
+}) {
+  const options = Array.isArray(action.options) ? action.options.map(String) : [];
+  // Only a crew question can stand for next time; a spec question is answered once.
+  const canStand = typeof action.desk === "string";
+  const [text, setText] = React.useState("");
+  const [standing, setStanding] = React.useState(false);
+  const words = text.trim();
+  return (
+    <div data-testid="answer-panel" className="basis-full pl-10">
+      <div className="flex max-w-[640px] flex-col gap-3 border border-border bg-muted p-3">
+        {options.length > 0 ? (
+          <div className="flex flex-wrap gap-2" role="group" aria-label={`Answers to ${item.title}`}>
+            {options.map((o, i) => (
+              <Button key={i} variant="secondary" className="h-8 text-[13px]!" disabled={busy}
+                onClick={() => onSend({ ...optionAnswer(options, i, canStand), standing })} data-user-text>
+                {o}
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <Textarea label="Your answer" rows={3} value={text} disabled={busy} maxLength={ANSWER_MAX} data-testid="answer-text"
+            onChange={(e) => setText(e.target.value)} />
+        )}
+        {canStand && (
+          <Checkbox label="Let this answer stand for next time" checked={standing} disabled={busy} data-testid="answer-standing"
+            onCheckedChange={(v) => setStanding(v === true)} />
+        )}
+        <div className="flex gap-2">
+          {options.length === 0 && (
+            <Button className="h-8 text-[13px]!" busy={busy} disabled={!words} onClick={() => onSend({ words, standing })}>Send</Button>
+          )}
+          <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy} onClick={onCancel}>Cancel</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Sign off: the tickets the person is vouching for, then the button. */
+export function SignOffDialog({ item, repo, tickets, more = 0, busy, error, onClose, onConfirm }: {
+  item: HomeItem; repo: string; tickets: string[]; more?: number; busy: boolean; error: string | null;
+  onClose: () => void; onConfirm: () => void;
+}) {
+  const name = item.project?.name ?? item.title;
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="signoff-dialog"
+      title={`Sign off ${name}?`}
+      description={`You are saying the tickets in ${repo} are right. The project can go to a crew once everyone who owns a repo in it has signed off.`}
+      footer={(
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button busy={busy} onClick={onConfirm} data-testid="signoff-confirm">Sign off</Button>
+        </>
+      )}>
+      <div className="flex min-w-0 flex-col gap-3">
+        {tickets.length > 0 && (
+          <ul className="m-0 max-h-48 list-disc overflow-auto pl-5 text-sm" data-testid="signoff-tickets">
+            {tickets.map((t, i) => <li key={i} className="[overflow-wrap:anywhere]" data-user-text>{t}</li>)}
+            {more > 0 && <li data-testid="signoff-more" className="list-none text-muted-foreground">and {more} more</li>}
+          </ul>
+        )}
+        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+/** Decline: an optional reason the giver can read. */
+export function DeclineDialog({ item, busy, error, onClose, onConfirm }: {
+  item: HomeItem; busy: boolean; error: string | null; onClose: () => void; onConfirm: (reason: string) => void;
+}) {
+  const [text, setText] = React.useState("");
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="decline-dialog"
+      title="Decline this grant?" description="It ends as a revoked one, and the person who gave it can see that you said no."
+      footer={(
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button busy={busy} onClick={() => onConfirm(text.trim())} data-testid="decline-confirm">Decline</Button>
+        </>
+      )}>
+      <div className="flex min-w-0 flex-col gap-3">
+        <p className="m-0 text-sm [overflow-wrap:anywhere]" data-user-text>{item.title}</p>
+        <Textarea label="Why (optional)" rows={3} value={text} disabled={busy} maxLength={REASON_MAX} data-testid="decline-reason"
+          onChange={(e) => setText(e.target.value)} />
+        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
+      </div>
+    </Dialog>
+  );
+}
+
+const andList = (names: string[]): string =>
+  names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+
+/** Hand over anyway: what is missing, then the lead's reason, which the crew and the owners can read. */
+export function HandOverDialog({ entry, busy, error, onClose, onConfirm }: {
+  entry: HomeWaitingOn; busy: boolean; error: string | null; onClose: () => void; onConfirm: (reason: string) => void;
+}) {
+  const [text, setText] = React.useState("");
+  const reason = text.trim();
+  const missing = entry.repos.filter((r) => r.state === "waiting" || r.state === "no_owner");
+  const owners = [...new Set(missing.flatMap((r) => (r.state === "waiting" && r.owner ? [r.owner.name] : [])))];
+  const unowned = missing.filter((r) => r.state === "no_owner").map((r) => r.repo);
+  const bits = [
+    ...(owners.length ? [`${andList(owners)} ${owners.length === 1 ? "has" : "have"} not signed off ${andList(missing.filter((r) => r.state === "waiting").map((r) => r.repo))}.`] : []),
+    ...(unowned.length ? [`${andList(unowned)} ${unowned.length === 1 ? "has" : "have"} no owner.`] : []),
+  ];
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="handover-dialog"
+      title={`Hand over ${entry.project.name} anyway?`}
+      description={`${bits.join(" ")} The crew will start those tickets without the sign-off, and the owners will see why.`.trim()}
+      footer={(
+        <>
+          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button busy={busy} disabled={!reason} onClick={() => onConfirm(reason)} data-testid="handover-confirm">Hand over</Button>
+        </>
+      )}>
+      <div className="flex min-w-0 flex-col gap-3">
+        <Textarea label="Why hand it over now?" rows={3} value={text} disabled={busy} maxLength={OVERRIDE_MAX} data-testid="handover-reason"
+          onChange={(e) => setText(e.target.value)} />
+        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
+      </div>
+    </Dialog>
+  );
+}

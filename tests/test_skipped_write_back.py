@@ -43,7 +43,7 @@ class Store:
     def agent_cap_frees_at(self, *a, **k):
         return None
 
-    def agent_cost_total(self, *a):
+    def agent_budget_spend(self, *a):
         return self.spent
 
     def finish_agent_run(self, run_id, status, **kw):

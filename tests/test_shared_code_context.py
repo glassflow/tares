@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 DB = "/tmp/tares-sharedctx-test.duckdb"
@@ -34,17 +35,22 @@ def check(label, cond, detail=""):
         FAIL += 1; print(f"  FAIL {label}  {detail}")
 
 
+def _ago(minutes):
+    """An ISO timestamp this many minutes back: the read windows (1h, 24h, 7d) count from now."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 # ── fake GitHub ──────────────────────────────────────────────────────────────
 BIG_PATCH = "+" + ("x" * 5000)
 STATE = {"calls": [], "remaining": "4000"}
 COMMIT_LIST = {
     "acme/app": [{"sha": "bbb2222bbb", "html_url": "u", "author": {"login": "alice"},
                   "commit": {"message": "add refunds endpoint\n\nbody",
-                             "author": {"name": "A", "date": "2026-08-18T10:01:00Z"}}},
+                             "author": {"name": "A", "date": _ago(3)}}},
                  {"sha": "aaa1111aaa", "html_url": "u", "author": {"login": "bob"},
-                  "commit": {"message": "first", "author": {"name": "B", "date": "2026-08-18T10:00:00Z"}}}],
+                  "commit": {"message": "first", "author": {"name": "B", "date": _ago(4)}}}],
     "acme/lib": [{"sha": "ccc3333ccc", "html_url": "u", "author": {"login": "alice"},
-                  "commit": {"message": "lib change", "author": {"name": "A", "date": "2026-08-18T10:02:00Z"}}}],
+                  "commit": {"message": "lib change", "author": {"name": "A", "date": _ago(2)}}}],
 }
 COMMIT_DETAIL = {
     "bbb2222bbb": {"files": [{"filename": f"src/f{i}.py", "status": "modified", "additions": 1,
@@ -71,9 +77,9 @@ def fake_github(request: httpx.Request) -> httpx.Response:
                               headers={"x-oauth-scopes": "repo"})
     if path == "/user/repos":
         return httpx.Response(200, json=[] if request.url.params.get("page", "1") != "1" else [
-            {"full_name": "acme/app", "default_branch": "main", "private": True, "pushed_at": "2026-08-18T00:00:00Z"},
-            {"full_name": "acme/lib", "default_branch": "main", "private": False, "pushed_at": "2026-08-18T00:00:00Z"},
-            {"full_name": "acme/context", "default_branch": "main", "private": True, "pushed_at": "2026-08-18T00:00:00Z"}])
+            {"full_name": "acme/app", "default_branch": "main", "private": True, "pushed_at": _ago(600)},
+            {"full_name": "acme/lib", "default_branch": "main", "private": False, "pushed_at": _ago(600)},
+            {"full_name": "acme/context", "default_branch": "main", "private": True, "pushed_at": _ago(600)}])
     for repo in ("acme/app", "acme/lib", "acme/context"):
         if path == f"/repos/{repo}":
             return httpx.Response(200, json={"default_branch": "main"}, headers=hdr)
@@ -346,7 +352,7 @@ async def main():
             check("bootstrap ran the agent once for the repo with commits (skipped the empty one)",
                   len(runs) == before + 1 and runs[0]["key"] == "acme/lib", json.dumps(runs, default=str)[:300])
             check("bootstrap run failed fast on missing key (no network call)",
-                  runs and runs[0]["status"] == "failed" and "key" in (runs[0].get("error") or ""), json.dumps(runs[0], default=str)[:300] if runs else "")
+                  runs and runs[0]["status"] == "failed" and ("key" in (runs[0].get("error") or "") or "model provider" in (runs[0].get("error") or "")), json.dumps(runs[0], default=str)[:300] if runs else "")
             log = s.get("log") or []
             check("create logged and no bootstrap failure",
                   any(x["action"] == "created" for x in log) and not any(x["action"] == "bootstrap_failed" for x in log),

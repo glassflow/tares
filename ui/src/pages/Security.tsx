@@ -6,12 +6,15 @@ import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
 import { type Cloud, cloudLink, useCloud } from "../cloud";
-import type { ApiKey, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
+import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import AreasPanel from "../components/AreasPanel";
 import OwnerOnly from "../components/OwnerOnly";
+import AdvancedPanel from "../editions/AdvancedPanel";
+import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
+import { copyText } from "../editions/copyText";
 
 // Four distinct credential concepts, one box each:
 //   · Access     — is this instance open, or does it require a login? (tares up --auth)
@@ -22,12 +25,13 @@ import WorkspaceSettings from "./WorkspaceSettings";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability";
+type SettingsTab = "workspace" | "usage" | "access" | "edition" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability" | "advanced";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access, people and API keys" },
+  { key: "edition", label: "Edition" },
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
   { key: "observability", label: "Observability", group: "Agents" },
@@ -35,6 +39,7 @@ const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "github", label: "GitHub", group: "Integrations" },
   { key: "linear", label: "Linear", group: "Integrations" },
   { key: "slack", label: "Slack", group: "Integrations" },
+  { key: "advanced", label: "Advanced" },   // factory and sre cells only
 ];
 
 // Coming back from a Tares Cloud connect page (contract §3): `cloud` says what happened and
@@ -58,7 +63,10 @@ export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind:
   cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
 };
 
-export default function Security() {
+export default function Security({ initialTab }: { initialTab?: SettingsTab } = {}) {
+  // The Advanced tab holds the building blocks on the factory and sre editions; a platform cell has no such tab.
+  const { edition } = useEdition();
+  const hasAdvanced = edition !== undefined && edition !== "platform";
   const [cloudBack] = useState(() => {
     const q = new URLSearchParams(window.location.search);
     const m = CLOUD_BACK[q.get("cloud") ?? ""];
@@ -67,7 +75,7 @@ export default function Security() {
   // the tab the address or a click asked for; none: Workspace on Tares Cloud, else Access
   const [picked, setPicked] = useState<SettingsTab | undefined>(() => {
     const t = new URLSearchParams(window.location.search).get("tab");
-    return cloudBack?.tab ?? TABS.find((x) => x.key === t)?.key;
+    return cloudBack?.tab ?? TABS.find((x) => x.key === t)?.key ?? initialTab;
   });
   const [backTab] = useState(picked);   // the tab the cloud message belongs to
   useEffect(() => {   // the message is shown once; a reload starts clean
@@ -96,13 +104,15 @@ export default function Security() {
   // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
   // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
   // so a hard load does not show Access and then jump.
-  const tab: SettingsTab | undefined = workspaceApiUrl ? (picked ?? "workspace")
-    : picked === "workspace" ? (cloud.ready ? "access" : "workspace")
-    : picked ?? (cloud.ready ? "access" : undefined);
+  const want = picked === "advanced" && !hasAdvanced ? undefined : picked;
+  const tab: SettingsTab | undefined = workspaceApiUrl ? (want ?? "workspace")
+    : want === "workspace" ? (cloud.ready ? "access" : "workspace")
+    : want ?? (cloud.ready ? "access" : undefined);
   // Tares Cloud: Workspace (team, plan, storage, credit, model spend). Self-hosted: Usage (model
   // spend and storage) in its place.
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
-    : t.key === "usage" ? !workspaceApiUrl : true);
+    : t.key === "usage" ? !workspaceApiUrl
+    : t.key === "advanced" ? hasAdvanced : true);
   const groups = [...new Set(tabs.map((t) => t.group))];
   const link = (t: (typeof TABS)[number]) => (
     <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}
@@ -150,6 +160,7 @@ export default function Security() {
         : <div className="panel"><div className="muted">loading…</div></div>)}
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <AccessTab />}
+      {tab === "edition" && <EditionPanel />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "areas" && <AreasPanel />}
@@ -160,6 +171,7 @@ export default function Security() {
       {tab === "slack" && (slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} />
         : <><SlackTokenPanel /><SlackSigningSecretPanel /></>)}
       {tab === "observability" && <TracingPanel />}
+      {tab === "advanced" && <AdvancedPanel />}
       </div>
       </div>
     </>
@@ -592,6 +604,7 @@ function AccessTab() {
     <>
       <AccessPanel me={me} />
       <PeoplePanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />
+      <McpToolsPanel />
       <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />
     </>
   );
@@ -782,6 +795,44 @@ function AccessPanel({ me }: { me?: Whoami }) {
             <code>tares up --auth</code> to require a login.
           </div>
         )}
+    </div>
+  );
+}
+
+// Whether agents that connect over MCP see the building-block tools (TR-757). On by default on a
+// platform cell; off on a factory or AI SRE cell until an admin turns it on. Only an admin sees it.
+function McpToolsPanel() {
+  const [on, setOn] = useState<boolean>();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+  useEffect(() => {
+    api.whoami().then((w) => w.scopes.includes("admin") ? api.mcpSettings().then((s) => setOn(s.object_tools)) : undefined)
+      .catch((e) => setErr(String((e as Error).message ?? e)));
+  }, []);
+  if (on === undefined && !err) return null;
+  const toggle = async (next: boolean) => {
+    setBusy(true); setErr(undefined);
+    try { setOn((await api.setMcpObjectTools(next)).object_tools); }
+    catch (e) { setErr(String((e as Error).message ?? e)); }
+    setBusy(false);
+  };
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Agent tools</h2>
+      {err && <div className="alert error">{err}</div>}
+      <label className="field" style={{ flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
+        <input type="checkbox" checked={!!on} disabled={busy || on === undefined} style={{ marginTop: 3 }}
+               onChange={(e) => toggle(e.target.checked)} />
+        <span>
+          <strong>Let agents use the building blocks (connections, raw data, rules)</strong><br />
+          <span className="help">
+            Agents that connect over MCP get the low-level tools as well as the ones named for what you want done.
+            Crew sessions always have them. Project keys lose these tools unless this is on. Agents that are
+            already connected need to reconnect after a change. This only shortens the list; what a key may do
+            is set by its scopes.
+          </span>
+        </span>
+      </label>
     </div>
   );
 }
@@ -1061,6 +1112,80 @@ function AgentLimitsPanel({ agent }: { agent?: string }) {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+// The cell's edition (TR-724): which set of screens the console shows. Anyone can see it; only an
+// admin can switch it. The data, projects and crew stay as they are; the console reloads after.
+const EDITION_BLURBS: Record<Edition, string> = {
+  factory: "Projects, tickets and reviews, with a crew of Claude Code sessions building them.",
+  sre: "Services, incidents and runbooks, watched by agents that tell you what needs you.",
+  platform: "Every building block on its own: sources, triggers, agents and projects.",
+};
+
+function EditionPanel() {
+  const [st, setSt] = useState<EditionSettings>();
+  const [admin, setAdmin] = useState<boolean>();
+  const [now, setNow] = useState<string>();
+  const [pick, setPick] = useState<Edition>();
+  const [ask, setAsk] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+
+  // whoami carries the current edition for every key; the choices come from the admin-only route.
+  useEffect(() => {
+    api.whoami().then((w) => {
+      const isAdmin = w.scopes.includes("admin");
+      setAdmin(isAdmin);
+      setNow(w.edition_name);
+      if (!isAdmin) return;
+      return api.edition().then((s) => { setSt(s); setPick(s.edition); });
+    }).catch((e) => { setAdmin(false); setErr(String((e as Error).message ?? e)); });
+  }, []);
+
+  if (admin === false && now) return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Edition</h2>
+      <p className="help" style={{ marginTop: 0 }}>Which screens this workspace shows. Now: {now}.</p>
+      <p className="help">Only an admin can change the edition.</p>
+    </div>
+  );
+  if (!st || pick === undefined) return <div className="panel"><h2 style={{ marginTop: 0 }}>Edition</h2>
+    {err ? <div className="alert error">{err}</div> : <div className="muted">loading…</div>}</div>;
+
+  const nameOf = (e: Edition) => st.choices.find((c) => c.id === e)?.name ?? e;
+  const save = async () => {
+    setBusy(true); setErr(undefined);
+    try { await api.setEdition(pick); window.location.reload(); }
+    catch (e) { setErr(String((e as Error).message ?? e)); setAsk(false); setBusy(false); }
+  };
+
+  return (
+    <div className="panel">
+      <h2 style={{ marginTop: 0 }}>Edition</h2>
+      <p className="help" style={{ marginTop: 0 }}>
+        Which screens this workspace shows. Your projects, data and crew are the same in every edition.
+      </p>
+      {err && <div className="alert error">{err}</div>}
+      <div role="radiogroup" aria-label="Edition">
+        {st.choices.map((c) => (
+          <label key={c.id} className="field" style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+            <input type="radio" name="edition" value={c.id} checked={pick === c.id}
+                   disabled={busy} onChange={() => setPick(c.id)} />
+            <span><strong>{c.name}</strong><br /><span className="help">{EDITION_BLURBS[c.id]}</span></span>
+          </label>
+        ))}
+      </div>
+      <p className="help">Now: {st.edition_name}</p>
+      <div className="btnrow">
+        <button className="primary" disabled={busy || pick === st.edition} onClick={() => setAsk(true)}>Save</button>
+      </div>
+      {ask && (
+        <ConfirmDialog title={`Switch to ${nameOf(pick)}?`} confirmLabel="Switch"
+          message={`Your projects, data and crew stay as they are. The screens change from ${nameOf(st.edition)} to ${nameOf(pick)}; what only ${nameOf(st.edition)} shows stays reachable under Settings, Advanced.`}
+          onConfirm={save} onCancel={() => setAsk(false)} />
+      )}
     </div>
   );
 }
@@ -1564,9 +1689,7 @@ export function CopySecret({ text }: { text: string }) {
   const [done, setDone] = useState(false);
   return (
     <button onClick={() => {
-      navigator.clipboard?.writeText(text);
-      setDone(true);
-      setTimeout(() => setDone(false), 1500);
+      copyText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }, () => {});
     }}>{done ? "copied" : "copy"}</button>
   );
 }

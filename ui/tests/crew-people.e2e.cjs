@@ -72,7 +72,7 @@ const userLine = (sid, text) => JSON.stringify({
     cwd: REPO,
     env: { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "crew.duckdb"),
            TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(PORT), TARES_HOST: "127.0.0.1",
-           TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_AUTH_TOKEN: ROOT,
+           TARES_EDITION: "platform", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_AUTH_TOKEN: ROOT,
            TARES_UI_DIST: path.join(UI_DIR, "dist") },
     stdio: "ignore",
   });

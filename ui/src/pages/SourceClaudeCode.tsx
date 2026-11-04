@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import { usePolling } from "../components/bits";
+import { copyText } from "../editions/copyText";
 
 function Copy({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -10,9 +11,7 @@ function Copy({ text }: { text: string }) {
     <button
       className="copybtn"
       onClick={() => {
-        navigator.clipboard?.writeText(text);
-        setDone(true);
-        setTimeout(() => setDone(false), 1500);
+        copyText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }, () => {});
       }}
     >
       {done ? "copied" : "copy"}

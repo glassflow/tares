@@ -265,9 +265,22 @@ async def main():
     ck("write it when the brief says there is none", "write_repo_map" in manual and "no map" in manual, manual[:100])
     ck("update it after a merge that changes layout or commands", re.search(
         r"layout.{0,80}(build|test|lint)", manual, re.S) is not None and "update" in manual.lower())
-    steps = {n: line for line in manual.splitlines() for n in ("6", "10") if line.startswith(n + ". ")}
-    ck("step 6 writes a new map with an empty base", "write_repo_map" in steps["6"] and "empty `base`" in steps["6"], steps["6"][-300:])
-    ck("step 10 passes the brief's version as base (TR-685)", "write_repo_map" in steps["10"] and "`version` as `base`" in steps["10"], steps["10"][-300:])
+    steps = {n: line for line in manual.splitlines() for n in ("7", "11") if line.startswith(n + ". ")}
+    ck("step 7 writes a new map with an empty base", "write_repo_map" in steps["7"] and "empty `base`" in steps["7"], steps["7"][-300:])
+    ck("step 11 passes the brief's version as base (TR-685)", "write_repo_map" in steps["11"] and "`version` as `base`" in steps["11"], steps["11"][-300:])
+    rman = open(os.path.join(ROOT, "claude-plugin/skills/station-reviewer/SKILL.md")).read()
+    rsteps = {n: line for line in rman.splitlines() for n in ("6", "11") if line.startswith(n + ". ")}
+    ck("reviewer step 6 is the design check and reads the approval with list_decisions",
+       "Design check" in rsteps["6"] and "list_decisions" in rman.split("Design check", 1)[1].split("\n7. ")[0], rsteps["6"][:200])
+    ck("reviewer step 6 reads the choice and compares author dates as timestamps",
+       all(w in rman.split("Design check", 1)[1].split("\n7. ")[0]
+           for w in ("`choice`", "%at", "sort -n | head -1", "git fetch origin <base>", "origin/<base>..<head>", "the SHA pinned in step 2", "convert `at` to epoch", "A git error", "on its own and check its exit code", "set -o pipefail", "prints a `fatal:` or `error:` line", "hides a bad ref", "neither its `choice` nor its `words` asks for a change")), rsteps["6"][:300])
+    ck("reviewer step 6 does not take the first UI commit with --reverse, and blocks when a screen ticket has none",
+       "log --reverse" not in rman.split("Design check", 1)[1].split("\n7. ")[0]
+       and "clean run with no output means no UI commit, which for a screen ticket is a `block`" in rman.split("Design check", 1)[1].split("\n7. ")[0], rsteps["6"][:300])
+    ck("builder step 3 reads the choice and wants no requested change",
+       all(w in manual.split("Mock first", 1)[1].split("\n4. ")[0] for w in ("choice", "neither the choice nor the words ask for a change")), manual[:100])
+    ck("reviewer step 11 still tidies the worktree", "factory tidy" in rsteps["11"], rsteps["11"][-200:])
 
 
 async def store_handover(app, uid, repos):

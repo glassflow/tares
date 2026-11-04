@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { TriggerCondition } from "../types";
+import { copyText } from "../editions/copyText";
 
 export function StatusBadge({ status }: { status: string | undefined }) {
   const s = status ?? "starting";
@@ -90,7 +91,7 @@ export function CopyButton({ text, label = "Copy", what, primary, title, classNa
   const timer = useRef<number>();
   useEffect(() => () => window.clearTimeout(timer.current), []);
   const copy = async () => {
-    try { await navigator.clipboard.writeText(text); } catch { return; /* the text stays selectable next to the button */ }
+    try { await copyText(text); } catch { return; /* the text stays selectable next to the button */ }
     setDone(true);
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setDone(false), 1800);

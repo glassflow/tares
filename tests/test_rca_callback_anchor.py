@@ -75,7 +75,7 @@ class Store:
     def agent_runs_today(self, name, exclude_run_id=None):
         return 0
 
-    def agent_cost_total(self, name):
+    def agent_budget_spend(self, *a):
         return 0.0
 
     def finish_agent_run(self, run_id, status, **kw):

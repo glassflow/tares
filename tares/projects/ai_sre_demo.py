@@ -273,6 +273,9 @@ class AiSreDemo(Template):
             # The hosted demo stack is shared and fires around the clock, so an idle cell would
             # keep running the agent every cooldown until its trial credit was gone. $2 covers a
             # real look at the demo; the run that hits the cap says where to raise it.
+            # It stays a lifetime budget in every edition (no `budget_period`): the $2 guards the
+            # trial credit, and a monthly reset would spend that credit again each month. Only the
+            # AI SRE edition's own watchers and investigators use a monthly budget.
             agent["budget_usd"] = 2.0
         objs.append(PlannedObject("agent", "agent", agent))
         return objs

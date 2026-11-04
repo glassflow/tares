@@ -5,10 +5,16 @@ while the default stays lean. Uses claude_code because its `text` is a deliberat
 tool_use renders as `→ Bash({first 80 chars…})`) while the raw record keeps the full input.
 """
 import asyncio, json, os, subprocess, sys
+from datetime import datetime, timedelta, timezone
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import clean_env
+
+
+def _ago(minutes):
+    """An ISO timestamp this many minutes back: the read windows (1h, 24h, 7d) count from now."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 P = F = 0
 def ck(l, c, d=""):
@@ -41,7 +47,7 @@ async def main():
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     B = f"http://127.0.0.1:{PORT}"
     line = json.dumps({"sessionId": "sess-raw", "type": "assistant", "cwd": "/tmp/proj",
-                       "timestamp": "2026-07-03T10:00:00Z",
+                       "timestamp": _ago(1),
                        "message": {"role": "assistant",
                                    "content": [{"type": "tool_use", "name": "Bash",
                                                 "input": {"command": LONG_CMD}}]}})

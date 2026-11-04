@@ -184,3 +184,21 @@ export const Zap = (p: P) => (
     <path d="M2 12l10 5 10-5" />
   </S>
 );
+
+export const Check = (p: P) => (
+  <S {...p}>
+    <path d="M20 6 9 17l-5-5" />
+  </S>
+);
+
+export const ChevronDown = (p: P) => (
+  <S {...p}>
+    <path d="m6 9 6 6 6-6" />
+  </S>
+);
+
+export const ChevronUp = (p: P) => (
+  <S {...p}>
+    <path d="m18 15-6-6-6 6" />
+  </S>
+);

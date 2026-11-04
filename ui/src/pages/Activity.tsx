@@ -5,6 +5,7 @@ import { api, auth } from "../api";
 import { Search } from "../components/icons";
 import { Picker, TimeAgo, usePolling } from "../components/bits";
 import type { DispatchLogEntry } from "../types";
+import { copyText } from "../editions/copyText";
 
 // Two pages share this module: Connect (how an agent hooks up — one tab per integration mode)
 // and AgentActivity (what agents have been doing — reads + trigger dispatches).
@@ -77,7 +78,7 @@ function Toolbar({ q, setQ, placeholder, shown, total }: {
 function Copy({ text, label = "copy" }: { text: string; label?: string }) {
   const [done, setDone] = useState(false);
   return (
-    <button className="copybtn" onClick={() => { navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1500); }}>
+    <button className="copybtn" onClick={() => { copyText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }, () => {}); }}>
       {done ? "copied" : label}
     </button>
   );

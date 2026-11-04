@@ -5,6 +5,7 @@ import { api } from "../api";
 import { Picker } from "../components/bits";
 import { SlackPick } from "../components/SlackPick";
 import type { Project, Template, RecipeParam } from "../types";
+import { copyText } from "../editions/copyText";
 
 // The fallback wizard: a form rendered straight from a template's PARAMS, for templates without a
 // dedicated flow. Strings, numbers, booleans and choices get inputs; lists and objects are JSON.
@@ -27,7 +28,7 @@ function fromStored(p: RecipeParam, v: unknown): string {
 function CopyBtn({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <button type="button" onClick={() => { navigator.clipboard?.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>
+    <button type="button" onClick={() => { copyText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {}); }}>
       {copied ? "copied" : "copy"}
     </button>
   );

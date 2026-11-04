@@ -190,6 +190,10 @@ export interface Whoami {
   scopes: string[];
   project?: string;
   project_name?: string | null;
+  edition: Edition;
+  edition_name: string;
+  edition_needed: boolean;
+  mcp_object_tools?: boolean;
 }
 
 // An agent that joined a project with a webhook subscription (TR-336). The URL comes masked: it
@@ -282,7 +286,9 @@ export interface BuiltinAgent {
   webhook_token_configured: boolean;   // the token itself is never sent to the client
   mcp_servers: string[];       // registry names this agent may use
   max_rounds: number | null;   // model rounds per run; null = the default for its shape
-  budget_usd?: number | null;  // lifetime spend cap in USD; null = no budget
+  budget_usd?: number | null;  // spend cap in USD over budget_period; null = no budget
+  budget_period?: "lifetime" | "month";  // "month" resets on the 1st, 00:00 UTC; absent = lifetime
+  budget_spent_usd?: number | null;  // this month's spend, set for a month budget only
   handoffs?: Handoff[];        // who takes over when a run concludes with a verdict (TR-334)
   concludes?: boolean;         // every run ends with the conclude tool, whatever the prompt says
   verdicts?: Verdict[];        // the only verdicts it may give; empty: any word, or none
@@ -438,6 +444,16 @@ export interface DeskItem {
   to_person?: PersonRef | null;   // who it is for (TR-634); null on an item from before
 }
 export interface DeskAllowed { desk_item: DeskItem; decision: Decision; station: string; line: string; added: boolean; scope: "project" | "all" }
+// The body of POST /api/desk/{ref}/reply: a person's own answer from the console (TR-740)
+export interface DeskReplyBody {
+  words: string; choice?: string; standing?: boolean; scope?: "project" | "all";
+  grant_kind?: "project" | "personal"; kept?: string[]; overturned?: Record<string, string>;
+}
+export interface DeskReplied {
+  desk_item: DeskItem; decision: Decision; matched: boolean; recorded: boolean; granted: boolean;
+  grant: Grant | null; assumptions: { label: string; state: "kept" | "overturned"; tickets: string[] }[];
+  follow_up: { assumption: string; tickets: string[] }[]; unheard: string[];
+}
 export interface Decision {
   id: string; label: string | null; question: string; words: string; choice: string | null;
   standing: boolean; scope: "project" | "all"; matched: boolean; granted: boolean; tickets: string[]; at: string;
@@ -590,10 +606,11 @@ export interface SpecQuestion {
   id: string; to_person_id: string; to_person?: PersonRef | null; repo: string; text: string;
   asked_by: string | null; asked_at: string; answer: string | null; answered_by: string | null;
   answered_by_person?: PersonRef | null; answered_at: string | null; state: "open" | "answered";
+  via?: "console" | null;   // "console": answered on the page
 }
 // One repo a project has tickets in: who owns its area, and whether they signed off (TR-636).
 // `exempt` says why it needs no sign-off: a cell of one person ("solo") or the owner leads the project.
-export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; exempt?: "solo" | "lead" | null; signed_off: boolean; at: string | null }
+export interface SignoffRow { repo: string; owner: PersonRef | null; is_lead: boolean; exempt?: "solo" | "lead" | null; signed_off: boolean; at: string | null; via?: "console" | null }
 export interface Handover { override?: HandoverOverride | null; overridden?: boolean; overrides?: HandoverOverride[]; repo: string | null; repos: HandoverRepo[]; autonomy: string | null; by: string | null; person?: PersonRef | null; by_label?: string | null; at: string; finished?: ProjectFinished | null }
 // A repo a project touches, with the tickets that change it and their open pull requests (TR-463)
 export interface RepoPR {
@@ -876,6 +893,7 @@ export interface Project {
   members?: ProjectMember[];           // the lead first (reason "lead"), then the others
   hidden?: boolean;                    // a private project the caller is not on: name and lead, nothing else
   activity_at?: string;                // when it last moved: its own update or its newest ticket's (GET /api/projects only)
+  ready_to_close?: boolean;            // a software factory project, still open, whose tickets are all merged or otherwise finished (GET /api/projects and the summary)
 }
 export type ProjectScope = "team" | "private";
 export interface ProjectMember { id: string; name: string; reason: "lead" | "manual" | "ticket" }
@@ -1160,6 +1178,15 @@ export interface Standup {
   summary_error?: string | null;
 }
 
+export type Edition = "factory" | "sre" | "platform";
+
+export interface EditionSettings {
+  edition: Edition;
+  edition_name: string;
+  edition_needed: boolean;
+  env_value: string | null;
+  choices: { id: Edition; name: string }[];
+}
 // Area owners (TR-627): the person who owns each GitHub repo.
 export interface Area { repo: string; person: PersonRef; note: string | null }
 
@@ -1175,7 +1202,7 @@ export interface Grant {
   given_by: PersonRef | null;
   holder: PersonRef | null;
   areas: string[];
-  consents: (PersonRef & { at: string })[];
+  consents: (PersonRef & { at: string; via?: "console"; declined?: boolean; reason?: string })[];
   waiting_for: { id: string; name: string | null }[];   // id "admin": an admin has to
   in_effect: boolean;
 }

@@ -53,7 +53,7 @@ class RunStore(Settings):
     def agent_runs_today(self, *a, **k):
         return self.runs_today
 
-    def agent_cost_total(self, *a):
+    def agent_budget_spend(self, *a):
         # past the run cap the next gate is the budget; spent out, it stops the run before any
         # model call, so a "budget" refusal proves the run cap let it through
         return 1e9
