@@ -395,11 +395,11 @@ def _tools(store, runtime, now) -> dict:
             "empty_words": empty}
 
 
-def _people(store, can_edit, workspace) -> dict:
+def _people(store, can_edit, workspace, hide=()) -> dict:
     keys = []
     now = now_utc()
     for k in store.list_api_keys():
-        if k.get("revoked_at"):
+        if k.get("revoked_at") or (k.get("project") and k["project"] in hide):
             continue
         scopes = [s for s in k.get("scopes") or []]
         used = k.get("last_used_at")
@@ -446,7 +446,7 @@ def settings_screen(store, runtime, can_edit: bool, channels, problem, workspace
         "investigating": _investigating(store, runtime, watcher, inv, t, models),
         "notes": _notes(store, watcher, inv, channels, problem),
         "tools": _tools(store, runtime, t),
-        "people": _people(store, can_edit, workspace),
+        "people": _people(store, can_edit, workspace, hide),
         "edition": _edition(store, can_edit),
         "advanced": _advanced(),
         "can_edit": bool(can_edit),
@@ -666,10 +666,12 @@ def _write_edition(store, body: dict):
             "warning": EDITION_WARNING}
 
 
-def _write_people(store, body: dict):
+def _write_people(store, body: dict, hide=()):
     if "revoke" in body:
         kid = str(body.get("revoke") or "").strip()
-        if not store.revoke_api_key(kid):
+        key = store.get_api_key(kid)
+        # a key of a private project the caller cannot see is not there for them (TR-998)
+        if (key and key.get("project") and key["project"] in hide) or not store.revoke_api_key(kid):
             return JSONResponse({"detail": "That key is not active, so there is nothing to revoke."},
                                 status_code=404), None
         return None, None
@@ -742,7 +744,8 @@ def register(app, store, h, ctx):
             if refused is not None:
                 return refused
         elif group == "people":
-            refused, created = await asyncio.to_thread(_write_people, store, body)
+            refused, created = await asyncio.to_thread(_write_people, store, body,
+                                              h.hidden_ids())
             if refused is not None:
                 return refused
             extra = {"created_key": created} if created else None

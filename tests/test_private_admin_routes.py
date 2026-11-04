@@ -11,8 +11,9 @@ under Settings, Keys and Catalog:
     save keeps the entries Zephyrwatch already has;
   - the catalog export leaves out what Zephyrwatch holds, and an import neither overwrites nor
     clears it, and answers the same counts as for a new name;
-  - the key list leaves out the project key, and revoking it, rebinding it or making one for
-    Zephyrwatch answers as for a key or project that is not there.
+  - the key list, and the SRE People page, leave out the project key, and revoking it, rebinding
+    it or making one for Zephyrwatch answers as for a key or project that is not there;
+  - a repo only Zephyrwatch's source sent cannot be linked to a service by her.
 
 Mia, Lee and the cell's own key still see and change all of it.
 
@@ -50,6 +51,7 @@ from tares import sre, sre_home
 from tares.connectors import source_type_for
 from tares.envelope import Envelope
 
+HIDDEN_REPO = "example-org/zephyr-repo"
 P = F = 0
 UTC = timezone.utc
 
@@ -104,12 +106,20 @@ async def main():
                                    budget_usd=25.0, budget_period="month", concludes=True)
         store.put_in_project("trigger", "watch-zephyr", vault)
         store.put_in_project("agent", "zephyr-seer", vault)
+        store.set_wake(vault, "watch-zephyr", "zephyr-seer", enabled=True)
+        store.upsert_catalog_source("zephyr-gh", source_type_for("github_app"), "github_app", "1h", {
+            "labels": [{"name": "repo", "field": "repo", "primary": True}]})
+        store.put_in_project("source", "zephyr-gh", vault)
         runtime.reload_catalog()
 
         t = base - timedelta(minutes=3)
         store.append([Envelope(source="zephyr-logs", source_type=source_type_for("otlp"),
                                key_value="zephyr-api", event_type="INFO", text="zephyr handled 1",
                                event_time=t, payload={}, labels={"service": "zephyr-api"},
+                               ingest_time=t)])
+        store.append([Envelope(source="zephyr-gh", source_type=source_type_for("github_app"),
+                               key_value=HIDDEN_REPO, event_type="commit", text="zephyr fix queue",
+                               event_time=t, payload={}, labels={"repo": HIDDEN_REPO},
                                ingest_time=t)])
         sre_home.clear_cache()
 
@@ -137,9 +147,34 @@ async def main():
            r.status_code == unk.status_code and alike(r, unk, "zephyr-api", "no-such-service"),
            f"{r.text} vs {unk.text}")
         await call("kim", "PATCH", "/api/services/service-a", {"merged_into": None})
+        # Zephyrwatch's service is itself merged into another: the refusal must not echo that
+        store.set_service("zephyr-api", "test", merged_into="edge-proxy")
+        r = await call("kim", "PATCH", "/api/services/service-a", {"merged_into": "zephyr-api"})
+        unk = await call("kim", "PATCH", "/api/services/service-a", {"merged_into": "no-such-service"})
+        ck("and it is not refused for a merge of the private service", r.status_code == unk.status_code
+           and "already merged" not in r.text, f"{r.status_code} {r.text[:160]} vs {unk.status_code} {unk.text[:160]}")
+        await call("kim", "PATCH", "/api/services/service-a", {"merged_into": None})
+        store.set_service("zephyr-api", "test", merged_into=None)
         r = await call("kim", "PATCH", "/api/services/service-a", {"display": "Service A"})
         ck("a shared service still takes a change", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
         await call("kim", "PATCH", "/api/services/service-a", {"display": None})
+
+        print("== a repo link ==")
+        for path, method, field in (("/api/services/{}", "PATCH", "repos"),
+                                    ("/api/sre/services/{}/settings", "PUT", "repos")):
+            hid = await call("kim", method, path.format("service-a"), {field: [HIDDEN_REPO]})
+            unk = await call("kim", method, path.format("service-a"), {field: ["example-org/no-such-repo"]})
+            ck(f"{method} {path.split('{')[0]}..: a repo only Zephyrwatch's source sent answers as an unseen one",
+               hid.status_code == unk.status_code == 400
+               and alike(hid, unk, HIDDEN_REPO, "example-org/no-such-repo"),
+               f"{hid.status_code} {hid.text[:120]} vs {unk.status_code} {unk.text[:120]}")
+        ck("and no link was made", HIDDEN_REPO not in json.dumps(store.service_settings(), default=str))
+        r = await call("kim", "PATCH", "/api/services/service-a", {"repos": ["example-org/service-a"]})
+        ck("a repo the caller sees still links", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        await call("kim", "PATCH", "/api/services/service-a", {"repos": None})
+        r = await call("lee", "PATCH", "/api/services/zephyr-api", {"repos": [HIDDEN_REPO]})
+        ck("Lee links the private repo to her service", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
+        await call("lee", "PATCH", "/api/services/zephyr-api", {"repos": None})
 
         print("== Mia, Lee and the cell's key can ==")
         for who, name in (("mia", "Mia's name"), ("lee", "Lee's name"), ("root", "Root's name")):
@@ -175,6 +210,10 @@ async def main():
         ck("a via-labels save of hers keeps the Zephyrwatch entry",
            r.status_code == 200 and stored.get("zephyr-logs") == ["upstream"]
            and stored.get("prod-otlp") == ["other"], str(stored))
+        r = await call("kim", "PUT", "/api/settings/via-labels", {"zephyr-gh": ["other"]})
+        stored = json.loads(store.get_setting(sre.VIA_SETTING) or "{}")
+        ck("a via-labels entry for a hidden source that had none is not written", r.status_code == 200
+           and "zephyr-gh" not in stored, str(stored))
         r = await call("lee", "PUT", "/api/settings/service-labels", {"zephyr-logs": "namespace"})
         ck("Lee changes the label of her own source", r.status_code == 200
            and json.loads(store.get_setting(sre.LABELS_SETTING) or "{}").get("zephyr-logs") == "namespace",
@@ -223,6 +262,17 @@ async def main():
            f"{r.status_code} {r.text[:160]} {sorted(runtime.catalog.sources)}")
         ck("and the project's wiring survives", store.projects_using("source", "zephyr-logs") == kept_owner(kept),
            str(store.projects_using("source", "zephyr-logs")))
+        ck("including the wake rows of the private project", store.list_wakes(vault, "watch-zephyr", "zephyr-seer"),
+           str(store.list_wakes(vault)))
+        def doc_in(project):
+            return yaml.safe_dump({"sources": [{"name": "kim-logs", "connector": "webhook", "poll": "9m",
+                                                "config": {}, "projects": [project]}]})
+        r = await call("kim", "POST", "/api/catalog/import", {"yaml": doc_in(vault)})
+        unk = await call("kim", "POST", "/api/catalog/import", {"yaml": doc_in("prj-no-such")})
+        ck("an import naming her project answers as for a project that is not there", r.status_code == 400
+           and alike(r, unk, vault, "prj-no-such"), f"{r.status_code} {r.text[:120]} vs {unk.status_code} {unk.text[:120]}")
+        ck("and Zephyrwatch gained no source", "kim-logs" not in runtime.catalog.sources
+           or vault not in store.projects_using("source", "kim-logs"), str(store.projects_using("source", "kim-logs")))
         r = await call("lee", "POST", "/api/catalog/import", {"yaml": doc("zephyr-logs", "7m")})
         ck("Lee's import of her own source lands", r.status_code == 200
            and runtime.catalog.sources["zephyr-logs"].poll == "7m", f"{r.status_code} {r.text[:160]}")
@@ -255,6 +305,19 @@ async def main():
            r.status_code == unk.status_code and alike(r, unk, vault, "prj-no-such")
            and "secret" not in r.text, f"{r.status_code} {r.text[:120]} vs {unk.status_code} {unk.text[:120]}")
         ck("and none was made", not any(k["name"] == "snoop" for k in store.list_api_keys()))
+        print("== the SRE People page ==")
+        r = await call("kim", "GET", "/api/sre/settings")
+        names = [k["name"] for k in r.json()["people"]["keys"]]
+        ck("Kim's People page leaves out the project key", r.status_code == 200 and "zephyr-reader" not in names
+           and "kim-laptop" in names, str(names))
+        r = await call("lee", "GET", "/api/sre/settings")
+        ck("Lee's People page lists it", "zephyr-reader" in [k["name"] for k in r.json()["people"]["keys"]])
+        r = await call("kim", "PUT", "/api/sre/settings/people", {"revoke": zkey})
+        unk = await call("kim", "PUT", "/api/sre/settings/people", {"revoke": "nokey000"})
+        ck("Kim revoking it there answers as for a key that is not there",
+           r.status_code == 404 and alike(r, unk, zkey, "nokey000"),
+           f"{r.status_code} {r.text[:120]} vs {unk.status_code} {unk.text[:120]}")
+        ck("and it is still active", (store.get_api_key(zkey) or {}).get("revoked_at") is None)
         r = await call("mia", "PUT", f"/api/keys/{zkey}/person", {"person_id": pid["mia"]})
         ck("Mia, on the project, rebinds it", r.status_code == 200, f"{r.status_code} {r.text[:160]}")
         r = await call("lee", "DELETE", f"/api/keys/{zkey}")

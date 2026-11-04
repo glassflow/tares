@@ -637,7 +637,7 @@ def patch_service(store, catalog, name: str, body, by: str, hide=()) -> dict:
             raise ValueError("hidden must be true, false or null")
         changes["hidden"] = bool(body["hidden"])
     if "repos" in body:
-        changes["repos"] = _check_repos(store, catalog, body["repos"])
+        changes["repos"] = _check_repos(store, catalog, body["repos"], hide)
     settings = store.service_settings()
     raw = _compute_cached(store, catalog, None)
     seen = _view(store, raw, hide)["recs"]
@@ -645,7 +645,11 @@ def patch_service(store, catalog, name: str, body, by: str, hide=()) -> dict:
         target = _text(body, "merged_into", MAX_NAME)
         if target is not None:
             # a service the caller cannot see has no merge state to echo back in the refusal
-            gone = set(raw["recs"]) - set(seen)
+            # (a service merged away still keeps its raw name inside the one it merged into)
+            blind = hidden_sources(store, hide)
+            gone = (set(raw["recs"]) - set(seen)) | {
+                n for r in raw["recs"].values() for n, srcs in r.get("raw", {}).items()
+                if srcs and srcs <= blind}
             check_merge({n: st for n, st in settings.items() if n not in gone}, name, target)
         changes["merged_into"] = target
     # the same test GET /api/services/{name} applies, so a name that answers 404 there does here
@@ -737,7 +741,7 @@ def github_repos(store, catalog, hide=()) -> dict:
     return {e["value"]: e["last_ingest"] for e in store.list_entities("repo", sources=names, limit=10000)}
 
 
-def _check_repos(store, catalog, repos) -> list[str]:
+def _check_repos(store, catalog, repos, hide=()) -> list[str]:
     if repos is None:
         return []
     if not isinstance(repos, list) or not all(isinstance(r, str) for r in repos):
@@ -745,7 +749,7 @@ def _check_repos(store, catalog, repos) -> list[str]:
     repos = list(dict.fromkeys(r.strip() for r in repos))
     if len(repos) > MAX_REPOS:
         raise ValueError(f"a service can link at most {MAX_REPOS} repos, and {len(repos)} were given")
-    known = github_repos(store, catalog) if repos else {}
+    known = github_repos(store, catalog, hide) if repos else {}
     for r in repos:
         if r not in known:
             raise ValueError(f"{r} has sent nothing to this workspace yet; connect it first")
