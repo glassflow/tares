@@ -450,8 +450,22 @@ def service_state(store, rows: dict, name: str, agents: dict, now) -> dict:
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
+def uses_sre(store, catalog) -> bool:
+    """Whether this cell has any use for the watch's look: an AI SRE cell, or a platform cell
+    that has set up a watcher by hand (it keeps the look it always had). A factory cell never
+    does, and nor does a platform cell with no watcher; their services need no state kept."""
+    kind = edition_mod.edition(store)[0]
+    if kind == "sre":
+        return True
+    if kind == "factory":
+        return False
+    return bool(sre.roles(store, catalog, include_paused=True)["watchers"])
+
+
 def _tick(store, catalog) -> None:
-    changes = sync(store, catalog)
+    # the look reads 24 hours of events for every service; a cell that does not use the AI SRE
+    # skips it (TR-896). The hooks stay: they read the incident tables, not the events.
+    changes = sync(store, catalog) if uses_sre(store, catalog) else []
     for hook in list(EVERY_TICK):
         try:
             hook(store, catalog, changes)
