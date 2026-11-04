@@ -4,7 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   Banner, Button, EmptyState, ListSection, ServiceRows, Skeleton, type ServiceRowItem,
 } from "../../components/edition";
-import { StartChecklist, StartChecklistLoading } from "../StartChecklist";
+import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
 import { BlindSpots } from "./BlindSpots";
@@ -259,6 +259,10 @@ export default function Home() {
       {home.start?.show && (
         <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={doStart} doing={doing} notice={startNote}
                         hide={sample ? () => Promise.resolve() : undefined} />
+      )}
+      {home.start && (
+        <StartChecklistHidden block={home.start} title={START_TITLE} onShown={reload}
+                              show={sample ? () => Promise.resolve() : undefined} />
       )}
       <Head title={home.headline.text} sub={home.headline.sub} />
       <Columns main={main} aside={aside} />
