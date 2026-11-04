@@ -411,6 +411,9 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         if g["state"] == "waiting" and not waiting_for(g):
             mirror_in(g, by)   # first: a failure leaves it waiting, to settle on the next try
             if not store.activate_waiting_grant(g["id"]):
+                now = store.get_grant_row(g["id"])
+                if now is not None and now["state"] == "active":
+                    return now   # another settle took it into effect first: its line stays
                 # declined or revoked since it was read: it stays so, and its line comes back out
                 mirror_out(g, by)
                 h.err(ValueError(f"{g['id']} is no longer waiting"), 409)
@@ -487,6 +490,8 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                 take("project", p["id"], store.get_doc(p["id"], d["id"])["body"])
         store.set_setting(GRANTS_MIGRATED_SETTING, "1")
 
+    grants_doc_lock = threading.RLock()   # one writer at a time on a grants doc's text
+
     def mirror_in(g: dict, by: str) -> None:
         """A team or project grant in effect, into the grants doc that readers of the docs use."""
         if g["kind"] == "personal":
@@ -507,12 +512,13 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
             doc_id = d["id"] if d else None
         if not doc_id:
             return
-        doc = store.get_doc(None, doc_id) if uid is None else store.get_doc(uid, doc_id)
-        keep = [ln for ln in doc["body"].splitlines()
-                if not any(w == g["words"] for w, _ in legacy_lines(ln))]
-        text = "\n".join(keep) + "\n"
-        if text != doc["body"]:
-            store.update_doc(doc_id, body=text, by=by)
+        with grants_doc_lock:   # read and write as one step: a line added meanwhile is kept
+            doc = store.get_doc(None, doc_id) if uid is None else store.get_doc(uid, doc_id)
+            keep = [ln for ln in doc["body"].splitlines()
+                    if not any(w == g["words"] for w, _ in legacy_lines(ln))]
+            text = "\n".join(keep) + "\n"
+            if text != doc["body"]:
+                store.update_doc(doc_id, body=text, by=by)
 
     def visible_grant(g: dict, request: Request) -> bool:
         """May this caller read this grant? Personal: its holder. Project: whoever can see the
@@ -582,7 +588,12 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         if waiting is not None:
             # the lead's (or an admin's) own add of words that sit waiting for someone else's
             # consent: it takes effect, with the areas and owner consents of this add
-            store.update_grant_row(waiting["id"], state="active", areas=areas, needs_lead=False)
+            # only while it still waits: a decline that came since the read must stay a decline
+            if not store.activate_waiting_grant(waiting["id"], areas=areas, needs_lead=False):
+                row = store.get_grant_row(waiting["id"])
+                if row is not None and row["state"] == "active":
+                    return row, False   # another add took it into effect first
+                h.err(ValueError(f"{waiting['id']} is no longer waiting"), 409)
             row = store.get_grant_row(waiting["id"])
             mirror_in(row, by)
             return row, True
@@ -751,9 +762,10 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
             else:
                 doc_id = d["id"]
             include_shared_grants(uid)
-        text, added = docs_mod.append_line(store.get_doc(None, doc_id)["body"], line)
-        if added:
-            store.update_doc(doc_id, body=text, by=by)
+        with grants_doc_lock:   # read and write as one step: a line removed meanwhile stays removed
+            text, added = docs_mod.append_line(store.get_doc(None, doc_id)["body"], line)
+            if added:
+                store.update_doc(doc_id, body=text, by=by)
         return added
 
     try:

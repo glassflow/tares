@@ -1526,13 +1526,22 @@ class FactoryStore:
                 [json.dumps(consents), gid]).fetchone()
         return hit is not None
 
-    def activate_waiting_grant(self, gid: str) -> bool:
-        """Put a grant in effect only while it still waits; False when it was declined or revoked
-        meanwhile."""
+    def activate_waiting_grant(self, gid: str, areas: list[str] | None = None,
+                               needs_lead: bool | None = None) -> bool:
+        """Put a grant in effect only while it still waits; False when it was declined, revoked
+        or put in effect meanwhile. `areas` and `needs_lead`, when given, are written in the
+        same statement, so a grant that is no longer waiting keeps what it had."""
+        sets, args = ["state = 'active'"], []
+        if areas is not None:
+            sets.append("areas = ?")
+            args.append(json.dumps(areas))
+        if needs_lead is not None:
+            sets.append("needs_lead = ?")
+            args.append(needs_lead)
         with self._swrite:
             hit = self.sc.execute(
-                "UPDATE grants SET state = 'active' WHERE id = ? AND state = 'waiting' "
-                "RETURNING id", [gid]).fetchone()
+                f"UPDATE grants SET {', '.join(sets)} WHERE id = ? AND state = 'waiting' "
+                "RETURNING id", [*args, gid]).fetchone()
         return hit is not None
 
     def add_signoff(self, project: str, repo: str, person_id: str, at,
