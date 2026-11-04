@@ -283,18 +283,18 @@ async function waitFor(url, tries = 150) {
       await c2.close();
     }
 
-    // ---- 10. a key that may only read: plain text, no inputs, no buttons, no Revoke
+    // ---- 10. a key that may only read: the cell refuses the page, the console says so and shows nothing of it
     for (const width of [1440, 390]) {
       const { ctx: c, page: p } = await newPage(width, { token: READ_KEY });
-      const o = expectOneCall(p, ROUTE);
-      await load(p, RO_BASE);
-      await o(ck, `read key ${width}`);
-      ck(`read key ${width}: it reads the settings plainly`, (await text(p, "value-watching-every")) === "Every 10 minutes" && /\$25/.test(await text(p, "value-watching-budget_usd")), await text(p, "group-watching"));
-      ck(`read key ${width}: no input, no menu, no button`, (await inputsIn(p)) === 0 && (await buttonsIn(p)) === 0, `${await inputsIn(p)} inputs, ${await buttonsIn(p)} buttons`);
-      ck(`read key ${width}: no Save, no Revoke, no add bar, no switch`, (await p.locator("[data-testid^=save-], [data-testid=key-revoke], [data-testid=tools-add], [data-testid=edition-switch], [data-testid=key-create-open]").count()) === 0);
-      ck(`read key ${width}: it says the settings can be read but not changed`, /read these settings but not change them/.test(await text(p, "readonly-note")));
-      ck(`read key ${width}: Edition says only an admin can switch`, /Only an admin can switch/.test(await text(p, "edition-help")));
-      ck(`read key ${width}: the cell sent no key id`, (await read(RO_BASE, READ_KEY)).people.keys.every((k) => !("id" in k) && !("can_revoke" in k)));
+      const asked = [];
+      p.on("request", (r) => { if (new URL(r.url()).pathname === ROUTE) asked.push(r.method()); });
+      await p.goto(`${RO_BASE}/settings`, { waitUntil: "load" });
+      await T(p, "settings-admin-only").waitFor();
+      ck(`read key ${width}: it says the key can read but not change settings`, /This key can read but not change settings\. Use a key that can write to open this page\./.test(await text(p, "settings-admin-only")));
+      ck(`read key ${width}: the page does not ask for the settings`, asked.length === 0, asked.join(", "));
+      ck(`read key ${width}: none of the settings is there`, (await T(p, "sre-settings").count()) === 0 && (await inputsIn(p)) === 0 && (await T(p, "settings-error").count()) === 0);
+      ck(`read key ${width}: it is not told to try again`, !/try again|did not load/i.test(await text(p, "sre-settings-refused")));
+      ck(`read key ${width}: the cell refuses the read`, (await fetch(`${RO_BASE}${ROUTE}`, { headers: { authorization: `Bearer ${READ_KEY}` } })).status === 403);
       if (width === 390) ck("read key 390: no sideways scroll", (await overflow(p)) <= 0, String(await overflow(p)));
       await checkWords(p, ck, `read key ${width}`);
       await shot(p, `live-ro-${width}.png`);

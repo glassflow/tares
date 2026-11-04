@@ -805,6 +805,9 @@ def make_app() -> FastAPI:
                              # is refused here; admin implies ingest
         # /api/settings holds instance credentials (the Anthropic key): admin even to READ, since
         # a read tells you whether and where a credential is configured.
+        if path in ("/api/factory/settings", "/api/sre/settings"):
+            return "admin"   # the two edition settings pages: the keys, the crew's limits, the Slack
+                             # channels. A read key is refused, as on the other admin-only pages
         if path == "/api/setup/github-suggestion":
             return "admin"   # spends model money and distills private READMEs: not for read keys
         if (path in _ADMIN_PATHS or path.startswith("/api/keys")

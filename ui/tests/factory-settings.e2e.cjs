@@ -262,26 +262,19 @@ const until = async (fn, tries = 40) => {
     }
     await ctx.close();
 
-    // 11. a read key: everything dimmed and disabled, no way to switch the edition
+    // 11. a read key: the cell refuses the page, the console says so and shows nothing of it
     {
       const n = await newPage(1440, { token: ids.read_key });
       const p = n.page;
-      const oneRo = expectOneCall(p, "/api/factory/settings");
+      const asked = [];
+      p.on("request", (r) => { if (new URL(r.url()).pathname === "/api/factory/settings") asked.push(r.method()); });
       await p.goto(`${BASE}/settings`, { waitUntil: "load" });
-      await p.getByTestId("section-advanced").waitFor();
+      await p.getByTestId("settings-admin-only").waitFor();
       await settle(p);
-      await oneRo(ck, "/settings as a read key");
-      ck("not an admin: the page says you can look only", /You can look but not change anything here\. Ask an admin\./.test(await text(p, "read-only")));
-      const live = await p.locator("#tools, #crew, #models, #people").locator("button:not([disabled]), a:not([aria-disabled=true])").count();
-      const all = await p.locator("#tools, #crew, #models, #people").locator("button, a").count();
-      ck("not an admin: every control in those sections is disabled", all >= 12 && live === 0, `${all} controls, ${live} live`);
-      ck("not an admin: the sections are dimmed", await p.locator("#tools > div, #crew > div, #models > div, #people > div").evaluateAll((d) => d.length > 0 && d.every((x) => Number(getComputedStyle(x).opacity) < 1)));
-      ck("not an admin: the switches are disabled", (await p.getByRole("switch").evaluateAll((s) => s.every((x) => x.disabled))));
-      ck("not an admin: the edition is shown read only, no button", (await p.getByTestId("edition-sre").count()) === 0 && /Only an admin can switch the edition\./.test(await text(p, "row-edition")));
-      await p.getByTestId("how-L4-ship").click({ force: true }).catch(() => {});
-      await p.getByTestId("builders-more").click({ force: true }).catch(() => {});
-      ck("not an admin: a click changes nothing", (await crew()).autonomy === "L3-review" && (await crew()).builders_max === 4);
-      ck("not an admin: Advanced still opens", (await p.getByTestId("advanced-link").count()) === 6);
+      ck("not an admin: the page does not ask for the settings", asked.length === 0, asked.join(", "));
+      ck("not an admin: the page says this key can read but not change settings", /This key can read but not change settings\. Use a key that can write to open this page\./.test(await text(p, "settings-admin-only")));
+      ck("not an admin: none of the page is there", (await p.getByTestId("factory-settings").count()) === 0 && (await p.getByTestId("section-crew").count()) === 0 && (await p.getByTestId("problem").count()) === 0 && (await p.getByRole("switch").count()) === 0);
+      ck("not an admin: it is not told to try again", !/try again|did not load/i.test(await p.getByTestId("factory-settings-refused").innerText()));
       await checkWords(p, ck, "read key");
       await shot(p, "live-readonly-1440.png");
       await n.ctx.close();

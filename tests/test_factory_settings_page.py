@@ -2,8 +2,8 @@
 
 One read: the tools (connected or not, worded), the crew's settings as the page shows them, the
 grants with their words, dates and, for a desk answer like "D1 A", the decision's question, the
-model and budget, the keys, the edition, the links under Advanced; a read key gets the page with
-`can_change` false; changes go through the routes that exist and read back; no forbidden word in
+model and budget, the keys, the edition, the links under Advanced; a read key is refused the page (403), an
+admin key still gets it; changes go through the routes that exist and read back; no forbidden word in
 anything but a person's own grant words.
 
 Run: .venv/bin/python tests/test_factory_settings_page.py
@@ -212,16 +212,19 @@ async def main():
             clean("the whole page", a)
 
             print("== a read key ==")
+            adm = (await cx.post("/api/keys", json={"name": "owner", "scopes": ["admin"]})).json()
             async with mk(k["secret"]) as rx:
                 r = await rx.get("/api/factory/settings")
-                b = r.json()
-                ck("a read key gets the page", r.status_code == 200, r.text[:200])
-                ck("and cannot change anything", b["can_change"] is False and b["edition"]["can_switch"] is False, b)
-                ck("it sees the same grants", len(b["crew"]["grants"]) == 3)
+                ck("a read key is refused the page", r.status_code == 403 and "admin" in r.text, r.text[:200])
+                ck("and gets nothing of it", "tools" not in r.text and "people" not in r.text, r.text[:200])
                 ck("its writes are refused",
                    (await rx.put("/api/crew/settings", json={"builders_max": 5})).status_code == 403)
                 ck("including the edition",
                    (await rx.put("/api/settings/edition", json={"edition": "sre"})).status_code == 403)
+            async with mk(adm["secret"]) as ax:
+                r = await ax.get("/api/factory/settings")
+                ck("an admin key still gets the page and may change it",
+                   r.status_code == 200 and r.json()["can_change"] is True, r.text[:200])
             ck("no token, no page", (await mk(None).get("/api/factory/settings")).status_code == 401)
 
             print("== a hostile cell ==")
