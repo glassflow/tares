@@ -923,11 +923,17 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         to = d.get("to_person_id")
         return to == me or (me == "local" and not to)
 
-    def desk_can_act(d: dict, me: str) -> bool:
+    def desk_can_act(d: dict, me: str, request: Request) -> bool:
         """Who may answer or allow a desk item from the console (TR-898): the person it is
-        addressed to. An item from before items were addressed has no one, so any person may; the
-        lists (`desk_is_mine`) still show it to `local` only."""
-        return not d.get("to_person_id") or d["to_person_id"] == me
+        addressed to. An item from before items were addressed has no one: an admin key, the
+        project's lead and `local` may act on it, nobody else (a key that can only ingest must not
+        grant a permission). The lists (`desk_is_mine`) still show it to `local` only."""
+        to = d.get("to_person_id")
+        if to:
+            return to == me
+        if me == "local" or h.is_admin(request):
+            return True
+        return leads(store.get_project(d["project"]) if d.get("project") else None, me)
 
     def leads(p: dict | None, me: str) -> bool:
         lead = (p or {}).get("lead_person_id")
@@ -2377,12 +2383,13 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         the console (TR-740). The same fields and checks as /answer, but their words are taken as
         typed: there is no recorded session to find them in. Recorded as made in the console,
         and a standing answer becomes a grant like one typed in a session. Refused from any crew
-        station, and for anyone but the person the item is addressed to."""
+        station, and for anyone but the person the item is addressed to (an item with no
+        addressee: an admin key, the project's lead or `local`)."""
         if caller(request)["station"]:
             h.err(PermissionError("a person answers this in the console"), 403)
         me = work_person(request)
         d = desk_or_404(ref)
-        if not desk_can_act(d, me["id"]):
+        if not desk_can_act(d, me["id"], request):
             who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
             h.err(PermissionError(f"{d['label']} is for {who}: only they answer it" if who else
                                   f"{d['label']} is not addressed to you"), 403)
@@ -2408,7 +2415,7 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                                   "console"), 403)
         me = work_person(request)
         d = desk_or_404(ref)
-        if not desk_can_act(d, me["id"]):
+        if not desk_can_act(d, me["id"], request):
             who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
             h.err(PermissionError(f"{d['label']} is for {who}: only they allow it" if who else
                                   f"{d['label']} is not addressed to you"), 403)

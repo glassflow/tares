@@ -2,9 +2,10 @@
 
 Items from before desk items were addressed carry no person. Only the person `local` had them in
 their lists, so a signed-in person who is not `local` got a 403 ("not addressed to you") when
-they allowed such a permission request or replied to such a question. Nobody else can act on it
-either, so any person may; an item addressed to someone else stays theirs, and a key with no
-person is still refused.
+they allowed such a permission request or replied to such a question. An admin key, the
+project's lead and `local` may act on such an item; a key that can only ingest and is not the
+lead may not (it must not grant a permission). An item addressed to someone else stays theirs,
+and a key with no person is still refused.
 
 Run: .venv/bin/python tests/test_desk_unaddressed_login.py
 """
@@ -130,6 +131,62 @@ async def main():
             rows = (await cx.get("/api/crew/my-work", headers=keys["lee"])).json()["desk"]
         ck("an item with no addressee is still not in lee's my-work",
            a5["label"] not in [d["label"] for d in rows], rows)
+
+        print("== a key that can only ingest ==")
+        for who, email in (("joe", "joe-ud@example.com"), ("kimi", "kim-ud@example.com")):
+            r = await call("root", "POST", "/api/keys", {
+                "name": f"{who}-ingest", "scopes": ["ingest"],
+                "person": {"email": email, "name": who}})
+            keys[who] = {"Authorization": f"Bearer {r.json()['secret']}"}
+            pid[who] = r.json()["person"]["id"]
+        r = await call("kim", "POST", "/api/projects", {"template": "custom", "name": "lead-shop",
+                                                        "objects": [], "kind": "software_factory"})
+        lead_uid = r.json()["id"]
+        r = await call("kim", "PATCH", f"/api/projects/{lead_uid}", {"lead_person_id": pid["kimi"]})
+        lead_ok = r.status_code == 200 and (store.get_project(lead_uid) or {}).get("lead_person_id") == pid["kimi"]
+        ck("(joe is no lead; the lead of lead-shop is an ingest key)", lead_ok, f"{r.status_code} {r.text}")
+        b1 = await add("Shop: ingest question?")
+        r = await call("joe", "POST", f"/api/desk/{b1['label']}/reply", {"words": "yes"})
+        ck("a non-lead ingest key cannot reply to an unaddressed item: 403", r.status_code == 403,
+           f"{r.status_code} {r.text}")
+        ck("and it is still open", state(b1) == "open")
+        b2 = await add("Shop: ingest push?", command="git push", station="shop-build-m1")
+        r = await call("joe", "POST", f"/api/desk/{b2['label']}/allow",
+                       {"words": WORDS, "scope": "project"})
+        ck("a non-lead ingest key cannot allow one: 403", r.status_code == 403,
+           f"{r.status_code} {r.text}")
+        ck("and it is still open", state(b2) == "open")
+        with store._lock:
+            store.sc.execute("UPDATE desk_items SET project = ? WHERE number = ?",
+                             [lead_uid, int(b1["label"][1:])])
+        r = await call("kimi", "POST", f"/api/desk/{b1['label']}/reply", {"words": "yes"})
+        ck("the project's lead (ingest key) replies: 200", r.status_code == 200,
+           f"{r.status_code} {r.text}")
+
+        print("== the recorded decision ==")
+        b3 = await add("Shop: push for the record?", command="git push", station="shop-build-m1")
+        r = await call("lee", "POST", f"/api/desk/{b3['label']}/allow",
+                       {"words": WORDS, "scope": "project"})
+        dec = [x for x in store.list_decisions(None, True) if x["question"] == b3["question"]] \
+            if hasattr(store, "list_decisions") else []
+        ck("allowed by lee", r.status_code == 200, f"{r.status_code} {r.text}")
+        ck("the decision is the person's, made in the console",
+           bool(dec) and dec[-1].get("via") == "console" and (dec[-1].get("person") or {}).get("id") == pid["lee"],
+           dec[-1:] if dec else "no decision found")
+
+        print("== local ==")
+        b4 = await add("Shop: local push?", command="git push", station="shop-build-m1")
+        r = await call("root", "POST", f"/api/desk/{b4['label']}/allow",
+                       {"words": WORDS, "scope": "project"})
+        ck("the cell's own credential (local) allows an unaddressed item", r.status_code == 200,
+           f"{r.status_code} {r.text}")
+
+        print("== a private project is not there for an outsider ==")
+        r = await call("kim", "PATCH", f"/api/projects/{uid}", {"scope": "private"})
+        ck("(shop is private)", r.status_code == 200, f"{r.status_code} {r.text}")
+        b5 = await add("Shop: private question?")
+        r = await call("joe", "POST", f"/api/desk/{b5['label']}/reply", {"words": "yes"})
+        ck("a non-member gets 404, not 403", r.status_code == 404, f"{r.status_code} {r.text}")
 
 
 asyncio.run(main())
