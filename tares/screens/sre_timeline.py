@@ -508,13 +508,15 @@ def _feed_of(catalog, row: dict) -> str:
 
 
 def raw_screen(store, catalog, service: str = "", start=None, end=None, limit: int = PAGE,
-               now=None, hide=()) -> dict:
+               now=None, hide=(), exclude=None, skip_sources=()) -> dict:
     """The events behind the timeline, newest first: {rows: [{at, feed, text, fields}], count (all
-    of them in the range), more (count is past the limit)}."""
+    of them in the range), more (count is past the limit)}. `hide` is the caller's hidden project
+    ids; `exclude` and `skip_sources` are the event-level leave-outs of the raw routes."""
     limit = max(1, min(int(limit), RAW_MAX))
     sc = _Scope(store, catalog, service, start, end, now, hide)
-    rows, total = (store.service_events(sc.keys, sc.start, sc.end, limit, skip=sc.gone)
-                   if sc.keys else ([], 0))
+    skip = sorted(set(sc.gone) | set(skip_sources or ()))
+    rows, total = (store.service_events(sc.keys, sc.start, sc.end, limit, exclude=exclude,
+                                        skip_sources=skip) if sc.keys else ([], 0))
     out = []
     for r in rows:
         fields = {**r["labels"]}
@@ -547,4 +549,4 @@ def register(app, store, h, ctx):
                                to: str = "", limit: int = PAGE):
         """The events in a range (a window's raw {from, to}), newest first, with their fields."""
         return await asyncio.to_thread(run, raw_screen, service, from_, to, limit, None,
-                                       h.hidden_ids())
+                                       h.hidden_ids(), h.read_exclude(), h.hidden_sources())

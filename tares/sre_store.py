@@ -189,19 +189,22 @@ class SreStore:
                  "n10": int(r[4]), "n24": int(r[5]), "last": r[6]}
                 for r in rows if r[1] not in (None, "")]
 
-    def memory_notes(self, sources: list[str], per_key: int = 20) -> dict[str, list[tuple]]:
+    def memory_notes(self, sources: list[str], per_key: int = 20,
+                     exclude=None) -> dict[str, list[tuple]]:
         """{key: [(event_time, text, payload)]}, newest first, at most `per_key` for each key, of
         the events the agents wrote with remember() into the memory `sources` (TR-753). Events
-        live in DuckDB only, so this reads self.con under self._lock and joins nothing."""
+        live in DuckDB only, so this reads self.con under self._lock and joins nothing. `exclude`
+        (the caller's read_exclude) leaves out the notes of private projects the caller cannot see."""
         if not sources:
             return {}
         ph = ", ".join(["?"] * len(sources))
+        esql, eparams = self._exclude(exclude, sources)
         sql = ("SELECT key_value, event_time, text, payload FROM (SELECT key_value, event_time, "
                "text, payload, ROW_NUMBER() OVER (PARTITION BY key_value ORDER BY event_time DESC) "
-               f"AS rn FROM events WHERE source IN ({ph})) WHERE rn <= ? "
+               f"AS rn FROM events WHERE source IN ({ph}){esql}) WHERE rn <= ? "
                "ORDER BY key_value, event_time DESC")
         with self._lock:
-            rows = self.con.execute(sql, [*sources, int(per_key)]).fetchall()
+            rows = self.con.execute(sql, [*sources, *eparams, int(per_key)]).fetchall()
         out: dict[str, list[tuple]] = {}
         for key, at, text, payload in rows:
             out.setdefault(key, []).append((at, text, payload))
@@ -338,14 +341,15 @@ class SreStore:
             return {}
         return out if isinstance(out, dict) else {}
 
-    def service_events(self, services: list[str], since, until, limit: int,
-                       skip=()) -> tuple[list[dict], int]:
+    def service_events(self, services: list[str], since, until, limit: int, exclude=None,
+                       skip_sources=()) -> tuple[list[dict], int]:
         """The events of `services` that arrived in [since, until) (by ingest_time), newest first:
         ([{service, source, at, event_type, text, labels, payload}], how many there are in all).
         A service counts the services merged into it, the same names event_series_many counts.
         Events live in DuckDB only, so this reads self.con under self._lock and joins no state
-        table."""
-        names, spec = self._series_scope(list(dict.fromkeys(services)), skip)
+        table. `exclude` (the caller's read_exclude) leaves out the rows of private projects the
+        caller cannot see, and `skip_sources` the sources that belong only to those projects."""
+        names, spec = self._series_scope(list(dict.fromkeys(services)), skip_sources)
         every = sorted(set().union(*names.values())) if names else []
         if not spec or not every:
             return [], 0
@@ -354,6 +358,14 @@ class SreStore:
         inner = (f"SELECT source, {case} AS svc, ingest_time, event_type, text, labels, payload "
                  f"FROM events WHERE ingest_time >= ? AND ingest_time < ? AND source IN ({ph_s})")
         base = [*cparams, since, until, *sources]
+        skip = sorted(set(skip_sources or ()))
+        if skip:
+            inner += f" AND source NOT IN ({', '.join(['?'] * len(skip))})"
+            base += skip
+        esql, eparams = self._exclude(exclude, sources)
+        if esql:
+            inner += esql
+            base += eparams
         with self._lock:
             total = self.con.execute(
                 f"SELECT COUNT(*) FROM ({inner}) WHERE svc IN ({ph_n})", [*base, *every]

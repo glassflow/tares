@@ -2035,7 +2035,12 @@ def make_app() -> FastAPI:
         from .projects.engine import dependents
         if kind not in ("source", "trigger"):
             _err(ValueError("kind must be source or trigger"), 400)
-        return {"dependents": dependents(store, kind, name)}
+        hidden = _hidden_ids()
+        if hidden and (name in _hidden_sources(hidden) if kind == "source"
+                       else _owned_by_hidden("trigger", name, hidden)):
+            return {"dependents": []}   # a private project's object answers as one that is not there
+        return {"dependents": [d for d in dependents(store, kind, name)
+                               if not _owned_by_hidden(d["kind"], d["name"], hidden)]}
 
     def _delete_dependents(kind: str, name: str) -> list[str]:
         from .projects.engine import dependents
@@ -4295,7 +4300,8 @@ def make_app() -> FastAPI:
         if show not in ("worth", "all"):
             _err(ValueError('show is "worth" or "all"'))
         out = await asyncio.to_thread(goal_mod.cell_results, store, _scheduled(), limit=limit,
-                                      before=at, show=show, service=service)
+                                      before=at, show=show, service=service,
+                                      hide=_hidden_ids())
         await asyncio.to_thread(feedback_mod.with_answers, store, out["findings"], _who(request)[0])
         return out
 
@@ -4962,7 +4968,7 @@ def make_app() -> FastAPI:
         """The project uses a skill already on Tares (shared: an edit shows in every project
         that uses it)."""
         _skill_project(uid)
-        if not store.use_skill(uid, name):
+        if _owned_by_hidden("skill", name, _hidden_ids()) or not store.use_skill(uid, name):
             _err(KeyError(f"there is no skill named {name!r} on Tares"), 404)
         return _skill_or_404(uid, name)
 
@@ -5221,7 +5227,7 @@ def make_app() -> FastAPI:
     def use_project_doc(uid: str, doc_id: str):
         """The project includes a doc already on the cell (shared: an edit shows everywhere)."""
         _project_or_404(uid)
-        if not store.use_doc(uid, doc_id):
+        if _owned_by_hidden("doc", doc_id, _hidden_ids()) or not store.use_doc(uid, doc_id):
             _err(KeyError(f"there is no doc {doc_id!r} on Tares"), 404)
         return _doc_or_404(uid, doc_id)
 
@@ -5850,6 +5856,8 @@ def make_app() -> FastAPI:
         is_system=lambda request: _is_system(request),
         is_admin=lambda request: _is_admin(request),
         hidden_ids=lambda: _hidden_ids(), can_see=lambda p: _can_see(p),
+        read_exclude=lambda: _read_exclude(),
+        hidden_sources=lambda: _hidden_sources(_hidden_ids()),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
@@ -5901,7 +5909,7 @@ def make_app() -> FastAPI:
 
     def _incident_or_404(incident_id: str) -> dict:
         inc = store.get_incident(incident_id)
-        if inc is None:
+        if inc is None or inc.get("project") in _hidden_ids():   # a private project reads as no incident
             _err(KeyError(f"no incident {incident_id!r}"), 404)
         return inc
 
@@ -5919,7 +5927,8 @@ def make_app() -> FastAPI:
             except ValueError:
                 _err(ValueError("before must be a time such as 2026-10-01T12:00:00Z"))
         limit = max(1, min(int(limit), 200))
-        rows = store.list_incidents(state or None, service or None, limit, cut)
+        hidden = _hidden_ids()
+        rows = store.list_incidents(state or None, service or None, limit, cut, hide=hidden)
         notes = store.notes_of([r["id"] for r in rows])
         settings = store.service_settings()
         now = incidents_mod.clock()
@@ -5927,7 +5936,7 @@ def make_app() -> FastAPI:
                                                  settings=settings, now=now) for r in rows],
                 "next_before": (goal_mod._iso(rows[-1]["last_note_at"])
                                 if len(rows) == limit else None),
-                "counts": store.incident_counts(service or None)}
+                "counts": store.incident_counts(service or None, hide=hidden)}
 
     @app.get("/api/incidents/{incident_id}")
     def get_incident_route(incident_id: str):
@@ -5961,6 +5970,34 @@ def make_app() -> FastAPI:
     def _worth_out(counts: dict, mine) -> dict:
         return {"ok": True, "worth": {**counts, "mine": mine}}
 
+    def _hidden_agent():
+        """A test for a watcher only private projects the caller cannot see use; None when none is hidden.
+        Each watcher is looked up once per call."""
+        hidden = _hidden_ids()
+        if not hidden:
+            return None
+        known: dict = {}
+
+        def test(agent):
+            if agent not in known:
+                known[agent] = _owned_by_hidden("agent", agent, hidden)
+            return known[agent]
+        return test
+
+    def _run_visible_or_404(run_id: str) -> None:
+        """A run of a private project the caller cannot see reads as no run at all."""
+        hidden = _hidden_ids()
+        if not hidden:
+            return
+        uids = store.run_projects(run_id)
+        if uids:
+            gone = set(uids) <= hidden
+        else:   # a run with no project of its own follows the watcher that raised it
+            run = store.get_agent_run(run_id)
+            gone = bool(run) and _owned_by_hidden("agent", run["agent"], hidden)
+        if gone:
+            _err(LookupError(f"no run {run_id!r}"), 404)
+
     @app.put("/api/findings/{run_id}/worth")
     def put_worth_route(run_id: str, request: Request, body: dict = Body(...)):
         """{worth: true|false, note?}: the caller's answer on a result the watcher raised. Answering
@@ -5971,6 +6008,7 @@ def make_app() -> FastAPI:
             _err(ValueError("worth must be true or false"))
         if note is not None and (not isinstance(note, str) or len(note) > feedback_mod.NOTE_MAX):
             _err(ValueError(f"note must be text of at most {feedback_mod.NOTE_MAX} characters"))
+        _run_visible_or_404(run_id)
         who, name = _who(request)
         try:
             counts = feedback_mod.answer(store, run_id, worth, who, name, "console", note)
@@ -5985,6 +6023,7 @@ def make_app() -> FastAPI:
         """Take the caller's answer back."""
         if store.get_agent_run(run_id) is None:
             _err(LookupError(f"no run {run_id!r}"), 404)
+        _run_visible_or_404(run_id)
         store.clear_feedback(run_id, _who(request)[0])
         return _worth_out(feedback_mod.counts(store.feedback_for([run_id])[run_id]), None)
 
@@ -5992,7 +6031,8 @@ def make_app() -> FastAPI:
     def watcher_hit_rate_route(days: int = 30):
         """Per watcher, how many of the answers said it was worth raising, over the last `days`."""
         days = max(1, min(int(days), 365))
-        return {"watchers": feedback_mod.hit_rates(store, days)}
+        return {"watchers": feedback_mod.hit_rates(store, days, hide=_hidden_ids(),
+                                                           skip_agent=_hidden_agent())}
 
     @app.get("/api/feedback/export")
     def feedback_export_route(since: str = "", format: str = "json"):
@@ -6006,7 +6046,7 @@ def make_app() -> FastAPI:
                 cut = goal_mod._aware(datetime.fromisoformat(since.replace("Z", "+00:00")))
             except ValueError:
                 _err(ValueError("since must be a time such as 2026-10-01T12:00:00Z"))
-        rows = feedback_mod.export_rows(store, cut)
+        rows = feedback_mod.export_rows(store, cut, hide=_hidden_ids(), skip_agent=_hidden_agent())
         if format == "csv":
             return Response(feedback_mod.export_csv(rows), media_type="text/csv")
         return {"feedback": rows}
@@ -6603,6 +6643,11 @@ def make_app() -> FastAPI:
         except OSError:
             disk_total = disk_free = None
         st = storage_state(store, DB_PATH)
+        hidden_src = _hidden_sources(_hidden_ids())   # a private project's source is not counted
+        if hidden_src:
+            gone = [x for x in u["sources"] if x["name"] in hidden_src]
+            u = {**u, "sources": [x for x in u["sources"] if x["name"] not in hidden_src],
+                 "events": u["events"] - sum(x["events"] for x in gone)}
         return {**u, "disk_total": disk_total, "disk_free": disk_free,
                 "max_bytes": st["max_bytes"], "max_bytes_source": st["max_bytes_source"],
                 "pct_used": st["pct_used"], "ingest_paused": st["paused"]}
