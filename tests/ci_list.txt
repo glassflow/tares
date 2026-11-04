@@ -74,6 +74,7 @@ test_grants_teams
 test_handoffs
 test_homebrew_formula
 test_http_poll
+test_incident_backfill_bulk
 test_incidents
 test_include_payload
 test_ingest_bypass_cooldown

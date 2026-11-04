@@ -11,6 +11,7 @@ tares/builtin_agents.py and runs on AI SRE cells only.
 from __future__ import annotations
 
 import threading
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from . import goal
@@ -19,6 +20,7 @@ from .envelope import now_utc
 BACKFILL_SETTING = "sre.incidents_backfilled"
 BACKFILL_VERSION = "2"        # bump when the rule for "is a note" or for joining changes
 SELF_RESOLVE_AFTER = timedelta(hours=24)
+BACKFILL_PAGE = 2000           # runs the backfill reads at a time
 SWEEP_PAGE = 500              # open incidents the sweep reads at a time
 BEFORE_TRACKING_AFTER = timedelta(days=7)
 DEFAULT_COOLDOWN = 3600.0     # seconds, when neither a handoff nor a trigger says
@@ -79,19 +81,35 @@ def service_of(store, catalog, key: str, label: str | None, at=None) -> str:
     return sre.canonical(found[0][0], settings) if found else sre.canonical(key, settings)
 
 
-def cooldown_for(store, catalog, run: dict) -> float:
+def cooldown_for(store, catalog, run: dict, known: dict | None = None) -> float:
     """Seconds a later note on the service still joins this note's incident: the cooldown of the
-    handoff that started the run, else its trigger's cooldown, else an hour."""
+    handoff that started the run, else its trigger's cooldown, else an hour. `known` carries what
+    a caller that files many notes has read in bulk ("parents": run id -> agent, "projects": run
+    id -> projects, "handoffs": a dict this fills), so each note costs no query of its own."""
     from .config import parse_duration
+    known = known or {}
     try:
         if run.get("woken_by") == "handoff" and run.get("parent_run_id"):
-            parent = store.get_agent_run(run["parent_run_id"])
-            if parent:
-                projects = (store.run_projects(run["id"]) if run.get("id") else []) \
-                    or [run.get("project")]
-                found = [h for p in projects if p
-                         for h in store.list_handoffs(project=p, from_agent=parent["agent"])
-                         if h["agent"] == run.get("agent")]
+            if "parents" in known:
+                parent_agent = known["parents"].get(run["parent_run_id"])
+            else:
+                parent = store.get_agent_run(run["parent_run_id"])
+                parent_agent = parent["agent"] if parent else None
+            if parent_agent:
+                if "projects" in known:
+                    own = known["projects"].get(run.get("id"), []) if run.get("id") else []
+                else:
+                    own = store.run_projects(run["id"]) if run.get("id") else []
+                projects = own or [run.get("project")]
+                memo = known.setdefault("handoffs", {})
+                found = []
+                for p in projects:
+                    if not p:
+                        continue
+                    if (p, parent_agent) not in memo:
+                        memo[(p, parent_agent)] = store.list_handoffs(project=p,
+                                                                      from_agent=parent_agent)
+                    found += [h for h in memo[(p, parent_agent)] if h["agent"] == run.get("agent")]
                 if found:
                     return max(parse_duration(h.get("cooldown") or "30m") for h in found)
         trig = next((t for t in catalog.triggers if t.name == run.get("trigger")), None)
@@ -287,7 +305,11 @@ def backfill(store, catalog=None, now=None) -> int:
     """Give every past note an incident, with the join rule live notes follow, in time order.
     Incidents whose last note is older than 7 days are stored resolved as before_tracking, newer
     ones stay open. Runs when the stored rule version is not BACKFILL_VERSION; running it again
-    does nothing. Writes the incident tables only and uses no model. Returns the notes filed."""
+    does nothing. Writes the incident tables only and uses no model. Returns the notes filed.
+
+    It runs at the start of a cell, so it reads the runs it needs in a few queries, decides every
+    join in memory and writes the result in batches (TR-897): a cell with thousands of findings
+    starts in seconds, where one write per note took minutes."""
     from . import sre
     from .config import catalog_from_db, trigger_entity_label
     if store.get_setting(BACKFILL_SETTING) == BACKFILL_VERSION:
@@ -297,9 +319,12 @@ def backfill(store, catalog=None, now=None) -> int:
     store.delete_backfilled_incidents()
     roles = sre.roles(store, catalog, include_paused=True)
     triggers = {t.name: t for t in catalog.triggers}
+    # only runs that can be a note: the same first checks as is_note, in SQL
+    maybe = ("status = 'ok' AND outcome = 'finding' AND COALESCE(practice, FALSE) = FALSE "
+             "AND finding IS NOT NULL AND finding <> ''")
     notes, offset = [], 0
     while True:   # newest first, a page at a time
-        page = store.list_agent_runs(None, limit=500, offset=offset)
+        page = store.list_agent_runs(None, limit=BACKFILL_PAGE, offset=offset, where_sql=maybe)
         if not page:
             break
         offset += len(page)
@@ -307,11 +332,24 @@ def backfill(store, catalog=None, now=None) -> int:
             if r.get("started_at") is not None and is_note(store, catalog, {"name": r["agent"]},
                                                            r, roles):
                 notes.append(r)
+        if len(page) < BACKFILL_PAGE:
+            break
     notes.sort(key=lambda r: (_aware(r["started_at"]), r["id"]))
-    seen, made, filed = {}, [], 0
+    filed_already = store.filed_run_ids()
+    notes = [r for r in notes if r["id"] not in filed_already]   # filed by a pass that is kept
+    known = {"parents": store.agents_of_runs(r["parent_run_id"] for r in notes
+                                             if r.get("woken_by") == "handoff"),
+             "projects": store.projects_of_runs(r["id"] for r in notes)}
+    # incidents a note may join, per service: the kept ones (a live one, a person's), apart,
+    # and the ones this pass makes, in the order of their last note
+    kept: dict[str, list[dict]] = {}
+    for inc in store.kept_open_incidents():
+        inc = {**inc, "opened_at": _aware(inc["opened_at"]), "last_note_at": _aware(inc["last_note_at"]),
+               "bumped": False}
+        kept.setdefault(inc["service"], []).append(inc)
+    fresh: dict[str, dict[str, dict]] = {}    # service -> {incident id: incident}, oldest touch first
+    made, joined, log, seen = [], [], [], {}
     for r in notes:
-        if store.incident_for_run(r["id"]):
-            continue   # filed by an earlier pass that is kept
         trig = triggers.get(r.get("trigger"))
         label = trigger_entity_label(trig, catalog.sources) if trig is not None else None
         at = _aware(r["started_at"])
@@ -319,27 +357,45 @@ def backfill(store, catalog=None, now=None) -> int:
         if memo not in seen:
             seen[memo] = service_of(store, catalog, r["key"], label, now)
         service = seen[memo]
-        cooldown = cooldown_for(store, catalog, r)
-        with _LOCK:
-            # an incident that opened after this note is not its incident (a live one, on a rerun)
-            inc = store.open_incident_for(service, at - timedelta(seconds=cooldown), until=at)
-            if inc:
-                store.add_incident_note(inc["id"], r["id"], at)
-                store.log_incident(inc["id"], "note_joined", None, r["agent"], "backfill", at)
-            else:
-                inc = store.create_incident(service, r.get("project"), at)
-                store.add_incident_note(inc["id"], r["id"], at)
-                store.log_incident(inc["id"], "opened", None, r["agent"], "backfill", at)
-                made.append(inc["id"])
-        filed += 1
-    for iid in made:
-        inc = store.get_incident(iid)
-        if inc and inc["state"] == "open" and _aware(inc["last_note_at"]) < now - BEFORE_TRACKING_AFTER:
-            store.set_incident_state(iid, "resolved", None, None, "backfill",
-                                     at=_aware(inc["last_note_at"]), resolution="before_tracking",
-                                     expect="open")
+        since = at - timedelta(seconds=cooldown_for(store, catalog, r, known))
+        # the newest incident of the service with a note inside the cooldown that opened no later
+        # than this note (one that opened after it is a live one, on a rerun: not its incident)
+        best = None
+        for inc in kept.get(service, ()):
+            if inc["last_note_at"] >= since and inc["opened_at"] <= at \
+                    and (best is None or inc["last_note_at"] > best["last_note_at"]):
+                best = inc
+        if fresh.get(service):   # touched last = newest last note, so only that one can win
+            newest = next(reversed(fresh[service].values()))
+            if newest["last_note_at"] >= since and (
+                    best is None or newest["last_note_at"] > best["last_note_at"]):
+                best = newest
+        if best is not None:
+            if best["last_note_at"] < at:
+                best["last_note_at"] = at
+                best["bumped"] = True
+                if best["id"] in fresh.get(service, {}):
+                    fresh[service].pop(best["id"])
+                    fresh[service][best["id"]] = best      # touched last
+            joined.append((r["id"], best["id"], at))
+            log.append((best["id"], at, "note_joined", "backfill", r["agent"]))
+        else:
+            inc = {"id": "inc_" + uuid.uuid4().hex[:10], "service": service,
+                   "project": r.get("project"), "state": "open", "opened_at": at,
+                   "last_note_at": at, "resolved_at": None, "resolution": None, "bumped": False}
+            made.append(inc)
+            fresh.setdefault(service, {})[inc["id"]] = inc
+            joined.append((r["id"], inc["id"], at))
+            log.append((inc["id"], at, "opened", "backfill", r["agent"]))
+    for inc in made:    # long quiet ones are from before incidents were tracked
+        if inc["last_note_at"] < now - BEFORE_TRACKING_AFTER:
+            inc.update(state="resolved", resolved_at=inc["last_note_at"],
+                       resolution="before_tracking")
+            log.append((inc["id"], inc["last_note_at"], "resolved", "backfill", None))
+    bumped = [(i["id"], i["last_note_at"]) for lst in kept.values() for i in lst if i["bumped"]]
+    store.write_backfill(made, joined, log, bumped)
     store.set_setting(BACKFILL_SETTING, BACKFILL_VERSION)
-    return filed
+    return len(joined)
 
 
 # ── how an incident reads ────────────────────────────────────────────────────
