@@ -6,6 +6,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Project health: when an agent's last run failed, the project page says so ("watcher could not
+  finish its last run (5 min ago): the model provider was busy or over its rate limit (HTTP
+  429)"), with a link to the agent, or to the model provider when it refused the key. Before, a
+  failed run added nothing to "What the agents found" and the page read as a quiet project.
+  Practice runs and capped runs do not raise it, and the next finished run clears it.
 - The spec skill brings in the area owners. It reads `list_areas`, asks the owner of a repo with
   `ask_area` instead of guessing, folds the answers into the spec, gives every ticket its `repo`
   (now also in a single-repo project, so the sign-off check sees it) and assigns it to that repo's
@@ -200,6 +205,11 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- A busy model provider (HTTP 429, 500, 502, 503, 504 or Anthropic's 529) is asked again up to
+  3 times, after 1 s and 2 s or after its `Retry-After` when that is 20 s or less, before the run
+  fails. Any other error still fails at once. This covers agent runs on Anthropic and every
+  OpenAI-compatible provider (xAI's "resource exhausted" 429 among them); Ask's streamed answers
+  are unchanged.
 - Plugin: the station and spec skills keep working against a Tares before 1.56. That Tares has no
   `my_work`, area or people tools, so the orchestrator there works from `crew_projects` and
   `list_tickets` as before, and the spec skips area owners and sign-offs. `tares factory crew up`

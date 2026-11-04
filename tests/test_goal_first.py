@@ -742,6 +742,52 @@ async def main():
         h = (await cx.get(f"/api/projects/{a}/health")).json()
         eq("working", (h["state"], h["message"], h["issues"]),
            ("working", "Receiving from 1 source, last event just now. 2 agents ready.", []))
+
+        print("== a failed run is a health issue, not an empty page ==")
+        mine = []
+
+        def run(status, error=None, practice=False):   # each newer than every run before it
+            rid = f"run_health_{len(mine)}"
+            store.start_agent_run(rid, "checkout-triage", "t", "d", "k", "h", project=a,
+                                  practice=practice)
+            store.finish_agent_run(rid, status, error=error)
+            # a timestamp from here, not SQL date arithmetic: the suite also runs on Postgres
+            at = datetime.now(timezone.utc) + timedelta(seconds=len(mine) + 1)
+            store.sc.execute("UPDATE agent_runs SET started_at = ? WHERE id = ?", [at, rid])
+            mine.append(rid)
+
+        run("failed", 'xai 429: {"code":"resource-exhausted","error":"capacity"}')
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        eq("the provider was busy: attention, and it says it tries again", (h["state"], h["issues"]), (
+            "attention", [{"severity": "warning",
+                           "message": "checkout-triage could not finish its last run (just now): "
+                                      "the model provider was busy or over its rate limit (HTTP "
+                                      "429). It tries again the next time it wakes.",
+                           "fix": "See the agent", "view": "agent:checkout-triage"}]))
+        eq("the banner leads with it", h["message"], h["issues"][0]["message"])
+        run("failed", "openai 401: invalid api key")
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        eq("a refused key points at the providers and promises nothing",
+           [(i["message"], i["fix"], i["view"]) for i in h["issues"]],
+           [("checkout-triage could not finish its last run (just now): the model provider "
+             "refused the key (HTTP 401).", "Check the model provider", "settings:providers")])
+        run("ok", practice=True)
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        ck("a practice run that went through does not clear it", len(h["issues"]) == 1, str(h["issues"]))
+        run("capped", "limit")
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        ck("nor does a capped run, which never started", len(h["issues"]) == 1, str(h["issues"]))
+        run("ok")
+        h = (await cx.get(f"/api/projects/{a}/health")).json()
+        eq("the next run that finishes clears it", (h["state"], h["issues"]), ("working", []))
+        eq("plain words for other errors", G._plain_run_error("RuntimeError: tool read crashed"),
+           ("tool read crashed", False))
+        eq("a 5xx passes", G._plain_run_error("anthropic 503: upstream"),
+           ("the model provider answered with an error (HTTP 503)", True))
+        no_em_dash("health with a failed run", h)
+        for rid in mine:
+            store.sc.execute("DELETE FROM run_projects WHERE run_id = ?", [rid])
+            store.sc.execute("DELETE FROM agent_runs WHERE id = ?", [rid])
         catalog = runtime.catalog
         project = store.get_project(a)
         later = datetime.now(timezone.utc) + timedelta(hours=3)

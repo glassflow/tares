@@ -23,6 +23,7 @@ means one class here; the loops, tracing and metering do not change (TR-299, TR-
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any, AsyncIterator
@@ -37,6 +38,49 @@ USAGE_FIELDS = ("input_tokens", "output_tokens",
 
 class ModelError(RuntimeError):
     """The provider answered with an error status. The message names the provider and status."""
+
+
+# A busy provider (a rate limit, xAI's "resource exhausted", Anthropic's 529, a gateway hiccup)
+# answers one of these, and the same request a few seconds later usually goes through. Any other
+# error (a refused key, an unknown model, a malformed body) fails the same way again, so it is
+# raised at once.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
+RETRY_ATTEMPTS = 3
+# A provider asking to wait longer than this is out for longer than one run should hold its
+# slot; the run fails with the provider's own error and the next wake tries again.
+RETRY_AFTER_CAP = 20.0
+_sleep = asyncio.sleep      # the tests swap it so a retry does not cost real seconds
+
+
+def retry_wait(status: int, headers, attempt: int) -> float | None:
+    """Seconds to wait before sending the request again, or None to stop: the status is not
+    one a busy provider answers, the attempts are used up, or Retry-After asks for longer than
+    RETRY_AFTER_CAP. Without a usable Retry-After the waits are 1 s, then 2 s."""
+    if status not in RETRY_STATUSES or attempt >= RETRY_ATTEMPTS - 1:
+        return None
+    asked = (headers.get("retry-after") or "").strip()
+    try:
+        secs = float(asked)
+    except ValueError:      # absent, or an HTTP date: our own backoff
+        return float(2 ** attempt)
+    return max(0.0, secs) if secs <= RETRY_AFTER_CAP else None
+
+
+async def post_retrying(cx: httpx.AsyncClient, url: str, *, headers: dict, json: dict,
+                        label: str) -> httpx.Response:
+    """POST, sending it again while the provider is busy (retry_wait). Returns the last
+    response, an error status included; the caller raises on it."""
+    attempt = 0
+    while True:
+        r = await cx.post(url, headers=headers, json=json)
+        wait = retry_wait(r.status_code, r.headers, attempt)
+        if wait is None:
+            if attempt and r.status_code >= 400:
+                print(f"model: {label} still answered {r.status_code} after {attempt + 1} tries")
+            return r
+        print(f"model: {label} answered {r.status_code}, trying again in {wait:g} s")
+        await _sleep(wait)
+        attempt += 1
 
 
 class ModelUnavailable(RuntimeError):
@@ -213,7 +257,8 @@ class AnthropicProvider(Provider):
         with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
                                  provider=self.kind, tools=tools) as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
-                r = await cx.post(f"{self.base_url}/v1/messages", headers=self.headers, json=body)
+                r = await post_retrying(cx, f"{self.base_url}/v1/messages",
+                                        headers=self.headers, json=body, label="anthropic")
             if r.status_code >= 400:
                 raise ModelError(f"anthropic {r.status_code}: {r.text[:300]}")
             msg = r.json()
@@ -381,8 +426,8 @@ class OpenAIProvider(Provider):
         with _tracing.generation(tracer, model, body["messages"], {"max_tokens": max_tokens},
                                  provider=self.kind, tools=tools) as gen:
             async with httpx.AsyncClient(timeout=self.timeout) as cx:
-                r = await cx.post(f"{self.base_url}/chat/completions", headers=self.headers,
-                                  json=body)
+                r = await post_retrying(cx, f"{self.base_url}/chat/completions",
+                                        headers=self.headers, json=body, label=self.label)
             if r.status_code >= 400:
                 raise ModelError(f"{self.label} {r.status_code}: {r.text[:300]}")
             reply = self.parse(r.json(), r.headers.get("x-litellm-response-cost"))
