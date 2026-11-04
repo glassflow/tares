@@ -100,6 +100,9 @@ def _tickets_in(tickets: list[dict], repo: str) -> list[dict]:
     return out
 
 
+SIGNOFF_TITLES = 20   # ticket titles a sign-off action carries; `more_tickets` counts the rest
+
+
 def signoff_items(t: Team) -> list[dict]:
     handed = set(t.store.handed_over_projects())
     out = []
@@ -129,7 +132,8 @@ def signoff_items(t: Team) -> list[dict]:
                 from_=lead, id=f"signoff:{p['id']}:{r['repo']}",
                 actions=[{"label": "Sign off", "primary": True, "do": "sign_off",
                           "project": p["id"], "repo": r["repo"],
-                          "tickets": [tk["title"] for tk in mine[:20]]},
+                          "tickets": [tk["title"] for tk in mine[:SIGNOFF_TITLES]],
+                          **({"more_tickets": n - SIGNOFF_TITLES} if n > SIGNOFF_TITLES else {})},
                          {"label": "Read the ticket" if n == 1 else f"Read the {n} tickets",
                           "primary": False, "href": f"/projects/{p['id']}"}]))
     return out

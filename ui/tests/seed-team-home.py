@@ -43,7 +43,7 @@ for area, who in (("acme/api", "kim"), ("acme/web", "alex")):
 
 shop = call("POST", "/api/projects", {"template": "custom", "name": "Shop", "objects": [],
                                       "kind": "software_factory"}, keys["kim"])["id"]
-call("POST", f"/api/projects/{shop}/tickets", {"title": "Web page", "repo": "acme/web"}, keys["kim"])
+web_ticket = call("POST", f"/api/projects/{shop}/tickets", {"title": "Web page", "repo": "acme/web"}, keys["kim"])
 done = call("POST", f"/api/projects/{shop}/tickets", {"title": "Api route", "repo": "acme/api"}, keys["kim"])
 call("POST", f"/api/projects/{shop}/tickets/{done['id']}/stage", {"stage": "merged", "reason": "seeded"}, keys["kim"])
 
@@ -65,8 +65,9 @@ for name, body in {
     "allow": {"question": "shop-build-m1 was refused a command. Allow it?", "recommendation": "shop-build-m1 may read the status of a commit",
               "why": "it needs it to wait for CI", "project": shop, "station": "shop-build-m1",
               "command": "gh api repos/acme/web/statuses/abc", "to": people["alex"]},
-    "options": {"question": "Which colour for the links?", "options": ["blue", "green"], "recommendation": "blue",
-                "why": "it reads best", "project": shop, "to": people["alex"]},
+    "options": {"question": "Which colour for the links?", "options": ["blue", "green", "b!"], "recommendation": "blue",
+                "why": "it reads best", "project": shop, "to": people["alex"],
+                "tickets": [f"T{web_ticket['number']}"]},
     "long": {"question": LONG, "recommendation": "the account", "why": "it follows the customer",
              "project": shop, "to": people["alex"]},
 }.items():

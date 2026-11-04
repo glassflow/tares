@@ -100,11 +100,17 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const token = who === "solo" ? null : ids.keys[who];
       await ctx.addInitScript((t) => { try { if (t) localStorage.setItem("tares_token", t); } catch { /* blocked */ } }, token);
       const page = await ctx.newPage();
-      const ctl = { fail: false, hold: null, reads: 0, posts: [] };
+      const ctl = { fail: false, hold: null, reads: 0, posts: [], more: 0 };
       await page.route(/\/api\/home(\?|$)/, async (route) => {
         ctl.reads++;
         if (ctl.hold) await ctl.hold;
         if (ctl.fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
+        if (ctl.more) {   // a sign-off over more tickets than the daemon lists by title
+          const res = await route.fetch();
+          const data = await res.json();
+          for (const it of data.waiting_for_you || []) for (const a of it.actions || []) if (a.do === "sign_off") a.more_tickets = ctl.more;
+          return route.fulfill({ response: res, json: data });
+        }
         return route.continue();
       });
       page.on("request", (req) => { if (req.method() === "POST" && new URL(req.url()).pathname.startsWith("/api/")) ctl.posts.push({ path: new URL(req.url()).pathname, body: req.postData() }); });
@@ -133,8 +139,10 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       {
         const { ctx, page, ctl } = await open("alex", width);
         ctl.fail = true;
+        const oneRead = expectOneCall(page, "/api/home");
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home-error").waitFor();
+        await oneRead(ck, t("error"));
         await shot(page, "error", width);
         await checkWords(page, ck, t("error"));
         ck(t("a first read that fails offers Retry and shows no rows"), (await page.getByRole("button", { name: "Retry" }).count()) === 1
@@ -143,9 +151,11 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       }
       {
         const { ctx, page } = await open("alex", width);
+        const oneRead = expectOneCall(page, "/api/home");
         await page.goto(`${BASE}/`, { waitUntil: "load" });
         await page.getByTestId("factory-home").waitFor();
         await settle(page);
+        await oneRead(ck, t("three people"));
         const rows = page.getByTestId("waiting-row");
         ck(t("seven things wait for Alex"), (await rows.count()) === 7, String(await rows.count()));
         const senders = await rows.evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="waiting-from"]')?.getAttribute("aria-label")));
@@ -279,6 +289,48 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     }
 
     // ── acting, as Alex at 1440 ──
+    // ── F6: a sign-off over more tickets than the daemon lists by title says how many more ──
+    {
+      const { ctx, page, ctl } = await open("alex", 1440);
+      const t = (s) => `more tickets: ${s}`;
+      ctl.more = 3;
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await settle(page);
+      await row(page, "Kim cannot hand the project").getByRole("button", { name: "Sign off" }).click();
+      const sd = page.getByTestId("signoff-dialog");
+      await sd.waitFor();
+      ck(t("the box lists the titles and then says 'and 3 more'"), (await sd.getByTestId("signoff-more").count()) === 1
+         && (await sd.getByTestId("signoff-more").innerText()).trim() === "and 3 more", await sd.getByTestId("signoff-tickets").innerText());
+      await checkWords(page, ck, t("sign-off with more"));
+      await ctx.close();
+    }
+    // ── F7: in a sample, a box opens and confirming it says nothing was sent ──
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
+      const page = await ctx.newPage();
+      const posts = [];
+      page.on("request", (req) => { if (req.method() !== "GET" && new URL(req.url()).pathname.startsWith("/api/")) posts.push(req.url()); });
+      const t = (s) => `sample: ${s}`;
+      await page.goto(`${BASE}/?sample=threePeople`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await settle(page);
+      const note = page.getByText("This is a sample, so nothing was sent.");
+      await row(page, "project-x").filter({ hasText: "Sign-off" }).getByRole("button", { name: "Sign off" }).click();
+      const sd = page.getByTestId("signoff-dialog");
+      ck(t("Sign off opens its box"), await sd.waitFor({ timeout: 3000 }).then(() => true, () => false));
+      await sd.getByTestId("signoff-confirm").click();
+      await note.first().waitFor({ timeout: 3000 }).catch(() => {});
+      ck(t("confirming says nothing was sent, and the box closes"), (await note.count()) >= 1 && (await sd.count()) === 0, String(await note.count()));
+      ck(t("the row stays and the cell was not asked to change anything"), (await row(page, "project-x").filter({ hasText: "Sign-off" }).count()) === 1 && posts.length === 0, JSON.stringify(posts));
+      await note.first().waitFor({ state: "detached", timeout: 15000 }).catch(() => {});   // let the first one go, so the next is its own
+      await row(page, "Try migrations on staging").getByRole("button", { name: "Agree" }).click();
+      await note.first().waitFor({ timeout: 3000 }).catch(() => {});
+      ck(t("Agree says so too and sends nothing"), (await note.count()) >= 1 && posts.length === 0, JSON.stringify(posts));
+      await checkWords(page, ck, t("after a sample action"));
+      await ctx.close();
+    }
     {
       const { ctx, page, ctl } = await open("alex", 1440);
       const t = (s) => `acts: ${s}`;
@@ -313,12 +365,20 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const optPanel = colour.getByTestId("answer-panel");
       await optPanel.waitFor();
       ck(t("a question with options shows one button each"), (await optPanel.getByRole("button", { name: "blue", exact: true }).count()) === 1
-         && (await optPanel.getByRole("button", { name: "green", exact: true }).count()) === 1 && (await optPanel.getByTestId("answer-text").count()) === 0);
+         && (await optPanel.getByRole("button", { name: "green", exact: true }).count()) === 1 && (await optPanel.getByRole("button", { name: "b!", exact: true }).count()) === 1
+         && (await optPanel.getByTestId("answer-text").count()) === 0);
       ck(t("a crew question can stand for next time"), (await optPanel.getByTestId("answer-standing").count()) === 1);
-      await optPanel.getByRole("button", { name: "green", exact: true }).click();
+      await optPanel.getByTestId("answer-standing").click();
+      await optPanel.getByRole("button", { name: "b!", exact: true }).click();
       await colour.waitFor({ state: "detached" });
       const decided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which colour for the links/.test(d.question));
-      ck(t("the option clicked is the recorded answer, made in the console"), !!decided && decided.words === "green" && decided.via === "console", JSON.stringify(decided));
+      ck(t("the option clicked is the recorded answer, made in the console"), !!decided && decided.via === "console", JSON.stringify(decided));
+      const replyPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
+      ck(t("F5, F3: the option clicked is sent as the choice, with its position as the words"), !!replyPost && JSON.parse(replyPost.body || "{}").choice === "b!" && JSON.parse(replyPost.body || "{}").words === "C", JSON.stringify(replyPost));
+      ck(t("F5, F3: the daemon recorded the option clicked, not the one a look-alike letter names"), !!decided && decided.choice === "b!", JSON.stringify(decided));
+      const stood = (await api("GET", `/api/grants?project=${ids.project}`, undefined, ids.keys.kim)).body;
+      const stoodWords = (stood.grants || stood).map((g) => g.words);
+      ck(t("F5: a standing option click keeps the option text as the grant, never its letter"), !!decided && decided.standing === true && stoodWords.includes("b!") && !stoodWords.includes("C"), JSON.stringify(stoodWords));
       const desk = (await api("GET", "/api/desk?state=answered")).body.desk;
       ck(t("the desk item is answered"), desk.some((d) => d.label === ids.desk.options), JSON.stringify(desk.map((d) => d.label)));
       ck(t("five remain"), (await rows.count()) === 5, String(await rows.count()));
@@ -333,6 +393,28 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       if (SHOTS) await shot(page, "sign-off-dialog", 1440);
       await sd.getByRole("button", { name: "Cancel" }).click();
       await sd.waitFor({ state: "detached" });
+
+      // F14, F8: Kim gives acme/web to Lee while the page is open; the daemon then refuses Alex's sign-off (403)
+      const moved = await api("PUT", "/api/areas/acme/web", { person_id: ids.people.lee }, ids.keys.kim);
+      ck(t("acme/web has a new owner, Lee, and the page still lists the sign-off"), moved.status === 200 && (await so.count()) === 1, JSON.stringify(moved));
+      ctl.posts.length = 0;
+      await so.getByRole("button", { name: "Sign off" }).click();
+      await sd.waitFor();
+      await sd.getByTestId("signoff-confirm").click();
+      const derr = sd.getByTestId("dialog-error");
+      await derr.waitFor({ timeout: 5000 }).catch(() => {});
+      const derrText = (await derr.count()) ? (await derr.innerText()).trim() : "";
+      ck(t("F14: a non-owner is told so in the box, in the daemon's words"), /Lee's: only the area owner signs off/.test(derrText), derrText);
+      ck(t("F14: the box stays open, the row stays and nothing was signed off"), (await sd.count()) === 1 && (await so.count()) === 1
+         && ctl.posts.some((x) => x.path === `/api/projects/${ids.project}/signoffs`), JSON.stringify(ctl.posts));
+      ck(t("F8: one alert on the page while the box is open, not a second one under the row"), (await page.locator('[role="alert"]').count()) === 1, String(await page.locator('[role="alert"]').count()));
+      await checkWords(page, ck, t("sign-off refusal"));
+      await sd.getByRole("button", { name: "Cancel" }).click();
+      await sd.waitFor({ state: "detached" });
+      ck(t("F8: closing the box leaves the page without an alert"), (await page.locator('[role="alert"]').count()) === 0, String(await page.locator('[role="alert"]').count()));
+      const back = await api("PUT", "/api/areas/acme/web", { person_id: ids.people.alex }, ids.keys.kim);
+      ck(t("Kim gives acme/web back to Alex"), back.status === 200, JSON.stringify(back));
+
       await so.getByRole("button", { name: "Sign off" }).click();
       await sd.waitFor();
       await sd.getByTestId("signoff-confirm").click();
@@ -482,9 +564,11 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
       const { ctx, page } = await open("alex", width);
+      const oneRead = expectOneCall(page, "/api/home");
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
+      await oneRead(ck, t("long text"));
       ck(t("a long question wraps and never pushes the page wider"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
       await shot(page, "long-text", width);
       await checkWords(page, ck, t("long text"));
@@ -495,9 +579,11 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
       const { ctx, page } = await open("alex", width);
+      const oneRead = expectOneCall(page, "/api/home");
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
+      await oneRead(ck, t("many items"));
       const rows = page.getByTestId("waiting-row");
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="waiting-row"]').length >= 8, null, { timeout: 4000 }).catch(() => {});
       ck(t("a long list shows eight rows and Show all"), (await rows.count()) === 8 && (await page.getByRole("button", { name: /Show all/ }).count()) === 1,
@@ -558,6 +644,13 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await shot(page, "waiting-on-dialog", width);
       await page.getByRole("button", { name: "Cancel" }).click();
       ck(t("Cancel closes the box"), (await page.getByTestId("handover-dialog").count()) === 0);
+      await page.getByRole("button", { name: "Hand over anyway" }).first().click();
+      await page.getByTestId("handover-dialog").waitFor();
+      await page.getByTestId("handover-reason").fill("Kim is out until Monday, so the ticket should not wait.");
+      await confirm.click();
+      const sampleNote = page.getByText("This is a sample, so nothing was sent.");
+      await sampleNote.first().waitFor({ timeout: 3000 }).catch(() => {});
+      ck(t("F7: confirming a hand-over in a sample says nothing was sent, and the box closes"), (await sampleNote.count()) >= 1 && (await page.getByTestId("handover-dialog").count()) === 0, String(await sampleNote.count()));
       await ctx.close();
     }
     // ── Projects, from the sample states: Mine and Team, the lock, the lead line and the hidden line ──

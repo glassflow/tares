@@ -213,6 +213,18 @@ async def main():
         r = await call("alex", "POST", "/api/grants/G999/decline", {})
         ck("an unknown grant: 404", r.status_code == 404, r.text)
 
+        print("== a standing click on an option keeps the option, not its letter ==")
+        d3b = await add("Shop: which may builders do?", tickets=[t_web],
+                        options=["Builders may merge to web", "Builders may deploy web previews"])
+        r = await reply("kim", d3b, {"words": "B", "choice": "Builders may deploy web previews",
+                                     "standing": True})
+        out = r.json() if r.status_code == 200 else {}
+        g4 = out.get("grant") or {}
+        ck("the grant says the option, not 'B'", r.status_code == 200
+           and g4.get("words") == "Builders may deploy web previews", r.text)
+        ck("the decision keeps the choice", (out.get("decision") or {}).get("choice")
+           == "Builders may deploy web previews", r.text)
+
         print("== assumptions: keep or overturn every one ==")
         as_({**keys["alex"], **STATION})
         a1 = json.loads(await mf.assume("Which db?", "sqlite", "small", tickets=[t_web],

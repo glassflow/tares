@@ -772,6 +772,15 @@ async def main():
                            person_id=pid["kim"])
         ck("once it is handed over, nothing is owed on it", not any(
             i["project"]["id"] == second for i in by_kind(await home("alex")).get("signoff", [])))
+        big = await make_project("kim", "Big shop")
+        for n in range(22):
+            await ticket("kim", big, f"Page {n:02d}", "acme/web")
+        so = next((i for i in by_kind(await home("alex")).get("signoff", []) if i["project"]["id"] == big), {})
+        act = (so.get("actions") or [{}])[0]
+        ck("a sign-off over many tickets lists twenty titles and counts the rest",
+           len(act.get("tickets", [])) == 20 and act.get("more_tickets") == 2, act)
+        store.set_handover(big, [{"path": None, "name": "acme/web"}], None, "kim", now_utc(),
+                           person_id=pid["kim"])
         busy = await make_project("kim", "Busy")
         await ticket("kim", busy, "In flight", "acme/api", stage="doing", status="started")
         mark = lambda kind: [{"project": {"id": busy}, "kind": kind}]
