@@ -338,7 +338,7 @@ def register(app, store, h, ctx):
                                     for s in store.incident_services(hide=hidden)}),
                 "next_before": next_before, "quiet_checks_words": quiet_words(quiet)}
 
-    def chart_of(inc: dict, now, settings: dict) -> dict:
+    def chart_of(inc: dict, now, settings: dict, hidden=()) -> dict:
         end = _aware(inc["resolved_at"]) + CHART_TAIL if inc["state"] == "resolved" and inc["resolved_at"] else now
         end = min(end, now)
         start = max(_aware(inc["opened_at"]) - CHART_LEAD, end - CHART_MAX)
@@ -357,7 +357,7 @@ def register(app, store, h, ctx):
             log.exception("incident chart: the traffic series of %s did not load", inc["service"])
             traffic = []
         try:
-            ds = sre.deploys(store, catalog(), inc["service"], start, DEPLOYS_MAX)
+            ds = sre.deploys(store, catalog(), inc["service"], start, DEPLOYS_MAX, hide=hidden)
         except Exception:
             log.exception("incident chart: the deploys of %s did not load", inc["service"])
             ds = []
@@ -435,7 +435,7 @@ def register(app, store, h, ctx):
             "note": goal._no_dash(goal.strip_filler(run.get("finding"))) or "",
             "evidence": [{"at": s["at"], "text": plain(s["text"])}
                          for s in parts["steps"][:EVIDENCE_MAX]],
-            "chart": chart_of(inc, now, settings),
+            "chart": chart_of(inc, now, settings, hidden),
             "slack": slack_of(store, inc, notes),
             "joined": joined,
             "worth": worth_of(first_id, caller, parts["can_answer"]),

@@ -343,7 +343,7 @@ def _deploy_label(d: dict) -> str:
     return text
 
 
-def _incident_out(store, catalog, inc, notes, settings, items_by_name, t) -> dict:
+def _incident_out(store, catalog, inc, notes, settings, items_by_name, t, hide=()) -> dict:
     v = incidents.view(store, inc, notes=notes, settings=settings, now=t)
     opened = goal._aware(inc["opened_at"])
     run = store.get_agent_run(notes[-1]["run_id"]) if notes else None
@@ -356,7 +356,7 @@ def _incident_out(store, catalog, inc, notes, settings, items_by_name, t) -> dic
     service = inc["service"]
     window = (opened - timedelta(hours=1), opened + timedelta(hours=1))
     series = store.event_series(service, window[0], window[1], 120, errors_only=True)
-    deploys = [d for d in sre.deploys(store, catalog, service, window[0])
+    deploys = [d for d in sre.deploys(store, catalog, service, window[0], hide=hide)
                if goal._aware(d["at"]) <= window[1]]
     chart = None
     if any(n for _a, n in series) or deploys:
@@ -461,7 +461,7 @@ def _start_ctx(store, items, state, roles) -> start_steps.SreStartCtx:
 def start_block(store, catalog, who: str, now=None, items=None, state=None, roles=None,
                 hide=()) -> dict:
     """The checklist block of this person's home: the steps, the counts and whether to show it."""
-    items = items if items is not None else sre.list_services(store, catalog, now)
+    items = items if items is not None else sre.list_services(store, catalog, now, hide=hide)
     state = state if state is not None else watch.compute(store, catalog, now)
     roles = roles if roles is not None else sre.roles(store, catalog, include_paused=True, hide=hide)
     return start_steps.checklist(
@@ -473,14 +473,14 @@ def build(store, catalog, health=None, now=None, person=None, start_who=None, hi
     t = now or now_utc()
     settings = store.service_settings()
     system = watch.system_name(store)
-    items = sre.list_services(store, catalog, now)
+    items = sre.list_services(store, catalog, now, hide=hide)
     by_name = {i["name"]: i for i in items}
     rows = store.watch_rows()
     state = watch.compute(store, catalog, now)
     roles = sre.roles(store, catalog, include_paused=True, hide=hide)
     why = watch.judge(store, catalog, t, roles["watchers"])
     pairs = _watchers(store, catalog, roles, why, t)
-    spots = sre.blind_spots(store, catalog, now)
+    spots = sre.blind_spots(store, catalog, now, hide)
 
     watch_out, off_since, main_block = _watch_part(store, catalog, state, rows, pairs, t)
     on = watch_out["on"]
@@ -495,7 +495,7 @@ def build(store, catalog, health=None, now=None, person=None, start_who=None, hi
     inc_views = [{"service": i["service"], "state": i["state"],
                   "who": ({"name": i.get("owner_name")} if i["state"] == "on_it" else None)}
                  for i in active]
-    incidents_out = [_incident_out(store, catalog, i, notes[i["id"]], settings, by_name, t)
+    incidents_out = [_incident_out(store, catalog, i, notes[i["id"]], settings, by_name, t, hide)
                      for i in shown]
 
     # services

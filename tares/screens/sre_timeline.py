@@ -360,10 +360,11 @@ def _incident_items(store, start, end, now, settings, display_of, want_key, hidd
     return out
 
 
-def _metric_items(store, catalog, keys, start_w, until, since, w, display_of) -> list[dict]:
+def _metric_items(store, catalog, keys, start_w, until, since, w, display_of,
+                  skip=()) -> list[dict]:
     prom = [s.name for s in catalog.sources.values() if s.connector == "prometheus"]
     series: dict[tuple, list] = {}
-    for r in store.metric_buckets(keys, since, until, w, prom):
+    for r in store.metric_buckets(keys, since, until, w, prom, skip=skip):
         series.setdefault((r["service"], r["metric"]), []).append(r)
     out = []
     for (svc, metric), rows in series.items():
@@ -393,7 +394,8 @@ def _metric_items(store, catalog, keys, start_w, until, since, w, display_of) ->
 class _Scope:
     """The range and the services both routes read."""
 
-    def __init__(self, store, catalog, service, start, end, now):
+    def __init__(self, store, catalog, service, start, end, now, hide=()):
+        self.gone = sre.hidden_sources(store, hide)
         self.now = now or now_utc()
         self.end = _when(end, "to") or self.now
         self.start = _when(start, "from") or self.end - timedelta(hours=DEFAULT_HOURS)
@@ -401,7 +403,7 @@ class _Scope:
             raise ValueError("to must be after from")
         if self.end - self.start > timedelta(days=MAX_DAYS):
             raise ValueError(f"the range is at most {MAX_DAYS} days")
-        c = sre._compute_cached(store, catalog, now)
+        c = sre._view(store, sre._compute_cached(store, catalog, now), hide)
         self.settings = c["settings"]
         items = [i for n, r in c["recs"].items()
                  if (i := sre._item(n, r, self.settings, False)) is not None]
@@ -436,7 +438,7 @@ def timeline_screen(store, catalog, service: str = "", start=None, end=None, kin
     `before` pages (the previous answer's next_before). Raises ValueError for a bad input."""
     want = _kinds(kinds)
     cut = _when(before, "before")
-    sc = _Scope(store, catalog, service, start, end, now)
+    sc = _Scope(store, catalog, service, start, end, now, hide)
     span = (sc.end - sc.start).total_seconds()
     w = SHORT_WINDOW if span <= 2 * 86400 else LONG_WINDOW
     epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
@@ -448,15 +450,15 @@ def timeline_screen(store, catalog, service: str = "", start=None, end=None, kin
         return want is None or bool(want & set(kind))
 
     if keys and on("window", "quiet"):
-        totals = store.event_series_many(keys, since, sc.end, w)
-        errors = store.event_series_many(keys, since, sc.end, w, errors_only=True)
+        totals = store.event_series_many(keys, since, sc.end, w, skip=sc.gone)
+        errors = store.event_series_many(keys, since, sc.end, w, errors_only=True, skip=sc.gone)
         for k in keys:
             items += _windows(k, sc.display_of(k), [n for _t, n in totals[k]],
                               [n for _t, n in errors[k]], since, sc.end, w)
     if keys and on("deploy"):
         for k in keys:
             for d in sre.deploys(store, catalog, k, sc.start, limit=PAGE, detail=True,
-                                 until=sc.end):
+                                 until=sc.end, hide=hide):
                 items.append(_item("deploy", f"deploy:{d['repo']}:{d['at']}:{d['kind']}:{k}",
                                    _when(d["at"], "at"), None, sc.display_of(k), _deploy_text(d),
                                    "info"))
@@ -470,7 +472,8 @@ def timeline_screen(store, catalog, service: str = "", start=None, end=None, kin
         items += _incident_items(store, sc.start, sc.end, sc.now, sc.settings, sc.display_of,
                                  sc.want_key, sc.hidden, hide)
     if keys and on("metric"):
-        items += _metric_items(store, catalog, keys, start_w, sc.end, since, w, sc.display_of)
+        items += _metric_items(store, catalog, keys, start_w, sc.end, since, w, sc.display_of,
+                               sc.gone)
 
     if want is not None:
         items = [i for i in items if i["kind"] in want]
@@ -505,13 +508,15 @@ def _feed_of(catalog, row: dict) -> str:
 
 
 def raw_screen(store, catalog, service: str = "", start=None, end=None, limit: int = PAGE,
-               now=None, exclude=None, skip_sources=()) -> dict:
+               now=None, hide=(), exclude=None, skip_sources=()) -> dict:
     """The events behind the timeline, newest first: {rows: [{at, feed, text, fields}], count (all
-    of them in the range), more (count is past the limit)}."""
+    of them in the range), more (count is past the limit)}. `hide` is the caller's hidden project
+    ids; `exclude` and `skip_sources` are the event-level leave-outs of the raw routes."""
     limit = max(1, min(int(limit), RAW_MAX))
-    sc = _Scope(store, catalog, service, start, end, now)
+    sc = _Scope(store, catalog, service, start, end, now, hide)
+    skip = sorted(set(sc.gone) | set(skip_sources or ()))
     rows, total = (store.service_events(sc.keys, sc.start, sc.end, limit, exclude=exclude,
-                                        skip_sources=skip_sources) if sc.keys else ([], 0))
+                                        skip_sources=skip) if sc.keys else ([], 0))
     out = []
     for r in rows:
         fields = {**r["labels"]}
@@ -544,4 +549,4 @@ def register(app, store, h, ctx):
                                to: str = "", limit: int = PAGE):
         """The events in a range (a window's raw {from, to}), newest first, with their fields."""
         return await asyncio.to_thread(run, raw_screen, service, from_, to, limit, None,
-                                       h.read_exclude(), h.hidden_sources())
+                                       h.hidden_ids(), h.read_exclude(), h.hidden_sources())
