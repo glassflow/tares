@@ -252,7 +252,8 @@ function statusOf(d: IncidentData, me: string, at: number): string {
   if (d.state === "on_it") {
     const who = d.who;
     const mine = !!who && !!me && who.name === me;
-    return `${mine ? "You are" : `${who?.name ?? "Someone"} is`} on it since ${sinceWords(Date.parse(who?.since ?? d.opened_at), at)}.`;
+    const since = sinceWords(Date.parse(who?.since ?? d.opened_at), at);
+    return `${mine ? "You are" : `${who?.name ?? "Someone"} is`} on it${since ? ` since ${since}` : ""}.`;
   }
   const r = d.resolved;
   if (!r) return "Resolved.";
@@ -267,7 +268,10 @@ function statusOf(d: IncidentData, me: string, at: number): string {
 /** "Who was on it". */
 function whoLine(d: IncidentData, me: string, at: number): string {
   const you = (n: string | null | undefined) => (n && me && n === me ? "You" : n ?? "Someone");
-  if (d.state === "on_it" && d.who) return `${you(d.who.name)}, since ${sinceWords(Date.parse(d.who.since), at)}.`;
+  if (d.state === "on_it" && d.who) {
+    const since = sinceWords(Date.parse(d.who.since), at);
+    return `${you(d.who.name)}${since ? `, since ${since}` : ""}.`;
+  }
   if (d.state === "resolved" && d.resolved?.by) return `${you(d.resolved.by)} resolved it.`;
   return d.state === "open" ? "Nobody yet." : "Nobody was on it.";
 }
@@ -476,6 +480,7 @@ function IncidentView({ id }: { id: string }) {
   const askWorth = worth.can_answer && (worth.answer === null || changing);
   const traffic = d.chart.traffic ?? [];
   const series = [{ label: "errors", points: d.chart.points }, ...(traffic.length > 0 ? [{ label: "traffic", points: traffic }] : [])];
+  const openedWords = stamp(opened, at, dateWords(opened));
   const btn = (a: IncidentAction, label: string, variant: "primary" | "secondary") => (
     <Button variant={variant} busy={busy === a} disabled={busy !== null && busy !== a} onClick={() => act(a)} data-testid={`act-${a}`}>{label}</Button>
   );
@@ -486,7 +491,7 @@ function IncidentView({ id }: { id: string }) {
         <div className="flex flex-wrap items-center gap-2">
           <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", tag.cls)} data-testid="incident-tag">{tag.label}</span>
           <span className="border border-border bg-card px-2 py-0.5 text-xs" data-user-text data-testid="incident-service">{d.service}</span>
-          <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {stamp(opened, at, dateWords(opened))}</span>
+          {openedWords && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {openedWords}</span>}
         </div>
         <h1 className="m-0! text-[22px]! [overflow-wrap:anywhere] md:text-[28px]!" data-words-exempt data-testid="incident-title">{d.title}</h1>
       </header>

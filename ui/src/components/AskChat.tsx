@@ -8,6 +8,7 @@ import { applyProposal, ProposalCard } from "./proposals";
 import type { DecisionMap, Proposal } from "./proposals";
 import { useAgentStream } from "./useAgentStream";
 import type { StreamEvent } from "./useAgentStream";
+import { copyText } from "../editions/copyText";
 
 type SessionMeta = { id: string; title: string; created_at: string; updated_at: string };
 
@@ -401,7 +402,7 @@ const Turn = memo(function Turn({ msg, decisions, apply, decide, thinking }: {
         tares
         {copyable && (
           <button className="turn-copy" title="copy this answer"
-                  onClick={() => navigator.clipboard?.writeText(copyable)}>copy</button>
+                  onClick={() => { copyText(copyable).catch(() => {}); }}>copy</button>
         )}
       </div>
       {blocks.map((b, j) => b.kind === "tools"

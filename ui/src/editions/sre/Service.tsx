@@ -96,7 +96,17 @@ function Header({ page }: { page: SreService }) {
 function ServiceChart({ page, stale }: { page: SreService; stale: boolean }) {
   const c = page.chart;
   const t0 = Date.parse(c.since);
-  const at = (i: number) => new Date(t0 + i * c.bucket_seconds * 1000).toISOString();
+  const step = c.bucket_seconds * 1000;
+  // A page without a start time, or a bad one, cannot place its points: say so instead of throwing,
+  // since one bad timestamp must not blank the console.
+  if (!Number.isFinite(t0 + step)) {
+    return (
+      <p className="m-0 text-sm text-muted-foreground" data-testid="service-chart-unplaced">
+        The chart has no times to draw yet.
+      </p>
+    );
+  }
+  const at = (i: number) => new Date(t0 + i * step).toISOString();
   const errors = c.errors.map((v, i) => [at(i), v] as [string, number]);
   const traffic = c.traffic.map((v, i) => [at(i), v] as [string, number]);
   return (

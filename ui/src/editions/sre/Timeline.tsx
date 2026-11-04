@@ -64,11 +64,12 @@ const DAY = 24 * HOUR;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** The hour an item sits under. A span that ends exactly on the hour belongs to the hour before. */
-const hourOf = (it: TimelineItem) => {
+const hourOf = (it: TimelineItem): number | null => {
   const t = it.end ? ms(it.end) - 1 : ms(it.at);
-  return Math.floor(t / HOUR) * HOUR;
+  return Number.isFinite(t) ? Math.floor(t / HOUR) * HOUR : null;   // null: the cell sent a time that is not one
 };
-const hourWords = (hour: number, now: number) => {
+const hourWords = (hour: number | null, now: number) => {
+  if (hour === null) return "Time unknown";
   const d = new Date(hour);
   const days = Math.floor(now / DAY) - Math.floor(hour / DAY);
   const clock = `${pad(d.getUTCHours())}:00`;
@@ -79,7 +80,8 @@ const hourWords = (hour: number, now: number) => {
 
 // ── the list: newest end first; at one moment a point before a span, then kind, then id, as the cell sorts
 const RANK: Record<TimelineItem["kind"], number> = { incident: 0, alert: 1, window: 2, check: 3, deploy: 4, metric: 5, quiet: 6 };
-const endOf = (it: TimelineItem) => ms(it.end ?? it.at);
+const NO_TIME = Number.MIN_SAFE_INTEGER;   // an item with a bad time sorts last and is never cut by a range
+const endOf = (it: TimelineItem) => { const t = ms(it.end ?? it.at); return Number.isNaN(t) ? NO_TIME : t; };
 const order = (a: TimelineItem, b: TimelineItem) => endOf(b) - endOf(a) || Number(a.end !== null) - Number(b.end !== null) || RANK[a.kind] - RANK[b.kind] || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 
 /** `incoming` over `have` by id, newest first, without what is older than `from`. */
@@ -87,7 +89,7 @@ function merge(have: TimelineItem[], incoming: TimelineItem[], from: number | nu
   const byId = new Map<string, TimelineItem>();
   for (const it of have) byId.set(it.id, it);
   for (const it of incoming) byId.set(it.id, it);
-  return [...byId.values()].filter((it) => from === null || endOf(it) >= from).sort(order);
+  return [...byId.values()].filter((it) => from === null || endOf(it) === NO_TIME || endOf(it) >= from).sort(order);
 }
 
 /** A poll's first page over what is held. The first page is replaced by what the cell sent, so an
@@ -100,7 +102,7 @@ function mergePoll(have: TimelineItem[], fresh: TimelineItem[], hasMore: boolean
   const last = head[head.length - 1];
   if (!hasMore || !older || !last) return head;
   const sent = new Set(head.map((it) => it.id));
-  const keep = (it: TimelineItem) => (from === null || endOf(it) >= from) && !sent.has(it.id) && order(it, last) > 0;
+  const keep = (it: TimelineItem) => (from === null || endOf(it) === NO_TIME || endOf(it) >= from) && !sent.has(it.id) && order(it, last) > 0;
   return [...head, ...have.filter(keep)].sort(order);
 }
 
@@ -403,13 +405,13 @@ export default function Timeline() {
 
   // one heading per hour, newest first. A point on the hour sorts before a span that ends on it (the span
   // belongs to the hour before), so the headings follow the list; an hour is still found by its number.
-  const groups: { hour: number; items: TimelineItem[] }[] = [];
+  const groups: { hour: number | null; items: TimelineItem[] }[] = [];
   for (const it of items) {
     const h = hourOf(it);
     const have = groups.find((g) => g.hour === h);
     if (have) have.items.push(it); else groups.push({ hour: h, items: [it] });
   }
-  groups.sort((a, b) => b.hour - a.hour);
+  groups.sort((a, b) => (b.hour ?? NO_TIME) - (a.hour ?? NO_TIME));
 
   const serviceOptions = [...new Set([...services, ...(service ? [service] : [])])];
   const narrowed = kinds.length < KIND_GROUPS.length;
@@ -495,7 +497,7 @@ export default function Timeline() {
       {fresh && items.length > 0 && (
         <div className="border border-border bg-card" data-testid="timeline-list">
           {groups.map((g, gi) => (
-            <React.Fragment key={g.hour}>
+            <React.Fragment key={g.hour ?? "unknown"}>
               <div role="heading" aria-level={2} data-testid="timeline-hour"
                    className={cn("border-y border-border bg-[var(--row-hover)] px-3.5 py-2 text-[13px] font-semibold text-muted-foreground md:px-[18px]", gi === 0 && "border-t-0")}>
                 {hourWords(g.hour, now)}

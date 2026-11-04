@@ -56,10 +56,9 @@ function AdvancedSettings() {
   return <Security initialTab="advanced" />;
 }
 
-/** /timeline is Explore on an AI SRE cell until its own page exists; any other cell lands on Home. */
+/** /timeline has a page only on an AI SRE cell; any other cell lands on Home. */
 function TimelineToday() {
-  const { edition } = useEdition();
-  return edition === "sre" ? <Explore /> : <Navigate to="/" replace />;
+  return <Navigate to="/" replace />;
 }
 
 const router = createBrowserRouter([

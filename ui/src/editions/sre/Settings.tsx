@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
+import { copyText } from "../copyText";
 import {
   saveSreSettings, sreSettings,
   type CreatedKey, type Field, type FieldGroup, type FieldGroupName, type FieldValue, type KeyRow, type Option,
@@ -388,7 +389,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
     if (await onCreate(name.trim(), scope)) { setForm(false); setName(""); setScope("read"); }
   };
   const copy = async () => {
-    try { await navigator.clipboard.writeText(created!.secret); toast("Key copied"); } catch { toast("Could not copy. Select the key and copy it by hand."); }
+    try { await copyText(created!.secret); toast("Key copied"); } catch { toast("Could not copy. Select the key and copy it by hand."); }
   };
   return (
     <Sec id="people" title={people.title} sub={SUBTITLE.people}>

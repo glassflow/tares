@@ -14,6 +14,7 @@ import OwnerOnly from "../components/OwnerOnly";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
+import { copyText } from "../editions/copyText";
 
 // Four distinct credential concepts, one box each:
 //   · Access     — is this instance open, or does it require a login? (tares up --auth)
@@ -1688,9 +1689,7 @@ export function CopySecret({ text }: { text: string }) {
   const [done, setDone] = useState(false);
   return (
     <button onClick={() => {
-      navigator.clipboard?.writeText(text);
-      setDone(true);
-      setTimeout(() => setDone(false), 1500);
+      copyText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }, () => {});
     }}>{done ? "copied" : "copy"}</button>
   );
 }
