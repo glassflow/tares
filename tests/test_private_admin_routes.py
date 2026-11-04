@@ -180,6 +180,20 @@ async def main():
         r = await call("lee", "PATCH", "/api/services/service-a", {"merged_into": "edge-proxy"})
         ck("and Lee, who sees them, is refused the same", r.status_code == 400
            and "chain of more than" in r.text, f"{r.status_code} {r.text[:200]}")
+        # two of Zephyrwatch's services linked to each other only: Kim's merge of one into the
+        # other would close a loop, and she must get the answer for a name nothing has
+        for w in ("zephyr-x1", "zephyr-x2"):
+            store.append([Envelope(source="zephyr-logs", source_type=source_type_for("otlp"),
+                                   key_value=w, event_type="INFO", text=f"{w} handled 1",
+                                   event_time=tw, payload={}, labels={"service": w}, ingest_time=tw)])
+        sre_home.clear_cache()
+        store.set_service("zephyr-x2", "test", merged_into="zephyr-x1")
+        r = await call("kim", "PATCH", "/api/services/zephyr-x1", {"merged_into": "zephyr-x2"})
+        unk = await call("kim", "PATCH", "/api/services/nosuch-a", {"merged_into": "nosuch-b"})
+        ck("a hidden name answers a merge as an unknown name does, not with a refusal about its links",
+           r.status_code == unk.status_code == 404 and alike(r, unk, "zephyr-x1", "nosuch-a")
+           and "chain of more than" not in r.text, f"{r.status_code} {r.text[:160]} vs {unk.status_code} {unk.text[:160]}")
+        store.set_service("zephyr-x2", "test", merged_into=None)
         for w in chain:
             store.set_service(w, "test", merged_into=None)
         sre_home.clear_cache()

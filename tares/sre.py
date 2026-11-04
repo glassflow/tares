@@ -656,7 +656,10 @@ def patch_service(store, catalog, name: str, body, by: str, hide=()) -> dict:
             # the links of services they cannot see still count toward the chain and the loop; the
             # refusal names only the two they gave. A hidden target that is itself merged is taken
             # like a name nothing has (a merge into a new name is allowed), so it is not refused.
-            check_merge(settings, name, target, chain_only=True)
+            # Only for a name they can see: for a hidden name the refusal would tell them it
+            # exists, where an unknown name answers 404.
+            if name not in gone:
+                check_merge(settings, name, target, chain_only=True)
         changes["merged_into"] = target
     # the same test GET /api/services/{name} applies, so a name that answers 404 there does here
     if canonical(name, settings) not in seen:
