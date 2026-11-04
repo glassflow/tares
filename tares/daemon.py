@@ -5849,7 +5849,7 @@ def make_app() -> FastAPI:
         area_owner=lambda repo: areas_mod.owner(store, repo),
         is_system=lambda request: _is_system(request),
         is_admin=lambda request: _is_admin(request),
-        hidden_ids=lambda: _hidden_ids(),
+        hidden_ids=lambda: _hidden_ids(), can_see=lambda p: _can_see(p),
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
@@ -5867,7 +5867,7 @@ def make_app() -> FastAPI:
         if value == "sre":
             return await asyncio.to_thread(sre_home.cached, store, runtime.catalog,
                                            runtime.health_snapshot, _by(request) or "console",
-                                           _start_who(request))
+                                           _start_who(request), _hidden_ids())
         return JSONResponse({"error": "no home on this edition"}, status_code=404)
 
     # ── services (TR-742): the services this cell receives data for, read from the events ──

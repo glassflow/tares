@@ -144,13 +144,16 @@ def register(app, store, h, ctx):
         docs = []   # (doc id, project name or None)
         if shared_id:
             docs.append((shared_id, None))
+        hidden = h.hidden_ids()
         for p in safe(store.list_projects, []) or []:
+            if p["id"] in hidden:
+                continue   # a private project's grants name its repos and people
             for d in safe(lambda: store.list_docs(p["id"], "grants"), []) or []:
                 if d["id"] != shared_id and (d["id"], p["name"]) not in docs:
                     docs.append((d["id"], p["name"]))
         questions = {}
         for d in safe(lambda: store.list_decisions(None), []) or []:
-            if d.get("label") and d["label"] not in questions:
+            if d.get("label") and d["label"] not in questions and d.get("project") not in hidden:
                 questions[d["label"]] = _text(d.get("question"))
         out = []
         for doc_id, project in docs:

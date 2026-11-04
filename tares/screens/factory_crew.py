@@ -115,7 +115,9 @@ def register(app, store, h, ctx):
         now = now_utc()
         stations = fx.stations()
         settings = fx.settings()
-        projects = {p["id"]: p for p in store.list_projects() if p.get("kind") == "software_factory"}
+        hidden = h.hidden_ids()
+        projects = {p["id"]: p for p in store.list_projects()
+                    if p.get("kind") == "software_factory" and p["id"] not in hidden}
         names = {pid: p["name"] for pid, p in projects.items()}
         open_ids = [pid for pid, p in projects.items() if p["status"] != "done"]
         tickets = store.tickets_by_project(open_ids) if open_ids else {}
@@ -125,7 +127,7 @@ def register(app, store, h, ctx):
                 if t.get("holder"):
                     by_holder.setdefault(t["holder"], []).append(t)
         by_name = {s["name"]: s for s in stations}
-        desk_open = len(store.list_desk("open", None))
+        desk_open = len([d for d in store.list_desk("open", None) if d.get("project") not in hidden])
 
         def member(s: dict) -> dict:
             m = crew_member(s, by_holder, desk_open, now, by_name)

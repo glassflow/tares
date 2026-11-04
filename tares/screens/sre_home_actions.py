@@ -18,14 +18,14 @@ MAX_AMOUNT_USD = 10000
 def register(app, store, h, ctx):
     runtime = ctx.runtime
 
-    def raise_budget(body: dict, person: str, start_who: str):
+    def raise_budget(body: dict, person: str, start_who: str, hide=()):
         try:
             amount = float(body.get("amount_usd", sre_home.RAISE_STEP_USD))
         except (TypeError, ValueError):
             return h.err(ValueError("amount_usd must be a number"), 400)
         if not 0 < amount <= MAX_AMOUNT_USD:
             return h.err(ValueError(f"amount_usd must be more than 0 and at most {MAX_AMOUNT_USD}"), 400)
-        found = sre.roles(store, runtime.catalog, include_paused=True)["watchers"]
+        found = sre.roles(store, runtime.catalog, include_paused=True, hide=hide)["watchers"]
         if not found:
             return h.err(KeyError("no watcher is set up"), 404)
         # the watcher that stopped for its budget, else the first one
@@ -59,7 +59,7 @@ def register(app, store, h, ctx):
         watch.sync(store, runtime.catalog)
         sre_home.clear_cache()
         return {"ok": True, "home": sre_home.build(store, runtime.catalog, runtime.health_snapshot(),
-                                                      person=person, start_who=start_who)}
+                                                      person=person, start_who=start_who, hide=hide)}
 
     @app.post("/api/home/actions/{action}")
     async def home_action(action: str, request: Request):
@@ -71,4 +71,4 @@ def register(app, store, h, ctx):
             body = {}
         body = body if isinstance(body, dict) else {}
         return await asyncio.to_thread(raise_budget, body, h.by(request) or "console",
-                                       h.start_who(request))
+                                       h.start_who(request), h.hidden_ids())

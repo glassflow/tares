@@ -71,17 +71,19 @@ def _errors_24h(store, names: list, t, now) -> dict:
     return out
 
 
-def cached(store, catalog, health, by, start_who=None) -> dict:
-    """build(), kept for CACHE_SECONDS per store and credential. `health` may be the
+def cached(store, catalog, health, by, start_who=None, hide=()) -> dict:
+    """build(), kept for CACHE_SECONDS per store, credential and set of hidden projects (TR-892:
+    two callers who see different private projects never share a body). `health` may be the
     runtime's health_snapshot (a function), which a cache hit never calls."""
-    key = (id(store), by or "open", start_who or "")
+    hide = frozenset(hide or ())
+    key = (id(store), by or "open", start_who or "", hide)
     with _LOCK:
         hit = _CACHE.get(key)
         if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
             return hit[1]
         gen = _GEN[0]
     body = build(store, catalog, health() if callable(health) else health, person=by or None,
-                 start_who=start_who)
+                 start_who=start_who, hide=hide)
     with _LOCK:
         # a clear_cache() that landed while this was building means the body may be stale
         if gen == _GEN[0]:
@@ -299,11 +301,12 @@ def _watch_part(store, catalog, state, rows, pairs, t) -> tuple:
     return out, since, block
 
 
-def _raised(store, catalog, person, on, t) -> tuple:
+def _raised(store, catalog, person, on, t, hide=()) -> tuple:
     scheduled = {x.name for x in catalog.triggers if getattr(x.condition, "every", None)}
-    worth = goal.cell_results(store, scheduled, limit=RAISED_SHOWN, show="worth", now=t)["findings"]
+    worth = goal.cell_results(store, scheduled, limit=RAISED_SHOWN, show="worth", now=t,
+                              hide=hide)["findings"]
     feedback.with_answers(store, worth, person)
-    newest = goal.cell_results(store, scheduled, limit=1, show="all", now=t)["findings"]
+    newest = goal.cell_results(store, scheduled, limit=1, show="all", now=t, hide=hide)["findings"]
     items = [{"id": r["id"], "at": sre._iso(_utc(r["at"])), "when_words": _when_words(r["at"], t),
               "service": r["title_parts"]["service"], "what": r["title_parts"]["what"],
               "outcome_words": r["outcome_words"], "worth": (r.get("worth") or {}).get("mine"),
@@ -454,17 +457,18 @@ def _start_ctx(store, items, state, roles) -> start_steps.SreStartCtx:
         demo_finding=demo is not None and bool(store.project_findings(demo["id"], limit=1)))
 
 
-def start_block(store, catalog, who: str, now=None, items=None, state=None, roles=None) -> dict:
+def start_block(store, catalog, who: str, now=None, items=None, state=None, roles=None,
+                hide=()) -> dict:
     """The checklist block of this person's home: the steps, the counts and whether to show it."""
     items = items if items is not None else sre.list_services(store, catalog, now)
     state = state if state is not None else watch.compute(store, catalog, now)
-    roles = roles if roles is not None else sre.roles(store, catalog, include_paused=True)
+    roles = roles if roles is not None else sre.roles(store, catalog, include_paused=True, hide=hide)
     return start_steps.checklist(
         store, start_steps.sre_steps(_start_ctx(store, items, state, roles)), who)
 
 
 # ── the page ─────────────────────────────────────────────────────────────────
-def build(store, catalog, health=None, now=None, person=None, start_who=None) -> dict:
+def build(store, catalog, health=None, now=None, person=None, start_who=None, hide=()) -> dict:
     t = now or now_utc()
     settings = store.service_settings()
     system = watch.system_name(store)
@@ -472,7 +476,7 @@ def build(store, catalog, health=None, now=None, person=None, start_who=None) ->
     by_name = {i["name"]: i for i in items}
     rows = store.watch_rows()
     state = watch.compute(store, catalog, now)
-    roles = sre.roles(store, catalog, include_paused=True)
+    roles = sre.roles(store, catalog, include_paused=True, hide=hide)
     why = watch.judge(store, catalog, t, roles["watchers"])
     pairs = _watchers(store, catalog, roles, why, t)
     spots = sre.blind_spots(store, catalog, now)
@@ -482,8 +486,8 @@ def build(store, catalog, health=None, now=None, person=None, start_who=None) ->
     last_by_agent = {b["agent"]: b["last_check_at"] for _w, b in pairs}
 
     # incidents
-    active = store.list_incidents("active", limit=50)
-    counts = store.incident_counts()
+    active = store.list_incidents("active", limit=50, hide=hide)
+    counts = store.incident_counts(hide=hide)
     total = counts["open"] + counts["on_it"]
     shown = active[:INCIDENTS_SHOWN]
     notes = store.notes_of([i["id"] for i in active])
@@ -560,7 +564,7 @@ def build(store, catalog, health=None, now=None, person=None, start_who=None) ->
                                             if len(silent) > 1 else "")
     headline = {"text": text, "tone": tone, "sub": sub}
 
-    raised, raised_note = _raised(store, catalog, person, on, t)
+    raised, raised_note = _raised(store, catalog, person, on, t, hide)
     inv_agents = [i["agent"] for i in roles["investigators"]]
     notes_channel = watch.channel_for(store, catalog, main_block["agent"] if main_block else None,
                                       main_block["project"] if main_block else None)
@@ -581,4 +585,4 @@ def build(store, catalog, health=None, now=None, person=None, start_who=None) ->
                         for s in spots],
         "tools": _tools(store, catalog, items, health, t),
         "start": start_block(store, catalog, start_who or person or "console", now, items, state,
-                             roles)}
+                             roles, hide)}

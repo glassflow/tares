@@ -76,7 +76,9 @@ def register(app, store, h, ctx):
             raise HTTPException(400, "offset is 0 or more")
         now = now_utc()
         fx = ctx.fx
-        all_p = [p for p in store.list_projects() if p.get("kind") == "software_factory"]
+        hidden = h.hidden_ids()
+        all_p = [p for p in store.list_projects()
+                 if p.get("kind") == "software_factory" and p["id"] not in hidden]
         # a draft opens at its setup, not at a page with tickets
         projects = [p for p in all_p if p.get("status") != "draft"]
         if project is not None and project not in {p["id"] for p in projects}:
@@ -91,7 +93,7 @@ def register(app, store, h, ctx):
         roles = station_roles(station_rows)
 
         # the projects in the order of the Projects page: what needs you first, finished last
-        waiting = waiting_items(store, fx, now)
+        waiting = waiting_items(store, fx, now, hidden)
         stations = fx.stations() if fx else []
         ranked = []
         for p in projects:

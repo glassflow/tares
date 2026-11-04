@@ -98,8 +98,9 @@ def register(app, store, h, ctx):
         fx = ctx.fx
         shown = None
         if project:
+            hidden = h.hidden_ids()
             shown = next(({"id": p["id"], "name": p["name"]} for p in store.list_projects()
-                          if p["id"] == project), None)
+                          if p["id"] == project and p["id"] not in hidden), None)
         rows = fx.queue() if fx else []
         if project:
             rows = [q for q in rows if q["project"] == project]

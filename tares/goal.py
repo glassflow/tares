@@ -1247,17 +1247,19 @@ def project_results(store, uid: str, limit: int = 20, before=None, scheduled: se
     return {"results": results, "next_before": next_before, "today": today, "quiet": quiet}
 
 
-def _merged_threads(store, before, scheduled: set):
-    """The threads of every project, newest first. One that two projects share comes twice,
-    with the same runs: the caller drops the second result it makes."""
+def _merged_threads(store, before, scheduled: set, hide=()):
+    """The threads of every project, newest first, except the projects in `hide`. One that two
+    projects share comes twice, with the same runs: the caller drops the second result it makes."""
     import heapq
-    gens = [_threads(store, p["id"], before, scheduled) for p in store.list_projects()]
+    gens = [_threads(store, p["id"], before, scheduled) for p in store.list_projects()
+            if p["id"] not in hide]
     return heapq.merge(*gens, key=lambda t: _aware(t["at"]), reverse=True)
 
 
 def cell_results(store, scheduled: set | None = None, limit: int = 20, before=None,
-                 show: str = "worth", service: str = "", now=None) -> dict:
-    """The AI SRE findings list: the results of every project, newest first, practice results
+                 show: str = "worth", service: str = "", now=None, hide=()) -> dict:
+    """The AI SRE findings list: the results of every project (but the ones in `hide`, the
+    private projects the caller cannot see), newest first, practice results
     left out, paged like project_results (`before` = the previous page's `next_before`).
     show="worth" (the default) leaves out the quiet checks and counts them in `quiet`, "all"
     keeps them. `service` keeps the findings about that service (its display name or its key)."""
@@ -1283,7 +1285,7 @@ def cell_results(store, scheduled: set | None = None, limit: int = 20, before=No
         return want in (r["title_parts"]["service"].lower(), service_key(r["entity"], settings).lower())
 
     results, next_before, quiet, _found = _page(
-        _merged_threads(store, before, scheduled), make, limit,
+        _merged_threads(store, before, scheduled, hide), make, limit,
         "worth" if show == "worth" else "", before is None, midnight, keep)
     return {"findings": results, "quiet": quiet, "next_before": next_before}
 

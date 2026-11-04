@@ -168,9 +168,10 @@ async def _slack_channels(store):
 
 
 # ── the engine objects the page edits ────────────────────────────────────────
-def _cast(store, runtime):
-    """The watcher and the investigator the page edits (the first of each) and the roles."""
-    roles = sre.roles(store, runtime.catalog, include_paused=True)
+def _cast(store, runtime, hide=()):
+    """The watcher and the investigator the page edits (the first of each) and the roles, of the
+    projects the caller can see (a private project's watcher is not theirs to edit, TR-892)."""
+    roles = sre.roles(store, runtime.catalog, include_paused=True, hide=hide)
     watcher = roles["watchers"][0] if roles["watchers"] else None
     inv = None
     if roles["investigators"]:
@@ -435,10 +436,10 @@ def _advanced() -> dict:
 
 
 def settings_screen(store, runtime, can_edit: bool, channels, problem, workspace: bool = False,
-                    now=None) -> dict:
+                    now=None, hide=()) -> dict:
     """The body of GET /api/sre/settings."""
     t = now or now_utc()
-    _roles, watcher, inv = _cast(store, runtime)
+    _roles, watcher, inv = _cast(store, runtime, hide)
     models = _model_options(store)
     return {
         "watching": _watching(store, runtime, watcher, t, models),
@@ -615,7 +616,7 @@ def _apply_agent(store, key: str, value, who) -> None:
         _save_agent(store, who, budget_period=value)
 
 
-def _write_fields(store, runtime, group: str, body: dict):
+def _write_fields(store, runtime, group: str, body: dict, hide=()):
     """Apply the parts of `body` in page order. Returns None when all were saved, else the 400."""
     unknown = [k for k in body if k not in ORDER[group]]
     if unknown:
@@ -626,7 +627,7 @@ def _write_fields(store, runtime, group: str, body: dict):
         return JSONResponse({"detail": "Nothing to save.", "saved": [], "failed": None},
                             status_code=400)
     parts = [k for k in ORDER[group] if k in body]
-    _roles, watcher, inv = _cast(store, runtime)
+    _roles, watcher, inv = _cast(store, runtime, hide)
     saved = []
     try:
         for n, key in enumerate(parts):
@@ -715,7 +716,7 @@ def register(app, store, h, ctx):
     async def screen(request: Request, extra: dict | None = None) -> dict:
         channels, problem = await _slack_channels(store)
         body = await asyncio.to_thread(settings_screen, store, runtime, allowed(request), channels,
-                                       problem, workspace())
+                                       problem, workspace(), None, h.hidden_ids())
         return {**body, **(extra or {})}
 
     @app.get("/api/sre/settings")
@@ -736,7 +737,8 @@ def register(app, store, h, ctx):
             return JSONResponse({"detail": "Send the settings as an object."}, status_code=400)
         extra = None
         if group in FIELD_GROUPS:
-            refused = await asyncio.to_thread(_write_fields, store, runtime, group, body)
+            refused = await asyncio.to_thread(_write_fields, store, runtime, group, body,
+                                              h.hidden_ids())
             if refused is not None:
                 return refused
         elif group == "people":

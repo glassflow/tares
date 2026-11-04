@@ -173,7 +173,8 @@ def register(app, store, h, ctx):
         """The whole project page in one read (404 for a project that is not a software factory
         project, and for a draft, which opens at its setup on today's page)."""
         p = store.get_project(uid)
-        if p is None or p.get("kind") != "software_factory" or p.get("status") == "draft":
+        if (p is None or p.get("kind") != "software_factory" or p.get("status") == "draft"
+                or not h.can_see(p)):   # a private project the caller is not on is not there
             raise HTTPException(404, f"no factory project {uid!r}")
         now = now_utc()
         tickets = store.list_tickets(uid)

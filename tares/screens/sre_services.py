@@ -38,16 +38,16 @@ def _count_words(n: int, one: str, many: str | None = None) -> str:
     return f"{n:,} {one if n == 1 else (many or one + 's')}"
 
 
-def _context(store, catalog, now, include_hidden: bool) -> dict:
+def _context(store, catalog, now, include_hidden: bool, hide=()) -> dict:
     """What the home page reads before it words a service, read once."""
     t = now or now_utc()
     items = sre.list_services(store, catalog, now, include_hidden=include_hidden)
     state = watch.compute(store, catalog, now)
-    roles = sre.roles(store, catalog, include_paused=True)
+    roles = sre.roles(store, catalog, include_paused=True, hide=hide)
     why = watch.judge(store, catalog, t, roles["watchers"])
     pairs = sre_home._watchers(store, catalog, roles, why, t)
     spots = sre.blind_spots(store, catalog, now)
-    active = store.list_incidents("active", limit=50)
+    active = store.list_incidents("active", limit=50, hide=hide)
     return {
         "t": t, "items": items, "state": state, "spots": spots, "pairs": pairs,
         "blocks": {b["agent"]: b for _w, b in pairs},
@@ -105,10 +105,10 @@ def _rank(row: dict) -> tuple:
     return (STATE_ORDER.index(state) if state in STATE_ORDER else len(STATE_ORDER), row["name"])
 
 
-def services_screen(store, catalog, now=None, include_hidden: bool = False) -> dict:
+def services_screen(store, catalog, now=None, include_hidden: bool = False, hide=()) -> dict:
     """The Services page: one row per service, what needs a look first. Hidden ones are left out and
     counted, or listed with hidden true when `include_hidden`."""
-    ctx = _context(store, catalog, now, True)
+    ctx = _context(store, catalog, now, True, hide)
     everything = ctx["items"]
     shown = everything if include_hidden else [i for i in everything if not i.get("hidden")]
     errors = sre_home._errors_24h(store, [i["name"] for i in shown], ctx["t"], now)
@@ -134,15 +134,15 @@ def _chart(store, catalog, name: str, window: str, t) -> dict:
                         for d in marks]}
 
 
-def _incidents(store, catalog, names: list, settings: dict, t) -> tuple:
+def _incidents(store, catalog, names: list, settings: dict, t, hide=()) -> tuple:
     """(the newest INCIDENTS_SHOWN as the page shows them, how many in all, how many still open)."""
     found: list = []
     total = open_ = 0
     for n in names:
-        counts = store.incident_counts(n)
+        counts = store.incident_counts(n, hide=hide)
         total += sum(counts.values())
         open_ += counts["open"] + counts["on_it"]
-        found += store.list_incidents(None, n, limit=INCIDENTS_SHOWN)
+        found += store.list_incidents(None, n, limit=INCIDENTS_SHOWN, hide=hide)
     found.sort(key=lambda i: goal._aware(i["last_note_at"]), reverse=True)
     found = found[:INCIDENTS_SHOWN]
     notes = store.notes_of([i["id"] for i in found])
@@ -154,10 +154,10 @@ def _incidents(store, catalog, names: list, settings: dict, t) -> tuple:
     return out, total, open_
 
 
-def _raised(store, catalog, name: str, t) -> tuple:
+def _raised(store, catalog, name: str, t, hide=()) -> tuple:
     scheduled = {x.name for x in catalog.triggers if getattr(x.condition, "every", None)}
     found = goal.cell_results(store, scheduled, limit=RAISED_FETCH, show="worth", service=name,
-                              now=t)["findings"]
+                              now=t, hide=hide)["findings"]
     out = [{"id": r["id"], "when_words": sre_home._when_words(r["at"], t),
             "what": r["title_parts"]["what"], "outcome_words": r["outcome_words"],
             "worth": WORTH.get(r["outcome"], "For the record")} for r in found[:RAISED_SHOWN]]
@@ -190,7 +190,7 @@ def _blind_words(item: dict, spots: list, watch_row) -> str:
     return "No blind spots found"
 
 
-def service_screen(store, catalog, name: str, window: str = "24h", now=None) -> dict | None:
+def service_screen(store, catalog, name: str, window: str = "24h", now=None, hide=()) -> dict | None:
     """One service's page, None when the cell knows no such service. A name merged into another
     answers with the service it is merged into. ValueError for a window that is not 1h, 24h or 7d."""
     if window not in WINDOWS:
@@ -199,7 +199,7 @@ def service_screen(store, catalog, name: str, window: str = "24h", now=None) -> 
     if found is None:
         return None
     name = found["name"]
-    ctx = _context(store, catalog, now, True)
+    ctx = _context(store, catalog, now, True, hide)
     t = ctx["t"]
     item = next((i for i in ctx["items"] if i["name"] == name), None) or found
     settings = store.service_settings()
@@ -207,8 +207,8 @@ def service_screen(store, catalog, name: str, window: str = "24h", now=None) -> 
     row = _row(store, ctx, item, errors.get(name))
     mine = [s for s in ctx["spots"] if s.get("service") == name]
     names = [name, *item.get("merged", [])]
-    shown, total, open_ = _incidents(store, catalog, names, settings, t)
-    raised, raised_total = _raised(store, catalog, name, t)
+    shown, total, open_ = _incidents(store, catalog, names, settings, t, hide)
+    raised, raised_total = _raised(store, catalog, name, t, hide)
     own = settings.get(name) or {}
     options = []
     for other in ctx["items"]:
@@ -245,7 +245,8 @@ def register(app, store, h, ctx):
 
     @app.get("/api/sre/services")
     async def sre_services(hidden: int = 0):
-        return await asyncio.to_thread(services_screen, store, runtime.catalog, None, bool(hidden))
+        return await asyncio.to_thread(services_screen, store, runtime.catalog, None, bool(hidden),
+                                     h.hidden_ids())
 
     # the settings route is declared first: {name:path} would take a PUT for a name with a "/" in it
     @app.put("/api/sre/services/{name:path}/settings")
@@ -256,7 +257,8 @@ def register(app, store, h, ctx):
     @app.get("/api/sre/services/{name:path}")
     async def sre_service(name: str, window: str = "24h"):
         try:
-            body = await asyncio.to_thread(service_screen, store, runtime.catalog, name, window)
+            body = await asyncio.to_thread(service_screen, store, runtime.catalog, name, window,
+                                          None, h.hidden_ids())
         except ValueError as e:
             return h.err(e, 400)
         if body is None:
@@ -271,6 +273,7 @@ def register(app, store, h, ctx):
             return h.err(ValueError(f"cannot change {', '.join(unknown)}: the settings are "
                                     + ", ".join(SETTINGS_FIELDS)), 400)
         who = h.by(request) or "console"
+        hide = h.hidden_ids()
 
         def write():
             try:
@@ -281,5 +284,5 @@ def register(app, store, h, ctx):
             except ValueError as e:
                 return h.err(e, 400)
             sre_home.clear_cache()
-            return service_screen(store, runtime.catalog, name)
+            return service_screen(store, runtime.catalog, name, hide=hide)
         return await asyncio.to_thread(write)
