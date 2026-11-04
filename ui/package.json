@@ -30,6 +30,7 @@
     "test:factory-start-show": "vite build && node tests/factory-start-show.e2e.cjs",
     "test:factory-reviews": "vite build && node tests/factory-reviews.e2e.cjs",
     "test:factory-ticket": "vite build && node tests/factory-ticket.e2e.cjs",
+    "test:sre-guards": "vite build && node tests/sre-guards.e2e.cjs",
     "test:sre-incidents": "vite build && node tests/sre-incidents.e2e.cjs",
     "test:sre-timeline": "vite build && node tests/sre-timeline.e2e.cjs",
     "test:factory-tickets": "vite build && node tests/factory-tickets.e2e.cjs",

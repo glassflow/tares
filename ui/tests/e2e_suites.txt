@@ -23,6 +23,7 @@ projects-list
 raise-limit
 session-picker
 settings-people
+sre-guards
 sre-home
 sre-incidents
 sre-runbooks

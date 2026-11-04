@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { api } from "../api";
 import type { Source } from "../types";
+import { copyText } from "../editions/copyText";
 
 const REDACTED = "••••••••";   // matches connectors.REDACTED_SECRET; a set secret comes back as this
 const hasSecret = (s: Source) => Object.values(s.config ?? {}).includes(REDACTED);
@@ -43,7 +44,7 @@ export default function CatalogExport() {
     setBusy(false);
   };
 
-  const copy = () => { if (yaml) { navigator.clipboard.writeText(yaml); setCopied(true); setTimeout(() => setCopied(false), 1500); } };
+  const copy = () => { if (yaml) { copyText(yaml).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {}); } };
   const download = () => {
     if (!yaml) return;
     const url = URL.createObjectURL(new Blob([yaml], { type: "application/yaml" }));

@@ -12,8 +12,9 @@ const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 /** "14:20" */
 export const clock = (ms: number) => (Number.isFinite(ms) ? new Date(ms).toISOString().slice(11, 16) : "");
 
-/** A rough length of time, as the cell says it: "less than a minute", "45 minutes", "3 days". */
+/** A rough length of time, as the cell says it ("a while" when the time is missing or bad): "less than a minute", "45 minutes", "3 days". */
 export function spanWords(ms: number) {
+  if (!Number.isFinite(ms)) return "a while";
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return "less than a minute";
   if (s < 3600) return plural(Math.floor(s / 60), "minute");
@@ -25,6 +26,7 @@ export const ageWords = (ms: number) => (ms < MIN ? "just now" : `${spanWords(ms
 
 /** A length of time with its second unit: "1 hour 4 minutes", "2 days 3 hours", "12 minutes". */
 export function durationWords(ms: number) {
+  if (!Number.isFinite(ms)) return "a while";
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return "less than a minute";
   const m = Math.floor(s / 60);
@@ -37,8 +39,10 @@ export function durationWords(ms: number) {
 
 const daysBetween = (ms: number, now: number) => Math.floor(now / DAY) - Math.floor(ms / DAY);
 
-/** "14:05" for today, "yesterday, 14:05", else "27 Oct, 14:05" (the cell's own "since" words). */
+/** "14:05" for today, "yesterday, 14:05", else "27 Oct, 14:05" (the cell's own "since" words). A missing or
+ *  bad date gives "". */
 export function sinceWords(ms: number, now: number) {
+  if (!Number.isFinite(ms)) return "";
   const gap = daysBetween(ms, now);
   if (gap <= 0) return clock(ms);
   if (gap === 1) return `yesterday, ${clock(ms)}`;
@@ -48,6 +52,7 @@ export function sinceWords(ms: number, now: number) {
 
 /** "today 14:11", "yesterday 14:11", "Fri 12:40" within the last week, else `far`. */
 export function stamp(ms: number, now: number, far: string) {
+  if (!Number.isFinite(ms)) return far;
   const gap = daysBetween(ms, now);
   if (gap <= 0) return `today ${clock(ms)}`;
   if (gap === 1) return `yesterday ${clock(ms)}`;
@@ -55,8 +60,9 @@ export function stamp(ms: number, now: number, far: string) {
   return far;
 }
 
-/** "27 Oct, 14:05": a date the stamp does not name. */
+/** "27 Oct, 14:05": a date the stamp does not name. A missing or bad date gives "", never "NaN". */
 export function dateWords(ms: number) {
+  if (!Number.isFinite(ms)) return "";
   const d = new Date(ms);
   return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]}, ${clock(ms)}`;
 }

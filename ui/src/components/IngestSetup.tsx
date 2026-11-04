@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../api";
+import { copyText } from "../editions/copyText";
 
 // Setup hints shown next to a push source's ingest URL. The URL is the address; on a secured
 // instance (`tares up --auth`) the producer ALSO needs an ingest API key in the Authorization
@@ -95,9 +96,7 @@ function CopyBtn({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button onClick={() => {
-      navigator.clipboard?.writeText(text);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      copyText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }, () => {});
     }}>{copied ? "copied" : label}</button>
   );
 }
