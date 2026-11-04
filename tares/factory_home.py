@@ -128,10 +128,12 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             "since": _iso(since), "waited": plain_wait(_minutes(since, now)), "actions": acts}
 
 
-def waiting_items(store, fx, now) -> list[dict]:
+def waiting_items(store, fx, now, hidden=()) -> list[dict]:
     """Every builder's items, oldest first. A project ready to close holds nothing up, so its
-    sign-off rows come after the rest, oldest first among themselves."""
-    items = [i for build in WAITING_BUILDERS for i in build(store, fx, now)]
+    sign-off rows come after the rest, oldest first among themselves. `hidden` is the ids of the
+    projects the caller may not see (private ones they are not on): their items are left out."""
+    items = [i for build in WAITING_BUILDERS for i in build(store, fx, now)
+             if not hidden or ((i.get("project") or {}).get("id") not in hidden)]
     items.sort(key=lambda i: (i["kind"] == "signoff", _dt(i["since"]) or now))
     return items
 
@@ -402,8 +404,8 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     stations = fx.stations() if fx else []
     settings = fx.settings() if fx else dict(factory_mod.CREW_DEFAULTS)
     team = fx.team_home(request, now) if request is not None and hasattr(fx, "team_home") else {}
-    # on a team cell a private project the caller is not on is left out of every count and name
-    hidden = fx.hidden_ids() if team else set()
+    # a private project the caller is not on is left out of every count and name
+    hidden = fx.hidden_ids() if fx else set()
     projects = [p for p in store.list_projects()
                 if p.get("kind") == "software_factory" and p["id"] not in hidden]
     open_ps = [p for p in projects if p["status"] != "done"]
@@ -411,7 +413,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
     desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
-    waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now)
+    waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now, hidden)
     rows = []
     for p in open_ps:
         row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,

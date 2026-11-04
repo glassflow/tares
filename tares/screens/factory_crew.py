@@ -79,11 +79,11 @@ def register(app, store, h, ctx):
         out.sort(key=lambda x: -x["_share"])
         return [{k: v for k, v in x.items() if k != "_share"} for x in out[:_MAX_BY_PROJECT]]
 
-    def standup(now) -> dict | None:
+    def standup(now, hidden) -> dict | None:
         """One line from the ledger over the last day; null when nothing moved."""
         try:
             rep = standup_mod.facts(store, now - timedelta(days=1), now,
-                                    lambda uid: project_progress(store, uid))
+                                    lambda uid: project_progress(store, uid), hide=hidden)
         except Exception:
             return None
         ps = rep["projects"]
@@ -115,7 +115,9 @@ def register(app, store, h, ctx):
         now = now_utc()
         stations = fx.stations()
         settings = fx.settings()
-        projects = {p["id"]: p for p in store.list_projects() if p.get("kind") == "software_factory"}
+        hidden = h.hidden_ids()
+        projects = {p["id"]: p for p in store.list_projects()
+                    if p.get("kind") == "software_factory" and p["id"] not in hidden}
         names = {pid: p["name"] for pid, p in projects.items()}
         open_ids = [pid for pid, p in projects.items() if p["status"] != "done"]
         tickets = store.tickets_by_project(open_ids) if open_ids else {}
@@ -125,7 +127,7 @@ def register(app, store, h, ctx):
                 if t.get("holder"):
                     by_holder.setdefault(t["holder"], []).append(t)
         by_name = {s["name"]: s for s in stations}
-        desk_open = len(store.list_desk("open", None))
+        desk_open = len([d for d in store.list_desk("open", None) if d.get("project") not in hidden])
 
         def member(s: dict) -> dict:
             m = crew_member(s, by_holder, desk_open, now, by_name)
@@ -183,12 +185,13 @@ def register(app, store, h, ctx):
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
         plan["by_project"] = by_project(names, now)
         proposals = [{"id": r["id"], "text": r["text"], "from": "the reviewer",
-                      "when": ago(r["created_at"], now)} for r in store.list_rule_proposals("open")]
+                      "when": ago(r["created_at"], now)} for r in store.list_rule_proposals("open")
+                     if r.get("project") not in hidden]
         releaser = None if settings.get("releaser") is False else first("releaser")
         return {"summary": summary, "talk_to": first("orchestrator"), "reviewer": first("reviewer"),
                 "releaser": releaser, "builders": builders, "how_far": _how(settings),
                 "pacing": _pacing(fx.pace(), now), "plan": plan, "rule_proposals": proposals,
-                "standup": standup(now), "now": now.isoformat()}
+                "standup": standup(now, hidden), "now": now.isoformat()}
 
     @app.get("/api/factory/crew")
     def get_crew_page():

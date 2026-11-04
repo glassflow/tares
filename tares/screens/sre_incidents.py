@@ -234,7 +234,9 @@ def register(app, store, h, ctx):
         return HTTPException(404, "No incident with that id")
 
     def service_filter(value: str, settings: dict) -> str:
-        """The incident service key a `service` filter names (its key or its display name)."""
+        """The incident service key a `service` filter names (its key or its display name). It
+        reads every key: a private project's service resolves, and the lists it feeds leave its
+        incidents out."""
         want = (value or "").strip().lower()
         if not want:
             return ""
@@ -250,10 +252,11 @@ def register(app, store, h, ctx):
                 "when_words": goal.age_words((now - _aware(inc["opened_at"])).total_seconds()),
                 "who": who_of(inc)}
 
-    def raised_findings(now, settings) -> tuple[list[dict], dict]:
+    def raised_findings(now, settings, hidden=()) -> tuple[list[dict], dict]:
         """(findings raised that did not become an incident, the quiet checks left out)."""
         try:
-            out = goal.cell_results(store, scheduled(), limit=20, show="worth", now=now)
+            out = goal.cell_results(store, scheduled(), limit=20, show="worth", now=now,
+                                    hide=hidden)
         except Exception:
             return [], {"count": 0}
         items = []
@@ -275,7 +278,7 @@ def register(app, store, h, ctx):
         return f"{n:,} quiet check{'' if n == 1 else 's'} today {'is' if n == 1 else 'are'} not shown"
 
     def incidents_screen(state: str = "", service: str = "", before: str = "", show: str = "",
-                         now=None) -> dict:
+                         now=None, hidden=()) -> dict:
         if state and state not in ("open", "on_it", "resolved", "all"):
             raise HTTPException(400, "state is open, on_it, resolved or all")
         if show and show != "all":
@@ -296,12 +299,14 @@ def register(app, store, h, ctx):
         next_before = None
         for s in wanted:
             if s == "resolved":
-                got = store.list_incidents("resolved", key or None, RESOLVED_PAGE + 1, cut)
+                got = store.list_incidents("resolved", key or None, RESOLVED_PAGE + 1, cut,
+                                           hide=hidden)
                 if len(got) > RESOLVED_PAGE:   # a 21st exists: there is a next page
                     got = got[:RESOLVED_PAGE]
                     next_before = goal._iso(got[-1]["last_note_at"])
             else:
-                got = store.list_incidents(s, key or None, ACTIVE_CAP) if cut is None else []
+                got = (store.list_incidents(s, key or None, ACTIVE_CAP, hide=hidden)
+                       if cut is None else [])
             rows[s] = got
         every = [i for got in rows.values() for i in got]
         notes = store.notes_of([i["id"] for i in every])
@@ -314,7 +319,7 @@ def register(app, store, h, ctx):
             groups.append({"state": s, "label": label, "items": items})
         quiet = {"count": 0}
         if show == "all" and cut is None:
-            found, quiet = raised_findings(now, settings)
+            found, quiet = raised_findings(now, settings, hidden)
             groups.append({"state": "raised", "label": "Raised, not an incident", "items": found})
         elif cut is None:
             try:
@@ -328,8 +333,9 @@ def register(app, store, h, ctx):
                                           now=now)["quiet"]
             except Exception:
                 pass
-        return {"groups": groups, "counts": store.incident_counts(key or None),
-                "services": sorted({goal.service_name(s, settings) for s in store.incident_services()}),
+        return {"groups": groups, "counts": store.incident_counts(key or None, hide=hidden),
+                "services": sorted({goal.service_name(s, settings)
+                                    for s in store.incident_services(hide=hidden)}),
                 "next_before": next_before, "quiet_checks_words": quiet_words(quiet)}
 
     def chart_of(inc: dict, now, settings: dict) -> dict:
@@ -392,9 +398,9 @@ def register(app, store, h, ctx):
                 "by": (got.get("person_name") or got["person"]) if got else None,
                 "can_answer": bool(can_answer)}
 
-    def incident_screen(incident_id: str, caller: str, now=None) -> dict:
+    def incident_screen(incident_id: str, caller: str, now=None, hidden=()) -> dict:
         inc = store.get_incident(incident_id)
-        if inc is None:
+        if inc is None or inc.get("project") in hidden:   # a private project reads as no incident
             raise not_found()
         now = _aware(now or incidents.clock())
         settings = store.service_settings()
@@ -442,12 +448,12 @@ def register(app, store, h, ctx):
         """The incidents by state: Open, Someone on it, Resolved (the 20 latest; page on with
         `before` = next_before). `state` shows one group. `show=all` adds the findings raised
         that did not become an incident."""
-        return incidents_screen(state, service, before, show)
+        return incidents_screen(state, service, before, show, hidden=h.hidden_ids())
 
     @app.get("/api/sre/incidents/{incident_id}")
     def get_incident_screen(incident_id: str, request: Request):
         """One incident: the note, the evidence, the chart, the Slack thread, who was on it."""
-        return incident_screen(incident_id, person(request))
+        return incident_screen(incident_id, person(request), hidden=h.hidden_ids())
 
     @app.post("/api/sre/incidents/{incident_id}/{action}")
     def incident_action(incident_id: str, action: str, request: Request):
@@ -456,7 +462,7 @@ def register(app, store, h, ctx):
         if action not in ACTIONS:
             raise HTTPException(404, "No such action")
         inc = store.get_incident(incident_id)
-        if inc is None:
+        if inc is None or inc.get("project") in h.hidden_ids():
             raise not_found()
         who = person(request)
         if action in STATE_ACTIONS:
@@ -484,4 +490,4 @@ def register(app, store, h, ctx):
                 raise HTTPException(404, "The note is gone")
             except feedback.NotRaised as e:
                 raise HTTPException(409, str(e))
-        return incident_screen(incident_id, who)
+        return incident_screen(incident_id, who, hidden=h.hidden_ids())

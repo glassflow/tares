@@ -416,7 +416,7 @@ def _paused_projects(store) -> dict:
     return {p["id"]: p.get("status") == "paused" for p in store.list_projects()}
 
 
-def roles(store, catalog, include_paused: bool = False) -> dict:
+def roles(store, catalog, include_paused: bool = False, hide=()) -> dict:
     """The jobs the agents of this cell do, from how they are wired.
 
     watchers: [{agent, project, trigger, enabled, paused, trigger_paused}], one per wake of an
@@ -424,7 +424,8 @@ def roles(store, catalog, include_paused: bool = False) -> dict:
     its trigger nor its project is paused. With `include_paused` the ones that cannot are listed
     too, and the three flags say why (`paused` is the project's).
     investigators: [{agent, project}], the agents a watcher hands a verdict to, and the agents
-    woken by a trigger that reads only findings."""
+    woken by a trigger that reads only findings. `hide` leaves out the roles of those projects,
+    for a screen that shows a person only the projects they can see (TR-892)."""
     from .schedule import is_scheduled
     triggers = {t.name: t for t in catalog.triggers}
     agents = {a["name"] for a in store.list_catalog_agents()}
@@ -457,6 +458,9 @@ def roles(store, catalog, include_paused: bool = False) -> dict:
     # that was turned off
     inv = {(i["agent"], i["project"]) for i in investigators}
     watchers = [w for w in watchers if w["enabled"] or (w["agent"], w["project"]) not in inv]
+    if hide:
+        watchers = [w for w in watchers if w["project"] not in hide]
+        investigators = [i for i in investigators if i["project"] not in hide]
     return {"watchers": watchers, "investigators": investigators}
 
 
