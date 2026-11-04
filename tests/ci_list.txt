@@ -29,6 +29,7 @@ test_crews
 test_degraded
 test_delete_cascade
 test_desk_person
+test_desk_unaddressed_login
 test_docs
 test_duckdb_memory
 test_edition
