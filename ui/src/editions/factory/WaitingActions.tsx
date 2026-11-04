@@ -10,8 +10,15 @@ const ANSWER_MAX = 4000;
 const REASON_MAX = 1000;
 const OVERRIDE_MAX = 500;   // the daemon keeps this much of a hand-over reason
 
-/** The words a person gives an answer, and whether it stands for next time. */
-export interface AnswerGiven { words: string; standing: boolean }
+/** The words a person gives an answer, the option they picked (if they clicked one), and whether it stands for next time. */
+export interface AnswerGiven { words: string; choice?: string; standing: boolean }
+
+const LETTERS = "ABCDEFGH";
+/** A click on an option. An option that is itself one letter (a to h) would read as a pick by position, so it is sent as its position. */
+export function optionAnswer(options: string[], index: number): { words: string; choice: string } {
+  const o = options[index];
+  return { words: /^\(?[a-h]\)?[.)]?$/i.test(o.trim()) ? LETTERS[index] : o, choice: o };
+}
 
 /** Answer, open under its row: one button per option, or a text box and Send. */
 export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
@@ -29,9 +36,9 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
       <div className="flex max-w-[640px] flex-col gap-3 border border-border bg-muted p-3">
         {options.length > 0 ? (
           <div className="flex flex-wrap gap-2" role="group" aria-label={`Answers to ${item.title}`}>
-            {options.map((o) => (
+            {options.map((o, i) => (
               <Button key={o} variant="secondary" className="h-8 text-[13px]!" disabled={busy}
-                onClick={() => onSend({ words: o, standing })} data-user-text>
+                onClick={() => onSend({ ...optionAnswer(options, i), standing })} data-user-text>
                 {o}
               </Button>
             ))}
@@ -56,8 +63,8 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
 }
 
 /** Sign off: the tickets the person is vouching for, then the button. */
-export function SignOffDialog({ item, repo, tickets, busy, error, onClose, onConfirm }: {
-  item: HomeItem; repo: string; tickets: string[]; busy: boolean; error: string | null;
+export function SignOffDialog({ item, repo, tickets, more = 0, busy, error, onClose, onConfirm }: {
+  item: HomeItem; repo: string; tickets: string[]; more?: number; busy: boolean; error: string | null;
   onClose: () => void; onConfirm: () => void;
 }) {
   const name = item.project?.name ?? item.title;
@@ -75,6 +82,7 @@ export function SignOffDialog({ item, repo, tickets, busy, error, onClose, onCon
         {tickets.length > 0 && (
           <ul className="m-0 max-h-48 list-disc overflow-auto pl-5 text-sm" data-testid="signoff-tickets">
             {tickets.map((t, i) => <li key={i} className="[overflow-wrap:anywhere]" data-user-text>{t}</li>)}
+            {more > 0 && <li data-testid="signoff-more" className="list-none text-muted-foreground">and {more} more</li>}
           </ul>
         )}
         {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}

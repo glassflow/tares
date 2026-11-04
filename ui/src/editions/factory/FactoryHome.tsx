@@ -143,8 +143,6 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
   );
 }
 
-// The buttons of a team row that the page does not act on yet: they show once their handlers land.
-
 /** A cell with more than one person sends these keys; a cell of one never does. */
 const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
@@ -583,15 +581,19 @@ function CloseDialog({ item, project, onClose, onDone }: {
   );
 }
 
-/** Everything the buttons of the page do. With `live` off (a sample) only Copy works, so a sample
- *  never calls the cell. `changed` tells the page what to hide at once and to read again. */
+const SAMPLE_NOTE = "This is a sample, so nothing was sent.";
+const SAMPLE_OPENS = ["answer", "sign_off", "decline"];
+
+/** Everything the buttons of the page do. With `live` off (a sample) Copy works and the answer, sign-off
+ *  and decline panels open, but nothing reaches the cell: the page says so. `changed` tells the page what
+ *  to hide at once and to read again. */
 function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const { toast } = useToast();
   const [rows, setRows] = React.useState<Record<string, RowState>>({});
   const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
   const [answering, setAnswering] = React.useState<{ item: HomeItem; action: HomeAction } | null>(null);
-  const [signing, setSigning] = React.useState<{ item: HomeItem; project: string; repo: string; tickets: string[] } | null>(null);
+  const [signing, setSigning] = React.useState<{ item: HomeItem; project: string; repo: string; tickets: string[]; more: number } | null>(null);
   const [declining, setDeclining] = React.useState<{ item: HomeItem; grant: string } | null>(null);
   const [handing, setHanding] = React.useState<{ entry: HomeWaitingOn; busy: boolean; error: string | null } | null>(null);
   const working = React.useRef(new Set<string>());
@@ -608,6 +610,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   /** One call for one row: the button shows work, the row leaves on success and shows the sentence of a refusal. */
   const run = async (item: HomeItem, verb: HomeVerb, call: () => Promise<unknown>, message: string, finish: () => void) => {
     if (working.current.has(item.id)) return;
+    if (!live) { toast(SAMPLE_NOTE); finish(); return; }   // a sample never calls the cell
     working.current.add(item.id);
     update(item.id, () => ({ busy: verb }));
     try {
@@ -640,7 +643,9 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       );
       return;
     }
-    if (!live || !item || working.current.has(item.id)) return;
+    if (!item || working.current.has(item.id)) return;
+    // A sample opens the panels and dialogs, and says nothing was sent when one is confirmed; the rest only say so.
+    if (!live && !SAMPLE_OPENS.includes(String(a.do))) { toast(SAMPLE_NOTE); return; }
     if (a.do === "keep_assumptions") {
       const project = String(a.project ?? item.project?.id ?? "");
       const refs = Array.isArray(a.refs) ? a.refs.map(String) : [];
@@ -672,7 +677,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       const repo = String(a.repo ?? item.repo ?? "");
       if (project && repo) {
         clearError(item.id);
-        setSigning({ item, project, repo, tickets: Array.isArray(a.tickets) ? a.tickets.map(String) : [] });
+        setSigning({ item, project, repo, tickets: Array.isArray(a.tickets) ? a.tickets.map(String) : [], more: Number(a.more_tickets) || 0 });
       }
     } else if (a.do === "agree") {
       if (typeof a.grant === "string") {
@@ -701,7 +706,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
 
   const sendAnswer = ({ item, action }: { item: HomeItem; action: HomeAction }, given: AnswerGiven) => {
     const desk = typeof action.desk === "string" ? action.desk : "";
-    const call = desk ? () => deskReply(desk, given.words, given.standing)
+    const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice)
       : () => answerQuestion(String(action.project), String(action.question), given.words);
     void run(item, "answer", call, "Answered. It is on its way back to whoever asked.", () => setAnswering(null));
   };
@@ -725,7 +730,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
           }} />
       )}
       {signing && (
-        <SignOffDialog key={signing.item.id} item={signing.item} repo={signing.repo} tickets={signing.tickets}
+        <SignOffDialog key={signing.item.id} item={signing.item} repo={signing.repo} tickets={signing.tickets} more={signing.more}
           busy={rows[signing.item.id]?.busy === "sign_off"} error={rows[signing.item.id]?.error ?? null}
           onClose={() => { clearError(signing.item.id); setSigning(null); }}
           onConfirm={() => void run(signing.item, "sign_off", () => signOff(signing.project, signing.repo),
@@ -752,7 +757,10 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       )}
     </>
   );
-  return { rows, onAction, onHandOver: handOver, dialogs, panels };
+  // A refusal shows once: in the dialog while one is open for the row, under the row otherwise.
+  const underRows = Object.fromEntries(Object.entries(rows).map(([id, s]) =>
+    [id, id === signing?.item.id || id === declining?.item.id ? { ...s, error: undefined } : s]));
+  return { rows: underRows, onAction, onHandOver: handOver, dialogs, panels };
 }
 
 // ── pages ──────────────────────────────────────────────────────────────────────
