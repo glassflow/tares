@@ -923,6 +923,12 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         to = d.get("to_person_id")
         return to == me or (me == "local" and not to)
 
+    def desk_can_act(d: dict, me: str) -> bool:
+        """Who may answer or allow a desk item from the console (TR-898): the person it is
+        addressed to. An item from before items were addressed has no one, so any person may; the
+        lists (`desk_is_mine`) still show it to `local` only."""
+        return not d.get("to_person_id") or d["to_person_id"] == me
+
     def leads(p: dict | None, me: str) -> bool:
         lead = (p or {}).get("lead_person_id")
         return lead == me or (me == "local" and not lead)
@@ -2376,7 +2382,7 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
             h.err(PermissionError("a person answers this in the console"), 403)
         me = work_person(request)
         d = desk_or_404(ref)
-        if not desk_is_mine(d, me["id"]):
+        if not desk_can_act(d, me["id"]):
             who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
             h.err(PermissionError(f"{d['label']} is for {who}: only they answer it" if who else
                                   f"{d['label']} is not addressed to you"), 403)
@@ -2402,7 +2408,7 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                                   "console"), 403)
         me = work_person(request)
         d = desk_or_404(ref)
-        if not desk_is_mine(d, me["id"]):
+        if not desk_can_act(d, me["id"]):
             who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
             h.err(PermissionError(f"{d['label']} is for {who}: only they allow it" if who else
                                   f"{d['label']} is not addressed to you"), 403)
