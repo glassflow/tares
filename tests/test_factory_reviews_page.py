@@ -1,8 +1,10 @@
 """The factory Reviews page (TR-735): GET /api/factory/reviews.
 
-Every pull request in review is in one of two lists: waiting for the person or with the crew. The
-split is one rule (factory_waiting.review_split, assumption A10): the project's autonomy is
-L3-review and the reviewer passed the pull request on its current commit. Checked here: the split,
+Every pull request in review is in one of three lists: waiting for the person, with the crew, or
+nobody is on it (TR-1009). The split is one rule (factory_waiting.review_split, assumption A10):
+it waits for the person when the project's autonomy is L3-review and the reviewer passed it on its
+current commit; it is with the crew only with a named next step; the rest is nobody's, with the
+reason. A ticket closed in its home leaves review (TR-1008). Checked here: the split,
 the sort, the wording of each row, the project filter, the autonomy sentence, the milestone a pull
 request holds up, that the home page's "PRs to review" and this page always agree (under L3, under
 L4-ship and for a project that sets its own), that /api/review-queue still carries every old field,
@@ -141,9 +143,12 @@ async def main():
             ck("empty lists, the L3 sentence, no project", a["waiting_for_you"] == [] and a["with_the_crew"] == []
                and a["autonomy_text"] == "You merge every pull request after the crew's review."
                and a["project"] is None and "now" in a, a)
-            ck("the answer's keys", set(a) == {"waiting_for_you", "with_the_crew", "autonomy_text", "project", "now"}, sorted(a))
+            ck("the answer's keys", set(a) == {"waiting_for_you", "with_the_crew", "nobody_on_it", "autonomy_text", "project", "now"}, sorted(a))
 
             px, py, pu = project("project-x"), project("project-y"), project("project-u")
+            # the crew has project-x and project-y (handed over, autonomy the crew's own)
+            for p_ in (px, py):
+                store.set_handover(p_, [{"path": "/w/a", "name": "example-org/service-a"}], None, None, now_utc())
             ms_found = store.create_milestone(px, "1. Foundations")
             ms_setup = store.create_milestone(py, "Setup")
             ms_fast = store.create_milestone(py, "Faster lists")
@@ -172,6 +177,13 @@ async def main():
             ck("with the crew: the rest, longest waiting first", refs(crew) == [
                 ("project-x", "Add the news page"), ("project-x", "Add the header"),
                 ("project-x", "Add the archive"), ("project-y", "Tidy the lists")], refs(crew))
+            ck("with the crew: each names who has it next", {r["ticket"]["title"]: r["why"] for r in crew} == {
+                "Add the news page": "The reviewer reviews it",
+                "Add the header": "The builder works on the changes the reviewer asked for",
+                "Add the archive": "The reviewer reviews it", "Tidy the lists": "The reviewer reviews it"},
+               {r["ticket"]["title"]: r["why"] for r in crew})
+            ck("waiting for you carries no why", all(r["why"] is None for r in wait))
+            ck("nobody is on none of them", a["nobody_on_it"] == [], refs(a["nobody_on_it"]))
             ck("the autonomy sentence for L3", a["autonomy_text"] == "You merge every pull request after the crew's review.")
             ck("waited is in words, never abbreviated", [r["waited"] for r in wait] == ["6 days", "2 days", "3 hours", "10 minutes"]
                and not any("min " in r["waited"] + " " or r["waited"].endswith("min") for r in wait + crew),
@@ -183,7 +195,7 @@ async def main():
                and r0["pr"] == {"number": 11, "url": "https://github.com/example-org/service-a/pull/11",
                                 "title": "PR: Add the footer", "repo": "example-org/service-a"}, r0)
             ck("a row's own keys", all(set(r) == {"project", "ticket", "pr", "waited", "since", "review", "ci",
-                                                  "ci_state", "holds_up", "codex_open"} for r in wait + crew))
+                                                  "ci_state", "holds_up", "codex_open", "why"} for r in wait + crew))
             by = {r["ticket"]["title"]: r for r in wait + crew}
             ck("review words", {t: by[t]["review"] for t in by} == {
                 "Add the footer": "Passed, round 2", "Add the sitemap": "Passed, round 1",
@@ -224,6 +236,10 @@ async def main():
             ck("still longest waiting first", [r["ticket"]["title"] for r in a["with_the_crew"]][:3] == [
                 "Add the footer", "Batch the lists", "Add the news page"], refs(a["with_the_crew"]))
             ck("the home page lists none", await home_prs(cx) == [])
+            l4 = {r["ticket"]["title"]: r["why"] for r in a["with_the_crew"]}
+            ck("under L4: a passed, green one is the crew's merge, a red one the builder's",
+               l4["Add the footer"] == "The crew merges it" and l4["Add the sitemap"] == "The builder fixes the failing CI"
+               and l4["Add the search box"] == "The crew merges it", l4)
 
             print("== a project that sets its own autonomy ==")
             store.set_handover(py, [{"path": "/w/a", "name": "example-org/service-a"}], "L3-review", None, now_utc())
@@ -249,6 +265,60 @@ async def main():
             a = await agree(cx, "after a merge")
             ck("a merged ticket leaves the page", all(r["ticket"]["title"] != "Add the search box"
                                                        for r in a["waiting_for_you"] + a["with_the_crew"]))
+
+            print("== nobody is on it (TR-1009) ==")
+            pn = project("project-n")
+            n_pass = in_review(pn, "Own session pass", hours=2, n=31)
+            n_open = in_review(pn, "Own session open", verdict=None, hours=1, n=32)
+            a = await agree(cx, "never handed over")
+            nob = {r["ticket"]["title"]: r["why"] for r in a["nobody_on_it"]}
+            ck("a project never handed over: a passed one still waits for you",
+               ("project-n", "Own session pass") in refs(a["waiting_for_you"]), refs(a["waiting_for_you"]))
+            ck("a project never handed over: the rest is nobody's, and says so",
+               nob == {"Own session open": "The project was never handed to the crew"}, nob)
+            store.set_handover(pn, [{"path": "/w/a", "name": "example-org/service-a"}], None, None, now_utc())
+            store.take_over(pn, "I will finish it", None, now_utc())
+            nob = {r["ticket"]["title"]: r["why"] for r in (await agree(cx, "taken over"))["nobody_on_it"]}
+            ck("a project taken over: nobody in the crew has it", nob == {"Own session open": "You took this project over from the crew"}, nob)
+            store.update_project(pn, status="done")
+            a = await agree(cx, "finished")
+            nob = {r["ticket"]["title"]: r["why"] for r in a["nobody_on_it"]}
+            fin = "The project is finished, so the crew no longer works on it"
+            ck("a finished project: every pull request in review is nobody's, a passed one too",
+               nob == {"Own session pass": fin, "Own session open": fin}
+               and not any(r["project"]["id"] == pn for r in a["waiting_for_you"] + a["with_the_crew"]), nob)
+            pr_ = store.get_ticket(px, x_changes)["pr"]
+            store.update_ticket(x_changes, pr={**pr_, "state": "closed", "merged": False})
+            a = await agree(cx, "closed without merging")
+            ck("a pull request closed without merging is nobody's",
+               {r["ticket"]["title"]: r["why"] for r in a["nobody_on_it"]}.get("Add the header")
+               == "The pull request was closed without merging", refs(a["nobody_on_it"]))
+            x_block = in_review(px, "Add the blocker", verdict="block", hours=1, n=17)
+            a = await agree(cx, "blocked by the reviewer")
+            ck("a pull request the reviewer blocked is nobody's, and needs the person",
+               {r["ticket"]["title"]: r["why"] for r in a["nobody_on_it"]}.get("Add the blocker")
+               == "The reviewer blocked it; it needs your decision", refs(a["nobody_on_it"]))
+
+            print("== a ticket closed in its home leaves review (TR-1008) ==")
+            store.update_ticket(x_none, status="done", why="Linear marked it Done")
+            t_ = store.get_ticket(px, x_none)
+            a = await agree(cx, "closed in Linear")
+            ck("done in its home: the stage is cleared and the history says why", t_["stage"] is None
+               and store.ticket_history(x_none)[-1]["reason"] == "Linear marked it Done", (t_["stage"], store.ticket_history(x_none)[-1:]))
+            ck("and it is on no list", not any(r["ticket"]["title"] == "Add the archive"
+                                              for r in a["waiting_for_you"] + a["with_the_crew"] + a["nobody_on_it"]))
+            with store._swrite:   # a ticket closed before TR-1008 kept its stage
+                store.sc.execute("UPDATE tickets SET status = 'canceled', stage = 'review' WHERE id = ?", [y_free])
+            q = (await cx.get("/api/review-queue")).json()["queue"]
+            ck("the review queue leaves out a canceled ticket even before the repair",
+               not any(x["title"] == "Tidy the lists" for x in q))
+            store._ticket_stage_repair()
+            ck("the repair clears its stage", store.get_ticket(py, y_free)["stage"] is None)
+            store._ticket_stage_repair()
+            ck("a second repair finds nothing", sum(1 for x in store.ticket_history(y_free) if x["field"] == "stage") == 1,
+               store.ticket_history(y_free))
+            store.update_ticket(x_new, status="done")    # merged above
+            ck("a merged ticket marked done keeps merged", store.get_ticket(px, x_new)["stage"] == "merged")
 
             print("== the review queue keeps its fields and adds the new ones ==")
             q = (await cx.get("/api/review-queue")).json()["queue"]

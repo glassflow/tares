@@ -265,6 +265,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- The Reviews page no longer lists pull requests nobody is on as "With the crew". A crew row now names who has it next (the reviewer, the builder, CI or the crew's merge), and a new "Nobody is on it" list shows the rest with the reason: the project is finished, it was never handed to the crew, you took it over, the pull request was closed without merging, or the reviewer blocked it. The home page counts from the same split.
+- A ticket closed in its home (Linear, GitHub Issues or Tares) is closed everywhere: its stage in the crew's work is cleared in the same write, with a history line saying why, and a one-time repair at start closes the ones that kept their stage. Every screen now reads a ticket's state from one rule (`factory.state_of`).
+- Pull request state stays current without anyone opening the project: the daemon reads open pull requests again in the background every 2 minutes (`TARES_PR_SYNC_SECONDS`, `off` turns it off). A project whose only open work is a pull request waiting for your merge now shows as waiting on you, not building.
 - Private projects stay private on the settings pages and merge checks: the SRE Tools list leaves out their sources, a merge counts the links of services you cannot see, and the key count leaves out their keys.
 - Admin routes no longer reveal or change what a private project holds: renaming or merging its services, the catalog export and import, and the key list and key changes answer a non-member as for a name that does not exist.
 - A person outside a private project can no longer change, pause, delete, test or rerun its sources, triggers, agents, MCP servers or runs, or decide its rule proposals; those answer as if they were not there.

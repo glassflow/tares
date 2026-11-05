@@ -62,7 +62,7 @@ function cleanEnv(extra) {
   const ids = JSON.parse(execFileSync(python, [path.join(__dirname, "seed-factory-reviews.py"), home, String(PORT),
     String(PORT + 1), dist, tares], { cwd: REPO, encoding: "utf8", env: cleanEnv({ ...base, TARES_EDITION: "factory" }) })
     .trim().split("\n").pop());
-  ck("seeded 4 projects", Object.keys(ids).length === 4, String(Object.keys(ids).length));
+  ck("seeded 5 projects", Object.keys(ids).length === 5, String(Object.keys(ids).length));
 
   const daemon = spawn(tares, ["up", "--port", String(PORT), "--data-dir", home], { cwd: REPO, stdio: "ignore",
     env: cleanEnv({ ...base, TARES_EDITION: "factory" }), detached: true });
@@ -121,15 +121,21 @@ function cleanEnv(extra) {
          && (await rows.first().getByTestId("review-ci").innerText()).trim() === "CI passed"
          && (await rows.first().getByTestId("review-holds").innerText()) === "Holds up M2: Faster lists");
       await page.getByTestId("crew-fold").click();
-      ck(`l3 @${width}: the fold opens to 3 more rows`, (await rows.count()) === 7 && (await crewCount.innerText()) === "3 −"
+      const nobody = page.getByTestId("reviews-nobody");
+      ck(`l3 @${width}: nobody is on 2, each with its reason, shown open`, (await page.getByTestId("nobody-count").innerText()) === "2"
+         && (await texts(nobody.getByTestId("review-why"))).join("|")
+         === "The project is finished, so the crew no longer works on it|The pull request was closed without merging");
+      ck(`l3 @${width}: the fold opens to 3 more rows`, (await rows.count()) === 9 && (await crewCount.innerText()) === "3 −"
          && (await page.getByTestId("crew-fold").getAttribute("aria-expanded")) === "true");
       const crew = page.getByTestId("crew-list");
       ck(`l3 @${width}: with the reviewer's words and a CI dot per state`,
          (await texts(crew.getByTestId("review-verdict"))).join("|") === "Not reviewed yet|Changes asked, round 1|Passed on an older commit"
          && (await crew.getByTestId("review-row").evaluateAll((r) => r.map((x) => x.dataset.ci))).join(",") === "go,ok,ok"
          && (await texts(crew.getByTestId("review-ci"))).join("|") === "CI in progress|CI passed|CI passed");
+      ck(`l3 @${width}: each crew row names who has it next`, (await texts(crew.getByTestId("review-why"))).join("|")
+         === "The reviewer reviews it|The builder works on the changes the reviewer asked for|The reviewer reviews it");
       await page.getByTestId("crew-fold").click();
-      ck(`l3 @${width}: and folds again`, (await rows.count()) === 4 && (await crewCount.innerText()) === "3 +");
+      ck(`l3 @${width}: and folds again`, (await rows.count()) === 6 && (await crewCount.innerText()) === "3 +");
       const link = rows.first().getByTestId("review-title");
       ck(`l3 @${width}: the title links to the ticket`, (await link.getAttribute("href")) === "/projects/project-x/tickets/T14");
       const pr = rows.first().getByTestId("review-pr");
@@ -199,6 +205,12 @@ function cleanEnv(extra) {
          && (await texts(crew.getByTestId("review-title"))).join("|").endsWith("|Add the archive"));
       ck(`${tag("crew")}: passed on an older commit, changes asked, not reviewed`, (await texts(crew.getByTestId("review-verdict"))).join("|")
          === "Passed on an older commit|Changes asked, round 1|Not reviewed yet");
+      ck(`${tag("crew")}: each names who has it next`, (await texts(crew.getByTestId("review-why"))).join("|")
+         === "The reviewer reviews it|The builder works on the changes the reviewer asked for|The reviewer reviews it",
+         (await texts(crew.getByTestId("review-why"))).join("|"));
+      ck(`${tag("nobody")}: the finished project's pull request is nobody's, with the reason`,
+         (await texts(page.getByTestId("reviews-nobody").getByTestId("review-title"))).join("|") === "Old bench script"
+         && (await texts(page.getByTestId("reviews-nobody").getByTestId("review-why"))).join("|") === "The project is finished, so the crew no longer works on it");
       ck(`${tag("crew")}: a pull request still going says so`, (await texts(crew.last().getByTestId("review-ci")))[0] === "CI in progress");
       ck(`${tag("crew")}: a lone ticket in its milestone holds it up, named with its place`,
          (await texts(crew.getByTestId("review-holds"))).join("|") === "Holds up M2: <u>Speed</u>");
@@ -221,7 +233,7 @@ function cleanEnv(extra) {
          && (await page.getByTestId("reviews-filter").getByRole("link", { name: "Show all" }).getAttribute("href")) === "/reviews");
       await shot(page, "live-filtered", width);
       await page.getByTestId("reviews-filter").getByRole("link", { name: "Show all" }).click();
-      await page.waitForFunction(() => document.querySelectorAll('[data-testid="review-row"]').length === 5);
+      await page.waitForFunction(() => document.querySelectorAll('[data-testid="review-row"]').length === 6);
       ck(`${tag("filter")}: Show all lists every project again`, (await waiting.count()) === 5 && new URL(page.url()).search === "");
       await openLive(`?project=${ids["project-u"]}`);
       ck(`${tag("filter")}: a project with nothing in review shows empty lists`, (await rows.count()) === 0

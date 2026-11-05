@@ -284,7 +284,8 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes.update(assignee_person_id=who, assignee_raw=raw)
             ticket_assignee.sync_join(store, project, who, status)
         if changes:
-            store.update_ticket(cur["id"], **changes)
+            store.update_ticket(cur["id"], why=f"GitHub shows the issue {status.replace('_', ' ')}",
+                                **changes)
     # "blocked by" becomes dependencies, once every issue has its ticket
     by_ext = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "github"}
     for iss in issues:
@@ -301,7 +302,8 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             continue
         # no longer carries the issue label (or deleted, or moved to another repo): canceled
         # here, not dropped, so its working doc stays reachable
-        store.update_ticket(cur["id"], status="canceled")
+        store.update_ticket(cur["id"], status="canceled",
+                            why="the issue no longer carries the label, or left the repo")
         out.append(_env(project, link,
                         {"id": ext, "identifier": cur["identifier"], "title": cur["title"]},
                         "removed", f"{cur['identifier']} no longer carries {label}",
