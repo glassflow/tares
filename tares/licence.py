@@ -46,9 +46,9 @@ _roots: dict[str, bytes] = ROOT_PUBLIC_KEYS
 
 _PREFIX = "TL1"
 _CLOCK_SKEW = timedelta(minutes=10)
-_B64U = re.compile(r"^[A-Za-z0-9_-]*$")
-_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+_B64U = re.compile(r"[A-Za-z0-9_-]*")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_STAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
 
 
 @dataclass(frozen=True, repr=False)
@@ -83,7 +83,7 @@ def _set_root_keys_for_tests(keys: dict[str, bytes] | None) -> None:
 
 
 def _b64u_decode(s: str) -> bytes:
-    if not isinstance(s, str) or not _B64U.match(s) or len(s) % 4 == 1:
+    if not isinstance(s, str) or not _B64U.fullmatch(s) or len(s) % 4 == 1:
         raise ValueError("bad base64")
     raw = base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
     if base64.urlsafe_b64encode(raw).rstrip(b"=").decode() != s:
@@ -112,7 +112,7 @@ def _str_field(d: dict, name: str, where: str = "licence") -> str:
 
 def _date_field(d: dict, name: str, where: str = "licence") -> date:
     v = d.get(name)
-    if not isinstance(v, str) or not _DATE.match(v):
+    if not isinstance(v, str) or not _DATE.fullmatch(v):
         raise _Bad(f"the {where} has no valid {name} date")
     try:
         return date.fromisoformat(v)
@@ -122,7 +122,7 @@ def _date_field(d: dict, name: str, where: str = "licence") -> date:
 
 def _stamp_field(d: dict, name: str) -> datetime:
     v = d.get(name)
-    if not isinstance(v, str) or not _STAMP.match(v):
+    if not isinstance(v, str) or not _STAMP.fullmatch(v):
         raise _Bad(f"the licence has no valid {name} time")
     try:
         return datetime.strptime(v, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
@@ -234,7 +234,8 @@ def expired(lic: Licence, now: datetime | None = None) -> bool:
 
 def state(text: str | None, used: int, now: datetime | None = None, source: str = "none") -> dict:
     """What the cell may do with this key, as a plain dict. An expired licence stays valid;
-    `expired` says it ran out. `used` is the seats in use."""
+    `expired` says it ran out. `used` is the seats in use (None counts as 0)."""
+    used = used or 0
     st = {"valid": False, "source": "none", "kid": None, "org": None, "seats": None, "used": used,
           "features": [], "expires": None, "days_left": None, "expired": False,
           "over_seats": False, "ee_allowed": False, "reason": None}

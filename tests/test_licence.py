@@ -73,6 +73,7 @@ L._set_root_keys_for_tests(None)
 r = L.verify(TEXT, NOW)
 ck("no root installed: Invalid, unknown root", isinstance(r, L.Invalid) and "trusts" in r.reason, repr(r))
 ck("the test root is not in the shipped ROOT_PUBLIC_KEYS", VEC["root_kid"] not in L.ROOT_PUBLIC_KEYS)
+ck("passing None restores the shipped dict itself", L._roots is L.ROOT_PUBLIC_KEYS)
 ck("installing a test root leaves the shipped dict alone",
    (install(), VEC["root_kid"] not in L.ROOT_PUBLIC_KEYS)[1])
 out = subprocess.run([sys.executable, "-c",
@@ -107,6 +108,25 @@ ck("issued late on the issuer's last day is fine",
    isinstance(L.verify(make(cert=same_day, issued="2026-11-05T23:59:59Z"), NOW), L.Licence))
 ck("issued the second after the issuer's last day is Invalid",
    invalid(make(cert=same_day, issued="2026-11-06T00:00:00Z"), NOW + timedelta(days=1)))
+# The root signs a body that already carries the wrong kid, so only the kid check can refuse it.
+wrong_body = {"kid": "0" * 16, "public_key": kit.b64u(iss_pub), "not_after": VEC["issuer_not_after"]}
+wrong_kid_cert = {**wrong_body, "root_kid": ROOT_KID, "root_signature": kit.b64u(root_priv.sign(kit.canonical(wrong_body)))}
+r = L.verify(make(cert=wrong_kid_cert), NOW)
+ck("a root-signed issuer whose kid is not the hash of its key is Invalid, for the kid",
+   isinstance(r, L.Invalid) and "does not match its name" in r.reason, repr(r))
+short_pub = iss_pub[:31]
+short_body = {"kid": kit.kid_of(short_pub), "public_key": kit.b64u(short_pub), "not_after": VEC["issuer_not_after"]}
+short_cert = {**short_body, "root_kid": ROOT_KID, "root_signature": kit.b64u(root_priv.sign(kit.canonical(short_body)))}
+r = L.verify(make(cert=short_cert), NOW)
+ck("a root-signed issuing key that is not 32 bytes is Invalid, for its length",
+   isinstance(r, L.Invalid) and "not a valid key" in r.reason, repr(r))
+# The last base64 character of a 64 byte signature has 4 spare bits: changing them decodes to the
+# same bytes, so only the strict re-encode check refuses the text.
+tail = sig[-1]; alt = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+twin = sig[:-1] + alt[alt.index(tail) ^ 1]
+ck("the same signature bytes in a non-canonical base64 spelling are Invalid",
+   b64d(twin) == b64d(sig) and invalid(f"TL1.{pay}.{twin}"))
+ck("a missing seats count to state() reads as 0 used", L.state(TEXT, None, NOW, "env")["used"] == 0)
 other_root, other_pub = kit.keypair("a different root")
 ck("an issuing key vouched for by an untrusted root is Invalid",
    invalid(make(cert=kit.issuer_cert(other_root, iss_pub, "2027-11-05"))))
@@ -145,6 +165,16 @@ now = datetime(2026, 11, 5, 12, 0, 0, tzinfo=UTC)
 ck("issued 9 minutes ahead of now is valid",
    isinstance(L.verify(make(issued="2026-11-05T12:09:00Z"), now), L.Licence))
 ck("issued 11 minutes ahead of now is Invalid", invalid(make(issued="2026-11-05T12:11:00Z"), now))
+import time
+_tz = os.environ.get("TZ"); os.environ["TZ"] = "Asia/Kolkata"; time.tzset()
+try:
+    ahead = make(issued="2026-11-06T12:05:00Z")
+    ck("a naive now is read as UTC, not as the machine's local time",
+       isinstance(L.verify(ahead, datetime(2026, 11, 6, 12, 0, 0)), L.Licence))
+finally:
+    if _tz is None: del os.environ["TZ"]
+    else: os.environ["TZ"] = _tz
+    time.tzset()
 ck("a naive now is read as UTC", isinstance(L.verify(TEXT, datetime(2026, 11, 6)), L.Licence))
 
 print("-- expiry")
