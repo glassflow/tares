@@ -124,6 +124,16 @@ async def main():
         ck("hidden_ids is a set", h.hidden_ids() == set())
         ck("projects() is the daemon's engine", hasattr(h.projects(), "list"))
         ck("resolve_project keeps an unknown ref", h.resolve_project("no-such-project") == "no-such-project")
+        from types import SimpleNamespace
+        ck("project_key is the request's project key",
+           h.project_key(SimpleNamespace(state=SimpleNamespace(project_key="prj_1"))) == "prj_1")
+        ck("project_key is None for any other credential",
+           h.project_key(SimpleNamespace(state=SimpleNamespace())) is None)
+        card = h.hidden_project({"id": "prj_1", "name": "Secret", "lead": "ada", "scope": "private",
+                                 "goal": "do not leak", "tickets": [1]})
+        ck("hidden_project names the project and its lead and nothing else",
+           card == {"id": "prj_1", "name": "Secret", "scope": "private", "hidden": True,
+                    "lead": "ada"}, card)
         ck("licence_state counts the people on the cell",
            h.licence_state()["used"] == len(store.list_people()) and h.licence_state()["used"] >= 3,
            h.licence_state())
