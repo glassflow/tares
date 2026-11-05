@@ -5,6 +5,7 @@ import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Skeleton } from "../../components/edition";
+import { Check, ChevronDown } from "../../components/icons";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -15,8 +16,9 @@ import {
 } from "./FactoryDocs.api";
 import { isSample, sampleBox, sampleLoad } from "./docsSamples";
 
-// Docs and memory: the crew's shared rules and memory, and each project's spec, plan, rules and
-// memory, read as documents. One read per page load (the list and the open document); picking a
+// Docs and memory: the crew's shared rules and memory, and one project's spec, plan, rules and
+// memory at a time, read as documents. The list shows the shared documents, then a project picker
+// (searchable; finished projects after the open ones) and the chosen project's documents (TR-1015). One read per page load (the list and the open document); picking a
 // document reads again. A line is added through the route the document names. The document text is
 // the people's and the crew's own (markdown, never raw HTML) and is exempt from the words rule.
 
@@ -133,8 +135,88 @@ function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: string 
   );
 }
 
-function DocList({ page, openId, finishedOpen, setFinishedOpen, to }: {
-  page: DocsPage; openId: string | null; finishedOpen: boolean; setFinishedOpen: (v: boolean) => void; to: (id: string) => string;
+/** Every project the picker offers: the open ones, then the finished ones. */
+type PickItem = { id: string; name: string; finished: boolean };
+const pickItems = (page: DocsPage): PickItem[] => [
+  ...page.projects.map((p) => ({ id: p.id, name: p.name, finished: false })),
+  ...page.finished.map((p) => ({ id: p.id, name: p.name, finished: true })),
+];
+
+/** The project picker: a button naming the chosen project; it opens a search box over a list of
+ *  every project, open ones first, finished ones after under their own heading. Arrow keys move,
+ *  Enter picks, Escape closes. */
+function ProjectPicker({ page, chosen, onPick }: { page: DocsPage; chosen: PickItem | null; onPick: (id: string) => void }) {
+  const [open, setOpen] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const [at, setAt] = React.useState(0);
+  const box = React.useRef<HTMLDivElement>(null);
+  const button = React.useRef<HTMLButtonElement>(null);
+  const listId = React.useId();
+  const all = pickItems(page);
+  const needle = q.trim().toLowerCase();
+  const shown = needle ? all.filter((p) => p.name.toLowerCase().includes(needle)) : all;
+  React.useEffect(() => { setAt(0); }, [q, open]);
+  React.useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => { if (box.current && !box.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open]);
+  const close = () => { setOpen(false); setQ(""); button.current?.focus(); };
+  const choose = (id: string) => { close(); onPick(id); };
+  const key = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setAt((i) => Math.min(i + 1, shown.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setAt((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (shown[at]) choose(shown[at].id); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
+  };
+  if (all.length === 0) return null;
+  const firstFinished = shown.findIndex((p) => p.finished);
+  return (
+    <div ref={box} className="relative" data-testid="doc-picker">
+      <button ref={button} type="button" aria-haspopup="listbox" aria-expanded={open} data-testid="doc-picker-button"
+              onClick={() => setOpen((o) => !o)}
+              className="flex! h-9 w-full items-center justify-between gap-2 border! border-input! bg-background! px-3! text-left text-sm! font-normal! text-foreground! hover:border-input!">
+        <span className="min-w-0 truncate">
+          {chosen ? <span data-user-text>{chosen.name}</span> : "Choose a project"}
+          {chosen?.finished && <span className="text-muted-foreground"> (finished)</span>}
+        </span>
+        <ChevronDown aria-hidden className="size-4 shrink-0 opacity-60" />
+      </button>
+      {open && (
+        <div className="absolute inset-x-0 top-10 z-30 border border-border bg-popover shadow-[0_6px_18px_var(--sheet-shadow)]" data-testid="doc-picker-panel">
+          <div className="border-b border-border p-2">
+            <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={key} placeholder="Search projects"
+                   role="combobox" aria-expanded aria-controls={listId} aria-label="Search projects" aria-autocomplete="list"
+                   aria-activedescendant={shown[at] ? `${listId}-${shown[at].id}` : undefined}
+                   className="h-8 bg-[var(--input-bg)]!" data-testid="doc-picker-search" />
+          </div>
+          <ul id={listId} role="listbox" aria-label="Projects" className="m-0! max-h-72 list-none! overflow-y-auto p-1!">
+            {shown.length === 0 && <li className="px-2.5 py-2 text-[13px] text-muted-foreground" data-testid="doc-picker-none">No project matches.</li>}
+            {shown.map((p, i) => (
+              <React.Fragment key={p.id}>
+                {i === firstFinished && (
+                  <li role="presentation" className="px-2.5 pb-1 pt-2 text-xs font-semibold text-muted-foreground">Finished</li>
+                )}
+                <li id={`${listId}-${p.id}`} role="option" aria-selected={chosen?.id === p.id} data-testid="doc-picker-option" data-project={p.id}
+                    onMouseDown={(e) => e.preventDefault()} onClick={() => choose(p.id)} onMouseEnter={() => setAt(i)}
+                    className={cn("flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-sm",
+                                  i === at && "bg-[var(--row-hover)]", chosen?.id === p.id && "font-semibold")}>
+                  <span data-user-text className="min-w-0 [overflow-wrap:anywhere]">{p.name}</span>
+                  {chosen?.id === p.id && <Check aria-hidden className="size-4 shrink-0" />}
+                </li>
+              </React.Fragment>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DocList({ page, openId, project, to, onPick }: {
+  page: DocsPage; openId: string | null; project: (DocProject & { finished: boolean }) | null; to: (id: string) => string;
+  onPick: (id: string) => void;
 }) {
   const item = (id: string, label: string) => (
     <Link key={id} to={to(id)} data-testid="doc-link" aria-current={id === openId ? "page" : undefined}
@@ -143,45 +225,49 @@ function DocList({ page, openId, finishedOpen, setFinishedOpen, to }: {
       {label}
     </Link>
   );
-  const group = (p: DocProject) => (
-    <div key={p.id} data-testid="doc-group">
-      <div className="px-3.5 pb-1 pt-3 text-xs font-semibold"><span data-user-text>{p.name}</span></div>
-      {p.docs.map((d) => item(d.id, d.label))}
-    </div>
-  );
-  const n = page.finished.length;
   return (
     <nav aria-label="Documents" className="hidden border border-border bg-card pb-1 md:block" data-testid="doc-list">
       <div data-testid="doc-group">
         <div className="px-3.5 pb-1 pt-3 text-xs font-semibold text-muted-foreground">For every project</div>
         {page.shared.map((d) => item(d.id, d.label))}
       </div>
-      {page.projects.map(group)}
-      {finishedOpen && page.finished.map(group)}
-      {n > 0 && (
-        <button type="button" onClick={() => setFinishedOpen(!finishedOpen)} data-testid="doc-finished"
-                className="mt-1 block! w-full border-0! border-t! border-border! bg-transparent! px-3.5! py-2.5! text-left text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline! cursor-pointer">
-          {finishedOpen ? "Hide finished projects" : `Show ${n} finished ${n === 1 ? "project" : "projects"}`}
-        </button>
+      {pickItems(page).length > 0 && (
+        <div className="border-t border-border px-3.5 pb-1 pt-3">
+          <div className="pb-1.5 text-xs font-semibold text-muted-foreground">Project</div>
+          <ProjectPicker page={page} chosen={project} onPick={onPick} />
+        </div>
+      )}
+      {project && (
+        <div data-testid="doc-group" data-project={project.id}>
+          <div className="sr-only"><span data-user-text>{project.name}</span></div>
+          {project.docs.map((d) => item(d.id, d.label))}
+        </div>
       )}
     </nav>
   );
 }
 
-/** The narrow page's list: one select with every document, the open one chosen. */
-function DocSelect({ page, openId, pick }: { page: DocsPage; openId: string | null; pick: (id: string) => void }) {
+/** The narrow page's list: the project picker, then one select with the shared documents and the
+ *  chosen project's, the open one chosen. */
+function DocSelect({ page, openId, project, pick, onPick }: {
+  page: DocsPage; openId: string | null; project: (DocProject & { finished: boolean }) | null;
+  pick: (id: string) => void; onPick: (id: string) => void;
+}) {
   return (
-    <select aria-label="Document" value={openId ?? ""} onChange={(e) => pick(e.target.value)} data-testid="doc-select"
-            className="block h-10 w-full min-w-0 border! border-border! bg-background! px-2.5! text-sm! text-foreground! md:hidden">
-      <optgroup label="For every project">
-        {page.shared.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
-      </optgroup>
-      {[...page.projects, ...page.finished].map((p) => (
-        <optgroup key={p.id} label={p.name}>
-          {p.docs.map((d) => <option key={d.id} value={d.id} data-user-text>{`${d.label}: ${p.name}`}</option>)}
+    <div className="grid gap-2 md:hidden" data-testid="doc-narrow">
+      <ProjectPicker page={page} chosen={project} onPick={onPick} />
+      <select aria-label="Document" value={openId ?? ""} onChange={(e) => pick(e.target.value)} data-testid="doc-select"
+              className="block h-10 w-full min-w-0 border! border-border! bg-background! px-2.5! text-sm! text-foreground!">
+        <optgroup label="For every project">
+          {page.shared.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
         </optgroup>
-      ))}
-    </select>
+        {project && (
+          <optgroup label={project.name}>
+            {project.docs.map((d) => <option key={d.id} value={d.id} data-user-text>{`${d.label}: ${project.name}`}</option>)}
+          </optgroup>
+        )}
+      </select>
+    </div>
   );
 }
 
@@ -205,7 +291,7 @@ export default function FactoryDocs() {
   const sample = isSample(named) ? named : null;
   const [params, setParams] = useSearchParams();
   const docId = params.get("doc");
-  const [showFinished, setShowFinished] = React.useState(false);
+  const [picked, setPicked] = React.useState<string | null>(null);
 
   // A document the page does not show (an old link) opens the first shared one instead.
   const seen = React.useRef(docId);
@@ -233,7 +319,15 @@ export default function FactoryDocs() {
   const doc = data?.doc ?? null;
   const openId = docId ?? doc?.id ?? null;
   const stale = Boolean(docId) && doc?.id !== docId && !error;
-  const inFinished = Boolean(doc?.project && data?.finished.some((p) => p.id === doc.project!.id));
+  // the project the list shows: the open document's, else the one picked last, else the first open one
+  const all = data ? [...data.projects.map((p) => ({ ...p, finished: false })), ...data.finished.map((p) => ({ ...p, finished: true }))] : [];
+  const project = all.find((p) => p.id === doc?.project?.id) ?? all.find((p) => p.id === picked) ?? all[0] ?? null;
+  // picking a project opens its first document, so the address says what is open
+  const onPick = (id: string) => {
+    setPicked(id);
+    const first = all.find((p) => p.id === id)?.docs[0];
+    if (first) pick(first.id);
+  };
 
   return (
     <div className="grid gap-6 md:gap-8" data-testid="factory-docs">
@@ -255,9 +349,9 @@ export default function FactoryDocs() {
       )}
       {data && !data.empty && (
         <>
-          <DocSelect page={data} openId={openId} pick={pick} />
+          <DocSelect page={data} openId={openId} project={project} pick={pick} onPick={onPick} />
           <div className="grid items-start gap-5 md:grid-cols-[260px_minmax(0,1fr)]">
-            <DocList page={data} openId={openId} to={to} finishedOpen={showFinished || inFinished} setFinishedOpen={setShowFinished} />
+            <DocList page={data} openId={openId} project={project} to={to} onPick={onPick} />
             {doc && <DocPane key={doc.id} doc={doc} sample={sample} stale={stale} reload={reload} />}
           </div>
         </>
