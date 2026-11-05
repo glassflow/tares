@@ -10,6 +10,8 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
   provider adapter both agent loops call), `mcp*.py` (the MCP proxy),
   `projects/` (projects and the Tares templates they start from).
 - `ui/` the console, a Vite + React app. The daemon serves `ui/dist` and the wheel bundles it.
+- `ee/` the enterprise code, the package `tares_ee`, under `ee/LICENSE`. It is loaded through the
+  `tares.ee` entry point group and never imported by `tares/`.
 - `tests/` plain scripts. `demo/` the demo stack. `skills/` the install skill agents use.
 
 ## Tests
@@ -28,6 +30,9 @@ A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `
 uv venv && uv pip install -e ".[otlp-grpc]"
 python tests/test_cli.py
 ```
+
+After you change entry points in `pyproject.toml`, re-run `pip install -e .` (or
+`uv pip install -e .`) so the installed metadata updates.
 
 ## Console
 
@@ -77,6 +82,9 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 
 ## Release
+
+Final releases are held while the file `RELEASE_BLOCK` exists; `scripts/check_release_block.sh`
+enforces it in `release.sh`, `release.yml` and `docker-publish.yml`. Release candidates (`-rc.N`) pass.
 
 `scripts/release.sh <version>` bumps `pyproject.toml`, commits and tags. Pushing the tag runs
 `release.yml` (PyPI) and `docker-publish.yml` (`ghcr.io/glassflow/tares:<version>`). Add a

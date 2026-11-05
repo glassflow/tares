@@ -1,0 +1,28 @@
+DRAFT, pending legal review
+
+Tares Enterprise Edition licence
+
+Copyright (c) 2026 GlassFlow (the "Licensor")
+
+This licence covers the files in this `ee` directory and everything below it (the "Software").
+The rest of the repository is under the MIT licence in the top-level LICENSE file.
+
+1. You may copy and modify the Software for development and testing. Modified copies stay
+   under this licence.
+
+2. You may run the Software in production only with a valid Tares licence key issued by the
+   Licensor, and only for as many seats as that key allows.
+
+3. You may not copy, sublicense, sell or redistribute the Software, or any part of it, except
+   as this licence allows. You may not remove or change a licence key check or the licensing
+   notices.
+
+4. The Licensor and its licensors keep all rights in the Software that this licence does not
+   give you. Contributions to this directory are licensed to the Licensor under these terms.
+
+5. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+   INCLUDING THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+   NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+   LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+
+To get a licence key, write to help@glassflow.ai.

@@ -4,8 +4,8 @@ version = "1.55.1"
 description = "Open-source platform for always-on AI agents: a software factory for Claude Code that takes your projects from tickets to merged pull requests, or an AI SRE that watches your systems."
 readme = "README.md"
 keywords = ["tares", "software-factory", "claude-code", "autonomous-agents", "coding-agents", "multi-agent", "agent-orchestration", "ai-sre", "ai-monitoring", "incident-response", "observability", "mcp"]
-license = "MIT"
-license-files = ["LICENSE"]
+license = "MIT AND LicenseRef-Tares-EE"
+license-files = ["LICENSE", "ee/LICENSE"]
 authors = [{ name = "GlassFlow" }]
 requires-python = ">=3.11"
 classifiers = [
@@ -50,6 +50,9 @@ otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
 # local install keeps its state in DuckDB and needs none of this.
 postgres-state = ["psycopg[binary]>=3.1"]
 
+# The `tares.ee` entry point group (`[project.entry-points."tares.ee"]`) is not declared yet: hatch
+# writes no group for an empty table. Its first entry, `team = "tares_ee.team:Team"`, is added by
+# the ticket that ships the ee Team (TR-918).
 [project.scripts]
 tares = "tares.cli:main"
 taresd = "tares.cli:run_daemon"
@@ -70,7 +73,7 @@ artifacts = ["ui/dist/**"]
 exclude = ["**/node_modules"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["tares"]
+packages = ["tares", "ee/tares_ee"]
 
 # Ship the built console SPA inside the package (tares/console), so `pip install` serves the UI.
 # Build the UI first: `cd ui && npm install && npm run build` emits ui/dist before the wheel build.

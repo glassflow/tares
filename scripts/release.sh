@@ -14,6 +14,9 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]]; then
 fi
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# a final release is held while RELEASE_BLOCK exists; the same check runs in CI on the tag
+bash "$ROOT/scripts/check_release_block.sh" "v$VERSION"
+
 # package version
 sed -i.bak -E "s/^version = \".*\"/version = \"$VERSION\"/" "$ROOT/pyproject.toml"
 rm -f "$ROOT/pyproject.toml.bak"

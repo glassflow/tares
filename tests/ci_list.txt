@@ -34,6 +34,7 @@ test_desk_unaddressed_login
 test_docs
 test_duckdb_memory
 test_edition
+test_ee_packaging
 test_factory_batching
 test_factory_build
 test_factory_builder
@@ -126,6 +127,7 @@ test_projects_unit_upgrade
 test_push_wins
 test_rca_callback_anchor
 test_recording_person
+test_release_block
 test_resources
 test_rius_rca
 test_run_results
