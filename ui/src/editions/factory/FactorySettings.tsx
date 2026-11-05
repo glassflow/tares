@@ -242,13 +242,9 @@ export function FactorySettingsView({ page, problem, onCrew, onGrant, onSwitch }
           <Row title="Access keys" text={people.keys.text} data-testid="row-keys">
             <Button asChild variant="secondary" disabled={dim} data-ctl><Link to="/settings/advanced?tab=access">Manage keys</Link></Button>
           </Row>
-          {people.cloud_team_href && (
-            <Row title="Team" text="Team members are managed in your workspace on Tares Cloud." data-testid="row-team">
-              <Button asChild variant="secondary" disabled={dim} data-ctl>
-                <a href={people.cloud_team_href} target="_blank" rel="noreferrer noopener">Open the workspace</a>
-              </Button>
-            </Row>
-          )}
+          <Row title="People" text="Who is on this cell, and adding a teammate." data-testid="row-team">
+            <Button asChild variant="secondary"><Link to="/people">Open People</Link></Button>
+          </Row>
         </Card>
       </Section>
 

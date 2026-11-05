@@ -46,6 +46,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-738
     "/settings": { page: React.lazy(() => import("./factory/FactorySettings")), fallback: "today" },
 
+    // TR-1011
+    "/people": { page: React.lazy(() => import("./factory/FactoryPeople")), fallback: { redirect: "/settings" } },
+
     // TR-732: the factory home is /, so Start (the login landing) goes there
     "/start": { page: null, fallback: { redirect: "/" } },
   },

@@ -48,6 +48,7 @@ test_factory_home_waiting
 test_factory_ledger
 test_factory_mcp
 test_factory_orchestrator_mock
+test_factory_people
 test_factory_plan
 test_factory_pr_sync
 test_factory_private_screens
