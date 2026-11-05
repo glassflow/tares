@@ -5,7 +5,7 @@ import { api, auth } from "../api";
 import { useCloud, useWorkspaceOverview } from "../cloud";
 import CommandPalette from "../components/CommandPalette";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
-import { Search } from "../components/icons";
+import { Moon, Search, Sun } from "../components/icons";
 import { Button } from "../components/edition";
 import { Initials } from "../components/edition/Initials";
 import { Input } from "../components/ui/input";
@@ -101,9 +101,17 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
             <div className="truncate font-semibold" data-user-text>{who}</div>
             <div className="text-xs text-muted-foreground">{small}</div>
           </div>
-          <button type="button" role="menuitem" className={ROW} onClick={toggleTheme}>
-            <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-            <span className="text-muted-foreground">{theme === "dark" ? "Dark now" : "Light now"}</span>
+          <button type="button" role="menuitemcheckbox" aria-checked={theme === "dark"} className={ROW} onClick={toggleTheme}>
+            <span className="flex items-center gap-2">
+              {theme === "dark" ? <Moon aria-hidden /> : <Sun aria-hidden />}
+              Dark mode
+            </span>
+            {/* The look of the edition switch; the whole row is the control. */}
+            <span aria-hidden data-state={theme === "dark" ? "checked" : "unchecked"}
+                  className="inline-flex h-5 w-9 shrink-0 items-center border border-border bg-muted transition-colors motion-reduce:transition-none data-[state=checked]:border-primary data-[state=checked]:bg-primary">
+              <span data-state={theme === "dark" ? "checked" : "unchecked"}
+                    className="block size-3.5 translate-x-0.5 bg-muted-foreground transition-transform motion-reduce:transition-none data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-primary-foreground" />
+            </span>
           </button>
           {workspaceUrl && (
             <a role="menuitem" className={ROW} href={workspaceUrl} target="_blank" rel="noreferrer">

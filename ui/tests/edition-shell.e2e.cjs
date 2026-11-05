@@ -190,7 +190,7 @@ async function waitFor(url, tries = 150) {
         const menu = page.getByTestId("account-menu");
         await page.getByTestId("account-version").waitFor();
         ck(`${tag}: the account button opens the menu`, await menu.isVisible());
-        ck(`${tag}: it has a Light or Dark mode row`, (await menu.getByRole("menuitem", { name: /(Light|Dark) mode/ }).count()) === 1);
+        ck(`${tag}: it has a Dark mode switch`, (await menu.getByRole("menuitemcheckbox", { name: "Dark mode" }).count()) === 1);
         const ver = (await page.getByTestId("account-version").innerText()).replace(/\s+/g, " ");
         ck(`${tag}: it has a version row`, /^Version Tares \d/.test(ver), ver);
         ck(`${tag}: no key, no Sign out`, (await menu.getByText("Sign out").count()) === 0);
@@ -202,7 +202,7 @@ async function waitFor(url, tries = 150) {
         await shot(page, `${e}-${w}-account.png`);
         ck(`${tag}: opening the account menu reads the version once`, reads.filter((p) => p === "/api/capabilities").length === atLoad + 1,
            `${atLoad} at load, ${reads.filter((p) => p === "/api/capabilities").length} after`);
-        await menu.getByRole("menuitem").first().focus();
+        await menu.getByRole("menuitemcheckbox", { name: "Dark mode" }).focus();
         await page.keyboard.press("Escape");
         ck(`${tag}: Escape closes it`, (await menu.count()) === 0);
         ck(`${tag}: and returns to the account button`, await page.getByTestId("account-button").evaluate((el) => el === document.activeElement));
