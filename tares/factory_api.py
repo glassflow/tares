@@ -1902,7 +1902,11 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
               if lab in (d.get("tickets") or []) or not d.get("tickets")][:10]
         if ds:
             L += ["## Decisions the person made on this project"]
-            L += [f"- {d.get('question') or ''}: \"{d.get('words') or ''}\"" for d in ds] + [""]
+            for d in ds:   # the answer chosen, then the person's words when they add something
+                dw = factory_mod.decision_words(d)
+                L.append(f"- {d.get('question') or ''}: {dw['answer']}"
+                         + (f" (they said: \"{dw['said']}\")" if dw["said"] else ""))
+            L += [""]
         # 7. recurring findings in this repo: check these first
         if pr.get("repo"):
             rec = recurring(pr["repo"])
@@ -2304,6 +2308,24 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                 h.err(ValueError(f"{words} is {factory_mod.OPTION_LETTERS[letter]}) {picked}, "
                                  f"not {choice!r}"))
             choice = picked
+        elif d["options"]:
+            # an item with options always records the option chosen (TR-1018): "D85 A", "B - next
+            # week" or the option's own words map to it; the orchestrator's own full choice (a
+            # refinement such as "keep all but change A31: ...") is kept as given
+            if choice:
+                # "A", or an option's text cut short, becomes the option; a longer refinement stays
+                named = factory_mod.picked_option("", choice, d["options"])
+                bare = re.sub(r"^\(?[a-h][).:]\s*", "", factory_mod._plain(choice))
+                if named is not None and len(bare) <= len(factory_mod._plain(named)):
+                    choice = named
+            elif (picked := factory_mod.picked_option(words, "", d["options"])) is not None:
+                choice = picked
+            else:
+                h.err(ValueError(
+                    f"say which of {d['label']}'s options this answer picks: pass choice, the "
+                    "option's full text (or the person's own answer when they chose none of them). "
+                    "Its options: " + ", ".join(f"{factory_mod.OPTION_LETTERS[i]}) {o}"
+                                                for i, o in enumerate(d["options"]))))
         standing = bool(body.get("standing"))
         # a letter stands for the option it picked: a standing answer keeps that option, never "A"
         grant_words = choice if letter is not None else words

@@ -26,6 +26,7 @@ test_cloud_connect
 test_console_answers
 test_crew_standup
 test_crews
+test_decision_answers
 test_degraded
 test_delete_cascade
 test_desk_person

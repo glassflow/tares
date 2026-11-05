@@ -372,7 +372,7 @@ async def main():
             ck("decisions: newest first, all of them", [d["question"] for d in a["decisions"]]
                == ["Which licence?", "Use tabs or spaces?"] and a["decisions"][0]["when"] == "2 hours ago"
                and a["decisions"][1]["when"] == "3 days ago"
-               and all(set(d) == {"question", "words", "when", "at"} and d["at"] for d in a["decisions"]),
+               and all(set(d) == {"question", "answer", "said", "when", "at"} and d["at"] for d in a["decisions"]),
                a["decisions"])
             ck("calls: the open assumptions only, with who made them and when", a["calls"] == [
                 {"ref": "A1", "question": "Which date format?", "choice": "ISO dates",
@@ -411,7 +411,10 @@ async def main():
             ck("the hand-over path is on the crew route (so the check above means something)",
                PATH in json.dumps(hand), hand.get("handover"))
             ck("free text that names the folder shows the repo instead",
-               a["decisions"][1]["words"] == f"Tabs, as in {REPO}/style.md", a["decisions"][1])
+               a["decisions"][1]["said"] == f"Tabs, as in {REPO}/style.md", a["decisions"][1])
+            ck("a decision reads as the answer chosen, the person's words under it when they add something (TR-1018)",
+               (a["decisions"][1]["answer"], a["decisions"][0]["answer"], a["decisions"][0]["said"]) == ("tabs", "MIT", None),
+               a["decisions"])
             bad = [(p, k, s) for p, k, s in strings(a)
                    if s[:1] in ("/", "~") and k not in ("url", "href", "tickets_href")]
             ck("no value starts with / or ~ except a link", bad == [], bad)

@@ -87,6 +87,9 @@ store.add_assumption(y, "Which title length?", "Sixty characters", "It fits a re
 for q, w, when in (("Use tabs or spaces?", "Tabs", ago(days=3)), ("Which licence?", "MIT", ago(days=2)),
                    ("Which host?", "The docs site", ago(days=1)), ("Which theme?", "The light one", ago(hours=2))):
     store.add_decision(y, "", q, w, w, False, "project", False, None, False, [], when)
+# a reply by letter: the page shows the option, with the person's words under it (TR-1018)
+store.add_decision(y, "", "How should the branch take in main?", "D85 A", "merge main into teams", False,
+                   "project", True, None, False, [], ago(hours=1))
 store.add_desk_item(y, "Which gateway should the crew use?", "", [], "The first", "It is the cheaper one.", "", [],
                     False, "crew-orchestrator", [], ago(hours=3), "crew-orchestrator", None)
 store.add_desk_item(y, "Permission", "", [], "", "", "", [], False, "project-y-build-m1", [], ago(hours=1),

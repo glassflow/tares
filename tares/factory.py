@@ -638,6 +638,49 @@ def option_letter(words: str) -> int | None:
     return OPTION_LETTERS.lower().index(m.group(1)) if m else None
 
 
+# a reply that names an option by its letter inside a little more: "D85 A", "B - next week",
+# "A) the first one", "b: yes". The letter must stand alone after an optional desk label.
+_PICKED = re.compile(r"^(?:d\d+\s*[:.)\-]?\s+)?\(?([a-h])\)?(?:\s*[.):]|\s+-|\s*$)")
+_LABEL = re.compile(r"^d\d+\s*[:.)\-]?\s+")
+
+
+def picked_option(words: str, choice: str, options: list[str]) -> str | None:
+    """The option a desk answer picks, or None (TR-1018). A letter, alone or after the desk label
+    and before a separator ("D85 A", "B - later", "A) yes"), picks by position; otherwise the
+    choice the orchestrator passed, or the words without the label, equal to an option or
+    starting with it (either way round) pick that option."""
+    opts = [o for o in options or [] if str(o or "").strip()]
+    if not opts:
+        return None
+    for text in (choice, words):
+        m = _PICKED.match(_plain(text))
+        if m:
+            i = OPTION_LETTERS.lower().index(m.group(1))
+            if i < len(opts):
+                return opts[i]
+    for text in (choice, words):
+        t = _LABEL.sub("", _plain(text))
+        if not t:
+            continue
+        for o in opts:
+            po = _plain(o)
+            if po and (t == po or t.startswith(po) or (len(t) >= 3 and po.startswith(t))):
+                return o
+    return None
+
+
+def decision_words(d: dict) -> dict:
+    """How a decision reads (TR-1018): {answer, said}. `answer` is what was chosen (the option's
+    text, or the person's own words when the question had no options); `said` is their words as
+    typed, only when they add something to the answer: a bare letter, "D85 A", or more words."""
+    words = " ".join(str(d.get("words") or "").split())
+    choice = " ".join(str(d.get("choice") or "").split())
+    answer = choice or words
+    bare = _LABEL.sub("", _plain(words))
+    said = None if not words or bare == _plain(answer) else words
+    return {"answer": answer, "said": said}
+
+
 def letter_match(index: int, turns: list[dict]) -> dict | None:
     """The person turn that is that option's letter and nothing else. A letter inside a longer
     message never counts: "B but later" and "maybe B" are not B."""

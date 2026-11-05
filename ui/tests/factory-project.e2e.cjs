@@ -190,10 +190,15 @@ async function waitFor(url, tries = 100) {
     await page.unroute(`**/api/projects/${y}/assumptions/A2/state`);
 
     // decisions, docs, terminal
-    ck("decisions: three shown, newest first, one older behind a button", (await T("decision-row").count()) === 3 && (await txt(T("decisions-more"))) === "Show 1 older"
-       && (await txt(T("decision-row").first())).includes("The light one"), await txt(T("decision-row").first()));
+    ck("decisions: three shown, newest first, two older behind a button", (await T("decision-row").count()) === 3 && (await txt(T("decisions-more"))) === "Show 2 older"
+       && (await txt(T("decision-row").nth(1))).includes("The light one"), await txt(T("decision-row").nth(1)));
+    ck("a reply by letter reads as the option chosen, with the person's words under it (TR-1018)",
+       (await txt(T("decision-row").first().getByTestId("decision-answer"))) === "merge main into teams"
+       && (await txt(T("decision-row").first().getByTestId("decision-said"))) === "You said: D85 A", await txt(T("decision-row").first()));
+    ck("words equal to the answer are not repeated", (await T("decision-row").nth(1).getByTestId("decision-said").count()) === 0);
+    ck("the heading says answers", /Your answers, newest first/.test(await txt(T("decisions"))));
     await T("decisions-more").click();
-    ck("Show 1 older shows all four", (await T("decision-row").count()) === 4 && (await T("decisions-more").count()) === 0);
+    ck("Show 2 older shows all five", (await T("decision-row").count()) === 5 && (await T("decisions-more").count()) === 0);
     ck("docs link to the docs screen", (await T("doc-row").count()) === 4 && /^\/docs\?doc=/.test(await T("doc-row").first().getAttribute("href")) &&
        (await txt(T("doc-row").first())).startsWith("Spec") && /, updated /.test(await txt(T("doc-row").first())), await txt(T("doc-row").first()));
     ck("the terminal shows the command to open a builder's session",
