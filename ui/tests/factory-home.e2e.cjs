@@ -171,7 +171,7 @@ function cleanEnv(extra) {
         const probe = document.createElement("i"); probe.style.color = "var(--accent-deep)"; document.body.appendChild(probe);
         const c = getComputedStyle(probe).color; probe.remove(); return getComputedStyle(e).color === c;
       }));
-      ck(`busy @${width}: How far it may go links to Settings`, (await page.getByRole("link", { name: "How far it may go" }).getAttribute("href")) === "/settings#crew");
+      ck(`busy @${width}: Autonomy links to Settings`, (await page.getByRole("link", { name: "Autonomy" }).getAttribute("href")) === "/settings#crew");
       ck(`busy @${width}: the plan card shows both limits`, (await page.getByText("1% used · resets 21:50").count()) === 1
          && (await page.getByText("11% used · resets Fri").count()) === 1);
       ck(`busy @${width}: connected tools and the dashed Add a tool link`, (await page.getByText("GitHub").count()) === 1

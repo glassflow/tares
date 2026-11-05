@@ -29,7 +29,7 @@ const member = (s: Spec): CrewMember => {
   };
 };
 
-const LEAD = () => member({ role: "The one you talk to", state: "working", doing: "Handing out the tickets of project-x and answering the builders", heard: "12 seconds ago", mem: 82 });
+const LEAD = () => member({ role: "Orchestrator", state: "working", doing: "Handing out the tickets of project-x and answering the builders", heard: "12 seconds ago", mem: 82 });
 const REVIEWER = () => member({ role: "Reviewer", state: "idle", since: "1 minute", doing: "Reviews every pull request, one project after another", heard: "1 minute ago", mem: 41 });
 const RELEASER = () => member({ role: "Releaser", state: "idle", since: "2 hours", doing: "Ships a milestone once you say so", heard: "2 hours ago", mem: 22 });
 

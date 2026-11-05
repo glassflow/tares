@@ -208,7 +208,7 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
 
 # ── the crew ──────────────────────────────────────────────────────────────────
 
-ROLE_LABEL = {"orchestrator": "The one you talk to", "reviewer": "Reviewer", "releaser": "Releaser",
+ROLE_LABEL = {"orchestrator": "Orchestrator", "reviewer": "Reviewer", "releaser": "Releaser",
               "builder": "Builder", "helper": "Helper"}
 
 

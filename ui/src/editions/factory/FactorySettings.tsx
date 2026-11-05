@@ -160,8 +160,8 @@ export function FactorySettingsView({ page, problem, onCrew, onGrant, onSwitch }
 
       <Section id="crew" title="Crew" why="How far the crew may go, how many builders work at once and what the crew may do on its own.">
         <Card dim={dim} className="mb-3" data-testid="how-far">
-          <div className={HEAD}><b className="text-[13px]">How far it may go</b></div>
-          <div role="radiogroup" aria-label="How far it may go">
+          <div className={HEAD}><b className="text-[13px]">Autonomy</b></div>
+          <div role="radiogroup" aria-label="Autonomy">
             {CHOICES.map((c) => (
               <button key={c.value} type="button" role="radio" aria-checked={level === c.value} disabled={dim} data-testid={`how-${c.value}`} data-ctl
                       onClick={() => { if (c.value === level) return; if (c.value === "L4-ship") setConfirm(true); else void onCrew({ autonomy: c.value }); }}
