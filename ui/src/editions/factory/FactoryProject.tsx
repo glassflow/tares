@@ -2,15 +2,19 @@ import * as React from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, ProgressBar, Skeleton, Textarea, Toaster, useToast } from "../../components/edition";
+import { Banner, Button, Dialog, Initials, ProgressBar, Skeleton, Textarea, Toaster, useToast } from "../../components/edition";
+import * as SelectPrimitive from "@radix-ui/react-select";
+import { Pencil } from "../../components/icons";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  acceptMilestone, answerCheck, decideCall, factoryProject,
+  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setProjectLead, type ProjectPeople, type ProjectPerson,
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
+import { DetailLines } from "./HomeDetail";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
 
@@ -123,12 +127,28 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-function ActionButton({ action, onClose }: { action: HomeAction; onClose?: () => void }) {
+function ActionButton({ action, onClose, onKeep }: { action: HomeAction; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void> }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
   const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px]! max-sm:flex-1 max-sm:justify-center max-sm:text-center";
   const variant = action.do === "close" ? "primary" : "secondary";
   const strong = action.primary && action.do !== "close" ? "border-foreground!" : "";
   if (action.do === "close") {
     return <Button variant={variant} className={cn(cls, strong)} onClick={onClose} data-testid="waiting-close">{action.label}</Button>;
+  }
+  if (action.do === "keep_assumptions" && onKeep) {
+    // kept here, on the project page: no trip to Home
+    const refs = Array.isArray(action.refs) ? action.refs.map(String) : [];
+    const keep = async () => {
+      setBusy(true); setError("");
+      try { await onKeep(refs); } catch (e) { setError(e instanceof ApiError ? e.message : NOT_SAVED); setBusy(false); }
+    };
+    return (
+      <span className="grid gap-1">
+        <Button variant={variant} className={cn(cls, strong)} busy={busy} onClick={() => void keep()} data-testid="waiting-keep">{action.label}</Button>
+        {error && <span role="alert" className="text-[13px] text-[color:var(--err)]">{error}</span>}
+      </span>
+    );
   }
   if (action.href) {
     const external = !action.href.startsWith("/");
@@ -146,7 +166,7 @@ function ActionButton({ action, onClose }: { action: HomeAction; onClose?: () =>
   );
 }
 
-function WaitingRow({ item, onClose }: { item: HomeItem; onClose: () => void }) {
+function WaitingRow({ item, onClose, onKeep }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void> }) {
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
     <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-[var(--row-hover)]")}
@@ -155,6 +175,7 @@ function WaitingRow({ item, onClose }: { item: HomeItem; onClose: () => void }) 
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{item.title}</div>
         <Detail text={item.detail} />
+        <DetailLines lines={item.lines} />
         {item.meta && <div className={cn(MUTED, "mt-0.5")}>{item.meta}</div>}
         {/* the options show here; they are answered on Home, where the Answer button opens */}
         <QuestionChoices item={item} render={(a) => (
@@ -163,25 +184,28 @@ function WaitingRow({ item, onClose }: { item: HomeItem; onClose: () => void }) 
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2 max-sm:w-full">
-          {actions.map((a) => <ActionButton key={a.label} action={a} onClose={onClose} />)}
+          {actions.map((a) => <ActionButton key={a.label} action={a} onClose={onClose} onKeep={onKeep} />)}
         </div>
       )}
     </div>
   );
 }
 
-function Waiting({ items, onClose }: { items: HomeItem[]; onClose: () => void }) {
+function Waiting({ items, onClose, onKeep }: {
+  items: HomeItem[]; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>;
+}) {
   const [all, setAll] = React.useState(false);
   const g = groupWaiting(items);
+  const count = items.length;
   const rest = all ? g.rest : g.rest.slice(0, SHOW_WAITING);
   const more = g.rest.length - rest.length;
-  const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close"));
-  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} />;
+  const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close" && !(a.do === "keep_assumptions" && onKeep)));
+  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} onKeep={onKeep} />;
   return (
     <section id="waiting" aria-label="Waiting for you" className="min-w-0 scroll-mt-4" data-testid="waiting">
       <SectionHead title="Waiting for you"
-                   aside={items.length > 0 && <span className={MUTED} data-testid="waiting-count">{plural(items.length, "thing", "things")}</span>} />
-      {items.length === 0 ? (
+                   aside={count > 0 && <span className={MUTED} data-testid="waiting-count">{plural(count, "thing", "things")}</span>} />
+      {count === 0 ? (
         <Empty testid="waiting-empty">Nothing waits for you in this project.</Empty>
       ) : (
         <>
@@ -417,9 +441,109 @@ function MilestoneRow({ m, onAnswer, onAccept }: {
   );
 }
 
+// ── who is on the project ────────────────────────────────────────────────────
+
+function PersonLine({ p, children }: { p: ProjectPerson; children?: React.ReactNode }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2.5 py-1" data-testid="people-person">
+      <Initials name={p.name} picture={p.picture} className="size-7 text-[11px]" aria-hidden />
+      <span className="min-w-0 truncate" data-user-text>{p.name}</span>
+      {children}
+      <span className={cn(MUTED, "ml-auto whitespace-nowrap")}>{plural(p.tickets ?? 0, "ticket", "tickets")}</span>
+    </div>
+  );
+}
+
+/** The pencil on the lead's line: pick someone else to lead. */
+function ChangeLead({ people, lead, onPick }: { people: ProjectPerson[]; lead: string; onPick: (id: string) => Promise<void> }) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const choices = people.filter((x) => x.id !== lead);
+  if (choices.length === 0) return null;
+  const pick = async (id: string) => {
+    setBusy(true); setError("");
+    try { await onPick(id); } catch (e) { setError(e instanceof ApiError ? e.message : NOT_SAVED); } finally { setBusy(false); }
+  };
+  return (
+    <>
+      <Select value="" disabled={busy} onValueChange={(v) => void pick(v)}>
+        <SelectPrimitive.Trigger aria-label="Change the lead" title="Change the lead" data-testid="people-set-lead"
+          className="-ml-1.5 inline-flex! size-6! shrink-0 items-center justify-center border-0! bg-transparent! p-0! text-muted-foreground! hover:text-foreground! disabled:opacity-45!">
+          <Pencil className="size-3.5" />
+        </SelectPrimitive.Trigger>
+        <SelectContent align="start">
+          {choices.map((x) => <SelectItem key={x.id} value={x.id} data-user-text>{x.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]">{error}</div>}
+    </>
+  );
+}
+
+/** Pick a person from the cell, then act: set the lead or add a member. */
+function PickPerson({ people, exclude, label, testid, onPick }: {
+  people: ProjectPerson[]; exclude: string[]; label: string; testid: string; onPick: (id: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const choices = people.filter((x) => !exclude.includes(x.id));
+  if (choices.length === 0) return null;
+  const pick = async (id: string) => {
+    setBusy(true); setError("");
+    try { await onPick(id); } catch (e) { setError(e instanceof ApiError ? e.message : NOT_SAVED); } finally { setBusy(false); }
+  };
+  return (
+    <div className="mt-1.5 grid gap-1">
+      <Select value="" disabled={busy} onValueChange={(v) => void pick(v)}>
+        <SelectTrigger aria-label={label} data-testid={testid} className="h-8! text-[13px]!">
+          <SelectValue placeholder={busy ? "Saving..." : label} />
+        </SelectTrigger>
+        <SelectContent>
+          {choices.map((x) => <SelectItem key={x.id} value={x.id} data-user-text>{x.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]">{error}</div>}
+    </div>
+  );
+}
+
+function People({ people, onLead, onAdd }: {
+  people: ProjectPeople; onLead?: (id: string) => Promise<void>; onAdd?: (id: string) => Promise<void>;
+}) {
+  const { lead, members } = people;
+  const on = [lead?.id, ...members.map((m) => m.id)].filter(Boolean) as string[];
+  return (
+    <section id="people" aria-label="People" className="min-w-0 scroll-mt-4" data-testid="project-people">
+      <SectionHead title="People" />
+      <div className={cn(CARD, "px-4 py-3")}>
+        <div className={cn(MUTED, "mb-0.5")}>Lead</div>
+        {lead ? (
+          <PersonLine p={lead}>
+            {people.can_set_lead && onLead && <ChangeLead people={people.people} lead={lead.id} onPick={onLead} />}
+          </PersonLine>
+        ) : (
+          <>
+            <div className="py-1 text-[13px]" data-testid="people-no-lead">No lead yet.</div>
+            {people.can_set_lead && onLead && (
+              <PickPerson people={people.people} exclude={[]} label="Set a lead" testid="people-set-lead" onPick={onLead} />
+            )}
+          </>
+        )}
+        <div className={cn(MUTED, "mb-0.5 mt-3")}>Members</div>
+        {members.length === 0 ? (
+          <div className="py-1 text-[13px] text-muted-foreground" data-testid="people-no-members">No members yet.</div>
+        ) : members.map((m) => <PersonLine key={m.id} p={m} />)}
+        {people.can_add && onAdd && (
+          <PickPerson people={people.people} exclude={on} label="Add a member" testid="people-add-member" onPick={onAdd} />
+        )}
+      </div>
+    </section>
+  );
+}
+
 // ── calls, decisions, docs, terminal ──────────────────────────────────────────
 
-function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void> }) {
+export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void> }) {
   const [open, setOpen] = React.useState(false);
   const [words, setWords] = React.useState("");
   const [busy, setBusy] = React.useState<"" | "keep" | "send">("");
@@ -449,7 +573,7 @@ function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: ProjectCall, s
         <Button variant="secondary" className="h-8 border-foreground! text-[13px]!" busy={busy === "keep"} disabled={busy === "send"}
                 onClick={() => decide("kept")} data-testid="call-keep">Keep</Button>
         <Button variant="secondary" className="h-8 text-[13px]!" aria-expanded={open} disabled={busy !== ""}
-                onClick={() => setOpen((o) => !o)} data-testid="call-overturn">Overturn</Button>
+                onClick={() => setOpen((o) => !o)} data-testid="call-overturn">Change</Button>
       </div>
       {open && (
         <div className="mt-2.5 grid gap-2" data-testid="call-overturn-box">
@@ -468,48 +592,44 @@ function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: ProjectCall, s
   );
 }
 
-function Calls({ d, gone, onDecide }: {
-  d: FactoryProjectData; gone: string[];
-  onDecide: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void>;
-}) {
-  const list = d.calls.filter((c) => !gone.includes(c.ref));
+/** One decision: the question, the answer chosen, the person's own words when they add something. */
+export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][number]; wide?: boolean }) {
+  if (wide) {
+    // its own page: the question and when it was decided on one line, the answer below
+    return (
+      <div className="px-5 py-4" data-testid="decision-row">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
+          <div className="min-w-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{x.question}</div>
+          <div className={cn(MUTED, "whitespace-nowrap")}>{x.when}</div>
+        </div>
+        <div className="mt-1.5 border-l-[3px] border-[color:var(--accent)] pl-3 text-[15px] font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+        {x.said && <div className="mt-1.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
+      </div>
+    );
+  }
   return (
-    <section id="calls" aria-label="Calls to keep" className="min-w-0 scroll-mt-4" data-testid="calls">
-      <SectionHead title="Calls to keep" aside={<span className={MUTED}>Made by the crew without you</span>} />
-      {list.length === 0 ? (
-        <Empty testid="calls-empty">No open calls. When the crew decides something without you, it shows here.</Empty>
-      ) : (
-        <div className={CARD}>{list.map((c) => <CallRow key={c.ref} c={c} onDecide={onDecide} />)}</div>
-      )}
-    </section>
+    <div className={ROW} data-testid="decision-row">
+      <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-user-text>{x.question}</div>
+      <div className="my-0.5 border-l-[3px] border-[color:var(--accent)] pl-2.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+      {x.said && <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
+      <div className={MUTED}>{x.when}</div>
+    </div>
   );
 }
 
-function Decisions({ items }: { items: FactoryProjectData["decisions"] }) {
-  const [all, setAll] = React.useState(false);
-  const shown = all ? items : items.slice(0, SHOW_DECISIONS);
-  const more = items.length - shown.length;
+function Decisions({ id, items }: { id: string; items: FactoryProjectData["decisions"] }) {
+  const shown = items.slice(0, SHOW_DECISIONS);
   return (
     <section id="decisions" aria-label="Decisions" className="min-w-0 scroll-mt-4" data-testid="decisions">
-      <SectionHead title="Decisions" aside={<span className={MUTED}>Your answers, newest first</span>} />
+      <SectionHead title="Decisions" aside={items.length > 0 && (
+        <Link to={`/projects/${encodeURIComponent(id)}/decisions`} className={cn("text-xs", LINK)} data-testid="decisions-all">
+          All {plural(items.length, "decision", "decisions")} {"›"}
+        </Link>
+      )} />
       {items.length === 0 ? (
         <Empty testid="decisions-empty">No decisions yet. When you answer the crew, it is kept here.</Empty>
       ) : (
-        <div className={CARD}>
-          {shown.map((x, i) => (
-            <div key={i} className={ROW} data-testid="decision-row">
-              <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-user-text>{x.question}</div>
-              <div className="my-0.5 border-l-[3px] border-[color:var(--accent)] pl-2.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
-              {x.said && <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
-              <div className={MUTED}>{x.when}</div>
-            </div>
-          ))}
-          {more > 0 && (
-            <div className="border-t border-border px-4 py-2.5">
-              <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => setAll(true)} data-testid="decisions-more">Show {more} older</Button>
-            </div>
-          )}
-        </div>
+        <div className={CARD}>{shown.map((x, i) => <DecisionRow key={i} x={x} />)}</div>
       )}
     </section>
   );
@@ -586,7 +706,7 @@ function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
 
 // ── the page ──────────────────────────────────────────────────────────────────
 
-function Crumb({ name }: { name?: string }) {
+export function Crumb({ name }: { name?: string }) {
   return (
     <div className={MUTED} data-testid="crumb">
       <Link to="/projects" className={LINK}>Projects</Link>
@@ -621,12 +741,14 @@ function Loading() {
 /** The page for a project that was read. `onClose` closes the project and answers when it is done or
  *  throws the cell's answer; `onDecide` keeps or overturns a call the same way. Without them the
  *  buttons only open and shut what they open. `start` is a Close part way, for a sample. */
-export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, start }: {
+export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, onLead, onAdd, start }: {
   data: FactoryProjectData;
   onClose?: () => Promise<void>;
   onDecide?: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void>;
   onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
   onAccept?: (m: ProjectMilestone) => Promise<void>;
+  onLead?: (id: string) => Promise<void>;
+  onAdd?: (id: string) => Promise<void>;
   start?: { open: boolean; error: string };
 }) {
   const { toast } = useToast();
@@ -634,13 +756,14 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
   const [asking, setAsking] = React.useState(Boolean(start?.open));
   const [busy, setBusy] = React.useState(false);
   const [closeError, setCloseError] = React.useState(start?.error ?? "");
-  const [gone, setGone] = React.useState<string[]>([]);
+  const [kept, setKept] = React.useState<string[]>([]);
 
   const finished = d.state === "finished";
   // a button that opens this very page has no place on it
   const here = `/projects/${d.id}`;
   const own = d.waiting.map((w) => ({ ...w, actions: w.actions.filter((a) => a.href !== here) }));
-  const items = d.can_close && !own.some((w) => w.actions.some((a) => a.do === "close")) ? [...own, readyRow(d)] : own;
+  const listed = own.filter((w) => !kept.includes(w.id));
+  const items = d.can_close && !listed.some((w) => w.actions.some((a) => a.do === "close")) ? [...listed, readyRow(d)] : listed;
 
   // an address with a #section scrolls to it once the page is there; a #desk-* one waits in Waiting
   React.useEffect(() => {
@@ -665,10 +788,16 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
     }
   };
 
-  const decide = async (c: ProjectCall, state: "kept" | "overturned", words?: string) => {
-    await onDecide?.(c, state, words);
-    setGone((g) => [...g, c.ref]);
-  };
+  // "Keep both" on a calls item keeps each call here; the item leaves the list once they are kept
+  const onKeep = onDecide && (async (refs: string[]) => {
+    for (const ref of refs) {
+      const c = d.calls.find((x) => x.ref === ref) ?? { ref, question: "", choice: "", why: "", made: "", tickets: [] };
+      await onDecide(c, "kept");
+    }
+    const item = d.waiting.find((w) => w.actions.some((a) => a.do === "keep_assumptions" && Array.isArray(a.refs) && a.refs.join() === refs.join()));
+    if (item) setKept((k) => [...k, item.id]);
+    toast(refs.length === 1 ? "Kept it. The crew carries on." : refs.length === 2 ? "Kept both. The crew carries on." : `Kept all ${refs.length}. The crew carries on.`);
+  });
 
   return (
     <div className="grid min-w-0 gap-6 md:gap-8" data-testid="factory-project" data-state={d.state}>
@@ -691,6 +820,9 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
         <div className="flex flex-wrap gap-x-[18px] gap-y-1 text-[13px]" data-testid="project-links">
           <Link to={`/setup?project=${encodeURIComponent(d.id)}`} className={LINK}>Edit plan</Link>
           {d.counts.total > 0 && <Link to={d.tickets_href} className={LINK} data-testid="all-tickets-head">All {d.counts.total} tickets</Link>}
+          {(d.calls.length > 0 || (d.calls_past ?? []).length > 0) && (
+            <Link to={`/projects/${encodeURIComponent(d.id)}/calls`} className={LINK} data-testid="calls-link">Calls</Link>
+          )}
           {d.linked.tickets_in && d.linked.url && (
             <a href={d.linked.url} target="_blank" rel="noopener noreferrer" className={LINK} data-testid="tracker-link">
               Tickets in {d.linked.tickets_in} {"↗"}
@@ -706,7 +838,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-8">
         <div className="grid min-w-0 gap-6">
-          <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} />
+          <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} onKeep={onKeep} />
           <Moving d={d} />
           <section id="milestones" aria-label="Milestones" className="min-w-0 scroll-mt-4" data-testid="milestones">
             <SectionHead title="Milestones" />
@@ -718,8 +850,8 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
           </section>
         </div>
         <div className="grid min-w-0 gap-6">
-          <Calls d={d} gone={gone} onDecide={decide} />
-          <Decisions items={d.decisions} />
+          {d.people && <People people={d.people} onLead={onLead} onAdd={onAdd} />}
+          <Decisions id={d.id} items={d.decisions} />
           <Docs items={d.docs} />
           <Terminal items={d.terminal} />
         </div>
@@ -771,6 +903,8 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
   const accept = async (m: ProjectMilestone) => {
     if (!sample) { await acceptMilestone(id, m.id); reload(); }
   };
+  const lead = async (person: string) => { if (!sample) { await setProjectLead(id, person); reload(); } };
+  const add = async (person: string) => { if (!sample) { await addProjectMember(id, person); reload(); } };
 
   if (!data) {
     return (
@@ -796,7 +930,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} start={sample ? sampleClose(sample) : undefined} />
     </>
   );
 }

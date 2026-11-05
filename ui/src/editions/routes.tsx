@@ -46,6 +46,12 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-760 (an old ?view=ticket:<ref> address lands here, see ProjectRoute)
     "/projects/:id/tickets/:ref": { page: React.lazy(() => import("./factory/FactoryTicket")), fallback: { redirect: "/projects/:id?view=ticket::ref" } },
 
+    // a project's decisions on their own page
+    "/projects/:id/decisions": { page: React.lazy(() => import("./factory/FactoryDecisions")), fallback: { redirect: "/projects/:id" } },
+
+    // the calls the crew made without the person, on their own page
+    "/projects/:id/calls": { page: React.lazy(() => import("./factory/FactoryCalls")), fallback: { redirect: "/projects/:id" } },
+
     // TR-806
     "/tickets": { page: React.lazy(() => import("./factory/FactoryTickets")), fallback: { redirect: "/projects" } },
 

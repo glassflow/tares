@@ -41,7 +41,7 @@ _STAGE_WORD = factory_mod.STAGE_WORD
 _VERDICT_WORD = {"pass": "passed", "changes": "changes asked", "block": "blocked"}
 _CI_WORD = {"success": "CI green", "failure": "CI failing", "pending": "CI running"}
 # the crew's roles as a person says them, as the author of a call: "by the builder"
-_ROLE_BY = {"orchestrator": "the lead", "reviewer": "the reviewer", "releaser": "the releaser",
+_ROLE_BY = {"orchestrator": "the orchestrator", "reviewer": "the reviewer", "releaser": "the releaser",
             "builder": "the builder", "helper": "a helper"}
 _ROLE_WHO = {"orchestrator": "Lead", "reviewer": "Reviewer", "releaser": "Releaser",
              "builder": "Builder", "helper": "Helper"}
@@ -156,6 +156,38 @@ def register(app, store, h, ctx):
             rows = []
         return station_roles(rows), rows
 
+    def project_people(p: dict, tickets: list[dict], request: Request) -> dict:
+        """Who is on the project (top right of the page): its lead and its members, each {id,
+        name, picture, tickets}. A member is anyone added to the project or holding an open ticket
+        in it. Also whether the caller may set the lead (an admin, or the lead) and add members
+        (the lead), and the people who can be picked."""
+        def ref(pid):
+            x = store.get_person(pid) if pid else None
+            return ({"id": x["id"], "name": x["name"] or x.get("email") or x["id"],
+                     "picture": x.get("picture")} if x else None)
+        counts: dict[str, int] = {}
+        for t in tickets:
+            who = t.get("assignee_person_id")
+            if who and t.get("status") != "canceled":
+                counts[who] = counts.get(who, 0) + 1
+        lead = ref(p.get("lead_person_id"))
+        if lead:
+            lead["tickets"] = counts.get(lead["id"], 0)
+        ids = [m["person_id"] for m in store.list_project_members(p["id"])]
+        ids += [i for i in counts if i not in ids]
+        members = [{**r, "tickets": counts.get(r["id"], 0)} for r in (ref(i) for i in ids)
+                   if r and (not lead or r["id"] != lead["id"])]
+        me = h.current_person(request) or {}
+        scopes = getattr(request.state, "scopes", None)
+        admin = scopes is None or "admin" in scopes
+        is_lead = bool(lead and me.get("id") == lead["id"])
+        # the cell's first person before anyone signed in (no email, named "You") is nobody to pick
+        everyone = [r for r in (ref(x["id"]) for x in store.list_people()
+                                if not (x["id"] == "local" and not x.get("email"))) if r]
+        return {"lead": lead, "members": members,
+                "can_set_lead": admin or is_lead, "can_add": is_lead or h.is_system(request),
+                "you": me.get("id"), "people": everyone if (admin or is_lead) else []}
+
     @app.get("/api/factory/projects/{uid}")
     def factory_project(uid: str, request: Request):
         """The whole project page in one read (404 for a project that is not a software factory
@@ -236,25 +268,13 @@ def register(app, store, h, ctx):
                            "can_accept": st["needs_person"] and not st["person_open"],
                            "tickets_href": f"/tickets?project={uid}&milestone={m['id']}"})
 
-        # the ticket that goes next: the one being built, else the first ready, else the first
-        # that waits
-        nxt = None
-        open_ = [t for t in tickets if not factory_mod.finished(t)]
-        building = next((t for t in open_ if t.get("stage") != "blocked"
-                         and (t.get("status") == "in_progress"
-                              or t.get("stage") in ("doing", "review", "changes"))), None)
-        ready = next((t for t in open_ if rd[t["id"]]["ready"]), None)
-        pick = building or ready or (open_[0] if open_ else None)
-        if pick is not None:
-            if pick is building:
-                why = "being worked on now"
-            elif pick is ready:
-                why = "ready, nothing it depends on is open"
-            elif pick.get("stage") == "blocked":
-                why = "blocked"
-            else:
-                why = "waits for " + ", ".join(rd[pick["id"]]["blocked_by"] or ["an earlier ticket"])
-            nxt = {"ticket": refs[pick["id"]], "title": clean(pick["title"]), "why": why}
+        # the ticket that goes next: the first ready one that has not started. Moving now lists
+        # the tickets being worked on and the ones that wait, so next is never one of those.
+        moving_ids = {t["id"] for t in movers}
+        pick = next((t for t in tickets if not factory_mod.finished(t) and t["id"] not in moving_ids
+                     and rd[t["id"]]["ready"]), None)
+        nxt = ({"ticket": refs[pick["id"]], "title": clean(pick["title"]),
+                "why": "ready, nothing it depends on is open"} if pick is not None else None)
 
         waiting = [w for w in fh.waiting_items(store, fh.for_caller(ctx.fx, request), now)
                    if (w.get("project") or {}).get("id") == uid]
@@ -276,13 +296,21 @@ def register(app, store, h, ctx):
                       **{k: clean(v) if v else None for k, v in factory_mod.decision_words(d).items()},
                       "when": plain_ago(d["at"], now), "at": fh._iso(d["at"])}
                      for d in store.list_decisions(uid)]
-        calls = []
-        for a in store.list_assumptions(uid, state="open"):
+        calls, calls_past = [], []
+        for a in store.list_assumptions(uid):
             by = _ROLE_BY.get(a.get("made_role") or "", "the crew")
-            calls.append({"ref": a["label"], "question": clean(a["question"]),
-                          "choice": clean(a["choice"]), "why": clean(a["why"]),
-                          "made": f"by {by}, {plain_ago(a['made_at'], now)}".rstrip(", "),
-                          "tickets": [refs[x] for x in a["tickets"] if x in refs]})
+            c = {"ref": a["label"], "question": clean(a["question"]),
+                 "choice": clean(a["choice"]), "why": clean(a["why"]),
+                 "made": f"by {by}, {plain_ago(a['made_at'], now)}".rstrip(", "),
+                 "tickets": [refs[x] for x in a["tickets"] if x in refs]}
+            if a["state"] == "open":
+                calls.append(c)
+            elif a["state"] in ("kept", "overturned"):
+                # the record on the calls page: what the person did with it, newest first
+                calls_past.append({**c, "state": a["state"], "words": clean(a["words"]) if a.get("words") else None,
+                                   "decided": plain_ago(a["decided_at"], now) if a.get("decided_at") else "",
+                                   "at": fh._iso(a.get("decided_at"))})
+        calls_past.sort(key=lambda c: c["at"] or "", reverse=True)
 
         order = list(_DOC_LABEL)
         docs = [{"id": d["id"], "title": clean(d["title"]), "kind_label": _DOC_LABEL[d["kind"]],
@@ -305,6 +333,7 @@ def register(app, store, h, ctx):
                     not in _GONE]
         terminal = list({t["command"]: t for t in terminal}.values())
 
+        people = project_people(p, tickets, request)
         home = store.project_ticket_home(uid)
         link = (store.get_project_linear(uid) if home == "linear"
                 else store.get_project_github(uid) if home == "github" else None)
@@ -313,8 +342,9 @@ def register(app, store, h, ctx):
                 "state": state, "state_label": STATE_LABEL[state],
                 "waiting": waiting, "counts": counts, "moving": moving, "moving_total": len(movers),
                 "tickets_href": f"/tickets?project={uid}", "next": nxt, "milestones": out_ms,
-                "decisions": decisions, "calls": calls, "docs": docs, "terminal": terminal,
+                "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "terminal": terminal,
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
                 "can_close": factory_mod.ready_to_close(p, tickets),
+                "people": people,
                 "now": fh._iso(now)}

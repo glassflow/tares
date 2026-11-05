@@ -44,7 +44,7 @@ const REVIEW = item("prs_to_review", "2 PRs to review", "project-y",
   "Waiting 3 hours · example-org/docs-site", [act("Review", true, { href: `/reviews?project=${PID}` })]);
 const CALLS = item("calls_to_confirm", "2 calls to confirm", "project-y",
   "The crew decided without you: ISO dates, the standard logger. Keep both?", "Made by the builder and the reviewer",
-  [act("Read them", false, { href: `/projects/${PID}#calls` }), act("Keep both", true, { do: "keep_assumptions" })]);
+  [act("Read them", false, { href: `/projects/${PID}/calls` }), act("Keep both", true, { do: "keep_assumptions" })]);
 const PERMISSION = item("permission", "Permission", "project-y",
   "The builder wants to use: `gh pr merge 17 --squash`", "Asked by the crew, 3 hours ago",
   [act("Open request", false, { href: `/projects/${PID}#desk-D2` }), act("Allow", true, { do: "allow" })]);

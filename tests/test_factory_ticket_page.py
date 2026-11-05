@@ -264,7 +264,7 @@ async def main():
             ck("the person's decisions that name the ticket, not the others, a station named as its role",
                sorted(a["decisions"], key=lambda d: d["question"]) == [
                    {"question": "Let the builder and the releaser push?", "answer": "yes",
-                    "said": "Yes, the lead and the reviewer can too", "when": "2 days ago"},
+                    "said": "Yes, the orchestrator and the reviewer can too", "when": "2 days ago"},
                    {"question": "Merge origin/main?", "answer": "yes",
                     "said": "Yes, the builder will, see origin/project-x-build-m2, project-x-build-m2/x.md, "
                             "project-x-build-m2.log, merge main first and the reviewer.",
@@ -277,7 +277,7 @@ async def main():
                 "Moved to in review", "Started", "Handed to the builder",
                 "Changed the title"], [x["what"] for x in hs])
             ck("history says who did it", {x["what"]: x["who"] for x in hs}["Changes asked"] == "the reviewer"
-               and {x["what"]: x["who"] for x in hs}["Handed to the builder"] == "the lead"
+               and {x["what"]: x["who"] for x in hs}["Handed to the builder"] == "the orchestrator"
                and any(x["who"] == "GitHub" for x in hs), hs)
             ck("history keeps a reason and swaps the folder", any(x["text"] == f"released from {REPO}/work" for x in hs)
                and any(x["text"] == "new commits pushed after the verdict" for x in hs), hs)

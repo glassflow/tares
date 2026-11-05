@@ -345,7 +345,7 @@ function cleanEnv(extra) {
         ck(t("7 waiting rows: two Close, a call, a spec, three permissions"), (await rows.count()) === 7, String(await rows.count()));
         ck(t("4 project rows, 1 finished"), (await projects.count()) === 4 && (await page.getByRole("link", { name: "All projects, 1 finished" }).count()) === 1);
         ck(t("a link action keeps the daemon's address"),
-           (await row(page, "2 calls to confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${ids["Billing export"]}#calls`
+           (await row(page, "2 calls to confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${ids["Billing export"]}/calls`
            && (await row(page, "Docs search").getByRole("link", { name: "Read the spec" }).getAttribute("href")) === `/projects/${ids["Docs search"]}`
            && (await row(page, "reviewer").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/crew#desk-${ids["allow-crew"]}`);
         ck(t("the permission names its command in a monospace span"), (await row(page, "npm run test").locator("code").innerText()) === "npm run test -- --watch=false");

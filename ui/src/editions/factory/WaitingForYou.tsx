@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { Button, EmptyState, ListRow } from "../../components/edition";
 import { cn } from "@/lib/utils";
-import { Detail } from "./HomeDetail";
+import { Detail, DetailLines } from "./HomeDetail";
 import type { HomeAction, HomeItem } from "./home.types";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 
@@ -84,6 +84,7 @@ function Row({ item, renderAction, error, panel }: {
             <span className="font-semibold" data-user-text>{item.title}</span>
           </div>
           <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text><Detail text={item.detail} /></div>
+          <DetailLines lines={item.lines} />
           <div className={cn(MUTED, "mt-0.5")} data-testid="waiting-meta">
             From <span data-user-text>{senderWords(item.from)}</span> · <span data-user-text>{item.meta}</span>
           </div>

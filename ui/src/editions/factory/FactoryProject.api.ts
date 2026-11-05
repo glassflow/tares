@@ -49,12 +49,32 @@ export interface ProjectCall {
   tickets: string[];
 }
 
+/** A call the person already kept or changed, with their words when they changed it. */
+export interface PastCall extends ProjectCall {
+  state: "kept" | "overturned";
+  words: string | null;
+  decided: string;
+}
+
 export interface ProjectDoc {
   id: string;
   title: string;
   kind_label: string;
   updated: string;
   href: string;
+}
+
+export interface ProjectPerson { id: string; name: string; picture: string | null; tickets?: number }
+
+/** Who is on the project: the lead, the members (added, or holding a ticket), and what the caller may change. */
+export interface ProjectPeople {
+  lead: ProjectPerson | null;
+  members: ProjectPerson[];
+  can_set_lead: boolean;
+  can_add: boolean;
+  you: string | null;
+  /** The people the caller may pick from, when they may change something. */
+  people: ProjectPerson[];
 }
 
 export interface FactoryProjectData {
@@ -78,14 +98,23 @@ export interface FactoryProjectData {
   /** `answer` is what was chosen; `said` the person's words as typed, only when they add something ("D85 A"). */
   decisions: { question: string; answer: string; said: string | null; when: string; at: string }[];
   calls: ProjectCall[];
+  calls_past?: PastCall[];
   docs: ProjectDoc[];
   terminal: { label: string; command: string }[];
   linked: { tickets_in: "Linear" | "GitHub" | null; url: string | null };
   can_close: boolean;
+  /** Who is on the project (TR-1023). */
+  people?: ProjectPeople;
   now: string;
 }
 
 /** The whole project page, in one read. */
+export const setProjectLead = (id: string, personId: string) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ lead_person_id: personId }) });
+
+export const addProjectMember = (id: string, personId: string) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}/members`, { method: "POST", body: JSON.stringify({ person_id: personId }) });
+
 export const factoryProject = (id: string) =>
   request<FactoryProjectData>(`/api/factory/projects/${encodeURIComponent(id)}`);
 

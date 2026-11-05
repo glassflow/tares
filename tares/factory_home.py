@@ -108,13 +108,14 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
               actions: list[dict], project: dict | None = None, repo: str | None = None,
               from_: dict | None = None, id: str | None = None,
               tickets: list[str] | None = None, blocking: bool = False,
-              question: dict | None = None) -> dict:
+              question: dict | None = None, lines: list[str] | None = None) -> dict:
     """One thing that waits for the person, in the shape every list of waiting items uses.
     `project` and `from_` are {id, name} (`from_` is {crew: True, name: "Your crew"} for the
     crew); `since` is when it began to wait. An action is a link (`href`) or something the page
     does (`do`, one of ACTIONS), never both. `id` is made from the kind, the project and the title
     unless the builder gives a stable one. `tickets` names the tickets the item is about (the
-    pull requests to review), empty for an item about no ticket."""
+    pull requests to review), empty for an item about no ticket. `lines` are short lines shown one
+    under the other below the detail (the calls in a "calls to confirm" item)."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}; one of: " + ", ".join(KINDS))
     acts = []
@@ -133,7 +134,7 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             # holds crew work up until the person answers (TR-1021); `older` is set by order_waiting
             "blocking": bool(blocking), "older": False,
             # a desk question's own options and the crew's recommendation, answerable on the row
-            "question": question}
+            "question": question, "lines": list(lines or [])}
 
 
 OLDER_DAYS = 7

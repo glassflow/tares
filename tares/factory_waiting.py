@@ -270,10 +270,10 @@ def calls_to_confirm(store, fx, now) -> list[dict]:
         since = min((a["made_at"] for a in items), key=lambda t: fh._dt(t) or now)
         out.append(fh.home_item(
             "calls_to_confirm", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
-            title=names[pid], detail="The crew decided without you: " + _list(shown)
-            + f". Keep {keep}?", meta="Made by " + _and(roles), since=since, now=now,
+            title=names[pid], detail="The crew decided without you:", lines=shown,
+            meta="Made by " + _and(roles), since=since, now=now,
             project={"id": pid, "name": names[pid]}, id=f"calls_to_confirm:{pid}",
-            actions=[{"label": "Read them", "primary": False, "href": f"/projects/{pid}#calls"},
+            actions=[{"label": "Read them", "primary": False, "href": f"/projects/{pid}/calls"},
                      {"label": {"both": "Keep both", "it": "Keep it", "them": "Keep all"}[keep],
                       "primary": True, "do": "keep_assumptions", "project": pid,
                       "refs": [a["label"] for a in items]}]))
