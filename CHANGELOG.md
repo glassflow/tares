@@ -265,6 +265,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- New project on a Software Factory cell is a factory page: it gives the `tares factory spec` command to start the project's spec in Claude Code (with what you want to build filled in) and says what happens next. The template gallery and the generic setup pages land there instead; the Platform and AI SRE editions keep them.
 - Private projects stay private on the settings pages and merge checks: the SRE Tools list leaves out their sources, a merge counts the links of services you cannot see, and the key count leaves out their keys.
 - Admin routes no longer reveal or change what a private project holds: renaming or merging its services, the catalog export and import, and the key list and key changes answer a non-member as for a name that does not exist.
 - A person outside a private project can no longer change, pause, delete, test or rerun its sources, triggers, agents, MCP servers or runs, or decide its rule proposals; those answer as if they were not there.

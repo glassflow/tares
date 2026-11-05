@@ -74,14 +74,15 @@ const router = createBrowserRouter([
       { path: "crew", element: <ByEdition path="/crew" today={<Crew />} /> },
       // Create new is the goal-first setup: goal, plan, connect, try it. The template gallery and
       // the by-hand path are links from its first step.
-      { path: "projects/new", element: <ProjectSetup /> },
-      { path: "projects/new/templates", element: <ProjectTemplates /> },
-      { path: "projects/new/shared_code_context", element: <ProjectNewSharedContext /> },
-      { path: "projects/new/custom", element: <ProjectNewCustom /> },
+      // A factory cell has its own New project (a spec in Claude Code) and none of these (TR-1014).
+      { path: "projects/new", element: <ByEdition path="/projects/new" today={<ProjectSetup />} /> },
+      { path: "projects/new/templates", element: <ByEdition path="/projects/new/templates" today={<ProjectTemplates />} /> },
+      { path: "projects/new/shared_code_context", element: <ByEdition path="/projects/new/shared_code_context" today={<ProjectNewSharedContext />} /> },
+      { path: "projects/new/custom", element: <ByEdition path="/projects/new/custom" today={<ProjectNewCustom />} /> },
       // the AI-guided builder's old address; the goal-first setup replaced it. Above the
       // :template fallback, which would read "assist" as a template key.
       { path: "projects/new/assist", element: <Navigate to="/projects/new" replace /> },
-      { path: "projects/new/:template", element: <ProjectNewGeneric /> },
+      { path: "projects/new/:template", element: <ByEdition path="/projects/new/:template" today={<ProjectNewGeneric />} /> },
       { path: "projects/:id", element: <ByEdition path="/projects/:id" today={<ProjectDetail />} /> },
       // a ticket's own page (edition cells); a platform cell has no such address
       { path: "projects/:id/tickets/:ref", element: <ByEdition path="/projects/:id/tickets/:ref" today={<NotFound />} /> },
