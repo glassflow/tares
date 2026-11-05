@@ -395,7 +395,9 @@ async def desk_answer(item: str, words: str, choice: str = "", standing: bool = 
     item is for (any station, any session of theirs). If it is not there yet, you get a
     retryable error: recordings can take a minute to arrive, so try again after the next sync.
     Nothing is recorded until the words are found. A reply of one letter ("B") is passed as
-    is: Tares maps it to that option. `choice` the option it picks. `standing` only when they
+    is: Tares maps it to that option. `choice` the option it picks, as the option's full text
+    (or, when they chose none, their own answer in a short sentence): on an item with options
+    every decision records one, and free words that name no option are refused (TR-1018). `standing` only when they
     said it holds from now on ("always fine for staging"); with `scope` all it holds for every project.
     A standing answer that matches becomes a grant given by that person: `grant_kind` project
     (the default; with `scope` all, a team grant, which needs an admin) or personal (for their
@@ -450,8 +452,10 @@ async def list_decisions(project: str = "") -> str:
         r = await cx.get(f"{TARESD}/api/projects/{uid}/decisions")
     if r.status_code >= 400:
         return _out(r)
-    return json.dumps([{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
-                                              "matched", "via", "tickets", "at", "person")}
+    from . import factory as factory_mod
+    return json.dumps([{**{k: d.get(k) for k in ("label", "question", "words", "choice", "standing",
+                                                 "matched", "via", "tickets", "at", "person")},
+                        "answer": factory_mod.decision_words(d)["answer"]}
                        for d in r.json().get("decisions") or []], default=str)
 
 

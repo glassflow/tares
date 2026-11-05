@@ -75,7 +75,8 @@ export interface FactoryProjectData {
   tickets_href: string;
   next: { ticket: string; title: string; why: string } | null;
   milestones: ProjectMilestone[];
-  decisions: { question: string; words: string; when: string; at: string }[];
+  /** `answer` is what was chosen; `said` the person's words as typed, only when they add something ("D85 A"). */
+  decisions: { question: string; answer: string; said: string | null; when: string; at: string }[];
   calls: ProjectCall[];
   docs: ProjectDoc[];
   terminal: { label: string; command: string }[];

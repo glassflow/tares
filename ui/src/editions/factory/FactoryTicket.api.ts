@@ -60,7 +60,10 @@ export interface TicketCall {
 
 export interface TicketDecision {
   question: string;
-  words: string;
+  /** What was chosen. */
+  answer: string;
+  /** The person's words as typed, only when they add something to the answer ("D85 A"). */
+  said: string | null;
   when: string;
 }
 

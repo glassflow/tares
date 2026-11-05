@@ -163,7 +163,9 @@ async function waitFor(url, tries = 100) {
     ck("three calls, in words", (await T("call-row").count()) === 3
        && (await txt(T("call-row").nth(0))).includes("Waiting for you") && (await txt(T("call-row").nth(1))).includes("Confirmed")
        && (await txt(T("call-row").nth(2))).includes("You changed it") && (await txt(T("call-row").nth(2))).includes("Use the brand font"));
-    ck("one decision of yours", (await T("decision-row").count()) === 1 && (await txt(T("decision-row"))).startsWith("Tabs or spaces? Tabs"));
+    ck("one decision of yours, read as the answer chosen", (await T("decision-row").count()) === 1
+       && (await txt(T("decision-row").getByTestId("decision-answer"))) === "tabs"
+       && (await T("decision-row").getByTestId("decision-said").count()) === 0, await txt(T("decision-row")));
 
     // history: fourteen, ten shown
     ck("fourteen lines of history, ten shown", (await txt(T("ticket-history").locator("span").filter({ hasText: /^14 lines$/ }))) === "14 lines"

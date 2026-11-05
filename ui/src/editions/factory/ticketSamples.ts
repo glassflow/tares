@@ -76,7 +76,7 @@ const MERGED: FactoryTicketData = {
   ],
   calls: [call(1, "Should an article without a checklist be blocked?", "Yes, it is held back and the builder is told.",
                "The plan says every article is checked first.", "by the builder, 5 days ago", "confirmed")],
-  decisions: [{ question: "Which site holds the first ten articles?", words: "docs-site, in its own folder.", when: "6 days ago" }],
+  decisions: [{ question: "Which site holds the first ten articles?", answer: "docs-site, in its own folder", said: "B", when: "6 days ago" }],
   history: [
     line("Merged", "the reviewer", "3 days ago"), line("Moved to in review", "the builder", "3 days ago"),
     line("Changes asked", "the reviewer", "4 days ago", "The draft reaches the site even when the checklist is empty."),

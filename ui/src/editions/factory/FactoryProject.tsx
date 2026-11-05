@@ -480,7 +480,7 @@ function Decisions({ items }: { items: FactoryProjectData["decisions"] }) {
   const more = items.length - shown.length;
   return (
     <section id="decisions" aria-label="Decisions" className="min-w-0 scroll-mt-4" data-testid="decisions">
-      <SectionHead title="Decisions" aside={<span className={MUTED}>Your words, newest first</span>} />
+      <SectionHead title="Decisions" aside={<span className={MUTED}>Your answers, newest first</span>} />
       {items.length === 0 ? (
         <Empty testid="decisions-empty">No decisions yet. When you answer the crew, it is kept here.</Empty>
       ) : (
@@ -488,7 +488,8 @@ function Decisions({ items }: { items: FactoryProjectData["decisions"] }) {
           {shown.map((x, i) => (
             <div key={i} className={ROW} data-testid="decision-row">
               <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-user-text>{x.question}</div>
-              <div className="my-0.5 border-l-[3px] border-[color:var(--accent)] pl-2.5 font-medium [overflow-wrap:anywhere]" data-user-text>{x.words}</div>
+              <div className="my-0.5 border-l-[3px] border-[color:var(--accent)] pl-2.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+              {x.said && <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
               <div className={MUTED}>{x.when}</div>
             </div>
           ))}

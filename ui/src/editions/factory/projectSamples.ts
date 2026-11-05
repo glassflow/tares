@@ -71,7 +71,8 @@ const QS = ["Which team owns answers?", "Do we show the author?", "How do we wor
   "Is a code sample allowed?", "Do answers need a screenshot?", "Who reads the German ones?"];
 const decisions = (n: number) => Array.from({ length: n }, (_, i) => ({
   question: QS[i % QS.length] + (i >= QS.length ? ` (round ${Math.floor(i / QS.length) + 1})` : ""),
-  words: WORDS[i % WORDS.length], when: `${i + 1} day${i ? "s" : ""} ago`, at: NOW,
+  answer: WORDS[i % WORDS.length], said: i % 3 === 0 ? `D${40 + i} ${"AB"[i % 2]}` : null,
+  when: `${i + 1} day${i ? "s" : ""} ago`, at: NOW,
 }));
 
 const DOCS = [
@@ -175,7 +176,7 @@ const LONG = make({
                                why: "ready, nothing it depends on is open" },
   milestones: [ms(1, "M1: A very long milestone name that should wrap and never push the bar out of its card", LONG_TEXT, 3, 1,
                   [{ check: LONG_TEXT, expect: LONG_TEXT }])],
-  decisions: [{ question: LONG_TEXT, words: LONG_TEXT, when: "1 day ago", at: NOW }],
+  decisions: [{ question: LONG_TEXT, answer: LONG_TEXT, said: null, when: "1 day ago", at: NOW }],
   calls: [{ ref: "A1", question: LONG_TEXT, choice: LONG_TEXT, why: LONG_TEXT, made: "by the builder, 2 days ago", tickets: ["T1"] }],
   docs: [{ id: "d1", title: "A document title that is much too long to fit on one line of the list and wraps", kind_label: "Spec",
            updated: "5 days ago", href: "/docs?doc=d1" }],

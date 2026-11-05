@@ -269,7 +269,9 @@ def register(app, store, h, ctx):
         stage = stage_of(has_start, tickets, closed)
         state = "finished" if closed else fh.project_state(p, tickets, handover, waiting)
 
-        decisions = [{"question": clean(d["question"]), "words": clean(d["words"]),
+        # the answer chosen, and the person's words only when they add something (TR-1018)
+        decisions = [{"question": clean(d["question"]),
+                      **{k: clean(v) if v else None for k, v in factory_mod.decision_words(d).items()},
                       "when": plain_ago(d["at"], now), "at": fh._iso(d["at"])}
                      for d in store.list_decisions(uid)]
         calls = []
