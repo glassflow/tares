@@ -101,16 +101,18 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
             <div className="truncate font-semibold" data-user-text>{who}</div>
             <div className="text-xs text-muted-foreground">{small}</div>
           </div>
-          <button type="button" role="menuitemcheckbox" aria-checked={theme === "dark"} className={ROW} onClick={toggleTheme}>
-            <span className="flex items-center gap-2">
+          {/* The row says the mode you are in; the round toggle shows which side you are on, and the
+              whole row switches to the other. */}
+          <button type="button" role="menuitem" aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                  data-testid="theme-row" data-theme-now={theme} className={ROW} onClick={toggleTheme}>
+            <span className="flex items-center gap-2" data-testid="theme-now">
               {theme === "dark" ? <Moon aria-hidden /> : <Sun aria-hidden />}
-              Dark mode
+              {theme === "dark" ? "Dark mode" : "Light mode"}
             </span>
-            {/* The look of the edition switch; the whole row is the control. */}
-            <span aria-hidden data-state={theme === "dark" ? "checked" : "unchecked"}
-                  className="inline-flex h-5 w-9 shrink-0 items-center border border-border bg-muted transition-colors motion-reduce:transition-none data-[state=checked]:border-primary data-[state=checked]:bg-primary">
-              <span data-state={theme === "dark" ? "checked" : "unchecked"}
-                    className="block size-3.5 translate-x-0.5 bg-muted-foreground transition-transform motion-reduce:transition-none data-[state=checked]:translate-x-[18px] data-[state=checked]:bg-primary-foreground" />
+            <span aria-hidden data-state={theme === "dark" ? "dark" : "light"}
+                  className="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border bg-muted transition-colors motion-reduce:transition-none data-[state=dark]:border-foreground data-[state=dark]:bg-foreground">
+              <span data-state={theme === "dark" ? "dark" : "light"}
+                    className="block size-3.5 translate-x-0.5 rounded-full bg-[var(--accent)] transition-transform motion-reduce:transition-none data-[state=dark]:translate-x-[18px] data-[state=dark]:bg-background" />
             </span>
           </button>
           {workspaceUrl && (
