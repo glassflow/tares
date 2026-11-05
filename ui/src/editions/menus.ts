@@ -14,6 +14,7 @@ export const MENUS: Record<"factory" | "sre", MenuEntry[]> = {
     { key: "reviews", label: "Reviews", to: "/reviews", today: false },
     { key: "crew", label: "Crew", to: "/crew", today: true },
     { key: "docs", label: "Docs and memory", to: "/docs", today: false },
+    { key: "people", label: "People", to: "/people", today: false },
     SETTINGS_ENTRY,
   ],
   sre: [

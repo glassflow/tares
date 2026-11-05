@@ -8,6 +8,7 @@ edition-shell
 factory-crew
 factory-docs
 factory-home
+factory-people
 factory-project
 factory-projects
 factory-reviews

@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A People page in the Software Factory menu: who is on the cell, whether they have signed in, the projects they lead and the repos they own, and Add a person. On a self-hosted cell an admin adds them on the cell; on Tares Cloud the workspace owner invites them from the console, with the same invite the workspace page sends. Settings links to it.
 - A first-run edition notice now also shows when the cell keeps its state in Postgres, and the edition chooser tells you when your choice was saved but the cell did not answer afterwards.
 - The AI SRE home shows the demo service as soon as "Try the demo service" finishes, and a failed demo start links to the step-by-step setup.
 - The AI SRE home shows a line after you hide the Start list, with a button to show it again.

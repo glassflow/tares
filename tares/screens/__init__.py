@@ -33,6 +33,8 @@ SCREENS = [
     "sre_runbooks",            # TR-753
 
     "sre_settings",          # TR-764
+
+    "factory_people",          # TR-1011
 ]
 
 
