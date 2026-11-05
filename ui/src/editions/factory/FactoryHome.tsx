@@ -341,14 +341,18 @@ function Tools({ data }: { data: HomeData }) {
       <SectionHead title="Connected" />
       <div className="flex flex-wrap gap-2">
         {data.tools.map((t) => (
-          <span key={t.name} className={cn(chip, "border-border bg-card")}>
+          <Link key={t.name} to="/settings#tools" data-testid="tool-chip" data-on={t.connected}
+                className={cn(chip, "border-border bg-card text-foreground! no-underline! hover:bg-[var(--row-hover)]")}>
             <StatusDot tone={t.connected ? "ready" : "quiet"} label={t.connected ? "connected" : "not connected"} />
-            {t.name}
-          </span>
+            <span>{t.name}</span>
+            {t.connected && t.short && <span className="text-muted-foreground" data-user-text>· {t.short}</span>}
+          </Link>
         ))}
-        <Link to="/settings#tools" className={cn(chip, "border-dashed border-border text-muted-foreground no-underline!")}>
-          Add a tool
-        </Link>
+        {data.tools.some((t) => !t.connected) && (
+          <Link to="/settings#tools" data-testid="tool-add" className={cn(chip, "border-dashed border-border text-muted-foreground no-underline!")}>
+            Add a tool
+          </Link>
+        )}
       </div>
     </section>
   );

@@ -243,7 +243,7 @@ async def main():
             ck("the crew is not running, the plan unknown, no tool connected",
                h["crew"]["running"] is False and h["crew"]["summary"] == "Not running"
                and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None}
-               and [t["connected"] for t in h["tools"]] == [False, False, False], h)
+               and [t["connected"] for t in h["tools"]] == [False, False, False, False], h)
             ck("every key of the shape", set(h) == {"edition", "headline", "waiting_for_you", "waiting_total",
                "projects", "finished_count", "crew", "plan", "tools", "start", "now"}, sorted(h))
 
@@ -251,9 +251,9 @@ async def main():
                                                     "poll": "10s", "config": {"push": True}})
             ck("the claude_code source is made", r.status_code < 300, r.text)
             h = await get_home(cx)
-            ck("a claude_code source counts as Claude Code connected, with no station",
-               h["crew"]["members"] == [] and h["tools"][2] == {"name": "Claude Code", "connected": True},
-               h["tools"])
+            ck("a claude_code source with nothing reported yet is not connected, as Settings says (TR-1013)",
+               h["crew"]["members"] == [] and h["tools"][3] == {"key": "claude_code", "name": "Claude Code",
+                                                                "connected": False, "short": None}, h["tools"])
 
             # project-x: building. Two merged, one in progress, one to do; two milestones
             px = json.loads(await m.create_project("project-x", "Ship the docs site"))["id"]
@@ -373,9 +373,12 @@ async def main():
                (lim["session"]["text"], lim["weekly_all"]["text"]))
             ck("who used the plan this week, biggest first",
                h["plan"]["share_text"] == "This week: project-x 75%, project-y 25%", h["plan"]["share_text"])
-            ck("the tools: GitHub and Claude Code connected, Linear not",
-               h["tools"] == [{"name": "GitHub", "connected": True}, {"name": "Linear", "connected": False},
-                              {"name": "Claude Code", "connected": True}], h["tools"])
+            ck("the tools: GitHub and Claude Code connected, each with what it is connected to; Linear and Slack not",
+               h["tools"] == [{"key": "github", "name": "GitHub", "connected": True, "short": "cred-a"},
+                              {"key": "linear", "name": "Linear", "connected": False, "short": None},
+                              {"key": "slack", "name": "Slack", "connected": False, "short": None},
+                              {"key": "claude_code", "name": "Claude Code", "connected": True,
+                               "short": "last session just now"}], h["tools"])
 
             ck("no forbidden word or dash anywhere in the body", words.offenders_in(h) == [],
                words.offenders_in(h))

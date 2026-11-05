@@ -70,6 +70,7 @@ function Tools({ tools, dim }: { tools: SettingsTool[]; dim: boolean }) {
               {t.name}
             </div>
             <div className="mt-0.5 text-[13px] text-muted-foreground" data-user-text>{t.detail}</div>
+            {t.covers && <div className="mt-0.5 text-[13px] text-muted-foreground" data-user-text data-testid="tool-covers">{t.covers}</div>}
           </div>
           <div className="flex flex-none items-center gap-2">
             <Button asChild variant={t.connected ? "secondary" : "primary"} disabled={dim} data-ctl>

@@ -8,7 +8,14 @@ const NOTE = "Switching changes the screens, not your data. What only the other 
 const ADV = "/settings/advanced";
 
 const tool = (key: SettingsTool["key"], name: string, detail: string | null, href: string): SettingsTool =>
-  ({ key, name, connected: detail !== null, detail: detail ?? "Not connected", href });
+  ({ key, name, connected: detail !== null, detail: detail ?? "Not connected", href,
+     covers: detail === null ? null : COVERS[key] });
+const COVERS: Record<SettingsTool["key"], string> = {
+  github: "The open projects build in example-org/service-a and example-org/docs",
+  linear: "1 open project keeps its tickets in Linear: project-x",
+  slack: "No agent posts to a channel yet; the standup asks where to post each time",
+  claude_code: "Your sessions and the crew's report here, so their work shows on each ticket",
+};
 const tools = (gh: string | null, li: string | null, sl: string | null, cc: string | null): SettingsTool[] => [
   tool("github", "GitHub", gh, `${ADV}?tab=github`),
   tool("linear", "Linear", li, `${ADV}?tab=linear`),

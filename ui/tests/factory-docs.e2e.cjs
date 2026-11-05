@@ -102,9 +102,24 @@ async function waitFor(url, tries = 100) {
     ck("the list has two groups: every project, and the open project", groups.length === 2, JSON.stringify(groups));
     ck("every project: Rules and Memory", JSON.stringify(groups[0]) === '["Rules","Memory"]', JSON.stringify(groups[0]));
     ck("a project: Spec, Plan, Rules, Memory", JSON.stringify(groups[1]) === '["Spec","Plan","Rules","Memory"]', JSON.stringify(groups[1]));
-    ck("the group of a project is its name", (await page.getByTestId("doc-group").nth(1).innerText()).startsWith("project-x"));
-    ck("a finished project is not listed until asked for", !(await page.getByTestId("doc-list").innerText()).includes("project-y")
-       && (await page.getByTestId("doc-finished").innerText()).trim() === "Show 1 finished project");
+    const picker = page.getByTestId("doc-list").getByTestId("doc-picker-button");
+    ck("the picker names the project shown", (await picker.innerText()).trim() === "project-x", await picker.innerText());
+    ck("only one project's documents are listed", !(await page.getByTestId("doc-list").innerText()).includes("project-y")
+       && (await page.getByTestId("doc-finished").count()) === 0);
+    await picker.click();
+    const options = page.getByTestId("doc-list").getByTestId("doc-picker-option");
+    ck("the picker lists the open project, then the finished one under Finished",
+       (await options.allInnerTexts()).map((t) => t.trim()).join("|") === "project-x|project-y"
+       && /Finished/.test(await page.getByTestId("doc-picker-panel").innerText()), (await options.allInnerTexts()).join("|"));
+    await shot(page, "live-picker-open-1440.png");
+    await page.getByTestId("doc-list").getByTestId("doc-picker-search").fill("proj-y");
+    ck("a search with no match says so", (await options.count()) === 0 && await page.getByTestId("doc-picker-none").isVisible());
+    await page.getByTestId("doc-list").getByTestId("doc-picker-search").fill("ct-y");
+    ck("the search narrows the list", (await options.allInnerTexts()).map((t) => t.trim()).join("|") === "project-y");
+    await page.keyboard.press("Escape");
+    ck("Escape closes the picker and leaves the list as it was", (await page.getByTestId("doc-picker-panel").count()) === 0
+       && (await picker.innerText()).trim() === "project-x");
+    await shot(page, "live-picker-1440.png");
     ck("a project that is not a factory project is not listed", !(await page.getByTestId("doc-list").innerText()).includes("project-w"));
     ck("the first shared document is open", (await title()) === "Rules for every project" && (await link("Rules", 0).getAttribute("aria-current")) === "page", await title());
     ck("a shared document says who changed it, and when, as a whole", /^Changed by .+, .+/.test(await page.getByTestId("doc-changed").innerText()),
@@ -207,10 +222,15 @@ async function waitFor(url, tries = 100) {
     // 9. finished projects, and a memory longer than the page shows at once
     await page.goto(`${BASE}/docs`, { waitUntil: "load" });
     await pane.waitFor();
-    await page.getByTestId("doc-finished").click();
-    ck("finished projects open on request", (await page.getByTestId("doc-group").count()) === 3
-       && (await page.getByTestId("doc-finished").innerText()).trim() === "Hide finished projects");
-    await pick("Memory", 2, "Memory: project-y");
+    await page.getByTestId("doc-list").getByTestId("doc-picker-button").click();
+    await page.getByTestId("doc-list").getByTestId("doc-picker-search").fill("project-y");
+    await page.keyboard.press("Enter");
+    await pane.getByTestId("doc-title").filter({ hasText: "project-y" }).waitFor();
+    await settle(page);
+    ck("a finished project is picked with the keyboard, its first document opens, and the list shows only its documents",
+       (await page.getByTestId("doc-group").count()) === 2 && /project-y/.test(await title())
+       && (await page.getByTestId("doc-list").getByTestId("doc-picker-button").innerText()).trim() === "project-y (finished)", await title());
+    await pick("Memory", 1, "Memory: project-y");
     ck("a long memory shows its newest 100 lines", (await rows.count()) === 100 && (await rowText())[99] === "Memory line 130: a fact kept for the crew.", `${await rows.count()}`);
     ck("and offers the 30 before", (await page.getByTestId("doc-earlier").innerText()).trim() === "Show 30 earlier lines");
     await checkWords(page, ck, "long memory");
@@ -219,8 +239,9 @@ async function waitFor(url, tries = 100) {
        && (await page.getByTestId("doc-earlier").count()) === 0);
     await page.reload({ waitUntil: "load" });
     await pane.waitFor();
-    ck("a finished project's document opened by address shows its project's group", (await page.getByTestId("doc-group").count()) === 3
-       && (await link("Memory", 2).getAttribute("aria-current")) === "page");
+    ck("a finished project's document opened by address shows its project in the picker", (await page.getByTestId("doc-group").count()) === 2
+       && (await link("Memory", 1).getAttribute("aria-current")) === "page"
+       && (await page.getByTestId("doc-list").getByTestId("doc-picker-button").innerText()).trim() === "project-y (finished)");
     ck("the page does not scroll sideways at 1440", (await overflow(page)) <= 0);
 
     // 10. without the sample flag the sample address changes nothing
@@ -240,7 +261,9 @@ async function waitFor(url, tries = 100) {
       const sel = p.getByTestId("doc-select");
       ck("390: the list is a select", await sel.isVisible() && !(await p.getByTestId("doc-list").isVisible()));
       ck("390: the select has the open document chosen", (await sel.inputValue()) === ids["project-x-memory"], await sel.inputValue());
-      ck("390: it lists every document, finished projects included", (await sel.locator("option").count()) === 8, `${await sel.locator("option").count()}`);
+      ck("390: it lists the shared documents and the chosen project's", (await sel.locator("option").count()) === 6, `${await sel.locator("option").count()}`);
+      const np = p.getByTestId("doc-narrow").getByTestId("doc-picker-button");
+      ck("390: the picker names the project", (await np.innerText()).trim() === "project-x");
       ck("390: the page does not scroll sideways", (await overflow(p)) <= 0, `${await overflow(p)}px`);
       ck("390: a line's author sits under it", await p.getByTestId("doc-row").first().evaluate((r) => {
         const [text, by] = r.children; return by.getBoundingClientRect().top >= text.getBoundingClientRect().bottom - 1;
@@ -253,6 +276,12 @@ async function waitFor(url, tries = 100) {
       ck("390: and the select shows it", (await sel.inputValue()) === ids["project-x-plan"]);
       await checkWords(p, ck, "390 plan");
       await shot(p, "live-plan-390.png");
+      await np.click();
+      await p.getByTestId("doc-narrow").getByTestId("doc-picker-option").filter({ hasText: "project-y" }).click();
+      await p.getByTestId("doc-title").filter({ hasText: "project-y" }).waitFor();
+      ck("390: a finished project is pickable, and the select follows it", (await np.innerText()).trim() === "project-y (finished)"
+         && (await sel.locator("option").allInnerTexts()).some((t) => t.includes("project-y")) && (await overflow(p)) <= 0);
+      await shot(p, "live-finished-390.png");
       await n.ctx.close();
     }
 
