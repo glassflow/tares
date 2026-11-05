@@ -190,10 +190,15 @@ async function waitFor(url, tries = 100) {
     await page.unroute(`**/api/projects/${y}/assumptions/A2/state`);
 
     // decisions, docs, terminal
-    ck("decisions: three shown, newest first, one older behind a button", (await T("decision-row").count()) === 3 && (await txt(T("decisions-more"))) === "Show 1 older"
-       && (await txt(T("decision-row").first())).includes("The light one"), await txt(T("decision-row").first()));
+    ck("decisions: three shown, newest first, two older behind a button", (await T("decision-row").count()) === 3 && (await txt(T("decisions-more"))) === "Show 2 older"
+       && (await txt(T("decision-row").nth(1))).includes("The light one"), await txt(T("decision-row").nth(1)));
+    ck("a reply by letter reads as the option chosen, with the person's words under it (TR-1018)",
+       (await txt(T("decision-row").first().getByTestId("decision-answer"))) === "merge main into teams"
+       && (await txt(T("decision-row").first().getByTestId("decision-said"))) === "You said: D85 A", await txt(T("decision-row").first()));
+    ck("words equal to the answer are not repeated", (await T("decision-row").nth(1).getByTestId("decision-said").count()) === 0);
+    ck("the heading says answers", /Your answers, newest first/.test(await txt(T("decisions"))));
     await T("decisions-more").click();
-    ck("Show 1 older shows all four", (await T("decision-row").count()) === 4 && (await T("decisions-more").count()) === 0);
+    ck("Show 2 older shows all five", (await T("decision-row").count()) === 5 && (await T("decisions-more").count()) === 0);
     ck("docs link to the docs screen", (await T("doc-row").count()) === 4 && /^\/docs\?doc=/.test(await T("doc-row").first().getAttribute("href")) &&
        (await txt(T("doc-row").first())).startsWith("Spec") && /, updated /.test(await txt(T("doc-row").first())), await txt(T("doc-row").first()));
     ck("the terminal shows the command to open a builder's session",
@@ -214,6 +219,31 @@ async function waitFor(url, tries = 100) {
     await page.waitForTimeout(THEME_MS);
     ck("#desk-D1 brings the waiting list into view", Math.abs(await page.evaluate(() => document.getElementById("waiting").getBoundingClientRect().top)) < 40);
 
+    // ── 1b. project-k: a milestone with checks for the person (TR-1017) ──────────────────────────
+    {
+      const kid = ids["project-k"];
+      await open(page, kid);
+      const row = page.locator('[data-testid="milestone-row"][data-ms="M1"]');
+      ck("project-k: the merged milestone says it has checks for you", (await txt(row.getByTestId("milestone-needs"))) === "2 checks for you to try");
+      ck("the crew's check says it passed and who checked it", (await txt(row.locator('[data-testid="milestone-check"][data-for="crew"]').getByTestId("check-state"))).startsWith("The crew's. Passed, checked by crew-orchestrator"));
+      ck("the Waiting list has the milestone item", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 1);
+      const first = row.locator('[data-testid="milestone-check"][data-for="person"]').first();
+      await first.getByTestId("check-works").click();
+      await page.waitForFunction(() => document.querySelectorAll('[data-testid="milestone-row"][data-ms="M1"] [data-testid="check-works"]').length === 1);
+      ck("Works records it, and only the other check is left", (await txt(row.getByTestId("milestone-needs"))) === "1 check for you to try");
+      const second = row.locator('[data-testid="milestone-check"][data-for="person"]').nth(1);
+      await second.getByTestId("check-wrong").click();
+      ck("Something's wrong asks for a sentence before it sends", await second.getByTestId("check-send").isDisabled());
+      await second.getByTestId("check-note").fill("Home lists one more than Reviews");
+      await second.getByTestId("check-send").click();
+      await page.waitForFunction(() => !document.querySelector('[data-testid="milestone-row"][data-ms="M1"] [data-testid="milestone-needs"]'));
+      ck("after Something's wrong the milestone is the crew's work: nothing left for you",
+         (await row.getByTestId("milestone-needs").count()) === 0
+         && ((await row.locator('[data-testid="milestone-check"][data-for="person"]').nth(1).getByTestId("check-state").textContent()) || "").includes("Home lists one more than Reviews"));
+      ck("and the item leaves the Waiting list", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 0);
+      await shot(page, "live-milestone-checks-1440.png");
+    }
+
     // ── 2. project-z: ready to close ────────────────────────────────────────────────────────────
     const z = ids["project-z"];
     await open(page, z);
@@ -227,9 +257,9 @@ async function waitFor(url, tries = 100) {
     ck("the Ready to close row has one Close button and no link to this page",
        (await ready.count()) === 1 && (await ready.getByTestId("waiting-close").count()) === 1
        && (await ready.getByRole("link").count()) === 0 && !(await txt(ready)).includes("Open project"), await txt(ready));
-    ck("and the milestone to check, with the address from the cell",
-       (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).getByRole("link").first().getAttribute("href")).startsWith(`/projects/${z}#milestone-ms_`));
-    ck("Waiting counts both", (await txt(T("waiting-count"))) === "2 things");
+    ck("no separate milestone item: a project ready to close folds them into Ready to close (TR-1017)",
+       (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 0);
+    ck("Waiting counts the one", (await txt(T("waiting-count"))) === "1 thing", await txt(T("waiting-count")));
     ck("the terminal says no builder is working", (await txt(T("terminal-empty"))).startsWith("No builder is working on this project now."));
     await checkWords(page, ck, "project-z ready");
     await shot(page, "live-ready-1440.png");

@@ -163,7 +163,8 @@ def register(app, store, h, ctx):
                           "made": f"by {made}, {plain_ago(a['made_at'], now)}".rstrip(", "),
                           "state_text": _CALL_STATE.get(a["state"], a["state"]),
                           "words": clean(a["words"]) or None})
-        decisions = [{"question": clean(d["question"]), "words": clean(d["words"]),
+        decisions = [{"question": clean(d["question"]),
+                      **{k: clean(v) if v else None for k, v in factory_mod.decision_words(d).items()},
                       "when": plain_ago(d["at"], now)}
                      for d in full["decisions"] if ref in d["tickets"]]
 

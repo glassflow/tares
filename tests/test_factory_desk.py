@@ -307,7 +307,10 @@ async def main():
         ck("not on a question about another project", "another project" in bad, bad)
         await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(5),
                        "message": {"role": "user", "content": "yes, the blog is done"}}])
-        json.loads(await mf.desk_answer(d8["label"], "yes, the blog is done"))
+        refused = await mf.desk_answer(d8["label"], "yes, the blog is done")
+        ck("free words on a question with options need the option they pick (TR-1018)",
+           "options this answer picks" in refused and "A) yes, it's done" in refused, refused)
+        json.loads(await mf.desk_answer(d8["label"], "yes, the blog is done", choice="yes, it's done"))
         as_station("shop-build-m1", "builder", "crew-orchestrator")
         bad = await mf.finish_project("Blog", d8["label"])
         ck("a builder may not finish a project", "only the orchestrator" in bad, bad)

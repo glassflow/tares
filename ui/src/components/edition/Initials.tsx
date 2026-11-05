@@ -13,18 +13,34 @@ export function initialsOf(nameOrEmail: string): string {
 
 export interface InitialsProps extends React.HTMLAttributes<HTMLSpanElement> {
   name: string;
+  /** An https address of the person's picture (TR-1016). Shown round in place of the initials;
+   *  the initials come back when there is none or it does not load. */
+  picture?: string | null;
 }
 
-export function Initials({ name, className, ...props }: InitialsProps) {
+const BOX = "inline-flex size-9 shrink-0 select-none items-center justify-center font-mono text-xs font-semibold text-foreground";
+
+export function Initials({ name, picture, className, ...props }: InitialsProps) {
+  const [failed, setFailed] = React.useState(false);
+  React.useEffect(() => setFailed(false), [picture]);
+  const src = picture && /^https:\/\//i.test(picture) && !failed ? picture : null;
+  if (src) {
+    return (
+      <span role="img" aria-label={name} title={name} data-picture="on"
+            className={cn(BOX, "overflow-hidden rounded-full bg-muted", className)} {...props}>
+        {/* no-referrer: Google's avatar addresses refuse a request that names another site */}
+        <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" draggable={false}
+             onError={() => setFailed(true)} className="size-full object-cover" />
+      </span>
+    );
+  }
   return (
     <span
       role="img"
       aria-label={name}
       title={name}
-      className={cn(
-        "inline-flex size-9 shrink-0 select-none items-center justify-center border border-border bg-muted font-mono text-xs font-semibold text-foreground",
-        className,
-      )}
+      data-picture="off"
+      className={cn(BOX, "border border-border bg-muted", className)}
       {...props}
     >
       {initialsOf(name)}

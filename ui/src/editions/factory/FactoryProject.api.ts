@@ -29,7 +29,14 @@ export interface ProjectMilestone {
   goal: string;
   done: boolean;
   counts: { total: number; merged: number };
-  checks: { check: string; expect: string }[];
+  /** Each acceptance check: `for` the crew (it runs and records them) or a person; `result` the latest run, null before one. */
+  checks: { n: number; check: string; expect: string; for: "crew" | "person"; result: "pass" | "fail" | null; note: string | null; by: string | null }[];
+  /** Accepted: its checks passed, or the person accepted it as it is. */
+  accepted: boolean;
+  /** Merged and waiting for the person: a check for them, or crew checks never recorded. */
+  needs_person: boolean;
+  /** The person may accept it as it is (the crew never recorded its checks, none is for them). */
+  can_accept: boolean;
   tickets_href: string;
 }
 
@@ -68,7 +75,8 @@ export interface FactoryProjectData {
   tickets_href: string;
   next: { ticket: string; title: string; why: string } | null;
   milestones: ProjectMilestone[];
-  decisions: { question: string; words: string; when: string; at: string }[];
+  /** `answer` is what was chosen; `said` the person's words as typed, only when they add something ("D85 A"). */
+  decisions: { question: string; answer: string; said: string | null; when: string; at: string }[];
   calls: ProjectCall[];
   docs: ProjectDoc[];
   terminal: { label: string; command: string }[];
@@ -86,4 +94,16 @@ export const decideCall = (id: string, ref: string, state: "kept" | "overturned"
   request<unknown>(`/api/projects/${encodeURIComponent(id)}/assumptions/${encodeURIComponent(ref)}/state`, {
     method: "POST",
     body: JSON.stringify(words ? { state, words } : { state }),
+  });
+
+/** The person's answer to a milestone check marked for them (TR-1017): it works, or what is wrong. */
+export const answerCheck = (id: string, milestone: string, n: number, result: "pass" | "fail", note?: string) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}/milestones/${encodeURIComponent(milestone)}/checks/${n}`, {
+    method: "POST", body: JSON.stringify({ result, note: note || undefined }),
+  });
+
+/** Accept a merged milestone as it is: its crew checks were never recorded (TR-1017). */
+export const acceptMilestone = (id: string, milestone: string) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}/milestones/${encodeURIComponent(milestone)}/accept`, {
+    method: "POST", body: JSON.stringify({}),
   });

@@ -263,13 +263,13 @@ async def main():
                and calls[a1["label"]]["why"] == f"it sorts, see {REPO}/dates", calls)
             ck("the person's decisions that name the ticket, not the others, a station named as its role",
                sorted(a["decisions"], key=lambda d: d["question"]) == [
-                   {"question": "Let the builder and the releaser push?",
-                    "words": "Yes, the lead and the reviewer can too", "when": "2 days ago"},
-                   {"question": "Merge origin/main?",
-                    "words": "Yes, the builder will, see origin/project-x-build-m2, project-x-build-m2/x.md, "
-                              "project-x-build-m2.log, merge main first and the reviewer.",
+                   {"question": "Let the builder and the releaser push?", "answer": "yes",
+                    "said": "Yes, the lead and the reviewer can too", "when": "2 days ago"},
+                   {"question": "Merge origin/main?", "answer": "yes",
+                    "said": "Yes, the builder will, see origin/project-x-build-m2, project-x-build-m2/x.md, "
+                            "project-x-build-m2.log, merge main first and the reviewer.",
                     "when": "1 day ago"},
-                   {"question": "Tabs or spaces?", "words": f"Tabs, as in {REPO}/style.md",
+                   {"question": "Tabs or spaces?", "answer": "tabs", "said": f"Tabs, as in {REPO}/style.md",
                     "when": "3 days ago"}], a["decisions"])
             hs = a["history"]
             ck("history newest first, in words", [x["what"] for x in hs] == [

@@ -209,15 +209,29 @@ def register(app, store, h, ctx):
         moving = [ticket_out(t) for t in movers[:_MOVING_CAP]]
 
         out_ms = []
+        results = store.milestone_check_results([m["id"] for m in milestones])
+        accepted = store.milestone_acceptances([m["id"] for m in milestones])
         for i, m in enumerate(milestones):
             ts = [t for t in tickets if t.get("milestone") == m["id"] and states[t["id"]] != "canceled"]
             merged = sum(1 for t in ts if states[t["id"]] == "merged")
+            res = results.get(m["id"]) or {}
+            st = factory_mod.milestone_state(m, [t for t in tickets if t.get("milestone") == m["id"]],
+                                             res, accepted.get(m["id"]))
             out_ms.append({"id": m["id"], "number": f"M{i + 1}", "name": m["name"],
                            "goal": clean(m["goal"]),
                            "done": bool(ts) and merged == len(ts),
                            "counts": {"total": len(ts), "merged": merged},
-                           "checks": [{"check": clean(c.get("check")), "expect": clean(c.get("expect"))}
-                                      for c in m["checks"]],
+                           # each check with who it is for and its latest result (TR-1017)
+                           "checks": [{"n": j + 1, "check": clean(c.get("check")),
+                                       "expect": clean(c.get("expect")),
+                                       "for": c.get("for") or "crew",
+                                       "result": (res.get(j) or {}).get("result"),
+                                       "note": clean((res.get(j) or {}).get("note")) or None,
+                                       "by": clean((res.get(j) or {}).get("by_name")) or None}
+                                      for j, c in enumerate(m["checks"])],
+                           "accepted": st["accepted"], "needs_person": st["needs_person"],
+                           # accept as it is: the crew never recorded its checks and none is for you
+                           "can_accept": st["needs_person"] and not st["person_open"],
                            "tickets_href": f"/tickets?project={uid}&milestone={m['id']}"})
 
         # the ticket that goes next: the one being built, else the first ready, else the first
@@ -255,7 +269,9 @@ def register(app, store, h, ctx):
         stage = stage_of(has_start, tickets, closed)
         state = "finished" if closed else fh.project_state(p, tickets, handover, waiting)
 
-        decisions = [{"question": clean(d["question"]), "words": clean(d["words"]),
+        # the answer chosen, and the person's words only when they add something (TR-1018)
+        decisions = [{"question": clean(d["question"]),
+                      **{k: clean(v) if v else None for k, v in factory_mod.decision_words(d).items()},
                       "when": plain_ago(d["at"], now), "at": fh._iso(d["at"])}
                      for d in store.list_decisions(uid)]
         calls = []

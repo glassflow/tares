@@ -209,7 +209,8 @@ function Calls({ d }: { d: FactoryTicketData }) {
               {d.decisions.map((x, i) => (
                 <div key={i} className="flex min-w-0 flex-col gap-[3px]" data-testid="decision-row">
                   <span className="text-[13.5px] font-semibold [overflow-wrap:anywhere]" data-user-text>{x.question}</span>
-                  <span className="text-[13.5px] [overflow-wrap:anywhere]" data-user-text>{x.words}</span>
+                  <span className="text-[13.5px] [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</span>
+                  {x.said && <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="decision-said">You said: <span data-user-text>{x.said}</span></span>}
                   <span className="text-[12.5px] text-muted-foreground">{sentence(x.when)}</span>
                 </div>
               ))}

@@ -26,6 +26,7 @@ test_cloud_connect
 test_console_answers
 test_crew_standup
 test_crews
+test_decision_answers
 test_degraded
 test_delete_cascade
 test_desk_person
@@ -92,6 +93,7 @@ test_mcp_remote
 test_mcp_setup
 test_mcp_station_headers
 test_metrics
+test_milestone_checks
 test_model_provider
 test_model_providers
 test_my_work
@@ -102,6 +104,7 @@ test_otlp_grpc
 test_owner_claims_local
 test_people
 test_person_attribution
+test_person_picture
 test_personal_docs
 test_personal_limits
 test_pickup

@@ -320,9 +320,11 @@ async def main():
                [m["name"] for m in a["milestones"]] == ["M1: pages", "M2: search"]
                and [m["number"] for m in a["milestones"]] == ["M1", "M2"]
                and ms["M1: pages"]["goal"] == "The pages are live."
-               and ms["M1: pages"]["checks"] == [{"check": "open the home page", "expect": "it loads"}]
+               and ms["M1: pages"]["checks"] == [{"n": 1, "check": "open the home page", "expect": "it loads",
+                                                   "for": "crew", "result": None, "note": None, "by": None}]
                and ms["M1: pages"]["done"] is False and ms["M2: search"]["done"] is False
-               and all(set(m) == {"id", "number", "name", "goal", "done", "counts", "checks", "tickets_href"}
+               and all(set(m) == {"id", "number", "name", "goal", "done", "counts", "checks", "accepted",
+                                      "needs_person", "can_accept", "tickets_href"}
                        for m in a["milestones"]), ms)
             ck("a milestone counts its tickets and leaves the canceled one out",
                ms["M1: pages"]["counts"] == {"total": 3, "merged": 1}
@@ -372,7 +374,7 @@ async def main():
             ck("decisions: newest first, all of them", [d["question"] for d in a["decisions"]]
                == ["Which licence?", "Use tabs or spaces?"] and a["decisions"][0]["when"] == "2 hours ago"
                and a["decisions"][1]["when"] == "3 days ago"
-               and all(set(d) == {"question", "words", "when", "at"} and d["at"] for d in a["decisions"]),
+               and all(set(d) == {"question", "answer", "said", "when", "at"} and d["at"] for d in a["decisions"]),
                a["decisions"])
             ck("calls: the open assumptions only, with who made them and when", a["calls"] == [
                 {"ref": "A1", "question": "Which date format?", "choice": "ISO dates",
@@ -411,7 +413,10 @@ async def main():
             ck("the hand-over path is on the crew route (so the check above means something)",
                PATH in json.dumps(hand), hand.get("handover"))
             ck("free text that names the folder shows the repo instead",
-               a["decisions"][1]["words"] == f"Tabs, as in {REPO}/style.md", a["decisions"][1])
+               a["decisions"][1]["said"] == f"Tabs, as in {REPO}/style.md", a["decisions"][1])
+            ck("a decision reads as the answer chosen, the person's words under it when they add something (TR-1018)",
+               (a["decisions"][1]["answer"], a["decisions"][0]["answer"], a["decisions"][0]["said"]) == ("tabs", "MIT", None),
+               a["decisions"])
             bad = [(p, k, s) for p, k, s in strings(a)
                    if s[:1] in ("/", "~") and k not in ("url", "href", "tickets_href")]
             ck("no value starts with / or ~ except a link", bad == [], bad)
@@ -520,7 +525,8 @@ async def main():
                [x["title"] for x in t["moving"]] == [f"Fix links in {REPO}/src and {REPO}"], t["moving"])
             ck("a milestone's goal and checks show the repo", t["milestones"][0]["goal"]
                == f"Links work under {REPO} and {REPO}/src." and t["milestones"][0]["checks"]
-               == [{"check": f"open {REPO}/index.html", "expect": f"it is the one in {REPO}"}], t["milestones"])
+               == [{"n": 1, "check": f"open {REPO}/index.html", "expect": f"it is the one in {REPO}",
+                    "for": "crew", "result": None, "note": None, "by": None}], t["milestones"])
             w = t["waiting"][0] if t["waiting"] else {}
             ck("a waiting item shows the repo in its words", (w.get("label"), w.get("title"), w.get("detail"), w.get("meta"))
                == (f"Look at {REPO}/", f"Check {REPO}/src", f"See {REPO}/notes", f"in {REPO}/"), w)

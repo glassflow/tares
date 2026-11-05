@@ -12,6 +12,8 @@ export type EditionInfo = {
   credentialName?: string;
   /** the person behind the sign-in, when it has one; the cell records changes under this name */
   personName?: string;
+  /** the picture of that person (an https address), when they have one (TR-1016) */
+  personPicture?: string;
   /** the cell has no sign-in at all (whoami answers "open"), so there is no one to name */
   open?: boolean;
   /** the cell has no edition stored yet, so the first screen asks which one (whoami edition_needed) */
@@ -48,7 +50,7 @@ function fromWhoami(w: Whoami): Omit<EditionInfo, "reload"> {
   const open = w.id === "open";
   return {
     edition: w.edition ?? "platform", name: w.edition_name, open, credentialName: open ? undefined : w.name,
-    personName: w.person?.name || undefined,
+    personName: w.person?.name || undefined, personPicture: w.person?.picture || undefined,
     needed: w.edition_needed === true, admin: open || (w.scopes ?? []).includes("admin"),
   };
 }

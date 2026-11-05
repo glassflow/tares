@@ -76,6 +76,7 @@ def register(app, store, h, ctx):
             led = sorted(leads.get(p["id"], []), key=lambda x: (x["done"], x["name"].lower()))
             out.append({"id": p["id"], "name": "Local" if first else (p["name"] or p.get("email") or "Someone"),
                         "email": p.get("email"), "admin": bool(p.get("is_admin")),
+                        "picture": p.get("picture"),
                         "you": p["id"] == me, "state": state, "state_words": words,
                         "leads": [{"id": x["id"], "name": x["name"]} for x in led if not x["done"]],
                         "owns": sorted(owns.get(p["id"], []))})
@@ -84,7 +85,7 @@ def register(app, store, h, ctx):
 
     @app.get("/api/factory/people")
     def factory_people(request: Request):
-        """{people: [{id, name, email, admin, you, state: active|invited, state_words, leads:
+        """{people: [{id, name, email, admin, picture, you, state: active|invited, state_words, leads:
         [{id, name}], owns: [repo]}], can_add, add_text, cloud, workspace_href, now}. You first,
         then the people who have signed in, then the invited ones."""
         now = now_utc()

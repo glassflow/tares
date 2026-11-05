@@ -87,6 +87,9 @@ store.add_assumption(y, "Which title length?", "Sixty characters", "It fits a re
 for q, w, when in (("Use tabs or spaces?", "Tabs", ago(days=3)), ("Which licence?", "MIT", ago(days=2)),
                    ("Which host?", "The docs site", ago(days=1)), ("Which theme?", "The light one", ago(hours=2))):
     store.add_decision(y, "", q, w, w, False, "project", False, None, False, [], when)
+# a reply by letter: the page shows the option, with the person's words under it (TR-1018)
+store.add_decision(y, "", "How should the branch take in main?", "D85 A", "merge main into teams", False,
+                   "project", True, None, False, [], ago(hours=1))
 store.add_desk_item(y, "Which gateway should the crew use?", "", [], "The first", "It is the cheaper one.", "", [],
                     False, "crew-orchestrator", [], ago(hours=3), "crew-orchestrator", None)
 store.add_desk_item(y, "Permission", "", [], "", "", "", [], False, "project-y-build-m1", [], ago(hours=1),
@@ -100,6 +103,18 @@ for n in (1, 2, 3):
     ticket(z, f"Write part {n}", milestone=mz, stage="merged", status="done")
 store.create_doc(z, "start", "Start", "Build it.")
 store.add_decision(z, "", "Which room?", "The big one", "big", False, "project", False, None, False, [], ago(days=1))
+
+# project-k: M1 merged, the crew passed its check, one check is for the person; M2 still open
+k = project("project-k", "Show who has each pull request.")
+hand(k, "project-k")
+mk1 = store.create_milestone(k, "M1: Three lists", "Reviews shows three lists.", [
+    {"check": "pytest tests/test_reviews.py", "expect": "0 failed"},
+    {"check": "Open Reviews", "expect": "Three lists, each row says who has it", "for": "person"},
+    {"check": "Open Home", "expect": "The same pull requests wait for you", "for": "person"}])
+ticket(k, "Split the review list", milestone=mk1, stage="merged", status="done")
+store.record_milestone_check(k, mk1, 0, "pass", "12 passed", "crew", "crew-orchestrator", None, now_utc())
+mk2 = store.create_milestone(k, "M2: Later", "Later.", [])
+ticket(k, "Later work", milestone=mk2)
 
 # project-x: a starting prompt only
 x = project("project-x", "Let customers connect their own tools, with a setup page for each.")

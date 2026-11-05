@@ -929,7 +929,8 @@ def make_app() -> FastAPI:
 
     def _person_ref(p: dict | None) -> dict | None:
         """The part of a person a credential carries."""
-        return {"id": p["id"], "name": p["name"], "email": p["email"]} if p else None
+        return ({"id": p["id"], "name": p["name"], "email": p["email"],
+                 "picture": p.get("picture")} if p else None)
 
     def _key_person(key: dict) -> dict | None:
         """Who a key acts as: the person it is bound to. A key nobody has bound acts as `local`
@@ -1724,7 +1725,8 @@ def make_app() -> FastAPI:
 
     # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
     def _person_out(p: dict) -> dict:
-        return {k: p[k] for k in ("id", "name", "email", "emails", "github", "is_admin", "created_via")}
+        return {k: p.get(k) for k in ("id", "name", "email", "emails", "github", "is_admin",
+                                      "created_via", "picture")}
 
     @app.get("/api/people")
     def list_people():
@@ -1732,23 +1734,33 @@ def make_app() -> FastAPI:
 
     @app.post("/api/people")
     def create_person(request: Request, body: dict = Body(...)):
-        """{name, email?, emails?, github?, is_admin?, owner?}. 201 with the new person; 200 with
-        the existing one when that email is already someone's. `owner: true` (the system
+        """{name, email?, emails?, github?, is_admin?, owner?, picture?}. 201 with the new person;
+        200 with the existing one when that email is already someone's. `owner: true` (the system
         credential only, as the control plane sends for the workspace owner) makes an unclaimed
-        `local` that person instead (200)."""
+        `local` that person instead (200). `picture` (an https address, TR-1016) is stored on a new
+        person; on an existing one only the system credential sets it, as the control plane does
+        with the picture a person signs in with, so their own console shows it."""
         email = None
         ident = getattr(request.state, "credential", None) or {}
+        system = ident.get("kind") == "system"
         try:
+            picture = store.check_picture(body.get("picture")) if "picture" in body else None
             email = store.check_email(body.get("email"))
             found = store.find_person_by_email(email) if email else None
             if found:
+                if system and picture and picture != found.get("picture"):
+                    found = store.update_person(found["id"], picture=picture) or found
                 return _person_out(found)
-            if email and body.get("owner") is True and ident.get("kind") == "system":
+            if email and body.get("owner") is True and system:
                 claimed = store.claim_local(email, body.get("name"))
                 if claimed:
+                    if picture:
+                        claimed = store.update_person(claimed["id"], picture=picture) or claimed
                     return _person_out(claimed)
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
+            if picture:
+                p = store.update_person(p["id"], picture=picture) or p
         except ValueError as e:
             # this handler runs in the thread pool: two creations of one email can both pass the
             # lookup above, and the loser then meets the winner's row. It gets that person (200).
@@ -1762,7 +1774,8 @@ def make_app() -> FastAPI:
     @app.patch("/api/people/{pid}")
     def update_person(pid: str, request: Request, body: dict = Body(...)):
         """An admin (or the system credential) changes anything; a person changes only their own
-        name. Emails and the GitHub login are how a person is recognised, so they are not self-service."""
+        name and picture. Emails and the GitHub login are how a person is recognised, so they are
+        not self-service."""
         admin = _is_admin(request)
         ident = getattr(request.state, "credential", None) or {}
         kid = str(ident.get("id") or "")
@@ -1772,7 +1785,8 @@ def make_app() -> FastAPI:
         if not admin and not own:
             raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
                                                         "can change a person")
-        allowed = ("name", "email", "emails", "github", "is_admin") if admin else ("name",)
+        allowed = (("name", "email", "emails", "github", "is_admin", "picture") if admin
+                   else ("name", "picture"))
         fields = {k: body[k] for k in allowed if k in body}
         if not admin and any(k in body for k in ("email", "emails", "github", "is_admin")):
             raise HTTPException(status_code=403, detail="only an admin can change a person's "
@@ -5565,16 +5579,35 @@ def make_app() -> FastAPI:
     # A Linear or GitHub project's milestones come from there; their checks stay Tares's ──────
     def _milestones_out(uid: str) -> list[dict]:
         tickets = _tickets_out(uid)
+        raw = store.list_tickets(uid)
+        ms = store.list_milestones(uid)
+        results = store.milestone_check_results([m["id"] for m in ms])
+        accepted = store.milestone_acceptances([m["id"] for m in ms])
         out = []
-        for m in store.list_milestones(uid):
+        for m in ms:
             mine = [t for t in tickets if t["milestone"] == m["id"]]
             live = [t for t in mine if t["status"] != "canceled"]
             done = sum(1 for t in live if t["status"] == "done")
+            res = results.get(m["id"]) or {}
+            st = factory_mod.milestone_state(m, [t for t in raw if t["milestone"] == m["id"]], res,
+                                             accepted.get(m["id"]))
+            results_out = [{"n": i + 1, "for": c.get("for") or "crew",
+                            "result": (res.get(i) or {}).get("result"), "note": (res.get(i) or {}).get("note"),
+                            "by": (res.get(i) or {}).get("by_name"), "at": (res.get(i) or {}).get("at")}
+                           for i, c in enumerate(m["checks"])]
             out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "checks", "position",
                                               "updated_at")},
+                        # each check's number, who it is for and its latest result (TR-1017)
+                        "check_results": results_out,
                         "tickets": len(live), "done": done,
                         "ready": [t["label"] for t in mine if t["ready"]],
-                        "finished": bool(live) and done == len(live)})
+                        "finished": bool(live) and done == len(live),
+                        # TR-1017: accepted (checks passed, or the person accepted it), and the
+                        # checks still to run: the crew's are yours to run and record_milestone_check
+                        "accepted": st["accepted"], "needs_person": st["needs_person"],
+                        "crew_to_run": [i + 1 for i in st["crew_unrun"]],
+                        "crew_failed": [i + 1 for i in st["crew_failed"]],
+                        "person_wrong": [i + 1 for i in st["person_wrong"]]})
         return out
 
     def _milestone_or_404(uid: str, ref: str) -> dict:
@@ -5589,6 +5622,57 @@ def make_app() -> FastAPI:
         its tickets are (count, done, the ready ones, finished)."""
         _project_or_404(uid)
         return {"milestones": _milestones_out(uid)}
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/checks/{n}")
+    def record_milestone_check(uid: str, ref: str, n: str, request: Request, body: dict = Body(...)):
+        """{result: pass|fail, note?}: one run of a milestone's acceptance check n (1-based)
+        (TR-1017). A station of the crew records its own checks; a person records the checks
+        marked for a person. A person's fail is "something's wrong": on a project whose tickets
+        are Tares's, a ticket to fix it is opened in the milestone; otherwise the orchestrator
+        sees the failed check in list_milestones and opens it where the tickets live."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        n = int(n) if str(n).isdigit() else 0
+        if not 1 <= n <= len(m["checks"]):
+            _err(KeyError(f"{m['name']} has {len(m['checks'])} checks; there is no check {n}"), 404)
+        result = str((body or {}).get("result") or "").strip().lower()
+        if result not in ("pass", "fail"):
+            _err(ValueError("result is pass or fail"))
+        note = " ".join(str((body or {}).get("note") or "").split())[:2000] or None
+        check = m["checks"][n - 1]
+        station = factory_api.caller(request)["station"]
+        person = _current_person(request)
+        if not station and check.get("for") != "person":
+            _err(ValueError(f"check {n} of {m['name']} is the crew's to run and record"), 409)
+        if station and check.get("for") == "person":
+            _err(ValueError(f"check {n} of {m['name']} is for a person to try; it shows on their "
+                            "waiting list"), 409)
+        if result == "fail" and not station and not note:
+            _err(ValueError("say in one sentence what is wrong"))
+        store.record_milestone_check(uid, m["id"], n - 1, result, note,
+                                     "crew" if station else "person", station or _by(request, body),
+                                     None if station else (person or {}).get("id"), now_utc())
+        opened = None
+        if result == "fail" and not station and store.project_ticket_home(uid) is None:
+            title = f"Fix: {check['check']}"[:docs_mod.MAX_TITLE]
+            opened = store.create_ticket(uid, "tares", title, "todo", milestone=m["id"])
+            store.add_ticket_history(opened, uid, "stage", "todo",
+                                     f"{_by(request, body)} tried check {n} of {m['name']}: {note}",
+                                     "", "person", now_utc(), (person or {}).get("id"))
+        out = next(x for x in _milestones_out(uid) if x["id"] == m["id"])
+        return {**out, "opened": factory_mod.label(store.get_ticket(uid, opened)) if opened else None}
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/accept")
+    def accept_milestone(uid: str, ref: str, request: Request, body: dict = Body(default={})):
+        """The person accepts a milestone as it is (TR-1017): every ticket merged, whatever checks
+        are still open. Its item leaves the person's waiting list."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if factory_api.caller(request)["station"]:
+            _err(ValueError("a person accepts a milestone, not a station"), 403)
+        person = _current_person(request)
+        store.accept_milestone(uid, m["id"], _by(request, body), (person or {}).get("id"), now_utc())
+        return next(x for x in _milestones_out(uid) if x["id"] == m["id"])
 
     @app.post("/api/projects/{uid}/milestones", status_code=201)
     def create_project_milestone(uid: str, body: dict = Body(...)):

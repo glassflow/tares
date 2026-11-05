@@ -57,8 +57,8 @@ function MenuLinks({ entries, narrow }: { entries: MenuEntry[]; narrow: boolean 
   );
 }
 
-function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
-  who: string; small: string; workspaceUrl?: string; logoutUrl?: string;
+function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
+  who: string; small: string; workspaceUrl?: string; logoutUrl?: string; picture?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(currentTheme);
@@ -92,7 +92,7 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
     <div ref={box} className="relative">
       <button ref={button} type="button" data-testid="account-button" aria-label="Account menu" aria-haspopup="menu" aria-expanded={open}
               onClick={() => setOpen((o) => !o)} className="block! border-0! bg-transparent! p-0! hover:bg-transparent!">
-        <Initials name={who} aria-hidden />
+        <Initials name={who} picture={picture} aria-hidden data-testid="account-avatar" />
       </button>
       {open && (
         <div role="menu" data-testid="account-menu"
@@ -137,7 +137,7 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl }: {
 }
 
 export default function EditionShell() {
-  const { edition, name, credentialName, open: openCell } = useEdition();
+  const { edition, name, credentialName, open: openCell, personPicture } = useEdition();
   const narrow = useNarrow();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
@@ -221,7 +221,7 @@ export default function EditionShell() {
                      }} />
             </div>
           )}
-          <AccountMenu who={who} small={small} workspaceUrl={workspaceUrl} logoutUrl={logoutUrl} />
+          <AccountMenu who={who} small={small} workspaceUrl={workspaceUrl} logoutUrl={logoutUrl} picture={personPicture} />
         </div>
       </header>
 

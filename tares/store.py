@@ -531,6 +531,9 @@ _MIGRATIONS = [
     # its scope, 'team' or 'private'. No DEFAULT for the same reason as paused above; NULL scope
     # reads as 'team'.
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS lead_person_id TEXT",
+    # A person's picture (TR-1016): an https address the console shows instead of their initials,
+    # the one they sign in to Tares Cloud with or one they set. NULL = initials. Never fetched here.
+    "ALTER TABLE people ADD COLUMN IF NOT EXISTS picture TEXT",
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
     # The person a doc belongs to (a people.id): a personal AGENTS.md or memory (TR-624). NULL =
     # a doc of the cell, as every doc made before this column.
@@ -4543,13 +4546,33 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return True
 
     # ── People: who is on the cell. A key belongs to one; the credential names the person ─
-    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via"
+    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via, picture"
+    PICTURE_MAX = 2048
 
     @staticmethod
     def _person_row(r) -> dict:
         return {"id": r[0], "name": r[1], "email": r[2],
                 "emails": json.loads(r[3]) if r[3] else [], "github": r[4],
-                "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7]}
+                "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7],
+                "picture": r[8] or None}
+
+    @classmethod
+    def check_picture(cls, picture) -> str | None:
+        """A picture address as stored: None for none (None or empty), ValueError when it is not
+        one https address of at most PICTURE_MAX characters. The cell never fetches it; the
+        console shows it in an img (TR-1016)."""
+        if picture is None:
+            return None
+        if not isinstance(picture, str):
+            raise ValueError("picture must be an https address")
+        p = picture.strip()
+        if not p:
+            return None
+        if len(p) > cls.PICTURE_MAX:
+            raise ValueError(f"picture is at most {cls.PICTURE_MAX} characters")
+        if not re.match(r"^https://[^\s/?#]+[^\s]*$", p) or any(c in p for c in "\"'<>"):
+            raise ValueError("picture must be an https address")
+        return p
 
     @staticmethod
     def _norm_email(e) -> str | None:
@@ -4646,8 +4669,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return next((p for p in self.list_people() if p["github"] == g), None)
 
     def update_person(self, pid: str, **fields) -> dict | None:
-        """Change name, email, emails, github or is_admin (anything else is ignored). None when
-        there is no such person; ValueError when an email or login belongs to someone else."""
+        """Change name, email, emails, github, is_admin or picture (anything else is ignored). None
+        when there is no such person; ValueError when an email or login belongs to someone else,
+        or the picture is not an https address."""
         cur = self.get_person(pid)
         if not cur:
             return None
@@ -4664,6 +4688,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             new["github"] = str(fields["github"] or "").strip().lstrip("@").lower() or None
         if "is_admin" in fields:
             new["is_admin"] = bool(fields["is_admin"])
+        if "picture" in fields:
+            new["picture"] = self.check_picture(fields["picture"])
         with self._swrite:
             clash = self._taken_emails(([new["email"]] if new["email"] else []) + new["emails"],
                                        besides=pid)
@@ -4673,9 +4699,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                                      for p in self._people()):
                 raise ValueError(f"the GitHub login {new['github']} already belongs to another person")
             self.sc.execute(
-                "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ? "
-                "WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
-                                 new["github"], new["is_admin"], pid])
+                "UPDATE people SET name = ?, email = ?, emails = ?, github = ?, is_admin = ?, "
+                "picture = ? WHERE id = ?", [new["name"], new["email"], json.dumps(new["emails"]),
+                                             new["github"], new["is_admin"], new["picture"], pid])
         return self.get_person(pid)
 
     def claim_local(self, email: str, name: str | None = None) -> dict | None:
