@@ -25,6 +25,21 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // TR-733
     "/projects": { page: React.lazy(() => import("./factory/FactoryProjects")), fallback: "today" },
 
+    // TR-1014: a factory project starts as a spec in Claude Code, not from the template gallery
+    "/projects/new": { page: React.lazy(() => import("./factory/FactoryNewProject")), fallback: "today" },
+
+    // TR-1014
+    "/projects/new/templates": { page: null, fallback: { redirect: "/projects/new" } },
+
+    // TR-1014
+    "/projects/new/custom": { page: null, fallback: { redirect: "/projects/new" } },
+
+    // TR-1014
+    "/projects/new/shared_code_context": { page: null, fallback: { redirect: "/projects/new" } },
+
+    // TR-1014
+    "/projects/new/:template": { page: null, fallback: { redirect: "/projects/new" } },
+
     // TR-734
     "/projects/:id": { page: React.lazy(() => import("./factory/ProjectRoute")), fallback: "today" },
 
