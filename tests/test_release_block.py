@@ -48,5 +48,18 @@ ck("the repo has a RELEASE_BLOCK", (ROOT / "RELEASE_BLOCK").is_file())
 for rel in (".github/workflows/release.yml", ".github/workflows/docker-publish.yml", "scripts/release.sh"):
     ck(f"{rel} calls the check", "check_release_block" in (ROOT / rel).read_text())
 
+# docker-publish also runs from workflow_dispatch on main, which pushes :latest. The step must
+# therefore run on every trigger: no `if:` on it, and it comes before the image is pushed.
+dp = (ROOT / ".github/workflows/docker-publish.yml").read_text().splitlines()
+hit = next((i for i, ln in enumerate(dp) if "check_release_block" in ln), None)
+start = hit
+while start is not None and start > 0 and not dp[start].startswith("      - "):
+    start -= 1
+step = dp[start:hit + 1] if hit is not None else []
+push = next((i for i, ln in enumerate(dp) if "build-push-action" in ln), len(dp))
+ck("docker-publish runs the check on every trigger, with no if:",
+   hit is not None and not any(ln.strip().startswith("if:") for ln in step), "\n".join(step))
+ck("docker-publish runs the check before it pushes the image", hit is not None and hit < push)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
