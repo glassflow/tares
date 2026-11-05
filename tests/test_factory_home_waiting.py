@@ -207,17 +207,19 @@ async def main():
         h = await get_home()
         w = h["waiting_for_you"]
         got = [(i["kind"], (i["project"] or {}).get("name")) for i in w]
-        ck("eight items, oldest first, six kinds", got == [
-            ("permission", "project-x"), ("prs_to_review", "project-x"), ("ready_to_start", "project-y"),
-            ("calls_to_confirm", "project-z"), ("question", "project-w"),
-            ("milestone_to_check", "project-w"), ("permission", None), ("question", None)], got)
+        # TR-1021: what holds the crew up first (the refused commands, the PRs waiting for your
+        # merge), then the rest, oldest first in each
+        ck("eight items, what holds the crew up first, six kinds", got == [
+            ("permission", "project-x"), ("prs_to_review", "project-x"), ("permission", None),
+            ("ready_to_start", "project-y"), ("calls_to_confirm", "project-z"), ("question", "project-w"),
+            ("milestone_to_check", "project-w"), ("question", None)], got)
         ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-            "waited", "actions", "tickets"} for i in w))
+            "waited", "actions", "tickets", "blocking", "older", "question"} for i in w))
         ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
-        ck("waited is in words, oldest first", [i["waited"] for i in w] == [
-            "4 days", "3 days", "2 days", "1 day", "10 hours", "6 hours", "40 minutes", "20 minutes"],
+        ck("waited is in words, oldest first within each group", [i["waited"] for i in w] == [
+            "4 days", "3 days", "40 minutes", "2 days", "1 day", "10 hours", "6 hours", "20 minutes"],
            [i["waited"] for i in w])
         ck("the headline says how many and for how long",
            h["headline"].endswith("8 things wait for you, the oldest for 4 days."), h["headline"])
@@ -323,8 +325,8 @@ async def main():
             store.add_assumption(pz, f"Q{n}?", c, "why", "", [], "z-build-m1", "builder", ago(hours=2))
         cc = by_kind(await get_home())["calls_to_confirm"][0]
         ck("five calls: three shown, the rest counted, keep all", cc["label"] == "5 calls to confirm"
-           and cc["detail"].endswith("..., and 2 more. Keep them?")
-           and "a very long choice a very long choice" in cc["detail"] and "..." in cc["detail"]
+           and cc["detail"].endswith("…, and 2 more. Keep them?") and "choice a…" in cc["detail"]
+           and "a very long choice a very long choice" in cc["detail"]
            and cc["actions"][1]["label"] == "Keep all" and len(cc["actions"][1]["refs"]) == 5, cc)
         ck("the long choice is cut", len(cc["detail"]) < 300, len(cc["detail"]))
 
@@ -459,9 +461,9 @@ async def main():
         ck("p95 under 300 ms", p95 < 300, f"{p95:.0f} ms")
         h2 = fh.waiting_items(store, fx, now_utc())
         rest = [i for i in h2 if i["kind"] != "signoff"]
-        ck("the list is still oldest first, ready-to-close rows last",
-           [i["since"] for i in rest] == sorted(i["since"] for i in rest)
-           and [i["kind"] for i in h2] == [i["kind"] for i in rest] + [i["kind"] for i in h2 if i["kind"] == "signoff"])
+        key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
+        ck("the list is still in order: what holds the crew up, the rest, ready-to-close rows last",
+           [key(i) for i in h2] == sorted(key(i) for i in h2), [(i["kind"], i["blocking"]) for i in h2])
 
 
 asyncio.run(main())

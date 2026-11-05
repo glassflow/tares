@@ -91,7 +91,7 @@ def checks_ok(checks) -> list[dict]:
 
 
 def milestone_state(m: dict, tickets: list[dict], results: dict | None = None,
-                    accepted: dict | None = None) -> dict:
+                    accepted: dict | None = None, crew_has_it: bool = False) -> dict:
     """Where a milestone stands for acceptance (TR-1017), from its checks, the latest result of
     each (`results` {index: {result, note, by, at}}) and a whole-milestone acceptance. A crew
     check is the crew's to run and record; a person check (`for: "person"`) is the person's.
@@ -101,7 +101,8 @@ def milestone_state(m: dict, tickets: list[dict], results: dict | None = None,
     delivered). crew_failed / person_wrong: work for the crew, never for the person. needs_person:
     delivered, not accepted, nothing failed, and a person check still open, or crew checks the
     crew never recorded (a milestone from before results were kept), which the person may accept
-    as it is."""
+    as it is. With `crew_has_it` (the project is with a crew, TR-1021) unrecorded crew checks stay
+    the crew's: only a person check makes it need the person."""
     results = results or {}
     live = [t for t in tickets if t.get("status") != "canceled"]
     done = bool(live) and all(delivered(t) for t in live)
@@ -116,7 +117,7 @@ def milestone_state(m: dict, tickets: list[dict], results: dict | None = None,
     passed = not (crew_failed or crew_unrun or person_wrong or person_open)
     is_accepted = bool(accepted) or (done and passed)
     needs = (done and not is_accepted and not crew_failed and not person_wrong
-             and bool(person_open or crew_unrun))
+             and bool(person_open or (crew_unrun and not crew_has_it)))
     return {"delivered": done, "accepted": is_accepted,
             "accepted_by": (accepted or {}).get("by") if accepted else ("checks" if is_accepted else None),
             "crew": crew, "person": person, "crew_failed": crew_failed, "crew_unrun": crew_unrun,

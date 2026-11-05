@@ -383,6 +383,35 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("the desk item is answered"), desk.some((d) => d.label === ids.desk.options), JSON.stringify(desk.map((d) => d.label)));
       ck(t("five remain"), (await rows.count()) === 5, String(await rows.count()));
 
+      // TR-1021: a question that holds the crew up comes first and is answered on its row
+      const font = await api("POST", "/api/desk", { question: "Which font for the shop?", options: ["serif", "sans"],
+        recommendation: "sans, it reads best on phones", why: "the mock uses it", project: ids.project,
+        to: ids.people.alex, blocking: true, blocks: "the shop's header ticket" });
+      ck(t("TR-1021: a blocking question is put on the desk"), font.status < 300, JSON.stringify(font));
+      await page.reload();
+      await row(page, "Which font for the shop").waitFor();
+      const first = row(page, "Which font for the shop");
+      const inNow = await page.evaluate(() => {
+        const rest = document.querySelector('[data-testid="waiting-rest"]');
+        const f = [...document.querySelectorAll('[data-testid="waiting-row"]')].find((r) => r.textContent.includes("Which font for the shop"));
+        return !!f && (!rest || !!(f.compareDocumentPosition(rest) & Node.DOCUMENT_POSITION_FOLLOWING));
+      });
+      ck(t("TR-1021: it is among what holds the crew up, above the rest"), (await page.getByTestId("waiting-now").count()) === 1 && inNow);
+      ck(t("TR-1021: its row shows the recommendation and what it holds up"),
+         (await first.getByTestId("question-recommendation").innerText()).includes("sans, it reads best on phones")
+         && (await first.innerText()).includes("Holds up the shop's header ticket"));
+      ck(t("TR-1021: the meta line says who it is from, in words"), /^From /.test((await first.getByTestId("waiting-meta").innerText()).trim()),
+         await first.getByTestId("waiting-meta").innerText());
+      ctl.posts.length = 0;
+      await first.getByTestId("question-choices").getByRole("button", { name: "sans", exact: true }).click();
+      await row(page, "Which font for the shop").waitFor({ state: "detached" });
+      const fontPost = ctl.posts.find((x) => /^\/api\/desk\/[^/]+\/reply$/.test(x.path));
+      ck(t("TR-1021: the option on the row is sent as the choice, its letter as the words"),
+         !!fontPost && JSON.parse(fontPost.body || "{}").choice === "sans" && JSON.parse(fontPost.body || "{}").words === "B", JSON.stringify(fontPost));
+      const fontDecided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which font for the shop/.test(d.question));
+      ck(t("TR-1021: the daemon recorded it from the console"), !!fontDecided && fontDecided.via === "console" && fontDecided.choice === "sans", JSON.stringify(fontDecided));
+      ck(t("TR-1021: five remain again"), (await rows.count()) === 5, String(await rows.count()));
+
       // Sign off
       const so = row(page, "Kim cannot hand the project");
       await so.getByRole("button", { name: "Sign off" }).click();

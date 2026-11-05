@@ -26,6 +26,7 @@ import { CrewLimit, ReposYouOwn, TeamCrews } from "./TeamSide";
 import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
 import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
+import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { YouAreWaitingOn } from "./YouAreWaitingOn";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
@@ -90,7 +91,7 @@ type OnAction = (a: HomeAction, item?: HomeItem) => void;
 
 const BUSY_LABEL: Partial<Record<HomeVerb, string>> = {
   keep_assumptions: "Keeping...", allow: "Allowing...", close: "Closing...", agree: "Agreeing...",
-  answer: "Sending...", sign_off: "Signing...", decline: "Declining...",
+  answer: "Sending...", choose: "Sending...", sign_off: "Signing...", decline: "Declining...",
 };
 
 function ActionButton({ action, item, onAction, state }: {
@@ -129,6 +130,7 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
         <div className="my-0.5 font-bold" data-user-text>{item.title}</div>
         <div className="line-clamp-3" title={item.detail} data-user-text><Detail text={item.detail} /></div>
         <div className={cn(MUTED, "mt-0.5")} data-user-text>{item.meta}</div>
+        <QuestionChoices item={item} render={(a, it) => <ActionButton key={a.label} action={a} item={it} onAction={onAction} state={state} />} />
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2">
@@ -149,17 +151,22 @@ const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
 function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAction; rows?: Record<string, RowState> }) {
   const [all, setAll] = React.useState(false);
-  const shown = all ? items : items.slice(0, SHOW_FIRST);
-  const more = items.length - shown.length;
+  const g = groupWaiting(items);
+  const rest = all ? g.rest : g.rest.slice(0, SHOW_FIRST);
+  const more = g.rest.length - rest.length;
+  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} />;
   return (
     <section aria-label="Waiting for you" className="min-w-0">
-      <SectionHead title="Waiting for you" aside={<span className={MUTED}>oldest first, ready to close last</span>} />
+      <SectionHead title="Waiting for you" aside={<span className={MUTED}>what holds the crew up first</span>} />
       <div className="border border-border bg-card">
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-6" />
         ) : (
           <>
-            {shown.map((it) => <WaitingRow key={it.id} item={it} onAction={onAction} state={rows?.[it.id]} />)}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" />}
+            {g.now.map(row)}
+            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" />}
+            {rest.map(row)}
             {more > 0 && (
               <ListRow>
                 <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
@@ -167,6 +174,7 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
                 </Button>
               </ListRow>
             )}
+            <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
           </>
         )}
       </div>
@@ -690,6 +698,15 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     } else if (a.do === "close") {
       const project = String(a.project ?? item.project?.id ?? "");
       if (project) setClose({ item, project });
+    } else if (a.do === "choose") {
+      // one of the question's own options, sent as the answer from the console (TR-1021)
+      const desk = typeof a.desk === "string" ? a.desk : "";
+      const choice = typeof a.choice === "string" ? a.choice : "";
+      const letter = typeof a.letter === "string" ? a.letter : choice;
+      if (desk && choice) {
+        void run(item, "choose", () => deskReply(desk, letter, false, choice),
+          "Answered. It is on its way back to whoever asked.", () => {});
+      }
     } else if (a.do === "answer") {
       if (typeof a.desk === "string" || (a.project && a.question)) { clearError(item.id); setAnswering({ item, action: a }); }
     } else if (a.do === "sign_off") {

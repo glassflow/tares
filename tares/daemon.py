@@ -5583,6 +5583,8 @@ def make_app() -> FastAPI:
         ms = store.list_milestones(uid)
         results = store.milestone_check_results([m["id"] for m in ms])
         accepted = store.milestone_acceptances([m["id"] for m in ms])
+        from . import factory_waiting as _fw
+        has = _fw.crew_has(store, store.get_project(uid) or {"id": uid})
         out = []
         for m in ms:
             mine = [t for t in tickets if t["milestone"] == m["id"]]
@@ -5590,7 +5592,7 @@ def make_app() -> FastAPI:
             done = sum(1 for t in live if t["status"] == "done")
             res = results.get(m["id"]) or {}
             st = factory_mod.milestone_state(m, [t for t in raw if t["milestone"] == m["id"]], res,
-                                             accepted.get(m["id"]))
+                                             accepted.get(m["id"]), has)
             results_out = [{"n": i + 1, "for": c.get("for") or "crew",
                             "result": (res.get(i) or {}).get("result"), "note": (res.get(i) or {}).get("note"),
                             "by": (res.get(i) or {}).get("by_name"), "at": (res.get(i) or {}).get("at")}
