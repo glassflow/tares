@@ -94,6 +94,28 @@ FACTORY_SCHEMA = [
     # Checks a builder ran on a ticket (TR-435): the command, what it showed, the commit, the test
     # proven to bite. Also a line in the ticket's working doc; kept here so they can be matched
     # against the recording (TR-442).
+    # A milestone's acceptance checks, run and recorded (TR-1017): one row per run, the latest per
+    # (milestone, index) counts. by_kind is crew (a station ran it) or person (they tried it).
+    """CREATE TABLE IF NOT EXISTS milestone_check_results (
+      id          TEXT PRIMARY KEY,
+      project     TEXT,
+      milestone   TEXT,
+      idx         INTEGER,
+      result      TEXT,
+      note        TEXT,
+      by_kind     TEXT,
+      by_name     TEXT,
+      person_id   TEXT,
+      checked_at  TIMESTAMPTZ
+    )""",
+    # A milestone the person accepted as a whole, without (or before) its checks' results.
+    """CREATE TABLE IF NOT EXISTS milestone_acceptances (
+      milestone   TEXT PRIMARY KEY,
+      project     TEXT,
+      by_name     TEXT,
+      person_id   TEXT,
+      accepted_at TIMESTAMPTZ
+    )""",
     """CREATE TABLE IF NOT EXISTS ticket_checks (
       id          TEXT PRIMARY KEY,
       project     TEXT,
@@ -428,6 +450,8 @@ class FactoryStore:
         self.sc.execute("DELETE FROM ticket_history WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM assumptions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM ticket_checks WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM milestone_check_results WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM milestone_acceptances WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM reviews WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
@@ -475,6 +499,50 @@ class FactoryStore:
         vals.append(mid)
         with self._swrite:
             self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals)
+
+    def record_milestone_check(self, project: str, milestone: str, idx: int, result: str,
+                               note: str | None, by_kind: str, by_name: str | None,
+                               person_id: str | None, at) -> None:
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO milestone_check_results (id, project, milestone, idx, result, note, "
+                "by_kind, by_name, person_id, checked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ["mc_" + uuid.uuid4().hex[:10], project, milestone, int(idx), result,
+                 note or None, by_kind, by_name or None, person_id or None, at])
+
+    def milestone_check_results(self, milestones: list[str]) -> dict[str, dict[int, dict]]:
+        """{milestone: {index: the latest result {result, note, by_kind, by_name, at}}}."""
+        if not milestones:
+            return {}
+        marks = ", ".join("?" for _ in milestones)
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT milestone, idx, result, note, by_kind, by_name, person_id, checked_at FROM "
+                f"milestone_check_results WHERE milestone IN ({marks}) ORDER BY checked_at, id",
+                list(milestones)).fetchall()
+        out: dict[str, dict[int, dict]] = {}
+        for r in rows:
+            out.setdefault(r[0], {})[int(r[1])] = {"result": r[2], "note": r[3], "by_kind": r[4],
+                                                   "by_name": r[5], "person_id": r[6], "at": r[7]}
+        return out
+
+    def accept_milestone(self, project: str, milestone: str, by_name: str | None,
+                         person_id: str | None, at) -> None:
+        with self._swrite:
+            self.sc.execute("DELETE FROM milestone_acceptances WHERE milestone = ?", [milestone])
+            self.sc.execute("INSERT INTO milestone_acceptances (milestone, project, by_name, "
+                             "person_id, accepted_at) VALUES (?, ?, ?, ?, ?)",
+                             [milestone, project, by_name or None, person_id or None, at])
+
+    def milestone_acceptances(self, milestones: list[str]) -> dict[str, dict]:
+        if not milestones:
+            return {}
+        marks = ", ".join("?" for _ in milestones)
+        with self._sread:
+            rows = self.sc.execute(f"SELECT milestone, by_name, person_id, accepted_at FROM "
+                                    f"milestone_acceptances WHERE milestone IN ({marks})",
+                                    list(milestones)).fetchall()
+        return {r[0]: {"by": r[1], "person_id": r[2], "at": r[3]} for r in rows}
 
     def list_milestones(self, project: str) -> list[dict]:
         with self._sread:

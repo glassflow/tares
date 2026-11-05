@@ -290,10 +290,10 @@ async def main():
 
         print("== milestones to check ==")
         mc = k["milestone_to_check"][0]
-        ck("every ticket merged (the canceled one does not count), its checks counted",
+        ck("every ticket merged (the canceled one does not count), its unrecorded crew checks counted (TR-1017)",
            len(k["milestone_to_check"]) == 1 and mc["label"] == "Milestone to check"
            and mc["title"] == "project-w, M1: styles"
-           and mc["detail"] == "Every ticket of this milestone merged. Try its 2 checks."
+           and mc["detail"] == "Every ticket of this milestone merged, but the crew has not recorded its 2 checks. Accept it as it is, or ask the crew."
            and mc["meta"] == "Merged 6 hours ago" and mc["id"] == f"milestone_to_check:{pw}:{mws['M1']}", mc)
         ck("check it, a link to the milestone", mc["actions"] == [
             {"label": "Check it", "primary": True, "href": f"/projects/{pw}#milestone-{mws['M1']}"}],

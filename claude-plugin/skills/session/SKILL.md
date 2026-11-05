@@ -90,7 +90,9 @@ words, and the project left the crew's work list. Its builders may still be runn
 6. **Git:** follow the project's AGENTS.md and the shared one (branch, PR, who merges). An open
    pull request a builder left is yours now: finish it, and merge only as the AGENTS.md says or on
    the person's yes.
-7. When a milestone's tickets are done, run its checks from `list_milestones` and record them.
+7. When a milestone's tickets are done, run its crew checks from `list_milestones` and record
+   each with `record_milestone_check`. The person tries the checks marked for a person in the
+   console; do not record those.
 
 ## Finishing
 

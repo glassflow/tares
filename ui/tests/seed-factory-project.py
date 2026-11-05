@@ -101,6 +101,18 @@ for n in (1, 2, 3):
 store.create_doc(z, "start", "Start", "Build it.")
 store.add_decision(z, "", "Which room?", "The big one", "big", False, "project", False, None, False, [], ago(days=1))
 
+# project-k: M1 merged, the crew passed its check, one check is for the person; M2 still open
+k = project("project-k", "Show who has each pull request.")
+hand(k, "project-k")
+mk1 = store.create_milestone(k, "M1: Three lists", "Reviews shows three lists.", [
+    {"check": "pytest tests/test_reviews.py", "expect": "0 failed"},
+    {"check": "Open Reviews", "expect": "Three lists, each row says who has it", "for": "person"},
+    {"check": "Open Home", "expect": "The same pull requests wait for you", "for": "person"}])
+ticket(k, "Split the review list", milestone=mk1, stage="merged", status="done")
+store.record_milestone_check(k, mk1, 0, "pass", "12 passed", "crew", "crew-orchestrator", None, now_utc())
+mk2 = store.create_milestone(k, "M2: Later", "Later.", [])
+ticket(k, "Later work", milestone=mk2)
+
 # project-x: a starting prompt only
 x = project("project-x", "Let customers connect their own tools, with a setup page for each.")
 store.create_doc(x, "start", "Start", "Build it.")

@@ -19,7 +19,10 @@ async def write_milestone(name: str, goal: str | None = None, checks: list[dict]
     """Write one of the project's milestones, or change it when one with this `name` exists
     (names are unique). Each milestone ships something a person can check: `goal` says what in
     one line, `checks` are its acceptance checks, [{"check": "<command or short manual step>",
-    "expect": "<what it should show>"}], that the releaser runs when the milestone ships.
+    "expect": "<what it should show>", "for": "person"?}]. A check is the crew's (the default):
+    the crew runs it and records it when the milestone's last ticket merges. Mark `for: "person"`
+    only a step a person must do themselves (look at a screen, try a flow in the console); those
+    reach the person to accept.
     `position` orders them (a new one goes last). To rename one, pass its current name or id as
     `id` and the new `name`. Give tickets a milestone with write_ticket(milestone=<name>). When
     the project's tickets live in Linear or GitHub, its milestones come from there (for GitHub,
@@ -47,11 +50,30 @@ async def write_milestone(name: str, goal: str | None = None, checks: list[dict]
     return _out(r, ("id", "name", "goal", "checks", "tickets"))
 
 
+@writable()
+async def record_milestone_check(milestone: str, n: int, result: str, note: str = "",
+                                 project: str = "") -> str:
+    """Record one run of a milestone's acceptance check (TR-1017): `milestone` its name or id,
+    `n` the check's number (1-based, as list_milestones shows), `result` pass or fail, `note`
+    the last lines of what it showed. Run a milestone's crew checks (`for` crew) as soon as its
+    last ticket merges and record every one; a fail is the crew's work (open a ticket for it).
+    Checks `for` person are the person's: they try them in the console, never record those."""
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/milestones/{milestone}/checks/{int(n)}",
+                          json={"result": result, "note": note})
+    return _out(r, ("id", "name", "accepted", "crew_to_run", "crew_failed", "person_wrong", "opened"))
+
+
 @mcp.tool()
 async def list_milestones(project: str = "") -> str:
-    """The project's milestones in order: name, goal, acceptance checks, how many tickets and
-    how many are done, which are ready, and whether the milestone is finished. Work one
-    milestone at a time, in this order."""
+    """The project's milestones in order: name, goal, acceptance checks (each with `n`, `for`
+    crew or person, and its latest `result`), how many tickets and how many are done, which are
+    ready, whether the milestone is finished and accepted, and `crew_to_run` (the crew checks not
+    recorded yet) and `crew_failed` / `person_wrong` (failed ones: open a ticket for each, where
+    the project's tickets live). Work one milestone at a time, in this order."""
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:

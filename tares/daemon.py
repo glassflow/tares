@@ -5579,16 +5579,34 @@ def make_app() -> FastAPI:
     # A Linear or GitHub project's milestones come from there; their checks stay Tares's ──────
     def _milestones_out(uid: str) -> list[dict]:
         tickets = _tickets_out(uid)
+        raw = store.list_tickets(uid)
+        ms = store.list_milestones(uid)
+        results = store.milestone_check_results([m["id"] for m in ms])
+        accepted = store.milestone_acceptances([m["id"] for m in ms])
         out = []
-        for m in store.list_milestones(uid):
+        for m in ms:
             mine = [t for t in tickets if t["milestone"] == m["id"]]
             live = [t for t in mine if t["status"] != "canceled"]
             done = sum(1 for t in live if t["status"] == "done")
-            out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "checks", "position",
+            res = results.get(m["id"]) or {}
+            st = factory_mod.milestone_state(m, [t for t in raw if t["milestone"] == m["id"]], res,
+                                             accepted.get(m["id"]))
+            checks = [{**c, "for": c.get("for") or "crew", "n": i + 1,
+                       "result": (res.get(i) or {}).get("result"), "note": (res.get(i) or {}).get("note"),
+                       "by": (res.get(i) or {}).get("by_name"), "at": (res.get(i) or {}).get("at")}
+                      for i, c in enumerate(m["checks"])]
+            out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "position",
                                               "updated_at")},
+                        "checks": checks,
                         "tickets": len(live), "done": done,
                         "ready": [t["label"] for t in mine if t["ready"]],
-                        "finished": bool(live) and done == len(live)})
+                        "finished": bool(live) and done == len(live),
+                        # TR-1017: accepted (checks passed, or the person accepted it), and the
+                        # checks still to run: the crew's are yours to run and record_milestone_check
+                        "accepted": st["accepted"], "needs_person": st["needs_person"],
+                        "crew_to_run": [i + 1 for i in st["crew_unrun"]],
+                        "crew_failed": [i + 1 for i in st["crew_failed"]],
+                        "person_wrong": [i + 1 for i in st["person_wrong"]]})
         return out
 
     def _milestone_or_404(uid: str, ref: str) -> dict:
@@ -5603,6 +5621,56 @@ def make_app() -> FastAPI:
         its tickets are (count, done, the ready ones, finished)."""
         _project_or_404(uid)
         return {"milestones": _milestones_out(uid)}
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/checks/{n}")
+    def record_milestone_check(uid: str, ref: str, n: int, request: Request, body: dict = Body(...)):
+        """{result: pass|fail, note?}: one run of a milestone's acceptance check n (1-based)
+        (TR-1017). A station of the crew records its own checks; a person records the checks
+        marked for a person. A person's fail is "something's wrong": on a project whose tickets
+        are Tares's, a ticket to fix it is opened in the milestone; otherwise the orchestrator
+        sees the failed check in list_milestones and opens it where the tickets live."""
+        p = _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if not 1 <= n <= len(m["checks"]):
+            _err(KeyError(f"{m['name']} has {len(m['checks'])} checks; there is no check {n}"), 404)
+        result = str((body or {}).get("result") or "").strip().lower()
+        if result not in ("pass", "fail"):
+            _err(ValueError("result is pass or fail"))
+        note = " ".join(str((body or {}).get("note") or "").split())[:2000] or None
+        check = m["checks"][n - 1]
+        station = factory_api.caller(request)["station"]
+        person = _current_person(request)
+        if not station and check.get("for") != "person":
+            _err(ValueError(f"check {n} of {m['name']} is the crew's to run and record"), 409)
+        if station and check.get("for") == "person":
+            _err(ValueError(f"check {n} of {m['name']} is for a person to try; it shows on their "
+                            "waiting list"), 409)
+        if result == "fail" and not station and not note:
+            _err(ValueError("say in one sentence what is wrong"))
+        store.record_milestone_check(uid, m["id"], n - 1, result, note,
+                                     "crew" if station else "person", station or _by(request, body),
+                                     None if station else (person or {}).get("id"), now_utc())
+        opened = None
+        if result == "fail" and not station and store.project_ticket_home(uid) is None:
+            title = f"Fix: {check['check']}"[:docs_mod.MAX_TITLE]
+            opened = store.create_ticket(uid, "tares", title, "todo", milestone=m["id"])
+            store.add_ticket_history(opened, uid, "stage", "todo",
+                                     f"{_by(request, body)} tried check {n} of {m['name']}: {note}",
+                                     "", "person", now_utc(), (person or {}).get("id"))
+        out = next(x for x in _milestones_out(uid) if x["id"] == m["id"])
+        return {**out, "opened": factory_mod.label(store.get_ticket(uid, opened)) if opened else None}
+
+    @app.post("/api/projects/{uid}/milestones/{ref}/accept")
+    def accept_milestone(uid: str, ref: str, request: Request, body: dict = Body(default={})):
+        """The person accepts a milestone as it is (TR-1017): every ticket merged, whatever checks
+        are still open. Its item leaves the person's waiting list."""
+        _project_or_404(uid)
+        m = _milestone_or_404(uid, ref)
+        if factory_api.caller(request)["station"]:
+            _err(ValueError("a person accepts a milestone, not a station"), 403)
+        person = _current_person(request)
+        store.accept_milestone(uid, m["id"], _by(request, body), (person or {}).get("id"), now_utc())
+        return next(x for x in _milestones_out(uid) if x["id"] == m["id"])
 
     @app.post("/api/projects/{uid}/milestones", status_code=201)
     def create_project_milestone(uid: str, body: dict = Body(...)):

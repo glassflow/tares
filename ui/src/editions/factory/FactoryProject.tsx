@@ -7,7 +7,7 @@ import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  decideCall, factoryProject,
+  acceptMilestone, answerCheck, decideCall, factoryProject,
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
@@ -287,34 +287,113 @@ function Moving({ d }: { d: FactoryProjectData }) {
 
 // ── milestones ────────────────────────────────────────────────────────────────
 
-function MilestoneRow({ m }: { m: ProjectMilestone }) {
-  const { total, merged } = m.counts;
+/** What a check's latest result says, in words: passed, failed, or not checked yet. */
+function checkWords(c: ProjectMilestone["checks"][number]): string {
+  if (c.result === "pass") return c.for === "person" ? "Works" : `Passed${c.by ? `, checked by ${c.by}` : ""}`;
+  if (c.result === "fail") return c.for === "person" ? "Something's wrong" : `Failed${c.by ? `, checked by ${c.by}` : ""}`;
+  return c.for === "person" ? "Waiting for you" : "Not checked yet";
+}
+
+/** One check for a person: Works, or Something's wrong with a sentence (TR-1017). */
+function PersonCheck({ c, onAnswer }: {
+  c: ProjectMilestone["checks"][number];
+  onAnswer?: (n: number, result: "pass" | "fail", note?: string) => Promise<void>;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const [note, setNote] = React.useState("");
+  const [busy, setBusy] = React.useState<"" | "pass" | "fail">("");
+  const [error, setError] = React.useState("");
+  const answer = async (result: "pass" | "fail") => {
+    setBusy(result); setError("");
+    try {
+      await onAnswer?.(c.n, result, result === "fail" ? note.trim() : undefined);
+      setOpen(false); setNote("");
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : NOT_SAVED);
+    } finally {
+      setBusy("");
+    }
+  };
+  if (c.result || !onAnswer) return null;
   return (
-    <div className={ROW} id={`milestone-${m.id}`} data-testid="milestone-row" data-ms={m.number}>
+    <div className="mt-1.5 grid gap-2" data-testid="person-check-actions">
+      <div className="flex flex-wrap gap-2">
+        <Button className="h-8 text-[13px]!" busy={busy === "pass"} disabled={busy === "fail"} onClick={() => answer("pass")} data-testid="check-works">Works</Button>
+        <Button variant="secondary" className="h-8 text-[13px]!" aria-expanded={open} disabled={busy !== ""}
+                onClick={() => setOpen((o) => !o)} data-testid="check-wrong">Something's wrong</Button>
+      </div>
+      {open && (
+        <div className="grid gap-2">
+          <Textarea label="What did you see? The crew gets a ticket with your words." value={note} data-testid="check-note"
+                    onChange={(e) => setNote(e.target.value)} className="min-h-14" />
+          <div className="flex flex-wrap gap-2">
+            <Button className="h-8 text-[13px]!" busy={busy === "fail"} disabled={note.trim() === ""} onClick={() => answer("fail")} data-testid="check-send">Send to the crew</Button>
+            <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
+          </div>
+        </div>
+      )}
+      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]" data-testid="check-error">{error}</div>}
+    </div>
+  );
+}
+
+function MilestoneRow({ m, onAnswer, onAccept }: {
+  m: ProjectMilestone;
+  onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
+  onAccept?: (m: ProjectMilestone) => Promise<void>;
+}) {
+  const { total, merged } = m.counts;
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const accept = async () => {
+    setBusy(true); setError("");
+    try { await onAccept?.(m); } catch (e) { setError(e instanceof ApiError ? e.message : NOT_SAVED); } finally { setBusy(false); }
+  };
+  const mine = m.checks.filter((c) => c.for === "person" && !c.result).length;
+  return (
+    <div className={ROW} id={`milestone-${m.id}`} data-testid="milestone-row" data-ms={m.number} data-accepted={m.accepted}>
       <div className="grid gap-x-6 gap-y-1.5 md:grid-cols-[minmax(0,1fr)_250px]">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2 font-semibold [overflow-wrap:anywhere]">
             <span data-user-text>{m.name}</span>
             {m.done && (
-              <span className="border border-[color:var(--ok-border)] bg-[var(--ok-soft)] px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--ok)]">Done</span>
+              <span className="border border-[color:var(--ok-border)] bg-[var(--ok-soft)] px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--ok)]">
+                {m.accepted ? "Accepted" : "Merged"}
+              </span>
             )}
           </div>
           {m.goal && <div className="mt-0.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{m.goal}</div>}
+          {m.needs_person && (
+            <div className="mt-1 text-[13px] font-semibold text-[color:var(--accent-deep)]" data-testid="milestone-needs">
+              {mine > 0 ? `${plural(mine, "check", "checks")} for you to try` : "The crew has not recorded its checks. Accept it as it is, or ask the crew."}
+            </div>
+          )}
           {m.checks.length > 0 && (
-            <details className="group mt-1" data-testid="milestone-checks">
+            <details className="group mt-1" data-testid="milestone-checks" open={m.needs_person && mine > 0}>
               <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[13px] text-[color:var(--accent-deep)] [&::-webkit-details-marker]:hidden">
                 <span aria-hidden className="text-[11px] transition-transform group-open:rotate-90">{"▸"}</span>
                 {plural(m.checks.length, "check", "checks")} to pass
               </summary>
               <ol className="mb-0.5 mt-1.5 list-decimal pl-5">
-                {m.checks.map((c, i) => (
-                  <li key={i} className="my-1.5 text-[13px] [overflow-wrap:anywhere]">
+                {m.checks.map((c) => (
+                  <li key={c.n} className="my-1.5 text-[13px] [overflow-wrap:anywhere]" data-testid="milestone-check" data-for={c.for} data-result={c.result ?? ""}>
                     <span data-user-text>{c.check}</span>
-                    <span className="block text-xs text-muted-foreground">Should show: <span data-user-text>{c.expect}</span></span>
+                    {c.expect && <span className="block text-xs text-muted-foreground">Should show: <span data-user-text>{c.expect}</span></span>}
+                    <span className="block text-xs text-muted-foreground" data-testid="check-state">
+                      {c.for === "person" ? "For you. " : "The crew's. "}{checkWords(c)}
+                      {c.note && <>: <span data-user-text>{c.note}</span></>}
+                    </span>
+                    {c.for === "person" && m.done && <PersonCheck c={c} onAnswer={onAnswer && ((n, r, note) => onAnswer(m, n, r, note))} />}
                   </li>
                 ))}
               </ol>
             </details>
+          )}
+          {m.can_accept && onAccept && (
+            <div className="mt-1.5">
+              <Button variant="secondary" className="h-8 text-[13px]!" busy={busy} onClick={accept} data-testid="milestone-accept">Accept as it is</Button>
+              {error && <div role="alert" className="mt-1 text-[13px] text-[color:var(--err)]">{error}</div>}
+            </div>
           )}
         </div>
         <div className="flex items-center gap-2.5 pt-0.5 text-[13px] md:self-start">
@@ -530,10 +609,12 @@ function Loading() {
 /** The page for a project that was read. `onClose` closes the project and answers when it is done or
  *  throws the cell's answer; `onDecide` keeps or overturns a call the same way. Without them the
  *  buttons only open and shut what they open. `start` is a Close part way, for a sample. */
-export function FactoryProjectView({ data: d, onClose, onDecide, start }: {
+export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, start }: {
   data: FactoryProjectData;
   onClose?: () => Promise<void>;
   onDecide?: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void>;
+  onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
+  onAccept?: (m: ProjectMilestone) => Promise<void>;
   start?: { open: boolean; error: string };
 }) {
   const { toast } = useToast();
@@ -620,7 +701,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, start }: {
             {d.milestones.length === 0 ? (
               <Empty testid="milestones-empty">No milestones yet. The crew adds them when it plans the build.</Empty>
             ) : (
-              <div className={CARD}>{d.milestones.map((m) => <MilestoneRow key={m.id} m={m} />)}</div>
+              <div className={CARD}>{d.milestones.map((m) => <MilestoneRow key={m.id} m={m} onAnswer={onAnswer} onAccept={onAccept} />)}</div>
             )}
           </section>
         </div>
@@ -672,6 +753,12 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
     if (!sample) await decideCall(id, c.ref, state, words);
     if (!sample) reload();
   };
+  const answer = async (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => {
+    if (!sample) { await answerCheck(id, m.id, n, result, note); reload(); }
+  };
+  const accept = async (m: ProjectMilestone) => {
+    if (!sample) { await acceptMilestone(id, m.id); reload(); }
+  };
 
   if (!data) {
     return (
@@ -697,7 +784,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} start={sample ? sampleClose(sample) : undefined} />
     </>
   );
 }

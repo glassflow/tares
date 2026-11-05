@@ -299,31 +299,54 @@ def desk_items(store, fx, now) -> list[dict]:
 
 # ── milestones whose tickets all merged ───────────────────────────────────────
 
-def milestones_to_check(store, fx, now) -> list[dict]:
-    """Per open project, each milestone whose tickets are all merged (a canceled one does not
-    count, at least one must be delivered). There is no "checked" mark: the item shows until the
-    project is closed."""
-    projects = _open_projects(store)
-    if not projects:
-        return []
+def _milestone_states(store, projects: list[dict]) -> dict[str, list[tuple[int, dict, dict, list[dict]]]]:
+    """{project id: [(position, milestone, factory.milestone_state, its tickets)]} in three queries."""
     ids = [p["id"] for p in projects]
     tickets, milestones = store.tickets_by_project(ids), store.milestones_by_project(ids)
+    mids = [m["id"] for ms in milestones.values() for m in ms]
+    results, accepted = store.milestone_check_results(mids), store.milestone_acceptances(mids)
+    out: dict[str, list] = {}
+    for p in projects:
+        for i, m in enumerate(milestones.get(p["id"]) or [], 1):
+            mine = [t for t in tickets.get(p["id"]) or [] if t["milestone"] == m["id"]]
+            st = factory_mod.milestone_state(m, mine, results.get(m["id"]), accepted.get(m["id"]))
+            out.setdefault(p["id"], []).append((i, m, st, mine))
+    return out
+
+
+def milestones_to_check(store, fx, now) -> list[dict]:
+    """Per open project, each milestone that needs the person (TR-1017): every ticket merged,
+    not accepted, nothing failed, and a check marked for a person still open, or crew checks the
+    crew never recorded (a milestone from before results were kept), which the person may accept
+    as it is. A milestone whose checks passed is accepted without asking; a failed check is the
+    crew's work. A project ready to close shows none: its Ready to close item names them."""
+    projects = [p for p in _open_projects(store)]
+    if not projects:
+        return []
+    states = _milestone_states(store, projects)
+    tickets = store.tickets_by_project([p["id"] for p in projects])
     out = []
     for p in projects:
-        for m in milestones.get(p["id"]) or []:
-            mine = [t for t in tickets.get(p["id"]) or []
-                    if t["milestone"] == m["id"] and t["status"] != "canceled"]
-            if not mine or not all(factory_mod.delivered(t) for t in mine):
+        if factory_mod.ready_to_close(p, tickets.get(p["id"]) or []):
+            continue
+        for _, m, st, mine in states.get(p["id"]) or []:
+            if not st["needs_person"]:
                 continue
-            n = len(m["checks"])
-            since = max((t["updated_at"] for t in mine if t.get("updated_at")),
+            live = [t for t in mine if t["status"] != "canceled"]
+            since = max((t["updated_at"] for t in live if t.get("updated_at")),
                         key=lambda t: fh._dt(t) or now, default=m["updated_at"])
+            if st["person_open"]:
+                n = len(st["person_open"])
+                detail = (f"Every ticket of this milestone merged. {fh._count(n, 'check')} "
+                          f"{'needs' if n == 1 else 'need'} you to try {'it' if n == 1 else 'them'}.")
+            else:
+                n = len(st["crew_unrun"])
+                detail = (f"Every ticket of this milestone merged, but the crew has not recorded "
+                          f"{'its check' if n == 1 else f'its {n} checks'}. Accept it as it is, or ask the crew.")
             out.append(fh.home_item(
                 "milestone_to_check", label="Milestone to check", title=f"{p['name']}, {m['name']}",
-                detail="Every ticket of this milestone merged."
-                + (f" Try its {fh._count(n, 'check')}." if n else ""),
-                meta="Merged " + fh.plain_ago(since, now), since=since, now=now, project=_ref(p),
-                id=f"milestone_to_check:{p['id']}:{m['id']}",
+                detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
+                project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
                 actions=[{"label": "Check it", "primary": True,
                           "href": f"/projects/{p['id']}#milestone-{m['id']}"}]))
     return out
@@ -344,18 +367,22 @@ def projects_to_close(store, fx, now) -> list[dict]:
     if not projects:
         return []
     tickets = store.tickets_by_project([p["id"] for p in projects])
+    ready = [p for p in projects if factory_mod.ready_to_close(p, tickets.get(p["id"]) or [])]
+    states = _milestone_states(store, ready) if ready else {}
     out = []
-    for p in projects:
+    for p in ready:
         ts = tickets.get(p["id"]) or []
-        if not factory_mod.ready_to_close(p, ts):
-            continue
         n = sum(1 for t in ts if factory_mod.delivered(t))
         since = max((t["updated_at"] for t in ts if t.get("updated_at")),
                     key=lambda t: fh._dt(t) or now, default=p.get("updated_at") or now)
+        # the milestone items fold in here (TR-1017): say which are not accepted yet
+        open_ms = [f"M{i}" for i, _, st, _ in states.get(p["id"]) or [] if st["delivered"] and not st["accepted"]]
+        note = ("" if not open_ms else
+                f" {_and(open_ms)} {'is' if len(open_ms) == 1 else 'are'} not accepted yet.")
         out.append(fh.home_item(
             "signoff", label="Ready to close", title=p["name"],
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
-                   + ". Close the project when you have checked the result.",
+                   + "." + note + " Close the project when you have checked the result.",
             meta=_ready_for(since, now), since=since, now=now, project=_ref(p),
             id=f"signoff:{p['id']}",
             actions=[{"label": "Open project", "primary": False, "href": f"/projects/{p['id']}"},

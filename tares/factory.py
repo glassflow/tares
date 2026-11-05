@@ -61,8 +61,10 @@ def goal_ok(goal) -> str:
 
 
 def checks_ok(checks) -> list[dict]:
-    """[{check, expect}], cleaned. A check is a command or a short manual step; `expect` is what
-    it should show. A plain string is a check with no expectation."""
+    """[{check, expect, for?}], cleaned. A check is a command or a short manual step; `expect` is
+    what it should show. A plain string is a check with no expectation. `for: "person"` marks a
+    check only a person can do (look at a screen, try a flow); every other check is the crew's,
+    which it runs and records when the milestone's last ticket merges (TR-1017)."""
     if checks is None:
         return []
     if not isinstance(checks, list):
@@ -81,8 +83,44 @@ def checks_ok(checks) -> list[dict]:
             raise DocError("a check needs its `check`: the command or the step")
         if len(check) > MAX_CHECK or len(expect) > MAX_CHECK:
             raise DocError(f"keep a check and its expectation to {MAX_CHECK} characters each")
-        out.append({"check": check, "expect": expect})
+        who = str(c.get("for") or "crew").strip().lower()
+        if who not in ("crew", "person"):
+            raise DocError('a check is "for" the crew (the default) or a "person"')
+        out.append({"check": check, "expect": expect, **({"for": "person"} if who == "person" else {})})
     return out
+
+
+def milestone_state(m: dict, tickets: list[dict], results: dict | None = None,
+                    accepted: dict | None = None) -> dict:
+    """Where a milestone stands for acceptance (TR-1017), from its checks, the latest result of
+    each (`results` {index: {result, note, by, at}}) and a whole-milestone acceptance. A crew
+    check is the crew's to run and record; a person check (`for: "person"`) is the person's.
+
+    delivered: every live ticket merged. accepted: accepted as a whole, or delivered with every
+    crew check passed and every person check passed (a milestone without checks is accepted once
+    delivered). crew_failed / person_wrong: work for the crew, never for the person. needs_person:
+    delivered, not accepted, nothing failed, and a person check still open, or crew checks the
+    crew never recorded (a milestone from before results were kept), which the person may accept
+    as it is."""
+    results = results or {}
+    live = [t for t in tickets if t.get("status") != "canceled"]
+    done = bool(live) and all(delivered(t) for t in live)
+    crew, person = [], []
+    for i, c in enumerate(m.get("checks") or []):
+        (person if c.get("for") == "person" else crew).append(i)
+    res = lambda i: (results.get(i) or {}).get("result")
+    crew_failed = [i for i in crew if res(i) == "fail"]
+    crew_unrun = [i for i in crew if res(i) is None]
+    person_wrong = [i for i in person if res(i) == "fail"]
+    person_open = [i for i in person if res(i) is None]
+    passed = not (crew_failed or crew_unrun or person_wrong or person_open)
+    is_accepted = bool(accepted) or (done and passed)
+    needs = (done and not is_accepted and not crew_failed and not person_wrong
+             and bool(person_open or crew_unrun))
+    return {"delivered": done, "accepted": is_accepted,
+            "accepted_by": (accepted or {}).get("by") if accepted else ("checks" if is_accepted else None),
+            "crew": crew, "person": person, "crew_failed": crew_failed, "crew_unrun": crew_unrun,
+            "person_wrong": person_wrong, "person_open": person_open, "needs_person": needs}
 
 
 def milestone_ok(name, goal, checks) -> tuple[str, str, list[dict]]:

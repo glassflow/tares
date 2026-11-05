@@ -18,11 +18,18 @@ const ticket = (ref: string, title: string, state: TicketState, extra: Partial<M
   ref, title, state, who: null, pr: null, review: null, blocked_by: [], href: `/projects/${PID}/tickets/${ref}`, ...extra,
 });
 
+type SampleCheck = { check: string; expect: string } & Partial<ProjectMilestone["checks"][number]>;
 const ms = (n: number, name: string, goal: string, total: number, merged: number,
-            checks: { check: string; expect: string }[] = []): ProjectMilestone => ({
-  id: `ms${n}`, number: `M${n}`, name, goal, done: total > 0 && merged === total,
-  counts: { total, merged }, checks, tickets_href: `${TICKETS}&milestone=ms${n}`,
-});
+            checks: SampleCheck[] = []): ProjectMilestone => {
+  const done = total > 0 && merged === total;
+  const full = checks.map((c, i) => ({ n: i + 1, for: "crew" as const, result: done ? "pass" as const : null, note: null, by: done ? "the crew" : null, ...c }));
+  const open = full.some((c) => c.for === "person" && !c.result);
+  return {
+    id: `ms${n}`, number: `M${n}`, name, goal, done, counts: { total, merged }, checks: full,
+    accepted: done && !open, needs_person: done && open, can_accept: false,
+    tickets_href: `${TICKETS}&milestone=ms${n}`,
+  };
+};
 
 const act = (label: string, primary: boolean, extra: Partial<HomeAction>): HomeAction => ({ label, primary, ...extra });
 

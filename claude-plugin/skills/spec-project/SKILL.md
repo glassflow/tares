@@ -98,7 +98,10 @@ assumption written in the spec.
 
 - **Milestones** each ship something a person can see and check. Small first milestone. No
   milestone depends on a later one. Each has **acceptance checks**: a command and what it should
-  show, or a URL and what it returns, that a releaser can run after the milestone ships.
+  show, or a URL and what it returns. The crew runs these itself when the milestone's last ticket
+  merges. Add a check `for: "person"` only for what a person must see or try themselves (a screen,
+  a flow in the console), worded for them, not as a command; those are the only checks the
+  person is asked to accept.
 - **Tickets** are an hour or two of agent work each, one PR each, in order. Each belongs to a
   milestone and names the tickets it depends on. A ticket a cheaper model cannot finish without
   guessing is too big or too vague: split it or say more.
@@ -153,7 +156,7 @@ Write for a reader who was not here: no "as discussed", no references to this co
    to check it went out, how to roll back, as exact commands. Propose the release section and get
    the user's yes. Ask for anything you do not know; a builder cannot guess it.
 5. Milestones: `write_milestone` once per milestone, in order, with its goal and its acceptance
-   checks (`[{"check": ..., "expect": ...}]`).
+   checks (`[{"check": ..., "expect": ...}]`, plus `"for": "person"` on a check only a person can do).
 6. Tickets, in order:
    - **Linear:** create the Linear project named like the Tares project, its milestones, and one
      issue per ticket in its milestone, with a two or three line description; add a "blocks"
@@ -230,7 +233,8 @@ depends on how the project is built (step 1's last question).
 - how to work: one milestone at a time; within it, the ready tickets from `list_tickets` in
   order; each read with `get_ticket` (it carries the working doc); progress marked (in Linear for
   Linear tickets, with `gh issue edit` and `gh issue close` for GitHub tickets, `write_ticket`
-  otherwise); when a milestone's tickets are done, run its checks
+  otherwise); when a milestone's tickets are done, run its crew checks and record each with
+  `record_milestone_check`
 - if a ticket is already in progress when the session starts, an earlier session stopped on it:
   `pick_up` first and finish that ticket instead of starting it over
 - to keep the working doc's `## Progress` current after each step that works
