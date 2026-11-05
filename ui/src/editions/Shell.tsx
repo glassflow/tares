@@ -182,8 +182,9 @@ export default function EditionShell() {
               Menu
             </Button>
           )}
-          <img src="/tares-mark.svg" alt="" aria-hidden data-testid="brand-mark" className="h-[18px] w-auto shrink-0" />
-          <b className="text-base tracking-tight">Tares</b>
+          {/* the platform console's brand: the mark and the "tares" wordmark (App.tsx, .brand) */}
+          <img src="/tares-mark.svg" alt="" aria-hidden data-testid="brand-mark" className="h-auto w-6 shrink-0" />
+          <b className="text-[19px] font-semibold tracking-[-0.02em]" data-testid="brand-word">tares</b>
           <span data-testid="edition-name"
                 className={"whitespace-nowrap text-base text-muted-foreground " + (cellName ? "shrink-0" : "min-w-0 truncate")}>{name}</span>
           {!narrow && switcher && (
