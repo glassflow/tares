@@ -165,8 +165,9 @@ now = datetime(2026, 11, 5, 12, 0, 0, tzinfo=UTC)
 ck("issued 9 minutes ahead of now is valid",
    isinstance(L.verify(make(issued="2026-11-05T12:09:00Z"), now), L.Licence))
 ck("issued 11 minutes ahead of now is Invalid", invalid(make(issued="2026-11-05T12:11:00Z"), now))
+ck("issued in non-ASCII digits is Invalid", invalid(make(issued="\u0662\u0660\u0662\u0666-11-05T00:00:00Z")))
 import time
-_tz = os.environ.get("TZ"); os.environ["TZ"] = "Asia/Kolkata"; time.tzset()
+_tz = os.environ.get("TZ"); os.environ["TZ"] = "IST-5:30"; time.tzset()
 try:
     ahead = make(issued="2026-11-06T12:05:00Z")
     ck("a naive now is read as UTC, not as the machine's local time",

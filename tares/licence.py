@@ -232,7 +232,7 @@ def expired(lic: Licence, now: datetime | None = None) -> bool:
     return _utc(now) >= end
 
 
-def state(text: str | None, used: int, now: datetime | None = None, source: str = "none") -> dict:
+def state(text: str | None, used: int | None, now: datetime | None = None, source: str = "none") -> dict:
     """What the cell may do with this key, as a plain dict. An expired licence stays valid;
     `expired` says it ran out. `used` is the seats in use (None counts as 0)."""
     used = used or 0
