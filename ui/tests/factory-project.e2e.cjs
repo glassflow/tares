@@ -215,8 +215,18 @@ async function waitFor(url, tries = 100) {
        (await T("decision-row").count()) === 5 && /Your answers to the crew on project-y, newest first\./.test(await txt(T("decisions-page"))));
     await checkWords(page, ck, "project-y decisions page");
     await open(page, y);
-    ck("docs link to the docs screen", (await T("doc-row").count()) === 4 && /^\/docs\?doc=/.test(await T("doc-row").first().getAttribute("href")) &&
-       (await txt(T("doc-row").first())).startsWith("Spec") && /, updated /.test(await txt(T("doc-row").first())), await txt(T("doc-row").first()));
+    ck("docs open on the project's own docs page", (await T("doc-row").count()) === 4
+       && (await T("doc-row").first().getAttribute("href")).startsWith(`/projects/${y}/docs?doc=`) &&
+       (await txt(T("doc-row").first())).startsWith("Spec") && /Updated /.test(await txt(T("doc-row").first())), await txt(T("doc-row").first()));
+    ck("All documents opens the project's docs page", (await T("docs-all").getAttribute("href")) === `/projects/${y}/docs`
+       && /^All \d+ documents ›$/.test(await txt(T("docs-all"))), await txt(T("docs-all")));
+    await page.goto(`${BASE}/projects/${y}/docs`, { waitUntil: "load" });
+    await page.getByTestId("project-docs-page").waitFor();
+    await page.getByTestId("doc-pane").waitFor();
+    ck("the docs page opens the spec first, with the project's documents in groups",
+       (await txt(T("doc-title"))).startsWith("Spec:") && (await T("project-doc-group").first().getAttribute("data-group")) === "project", await txt(T("doc-title")));
+    await checkWords(page, ck, "project-y docs page");
+    await open(page, y);
     ck("the terminal shows the command to open a builder's session",
        (await T("command-text").first().innerText()) === "tares factory crew attach project-y-build-m2" && (await txt(T("terminal"))).includes("Open the builder's session"));
     ck("a second command is behind \"1 more command\"", (await txt(T("terminal-more").locator("summary"))) === "1 more command");

@@ -100,6 +100,8 @@ export interface FactoryProjectData {
   calls: ProjectCall[];
   calls_past?: PastCall[];
   docs: ProjectDoc[];
+  /** How many documents the project has, working notes and notes too (its docs page lists them). */
+  docs_total?: number;
   terminal: { label: string; command: string }[];
   linked: { tickets_in: "Linear" | "GitHub" | null; url: string | null };
   can_close: boolean;

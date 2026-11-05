@@ -182,7 +182,7 @@ async def main():
                [x["text"] for x in L] == ["Keep one fact per line.", "Expand the questions first.",
                                           "Checks come before review.", "A line with no stamp.",
                                           "Not a real day. (2026-02-30, someone)"], L)
-            ck("a stamp becomes who and when, in role words", (L[0]["by"], L[0]["when"]) == ("the Lead", "9 days ago")
+            ck("a stamp becomes who and when, in role words", (L[0]["by"], L[0]["when"]) == ("the Orchestrator", "9 days ago")
                and (L[1]["by"], L[1]["when"]) == ("the Builder", "3 days ago")
                and (L[2]["by"], L[2]["when"]) == ("you", "1 day ago"), L)
             ck("a line without a stamp has no author", (L[3]["by"], L[3]["when"]) == ("", ""), L[3])

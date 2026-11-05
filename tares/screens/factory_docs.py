@@ -12,6 +12,10 @@ routes that already exist (`add.path` in the answer), so there is no write route
 Each route answers the whole page in one read (the list and one open document), so a page load is
 one call whichever way it was reached: /docs gives the first shared document, /docs?doc=<id> that
 one.
+
+A project's own docs page (GET /api/factory/projects/{uid}/docs, ?doc=<id> for one) lists every
+document of that project, in three groups: its spec, plan, rules and memory; the working notes,
+one per ticket, each with its ticket; and its notes. It opens any of them.
 """
 from __future__ import annotations
 
@@ -21,16 +25,19 @@ from datetime import datetime, time, timezone
 from fastapi import HTTPException
 
 from .. import docs as docs_mod
+from .. import factory as factory_mod
 from ..envelope import now_utc
 from ..factory_home import _dt, plain_ago
 
 # the documents the page shows, in reading order, and the word for each
 SHOWN = ("spec", "plan", "agents", "memory")
 LABEL = {"spec": "Spec", "plan": "Plan", "agents": "Rules", "memory": "Memory"}
+# a project's own docs page shows every document of the project: these too, after the four
+PROJECT_LABEL = {**LABEL, "note": "Notes", "working": "Working notes"}
 # the title of a shared document; a project's own is "<word>: <project name>"
 SHARED_TITLE = {"agents": "Rules for every project", "memory": "Memory for every project"}
 # who a crew member is called, by its role
-ROLE_WORD = {"orchestrator": "the Lead", "reviewer": "the Reviewer", "releaser": "the Releaser",
+ROLE_WORD = {"orchestrator": "the Orchestrator", "reviewer": "the Reviewer", "releaser": "the Releaser",
              "builder": "the Builder", "helper": "the Helper"}
 # a line of project memory ends with who wrote it and the day
 STAMP = re.compile(r"\s*\((\d{4}-\d{2}-\d{2}),\s*([^()]*?)\)\s*$")
@@ -111,7 +118,10 @@ def register(app, store, h, ctx):
         role = station_roles.get(name)
         if not role and name.startswith("crew-"):
             role = name[len("crew-"):].split("-")[0]
-        return ROLE_WORD.get(role or "", name)
+        if role not in ROLE_WORD and "-build" in name:
+            role = "builder"   # a project's build station
+        # a station the page cannot place is the crew, never its internal name
+        return ROLE_WORD.get(role or "", "the crew" if name.startswith("crew-") else name)
 
     def changed(d: dict, station_roles, now) -> str:
         by = who(d.get("updated_by"), station_roles)
@@ -142,9 +152,10 @@ def register(app, store, h, ctx):
         return {"empty": not gids and not open_ and not done, "shared": shared,
                 "projects": open_, "finished": done}
 
-    def view(doc_id: str) -> dict:
+    def view(doc_id: str, in_project: str | None = None) -> dict:
         """One document as the rows the page shows, with who changed it and when, and where a
-        line is added (`add`, null when the page does not add to it)."""
+        line is added (`add`, null when the page does not add to it). With `in_project`, any
+        document of that project (its working notes and notes too), and only that project's."""
         now = now_utc()
         station_roles = roles()
         ids = h.global_ids()
@@ -161,13 +172,17 @@ def register(app, store, h, ctx):
                    "hint": f"Add a line to {word}. The crew reads it from the next task."}
         else:
             d = store.get_doc(None, doc_id)
-            if d is None or d["kind"] not in SHOWN or not d.get("projects"):
+            kinds = PROJECT_LABEL if in_project else SHOWN
+            if d is None or d["kind"] not in kinds or not d.get("projects"):
                 raise HTTPException(404, f"no document {doc_id!r}")
-            p = store.get_project(d["projects"][0])
+            if in_project and in_project not in d["projects"]:
+                raise HTTPException(404, f"no document {doc_id!r} in this project")
+            p = store.get_project(in_project or d["projects"][0])
             if p is None or p.get("kind") != "software_factory" or not h.can_see(p):
                 raise HTTPException(404, f"no document {doc_id!r}")
             project = {"id": p["id"], "name": p["name"]}
-            title = f"{LABEL[d['kind']]}: {p['name']}"
+            title = (f"{LABEL[d['kind']]}: {p['name']}" if d["kind"] in LABEL
+                     else str(d.get("title") or PROJECT_LABEL[d["kind"]]))
             add = ({"path": f"/api/projects/{p['id']}/memory/lines",
                     "hint": "Add a line to this memory. The crew reads it from the next task."}
                    if d["kind"] == "memory" else None)
@@ -199,7 +214,7 @@ def register(app, store, h, ctx):
                     r["when"] = ago(d["updated_at"] if fresh else day, now) if (
                         fresh or day.date() < now.date()) else "today"
         empty = not rows
-        return {"id": doc_id, "kind": kind, "label": LABEL.get(kind, kind), "title": title,
+        return {"id": doc_id, "kind": kind, "label": PROJECT_LABEL.get(kind, kind), "title": title,
                 "project": project, "shared": project is None,
                 "changed": "Nothing here yet." if empty else changed(d, station_roles, now),
                 "empty": empty, "lines": rows, "add": add}
@@ -218,4 +233,52 @@ def register(app, store, h, ctx):
         """The same page with `doc` set to this one (404 for a document the page does not show)."""
         out = listing()
         out["doc"] = view(doc_id)
+        return out
+
+    def project_listing(uid: str) -> dict:
+        """A project's documents in three groups, each doc {id, kind, label, title, updated} (a
+        working note also {ticket, ticket_href}); `total` counts them all."""
+        p = store.get_project(uid)
+        if p is None or p.get("kind") != "software_factory" or p["id"] in h.hidden_ids() or not h.can_see(p):
+            raise HTTPException(404, f"no factory project {uid!r}")
+        now = now_utc()
+        gids = set(h.global_ids().values())
+        own = sorted((d for d in store.list_docs(uid) if d["id"] not in gids and d["kind"] in PROJECT_LABEL),
+                     key=lambda d: str(d["created_at"]))
+        tickets = {t.get("working_doc"): t for t in store.list_tickets(uid) if t.get("working_doc")}
+
+        def item(d):
+            out = {"id": d["id"], "kind": d["kind"], "label": PROJECT_LABEL[d["kind"]],
+                   "title": (LABEL[d["kind"]] if d["kind"] in LABEL else str(d.get("title") or "")),
+                   "updated": ago(d.get("updated_at"), now)}
+            t = tickets.get(d["id"])
+            if d["kind"] == "working":
+                # "Working: <ticket title>" reads as the ticket's title next to its ref
+                title = str(d.get("title") or "")
+                out["title"] = title.split(": ", 1)[1] if title.startswith("Working: ") else title
+                out["ticket"] = factory_mod.label(t) if t else None
+                out["ticket_href"] = f"/projects/{uid}/tickets/{factory_mod.label(t)}" if t else None
+            return out
+
+        first: dict[str, dict] = {}
+        for d in own:   # one of each, the first written, as the Docs and memory page picks it
+            first.setdefault(d["kind"], d)
+        main = [item(first[k]) for k in SHOWN if k in first]
+        groups = [{"key": "project", "title": "The project", "docs": main},
+                  # in ticket order; a note whose ticket is gone comes last
+                  {"key": "working", "title": "Working notes", "docs": [item(d) for d in sorted(
+                      (d for d in own if d["kind"] == "working"),
+                      key=lambda d: (tickets[d["id"]].get("number") or 0) if d["id"] in tickets else 10 ** 9)]},
+                  {"key": "notes", "title": "Notes", "docs": [item(d) for d in reversed(own) if d["kind"] == "note"]}]
+        groups = [g for g in groups if g["docs"]]
+        return {"project": {"id": p["id"], "name": p["name"]}, "groups": groups,
+                "total": sum(len(g["docs"]) for g in groups)}
+
+    @app.get("/api/factory/projects/{uid}/docs")
+    def project_docs_page(uid: str, doc: str | None = None):
+        """A project's own docs page in one call: its documents, grouped, and in `doc` the one
+        asked for (else the first), open. 404 for a document that is not this project's."""
+        out = project_listing(uid)
+        first = next((d["id"] for g in out["groups"] for d in g["docs"]), None)
+        out["doc"] = view(doc or first, in_project=uid) if (doc or first) else None
         return out
