@@ -25,6 +25,32 @@ MAX_DEPENDS = 30
 
 # a ticket status that counts as finished for the tickets that depend on it
 DONE_STATUSES = ("done", "canceled")
+# the stages of a ticket still in the work; a done or canceled status clears them (TR-1008)
+OPEN_STAGES = ("todo", "doing", "review", "changes", "blocked")
+STAGE_WORD = {"todo": "to do", "doing": "in progress", "review": "in review",
+              "changes": "changes asked", "blocked": "blocked", "merged": "merged",
+              "shipped": "merged", "canceled": "canceled"}
+
+
+def state_of(t: dict, blocked_by: list[str] | None = None) -> str:
+    """THE answer to "where is this ticket" (TR-1008), in words: merged, canceled, blocked, in
+    progress, in review, changes asked or to do. A ticket keeps two fields: `status`, what its
+    home (Tares, Linear, GitHub Issues) says, and `stage`, where the crew's workflow has it. A done
+    or canceled status closes the ticket whatever the stage says; otherwise the stage decides.
+    `blocked_by` (factory.readiness) turns a ticket to do into blocked. Every screen, the project's
+    ring and the review queue read this; factory_store.review_tickets mirrors it in SQL."""
+    stage, status = t.get("stage"), t.get("status")
+    if stage in ("merged", "shipped") or status == "done":
+        return "merged"
+    if status == "canceled":
+        return "canceled"
+    if stage == "blocked":
+        return "blocked"
+    if stage in ("doing", "review", "changes"):
+        return STAGE_WORD[stage]
+    if status == "in_progress":
+        return "in progress"
+    return "blocked" if blocked_by else "to do"
 
 
 def goal_ok(goal) -> str:
@@ -260,15 +286,10 @@ def progress(tickets: list[dict]) -> dict:
     (ui/src/components/ProgressRing.tsx)."""
     waits = readiness(tickets)
     n = {"done": 0, "doing": 0, "blocked": 0, "todo": 0, "canceled": 0}
+    ring = {"merged": "done", "canceled": "canceled", "blocked": "blocked", "in progress": "doing",
+            "in review": "doing", "changes asked": "doing", "to do": "todo"}
     for t in tickets:
-        stage, status = t.get("stage"), t.get("status")
-        k = ("done" if stage in ("merged", "shipped") or status == "done"
-             else "canceled" if status == "canceled"
-             else "blocked" if stage == "blocked"
-             else "doing" if stage in ("doing", "review", "changes") or status == "in_progress"
-             else "blocked" if waits[t["id"]]["blocked_by"]
-             else "todo")
-        n[k] += 1
+        n[ring[state_of(t, waits[t["id"]]["blocked_by"])]] += 1
     return {**n, "total": n["done"] + n["doing"] + n["blocked"] + n["todo"]}
 
 

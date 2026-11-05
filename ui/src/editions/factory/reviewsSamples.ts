@@ -13,7 +13,7 @@ const CI_WORDS: Record<CiState, string> = { ok: "CI passed", bad: "CI failing", 
 
 interface Spec {
   project: string; ref: string; title: string; number: number; waited: string;
-  review?: string; ci?: CiState; holds?: string | null; repo?: string;
+  review?: string; ci?: CiState; holds?: string | null; repo?: string; why?: string | null;
 }
 
 const row = (s: Spec): ReviewRow => {
@@ -24,7 +24,7 @@ const row = (s: Spec): ReviewRow => {
     ticket: { ref: s.ref, title: s.title, href: `/projects/${id}/tickets/${s.ref}` },
     pr: { number: s.number, url: `https://github.com/${s.repo ?? A}/pull/${s.number}`, title: s.title, repo: s.repo ?? A },
     waited: s.waited, since: NOW, review: s.review ?? "Passed, round 1", ci: CI_WORDS[ci], ci_state: ci,
-    holds_up: s.holds ?? null, codex_open: false,
+    holds_up: s.holds ?? null, codex_open: false, why: s.why ?? null,
   };
 };
 
@@ -37,11 +37,18 @@ const WAITING: ReviewRow[] = ([
 
 const WITH_CREW: ReviewRow[] = ([
   { project: "project-y", ref: "T68", title: "Add the edition routes and the Advanced tab in Settings", number: 355, waited: "8 minutes",
-    review: "Not reviewed yet", ci: "go", holds: "Holds up 1. Foundations" },
+    review: "Not reviewed yet", ci: "go", holds: "Holds up 1. Foundations", why: "The reviewer reviews it" },
   { project: "project-z", ref: "T92", title: "Write the sixth wave of answer articles", number: 279, waited: "2 days",
-    review: "Changes asked, round 1", repo: B },
+    review: "Changes asked, round 1", repo: B, why: "The builder works on the changes the reviewer asked for" },
   { project: "project-z", ref: "T73", title: "Fix up 10 older articles flagged in two reviews", number: 287, waited: "2 days",
-    review: "Passed on an older commit", repo: B },
+    review: "Passed on an older commit", repo: B, why: "The reviewer reviews it" },
+] as Spec[]).map(row);
+
+const NOBODY: ReviewRow[] = ([
+  { project: "project-w", ref: "T5", title: "Add a bench script for the cell's endpoints", number: 250, waited: "1 week",
+    review: "Not reviewed yet", why: "The project is finished, so the crew no longer works on it" },
+  { project: "project-z", ref: "T61", title: "Split the long answer pages", number: 270, waited: "4 days",
+    review: "Not reviewed yet", repo: B, why: "The pull request was closed without merging" },
 ] as Spec[]).map(row);
 
 const LONG_TITLE = "Move every answer article off the old docs template, check each against the fact sheet, and rewrite the ones that fail so that a reader finds the same answer in the docs, in search and in an assistant";
@@ -56,14 +63,14 @@ const MANY: ReviewRow[] = Array.from({ length: 40 }, (_, i) => row({
 }));
 
 const data = (d: Partial<FactoryReviewsData>): FactoryReviewsData => ({
-  waiting_for_you: [], with_the_crew: [], autonomy_text: MERGE, project: null, now: NOW, ...d,
+  waiting_for_you: [], with_the_crew: [], nobody_on_it: [], autonomy_text: MERGE, project: null, now: NOW, ...d,
 });
 
 const SAMPLES: Record<string, FactoryReviewsData | "load" | "err"> = {
   // you merge: four wait for you, three are with the crew
-  l3: data({ waiting_for_you: WAITING, with_the_crew: WITH_CREW }),
+  l3: data({ waiting_for_you: WAITING, with_the_crew: WITH_CREW, nobody_on_it: NOBODY }),
   // the crew merges: nothing waits for you, so the crew's list opens
-  l4: data({ autonomy_text: CREW_MERGES, with_the_crew: [...WAITING, ...WITH_CREW] }),
+  l4: data({ autonomy_text: CREW_MERGES, with_the_crew: [...WAITING.map((r) => ({ ...r, why: "The crew merges it" })), ...WITH_CREW] }),
   empty: data({}),
   long: data({ waiting_for_you: [LONG_ROW, WAITING[0]], with_the_crew: WITH_CREW.slice(0, 1) }),
   many: data({ waiting_for_you: MANY, with_the_crew: WITH_CREW }),

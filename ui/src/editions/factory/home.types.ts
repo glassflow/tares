@@ -54,6 +54,8 @@ export interface HomeItem {
   since: string | null; // ISO time it began to wait
   waited: string; // "just now", "5 minutes", "6 days"
   actions: HomeAction[];
+  /** The tickets the item is about (the pull requests to review); empty for an item about no ticket. */
+  tickets?: string[];
 }
 
 export type HomeProjectState = "building" | "waiting_on_you" | "not_started" | "ready_to_close";

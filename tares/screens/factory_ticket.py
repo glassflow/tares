@@ -175,6 +175,8 @@ def register(app, store, h, ctx):
                     what = "Changes asked"
                 elif x["value"] in ("merged", "shipped"):
                     what = "Merged"
+                elif x["value"] is None:
+                    what = "Closed"
                 elif x is first_stage and x["value"] == "doing":
                     what = "Started"
                 else:

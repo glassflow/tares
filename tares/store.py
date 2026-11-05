@@ -18,6 +18,7 @@ import duckdb
 
 from .envelope import Envelope, now_utc
 from .claude_usage_store import CLAUDE_USAGE_SCHEMA, ClaudeUsageStore
+from .factory import DONE_STATUSES, OPEN_STAGES
 from .factory_store import FACTORY_SCHEMA, FactoryStore
 from .sre_store import SRE_SCHEMA, SreStore
 
@@ -867,6 +868,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         self._init_source_stats()
         self._init_entity_counts()
         self._incidents_backfill()
+        self._ticket_stage_repair()
 
     def _incidents_backfill(self) -> None:
         """Give the notes written before incidents were tracked their incidents (TR-744). Writes
@@ -3068,11 +3070,16 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                  repo, assignee_person_id or None, assignee_raw or None])
         return tid
 
-    def update_ticket(self, tid: str, touch: bool = True, **fields) -> None:
+    def update_ticket(self, tid: str, touch: bool = True, why: str | None = None,
+                      **fields) -> None:
         """Set the given columns (title, status, position, working_doc, identifier, url,
         external_id, milestone, depends_on); None clears working_doc or milestone only when passed
         explicitly. `touch=False` leaves updated_at alone: a re-read that found nothing new is
-        not activity."""
+        not activity.
+
+        A status of done or canceled closes the ticket everywhere (TR-1008): a stage still in the
+        work (todo, doing, review, changes, blocked) is cleared in the same write, and the history
+        says why (`why`, e.g. "Linear marked it done"). Merged and shipped stay: they are true."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
                    "pr", "repo", "assignee_person_id", "assignee_raw"}
@@ -3084,9 +3091,36 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 v = json.dumps(v, default=str) if v else None
             if col in allowed:
                 sets.append(f"{col} = ?"); vals.append(v)
+        closes = fields.get("status") in DONE_STATUSES and "stage" not in fields
+        if closes:
+            sets.append("stage = CASE WHEN stage IN ('merged', 'shipped') THEN stage ELSE NULL END")
         vals.append(tid)
         with self._swrite:
+            was = (self.sc.execute("SELECT project, stage FROM tickets WHERE id = ?", [tid]).fetchone()
+                   if closes else None)
             self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
+        if was and was[1] in OPEN_STAGES:
+            self.add_ticket_history(tid, was[0], "stage", None,
+                                    why or f"the ticket was marked {fields['status']}",
+                                    "tares", "tares", now_utc())
+
+    def _ticket_stage_repair(self) -> None:
+        """Tickets closed before TR-1008 kept their stage, so a done ticket could still sit in
+        review. Clear those stages once, with a history line; later closes do it in update_ticket.
+        Cheap on every start: one query that finds nothing."""
+        try:
+            marks = ", ".join("?" for _ in OPEN_STAGES)
+            with self._sread:
+                rows = self.sc.execute(
+                    f"SELECT id, status FROM tickets WHERE status IN ('done', 'canceled') "
+                    f"AND stage IN ({marks})", list(OPEN_STAGES)).fetchall()
+            for tid, status in rows:
+                self.update_ticket(tid, touch=False, status=status,
+                                   why=f"closed when the ticket was {status}; it had kept its stage")
+            if rows:
+                print(f"taresd: closed the stage of {len(rows)} done or canceled tickets")
+        except Exception as e:
+            print(f"taresd: ticket stage repair: {type(e).__name__}: {e}")
 
     def update_ticket_owner(self, tid: str, owner: str) -> None:
         """A project stopped using Linear or GitHub: its tickets become Tares's (TR-408)."""

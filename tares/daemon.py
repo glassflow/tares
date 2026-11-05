@@ -721,6 +721,8 @@ def make_app() -> FastAPI:
         schedule_task = asyncio.create_task(_schedule.run(runtime, loop_stop))
         # who is watching each service, and telling Slack when that changes (TR-743)
         watch_task = asyncio.create_task(watch_mod.run(runtime, loop_stop))
+        # pull requests read again in the background, not only when a project is opened (TR-1010)
+        pr_sync_task = asyncio.create_task(factory_api.sync_prs(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -740,6 +742,7 @@ def make_app() -> FastAPI:
         loop_watch.cancel()
         schedule_task.cancel()
         watch_task.cancel()
+        pr_sync_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -5540,7 +5543,8 @@ def make_app() -> FastAPI:
             joins = _assign_join(request, project, t.get("assignee_person_id"), who)
             fields.update(assignee_person_id=who, assignee_raw=raw)
         if fields:
-            store.update_ticket(t["id"], **fields)
+            why = (f"marked {fields['status'].replace('_', ' ')} in Tares" if "status" in fields else None)
+            store.update_ticket(t["id"], why=why, **fields)
         if joins:
             ticket_assignee.join(store, project, fields["assignee_person_id"], _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)

@@ -618,12 +618,14 @@ class FactoryStore:
 
     def review_tickets(self) -> list[tuple[str, dict]]:
         """Every ticket in review with its project's name, in the order the projects were made
-        and then the list's own order, in one query (TR-648)."""
+        and then the list's own order, in one query (TR-648). "In review" is factory.state_of's:
+        stage review and a status that is not done or canceled (TR-1008)."""
         with self._sread:
             rows = self.sc.execute(
                 f"SELECT {self._TICKET_COLS}, pname FROM (SELECT t.*, u.name AS pname, "
                 "u.created_at AS pcreated FROM tickets t JOIN usecases u ON u.id = t.project "
-                "WHERE t.stage = 'review') ORDER BY pcreated, position, created_at").fetchall()
+                "WHERE t.stage = 'review' AND (t.status IS NULL OR t.status NOT IN ('done', 'canceled'))) "
+                "ORDER BY pcreated, position, created_at").fetchall()
         return [(r[-1], self._ticket_row(r)) for r in rows]
 
     def milestone_statuses(self, milestones: list[str]) -> list[dict]:

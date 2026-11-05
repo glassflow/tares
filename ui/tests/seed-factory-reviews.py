@@ -84,6 +84,16 @@ store.create_milestone(y, "Setup")
 fast = store.create_milestone(y, "Faster lists")
 in_review(y, "Batch the lists", 21, milestone=fast, hours=50)
 
+# the crew has project-x and project-y, so their pull requests not waiting for you are the crew's
+for p_ in (x, y):
+    store.set_handover(p_, [{"path": "/w/a", "name": REPO}], None, None, now_utc())
+
+# a finished project still holding a pull request in review: nobody is on it (TR-1009)
+f = project("project-f", "Finished, with one pull request left in review.")
+in_review(f, "Old bench script", 41, verdict=None, days=7)
+store.set_handover(f, [{"path": "/w/a", "name": REPO}], None, None, now_utc())
+store.update_project(f, status="done")
+
 u = project("project-u", "Nothing in review yet.")
 store.create_ticket(u, "tares", "Write the plan")
 

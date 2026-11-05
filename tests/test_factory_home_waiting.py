@@ -214,7 +214,7 @@ async def main():
         ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-            "waited", "actions"} for i in w))
+            "waited", "actions", "tickets"} for i in w))
         ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
         ck("waited is in words, oldest first", [i["waited"] for i in w] == [
             "4 days", "3 days", "2 days", "1 day", "10 hours", "6 hours", "40 minutes", "20 minutes"],
