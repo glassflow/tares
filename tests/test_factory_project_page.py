@@ -306,7 +306,8 @@ async def main():
             ck("the top level has exactly the fields of the page",
                set(a) == {"id", "name", "goal", "stage", "stage_label", "state", "state_label", "waiting",
                           "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
-                          "decisions", "calls", "docs", "terminal", "linked", "can_close", "now"}, sorted(a))
+                          "decisions", "calls", "calls_past", "docs", "terminal", "linked", "can_close", "now",
+                          "people"}, sorted(a))
             ck("no ticket lists under the milestones and no no_milestone", "no_milestone" not in a
                and all("tickets" not in m for m in a["milestones"]), sorted(a))
             ck("identity and stage", a["id"] == px and a["name"] == "project-x"
@@ -368,8 +369,9 @@ async def main():
                and tk["Add the search box"]["review"] is None, [tk[k]["review"] for k in tk])
             ck("a ticket that waits says for what", tk["Add the results page"]["blocked_by"] == ["T4"]
                and tk["Add the footer"]["blocked_by"] == [], tk["Add the results page"])
-            ck("next is the ticket being built", a["next"] == {
-                "ticket": "T2", "title": "Add the footer", "why": "being worked on now"}, a["next"])
+            ck("next is the first ready ticket that has not started, never one Moving now lists", a["next"] == {
+                "ticket": "T6", "title": "Add the news page", "why": "ready, nothing it depends on is open"}
+               and a["next"]["ticket"] not in {m["ref"] for m in a["moving"]}, a["next"])
 
             ck("decisions: newest first, all of them", [d["question"] for d in a["decisions"]]
                == ["Which licence?", "Use tabs or spaces?"] and a["decisions"][0]["when"] == "2 hours ago"
@@ -404,7 +406,7 @@ async def main():
                and not any(w["id"] == x["id"] for w in ry["waiting"] for x in a["waiting"]), ry["waiting"])
             ck("a waiting item has the shape of the home page's", all(
                 set(w) == {"id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-                           "waited", "actions", "tickets", "blocking", "older", "question"} for w in a["waiting"]), [sorted(w) for w in a["waiting"]][:1])
+                           "waited", "actions", "tickets", "blocking", "older", "question", "lines"} for w in a["waiting"]), [sorted(w) for w in a["waiting"]][:1])
 
             print("== nothing of the crew's machine ==")
             text = json.dumps(a)
@@ -441,10 +443,10 @@ async def main():
             ck("the first ticket with nothing open before it is ready", n == {
                 "ticket": "T1", "title": "Export the posts", "why": "ready, nothing it depends on is open"}, n)
             n = (await cx.get(f"/api/factory/projects/{pz}")).json()["next"]
-            ck("when nothing is ready the first that waits says for what", n == {
-                "ticket": "T2", "title": "Replace it", "why": "waits for T1 (canceled)"}, n)
+            ck("when nothing is ready there is no next: the tickets that wait are in Moving now", n is None
+               and (await cx.get(f"/api/factory/projects/{pz}")).json()["moving"][0]["ref"] == "T2", n)
             n = (await cx.get(f"/api/factory/projects/{pq}")).json()["next"]
-            ck("a blocked ticket says so", n and n["why"] == "blocked", n)
+            ck("a blocked ticket is in Moving now, not next", n is None, n)
             n = (await cx.get(f"/api/factory/projects/{pm}")).json()["next"]
             ck("a finished plan has no next ticket", n is None, n)
             e = (await cx.get(f"/api/factory/projects/{pw}"))

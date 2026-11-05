@@ -216,7 +216,7 @@ async def main():
         ck("waiting_total counts them", h["waiting_total"] == 8, h["waiting_total"])
         ck("every item has the shape of the frame", all(set(i) == {
             "id", "kind", "label", "title", "detail", "meta", "project", "repo", "from", "since",
-            "waited", "actions", "tickets", "blocking", "older", "question"} for i in w))
+            "waited", "actions", "tickets", "blocking", "older", "question", "lines"} for i in w))
         ck("their ids are all different", len({i["id"] for i in w}) == 8, [i["id"] for i in w])
         ck("waited is in words, oldest first within each group", [i["waited"] for i in w] == [
             "4 days", "3 days", "40 minutes", "2 days", "1 day", "10 hours", "6 hours", "20 minutes"],
@@ -252,10 +252,10 @@ async def main():
         cc = k["calls_to_confirm"][0]
         ck("the open calls of a project, the kept one left out", len(k["calls_to_confirm"]) == 1
            and cc["label"] == "2 calls to confirm" and cc["title"] == "project-z"
-           and cc["detail"] == "The crew decided without you: ISO dates, and the standard one. Keep both?"
+           and cc["detail"] == "The crew decided without you:" and cc["lines"] == ["ISO dates", "the standard one"]
            and cc["meta"] == "Made by the builder and the reviewer" and cc["id"] == f"calls_to_confirm:{pz}", cc)
         ck("read them, or keep them all in one click", cc["actions"] == [
-            {"label": "Read them", "primary": False, "href": f"/projects/{pz}#calls"},
+            {"label": "Read them", "primary": False, "href": f"/projects/{pz}/calls"},
             {"label": "Keep both", "primary": True, "do": "keep_assumptions", "project": pz,
              "refs": ["A1", "A2"]}], cc["actions"])
         ck("the desk batch of the same calls is not a second item",
@@ -324,11 +324,10 @@ async def main():
         for n, c in enumerate(("a very long choice " * 12, "choice three", "choice four")):
             store.add_assumption(pz, f"Q{n}?", c, "why", "", [], "z-build-m1", "builder", ago(hours=2))
         cc = by_kind(await get_home())["calls_to_confirm"][0]
-        ck("five calls: three shown, the rest counted, keep all", cc["label"] == "5 calls to confirm"
-           and cc["detail"].endswith("…, and 2 more. Keep them?") and "choice a…" in cc["detail"]
-           and "a very long choice a very long choice" in cc["detail"]
+        ck("five calls: three shown, one line each, the rest counted, keep all", cc["label"] == "5 calls to confirm"
+           and len(cc["lines"]) == 4 and cc["lines"][-1] == "2 more" and cc["lines"][2].endswith("choice a…")
            and cc["actions"][1]["label"] == "Keep all" and len(cc["actions"][1]["refs"]) == 5, cc)
-        ck("the long choice is cut", len(cc["detail"]) < 300, len(cc["detail"]))
+        ck("the long choice is cut", len(cc["lines"][2]) <= 140, len(cc["lines"][2]))
 
         print("== what the person does ends it ==")
         async with cx_() as cx:

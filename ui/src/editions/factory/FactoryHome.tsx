@@ -21,7 +21,7 @@ import type {
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
-import { Detail } from "./HomeDetail";
+import { Detail, DetailLines } from "./HomeDetail";
 import { CrewLimit, ReposYouOwn, TeamCrews } from "./TeamSide";
 import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
 import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
@@ -129,6 +129,7 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold" data-user-text>{item.title}</div>
         <div className="line-clamp-3" title={item.detail} data-user-text><Detail text={item.detail} /></div>
+        <DetailLines lines={item.lines} />
         <div className={cn(MUTED, "mt-0.5")} data-user-text>{item.meta}</div>
         <QuestionChoices item={item} render={(a, it) => <ActionButton key={a.label} action={a} item={it} onAction={onAction} state={state} />} />
       </div>

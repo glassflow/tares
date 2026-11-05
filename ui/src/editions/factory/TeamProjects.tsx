@@ -1,4 +1,5 @@
 import { Lock } from "../../components/icons";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "@/lib/utils";
 import type { HomeHiddenProject, HomeProject } from "./home.types";
 import { Sender } from "./WaitingForYou";
@@ -11,22 +12,21 @@ export type ProjectsView = "mine" | "team";
 
 const LOCK = "size-3.5 flex-none text-muted-foreground";
 
+/** Which projects the home lists (TR-1023): yours by default (you lead it, hold a ticket in it, or
+ *  something in it waits for you), or all of the cell's open projects. A dropdown, top right. */
 export function ProjectsSwitch({ view, counts, onView }: {
   view: ProjectsView; counts: { mine: number; team: number }; onView?: (v: ProjectsView) => void;
 }) {
-  const tab = (v: ProjectsView, label: string, n: number) => (
-    <button type="button" aria-pressed={view === v} data-testid={`projects-${v}`} onClick={() => onView?.(v)}
-            className={cn("h-8 cursor-pointer border-0 px-3.5 text-[13px] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--accent)]",
-                          v === "team" && "border-l! border-border!",
-                          view === v ? "bg-foreground font-medium text-background" : "bg-transparent text-foreground")}>
-      {label}, {n}
-    </button>
-  );
   return (
-    <div role="group" aria-label="Which projects" data-testid="projects-switch" className="flex border border-border">
-      {tab("mine", "Mine", counts.mine)}
-      {tab("team", "Team", counts.team)}
-    </div>
+    <Select value={view} onValueChange={(v) => onView?.(v as ProjectsView)}>
+      <SelectTrigger aria-label="Which projects" data-testid="projects-switch" className="h-8! w-auto! min-w-[110px] text-[13px]!">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end">
+        <SelectItem value="mine" data-testid="projects-mine">Yours ({counts.mine})</SelectItem>
+        <SelectItem value="team" data-testid="projects-team">All ({counts.team})</SelectItem>
+      </SelectContent>
+    </Select>
   );
 }
 

@@ -88,6 +88,9 @@ const router = createBrowserRouter([
       { path: "projects/:id/tickets/:ref", element: <ByEdition path="/projects/:id/tickets/:ref" today={<NotFound />} /> },
       // a project set up goal first, resumed at the step it stored
       { path: "projects/:id/setup", element: <ProjectSetup /> },
+      // a project's decisions on their own page (edition cells)
+      { path: "projects/:id/decisions", element: <ByEdition path="/projects/:id/decisions" today={<NotFound />} /> },
+      { path: "projects/:id/calls", element: <ByEdition path="/projects/:id/calls" today={<NotFound />} /> },
       { path: "sources", element: <Sources /> },
       { path: "sources/discover", element: <SourceDiscover /> },
       { path: "sources/claude-code", element: <SourceClaudeCode /> },

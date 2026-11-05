@@ -12,11 +12,11 @@ import type { HomeAction, HomeItem } from "./home.types";
 export interface WaitingGroups { now: HomeItem[]; rest: HomeItem[]; older: HomeItem[] }
 
 export function groupWaiting(items: HomeItem[]): WaitingGroups {
-  return {
-    now: items.filter((i) => i.blocking),
-    rest: items.filter((i) => !i.blocking && !i.older),
-    older: items.filter((i) => !i.blocking && i.older),
-  };
+  const now = items.filter((i) => i.blocking);
+  const rest = items.filter((i) => !i.blocking && !i.older);
+  const older = items.filter((i) => !i.blocking && i.older);
+  // older things fold away only below something newer; when they are all there is, they show
+  return now.length + rest.length === 0 ? { now, rest: older, older: [] } : { now, rest, older };
 }
 
 /** One button per option of a desk question, and the crew's recommendation above them. A click

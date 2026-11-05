@@ -122,11 +122,11 @@ async function waitFor(url, tries = 100) {
     ck("a permission: Answer opens the request, and the command is code",
        (await row("permission").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/projects/${y}#desk-D2`
        && (await row("permission").locator("code[data-words-exempt]").innerText()) === "gh pr merge 13 --squash");
-    ck("calls to confirm: Read them opens the calls on this page",
-       (await row("calls_to_confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${y}#calls`);
-    const keepBoth = row("calls_to_confirm").getByRole("link", { name: /Keep both/ });
-    ck("an action done on Home shows an arrow and opens Home",
-       (await keepBoth.getAttribute("href")) === "/" && (await keepBoth.innerText()).includes("↗") && (await keepBoth.getAttribute("title")) === "Opens Home, where this is done");
+    ck("calls to confirm: Read them opens the project's calls page",
+       (await row("calls_to_confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${y}/calls`);
+    ck("calls to confirm: each call on its own line", (await row("calls_to_confirm").getByTestId("detail-lines").locator("li").count()) === 2);
+    ck("Keep both is done here: a button, no arrow, no trip to Home",
+       (await row("calls_to_confirm").getByTestId("waiting-keep").count()) === 1 && !(await txt(row("calls_to_confirm").getByTestId("waiting-keep"))).includes("↗"));
     await checkWords(page, ck, "project-y waiting, three shown");
 
     ck("1 PR to review: Review opens the reviews of this project",
@@ -142,8 +142,9 @@ async function waitFor(url, tries = 100) {
     const t5 = T("moving-row").and(page.locator("[data-ref=T5]"));
     ck("a ticket row opens the ticket, in words", (await t5.getAttribute("href")) === `/projects/${y}/tickets/T5`
        && (await txt(t5)).includes("Changes asked") && (await txt(t5)).includes("Builder for M2") && (await txt(t5)).includes("open, CI failing"), await txt(t5));
-    ck("the next ticket is a row of its own", (await txt(T("next-up"))).startsWith("T3"), await txt(T("next-up")));
-    ck("and it opens that ticket", (await T("next-up").getAttribute("href")) === `/projects/${y}/tickets/T3`, await T("next-up").getAttribute("href"));
+    ck("the next ticket is a row of its own: the first ready one, not one Moving now lists",
+       (await txt(T("next-up"))).startsWith("T10") && (await T("moving-row").and(page.locator("[data-ref=T10]")).count()) === 0, await txt(T("next-up")));
+    ck("and it opens that ticket", (await T("next-up").getAttribute("href")) === `/projects/${y}/tickets/T10`, await T("next-up").getAttribute("href"));
 
     // milestones: compact, with counts and a link, no tickets listed
     const mrows = T("milestone-row");
@@ -159,9 +160,15 @@ async function waitFor(url, tries = 100) {
     ck("opened, each check says what should show", (await txt(checks)).includes("Should show: Ten articles are listed"));
     ck("a milestone with open tickets is not marked Done", !/\bDone\b/.test(await txt(mrows.nth(0))), await txt(mrows.nth(0)));
 
-    // calls: keep removes, overturn needs words
+    // calls: on their own page; keep removes, change needs words
+    ck("the project page has no calls card", (await T("calls").count()) === 0 && (await page.getByTestId("call-row").count()) === 0);
+    ck("the Calls link opens the calls page", (await T("calls-link").getAttribute("href")) === `/projects/${y}/calls`);
+    await page.goto(`${BASE}/projects/${y}/calls`, { waitUntil: "load" });
+    await page.getByTestId("calls-page").waitFor();
+    ck("the calls page: crumb back to the project, To confirm first",
+       (await T("crumb").getByRole("link", { name: "project-y" }).getAttribute("href")) === `/projects/${y}` && (await T("calls-open").count()) === 1);
     const calls = page.getByTestId("call-row");
-    ck("two calls, each with Keep and Overturn", (await calls.count()) === 2 && (await calls.nth(0).getByTestId("call-keep").count()) === 1
+    ck("two calls, each with Keep and Change", (await calls.count()) === 2 && (await calls.nth(0).getByTestId("call-keep").count()) === 1
        && (await calls.nth(0).getByTestId("call-overturn").count()) === 1);
     ck("a call shows its question, choice, why and who made it",
        (await txt(calls.nth(0))).includes("Which date format?") && (await txt(calls.nth(0))).includes("ISO dates") && (await txt(calls.nth(0))).includes("It sorts as text.")
@@ -169,7 +176,7 @@ async function waitFor(url, tries = 100) {
     const posts = [];
     page.on("request", (req) => { if (req.method() === "POST") posts.push({ url: new URL(req.url()).pathname, body: req.postData() }); });
     await calls.nth(0).getByTestId("call-overturn").click();
-    ck("Overturn asks for words, and Send waits for them", (await txt(calls.nth(0).getByTestId("call-overturn-box"))).includes("Say what you want instead. The crew reads your words.")
+    ck("Change asks for words, and Send waits for them", (await txt(calls.nth(0).getByTestId("call-overturn-box"))).includes("Say what you want instead. The crew reads your words.")
        && (await calls.nth(0).getByTestId("call-send").isDisabled()));
     await checkWords(page, ck, "project-y overturn open");
     await shot(page, "live-overturn-1440.png");
@@ -190,19 +197,24 @@ async function waitFor(url, tries = 100) {
     await page.getByTestId("calls-empty").waitFor();
     const kept = posts.filter((p) => p.url === `/api/projects/${y}/assumptions/A2/state`);
     ck("Keep posts kept, and with the last call gone the section says so",
-       JSON.parse(kept[kept.length - 1].body).state === "kept" && (await txt(T("calls-empty"))) === "No open calls. When the crew decides something without you, it shows here.");
+       JSON.parse(kept[kept.length - 1].body).state === "kept" && (await txt(T("calls-empty"))) === "Nothing to confirm. When the crew decides something without you, it shows here.");
     await page.unroute(`**/api/projects/${y}/assumptions/A2/state`);
 
+    await open(page, y);
     // decisions, docs, terminal
-    ck("decisions: three shown, newest first, two older behind a button", (await T("decision-row").count()) === 3 && (await txt(T("decisions-more"))) === "Show 2 older"
+    ck("decisions: three shown, newest first, a link to all five", (await T("decision-row").count()) === 3 && (await txt(T("decisions-all"))) === "All 5 decisions ›"
        && (await txt(T("decision-row").nth(1))).includes("The light one"), await txt(T("decision-row").nth(1)));
     ck("a reply by letter reads as the option chosen, with the person's words under it (TR-1018)",
        (await txt(T("decision-row").first().getByTestId("decision-answer"))) === "merge main into teams"
        && (await txt(T("decision-row").first().getByTestId("decision-said"))) === "You said: D85 A", await txt(T("decision-row").first()));
     ck("words equal to the answer are not repeated", (await T("decision-row").nth(1).getByTestId("decision-said").count()) === 0);
-    ck("the heading says answers", /Your answers, newest first/.test(await txt(T("decisions"))));
-    await T("decisions-more").click();
-    ck("Show 2 older shows all five", (await T("decision-row").count()) === 5 && (await T("decisions-more").count()) === 0);
+    ck("All 5 decisions opens the decisions page", (await T("decisions-all").getAttribute("href")) === `/projects/${y}/decisions`);
+    await page.goto(`${BASE}/projects/${y}/decisions`, { waitUntil: "load" });
+    await page.getByTestId("decisions-page").waitFor();
+    ck("the decisions page lists all five, and says they are your answers, newest first",
+       (await T("decision-row").count()) === 5 && /Your answers to the crew on project-y, newest first\./.test(await txt(T("decisions-page"))));
+    await checkWords(page, ck, "project-y decisions page");
+    await open(page, y);
     ck("docs link to the docs screen", (await T("doc-row").count()) === 4 && /^\/docs\?doc=/.test(await T("doc-row").first().getAttribute("href")) &&
        (await txt(T("doc-row").first())).startsWith("Spec") && /, updated /.test(await txt(T("doc-row").first())), await txt(T("doc-row").first()));
     ck("the terminal shows the command to open a builder's session",
@@ -216,9 +228,13 @@ async function waitFor(url, tries = 100) {
     await shot(page, "live-building-1440.png");
 
     // a #section in the address scrolls to it
-    await open(page, y, "#calls");
+    await open(page, y, "#milestones");
     await page.waitForTimeout(THEME_MS);
-    ck("#calls scrolls to the calls", Math.abs(await page.evaluate(() => document.getElementById("calls").getBoundingClientRect().top)) < 40);
+    ck("#milestones scrolls to the milestones", await page.evaluate(() => {
+      const top = document.getElementById("milestones").getBoundingClientRect().top;
+      const atEnd = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
+      return window.scrollY > 0 && (Math.abs(top) < 40 || (atEnd && top >= 0 && top < window.innerHeight));
+    }));
     await open(page, y, "#desk-D1");
     await page.waitForTimeout(THEME_MS);
     ck("#desk-D1 brings the waiting list into view", Math.abs(await page.evaluate(() => document.getElementById("waiting").getBoundingClientRect().top)) < 40);
@@ -396,14 +412,14 @@ async function waitFor(url, tries = 100) {
             ck("finished: Finished, no Close, nothing waiting", (await raw(q("project-chip"))) === "Finished" && (await q("project-close").count()) === 0 && (await q("waiting-empty").count()) === 1);
           } else if (name === "empty") {
             ck("empty: every section has its sentence", (await q("waiting-empty").count()) === 1 && (await q("moving-empty").count()) === 1 && (await q("milestones-empty").count()) === 1
-               && (await q("calls-empty").count()) === 1 && (await q("decisions-empty").count()) === 1 && (await q("docs-empty").count()) === 1);
+               && (await q("decisions-empty").count()) === 1 && (await q("docs-empty").count()) === 1);
           } else if (name === "long") {
             ck("long: nothing pushes out of its card", await p.evaluate(() => [...document.querySelectorAll("[data-testid=factory-project] *")]
               .every((e) => e.closest("details:not([open])") || e.scrollWidth <= e.clientWidth + 1 || getComputedStyle(e).display === "inline" || e.tagName === "CODE")));
           } else if (name === "many") {
             ck("many: five waiting (three shown), five of eighteen moving, six milestones, forty decisions (three shown)",
                (await txt(q("waiting-count"))) === "5 things" && (await q("moving-row").count()) === 5 && (await txt(q("moving-more"))).startsWith("13 more tickets are moving.")
-               && (await q("milestone-row").count()) === 6 && (await q("decision-row").count()) === 3 && (await txt(q("decisions-more"))) === "Show 37 older");
+               && (await q("milestone-row").count()) === 6 && (await q("decision-row").count()) === 3 && (await txt(q("decisions-all"))) === "All 40 decisions ›");
             ck("many: three commands, two behind a button", (await q("command").count()) === 3 && (await txt(q("terminal-more").locator("summary"))) === "2 more commands");
           } else if (name === "load") {
             ck("load: the skeleton, and no project", (await q("project-loading").isVisible()) && (await q("factory-project").count()) === 0);

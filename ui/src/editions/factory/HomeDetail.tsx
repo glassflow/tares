@@ -9,3 +9,15 @@ export function Detail({ text }: { text: string }) {
     </>
   );
 }
+
+/** An item's lines, one under the other (the calls in a "calls to confirm" item). */
+export function DetailLines({ lines }: { lines?: string[] }) {
+  if (!lines || lines.length === 0) return null;
+  return (
+    <ul className="m-0! mt-1! grid list-none! gap-1 p-0! [&>li]:list-none!" data-testid="detail-lines">
+      {lines.map((l, i) => (
+        <li key={i} className="line-clamp-2 border-l-2 border-border pl-2.5 [overflow-wrap:anywhere]" title={l} data-user-text><Detail text={l} /></li>
+      ))}
+    </ul>
+  );
+}

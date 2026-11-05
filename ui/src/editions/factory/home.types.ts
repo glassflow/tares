@@ -57,6 +57,8 @@ export interface HomeItem {
   actions: HomeAction[];
   /** The tickets the item is about (the pull requests to review); empty for an item about no ticket. */
   tickets?: string[];
+  /** Short lines shown one under the other below the detail (the calls in a "calls to confirm" item). */
+  lines?: string[];
   /** Holds crew work up until the person answers; such items come first (TR-1021). */
   blocking?: boolean;
   /** Waited more than a week and holds nothing up: folded under "N older things". */

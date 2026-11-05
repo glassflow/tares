@@ -38,6 +38,19 @@ const ck = (label, cond, detail = "") => {
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
 };
 
+// The Yours / All dropdown on the home's Projects (TR-1023): what it shows, its two options, and choosing one.
+const switchLabel = async (page) => (await page.getByTestId("projects-switch").innerText()).trim();
+async function switchOptions(page) {
+  await page.getByTestId("projects-switch").click();
+  const texts = (await page.getByRole("option").allInnerTexts()).map((x) => x.trim());
+  await page.keyboard.press("Escape");
+  return texts;
+}
+async function switchTo(page, view) {
+  await page.getByTestId("projects-switch").click();
+  await page.getByRole("option", { name: view === "team" ? /^All/ : /^Yours/ }).click();
+}
+
 async function waitFor(url, tries = 150) {
   for (; tries > 0; tries--) {
     const ok = await new Promise((res) => http.get(url, (r) => { r.resume(); res(true); }).on("error", () => res(false)));
@@ -223,9 +236,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       const rowsN = () => page.getByTestId("project-row").count();
       const prow = (name) => page.getByTestId("project-row").filter({ hasText: name });
       const everything = () => page.evaluate(() => document.body.innerText);
-      ck(t("the switch counts Mine, 3 and Team, 6"), (await page.getByTestId("projects-mine").innerText()) === "Mine, 3" && (await page.getByTestId("projects-team").innerText()) === "Team, 6",
-         `${await page.getByTestId("projects-mine").innerText()} / ${await page.getByTestId("projects-team").innerText()}`);
-      ck(t("Mine is chosen and lists Shop, Portal and Notes"), (await page.getByTestId("projects-mine").getAttribute("aria-pressed")) === "true" && (await rowsN()) === 3
+      const opts = await switchOptions(page);
+      ck(t("the dropdown offers Yours (3) and All (6)"), JSON.stringify(opts) === JSON.stringify(["Yours (3)", "All (6)"]), JSON.stringify(opts));
+      ck(t("Yours is chosen and lists Shop, Portal and Notes"), (await switchLabel(page)) === "Yours (3)" && (await rowsN()) === 3
          && (await prow("Shop").count()) === 1 && (await prow("Portal").count()) === 1 && (await prow("Notes").count()) === 1, String(await rowsN()));
       ck(t("Mine has one line about the hidden project and no stub row"), (await n("hidden-summary")) === 1 && (await n("hidden-row")) === 0
          && (await texts("hidden-summary"))[0].trim() === "1 private project you are not on, led by Lee", JSON.stringify(await texts("hidden-summary")));
@@ -236,8 +249,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await shot(page, "live-projects-mine", width);
       await checkWords(page, ck, t("live mine"));
       const asked = page.waitForRequest((r) => r.url().endsWith("/api/home?projects=team"), { timeout: 5000 }).then(() => true, () => false);
-      await page.getByTestId("projects-team").click();
-      ck(t("choosing Team makes the page read /api/home?projects=team"), await asked);
+      await switchTo(page, "team");
+      ck(t("choosing All makes the page read /api/home?projects=team"), await asked);
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="project-row"]').length === 6, null, { timeout: 4000 }).catch(() => {});
       ck(t("Team lists six projects"), (await rowsN()) === 6 && (await Promise.all(TEAM_NAMES.map((x) => prow(x).count()))).every((c) => c === 1), String(await rowsN()));
       ck(t("Team has the stub, Private, led by Lee, and no summary line"), (await n("hidden-row")) === 1 && (await texts("hidden-row"))[0].trim() === "Private, led by Lee"
@@ -716,18 +729,18 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
         await page.getByTestId("projects").waitFor();
         await settle(page);
-        if (view === "team") await page.getByTestId("projects-team").click();
+        if (view === "team") await switchTo(page, "team");
       };
       const prow = (name) => page.getByTestId("project-row").filter({ hasText: name });
       const rowsN = () => page.getByTestId("project-row").count();
 
       await go("threePeople", "mine");
-      ck(t("the switch shows both counts"), (await page.getByTestId("projects-mine").innerText()) === "Mine, 3" && (await page.getByTestId("projects-team").innerText()) === "Team, 6");
-      ck(t("Mine is the one chosen and lists three projects"), (await page.getByTestId("projects-mine").getAttribute("aria-pressed")) === "true" && (await rowsN()) === 3, String(await rowsN()));
+      ck(t("the dropdown shows both counts"), JSON.stringify(await switchOptions(page)) === JSON.stringify(["Yours (3)", "All (6)"]));
+      ck(t("Yours is the one chosen and lists three projects"), (await switchLabel(page)) === "Yours (3)" && (await rowsN()) === 3, String(await rowsN()));
       const before = calls.length;
-      await page.getByTestId("projects-team").click();
+      await switchTo(page, "team");
       ck(t("Team lists all six"), (await rowsN()) === 6, String(await rowsN()));
-      ck(t("Team is now the one chosen"), (await page.getByTestId("projects-team").getAttribute("aria-pressed")) === "true" && (await page.getByTestId("projects-mine").getAttribute("aria-pressed")) === "false");
+      ck(t("All is now the one chosen"), (await switchLabel(page)) === "All (6)", await switchLabel(page));
       ck(t("a sample switches without calling the cell"), calls.length === before, calls.slice(before).join(", "));
       ck(t("a private project has a lock and the others none"), (await page.getByTestId("project-lock").count()) === 1 && (await prow("project-y").getByTestId("project-lock").count()) === 1);
       ck(t("a row says who leads it"), (await prow("project-x").getByTestId("project-lead").innerText()).trim() === "Led by Kim" && /^Led by (you|Alex)$/.test((await prow("project-y").getByTestId("project-lead").innerText()).trim()));
@@ -756,7 +769,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
              && (await page.getByTestId("hidden-summary").innerText()).trim() === "1 private project you are not on, led by Lee");
           ck(`${label}: no stub row`, (await page.getByTestId("hidden-row").count()) === 0);
         }
-        ck(`${label}: the switch counts leave the hidden one out`, (await page.getByTestId("projects-team").innerText()) === "Team, 6");
+        ck(`${label}: the switch counts leave the hidden one out`, (await switchOptions(page))[1] === "All (6)");
         ck(`${label}: no horizontal scroll`, (await overflow(page)) <= 0, `${await overflow(page)}px over`);
         await shot(page, `projects-private-${view}`, width);
         await checkWords(page, ck, label);
