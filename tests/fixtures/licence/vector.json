@@ -1,0 +1,16 @@
+{
+  "root_phrase": "tares licence test root",
+  "issuer_phrase": "tares licence test issuer",
+  "issuer_not_after": "2027-11-05",
+  "kid": "lic_test0001",
+  "org": "Test Org",
+  "seats": 5,
+  "features": [
+    "enterprise"
+  ],
+  "issued": "2026-11-05T00:00:00Z",
+  "expires": "2027-11-05",
+  "root_kid": "e8fb4e4fc0f0a2f8",
+  "root_public_key": "H3c5GQeQNSn69VZSaWlI0pL-gue2abhHe2ScnujCGLA",
+  "licence": "TL1.eyJleHBpcmVzIjoiMjAyNy0xMS0wNSIsImZlYXR1cmVzIjpbImVudGVycHJpc2UiXSwiaXNzdWVkIjoiMjAyNi0xMS0wNVQwMDowMDowMFoiLCJpc3N1ZXIiOnsia2lkIjoiZTYzNDIwMTU5OGRhNzNmZiIsIm5vdF9hZnRlciI6IjIwMjctMTEtMDUiLCJwdWJsaWNfa2V5Ijoib21Fc3dOYUE1MVZSYU42WEpSUmNVMVZwd0dVaGFtVjBIZ000ZnN6eVVlcyIsInJvb3Rfa2lkIjoiZThmYjRlNGZjMGYwYTJmOCIsInJvb3Rfc2lnbmF0dXJlIjoiQTV4bUsxNjN5T2RIQWFEenItUEdId2xfQWgxSndVb0hTOExOaktvdzdiNkZIaENzRTExbklPZHZwTmZ3U0QwWC1JR0hLb3hCUTBZYTFRVjZyMEZCQ2cifSwia2lkIjoibGljX3Rlc3QwMDAxIiwib3JnIjoiVGVzdCBPcmciLCJzZWF0cyI6NSwidiI6MX0.G0i5JW-SxDz9dvXm0LE0E79xLv8Dyqm8iH9P7hwB0BKDdfl3NNFd1bd2Hf8K38IBZrhyzCXV11YobCTjhgJ_BQ"
+}

@@ -34,6 +34,7 @@ dependencies = [
     # /metrics (metrics.py): Prometheus text format for the daemon's own counters. Pure Python and
     # small, so base: a fleet scrapes every cell without an extra to remember.
     "prometheus-client>=0.20",
+    "cryptography>=42",  # Ed25519 licence check, tares/licence.py
 ]
 
 [project.urls]
