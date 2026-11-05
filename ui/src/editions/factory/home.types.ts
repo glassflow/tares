@@ -20,6 +20,7 @@ export type HomeVerb =
   | "keep_assumptions"
   | "allow"
   | "answer"
+  | "choose"
   | "sign_off"
   | "agree"
   | "decline"
@@ -50,12 +51,18 @@ export interface HomeItem {
   project: HomeRef | null;
   repo: string | null;
   // who it comes from; {crew: true, name: "Your crew"} for the crew
-  from: (Partial<HomeRef> & { crew?: boolean; name: string }) | null;
+  from: (Partial<HomeRef> & { crew?: boolean; name: string; picture?: string | null }) | null;
   since: string | null; // ISO time it began to wait
   waited: string; // "just now", "5 minutes", "6 days"
   actions: HomeAction[];
   /** The tickets the item is about (the pull requests to review); empty for an item about no ticket. */
   tickets?: string[];
+  /** Holds crew work up until the person answers; such items come first (TR-1021). */
+  blocking?: boolean;
+  /** Waited more than a week and holds nothing up: folded under "N older things". */
+  older?: boolean;
+  /** A desk question's options and the crew's recommendation, answered on the row. */
+  question?: { desk: string; options: string[]; recommendation: string | null; blocks: string | null } | null;
 }
 
 export type HomeProjectState = "building" | "waiting_on_you" | "not_started" | "ready_to_close";

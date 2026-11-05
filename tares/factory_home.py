@@ -107,7 +107,8 @@ def plain_ago(ts, now) -> str:
 def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, since, now,
               actions: list[dict], project: dict | None = None, repo: str | None = None,
               from_: dict | None = None, id: str | None = None,
-              tickets: list[str] | None = None) -> dict:
+              tickets: list[str] | None = None, blocking: bool = False,
+              question: dict | None = None) -> dict:
     """One thing that waits for the person, in the shape every list of waiting items uses.
     `project` and `from_` are {id, name} (`from_` is {crew: True, name: "Your crew"} for the
     crew); `since` is when it began to wait. An action is a link (`href`) or something the page
@@ -128,17 +129,35 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
     return {"id": id or f"{kind}:{pid}:{key}", "kind": kind, "label": label, "title": title,
             "detail": detail, "meta": meta, "project": project, "repo": repo, "from": from_,
             "since": _iso(since), "waited": plain_wait(_minutes(since, now)), "actions": acts,
-            "tickets": list(tickets or [])}
+            "tickets": list(tickets or []),
+            # holds crew work up until the person answers (TR-1021); `older` is set by order_waiting
+            "blocking": bool(blocking), "older": False,
+            # a desk question's own options and the crew's recommendation, answerable on the row
+            "question": question}
+
+
+OLDER_DAYS = 7
+
+
+def order_waiting(items: list[dict], now) -> list[dict]:
+    """What waits for the person in the order that matters (TR-1021): what holds the crew up
+    first, then the rest, then what has waited more than OLDER_DAYS and holds nothing up (marked
+    `older`, folded on the page). A project ready to close comes last among the rest. Oldest
+    first within each."""
+    for i in items:
+        age = _minutes(i.get("since"), now)
+        i["older"] = (not i.get("blocking")) and age is not None and age > OLDER_DAYS * 24 * 60
+    items.sort(key=lambda i: (not i.get("blocking"), i["older"], i["kind"] == "signoff",
+                              _dt(i["since"]) or now))
+    return items
 
 
 def waiting_items(store, fx, now, hidden=()) -> list[dict]:
-    """Every builder's items, oldest first. A project ready to close holds nothing up, so its
-    sign-off rows come after the rest, oldest first among themselves. `hidden` is the ids of the
-    projects the caller may not see (private ones they are not on): their items are left out."""
+    """Every builder's items in the order of order_waiting. `hidden` is the ids of the projects
+    the caller may not see (private ones they are not on): their items are left out."""
     items = [i for build in WAITING_BUILDERS for i in build(store, fx, now)
              if not hidden or ((i.get("project") or {}).get("id") not in hidden)]
-    items.sort(key=lambda i: (i["kind"] == "signoff", _dt(i["since"]) or now))
-    return items
+    return order_waiting(items, now)
 
 
 # ── projects ──────────────────────────────────────────────────────────────────

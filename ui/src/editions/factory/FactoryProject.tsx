@@ -11,6 +11,7 @@ import {
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
+import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
 
 // One factory project, from one read (GET /api/factory/projects/{id}): what waits for you, the few
@@ -155,6 +156,10 @@ function WaitingRow({ item, onClose }: { item: HomeItem; onClose: () => void }) 
         <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{item.title}</div>
         <Detail text={item.detail} />
         {item.meta && <div className={cn(MUTED, "mt-0.5")}>{item.meta}</div>}
+        {/* the options show here; they are answered on Home, where the Answer button opens */}
+        <QuestionChoices item={item} render={(a) => (
+          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground! no-underline! hover:bg-[var(--row-hover)]" data-user-text>{a.label} ↗</Link>
+        )} />
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2 max-sm:w-full">
@@ -167,9 +172,11 @@ function WaitingRow({ item, onClose }: { item: HomeItem; onClose: () => void }) 
 
 function Waiting({ items, onClose }: { items: HomeItem[]; onClose: () => void }) {
   const [all, setAll] = React.useState(false);
-  const shown = all ? items : items.slice(0, SHOW_WAITING);
-  const more = items.length - shown.length;
-  const arrows = items.some((i) => i.actions.some((a) => a.do && a.do !== "close"));
+  const g = groupWaiting(items);
+  const rest = all ? g.rest : g.rest.slice(0, SHOW_WAITING);
+  const more = g.rest.length - rest.length;
+  const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close"));
+  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} />;
   return (
     <section id="waiting" aria-label="Waiting for you" className="min-w-0 scroll-mt-4" data-testid="waiting">
       <SectionHead title="Waiting for you"
@@ -180,7 +187,10 @@ function Waiting({ items, onClose }: { items: HomeItem[]; onClose: () => void })
         <>
           {arrows && <div className={cn(MUTED, "-mt-1 mb-2")}>Buttons with an arrow open Home, where they are done.</div>}
           <div className={CARD}>
-            {shown.map((it) => <WaitingRow key={it.id} item={it} onClose={onClose} />)}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" />}
+            {g.now.map(row)}
+            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" />}
+            {rest.map(row)}
             {more > 0 && (
               <div className="border-t border-border px-4 py-2.5">
                 <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => setAll(true)} data-testid="waiting-more">
@@ -188,6 +198,7 @@ function Waiting({ items, onClose }: { items: HomeItem[]; onClose: () => void })
                 </Button>
               </div>
             )}
+            <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
           </div>
         </>
       )}

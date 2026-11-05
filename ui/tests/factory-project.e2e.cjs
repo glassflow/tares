@@ -110,7 +110,12 @@ async function waitFor(url, tries = 100) {
 
     // waiting: four things, three shown, the rest behind a button
     ck("Waiting for you counts four things", (await txt(T("waiting-count"))) === "4 things");
-    ck("three are shown, the fourth is behind a button", (await T("waiting-row").count()) === 3 && (await txt(T("waiting-more"))) === "Show 1 more");
+    // TR-1021: what holds the crew up (the permission and the PR) comes first under its own head,
+    // and is never behind a button; the rest follows
+    ck("what holds the crew up comes first, under its own head", (await T("waiting-now").count()) === 1
+       && (await T("waiting-row").first().getAttribute("data-kind")) !== "milestone_to_check", await T("waiting-row").first().getAttribute("data-kind"));
+    ck("all four show: nothing that waits is behind a button here", (await T("waiting-row").count()) === 4 && (await T("waiting-more").count()) === 0,
+       String(await T("waiting-row").count()));
     ck("the note says what an arrow does", (await txt(T("waiting"))).includes("Buttons with an arrow open Home, where they are done."));
     const row = (kind) => T("waiting-row").and(page.locator(`[data-kind=${kind}]`));
     ck("a question: Answer opens the desk of this project", (await row("question").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/projects/${y}#desk-D1`);
@@ -123,8 +128,7 @@ async function waitFor(url, tries = 100) {
     ck("an action done on Home shows an arrow and opens Home",
        (await keepBoth.getAttribute("href")) === "/" && (await keepBoth.innerText()).includes("↗") && (await keepBoth.getAttribute("title")) === "Opens Home, where this is done");
     await checkWords(page, ck, "project-y waiting, three shown");
-    await T("waiting-more").click();
-    ck("Show 1 more shows the fourth and the button goes", (await T("waiting-row").count()) === 4 && (await T("waiting-more").count()) === 0);
+
     ck("1 PR to review: Review opens the reviews of this project",
        (await row("prs_to_review").getByRole("link", { name: "Review" }).getAttribute("href")) === `/reviews?project=${y}`);
 

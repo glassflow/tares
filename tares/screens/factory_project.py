@@ -27,6 +27,7 @@ from fastapi import HTTPException, Request
 from .. import factory as factory_mod
 from .. import factory_api
 from .. import factory_home as fh
+from .. import factory_waiting as fw
 from ..envelope import now_utc
 from ..factory_home import plain_ago
 
@@ -210,13 +211,14 @@ def register(app, store, h, ctx):
 
         out_ms = []
         results = store.milestone_check_results([m["id"] for m in milestones])
+        crew_with_it = fw.crew_has(store, p)
         accepted = store.milestone_acceptances([m["id"] for m in milestones])
         for i, m in enumerate(milestones):
             ts = [t for t in tickets if t.get("milestone") == m["id"] and states[t["id"]] != "canceled"]
             merged = sum(1 for t in ts if states[t["id"]] == "merged")
             res = results.get(m["id"]) or {}
             st = factory_mod.milestone_state(m, [t for t in tickets if t.get("milestone") == m["id"]],
-                                             res, accepted.get(m["id"]))
+                                             res, accepted.get(m["id"]), crew_with_it)
             out_ms.append({"id": m["id"], "number": f"M{i + 1}", "name": m["name"],
                            "goal": clean(m["goal"]),
                            "done": bool(ts) and merged == len(ts),

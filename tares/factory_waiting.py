@@ -52,12 +52,34 @@ def _role_of_station(name: str | None) -> str:
 
 
 def _trim(text: str, n: int = 140) -> str:
+    """At most n characters, cut at a word boundary with an ellipsis (TR-1021), never mid-word."""
     t = " ".join(str(text or "").split()).rstrip(".,;: ")
-    return t if len(t) <= n else t[: n - 3].rstrip() + "..."
+    if len(t) <= n:
+        return t
+    cut = t[: n - 1]
+    cut = cut.rsplit(" ", 1)[0] if " " in cut else cut
+    return cut.rstrip(".,;:-( ") + "…"
 
 
 def _ref(project: dict) -> dict:
     return {"id": project["id"], "name": project["name"]}
+
+
+def desk_blocks(d: dict) -> bool:
+    """A desk item holds crew work up (TR-1021): asked as blocking, naming what it blocks, or a
+    station's refused command."""
+    return bool(d.get("blocking") or d.get("blocks") or d.get("command"))
+
+
+def desk_question(d: dict) -> dict | None:
+    """A question's own options and the crew's recommendation, for answering on the row
+    (TR-1021); None for a question without options."""
+    opts = [str(o) for o in (d.get("options") or []) if str(o).strip()]
+    if not opts or d.get("command"):
+        return None
+    return {"desk": d["label"], "options": opts,
+            "recommendation": _trim(d.get("recommendation") or "", 400) or None,
+            "blocks": _trim(str(d.get("blocks") or ""), 140) or None}
 
 
 # ── pull requests the reviewer passed ─────────────────────────────────────────
@@ -185,6 +207,7 @@ def prs_to_review(store, fx, now) -> list[dict]:
             since=since, now=now, project={"id": pid, "name": rows[0]["project_name"]},
             repo=repos[0] if len(repos) == 1 else None, id=f"prs_to_review:{pid}",
             actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
+            blocking=True,
             # whose merge waits for the person: not in the crew's hands (project_state)
             tickets=[r["ticket"] for r in rows]))
     return out
@@ -285,6 +308,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`",
                 meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"permission:{d['label']}",
+                blocking=True,
                 actions=[{**answer, "primary": False},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"],
                           "may_limit": may_limit}]))
@@ -293,11 +317,23 @@ def desk_items(store, fx, now) -> list[dict]:
                 "question", label="Question for you", title=names[pid] if pid else "Every project",
                 detail=d["question"], meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"question:{d['label']}",
+                blocking=desk_blocks(d), question=desk_question(d),
                 actions=[answer]))
     return out
 
 
 # ── milestones whose tickets all merged ───────────────────────────────────────
+
+def crew_has(store, project: dict) -> bool:
+    """The project is with a crew that will run its checks (TR-1021): handed over, not finished
+    and not taken back."""
+    if project.get("status") == "done":
+        return False
+    ho = store.get_handover(project["id"])
+    if not ho or ho.get("finished"):
+        return False
+    return not (ho.get("takeover") and not ho["takeover"].get("released_at"))
+
 
 def _milestone_states(store, projects: list[dict]) -> dict[str, list[tuple[int, dict, dict, list[dict]]]]:
     """{project id: [(position, milestone, factory.milestone_state, its tickets)]} in three queries."""
@@ -307,9 +343,10 @@ def _milestone_states(store, projects: list[dict]) -> dict[str, list[tuple[int, 
     results, accepted = store.milestone_check_results(mids), store.milestone_acceptances(mids)
     out: dict[str, list] = {}
     for p in projects:
+        has = crew_has(store, p)
         for i, m in enumerate(milestones.get(p["id"]) or [], 1):
             mine = [t for t in tickets.get(p["id"]) or [] if t["milestone"] == m["id"]]
-            st = factory_mod.milestone_state(m, mine, results.get(m["id"]), accepted.get(m["id"]))
+            st = factory_mod.milestone_state(m, mine, results.get(m["id"]), accepted.get(m["id"]), has)
             out.setdefault(p["id"], []).append((i, m, st, mine))
     return out
 

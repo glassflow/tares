@@ -55,10 +55,13 @@ class Team:
 
 
 def _ref(person: dict | None) -> dict | None:
-    """{id, name} of a person; the id stands in for a name nobody set."""
+    """{id, name, picture} of a person; the id stands in for a name nobody set."""
     if not person or not person.get("id"):
         return None
-    return {"id": person["id"], "name": person.get("name") or person["id"]}
+    out = {"id": person["id"], "name": person.get("name") or person["id"]}
+    if person.get("picture"):
+        out["picture"] = person["picture"]
+    return out
 
 
 def _project(t: Team, pid: str | None) -> dict | None:
@@ -182,13 +185,19 @@ def _desk_from(t: Team, d: dict) -> dict | None:
     """The person's own crew when the crew that asked is theirs, else the person whose crew
     asked; an item no crew is known for comes from the person who put it on the desk, else from
     the person's crew."""
-    rows = [s for s in t.stations() if s["name"] == (d.get("station") or "")]
+    name = d.get("station") or d.get("asked_by") or ""
+    rows = [s for s in t.stations() if s["name"] == name]
     if any((s.get("person") or {}).get("id") == t.me["id"] for s in rows):
         return YOUR_CREW
     for s in rows:
         if _ref(s.get("person")):
-            return _ref(s["person"])
-    return _ref(d.get("person")) or YOUR_CREW
+            return _ref(t.store.get_person(s["person"]["id"]) or s["person"])
+    # no station known for it: a crew asked it (asked_by names a station) of this person, so it is
+    # their crew's, never "from" themselves (TR-1021); else the person who put it on the desk
+    who = _ref(d.get("person"))
+    if who is None or who["id"] == t.me["id"]:
+        return YOUR_CREW
+    return _ref(t.store.get_person(who["id"])) or who
 
 
 def desk_items(t: Team) -> list[dict]:
@@ -203,7 +212,8 @@ def desk_items(t: Team) -> list[dict]:
         may_limit = bool(project) and not str(d.get("station") or "the station").startswith("crew-")
         base = dict(since=since, now=t.now, project=project, from_=_desk_from(t, d),
                     id=f"desk:{d['label']}", meta="Asked " + fh.plain_ago(since, t.now),
-                    title=project["name"] if project else "Every project")
+                    title=project["name"] if project else "Every project",
+                    blocking=fw.desk_blocks(d))
         if d.get("command"):
             who = fw._role_of_station(d.get("station"))
             out.append(fh.home_item(
@@ -215,7 +225,7 @@ def desk_items(t: Team) -> list[dict]:
                           "may_limit": may_limit}]))
         else:
             out.append(fh.home_item(
-                "desk", label="Question for you", detail=d["question"], **base,
+                "desk", label="Question for you", detail=d["question"], question=fw.desk_question(d), **base,
                 actions=[{"label": "Answer", "primary": True, "do": "answer",
                           "desk": d["label"], "options": list(d.get("options") or [])}]))
     return out
@@ -224,21 +234,12 @@ def desk_items(t: Team) -> list[dict]:
 # ── milestones of the projects the person leads whose tickets all merged ─────
 
 def milestone_items(t: Team) -> list[dict]:
-    out = []
-    for led in t.c.work_of(t.me, t.hidden, detail=True)["led_projects"]:
-        for m in led["milestones"]:
-            pid = led["project_id"]
-            out.append(fh.home_item(
-                "milestone_to_check", label="Milestone to check",
-                title=f"{led['project']}, {m['name']}",
-                detail="Every ticket of this milestone merged."
-                + (f" Try its {fh._count(m['checks'], 'check')}." if m["checks"] else ""),
-                meta="Merged " + fh.plain_ago(m["since"], t.now), since=m["since"], now=t.now,
-                project={"id": pid, "name": led["project"]}, from_=YOUR_CREW,
-                id=f"milestone_to_check:{pid}:{m['id']}",
-                actions=[{"label": "Check it", "primary": True,
-                          "href": f"/projects/{pid}#milestone-{m['id']}"}]))
-    return out
+    """The single-person rule (factory_waiting.milestones_to_check, TR-1017 and TR-1021), kept to
+    the projects the person leads: only what truly needs them, nothing for a project ready to
+    close, and the crew's unrecorded checks stay the crew's on a project it works on."""
+    return [{**i, "from": YOUR_CREW} for i in fw.milestones_to_check(t.store, None, t.now)
+            if (i.get("project") or {}).get("id") not in t.hidden
+            and t.c.leads(t.store.get_project(i["project"]["id"]), t.me["id"])]
 
 
 # ── pull requests the reviewer passed, in the projects the person leads or holds tickets in ──
@@ -557,8 +558,7 @@ def team_home(c, request, now) -> dict:
     if not _applies(c, request):
         return {}
     t = Team(c, request, c.work_person(request), now)
-    waiting = [i for build in BUILDERS for i in build(t)]
-    waiting.sort(key=lambda i: fh._dt(i["since"]) or now)
+    waiting = fh.order_waiting([i for build in BUILDERS for i in build(t)], now)
     on = waiting_on(t)
     crew_rows, quiet = crews(t)
     return {"waiting_for_you": waiting, "waiting_total": len(waiting),

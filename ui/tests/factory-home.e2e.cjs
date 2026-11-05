@@ -120,7 +120,7 @@ function cleanEnv(extra) {
       ck(`busy @${width}: 4 waiting rows`, (await rows.count()) === 4, String(await rows.count()));
       ck(`busy @${width}: 5 project rows`, (await projects.count()) === 5, String(await projects.count()));
       ck(`busy @${width}: no "more" button with 4 waiting`, (await page.getByRole("button", { name: /\d+ more/ }).count()) === 0);
-      ck(`busy @${width}: oldest first caption`, await page.getByText("oldest first").isVisible());
+      ck(`busy @${width}: the caption says what comes first`, await page.getByText("what holds the crew up first").isVisible());
       ck(`busy @${width}: the headline is the data's`, (await page.getByTestId("home-headline").innerText()).startsWith("4 things wait for you."));
       const second = rows.nth(1).getByRole("button");
       ck(`busy @${width}: a row's outline button comes before its primary one`,
@@ -336,8 +336,12 @@ function cleanEnv(extra) {
         await checkWords(page, ck, t("page"));
         ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
         ck(t("the headline is the daemon's"), /^The crew is not running\. 6 things wait for you/.test(await page.getByTestId("home-headline").innerText()), await page.getByTestId("home-headline").innerText());
-        ck(t("the first 5 of 7 waiting rows, then 2 more"), (await rows.count()) === 5 && (await page.getByRole("button", { name: "2 more" }).count()) === 1, String(await rows.count()));
-        await page.getByRole("button", { name: "2 more" }).click();
+        // what holds the crew up (the three permissions) always shows; the rest shows its first 5 (TR-1021)
+        const nowRows = await page.getByTestId("waiting-now").count() ? 3 : 0;
+        const moreBtn = page.getByRole("button", { name: /^\d+ more$/ });
+        ck(t("the three permissions under The crew is waiting on you, then the rest"), nowRows === 3
+           && (await rows.count()) === 7 && (await moreBtn.count()) === 0, `${await rows.count()} rows, ${await moreBtn.count()} more`);
+        if (await moreBtn.count()) await moreBtn.click();
         ck(t("7 waiting rows: two Close, a call, a spec, three permissions"), (await rows.count()) === 7, String(await rows.count()));
         ck(t("4 project rows, 1 finished"), (await projects.count()) === 4 && (await page.getByRole("link", { name: "All projects, 1 finished" }).count()) === 1);
         ck(t("a link action keeps the daemon's address"),

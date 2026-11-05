@@ -2559,7 +2559,9 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
         area), "lead" when the owner leads the project, else None. The hand-over waits only for
         the rows with no `exempt`."""
         signed = {x["repo"]: x for x in store.list_signoffs(uid)}
-        lead = p.get("lead_person_id")
+        # a project with no lead is local's, as leads() reads it (TR-1021): local never signs off
+        # their own repo in it
+        lead = p.get("lead_person_id") or "local"
         solo = store.only_local_person()
         out = []
         for repo in ticket_repos(uid):

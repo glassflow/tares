@@ -256,8 +256,9 @@ async def main():
         ck("Alex has three desk items and no single-person permission or question kinds",
            len(k.get("desk", [])) == 3 and "permission" not in k and "question" not in k,
            [i["kind"] for i in (await home("alex"))["waiting_for_you"]])
-        ck("the oldest comes first", [i["id"] for i in k["desk"]] == [
-            f"desk:{batch['label']}", f"desk:{perm['label']}", f"desk:{ask['label']}"],
+        # what holds the crew up comes first (TR-1021): the refused command blocks a station
+        ck("what holds the crew up comes first, then the oldest", [i["id"] for i in k["desk"]] == [
+            f"desk:{perm['label']}", f"desk:{batch['label']}", f"desk:{ask['label']}"],
            [i["id"] for i in k["desk"]])
         dp = next(i for i in k["desk"] if i["id"] == f"desk:{perm['label']}")
         dq = next(i for i in k["desk"] if i["id"] == f"desk:{ask['label']}")
@@ -287,7 +288,7 @@ async def main():
         store.set_handover(shop, [{"path": "/w/shop", "name": "acme/api"}], None, None, now_utc())
         print("== a milestone the lead can check ==")
         r = await call("kim", "POST", f"/api/projects/{shop}/milestones", {
-            "name": "M1: pages", "checks": [{"check": "open the page", "expect": "it loads"}]})
+            "name": "M1: pages", "checks": [{"check": "open the page", "expect": "it loads", "for": "person"}]})
         ck("Kim adds a milestone", r.status_code < 300, r.text)
         mid = store.milestones_by_project([shop])[shop][0]["id"]
         t1 = await ticket("kim", shop, "Milestone ticket", "acme/api", milestone=mid, stage="merged",
@@ -296,7 +297,7 @@ async def main():
         ms = (k.get("milestone_to_check") or [{}])[0]
         ck("Kim leads Shop, so it is Kim's", len(k.get("milestone_to_check", [])) == 1
            and ms["title"] == "Shop, M1: pages" and ms["from"] == {"crew": True, "name": "Your crew"}
-           and ms["detail"] == "Every ticket of this milestone merged. Try its 1 check."
+           and ms["detail"] == "Every ticket of this milestone merged. 1 check needs you to try it."
            and ms["actions"] == [{"label": "Check it", "primary": True,
                                   "href": f"/projects/{shop}#milestone-{mid}"}], k)
         ck("not Alex's or Lee's", "milestone_to_check" not in by_kind(await home("alex"))
@@ -321,8 +322,10 @@ async def main():
             ck(f"{who.capitalize()}: the total is the list, the summary counts it",
                h["waiting_total"] == len(w) and h["summary"] == factory_team.summary(w), h["summary"])
         h = await home("kim")
-        ck("Kim's list is oldest first", [i["since"] for i in h["waiting_for_you"]]
-           == sorted(i["since"] for i in h["waiting_for_you"]))
+        w = h["waiting_for_you"]
+        key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
+        ck("Kim's list: what holds the crew up first, then the rest, oldest first in each (TR-1021)",
+           [key(i) for i in w] == sorted(key(i) for i in w), [(i["kind"], i["blocking"], i["since"]) for i in w])
         ck("the summary has a sentence for none, one and many", [factory_team.summary([{}] * n) for n in (0, 1, 4)]
            == ["Nothing waits for you.", "1 thing waits for you.", "4 things wait for you."])
         h = await home("root")
