@@ -36,9 +36,7 @@ STAGE_LABEL = {"spec": "Spec", "build": "Build", "review": "Review", "done": "Do
 STATE_LABEL = {**fh.STATE_LABEL, "finished": "Finished"}
 
 # a ticket's state in words, by its stage key
-_STAGE_WORD = {"todo": "to do", "doing": "in progress", "review": "in review",
-               "changes": "changes asked", "blocked": "blocked", "merged": "merged",
-               "shipped": "merged", "canceled": "canceled"}
+_STAGE_WORD = factory_mod.STAGE_WORD
 _VERDICT_WORD = {"pass": "passed", "changes": "changes asked", "block": "blocked"}
 _CI_WORD = {"success": "CI green", "failure": "CI failing", "pending": "CI running"}
 # the crew's roles as a person says them, as the author of a call: "by the builder"
@@ -112,19 +110,8 @@ def who_words(holder: str | None, roles: dict[str, str], milestone: str | None =
 
 
 def ticket_state(t: dict, blocked_by: list[str]) -> str:
-    """A ticket's state in words, counted as the project's ring counts it (factory.progress)."""
-    stage, status = t.get("stage"), t.get("status")
-    if stage in ("merged", "shipped") or status == "done":
-        return "merged"
-    if status == "canceled":
-        return "canceled"
-    if stage == "blocked":
-        return "blocked"
-    if stage in ("doing", "review", "changes"):
-        return _STAGE_WORD[stage]
-    if status == "in_progress":
-        return "in progress"
-    return "blocked" if blocked_by else "to do"
+    """A ticket's state in words: factory.state_of, the one rule every screen reads."""
+    return factory_mod.state_of(t, blocked_by)
 
 
 def _stamp(v) -> float:

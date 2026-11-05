@@ -2,7 +2,7 @@
 
 One read answers the page: a page of tickets across every factory project, the count of each state
 for the filters chosen, the projects and milestones to choose from, and how many canceled tickets
-are hidden. The filters (project, milestone, state, text), the three sorts and the paging are the
+are hidden. The filters (project, milestone, state, text), the four sorts and the paging are the
 server's. Nothing in the answer may name a station, a session or a folder of the crew's machine,
 and every shown word passes the edition words list.
 
@@ -245,6 +245,16 @@ async def main():
             nums = [int(t["ref"].lstrip("T")) for t in byref if t["project"]["id"] == px]
             ck("the number in the ref is a number: T2 comes before T10", nums == sorted(nums) and nums[-1] == 10
                and len(nums) == 9 and nums.index(2) < nums.index(10), nums)
+            opn = (await get("?sort=open")).json()["tickets"]
+            states = [t["state"] for t in opn]
+            ck("open first: every merged ticket comes after every other one",
+               "merged" in states and all(st == "merged" for st in states[states.index("merged"):]), states)
+            newest = [t["title"] for t in (await get("")).json()["tickets"] if t["state"] != "merged"]
+            ck("open first: newest change first within the open ones",
+               [t["title"] for t in opn if t["state"] != "merged"] == newest)
+            few = (await get("?sort=open&limit=3")).json()["tickets"]
+            ck("open first: a small limit still takes open tickets before merged ones",
+               all(t["state"] != "merged" for t in few), [t["state"] for t in few])
             p1 = (await get("?limit=4")).json()
             p2 = (await get("?limit=4&offset=4")).json()
             p3 = (await get("?limit=4&offset=8")).json()

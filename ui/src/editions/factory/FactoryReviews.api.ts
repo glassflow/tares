@@ -24,13 +24,17 @@ export interface ReviewRow {
   holds_up: string | null;
   /** The challenger found something blocking that nobody has answered yet. */
   codex_open: boolean;
+  /** Who has it next ("The reviewer reviews it") for a crew row, why nobody does for a nobody row; null when it waits for the person. */
+  why: string | null;
 }
 
 export interface FactoryReviewsData {
   /** The ones that wait for the person to merge, the longest waiting first. */
   waiting_for_you: ReviewRow[];
-  /** The ones the crew is handling, the longest waiting first. */
+  /** The ones a named role of the crew has next, the longest waiting first. */
   with_the_crew: ReviewRow[];
+  /** The ones nobody is on (project finished, never handed over, closed, blocked), each with its reason. */
+  nobody_on_it: ReviewRow[];
   autonomy_text: string;
   /** The project the list is cut to (?project=), or null for every project. */
   project: { id: string; name: string } | null;

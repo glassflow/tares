@@ -9,9 +9,10 @@ to choose from, and how many canceled tickets are hidden.
 Query: `project` (an id), `milestone` (an id), `state` ("to do", "in progress", "in review",
 "changes asked", "blocked", "merged", "canceled" or "moving", which is the three that move now:
 in progress, in review and changes asked), `q` (text in the ref or the title), `sort` ("new",
-"old" or "ref"), `limit` (25 by default, 200 at most) and `offset`. Canceled tickets show only when
-`state` is "canceled". The Board and Swimlanes layouts ask for `limit=200` and cap each column
-themselves.
+"old", "ref" or "open": every ticket not merged first, then the merged ones, newest first in each),
+`limit` (25 by default, 200 at most) and `offset`. Canceled tickets show only when `state` is
+"canceled". The Board and Swimlanes layouts ask for `sort=open&limit=200`, so a cell with many merged
+tickets still shows every open one, and cap each column themselves.
 
 Every string is worded for people, as on the project page (`factory_project`): a state is "in
 review", who works on a ticket is "Builder for M2", never the name of a station, a time is "3 days
@@ -37,7 +38,7 @@ KEYS = {"to do": "to_do", "in progress": "in_progress", "in review": "in_review"
         "changes asked": "changes_asked", "blocked": "blocked", "merged": "merged",
         "canceled": "canceled"}
 MOVING = ("in progress", "in review", "changes asked")
-SORTS = ("new", "old", "ref")
+SORTS = ("new", "old", "ref", "open")
 DEFAULT_LIMIT, MAX_LIMIT = 25, 200
 NOT_TAKEN = "Not picked up yet"
 _EPOCH = datetime.fromtimestamp(0, timezone.utc)
@@ -169,6 +170,9 @@ def register(app, store, h, ctx):
             picked.sort(key=stamp)
         elif sort == "ref":
             picked.sort(key=lambda r: (r[2]["project"]["name"].lower(), _ref_number(r[2]["ref"])))
+        elif sort == "open":
+            picked.sort(key=stamp, reverse=True)
+            picked.sort(key=lambda r: r[0] == "merged")  # stable: newest first within each half
         else:
             picked.sort(key=stamp, reverse=True)
         page = picked[offset:offset + limit]

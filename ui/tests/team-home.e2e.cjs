@@ -780,7 +780,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await go("threePeople");
       ck(t("your crew shows the limit in words and the team's"), /The team allows up to merge\. Yours can be stricter, not looser\./.test((await texts("crew-limit-text"))[0] ?? "")
          && (await texts("crew-limit-mine"))[0] === "You approve each merge", JSON.stringify(await texts("crew-limit")));
-      ck(t("How far it may go links to the crew settings"), (await page.getByRole("link", { name: "How far it may go" }).getAttribute("href")) === "/settings#crew");
+      ck(t("Autonomy links to the crew settings"), (await page.getByRole("link", { name: "Autonomy" }).getAttribute("href")) === "/settings#crew");
       ck(t("one other crew is a row, and your own crew is not"), (await n("team-crew-row")) === 1
          && /Kim's crew/.test((await texts("team-crew-row"))[0] ?? "") && !/Your crew/.test((await texts("team-crew-row")).join()), JSON.stringify(await texts("team-crew-row")));
       ck(t("a crew row says the machine, when it was heard and what it does"), /kim-mbp\. Building project-x and project-w\./.test((await texts("team-crew-row"))[0] ?? "")
@@ -832,7 +832,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await go("onePerson");
       ck(t("a cell of one keeps today's side: no limit foot, team crews or repos you own"),
          (await n("crew-limit")) === 0 && (await n("team-crews")) === 0 && (await n("team-crew-row")) === 0 && (await n("quiet-crews")) === 0 && (await n("repos-you-own")) === 0);
-      ck(t("a cell of one still has How far it may go and the plan"), (await page.getByRole("link", { name: "How far it may go" }).count()) === 1
+      ck(t("a cell of one still has Autonomy and the plan"), (await page.getByRole("link", { name: "Autonomy" }).count()) === 1
          && (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1);
       await ctx.close();
     }

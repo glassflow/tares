@@ -124,6 +124,7 @@ const router = createBrowserRouter([
       { path: "tickets", element: <ByEdition path="/tickets" today={<Navigate to="/" replace />} /> },
       { path: "reviews", element: <ByEdition path="/reviews" today={<Navigate to="/" replace />} /> },
       { path: "docs", element: <ByEdition path="/docs" today={<Navigate to="/" replace />} /> },
+      { path: "people", element: <ByEdition path="/people" today={<Navigate to="/" replace />} /> },
       { path: "services", element: <ByEdition path="/services" today={<Navigate to="/" replace />} /> },
       { path: "services/:name", element: <ByEdition path="/services/:name" today={<Navigate to="/" replace />} /> },
       { path: "incidents", element: <ByEdition path="/incidents" today={<Navigate to="/" replace />} /> },

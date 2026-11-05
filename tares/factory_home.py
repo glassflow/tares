@@ -106,12 +106,14 @@ def plain_ago(ts, now) -> str:
 
 def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, since, now,
               actions: list[dict], project: dict | None = None, repo: str | None = None,
-              from_: dict | None = None, id: str | None = None) -> dict:
+              from_: dict | None = None, id: str | None = None,
+              tickets: list[str] | None = None) -> dict:
     """One thing that waits for the person, in the shape every list of waiting items uses.
     `project` and `from_` are {id, name} (`from_` is {crew: True, name: "Your crew"} for the
     crew); `since` is when it began to wait. An action is a link (`href`) or something the page
     does (`do`, one of ACTIONS), never both. `id` is made from the kind, the project and the title
-    unless the builder gives a stable one."""
+    unless the builder gives a stable one. `tickets` names the tickets the item is about (the
+    pull requests to review), empty for an item about no ticket."""
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}; one of: " + ", ".join(KINDS))
     acts = []
@@ -125,7 +127,8 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
     key = hashlib.sha1(f"{title}\n{repo or ''}".encode()).hexdigest()[:10]
     return {"id": id or f"{kind}:{pid}:{key}", "kind": kind, "label": label, "title": title,
             "detail": detail, "meta": meta, "project": project, "repo": repo, "from": from_,
-            "since": _iso(since), "waited": plain_wait(_minutes(since, now)), "actions": acts}
+            "since": _iso(since), "waited": plain_wait(_minutes(since, now)), "actions": acts,
+            "tickets": list(tickets or [])}
 
 
 def waiting_items(store, fx, now, hidden=()) -> list[dict]:
@@ -151,7 +154,11 @@ def project_state(p: dict, tickets: list[dict], handover: dict | None, waiting: 
     if prog["done"] == 0 and prog["doing"] == 0:
         return "not_started"
     mine = [w for w in waiting if (w.get("project") or {}).get("id") == p["id"]]
-    if (mine and prog["doing"] == 0) or any(w["kind"] in _ASKS for w in mine):
+    # a ticket whose pull request waits for the person's merge is not the crew's work any more
+    yours = {ref for w in mine if w["kind"] == "prs_to_review" for ref in w.get("tickets") or ()}
+    doing = sum(1 for t in tickets if factory_mod.state_of(t) in ("in progress", "in review", "changes asked")
+                and factory_mod.label(t) not in yours)
+    if (mine and doing == 0) or any(w["kind"] in _ASKS for w in mine):
         return "waiting_on_you"
     return "building"
 
@@ -208,7 +215,7 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
 
 # ── the crew ──────────────────────────────────────────────────────────────────
 
-ROLE_LABEL = {"orchestrator": "The one you talk to", "reviewer": "Reviewer", "releaser": "Releaser",
+ROLE_LABEL = {"orchestrator": "Orchestrator", "reviewer": "Reviewer", "releaser": "Releaser",
               "builder": "Builder", "helper": "Helper"}
 
 

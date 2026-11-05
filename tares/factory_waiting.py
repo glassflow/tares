@@ -74,28 +74,80 @@ def effective_autonomy(store, fx, project: str, crew: str | None = None) -> str:
     return own or crew or DEFAULT_AUTONOMY
 
 
-def review_split(store, fx, rows: list[dict] | None = None) -> tuple[list[dict], list[dict]]:
-    """THE rule for who merges (assumption A10): the queue rows (`fx.queue()`) split into
-    (waits for the person, with the crew). A pull request waits for the person when its project's
-    autonomy is L3-review and the reviewer passed it on its current commit; every other one is with
-    the crew (waiting for the reviewer, the builder, CI, or the crew's own merge). The Home page
-    and the Reviews page both read this and nowhere else, so their lists are always the same."""
+# why a pull request in review is with nobody, in the words the Reviews page shows (TR-1009)
+NOBODY = {
+    "finished": "The project is finished, so the crew no longer works on it",
+    "not_handed": "The project was never handed to the crew",
+    "taken": "You took this project over from the crew",
+    "closed": "The pull request was closed without merging",
+    "blocked": "The reviewer blocked it; it needs your decision",
+}
+
+
+def _crew_has(q: dict, level: str) -> str | None:
+    """Who in the crew has a pull request next, in words, or None when nobody in the crew does.
+    Checked, never assumed: the reviewer for a commit not reviewed yet, the builder for changes
+    asked or failing CI, CI while it runs, the crew's merge at L4-ship."""
+    v = q.get("verdict") or {}
+    kind, current = v.get("verdict"), bool(v.get("current"))
+    if kind == "block" and current:
+        return None
+    if kind == "changes" and current:
+        return "The builder works on the changes the reviewer asked for"
+    if q.get("ci") == "failure":
+        return "The builder fixes the failing CI"
+    if not (kind == "pass" and current):
+        return "The reviewer reviews it"
+    if q.get("ci") == "pending":
+        return "CI is still running; the crew merges it when CI passes"
+    if level != DEFAULT_AUTONOMY:
+        return "The crew merges it"
+    return None
+
+
+def review_split(store, fx, rows: list[dict] | None = None
+                 ) -> tuple[list[dict], list[dict], list[dict]]:
+    """THE rule for who has each pull request in review (assumption A10, TR-1009): the queue rows
+    (`fx.queue()`) split into (waits for the person, with the crew, nobody is on it), each row
+    with `why` in words. A pull request waits for the person when its project's autonomy is
+    L3-review and the reviewer passed it on its current commit, unless its project is finished or
+    the pull request was closed without merging. It is with the crew only when the crew has the
+    project (handed over, not finished, not taken back) and a named role has the next step
+    (`_crew_has`). Everything else is nobody's, with the reason (`NOBODY`). The Home page and
+    the Reviews page both read this and nowhere else, so their lists are always the same."""
     if fx is None:
-        return [], []
+        return [], [], []
     rows = fx.queue() if rows is None else rows
     crew = (fx.settings() or {}).get("autonomy")
+    projects = {p["id"]: p for p in store.list_projects()}
     level: dict[str, str] = {}
-    mine, theirs = [], []
+    held: dict[str, str | None] = {}
+    mine, theirs, nobody = [], [], []
     for q in rows:
+        pid = q["project"]
+        if pid not in level:
+            level[pid] = effective_autonomy(store, fx, pid, crew)
+            ho = store.get_handover(pid)
+            p = projects.get(pid) or {}
+            held[pid] = ("finished" if p.get("status") == "done" or (ho or {}).get("finished")
+                         else "not_handed" if not ho
+                         else "taken" if (ho.get("takeover") and not ho["takeover"].get("released_at"))
+                         else None)
         v = q.get("verdict") or {}
-        if q["project"] not in level:
-            level[q["project"]] = effective_autonomy(store, fx, q["project"], crew)
-        if (level[q["project"]] == DEFAULT_AUTONOMY and v.get("verdict") == "pass"
-                and v.get("current")):
-            mine.append(q)
+        # closed or finished: nobody's, whatever the review says
+        gone = ("closed" if q.get("pr_state") == "closed" and not q.get("pr_merged")
+                else "finished" if held[pid] == "finished" else None)
+        if gone:
+            nobody.append({**q, "why": NOBODY[gone]})
+        elif level[pid] == DEFAULT_AUTONOMY and v.get("verdict") == "pass" and v.get("current"):
+            mine.append({**q, "why": None})
+        elif held[pid]:      # never handed over, or taken back: the crew does not have it
+            nobody.append({**q, "why": NOBODY[held[pid]]})
+        elif (has := _crew_has(q, level[pid])):
+            theirs.append({**q, "why": has})
         else:
-            theirs.append(q)
-    return mine, theirs
+            nobody.append({**q, "why": NOBODY["blocked"]})
+    return mine, theirs, nobody
 
 
 def waits_for_person(store, fx) -> list[dict]:
@@ -132,7 +184,9 @@ def prs_to_review(store, fx, now) -> list[dict]:
             meta="Waiting " + waited + (" · " + ", ".join(repos) if repos else ""),
             since=since, now=now, project={"id": pid, "name": rows[0]["project_name"]},
             repo=repos[0] if len(repos) == 1 else None, id=f"prs_to_review:{pid}",
-            actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}]))
+            actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
+            # whose merge waits for the person: not in the crew's hands (project_state)
+            tickets=[r["ticket"] for r in rows]))
     return out
 
 

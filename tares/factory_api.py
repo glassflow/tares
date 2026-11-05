@@ -9,6 +9,7 @@ from the station's environment (tares/factory.py `may`).
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 import re
 import threading
@@ -61,10 +62,7 @@ async def refresh_prs(store, uid: str) -> None:
     making the read wait on GitHub: one refresh per project at a time, shared by every read that
     asks meanwhile; a read waits at most REFRESH_WAIT seconds, then gets the cached state while
     the refresh finishes in the background."""
-    task = _REFRESHING.get(uid)
-    if task is None or task.done():
-        task = asyncio.create_task(_refresh(store, uid))
-        _REFRESHING[uid] = task
+    task = _shared(store, uid)
     try:
         await asyncio.wait_for(asyncio.shield(task), REFRESH_WAIT)
     except asyncio.TimeoutError:
@@ -72,6 +70,62 @@ async def refresh_prs(store, uid: str) -> None:
     except Exception as e:       # a refresh must never fail a read, but say why it did not run
         print(f"[tares] pull request refresh for {uid} failed: {type(e).__name__}: {e}",
               flush=True)
+
+
+def _shared(store, uid: str) -> "asyncio.Task":
+    """The one refresh of a project that is running, or a new one."""
+    task = _REFRESHING.get(uid)
+    if task is None or task.done():
+        task = asyncio.create_task(_refresh(store, uid))
+        _REFRESHING[uid] = task
+    return task
+
+
+def projects_with_open_prs(store) -> list[str]:
+    """The factory projects with a ticket still open whose pull request is linked and neither
+    merged nor closed: the ones the background sync keeps current (TR-1010)."""
+    out = []
+    ids = [p["id"] for p in store.list_projects() if p.get("kind") == "software_factory"]
+    for uid, tickets in store.tickets_by_project(ids).items():
+        for t in tickets:
+            pr = t.get("pr") or {}
+            if (pr.get("repo") and not pr.get("merged") and pr.get("state") != "closed"
+                    and factory_mod.state_of(t) not in ("merged", "canceled")):
+                out.append(uid)
+                break
+    return out
+
+
+async def sync_prs(store, stop: asyncio.Event) -> None:
+    """The daemon's pull request sync (TR-1010): every TARES_PR_SYNC_SECONDS (120), the same
+    refresh a ticket read runs, for every project with an open pull request, one project at a
+    time and only for the pull requests whose last read is stale (factory_github.stale). So the
+    Reviews and home pages, which never refresh, show what GitHub shows without anyone opening
+    the project. It shares a refresh already running for a read, and never stops on an error.
+    The first pass waits one interval, so a daemon's start does not read GitHub at once; "off"
+    turns it off."""
+    every = os.getenv("TARES_PR_SYNC_SECONDS", "120").strip().lower()
+    if every in ("off", "0", "none"):
+        return
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=float(every))
+            return
+        except asyncio.TimeoutError:
+            pass
+        try:
+            for uid in await asyncio.to_thread(projects_with_open_prs, store):
+                if stop.is_set():
+                    break
+                try:
+                    await _shared(store, uid)
+                except Exception as e:     # one project's failure never stops the others
+                    print(f"[tares] pull request sync for {uid} failed: {type(e).__name__}: {e}",
+                          flush=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[tares] pull request sync failed: {type(e).__name__}: {e}", flush=True)
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
@@ -1634,6 +1688,10 @@ def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
                         "number": (t["pr"] or {}).get("number"),
                         "pr_title": (t["pr"] or {}).get("title"),
                         "ci": (t["pr"] or {}).get("ci"), "milestone": t["milestone"],
+                        # open or closed on GitHub when Tares last read it, and whether it was
+                        # merged: a pull request closed without merging is nobody's (TR-1009)
+                        "pr_state": (t["pr"] or {}).get("state"),
+                        "pr_merged": bool((t["pr"] or {}).get("merged")),
                         "waiting_since": since,
                         "blocks_milestone": blocks,
                         "layer1_clean": layer["clean"],

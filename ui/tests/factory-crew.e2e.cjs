@@ -88,8 +88,8 @@ async function waitFor(url, tries = 100) {
     await settle(page);
     await one(ck, "/crew");
     ck("the page has its heading", await page.getByRole("heading", { name: "Crew", exact: true }).isVisible());
-    ck("the sections, in order", JSON.stringify(await heads(page)) === JSON.stringify(["The one you talk to", "Reviewer", "Releaser", "Builders",
-       "Rules the crew proposes", "Standup", "How far it may go", "Claude plan"]), JSON.stringify(await heads(page)));
+    ck("the sections, in order", JSON.stringify(await heads(page)) === JSON.stringify(["Orchestrator", "Reviewer", "Releaser", "Builders",
+       "Rules the crew proposes", "Standup", "Autonomy", "Claude plan"]), JSON.stringify(await heads(page)));
     ck("the summary says the crew works and when it was heard", /^Working, last heard \d+ seconds? ago$/.test((await page.getByTestId("crew-summary").innerText()).trim()),
        await page.getByTestId("crew-summary").innerText());
     ck("the menu has Crew, and it is the current one",
@@ -98,7 +98,7 @@ async function waitFor(url, tries = 100) {
     // 2. members
     const lead = page.getByTestId("crew-member").first();
     ck("the one you talk to: working, heard seconds ago, memory 82% full",
-       (await lead.getAttribute("data-state")) === "working" && /The one you talk to · Working/.test(await lead.innerText())
+       (await lead.getAttribute("data-state")) === "working" && /Orchestrator · Working/.test(await lead.innerText())
        && /Heard \d+ seconds? ago/.test(await lead.innerText()) && /Memory 82% full/.test(await lead.innerText()), await lead.innerText());
     ck("the reviewer is idle", /Reviewer · Idle for 1 minute/.test(await member(page, "Reviewer").first().innerText()), await member(page, "Reviewer").first().innerText());
     ck("the releaser is idle for two hours", /Releaser · Idle for 2 hours/.test(await member(page, "Releaser").first().innerText()));
@@ -254,7 +254,7 @@ async function waitFor(url, tries = 100) {
         await p.goto(`${BASE}/crew?sample=${name}`, { waitUntil: "load" });
         if (name === "load") await p.getByTestId("crew-loading").waitFor();
         else if (name === "err") await p.getByRole("button", { name: "Retry" }).waitFor();
-        else await p.getByTestId("factory-crew").getByRole("heading", { name: "How far it may go" }).waitFor();
+        else await p.getByTestId("factory-crew").getByRole("heading", { name: "Autonomy" }).waitFor();
         await settle(p);
         const text = await p.getByTestId("factory-crew").innerText();
         if (name === "load") ck(`${tag}: it is the loading state, no crew`, (await p.getByTestId("crew-member").count()) === 0 && (await p.getByTestId("crew-loading").isVisible()));
@@ -272,7 +272,7 @@ async function waitFor(url, tries = 100) {
         if (name === "pace") ck(`${tag}: the pacing banner and no switch`, (await p.getByTestId("crew-pacing").isVisible()) && (await p.getByRole("switch").count()) === 0);
         if (name === "quiet") ck(`${tag}: everybody is not heard from, with no standup yet`, (await p.getByTestId("crew-member").and(p.locator("[data-state='not heard']")).count()) === 4 && /Nothing moved in the last day\./.test(text), text);
         if (name === "none") ck(`${tag}: not started, how to start it, no other section`, /The crew is not started\./.test(text) && (await p.getByTestId("crew-not-started").locator("code").innerText()) === "tares factory crew up"
-           && JSON.stringify(await heads(p)) === JSON.stringify(["The one you talk to", "How far it may go"]) && (await p.getByTestId("crew-member").count()) === 0, JSON.stringify(await heads(p)));
+           && JSON.stringify(await heads(p)) === JSON.stringify(["Orchestrator", "Autonomy"]) && (await p.getByTestId("crew-member").count()) === 0, JSON.stringify(await heads(p)));
         if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("wash-2")).length)) === 4);
         if (name === "long") ck(`${tag}: long names and texts wrap inside the page`, (await overflow(p)) <= 0);
         ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);

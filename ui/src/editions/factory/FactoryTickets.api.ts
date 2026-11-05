@@ -60,7 +60,8 @@ export interface FactoryTicketsData {
   now: string;
 }
 
-export type TicketSort = "new" | "old" | "ref";
+/** "open": every ticket not merged first, then merged, newest first in each (the Board and Swimlanes). */
+export type TicketSort = "new" | "old" | "ref" | "open";
 
 export interface TicketsQuery {
   project?: string;

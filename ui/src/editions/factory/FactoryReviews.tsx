@@ -8,8 +8,9 @@ import { useSample } from "../sample";
 import { factoryReviews, type CiState, type FactoryReviewsData, type ReviewRow } from "./FactoryReviews.api";
 import { isSample, sampleLoad } from "./reviewsSamples";
 
-// Reviews: every pull request in review, across projects, in two lists: the ones that wait for the
-// person to merge and the ones the crew is handling. One read (GET /api/factory/reviews), which
+// Reviews: every pull request in review, across projects, in three lists: the ones that wait for the
+// person to merge, the ones a named role of the crew has next, and the ones nobody is on, each with
+// its reason (TR-1009). One read (GET /api/factory/reviews), which
 // the page repeats every 20 seconds. `?project=<id>` in the address cuts the lists to one project.
 // Every string from the cell is a React text node; project, ticket and pull request titles, the repo
 // and the milestone are the person's own text and marked data-user-text.
@@ -57,6 +58,9 @@ function Row({ r }: { r: ReviewRow }) {
         <span data-testid="review-verdict">{r.review}</span>
         <span data-testid="review-ci"><StatusDot tone={dot.tone} className={cn("mr-1.5 rounded-full", dot.className)} />{r.ci}</span>
       </div>
+      {r.why && (
+        <div className="col-span-full text-[13px] text-foreground" data-testid="review-why">{r.why}</div>
+      )}
       {r.holds_up && (
         <div className="col-span-full text-[13px] font-semibold text-[color:var(--accent-deep)] [overflow-wrap:anywhere]" data-user-text data-testid="review-holds">
           {r.holds_up}
@@ -79,6 +83,7 @@ function Loading() {
 /** The lists for one read of the cell. `unknown` is a project in the address the cell does not know. */
 export function FactoryReviewsView({ data, unknown = false }: { data: FactoryReviewsData; unknown?: boolean }) {
   const { waiting_for_you: mine, with_the_crew: theirs } = data;
+  const nobody = data.nobody_on_it ?? [];
   // the crew's list is folded away while something waits for you, and open when nothing does
   const [folded, setFolded] = React.useState<boolean | null>(null);
   const open = folded === null ? mine.length === 0 : !folded;
@@ -102,6 +107,11 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
           ? <div className="px-4 py-7 text-muted-foreground" data-testid="reviews-waiting-none">Nothing waits for your review.</div>
           : mine.map((r) => <Row key={`${r.project.id}/${r.ticket.ref}`} r={r} />)}
       </ListSection>
+      {nobody.length > 0 && (
+        <ListSection title="Nobody is on it" aside={<span className="font-mono" data-testid="nobody-count">{nobody.length}</span>} data-testid="reviews-nobody">
+          {nobody.map((r) => <Row key={`${r.project.id}/${r.ticket.ref}`} r={r} />)}
+        </ListSection>
+      )}
       {theirs.length > 0 && (
         <div data-testid="reviews-crew">
           <button type="button" aria-expanded={open} aria-controls="reviews-crew-list" data-testid="crew-fold"

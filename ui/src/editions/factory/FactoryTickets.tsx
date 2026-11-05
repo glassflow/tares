@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { ChevronDown, ChevronRight } from "../../components/icons";
 import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
@@ -77,7 +78,7 @@ const DOT: Record<StateKey, string> = {
 };
 
 const MUTED = "text-muted-foreground";
-const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-[var(--white)]! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
+const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-[var(--input-bg)]! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
 const LINKISH = "cursor-pointer! border-0! bg-transparent! p-0! text-[length:inherit]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]";
 const TILE_LINK = "no-underline! text-foreground! hover:text-foreground! focus-visible:outline-2 focus-visible:outline-[color:var(--accent)]";
 
@@ -195,9 +196,11 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
 }
 
 /** Cards for one cell: the first `cap`, then "Showing 8 of 14" and "Show 8 more". */
-function Cell({ rows, total, cap, id, ctx, quiet, caps, bump }: {
+function Cell({ rows, total, cap, id, ctx, quiet, caps, bump, listHref }: {
   rows: TicketRow[]; total: number; cap: number; id: string; ctx: CardCtx; quiet?: boolean;
   caps: Record<string, number>; bump: (id: string, cap: number) => void;
+  /** The List filtered to this column, for when the column counts more tickets than the board read. */
+  listHref?: string;
 }) {
   const lim = caps[id] ?? cap;
   const shown = rows.slice(0, lim);
@@ -210,9 +213,15 @@ function Cell({ rows, total, cap, id, ctx, quiet, caps, bump }: {
       {rest > 0 && (
         <div className="flex flex-col items-stretch gap-1.5 pt-0.5 text-xs text-muted-foreground">
           <span data-testid="cell-showing">Showing {shown.length} of {total}</span>
-          <Button variant="secondary" className="h-8!" data-testid="cell-more" onClick={() => bump(id, cap)}>
-            Show {Math.min(cap, rest)} more
-          </Button>
+          {shown.length < rows.length || !listHref ? (
+            <Button variant="secondary" className="h-8!" data-testid="cell-more" onClick={() => bump(id, cap)}>
+              Show {Math.min(cap, rows.length - shown.length || rest)} more
+            </Button>
+          ) : (
+            <Link to={listHref} data-testid="cell-list" className="text-center text-foreground! underline decoration-border underline-offset-[3px]">
+              See all {total} in the List
+            </Link>
+          )}
         </div>
       )}
     </div>
@@ -294,6 +303,8 @@ interface BodyProps {
   bump: (id: string, cap: number) => void;
   closed: Record<string, boolean>;
   flip: (id: string) => void;
+  /** The List, with today's filters, narrowed to one state. */
+  listOf: (k: StateKey) => string;
 }
 
 const countOf = (data: FactoryTicketsData, k: StateKey) => data.counts[k];
@@ -307,7 +318,7 @@ function StateTabs({ cols, data, tab, setTab }: { cols: StateKey[]; data: Factor
     <div role="tablist" aria-label="State" className="grid grid-cols-3 gap-1.5" data-testid="state-tabs">
       {cols.map((k) => (
         <button key={k} type="button" role="tab" aria-selected={k === tab} data-testid="state-tab" data-state={k} onClick={() => setTab(k)}
-                className={cn("flex! min-h-[50px] min-w-0 flex-col! items-start! justify-center! gap-0.5 border! border-border! bg-[var(--white)]! px-2! py-1.5! text-left! text-[12.5px]! font-normal! text-foreground!",
+                className={cn("flex! min-h-[50px] min-w-0 flex-col! items-start! justify-center! gap-0.5 border! border-border! bg-[var(--input-bg)]! px-2! py-1.5! text-left! text-[12.5px]! font-normal! text-foreground!",
                   k === tab && "border-foreground! bg-[var(--wash)]! font-semibold! shadow-[inset_0_-3px_0_var(--accent)]")}>
           <span className="flex min-w-0 items-center gap-1.5"><Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span></span>
           <b className="pl-[15px] text-[15px]">{countOf(data, k)}</b>
@@ -318,14 +329,14 @@ function StateTabs({ cols, data, tab, setTab }: { cols: StateKey[]; data: Factor
 }
 
 function BoardBody(p: BodyProps) {
-  const { data, rows, cols, narrow, caps, bump } = p;
+  const { data, rows, cols, narrow, caps, bump, listOf } = p;
   const [tab, setTab] = useTab(cols);
   if (narrow) {
     const list = rows.filter((r) => r.state_key === tab);
     return (
       <div className="grid gap-3">
         <StateTabs cols={cols} data={data} tab={tab} setTab={setTab} />
-        <Cell rows={list} total={colTotal(data, rows, tab)} cap={BOARD_CAP} id={`b|${tab}`} ctx="board" caps={caps} bump={bump} />
+        <Cell rows={list} total={colTotal(data, rows, tab)} cap={BOARD_CAP} id={`b|${tab}`} ctx="board" caps={caps} bump={bump} listHref={listOf(tab)} />
       </div>
     );
   }
@@ -340,7 +351,7 @@ function BoardBody(p: BodyProps) {
               <span className="ml-auto text-[12.5px] font-medium text-muted-foreground" data-testid="col-count">{countOf(data, k)}</span>
             </div>
             <div className="p-2">
-              <Cell rows={list} total={colTotal(data, rows, k)} cap={BOARD_CAP} id={`b|${k}`} ctx="board" caps={caps} bump={bump} />
+              <Cell rows={list} total={colTotal(data, rows, k)} cap={BOARD_CAP} id={`b|${k}`} ctx="board" caps={caps} bump={bump} listHref={listOf(k)} />
             </div>
           </section>
         );
@@ -467,7 +478,7 @@ function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
     body = (
       <div className="grid gap-3">
         <div className="grid grid-cols-3 gap-1.5">
-          {Array.from({ length: 6 }, (_, i) => <div key={i} className="grid min-h-[50px] gap-2 border border-border bg-[var(--white)] p-2"><Skeleton width="80%" /><Skeleton width="30%" /></div>)}
+          {Array.from({ length: 6 }, (_, i) => <div key={i} className="grid min-h-[50px] gap-2 border border-border bg-[var(--input-bg)] p-2"><Skeleton width="80%" /><Skeleton width="30%" /></div>)}
         </div>
         {[0, 1, 2, 3].map(card)}
       </div>
@@ -506,11 +517,11 @@ function Tickets() {
     ? layoutParam : (readPref() ?? (hasFilter ? "list" : "board"));
   const group: Group = ((g) => (g === "milestone" || g === "who" ? g : "project"))(params.get("group"));
 
-  // What the read asks for. The List pages by 25; the Board and the Swimlanes take the 200 newest.
+  // What the read asks for. The List pages by 25; the Board and the Swimlanes take 200, open first.
   const query: TicketsQuery = {
     project: filters.project, milestone: filters.milestone, state: filters.state ? (filters.state === "moving" ? "moving" : STATE_URL[filters.state]) : "",
     q: filters.q.trim(),
-    ...(layout === "list" ? { sort: filters.sort || undefined, limit: PAGE } : { limit: BOARD_LIMIT }),
+    ...(layout === "list" ? { sort: filters.sort || undefined, limit: PAGE } : { sort: "open" as const, limit: BOARD_LIMIT }),
   };
   const queryKey = JSON.stringify(query);
   const queryRef = React.useRef(query);
@@ -690,10 +701,17 @@ function Tickets() {
         </div>
       );
     }
-    const p: BodyProps = { data: resp, rows, cols, group, narrow, caps, bump, closed, flip };
+    const listOf = (k: StateKey) => {
+      const next = new URLSearchParams(params);
+      next.set("layout", "list");
+      next.set("state", STATE_URL[k]);
+      next.delete("group");
+      return `?${next.toString()}`;
+    };
+    const p: BodyProps = { data: resp, rows, cols, group, narrow, caps, bump, closed, flip, listOf };
     return (
       <>
-        {more && <Banner tone="note" className="mb-3" data-testid="tickets-capped">Showing the {BOARD_LIMIT} newest tickets. Narrow the filters, or use the List, to reach the rest.</Banner>}
+        {more && <Banner tone="note" className="mb-3" data-testid="tickets-capped">Showing every open ticket and the newest merged ones, {BOARD_LIMIT} in all. Narrow the filters, or use the List, to reach the rest.</Banner>}
         {layout === "board" ? <BoardBody {...p} /> : <LanesBody {...p} />}
       </>
     );
@@ -726,6 +744,31 @@ function Tickets() {
   );
 }
 
+// The themed menu (Radix) in place of the browser's own. Radix keeps "" for "nothing chosen", so
+// "All ..." travels as ALL and turns back into "" on the way out.
+const ALL = "__all__";
+type FilterOption = { value: string; label: string; user?: boolean };
+
+function FilterSelect({ label, testid, value, options, onChange, disabled, title, className }: {
+  label: string; testid: string; value: string; options: readonly FilterOption[]; onChange: (v: string) => void;
+  disabled?: boolean; title?: string; className?: string;
+}) {
+  const wrap = (v: string) => (v === "" ? ALL : v);
+  return (
+    <Select value={wrap(value)} disabled={disabled} onValueChange={(v) => onChange(v === ALL ? "" : v)}>
+      <SelectTrigger aria-label={label} data-testid={testid} title={title}
+                     className={cn("w-full! md:w-auto! min-w-0 border-border! bg-[var(--input-bg)]! px-2.5! disabled:opacity-60!", className)}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={wrap(o.value)} data-value={o.value} {...(o.user ? { "data-user-text": "" } : {})}>{o.label}</SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, patch, setQText }: {
   layout: Layout; filters: Filters; qText: string; group: Group; data: FactoryTicketsData | undefined; disabled?: boolean;
   onLayout: (l: Layout) => void; patch: (c: Record<string, string | null>, replace?: boolean) => void; setQText: (s: string) => void;
@@ -735,7 +778,7 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
   const noProject = !filters.project;
   return (
     <div role="search" className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center" data-testid="tickets-filters">
-      <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-[var(--white)] md:inline-flex md:w-auto">
+      <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-[var(--input-bg)] md:inline-flex md:w-auto">
         {LAYOUTS.map((l) => (
           <button key={l.value} type="button" aria-pressed={layout === l.value} disabled={disabled} data-testid={`layout-${l.value}`} onClick={() => onLayout(l.value)}
                   className={cn("h-full! flex-1 border-0! border-r! border-border! bg-transparent! px-3.5! py-0! text-[13px]! font-medium! text-foreground! last:border-r-0! hover:bg-[var(--row-hover)]! disabled:opacity-60 max-md:px-1.5!",
@@ -746,36 +789,26 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
       </div>
       <input type="text" value={qText} disabled={disabled} onChange={(e) => setQText(e.target.value)} placeholder="Search by ref or title" aria-label="Search tickets"
              data-testid="f-q" className={cn(FIELD, "col-span-full md:min-w-[150px] md:flex-1 md:basis-[150px]")} />
-      <select aria-label="Project" value={filters.project} disabled={disabled} data-testid="f-project" className={cn(FIELD, "md:w-auto md:min-w-[128px]")}
-              onChange={(e) => patch({ project: e.target.value || null, milestone: null })}>
-        <option value="">All projects</option>
-        {(data?.projects ?? []).map((p) => <option key={p.id} value={p.id} data-user-text>{p.name} ({p.count})</option>)}
-        {data && filters.project && !data.projects.some((p) => p.id === filters.project) && <option value={filters.project} data-user-text>{filters.project}</option>}
-      </select>
-      <select aria-label="State" value={filters.state} disabled={disabled} data-testid="f-state" className={cn(FIELD, "md:w-auto md:min-w-[128px]")}
-              onChange={(e) => patch({ state: e.target.value || null })}>
-        <option value="">All states</option>
-        <option value="moving">Moving now{counts ? ` (${counts.moving})` : ""}</option>
-        {FILTER_STATES.map((k) => <option key={k} value={STATE_URL[k]}>{opt(k)}</option>)}
-      </select>
-      <select aria-label="Milestone" value={filters.milestone} disabled={disabled || noProject} data-testid="f-milestone" title={noProject ? "Choose a project first" : undefined}
-              className={cn(FIELD, "md:w-auto md:min-w-[128px]")} onChange={(e) => patch({ milestone: e.target.value || null })}>
-        <option value="">All milestones</option>
-        {(data?.milestones ?? []).filter((m) => m.project === filters.project).map((m) => (
-          <option key={m.id} value={m.id} data-user-text>{m.number} {m.name}</option>
-        ))}
-      </select>
+      <FilterSelect label="Project" testid="f-project" value={filters.project} disabled={disabled} className="md:min-w-[128px]"
+                    onChange={(v) => patch({ project: v || null, milestone: null })}
+                    options={[{ value: "", label: "All projects" },
+                      ...(data?.projects ?? []).map((p) => ({ value: p.id, label: `${p.name} (${p.count})`, user: true })),
+                      ...(data && filters.project && !data.projects.some((p) => p.id === filters.project) ? [{ value: filters.project, label: filters.project, user: true }] : [])]} />
+      <FilterSelect label="State" testid="f-state" value={filters.state} disabled={disabled} className="md:min-w-[128px]"
+                    onChange={(v) => patch({ state: v || null })}
+                    options={[{ value: "", label: "All states" }, { value: "moving", label: `Moving now${counts ? ` (${counts.moving})` : ""}` },
+                      ...FILTER_STATES.map((k) => ({ value: STATE_URL[k], label: opt(k) }))]} />
+      <FilterSelect label="Milestone" testid="f-milestone" value={filters.milestone} disabled={disabled || noProject} title={noProject ? "Choose a project first" : undefined}
+                    className="md:min-w-[128px]" onChange={(v) => patch({ milestone: v || null })}
+                    options={[{ value: "", label: "All milestones" },
+                      ...(data?.milestones ?? []).filter((m) => m.project === filters.project).map((m) => ({ value: m.id, label: `${m.number} ${m.name}`, user: true }))]} />
       {layout === "list" && (
-        <select aria-label="Sort" value={filters.sort || "new"} disabled={disabled} data-testid="f-sort" className={cn(FIELD, "col-span-full md:col-auto md:ml-auto md:w-auto md:min-w-[190px]")}
-                onChange={(e) => patch({ sort: e.target.value === "new" ? null : e.target.value })}>
-          {SORTS.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
-        </select>
+        <FilterSelect label="Sort" testid="f-sort" value={filters.sort || "new"} disabled={disabled} className="col-span-full md:col-auto md:ml-auto md:min-w-[190px]"
+                      onChange={(v) => patch({ sort: v === "new" ? null : v })} options={SORTS} />
       )}
       {layout === "lanes" && (
-        <select aria-label="Group by" value={group} disabled={disabled} data-testid="f-group" className={cn(FIELD, "col-span-full md:col-auto md:ml-auto md:w-auto md:min-w-[190px]")}
-                onChange={(e) => patch({ group: e.target.value === "project" ? null : e.target.value })}>
-          {GROUPS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
-        </select>
+        <FilterSelect label="Group by" testid="f-group" value={group} disabled={disabled} className="col-span-full md:col-auto md:ml-auto md:min-w-[190px]"
+                      onChange={(v) => patch({ group: v === "project" ? null : v })} options={GROUPS} />
       )}
     </div>
   );

@@ -298,7 +298,7 @@ function CrewCard({ data }: { data: HomeData }) {
         {crew.members.map((m) => <Member key={m.station} m={m} />)}
         {limit ? <CrewLimit limit={limit} /> : (
           <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-xs">
-            <Link to="/settings#crew" className="text-foreground">How far it may go</Link>
+            <Link to="/settings#crew" className="text-foreground">Autonomy</Link>
             <span className="text-muted-foreground">{crew.how_far.text}</span>
           </div>
         )}

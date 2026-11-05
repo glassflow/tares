@@ -1,7 +1,8 @@
 """The factory Reviews page (TR-735): GET /api/factory/reviews.
 
-Every pull request that is in review, across projects, in two lists: the ones that wait for the
-person and the ones that are with the crew. Which is which is decided in one place,
+Every pull request that is in review, across projects, in three lists: the ones that wait for the
+person, the ones a named role of the crew has next, and the ones nobody is on (TR-1009). Which is
+which is decided in one place,
 `factory_waiting.review_split` (assumption A10: a pull request waits for the person when its
 project's autonomy is L3-review and the reviewer passed it on its current commit), the same
 function the home page's "PRs to review" reads, so the two always agree.
@@ -84,15 +85,20 @@ def _row(q: dict, now, milestones: dict[str, list[dict]]) -> dict:
                      if q.get("blocks_milestone") else None),
         # the challenger found something blocking and nobody has answered it
         "codex_open": not q.get("layer1_clean", True),
+        # who has it next ("The reviewer reviews it"), or why nobody does; null when it waits
+        # for the person (TR-1009)
+        "why": q.get("why"),
     }
 
 
 def register(app, store, h, ctx):
     @app.get("/api/factory/reviews")
     def factory_reviews(request: Request, project: str = Query("")):
-        """{waiting_for_you: [row], with_the_crew: [row], autonomy_text, project, now}. Both lists
-        have the longest waiting first. `?project=<id>` keeps one project's pull requests; an id
-        the cell does not know gives two empty lists. `project` is {id, name} of the filter, or
+        """{waiting_for_you: [row], with_the_crew: [row], nobody_on_it: [row], autonomy_text,
+        project, now}. Every list has the longest waiting first; a crew row's `why` names who has
+        it next, a nobody row's says why nobody does (factory_waiting.review_split).
+        `?project=<id>` keeps one project's pull requests; an id
+        the cell does not know gives three empty lists. `project` is {id, name} of the filter, or
         null."""
         now = now_utc()
         fx = fh.for_caller(ctx.fx, request)
@@ -104,7 +110,7 @@ def register(app, store, h, ctx):
         rows = fx.queue() if fx else []
         if project:
             rows = [q for q in rows if q["project"] == project]
-        mine, theirs = fw.review_split(store, fx, rows)
+        mine, theirs, nobody = fw.review_split(store, fx, rows)
         key = lambda q: (fh._dt(q.get("waiting_since")) or now, q["project_name"], q["ticket"])
         milestones = {pid: store.list_milestones(pid)
                       for pid in sorted({q["project"] for q in rows if q.get("blocks_milestone")})}
@@ -113,5 +119,6 @@ def register(app, store, h, ctx):
                  else crew or fw.DEFAULT_AUTONOMY)
         return {"waiting_for_you": [_row(q, now, milestones) for q in sorted(mine, key=key)],
                 "with_the_crew": [_row(q, now, milestones) for q in sorted(theirs, key=key)],
+                "nobody_on_it": [_row(q, now, milestones) for q in sorted(nobody, key=key)],
                 "autonomy_text": AUTONOMY_TEXT.get(level, AUTONOMY_TEXT[fw.DEFAULT_AUTONOMY]),
                 "project": shown, "now": now.isoformat()}

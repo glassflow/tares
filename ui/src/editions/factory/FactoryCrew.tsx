@@ -258,7 +258,7 @@ function HowFar({ how }: { how: CrewPage["how_far"] }) {
   const href = how.settings_href || "/settings#crew";
   return (
     <section data-testid="crew-how-far">
-      <SectionHead title="How far it may go" />
+      <SectionHead title="Autonomy" />
       <div className={cn(CARD, "px-4 py-3.5")}>
         <div className="font-semibold">{how.text}</div>
         {how.detail && <div className="mt-0.5 text-[13px] text-muted-foreground">{how.detail}</div>}
@@ -313,7 +313,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
     <div className="grid gap-6 md:gap-8" data-testid="factory-crew">
       <div>
         <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Crew</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and how far the crew may go.</p>
+        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and the crew's autonomy.</p>
       </div>
 
       {error && (
@@ -328,7 +328,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
           {data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
-              <Single title="The one you talk to" m={data.talk_to} actions={actions} empty={<NotStarted />} />
+              <Single title="Orchestrator" m={data.talk_to} actions={actions} empty={<NotStarted />} />
               {started && data.reviewer && <Single title="Reviewer" m={data.reviewer} actions={actions} />}
               {started && data.releaser && <Single title="Releaser" m={data.releaser} actions={actions} />}
               {started && <Builders groups={data.builders ?? []} actions={actions} />}

@@ -92,6 +92,19 @@ function cleanEnv(extra) {
     const text = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
     const query = (page) => Object.fromEntries(new URL(page.url()).searchParams);
     const idle = (page) => page.waitForLoadState("networkidle");
+    // The filters are themed menus (Radix), not <select>s: open one, read or click its options.
+    const opts = async (page, id) => {
+      await page.getByTestId(id).click();
+      await page.getByRole("listbox").waitFor();
+      const o = await page.getByRole("option").evaluateAll((els) => els.map((x) => ({ v: x.getAttribute("data-value"), t: x.textContent.replace(/\s+/g, " ").trim() })));
+      await page.keyboard.press("Escape");
+      await page.getByRole("listbox").waitFor({ state: "detached" });
+      return o;
+    };
+    const pick = async (page, id, value) => {
+      await page.getByTestId(id).click();
+      await page.locator(`[role="option"][data-value="${value}"]`).click();
+    };
 
     // ---- samples, in every layout at both widths
     for (const width of [1440, 390]) {
@@ -239,9 +252,9 @@ function cleanEnv(extra) {
       ck(`${tag("list")}: the sentence under the title for a filter`, (await text(page.getByTestId("tickets-sub"))) === "Every ticket of every project the crew holds");
       ck(`${tag("list")}: newest change first`, (await rows.first().getAttribute("data-ref")) === "T1", await rows.first().getAttribute("data-ref"));
       ck(`${tag("list")}: Milestone is open now, with the project's three`, !(await page.getByTestId("f-milestone").isDisabled())
-         && (await page.getByTestId("f-milestone").locator("option").count()) === 4);
+         && (await opts(page, "f-milestone")).length === 4);
       ck(`${tag("list")}: the State menu carries counts`, /^All states\|Moving now \(3\)\|In progress \(1\)\|In review \(1\)\|Changes asked \(1\)\|Blocked \(1\)\|To do \(14\)\|Merged \(12\)\|Canceled \(1\)$/
-         .test((await texts(page.getByTestId("f-state").locator("option"))).join("|")), (await texts(page.getByTestId("f-state").locator("option"))).join("|"));
+         .test((await opts(page, "f-state")).map((o) => o.t).join("|")), (await opts(page, "f-state")).map((o) => o.t).join("|"));
       await page.getByTestId("list-more").click();
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="ticket-row"]').length === 30);
       ck(`${tag("list")}: Show more appends the last 5, then the button is gone`, (await rows.count()) === 30 && (await page.getByTestId("list-more").count()) === 0);
@@ -263,11 +276,11 @@ function cleanEnv(extra) {
 
       // sort
       await openLive(`?project=${X}&layout=list`);
-      await page.getByTestId("f-sort").selectOption("old");
+      await pick(page, "f-sort", "old");
       await settle();
       ck(`${tag("sort")}: oldest change first (the canceled T31 is hidden)`, query(page).sort === "old" && (await rows.first().getAttribute("data-ref")) === "T30",
          `${query(page).sort} ${await rows.first().getAttribute("data-ref")}`);
-      await page.getByTestId("f-sort").selectOption("ref");
+      await pick(page, "f-sort", "ref");
       await settle();
       ck(`${tag("sort")}: by ref`, query(page).sort === "ref" && (await rows.first().getAttribute("data-ref")) === "T1" && (await rows.nth(1).getAttribute("data-ref")) === "T2");
 
@@ -290,19 +303,19 @@ function cleanEnv(extra) {
 
       // milestone
       await openLive(`?layout=list`);
-      await page.getByTestId("f-project").selectOption(X);
+      await pick(page, "f-project", X);
       await settle();
-      const msOptions = await page.getByTestId("f-milestone").locator("option").evaluateAll((o) => o.map((x) => ({ v: x.value, t: x.textContent })));
+      const msOptions = await opts(page, "f-milestone");
       ck(`${tag("milestone")}: choosing a project opens Milestone with M1, M2, M3`, msOptions.map((o) => o.t).join("|") === "All milestones|M1 1. Foundations|M2 Speed|M3 Launch", msOptions.map((o) => o.t).join("|"));
-      await page.getByTestId("f-milestone").selectOption(msOptions[3].v);
+      await pick(page, "f-milestone", msOptions[3].v);
       await settle();
       ck(`${tag("milestone")}: a milestone narrows the list`, query(page).milestone === msOptions[3].v && /^\d+ tickets match/.test(await text(page.getByTestId("tickets-count-line"))));
       const n3 = await rows.count();
       ck(`${tag("milestone")}: only that milestone's tickets`, n3 > 0 && (await texts(page.getByTestId("ticket-row").locator("[data-user-text]"))).some((t) => t.includes("M3 Launch")));
-      await page.getByTestId("f-project").selectOption(Y);
+      await pick(page, "f-project", Y);
       await settle();
       ck(`${tag("milestone")}: another project clears the milestone`, query(page).milestone === undefined && query(page).project === Y);
-      await page.getByTestId("f-project").selectOption("");
+      await pick(page, "f-project", "");
       await settle();
       ck(`${tag("milestone")}: no project: Milestone waits again`, await page.getByTestId("f-milestone").isDisabled());
 
@@ -350,7 +363,7 @@ function cleanEnv(extra) {
       }
 
       // grouping
-      await page.getByTestId("f-group").selectOption("milestone");
+      await pick(page, "f-group", "milestone");
       await settle();
       const byMs = await page.getByTestId("lane").evaluateAll((l) => l.map((x) => x.dataset.lane));
       ck(`${tag("group")}: by milestone, in order, project by project${narrow ? " (the lanes of To do)" : ""}`, query(page).group === "milestone"
@@ -358,14 +371,14 @@ function cleanEnv(extra) {
          && byMs.indexOf("project-x, M2 Speed") < byMs.indexOf("project-x, M3 Launch") && byMs.includes("project-y, M1 Faster lists")
          && byMs.includes("project-<i>m</i>, no milestone"), byMs.join("|"));
       await shot(page, "live-lanes-milestone", width);
-      await page.getByTestId("f-group").selectOption("who");
+      await pick(page, "f-group", "who");
       await settle();
       const byWho = await page.getByTestId("lane").evaluateAll((l) => l.map((x) => x.dataset.lane));
       ck(`${tag("group")}: by who: ${narrow ? "the To do tickets wait for no one yet" : "Builder for M1, Builder for M2, Reviewer, Lead, Not picked up yet, then the finished"}`, query(page).group === "who"
          && byWho.join("|") === (narrow ? "Not picked up yet" : "Builder for M1|Builder for M2|Reviewer|Lead|Not picked up yet|Finished"), byWho.join("|"));
       await checkWords(page, ck, tag("lanes by who"));
       await shot(page, "live-lanes-who", width);
-      await page.getByTestId("f-group").selectOption("project");
+      await pick(page, "f-group", "project");
       await settle();
       ck(`${tag("group")}: by project is the default and leaves the address`, query(page).group === undefined);
 
@@ -391,6 +404,33 @@ function cleanEnv(extra) {
         await page.getByTestId("tickets-count").waitFor();
         ck(`${tag("error")}: Retry reads again and the tickets show`, (await page.getByTestId("tickets-retry").count()) === 0 && (await page.getByTestId("tickets-sub").count()) === 1);
         await page.unroute(`**${ROUTE}**`);
+      }
+
+      // a board read that stops short of a column: the board asks for open tickets first, and a
+      // column that counts more than came back points to the List instead of a Show more that cannot
+      {
+        let asked = "";
+        await page.route(`**${ROUTE}**`, async (route) => {
+          asked = route.request().url();
+          const body = await (await route.fetch()).json();
+          body.tickets = body.tickets.filter((t) => t.state_key !== "to_do");
+          body.more = true;
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
+        });
+        await page.goto(`${BASE}/tickets?layout=board&q=`, { waitUntil: "load" });
+        await page.getByTestId("tickets-capped").waitFor();
+        ck(`${tag("short read")}: the board asks for open tickets first`, new URL(asked).searchParams.get("sort") === "open", asked);
+        if (narrow) await tab("to_do").click();
+        const cell = narrow ? page.locator('[data-cell="b|to_do"]') : col("to_do");
+        const link = cell.getByTestId("cell-list");
+        ck(`${tag("short read")}: nothing loaded, so no Show more`, (await cell.getByTestId("cell-more").count()) === 0);
+        ck(`${tag("short read")}: a link to the List for that state`, (await text(link)) === "See all 16 in the List"
+           && new URL(await link.getAttribute("href"), BASE).searchParams.get("state") === "to-do"
+           && new URL(await link.getAttribute("href"), BASE).searchParams.get("layout") === "list", await link.getAttribute("href"));
+        await page.unroute(`**${ROUTE}**`);
+        await link.click();
+        await page.getByTestId("tickets-count").waitFor();
+        ck(`${tag("short read")}: it opens the List on To do`, query(page).layout === "list" && query(page).state === "to-do", page.url());
       }
 
       // the menu entry

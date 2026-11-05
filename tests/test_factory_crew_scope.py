@@ -125,7 +125,7 @@ async def main():
         store.create_project("prj-y", "software_factory", "Project Y", {}, goal="Build Y")
         store.set_project_kind("prj-y", "software_factory")
         store.update_project("prj-y", status="active")
-        store.update_ticket(t, status="done")          # prj-x: one ticket delivered, its PR still open
+        # prj-x keeps its passed PR in review (a done ticket would leave review, TR-1008)
         store.create_ticket("prj-x", "tares", "Next", repo="example-org/svc")   # and one still to do
         busy = store.create_ticket("prj-y", "tares", "Busy", repo="example-org/svc2")
         store.update_ticket(busy, stage="doing")

@@ -9,7 +9,7 @@ export type MemberState = "working" | "idle" | "waiting for you" | "not heard" |
 
 export interface CrewMember {
   station: string;
-  /** "The one you talk to", "Reviewer", "Releaser" or "Builder". */
+  /** "Orchestrator", "Reviewer", "Releaser" or "Builder". */
   role_label: string;
   state: MemberState;
   /** The state in words with its length: "Working", "Idle for 8 minutes", "Not heard from in 2 hours". */

@@ -123,7 +123,7 @@ const until = async (fn, tries = 40) => {
     ck("second check and pacing are off", (await page.getByTestId("toggle-challenger").getAttribute("aria-checked")) === "false" && (await page.getByTestId("toggle-pace").getAttribute("aria-checked")) === "false");
     ck("there is no Releases row without a release profile", (await page.getByTestId("row-releases").count()) === 0);
     ck("people: two access keys", /2 access keys/.test(await text(page, "row-keys")));
-    ck("there is no Team row without a workspace address", (await page.getByTestId("row-team").count()) === 0);
+    ck("the People row opens the People page", (await page.getByTestId("row-team").getByRole("link", { name: "Open People" }).getAttribute("href")) === "/people");
     await checkWords(page, ck, "live page");
     await shot(page, "live-1440.png");
 
@@ -322,8 +322,9 @@ const until = async (fn, tries = 40) => {
         else if (name === "err") ck(`${tag}: it says settings did not load and offers Retry`, /Settings did not load\./.test(body) && (await p.getByRole("button", { name: "Retry" }).count()) === 1 && sections.length === 0, body);
         else ck(`${tag}: six sections in order`, sections.join() === SECTIONS.join(), sections.join());
         if (name === "busy") ck(`${tag}: 7 grants, 5 shown, Show 2 more`, (await p.getByTestId("grant").count()) === 5 && (await text(p, "grants-more")) === "Show 2 more");
-        if (name === "newc") ck(`${tag}: nothing allowed yet, nothing connected`, /Nothing allowed yet\. The crew asks when it needs something\./.test(body) && (await p.getByTestId("tool-dot").evaluateAll((d) => d.every((x) => x.getAttribute("data-on") === "false"))) && /Not chosen yet/.test(body) && /No access keys yet/.test(body) && (await p.getByTestId("row-team").count()) === 0);
-        if (name === "ro") ck(`${tag}: read only, every control disabled`, (await p.getByTestId("read-only").count()) === 1 && (await p.locator("#tools, #crew, #models, #people").locator("button:not([disabled]), a:not([aria-disabled=true])").count()) === 0 && (await p.getByTestId("edition-sre").count()) === 0);
+        if (name === "newc") ck(`${tag}: nothing allowed yet, nothing connected`, /Nothing allowed yet\. The crew asks when it needs something\./.test(body) && (await p.getByTestId("tool-dot").evaluateAll((d) => d.every((x) => x.getAttribute("data-on") === "false"))) && /Not chosen yet/.test(body) && /No access keys yet/.test(body) && (await p.getByTestId("row-team").count()) === 1);
+        if (name === "ro") ck(`${tag}: read only, every control disabled, People still opens`, (await p.getByTestId("read-only").count()) === 1 && (await p.locator("#tools, #crew, #models, #people").locator("button:not([disabled]), a:not([aria-disabled=true]):not([href='/people'])").count()) === 0
+           && (await p.getByTestId("row-team").getByRole("link", { name: "Open People" }).count()) === 1 && (await p.getByTestId("edition-sre").count()) === 0);
         if (name === "rel") ck(`${tag}: the Releases row, second check and pacing on`, (await p.getByTestId("row-releases").count()) === 1 && (await p.getByTestId("toggle-challenger").getAttribute("aria-checked")) === "true" && /91%/.test(await text(p, "row-pace")));
         if (name === "long") ck(`${tag}: very long names wrap and markup stays text`, (await overflow(p)) <= 0 && (await p.getByTestId("grant").first().locator("b, img").count()) === 0 && (await p.getByTestId("grant").first().innerText()).includes("<b>bold</b>"));
         if (name === "many") { await p.getByTestId("grants-more").click(); ck(`${tag}: 12 grants after Show 7 more`, (await p.getByTestId("grant").count()) === 12); }

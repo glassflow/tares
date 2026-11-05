@@ -224,7 +224,7 @@ async def main():
             a = await page(cx)
             print("   ", json.dumps(a)[:300])
             t, rv, rl = a["talk_to"], a["reviewer"], a["releaser"]
-            ck("the one you talk to: role, working, with its memory", t["role_label"] == "The one you talk to"
+            ck("the orchestrator: role, working, with its memory", t["role_label"] == "Orchestrator"
                and t["state"] == "working" and t["state_text"] == "Working" and t["memory_pct"] == 82
                and t["memory_text"] == "Memory 82% full" and t["helpers"] == 0, t)
             ck("heard is to the second under a minute", t["heard"].endswith(" seconds ago"), t["heard"])

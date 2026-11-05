@@ -220,14 +220,16 @@ async def main():
         print("== review queue (TR-648) ==")
         out, _ = await get("/api/review-queue")
         queue = out["queue"]
-        ck("tickets in review from every project are queued", len(queue) == 8,
+        # ticket 0 of each big project is done and still in review: done wins (TR-1008), so it
+        # is not queued
+        ck("tickets in review from every project are queued, done ones not", len(queue) == 6,
            f"{len(queue)} queued")
         first = queue[0]
         ck("the ticket that blocks its milestone comes first",
            first["blocks_milestone"] and first["project_name"] == "solo", str(first)[:200])
         by_title = {(q["project_name"], q["title"]): q for q in queue}
         hist = {t["title"]: store.ticket_history(t["id"]) for t in store.list_tickets(big)
-                if t["stage"] == "review"}
+                if t["stage"] == "review" and t["status"] not in ("done", "canceled")}
         for title, h in hist.items():
             want = max((x["at"] for x in h if x["field"] == "stage" and x["value"] == "review"),
                        default=None)
@@ -249,9 +251,9 @@ async def main():
             _, q_many = await get("/api/review-queue")
         finally:
             store.challenge_events = real
-        ck(f"queries do not grow with the tickets in review (8 vs {8 + len(more)})",
+        ck(f"queries do not grow with the tickets in review (6 vs {6 + len(more)})",
            q_few == q_many, f"{q_few} vs {q_many}")
-        print(f"  {q_many} queries for {8 + len(more)} tickets in review")
+        print(f"  {q_many} queries for {6 + len(more)} tickets in review")
 
         print("== projects list (TR-659) ==")
         out, _ = await get("/api/projects")
