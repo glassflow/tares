@@ -220,6 +220,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       // a. You are waiting on
       const won = page.getByTestId("waiting-on-row");
       const portal = won.filter({ hasText: "Portal" }), notes = won.filter({ hasText: "Notes" });
+      ck(t("a project's name opens the project"), (await portal.getByTestId("waiting-on-project").getAttribute("href")) === `/projects/${ids.projects.portal}`);
       ck(t("You are waiting on lists Portal and Notes, the two projects Alex leads that wait on Kim"), (await won.count()) === 2
          && (await portal.count()) === 1 && (await notes.count()) === 1, JSON.stringify(await won.allInnerTexts()));
       ck(t("Portal: acme/api waits for Kim, acme/docs has no owner"), JSON.stringify(await chipsOf(portal)) === JSON.stringify(["no_owner:acme/docs · no owner", "waiting:acme/api · Kim · waiting"]), JSON.stringify(await chipsOf(portal)));

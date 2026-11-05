@@ -59,7 +59,11 @@ export function YouAreWaitingOn({ entries, onHandOver }: {
             <ListRow key={e.project.id} data-testid="waiting-on-row"
                      className="items-start justify-between gap-x-4 gap-y-3 px-[18px]! py-4!">
               <div className="min-w-0 flex-[1_1_300px]">
-                <div className="font-semibold [overflow-wrap:anywhere]" data-user-text>{e.title}</div>
+                {/* the name opens the project; the row itself holds buttons, so it is not one link */}
+                <Link to={`/projects/${encodeURIComponent(e.project.id)}`} data-testid="waiting-on-project" data-user-text
+                      className="block w-fit font-semibold text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+                  {e.title}
+                </Link>
                 <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text>{e.detail}</div>
                 {e.repos.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
