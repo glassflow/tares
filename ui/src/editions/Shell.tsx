@@ -182,9 +182,7 @@ export default function EditionShell() {
               Menu
             </Button>
           )}
-          <span aria-hidden className="flex size-[22px] shrink-0 items-center justify-center bg-foreground">
-            <i className="block size-2 bg-[var(--accent)]" />
-          </span>
+          <img src="/tares-mark.svg" alt="" aria-hidden data-testid="brand-mark" className="h-[18px] w-auto shrink-0" />
           <b className="text-base tracking-tight">Tares</b>
           <span data-testid="edition-name"
                 className={"whitespace-nowrap text-base text-muted-foreground " + (cellName ? "shrink-0" : "min-w-0 truncate")}>{name}</span>
