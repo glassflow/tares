@@ -173,8 +173,11 @@ export interface HomePlan {
 }
 
 export interface HomeTool {
+  key: "github" | "linear" | "slack" | "claude_code";
   name: string;
   connected: boolean;
+  /** What it is connected to, after the name on the chip: "glassflow", "last session 5 minutes ago". */
+  short: string | null;
 }
 
 export interface HomeData {
