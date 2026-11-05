@@ -90,7 +90,7 @@ async def main():
         ck("the answer's keys", set(a) == {"people", "can_add", "add_text", "cloud", "workspace_href", "now"}, sorted(a))
         by = {p["name"]: p for p in a["people"]}
         ck("every person is listed", {"Alex", "Kim", "Reader"} <= set(by), sorted(by))
-        ck("a row's keys", all(set(p) == {"id", "name", "email", "admin", "you", "state", "state_words", "leads", "owns"}
+        ck("a row's keys", all(set(p) == {"id", "name", "email", "admin", "picture", "you", "state", "state_words", "leads", "owns"}
                                for p in a["people"]), sorted(a["people"][0]))
         ck("the caller comes first and is marked", a["people"][0]["name"] == "Alex" and a["people"][0]["you"]
            and not by["Kim"]["you"], [p["name"] for p in a["people"]])

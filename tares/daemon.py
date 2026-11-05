@@ -929,7 +929,8 @@ def make_app() -> FastAPI:
 
     def _person_ref(p: dict | None) -> dict | None:
         """The part of a person a credential carries."""
-        return {"id": p["id"], "name": p["name"], "email": p["email"]} if p else None
+        return ({"id": p["id"], "name": p["name"], "email": p["email"],
+                 "picture": p.get("picture")} if p else None)
 
     def _key_person(key: dict) -> dict | None:
         """Who a key acts as: the person it is bound to. A key nobody has bound acts as `local`
@@ -1724,7 +1725,8 @@ def make_app() -> FastAPI:
 
     # ── People: who is on the cell. Keys belong to them; the credential names who is calling ──
     def _person_out(p: dict) -> dict:
-        return {k: p[k] for k in ("id", "name", "email", "emails", "github", "is_admin", "created_via")}
+        return {k: p.get(k) for k in ("id", "name", "email", "emails", "github", "is_admin",
+                                      "created_via", "picture")}
 
     @app.get("/api/people")
     def list_people():
@@ -1732,23 +1734,33 @@ def make_app() -> FastAPI:
 
     @app.post("/api/people")
     def create_person(request: Request, body: dict = Body(...)):
-        """{name, email?, emails?, github?, is_admin?, owner?}. 201 with the new person; 200 with
-        the existing one when that email is already someone's. `owner: true` (the system
+        """{name, email?, emails?, github?, is_admin?, owner?, picture?}. 201 with the new person;
+        200 with the existing one when that email is already someone's. `owner: true` (the system
         credential only, as the control plane sends for the workspace owner) makes an unclaimed
-        `local` that person instead (200)."""
+        `local` that person instead (200). `picture` (an https address, TR-1016) is stored on a new
+        person; on an existing one only the system credential sets it, as the control plane does
+        with the picture a person signs in with, so their own console shows it."""
         email = None
         ident = getattr(request.state, "credential", None) or {}
+        system = ident.get("kind") == "system"
         try:
+            picture = store.check_picture(body.get("picture")) if "picture" in body else None
             email = store.check_email(body.get("email"))
             found = store.find_person_by_email(email) if email else None
             if found:
+                if system and picture and picture != found.get("picture"):
+                    found = store.update_person(found["id"], picture=picture) or found
                 return _person_out(found)
-            if email and body.get("owner") is True and ident.get("kind") == "system":
+            if email and body.get("owner") is True and system:
                 claimed = store.claim_local(email, body.get("name"))
                 if claimed:
+                    if picture:
+                        claimed = store.update_person(claimed["id"], picture=picture) or claimed
                     return _person_out(claimed)
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
+            if picture:
+                p = store.update_person(p["id"], picture=picture) or p
         except ValueError as e:
             # this handler runs in the thread pool: two creations of one email can both pass the
             # lookup above, and the loser then meets the winner's row. It gets that person (200).
@@ -1762,7 +1774,8 @@ def make_app() -> FastAPI:
     @app.patch("/api/people/{pid}")
     def update_person(pid: str, request: Request, body: dict = Body(...)):
         """An admin (or the system credential) changes anything; a person changes only their own
-        name. Emails and the GitHub login are how a person is recognised, so they are not self-service."""
+        name and picture. Emails and the GitHub login are how a person is recognised, so they are
+        not self-service."""
         admin = _is_admin(request)
         ident = getattr(request.state, "credential", None) or {}
         kid = str(ident.get("id") or "")
@@ -1772,7 +1785,8 @@ def make_app() -> FastAPI:
         if not admin and not own:
             raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
                                                         "can change a person")
-        allowed = ("name", "email", "emails", "github", "is_admin") if admin else ("name",)
+        allowed = (("name", "email", "emails", "github", "is_admin", "picture") if admin
+                   else ("name", "picture"))
         fields = {k: body[k] for k in allowed if k in body}
         if not admin and any(k in body for k in ("email", "emails", "github", "is_admin")):
             raise HTTPException(status_code=403, detail="only an admin can change a person's "

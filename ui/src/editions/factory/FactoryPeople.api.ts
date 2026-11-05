@@ -9,6 +9,8 @@ export interface PersonRow {
   name: string;
   email: string | null;
   admin: boolean;
+  /** An https address of their picture (TR-1016); null shows their initials. */
+  picture: string | null;
   /** The person this console is signed in as. */
   you: boolean;
   /** "active": has signed in; "invited": added, not signed in yet. */

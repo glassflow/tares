@@ -5,6 +5,8 @@
  *    who never signed in shows as invited; the add form adds a teammate, who shows as invited; the
  *    same email twice says so.
  *  - Signed in with a read key: the list shows, the form does not, and the page says why.
+ *  - Pictures (TR-1016): a person with a picture shows it, round, in the account button and on
+ *    their row; a picture that does not load falls back to the initials; you change your own.
  *  - At phone width the page fits without a sideways scroll.
  *  - The page's words keep the words list.
  *
@@ -23,6 +25,7 @@ const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords } = require("./words.cjs");
 
 const ROOT = "root-token-factory-people-e2e";
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 const PORT = Number(process.env.TARES_E2E_PORT || 8871);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
@@ -72,7 +75,8 @@ function waitFor(url, tries = 150) {
   const bob = await call("POST", "/api/keys", { name: "bob-laptop", scopes: ["admin"], person: { email: "bob@example.com", name: "Bob B" } }, root);
   const alice = await call("POST", "/api/keys", { name: "alice-laptop", scopes: ["read"], person: { email: "alice@example.com", name: "Alice A" } }, root);
   const kim = await call("POST", "/api/factory/people", { email: "kim@example.com", name: "Kim K" }, root);
-  await call("PATCH", `/api/people/${kim.json.id}`, { is_admin: true }, root);
+  await call("PATCH", `/api/people/${kim.json.id}`, { is_admin: true, picture: "https://pictures.example.test/broken.png" }, root);
+  await call("PATCH", `/api/people/${bob.json.person.id}`, { picture: "https://pictures.example.test/bob.png" }, root);
   ck("keys and a person made", bob.status === 201 && alice.status === 201, `${bob.status} ${alice.status}`);
   // Alice has used her key once, so she has signed in; Kim never has
   await call("GET", "/api/factory/people", undefined, { authorization: `Bearer ${alice.json.secret}` });
@@ -81,6 +85,10 @@ function waitFor(url, tries = 150) {
   const open = async (token, width = 1440) => {
     const ctx = await browser.newContext({ viewport: { width, height: 900 } });
     await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, token);
+    // the pictures' host: bob.png and new.png are a 1x1 image, broken.png fails
+    await ctx.route("https://pictures.example.test/**", (route) => route.request().url().endsWith("broken.png")
+      ? route.abort()
+      : route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
     const page = await ctx.newPage();
     await page.goto(`${BASE}/people`);
     await page.getByTestId("people-list").waitFor({ timeout: 15000 });
@@ -94,6 +102,27 @@ function waitFor(url, tries = 150) {
     ck("the menu has People, current here", (await page.locator('nav[aria-label="Main"] a', { hasText: "People" }).getAttribute("href")) === "/people"
        && (await page.locator('nav[aria-label="Main"] a[aria-current="page"]').allInnerTexts()).map((t) => t.trim()).join() === "People");
     ck("the heading", await page.getByRole("heading", { name: "People", exact: true }).isVisible());
+    // pictures
+    const avatarImg = (loc) => loc.locator('img[referrerpolicy="no-referrer"]');
+    await page.waitForFunction(() => document.querySelector('[data-testid="account-avatar"] img')?.complete);
+    ck("pictures: yours shows round in the account button", (await page.getByTestId("account-avatar").getAttribute("data-picture")) === "on"
+       && (await avatarImg(page.getByTestId("account-avatar")).getAttribute("src")) === "https://pictures.example.test/bob.png"
+       && /rounded-full/.test(await page.getByTestId("account-avatar").getAttribute("class")));
+    ck("pictures: and on your row", (await rowOf(page, "bob@example.com").getByTestId("person-avatar").getAttribute("data-picture")) === "on");
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="person-row"]')].some((r) => r.textContent.includes("kim@example.com")
+      && r.querySelector('[data-testid="person-avatar"]')?.getAttribute("data-picture") === "off"));
+    ck("pictures: one that does not load shows the initials", (await rowOf(page, "kim@example.com").getByTestId("person-avatar").innerText()).trim() === "KK");
+    ck("pictures: no picture, initials", (await rowOf(page, "alice@example.com").getByTestId("person-avatar").getAttribute("data-picture")) === "off");
+    await rowOf(page, "bob@example.com").getByTestId("picture-open").click();
+    await page.getByTestId("picture-url").fill("http://pictures.example.test/new.png");
+    await page.getByTestId("picture-save").click();
+    await page.getByText("Picture must be an https address.").waitFor({ timeout: 10000 });
+    ck("pictures: an address that is not https is refused, in words", true);
+    await page.getByTestId("picture-url").fill("https://pictures.example.test/new.png");
+    await page.getByTestId("picture-save").click();
+    await page.waitForFunction(() => document.querySelector('[data-testid="account-avatar"] img')?.getAttribute("src") === "https://pictures.example.test/new.png");
+    ck("pictures: you change your own, and the account button follows", (await avatarImg(rowOf(page, "bob@example.com").getByTestId("person-avatar")).getAttribute("src")) === "https://pictures.example.test/new.png");
+    ck("pictures: only on your own row", (await rowOf(page, "alice@example.com").getByTestId("picture-open").count()) === 0);
     const names = (await page.getByTestId("person-name").allInnerTexts()).map((t) => t.trim());
     ck("you come first, and are marked", names[0] === "Bob B" && /\(you\)/.test(await page.getByTestId("person-row").first().innerText()), names.join("|"));
     ck("every person is listed", ["Bob B", "Alice A", "Kim K"].every((n) => names.includes(n)), names.join("|"));

@@ -178,6 +178,8 @@ export interface Person {
   github: string | null;
   is_admin: boolean;
   created_via: string;
+  /** An https address of their picture (TR-1016); null shows their initials. */
+  picture?: string | null;
 }
 
 // /api/whoami: the credential making the request, and the person it acts as (null for the root
@@ -186,7 +188,7 @@ export interface Whoami {
   id: string;
   name: string;
   kind: "system" | "key" | "project" | "open";
-  person: { id: string; name: string; email: string | null } | null;
+  person: { id: string; name: string; email: string | null; picture?: string | null } | null;
   scopes: string[];
   project?: string;
   project_name?: string | null;

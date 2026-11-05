@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A person's picture (TR-1016): where the console shows a person's initials (the account button, People rows) it shows their picture, round, and the initials when there is none or it does not load. On Tares Cloud it is the picture they sign in with, sent by the control plane when they open the cell. On a self-hosted cell a person sets their own on the People page by its address. People and whoami carry `picture`; only one https address of at most 2048 characters is taken, and the cell never fetches it.
 - A People page in the Software Factory menu: who is on the cell, whether they have signed in, the projects they lead and the repos they own, and Add a person. On a self-hosted cell an admin adds them on the cell; on Tares Cloud the workspace owner invites them from the console, with the same invite the workspace page sends. Settings links to it.
 - A first-run edition notice now also shows when the cell keeps its state in Postgres, and the edition chooser tells you when your choice was saved but the cell did not answer afterwards.
 - The AI SRE home shows the demo service as soon as "Try the demo service" finishes, and a failed demo start links to the step-by-step setup.
