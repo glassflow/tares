@@ -635,10 +635,14 @@ function Decisions({ id, items }: { id: string; items: FactoryProjectData["decis
   );
 }
 
-function Docs({ items }: { items: FactoryProjectData["docs"] }) {
+function Docs({ id, items, total }: { id: string; items: FactoryProjectData["docs"]; total: number }) {
   return (
     <section id="docs" aria-label="Docs" className="min-w-0 scroll-mt-4" data-testid="docs">
-      <SectionHead title="Docs" />
+      <SectionHead title="Docs" aside={total > 0 && (
+        <Link to={`/projects/${encodeURIComponent(id)}/docs`} className={cn("text-xs", LINK)} data-testid="docs-all">
+          All {plural(total, "document", "documents")} {"›"}
+        </Link>
+      )} />
       {items.length === 0 ? (
         <Empty testid="docs-empty">No docs yet. The spec and plan show here once they are written.</Empty>
       ) : (
@@ -646,8 +650,8 @@ function Docs({ items }: { items: FactoryProjectData["docs"] }) {
           {items.map((x) => (
             <Link key={x.id} to={x.href} data-testid="doc-row"
                   className="flex flex-col gap-px border-b border-border px-4 py-2.5 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)]">
-              <span className="font-semibold [overflow-wrap:anywhere]" data-user-text>{x.title}</span>
-              <span className={MUTED}>{x.kind_label}, updated {x.updated}</span>
+              <span className="font-semibold">{x.kind_label}</span>
+              <span className={MUTED}>Updated {x.updated}</span>
             </Link>
           ))}
         </div>
@@ -852,7 +856,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
         <div className="grid min-w-0 gap-6">
           {d.people && <People people={d.people} onLead={onLead} onAdd={onAdd} />}
           <Decisions id={d.id} items={d.decisions} />
-          <Docs items={d.docs} />
+          <Docs id={d.id} items={d.docs} total={d.docs_total ?? d.docs.length} />
           <Terminal items={d.terminal} />
         </div>
       </div>

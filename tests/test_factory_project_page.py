@@ -307,7 +307,7 @@ async def main():
                set(a) == {"id", "name", "goal", "stage", "stage_label", "state", "state_label", "waiting",
                           "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
                           "decisions", "calls", "calls_past", "docs", "terminal", "linked", "can_close", "now",
-                          "people"}, sorted(a))
+                          "people", "docs_total"}, sorted(a))
             ck("no ticket lists under the milestones and no no_milestone", "no_milestone" not in a
                and all("tickets" not in m for m in a["milestones"]), sorted(a))
             ck("identity and stage", a["id"] == px and a["name"] == "project-x"
@@ -382,11 +382,22 @@ async def main():
                 {"ref": "A1", "question": "Which date format?", "choice": "ISO dates",
                  "why": f"it sorts, see {REPO}/dates", "made": "by the builder, 2 days ago", "tickets": ["T2"]}],
                a["calls"])
-            ck("docs: the project's own, in reading order, with a word for each kind",
-               [(d["kind_label"], d["title"]) for d in a["docs"]]
-               == [("Spec", "Spec"), ("Plan", "Plan"), ("Rules", "Rules"), ("Memory", "Memory"),
-                   ("Notes", "A note"), ("Working notes", "Working notes: T2")]
-               and all(d["href"] == f"/docs?doc={d['id']}" and d["updated"] for d in a["docs"]), a["docs"])
+            ck("docs: the four the project is about, in reading order, each opening the project's docs page",
+               [d["kind_label"] for d in a["docs"]] == ["Spec", "Plan", "Rules", "Memory"]
+               and all(d["href"] == f"/projects/{px}/docs?doc={d['id']}" and d["updated"] for d in a["docs"]), a["docs"])
+            ck("docs_total counts every document, the note and the working notes too", a["docs_total"] == 6, a["docs_total"])
+            pd = (await cx.get(f"/api/factory/projects/{px}/docs")).json()
+            ck("the project's docs page: three groups, the four first, then the working note, then the note",
+               [(g["key"], [d["label"] for d in g["docs"]]) for g in pd["groups"]]
+               == [("project", ["Spec", "Plan", "Rules", "Memory"]), ("working", ["Working notes"]), ("notes", ["Notes"])]
+               and pd["total"] == 6 and pd["doc"]["title"] == "Spec: project-x", pd["groups"])
+            note = pd["groups"][2]["docs"][0]["id"]
+            wn = (await cx.get(f"/api/factory/projects/{px}/docs", params={"doc": note})).json()["doc"]
+            ck("it opens a note, which the Docs and memory page does not show", wn["id"] == note and wn["title"] == "A note"
+               and (await cx.get(f"/api/factory/docs/{note}")).status_code == 404, wn)
+            other = next(d["id"] for d in store.list_docs(pt) if d["kind"] == "spec")
+            ck("a document of another project is 404 here",
+               (await cx.get(f"/api/factory/projects/{px}/docs", params={"doc": other})).status_code == 404)
             ck("terminal: one command per live builder, no folder in it",
                sorted(t["command"] for t in a["terminal"]) ==
                [f"tares factory crew attach {STATIONS[0]}", f"tares factory crew attach {STATIONS[1]}"]
@@ -538,7 +549,7 @@ async def main():
             ck("no folder anywhere in the answer", "/Users/" not in json.dumps(t), json.dumps(t)[:200])
             ck("documents come in reading order whatever order they were made in",
                [d["kind_label"] for d in t["docs"]]
-               == ["Spec", "Plan", "Rules", "Memory", "Notes", "Working notes"], t["docs"])
+               == ["Spec", "Plan", "Rules", "Memory"] and t["docs_total"] == 6, t["docs"])
 
             print("== not found and not allowed ==")
             e = await cx.get("/api/factory/projects/uc_nope")

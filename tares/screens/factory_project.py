@@ -312,11 +312,16 @@ def register(app, store, h, ctx):
                                    "at": fh._iso(a.get("decided_at"))})
         calls_past.sort(key=lambda c: c["at"] or "", reverse=True)
 
-        order = list(_DOC_LABEL)
-        docs = [{"id": d["id"], "title": clean(d["title"]), "kind_label": _DOC_LABEL[d["kind"]],
-                 "updated": plain_ago(d["updated_at"], now), "href": f"/docs?doc={d['id']}"}
-                for d in sorted((d for d in own if d["kind"] in _DOC_LABEL),
-                                key=lambda d: (order.index(d["kind"]), str(d["created_at"])))]
+        # the card shows the four the project is about, one of each (the first written); every
+        # document, working notes and notes too, is on the project's docs page
+        first: dict[str, dict] = {}
+        for d in sorted((d for d in own if d["kind"] in _DOC_LABEL), key=lambda d: str(d["created_at"])):
+            first.setdefault(d["kind"], d)
+        docs = [{"id": first[k]["id"], "title": clean(first[k]["title"]), "kind_label": _DOC_LABEL[k],
+                 "updated": plain_ago(first[k]["updated_at"], now),
+                 "href": f"/projects/{uid}/docs?doc={first[k]['id']}"}
+                for k in ("spec", "plan", "agents", "memory") if k in first]
+        docs_total = sum(1 for d in own if d["kind"] in _DOC_LABEL)
 
         # a builder's station plays by its newest session, shown as the crew page shows it
         # (factory_api.stations): an older session that is still working does not bring it back
@@ -342,7 +347,7 @@ def register(app, store, h, ctx):
                 "state": state, "state_label": STATE_LABEL[state],
                 "waiting": waiting, "counts": counts, "moving": moving, "moving_total": len(movers),
                 "tickets_href": f"/tickets?project={uid}", "next": nxt, "milestones": out_ms,
-                "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "terminal": terminal,
+                "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "docs_total": docs_total, "terminal": terminal,
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
                 "can_close": factory_mod.ready_to_close(p, tickets),

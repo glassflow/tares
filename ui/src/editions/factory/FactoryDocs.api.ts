@@ -59,3 +59,25 @@ export const factoryDoc = (id: string) => request<DocsPage>(`/api/factory/docs/$
  *  that is already there. */
 export const addDocLine = (path: string, text: string) =>
   request<{ added?: boolean }>(path, { method: "POST", body: JSON.stringify({ text, by: "console" }) });
+
+/** One document on a project's own docs page; a working note names its ticket. */
+export interface ProjectDocLink {
+  id: string;
+  kind: string;
+  label: string;
+  title: string;
+  updated: string;
+  ticket?: string | null;
+  ticket_href?: string | null;
+}
+
+/** GET /api/factory/projects/{uid}/docs: every document of one project, grouped, and one open. */
+export interface ProjectDocsPage {
+  project: { id: string; name: string };
+  groups: { key: "project" | "working" | "notes"; title: string; docs: ProjectDocLink[] }[];
+  total: number;
+  doc: DocView | null;
+}
+
+export const projectDocs = (project: string, doc?: string | null) =>
+  request<ProjectDocsPage>(`/api/factory/projects/${encodeURIComponent(project)}/docs${doc ? `?doc=${encodeURIComponent(doc)}` : ""}`);

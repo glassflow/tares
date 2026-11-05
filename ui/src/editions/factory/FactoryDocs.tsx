@@ -105,7 +105,7 @@ function AddLine({ doc, sample, reload }: { doc: DocView; sample: string | null;
   );
 }
 
-function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: string | null; stale: boolean; reload: () => void }) {
+export function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: string | null; stale: boolean; reload: () => void }) {
   const [all, setAll] = React.useState(false);
   const cut = doc.kind === "memory" && !all && doc.lines.length > SHOWN_LINES ? doc.lines.length - SHOWN_LINES : 0;
   return (

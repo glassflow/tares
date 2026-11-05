@@ -139,7 +139,7 @@ async function waitFor(url, tries = 100) {
       "The first wave needs a yes on each pull request the day it opens.", "Answer articles keep one fact per sentence so an assistant can quote them.",
       "Tell the reviewer which ticket a pull request closes."]), (await rowText()).join("|"));
     ck("each line shows by whom and how many days ago", JSON.stringify(await rowBy()) === JSON.stringify([
-      "the Builder, 12 days ago", "the Reviewer, 9 days ago", "you, 6 days ago", "the Builder, 3 days ago", "the Lead, 1 day ago"]), (await rowBy()).join("|"));
+      "the Builder, 12 days ago", "the Reviewer, 9 days ago", "you, 6 days ago", "the Builder, 3 days ago", "the Orchestrator, 1 day ago"]), (await rowBy()).join("|"));
     ck("the stamp is not left in the line", !(await rowText()).some((t) => /\(\d{4}-\d{2}-\d{2}/.test(t)));
     ck("the header says who changed it and when", (await page.getByTestId("doc-changed").innerText()) === "Changed by the Builder, 1 day ago",
        await page.getByTestId("doc-changed").innerText());
