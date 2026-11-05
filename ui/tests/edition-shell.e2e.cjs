@@ -144,7 +144,7 @@ async function waitFor(url, tries = 150) {
       const { page, ctx } = await open(e, 1440);
       await visit(page, e, "/projects");
       const htext = await page.getByTestId("edition-header").innerText();
-      ck(`${e}: the header says Tares`, /Tares/.test(htext), htext);
+      ck(`${e}: the header shows the Tares mark and the tares wordmark`, /^tares/.test(htext) && (await page.getByTestId("brand-mark").getAttribute("src")) === "/tares-mark.svg", htext);
       ck(`${e}: and the edition name`, (await page.getByTestId("edition-name").innerText()) === expect[e].name);
       const items = (await labels(page)).map((t) => t.trim());
       ck(`${e}: the menu is ${menuText(e)}`, menuIs(e, items), items.join(","));
