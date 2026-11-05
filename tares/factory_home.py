@@ -397,6 +397,12 @@ def _start_ctx(store, stations: list[dict], tickets: dict, linear: bool) -> star
         spec_with_tickets=spec)
 
 
+def _tools(store, now, hidden) -> list[dict]:
+    from . import factory_tools
+    return [{k: t[k] for k in ("key", "name", "connected", "short")}
+            for t in factory_tools.tools(store, now, hidden)]
+
+
 def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
@@ -440,10 +446,8 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps), "crew": crew,
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}),
-            "tools": [{"name": "GitHub", "connected": bool(store.list_github_credentials())},
-                      {"name": "Linear", "connected": bool(linear)},
-                      {"name": "Claude Code", "connected": bool(stations) or any(
-                          c["connector"] == "claude_code" for c in store.list_catalog_sources())}],
+            # the same rows Settings shows (factory_tools, TR-1013): the chip shows `short`
+            "tools": _tools(store, now, hidden),
             "start": start_steps.checklist(
                 store, start_steps.factory_steps(_start_ctx(store, stations, tickets, linear)),
                 "console" if credential_key == "open" else credential_key),

@@ -265,6 +265,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   crew has a station of the same name.
 
 ### Fixed
+- The Software Factory home's Connected chips say what each tool is connected to (GitHub · the account, Linear and Slack · the workspace, Claude Code · the last session), Slack is among them, a chip opens Settings, and Add a tool shows only while a tool is still unconnected. Settings says what each tool covers: the repos the open projects build in, the projects that keep tickets in Linear, the channels agents post to. Home and Settings read the same rows (`tares/factory_tools.py`), so Claude Code counts as connected on both only once a session has reported.
 - Private projects stay private on the settings pages and merge checks: the SRE Tools list leaves out their sources, a merge counts the links of services you cannot see, and the key count leaves out their keys.
 - Admin routes no longer reveal or change what a private project holds: renaming or merging its services, the catalog export and import, and the key list and key changes answer a non-member as for a name that does not exist.
 - A person outside a private project can no longer change, pause, delete, test or rerun its sources, triggers, agents, MCP servers or runs, or decide its rule proposals; those answer as if they were not there.

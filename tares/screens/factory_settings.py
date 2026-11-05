@@ -24,6 +24,7 @@ from .. import edition as edition_mod
 from .. import linear as linear_mod
 from .. import providers as providers_mod
 from .. import builtin_agents
+from .. import factory_tools
 from ..envelope import now_utc
 from ..factory_home import _count, _dt, _how_far, for_caller, plain_ago
 from .factory_docs import ago
@@ -77,66 +78,6 @@ def register(app, store, h, ctx):
             return fn()
         except Exception:
             return default
-
-    # ── tools ────────────────────────────────────────────────────────────────
-    def github() -> dict:
-        creds = safe(store.list_github_credentials, []) or []
-        row = {"key": "github", "name": "GitHub", "connected": bool(creds), "href": f"{ADV}?tab=github"}
-        if not creds:
-            return {**row, "detail": "Not connected"}
-        c = creds[0]
-        who = _text(c.get("account") or c.get("name"))
-        kind = str(c.get("kind") or "")
-        if kind.startswith("app"):
-            detail = f"Connected as the GitHub App on {who}" if who else "Connected as a GitHub App"
-        else:
-            detail = f"Connected as {who}" if who else "Connected with a token"
-        if len(creds) > 1:
-            detail += f", and {_count(len(creds) - 1, 'more connection')}"
-        return {**row, "detail": detail}
-
-    def linear() -> dict:
-        row = {"key": "linear", "name": "Linear", "href": f"{ADV}?tab=linear"}
-        conn = safe(lambda: linear_mod.public_connection(store), {}) or {}
-        if not conn.get("connected"):
-            return {**row, "connected": False, "detail": "Not connected"}
-        acct = conn.get("account") if isinstance(conn.get("account"), dict) else {}
-        who = _text(acct.get("org") or acct.get("name"))
-        return {**row, "connected": True,
-                "detail": f"Connected to the {who} workspace" if who else "Connected"}
-
-    def slack() -> dict:
-        from .. import slack as slack_mod
-        row = {"key": "slack", "name": "Slack", "href": f"{ADV}?tab=slack"}
-        token = safe(lambda: slack_mod.resolve_token(store)[0], "")
-        if not token:
-            return {**row, "connected": False, "detail": "Not connected"}
-        try:
-            team = json.loads(store.get_setting("slack_team") or "{}")
-        except ValueError:
-            team = {}
-        who = _text(team.get("name")) if isinstance(team, dict) else ""
-        return {**row, "connected": True,
-                "detail": f"Connected to the {who} workspace" if who else "Connected"}
-
-    def claude_code(now) -> dict:
-        row = {"key": "claude_code", "name": "Claude Code", "href": "/sources/claude-code"}
-        names = {c.get("name") for c in safe(store.list_catalog_sources, []) or []
-                 if c.get("connector") == "claude_code"}
-        if not names:
-            return {**row, "connected": False,
-                    "detail": f"Not connected. Nothing has reported in {REPORTING_DAYS} days."}
-        last = None
-        for s in safe(store.event_stats, []) or []:
-            t = _dt(s.get("last_ingest"))
-            if s.get("source") in names and t and (last is None or t > last):
-                last = t
-        fresh = last is not None and (now - last).total_seconds() <= REPORTING_DAYS * 86400
-        if fresh:
-            return {**row, "connected": True,
-                    "detail": f"Reporting: last session {plain_ago(last, now)}"}
-        return {**row, "connected": False,
-                "detail": f"Not connected. Nothing has reported in {REPORTING_DAYS} days."}
 
     # ── grants ───────────────────────────────────────────────────────────────
     def grants(now) -> tuple[list[dict], int]:
@@ -215,7 +156,7 @@ def register(app, store, h, ctx):
         team = _text(os.getenv("TARES_WORKSPACE_URL"))
         return {
             "can_change": can_change,
-            "tools": [github(), linear(), slack(), claude_code(now)],
+            "tools": factory_tools.tools(store, now, h.hidden_ids()),
             "crew": {
                 "how_far": {"value": how["autonomy"], "releases": how["releases"],
                             "text": how["text"]},

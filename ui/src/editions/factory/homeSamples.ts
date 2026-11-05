@@ -107,9 +107,10 @@ const PLAN: HomeData["plan"] = {
 };
 
 const TOOLS: HomeData["tools"] = [
-  { name: "GitHub", connected: true },
-  { name: "Linear", connected: true },
-  { name: "Claude Code", connected: true },
+  { key: "github", name: "GitHub", connected: true, short: "example-org" },
+  { key: "linear", name: "Linear", connected: true, short: "Example Org" },
+  { key: "slack", name: "Slack", connected: false, short: null },
+  { key: "claude_code", name: "Claude Code", connected: true, short: "last session 5 minutes ago" },
 ];
 
 const BASE: HomeData = {
@@ -155,7 +156,7 @@ export const empty: HomeData = {
                 doing: "Starts when you hand over a project", memory_pct: null, memory: null }],
   },
   plan: { known: false, limits: [], share_text: null },
-  tools: [{ name: "GitHub", connected: false }],
+  tools: [{ key: "github", name: "GitHub", connected: false, short: null }],
 };
 
 export const crewQuiet: HomeData = {

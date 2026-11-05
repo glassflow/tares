@@ -9,6 +9,8 @@ export interface SettingsTool {
   name: string;
   connected: boolean;
   detail: string;
+  /** What it is used for here: "The open projects build in glassflow/tares and glassflow/docs"; null when not connected. */
+  covers: string | null;
   href: string;
 }
 
