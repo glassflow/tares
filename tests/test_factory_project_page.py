@@ -320,9 +320,11 @@ async def main():
                [m["name"] for m in a["milestones"]] == ["M1: pages", "M2: search"]
                and [m["number"] for m in a["milestones"]] == ["M1", "M2"]
                and ms["M1: pages"]["goal"] == "The pages are live."
-               and ms["M1: pages"]["checks"] == [{"check": "open the home page", "expect": "it loads"}]
+               and ms["M1: pages"]["checks"] == [{"n": 1, "check": "open the home page", "expect": "it loads",
+                                                   "for": "crew", "result": None, "note": None, "by": None}]
                and ms["M1: pages"]["done"] is False and ms["M2: search"]["done"] is False
-               and all(set(m) == {"id", "number", "name", "goal", "done", "counts", "checks", "tickets_href"}
+               and all(set(m) == {"id", "number", "name", "goal", "done", "counts", "checks", "accepted",
+                                      "needs_person", "can_accept", "tickets_href"}
                        for m in a["milestones"]), ms)
             ck("a milestone counts its tickets and leaves the canceled one out",
                ms["M1: pages"]["counts"] == {"total": 3, "merged": 1}
@@ -523,7 +525,8 @@ async def main():
                [x["title"] for x in t["moving"]] == [f"Fix links in {REPO}/src and {REPO}"], t["moving"])
             ck("a milestone's goal and checks show the repo", t["milestones"][0]["goal"]
                == f"Links work under {REPO} and {REPO}/src." and t["milestones"][0]["checks"]
-               == [{"check": f"open {REPO}/index.html", "expect": f"it is the one in {REPO}"}], t["milestones"])
+               == [{"n": 1, "check": f"open {REPO}/index.html", "expect": f"it is the one in {REPO}",
+                    "for": "crew", "result": None, "note": None, "by": None}], t["milestones"])
             w = t["waiting"][0] if t["waiting"] else {}
             ck("a waiting item shows the repo in its words", (w.get("label"), w.get("title"), w.get("detail"), w.get("meta"))
                == (f"Look at {REPO}/", f"Check {REPO}/src", f"See {REPO}/notes", f"in {REPO}/"), w)

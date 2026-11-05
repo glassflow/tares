@@ -114,7 +114,7 @@ async def main():
 
         print("== the crew records its checks ==")
         r = await call("POST", f"/api/projects/{px}/milestones/{m_crew}/checks/1", {"result": "pass", "note": "41 passed"}, crew)
-        ck("the crew records a pass", r.status_code == 200 and r.json()["accepted"] and r.json()["checks"][0]["result"] == "pass", r.text)
+        ck("the crew records a pass", r.status_code == 200 and r.json()["accepted"] and r.json()["check_results"][0]["result"] == "pass", r.text)
         ck("crew checks passed, no person checks: accepted without asking",
            "project-x, M2 crew only" not in {i["title"] for i in await waiting()})
         r = await call("POST", f"/api/projects/{px}/milestones/{m_person}/checks/1", {"result": "pass"}, crew)
@@ -138,8 +138,8 @@ async def main():
            and any(t["title"].startswith("Fix: Open the Reviews page") and t["milestone"] == m_p for t in store.list_tickets(mp)), r.text)
         ck("and the milestone is the crew's work now: no item for the person",
            "project-p, M1 look" not in {i["title"] for i in await waiting()})
-        ck("the result keeps the person's sentence", r.json()["checks"][0]["note"] == "Only two lists show"
-           and r.json()["person_wrong"] == [1], r.json()["checks"])
+        ck("the result keeps the person's sentence", r.json()["check_results"][0]["note"] == "Only two lists show"
+           and r.json()["person_wrong"] == [1], r.json()["check_results"])
         fix = next(t for t in store.list_tickets(mp) if t["title"].startswith("Fix:"))
         store.update_ticket(fix["id"], stage="merged", status="done")
         r = await call("POST", f"/api/projects/{mp}/milestones/{m_p}/checks/1", {"result": "pass"})
@@ -178,7 +178,8 @@ async def main():
         r = await call("GET", f"/api/projects/{px}/milestones")
         ms = {m["name"]: m for m in r.json()["milestones"]}
         ck("list_milestones says what the crew still has to run", ms["M5 still building"]["crew_to_run"] == [1]
-           and ms["M2 crew only"]["crew_to_run"] == [] and ms["M2 crew only"]["checks"][0]["for"] == "crew", ms["M2 crew only"])
+           and ms["M2 crew only"]["crew_to_run"] == [] and ms["M2 crew only"]["check_results"][0]["for"] == "crew"
+           and ms["M2 crew only"]["checks"] == [{"check": "pytest", "expect": "0 failed"}], ms["M2 crew only"])
 
 
 asyncio.run(main())

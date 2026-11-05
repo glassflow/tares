@@ -5591,13 +5591,14 @@ def make_app() -> FastAPI:
             res = results.get(m["id"]) or {}
             st = factory_mod.milestone_state(m, [t for t in raw if t["milestone"] == m["id"]], res,
                                              accepted.get(m["id"]))
-            checks = [{**c, "for": c.get("for") or "crew", "n": i + 1,
-                       "result": (res.get(i) or {}).get("result"), "note": (res.get(i) or {}).get("note"),
-                       "by": (res.get(i) or {}).get("by_name"), "at": (res.get(i) or {}).get("at")}
-                      for i, c in enumerate(m["checks"])]
-            out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "position",
+            results_out = [{"n": i + 1, "for": c.get("for") or "crew",
+                            "result": (res.get(i) or {}).get("result"), "note": (res.get(i) or {}).get("note"),
+                            "by": (res.get(i) or {}).get("by_name"), "at": (res.get(i) or {}).get("at")}
+                           for i, c in enumerate(m["checks"])]
+            out.append({**{k: m[k] for k in ("id", "owner", "name", "goal", "checks", "position",
                                               "updated_at")},
-                        "checks": checks,
+                        # each check's number, who it is for and its latest result (TR-1017)
+                        "check_results": results_out,
                         "tickets": len(live), "done": done,
                         "ready": [t["label"] for t in mine if t["ready"]],
                         "finished": bool(live) and done == len(live),
@@ -5623,14 +5624,15 @@ def make_app() -> FastAPI:
         return {"milestones": _milestones_out(uid)}
 
     @app.post("/api/projects/{uid}/milestones/{ref}/checks/{n}")
-    def record_milestone_check(uid: str, ref: str, n: int, request: Request, body: dict = Body(...)):
+    def record_milestone_check(uid: str, ref: str, n: str, request: Request, body: dict = Body(...)):
         """{result: pass|fail, note?}: one run of a milestone's acceptance check n (1-based)
         (TR-1017). A station of the crew records its own checks; a person records the checks
         marked for a person. A person's fail is "something's wrong": on a project whose tickets
         are Tares's, a ticket to fix it is opened in the milestone; otherwise the orchestrator
         sees the failed check in list_milestones and opens it where the tickets live."""
-        p = _project_or_404(uid)
+        _project_or_404(uid)
         m = _milestone_or_404(uid, ref)
+        n = int(n) if str(n).isdigit() else 0
         if not 1 <= n <= len(m["checks"]):
             _err(KeyError(f"{m['name']} has {len(m['checks'])} checks; there is no check {n}"), 404)
         result = str((body or {}).get("result") or "").strip().lower()

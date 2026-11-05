@@ -69,8 +69,8 @@ async def record_milestone_check(milestone: str, n: int, result: str, note: str 
 
 @mcp.tool()
 async def list_milestones(project: str = "") -> str:
-    """The project's milestones in order: name, goal, acceptance checks (each with `n`, `for`
-    crew or person, and its latest `result`), how many tickets and how many are done, which are
+    """The project's milestones in order: name, goal, acceptance checks, `check_results` (each
+    check's `n`, `for` crew or person, and its latest `result`), how many tickets and how many are done, which are
     ready, whether the milestone is finished and accepted, and `crew_to_run` (the crew checks not
     recorded yet) and `crew_failed` / `person_wrong` (failed ones: open a ticket for each, where
     the project's tickets live). Work one milestone at a time, in this order."""
