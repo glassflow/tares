@@ -164,6 +164,7 @@ export function sampleLoad(name: string, q: TicketsQuery): Promise<FactoryTicket
   if (q.sort === "old") picked.sort((a, b) => m(b) - m(a));
   else if (q.sort === "ref") picked.sort((a, b) => order(a) - order(b) || num(a) - num(b));
   else picked.sort((a, b) => m(a) - m(b));
+  if (q.sort === "open") picked.sort((a, b) => Number(a.state_key === "merged") - Number(b.state_key === "merged"));
   const offset = q.offset ?? 0;
   const limit = q.limit ?? 25;
   const page = picked.slice(offset, offset + limit);
