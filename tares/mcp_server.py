@@ -20,7 +20,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp import types
 from mcp.types import TextContent
 
+import logging
+
 from . import docs as docs_mod
+from . import team as team_mod
 
 
 def _factory_token() -> str:
@@ -151,6 +154,12 @@ FACTORY_TOOLS = frozenset({"what_needs_me", "how_is_project", "start_project",
 FACTORY_ONLY = frozenset({"what_needs_me", "how_is_project"})
 # The outcome tools of an AI SRE cell (tares/mcp_outcomes.py registers them); they stay off factory.
 SRE_TOOLS = frozenset({"what_is_broken", "how_is_service", "what_happened", "mark_incident"})
+# The tools an ee team adds (Team.mcp_tools(), registered by _register_ee_tools). They show only
+# while the cell's licence allows ee, for every caller, crew stations included. They are in none of
+# the sets above, so the edition filter leaves them alone.
+EE_TOOLS: set[str] = set()
+_LICENCE_TEXT = ("licence_required: This needs an enterprise licence. "
+                 "https://docs.glassflow.ai/tares/enterprise")
 _OFF = ("This tool is off on this Tares. An admin can turn on the building-block tools under "
         "Settings, Access and API keys, Agent tools.")
 
@@ -194,8 +203,38 @@ async def _surface() -> tuple[str, bool]:
     return out
 
 
-def _visible(name: str, edition: str, object_tools: bool, station: bool) -> bool:
+_EE_ON: dict[str, tuple[float, bool]] = {}
+
+
+async def _ee_on() -> bool:
+    """Whether the licence allows ee, as the daemon says for this caller's token (`GET /api/licence`,
+    `ee_allowed`), kept for TARES_MCP_SURFACE_TTL seconds. Any error gives False."""
+    tok = _caller("token")
+    now = time.monotonic()
+    hit = _EE_ON.get(tok)
+    try:
+        ttl = float(os.getenv("TARES_MCP_SURFACE_TTL", "30"))
+    except ValueError:
+        ttl = 30.0
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    try:
+        async with _cx(5) as cx:
+            r = await cx.get(f"{TARESD}/api/licence")
+        r.raise_for_status()
+        out = bool(r.json()["ee_allowed"])
+    except Exception:
+        return False
+    if len(_EE_ON) > 256:
+        _EE_ON.clear()
+    _EE_ON[tok] = (now, out)
+    return out
+
+
+def _visible(name: str, edition: str, object_tools: bool, station: bool, ee_on: bool = True) -> bool:
     """Whether a tool is listed (and runs) for this caller on this edition."""
+    if name in EE_TOOLS and not ee_on:
+        return False
     if station or edition not in ("factory", "sre", "platform"):   # unknown edition: every tool
         return True
     if name in OBJECT_TOOLS:
@@ -214,14 +253,17 @@ class TaresMCP(FastMCP):
 
     async def list_tools(self):
         tools = await super().list_tools()
-        if _caller("role"):   # a crew station sees every tool, so it needs no look at the cell
-            return tools
+        ee_on = await _ee_on() if EE_TOOLS else True
+        if _caller("role"):   # a crew station sees every tool but the ee ones without a licence
+            return [t for t in tools if t.name not in EE_TOOLS or ee_on]
         edition, object_tools = await _surface()
-        tools = [t for t in tools if _visible(t.name, edition, object_tools, False)]
+        tools = [t for t in tools if _visible(t.name, edition, object_tools, False, ee_on)]
         first = FACTORY_TOOLS if edition == "factory" else SRE_TOOLS if edition == "sre" else frozenset()
         return sorted(tools, key=lambda t: t.name not in first)   # stable: outcome tools first
 
     async def call_tool(self, name, arguments):
+        if name in EE_TOOLS and not await _ee_on():
+            return types.CallToolResult(content=[TextContent(type="text", text=_LICENCE_TEXT)])
         if not _caller("role"):
             edition, object_tools = await _surface()
             if not _visible(name, edition, object_tools, False):
@@ -1103,6 +1145,37 @@ class _CallerHeaders:
 
 from . import mcp_factory  # noqa: E402,F401  (registers the factory's tools on `mcp`)
 from . import mcp_outcomes  # noqa: E402,F401  (the outcome tools of the factory edition)
+
+
+def _register_ee_tools() -> None:
+    """Register the tools of the ee team (if any) on `mcp` and name them in EE_TOOLS. A failure is
+    logged once and leaves EE_TOOLS empty; a name that is already a core tool is skipped."""
+    EE_TOOLS.clear()
+    ee = team_mod._ee()
+    if ee is None:
+        return
+    log = logging.getLogger("tares.mcp")
+    try:
+        taken = {t.name for t in mcp._tool_manager.list_tools()}
+        added: list[str] = []
+        for fn in ee.mcp_tools():
+            if fn.__name__ in taken:
+                log.warning("ee tool %s skipped: a core tool has that name", fn.__name__)
+                continue
+            mcp.tool()(fn)
+            added.append(fn.__name__)
+    except Exception as e:
+        log.warning("ee tools did not register: %s: %s", type(e).__name__, e)
+        for name in added:   # none stays listed outside EE_TOOLS, where the licence would not hide it
+            try:
+                mcp.remove_tool(name)
+            except Exception:
+                pass
+        return
+    EE_TOOLS.update(added)
+
+
+_register_ee_tools()
 
 
 def main():
