@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """Factory Settings, the Crew page and the home card read the setting the save writes (TR-893).
 
 A signed-in owner (an admin key that names a person) saves the crew's settings as their own, not
@@ -6,7 +7,7 @@ control snaps back after a reload. The owner changes how far the crew may go, th
 builders, the challenger and pacing; each of the three screens shows the new value on the next
 read. The cell's own credential still sets the default, which a second person who set nothing sees.
 
-Run: .venv/bin/python tests/test_factory_crew_scope.py
+Run: .venv/bin/python ee/tests/test_factory_crew_scope.py
 """
 import asyncio
 import json
@@ -14,15 +15,14 @@ import os
 import sys
 import tempfile
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-from _env import scrub_os_environ
-scrub_os_environ()
-sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-factory-crew-scope-")
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-crew-scope"
 os.environ["TARES_EDITION"] = "factory"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"

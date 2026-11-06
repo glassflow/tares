@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """Who a ticket is for (TR-631): every ticket has an assignee person, or shows as unowned with the
 assignee as its source named them, wherever the ticket lives.
 
@@ -13,7 +14,7 @@ project gets no members; a reassignment leaves holder and stage alone (also thro
 ticket JSON and list_tickets / get_ticket text; the person added by the assignment comes from the
 credential; and, with auth off, the same routes still work.
 
-Run: .venv/bin/python tests/test_ticket_assignee.py
+Run: .venv/bin/python ee/tests/test_ticket_assignee.py
 """
 import asyncio
 import json
@@ -25,13 +26,15 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # puts the repo and tests/ on sys.path
+licensed.install_test_root()
 from _env import clean_env
 
 _TMP = tempfile.mkdtemp(prefix="tares-assignee-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-assignee"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
@@ -478,8 +481,8 @@ async def main():
     home = tempfile.mkdtemp(prefix="assignee-off-")
     port = free_port()
     env = {**clean_env(), "TARES_DB": os.path.join(home, "off.duckdb"), "TARES_PORT": port,
-           "TARES_OTLP_GRPC_PORT": "off"}
-    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+           "TARES_OTLP_GRPC_PORT": "off", "TARES_LICENSE": licensed.test_licence()}
+    proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     B = f"http://127.0.0.1:{port}"
     try:

@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """The factory People page (TR-1011): GET and POST /api/factory/people.
 
 Who is on the cell, and adding a teammate. Checked here: every person is listed with their email,
@@ -8,7 +9,7 @@ the same email is refused, a bad email is refused; a read key may look but not a
 Cloud cell (TARES_WORKSPACE_API_URL) the cell does not add people itself, because the console
 invites through the workspace.
 
-Run: .venv/bin/python tests/test_factory_people.py
+Run: .venv/bin/python ee/tests/test_factory_people.py
 """
 import asyncio
 import os
@@ -16,15 +17,16 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-people-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-people"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_EDITION"] = "factory"

@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """Two people, two crews, one cell: the team flow end to end over HTTP and MCP (TR-638).
 
 A daemon with auth on, two people with their own keys, no real Claude session: recordings go in
@@ -6,7 +7,7 @@ second person cannot see; tickets that make them a member; a hand-over from the 
 crew; each person's my_work; a merge that frees the second person's ticket; a desk question that
 only the person it is addressed to can answer; two crews of the same name on /api/crew.
 
-Run: .venv/bin/python tests/test_teams_e2e.py
+Run: .venv/bin/python ee/tests/test_teams_e2e.py
 """
 import asyncio
 import json
@@ -17,15 +18,16 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-teams-e2e-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-teams-e2e"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
