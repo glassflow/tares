@@ -24,6 +24,10 @@ def test_create_person():
     skip("tares/daemon.py:POST /api/people (create_person)")
 
 
+def test_desk_target():
+    skip("tares/factory_api.py:desk_target (a `to` naming someone other than the caller)")
+
+
 def test_factory_people():
     skip("tares/screens/factory_people.py:POST /api/factory/people")
 
