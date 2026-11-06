@@ -6,6 +6,10 @@ demo project adds a sixth. Each row is done from one read of the store, its acti
 done, the block hides when everything is done or when the caller hid it (for that caller only),
 and the words pass tares/words.py.
 
+This file is the one-person half; hiding under keys bound to other people, the hide following the
+person and not the name, and a key with no person on a cell of several people are in
+ee/tests/test_sre_start_team.py.
+
 Run: .venv/bin/python tests/test_sre_start.py
      (the Postgres variant: PYTHONPATH=tests/pg_harness TARES_TEST_PG=<dsn> the same way)
 """
@@ -242,47 +246,6 @@ async def main():
         r = await cx.get("/api/home")
         eq("shown again at once", r.json()["start"]["show"], True)
         eq("and it is not marked hidden any more", r.json()["start"].get("hidden"), False)
-
-        print("== hiding with a key bound to a person ==")
-        # the home reads under the person's name, so the hide must be kept under it too
-        r = await cx.post("/api/keys", json={"name": "kim-laptop", "scopes": ["admin"],
-                                             "person": {"email": "kim@glassflow.dev", "name": "Kim"}})
-        kim = {"Authorization": f"Bearer {r.json()['secret']}"}
-        sre_home.clear_cache()
-        eq("it shows before", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], True)
-        r = await cx.post("/api/home/start/hide", headers=kim)
-        eq("hide answers hidden", (r.status_code, r.json()["show"]), (200, False))
-        eq("and the next read is hidden", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], False)
-        eq("the root key still sees it", (await cx.get("/api/home")).json()["start"]["show"], True)
-
-        print("== the hide follows the person, not the name ==")
-        r = await cx.get("/api/keys")
-        kim_key = next(k for k in r.json()["keys"] if k["name"] == "kim-laptop")
-        kim_id = kim_key["person"]["id"]
-        eq("the hide is kept under the person's id", ss.hidden(store, kim_id), True)
-        r = await cx.patch(f"/api/people/{kim_id}", json={"name": "Dana Roe"})
-        eq("rename answers", r.status_code, 200)
-        sre_home.clear_cache()
-        eq("after a rename it is still hidden", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], False)
-        r = await cx.post("/api/home/actions/raise_budget", json={"amount_usd": 5}, headers=kim)
-        eq("the budget answer keeps the hide too", (r.status_code, r.json()["home"]["start"]["show"]), (200, False))
-        r = await cx.post("/api/keys", json={"name": "other-laptop", "scopes": ["admin"],
-                                             "person": {"email": "other@glassflow.dev", "name": "Dana Roe"}})
-        other = {"Authorization": f"Bearer {r.json()['secret']}"}
-        sre_home.clear_cache()
-        eq("another person of the same name still sees it", (await cx.get("/api/home", headers=other)).json()["start"]["show"], True)
-        r = await cx.post("/api/home/start/hide", headers=other)
-        eq("their hide answers hidden", (r.status_code, r.json()["show"]), (200, False))
-        r = await cx.request("DELETE", "/api/home/start/hide", headers=other)
-        eq("their show answers shown", (r.status_code, r.json()["show"]), (200, True))
-        eq("and it does not show Kim's", (await cx.get("/api/home", headers=kim)).json()["start"]["show"], False)
-        r = await cx.post("/api/keys", json={"name": "bare-key", "scopes": ["admin"]})
-        bare = {"Authorization": f"Bearer {r.json()['secret']}"}
-        sre_home.clear_cache()
-        await cx.post("/api/home/start/hide", headers=bare)
-        sre_home.clear_cache()
-        eq("a key with no person hides under its own name", (ss.hidden(store, "bare-key"),
-           (await cx.get("/api/home", headers=bare)).json()["start"]["show"]), (True, False))
 
         await cx.aclose()
 

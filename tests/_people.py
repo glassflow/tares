@@ -12,8 +12,9 @@ from tares.store import Store
 
 def seed(db_path: str, people: list) -> list:
     """Create each (name, email) as a person in the database at `db_path`, as an admin would,
-    and return the created rows. The store is closed before this returns."""
-    store = Store(db_path)
+    and return the created rows. The store is closed before this returns. It opens DuckDB only
+    (state_dsn=""), so it never follows a Postgres state env the runner sets."""
+    store = Store(db_path, state_dsn="")
     rows = [store.create_person(name, email=email, via="admin") for name, email in people]
     del store
     return rows

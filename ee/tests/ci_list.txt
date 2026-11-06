@@ -1,5 +1,8 @@
 # Tares enterprise licence, see ee/LICENSE
 # Tests CI runs for the enterprise code, one per line, in sorted order (ee/tests/<name>.py).
+test_console_answers
+test_desk_person
+test_desk_unaddressed_login
 test_ee_smoke
 test_owner_claims_local_team
 test_people_team
@@ -7,3 +10,5 @@ test_person_attribution_team
 test_person_picture
 test_personal_limits
 test_recording_person_team
+test_setup_flow_team
+test_sre_start_team
