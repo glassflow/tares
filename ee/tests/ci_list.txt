@@ -1,0 +1,3 @@
+# Tares enterprise licence, see ee/LICENSE
+# Tests CI runs for the enterprise code, one per line, in sorted order (ee/tests/<name>.py).
+test_ee_smoke

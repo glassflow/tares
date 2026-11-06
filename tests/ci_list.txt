@@ -34,6 +34,7 @@ test_desk_unaddressed_login
 test_docs
 test_duckdb_memory
 test_edition
+test_ee_headers
 test_ee_packaging
 test_factory_batching
 test_factory_build
@@ -80,6 +81,7 @@ test_handoffs
 test_homebrew_formula
 test_host
 test_http_poll
+test_import_boundary
 test_incident_backfill_bulk
 test_incidents
 test_include_payload

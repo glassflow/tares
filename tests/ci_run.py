@@ -3,9 +3,14 @@
     python tests/ci_run.py                       # everything, in order
     python tests/ci_run.py --shard 2 --of 5      # the 2nd of 5 shards (1-based)
     python tests/ci_run.py --suite postgres ...  # the list for the Postgres run
+    python tests/ci_run.py --suite mit ...       # the core tests that need no ee/ (CI deletes it first)
+    python tests/ci_run.py --suite ee ...        # the tests of the enterprise code, ee/tests
+    python tests/ci_run.py --suite ee-postgres   # the same, with the state in Postgres
 
 The tests are the ones named in tests/ci_list.txt (tests/<name>.py) and tests/factory/ci_list.txt
-(tests/factory/<name>_test.sh, the factory CLI against a real Tares). Shards are balanced by
+(tests/factory/<name>_test.sh, the factory CLI against a real Tares). The ee suites read
+ee/tests/ci_list.txt (ee/tests/<name>.py) and ee/tests/factory/ci_list.txt
+(ee/tests/factory/<name>_test.sh) the same way. Shards are balanced by
 WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT_WEIGHT. A test
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
 failure."""
@@ -17,9 +22,17 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY_LIST = os.path.join(HERE, "ci_list.txt")
 SH_LIST = os.path.join(HERE, "factory", "ci_list.txt")
+EE_DIR = os.path.join(os.path.dirname(HERE), "ee", "tests")
+EE_PY_LIST = os.path.join(EE_DIR, "ci_list.txt")
+EE_SH_LIST = os.path.join(EE_DIR, "factory", "ci_list.txt")
+
+SUITES = ["duckdb", "postgres", "mit", "ee", "ee-postgres"]
 
 # Not in the Postgres run: they are about the DuckDB file itself.
 DUCKDB_ONLY = {"test_duckdb_memory", "test_state_postgres"}
+
+# Not in the mit run, where every ee directory is deleted before tares is installed: they look at ee/.
+NEEDS_EE = {"test_ee_packaging"}
 
 DEFAULT_WEIGHT = 4
 WEIGHT = {
@@ -36,8 +49,18 @@ def names(path):
         return [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
 
 
+def names_if(path):
+    """The names in a list, or none when the list does not exist (ee/tests/factory has none yet)."""
+    return names(path) if os.path.isfile(path) else []
+
+
 def items(suite):
-    py = [t for t in names(PY_LIST) if suite == "duckdb" or t not in DUCKDB_ONLY]
+    if suite in ("ee", "ee-postgres"):
+        py = [t for t in names(EE_PY_LIST) if suite == "ee" or t not in DUCKDB_ONLY]
+        return py + [f"factory:{t}" for t in names_if(EE_SH_LIST)]
+    py = [t for t in names(PY_LIST) if suite in ("duckdb", "mit") or t not in DUCKDB_ONLY]
+    if suite == "mit":
+        py = [t for t in py if t not in NEEDS_EE]
     return py + [f"factory:{t}" for t in names(SH_LIST)]
 
 
@@ -52,18 +75,20 @@ def shard(all_items, n, of):
     return sorted(bins[n - 1][1], key=order.get)
 
 
-def run(t):
+def run(t, suite="duckdb"):
+    ee = suite in ("ee", "ee-postgres")
+    base = EE_DIR if ee else HERE
     if t.startswith("factory:"):
         name = t.split(":", 1)[1]
         print(f"== factory {name} ==", flush=True)
-        return subprocess.call(["bash", os.path.join(HERE, "factory", f"{name}_test.sh")])
+        return subprocess.call(["bash", os.path.join(base, "factory", f"{name}_test.sh")])
     print(f"== {t} ==", flush=True)
-    return subprocess.call([sys.executable, os.path.join(HERE, f"{t}.py")])
+    return subprocess.call([sys.executable, os.path.join(base, f"{t}.py")])
 
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--suite", choices=["duckdb", "postgres"], default="duckdb")
+    p.add_argument("--suite", choices=SUITES, default="duckdb")
     p.add_argument("--shard", type=int, default=1)
     p.add_argument("--of", type=int, default=1)
     p.add_argument("--list", action="store_true", help="print the shard's tests, run nothing")
@@ -75,7 +100,7 @@ def main():
         print("\n".join(mine))
         return 0
     for t in mine:
-        rc = run(t)
+        rc = run(t, a.suite)
         if rc:
             print(f"FAILED: {t} (exit {rc})", flush=True)
             return rc
