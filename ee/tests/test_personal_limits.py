@@ -1,15 +1,16 @@
+# Tares enterprise licence, see ee/LICENSE
 """Limits on what a person sets for themselves (TR-624 and TR-630 follow-ups). A person's own
 autonomy and challenger are ceilings under the team's value: looser is refused, stricter is kept,
 clearing falls back to the team's. A personal AGENTS.md or memory has a size limit. Reading grants
 settles only grants the reader may see, and as Tares, not as the reader.
 
-Run: .venv/bin/python tests/test_personal_limits.py
+Run: .venv/bin/python ee/tests/test_personal_limits.py
 """
 import asyncio, os, shutil, socket, subprocess, sys, tempfile
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 from tares import docs as docs_mod
 
@@ -47,8 +48,8 @@ def H(tok):
 def start(db):
     port = free_port()
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
-           "TARES_AUTH_TOKEN": AUTH}
-    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+           "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
+    proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc, f"http://127.0.0.1:{port}"
 

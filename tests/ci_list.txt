@@ -114,9 +114,7 @@ test_otlp_grpc
 test_owner_claims_local
 test_people
 test_person_attribution
-test_person_picture
 test_personal_docs
-test_personal_limits
 test_pickup
 test_plugin_challenger
 test_postgres
