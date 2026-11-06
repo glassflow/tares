@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Checks a crew's name (TR-541): the default crew keeps today's names, a named crew puts its name in every
 # station and message target, two crews on one machine run side by side without a clash, the name comes from
-# FACTORY_CREW_NAME then crew.json, a Tares shared by several people asks for it once, and the roster says
+# FACTORY_CREW_NAME then crew.json, and the roster says
 # which crew it is and warns when the orchestrator's session title is not the name messages go to. Uses a
-# fake claude and throwaway homes only.
+# fake claude and throwaway homes only. A Tares shared by several people asks for the name once: that is
+# ee/tests/factory/crewname_team_test.sh.
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
@@ -150,23 +151,6 @@ check "roster warns of a different orchestrator session title" 'grep -qF "Orches
 FACTORY_CREW_HOME=$B "$F" roster >"$T/roster-b.out" 2>&1
 check "roster stays quiet when the title is the name" '! grep -q "Orchestrator session title" "$T/roster-b.out"'
 
-# A Tares shared by several people asks for the name once, suggesting <first name>-<short hostname>.
-api POST /api/people '{"name": "Lena", "email": "lena@example.com"}' >/dev/null
-check "one person besides local: nothing is asked" '[ "$(api GET /api/people | jq "[.people[] | select(.id != \"local\")] | length")" = 1 ]'
-C0=$T/crew-one; trust "$C0"
-FACTORY_CREW_HOME=$C0 "$F" crew up </dev/null >"$T/up-one.out" 2>&1
-check "one person: crew up does not ask for a name and keeps crew" '! grep -q "What should this crew be called" "$T/up-one.out" && [ "$(st $C0 crew-orchestrator .status)" = active ] && jq -e "has(\"crew_name\") | not" $C0/crew.json >/dev/null'
-api POST /api/people '{"name": "Ravi", "email": "ravi@example.com"}' >/dev/null
-C1=$T/crew-two; C2=$T/crew-three; C3=$T/crew-four; trust "$C1" "$C2" "$C3"
-FACTORY_CREW_HOME=$C1 "$F" crew up </dev/null >"$T/up-two.out" 2>&1
-sugg=$(jq -r .crew_name $C1/crew.json)
-check "two people: the name is asked, suggesting <first name>-<short hostname>" 'grep -q "What should this crew be called" "$T/up-two.out" && grep -Eq "^ashish(-[a-z0-9-]+)?$" <<<"$sugg" && grep -q "recommended: $sugg " "$T/up-two.out"'
-check "two people: enter takes the suggestion and names the stations with it" '[ "$(st $C1 $sugg-orchestrator .status)" = active ] && [ "$(envof $C1 $sugg-reviewer FACTORY_CREW)" = "$sugg" ]'
-printf 'ana-laptop\n' | FACTORY_CREW_HOME=$C2 "$F" crew up >"$T/up-three.out" 2>&1
-check "two people: a typed name is used" '[ "$(jq -r .crew_name $C2/crew.json)" = ana-laptop ] && [ "$(st $C2 ana-laptop-orchestrator .status)" = active ]'
-printf 'Bad Name\nana-desk\n' | FACTORY_CREW_HOME=$C3 "$F" crew up >"$T/up-four.out" 2>&1
-check "two people: a name that is not valid is asked again" 'grep -q "is not one of the choices\|is not a valid crew name" "$T/up-four.out" && [ "$(jq -r .crew_name $C3/crew.json)" = ana-desk ]'
-check "two people: FACTORY_CREW_NAME skips the question" 'C4=$T/crew-five; trust "$C4"; FACTORY_CREW_HOME=$C4 FACTORY_CREW_NAME=ravi-pc "$F" crew up </dev/null >"$T/up-five.out" 2>&1; ! grep -q "What should this crew be called" "$T/up-five.out" && [ "$(jq -r .crew_name $C4/crew.json)" = ravi-pc ]'
 # A default crew that is already running keeps its name when Tares gains a second person: crew up must not
 # start a second orchestrator and reviewer under a new name beside the running ones.
 n=$(launches)

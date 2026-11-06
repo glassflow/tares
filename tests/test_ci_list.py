@@ -98,14 +98,18 @@ ck("job test: the mit run checks tares_ee is not importable",
 ee_list = ROOT / "ee" / "tests" / "ci_list.txt"
 has_ee = (ROOT / "ee").is_dir()
 ee = []
+ee_sh = []
 if has_ee:
     ee = check("ee", ee_list, lambda n: f"{n}.py")
     ck("ee list holds the smoke test", "test_ee_smoke" in ee)
+    ee_sh = check("ee bash", ROOT / "ee" / "tests" / "factory" / "ci_list.txt", lambda n: f"{n}_test.sh")
+    ck("ee bash list holds the crew name test for a shared Tares", "crewname_team" in ee_sh)
     unlisted = sorted(f.stem for f in ee_list.parent.glob("test_*.py") if f.stem not in ee)
     ck("every ee/tests/test_*.py is in ee/tests/ci_list.txt", not unlisted, "not listed: " + ", ".join(unlisted))
 test_ee = js.get("test-ee", "")
 ck("job test-ee: checks the ee list, then runs the ee suite for each database",
-   re.search(r"(?m)^\s*bash tests/check_ci_list\.sh ee/tests/ci_list\.txt\s*$", test_ee) is not None
+   all(re.search(r"(?m)^\s*bash tests/check_ci_list\.sh " + re.escape(f) + r"\s*$", test_ee) is not None
+       for f in ("ee/tests/ci_list.txt", "ee/tests/factory/ci_list.txt"))
    and "python tests/ci_run.py --suite ee-postgres" in test_ee
    and re.search(r"(?m)^\s*python tests/ci_run\.py --suite ee\s*$", test_ee) is not None
    and re.search(r"db: \[duckdb, postgres\]", test_ee) is not None, test_ee[:500])
@@ -163,8 +167,8 @@ want = {"duckdb": py + [f"factory:{n}" for n in sh],
         "mit": [n for n in py if n != "test_ee_packaging"] + [f"factory:{n}" for n in sh],
         }
 if has_ee:
-    want["ee"] = list(ee)
-    want["ee-postgres"] = [n for n in ee if n not in ci_run.DUCKDB_ONLY]
+    want["ee"] = list(ee) + [f"ee-factory:{n}" for n in ee_sh]
+    want["ee-postgres"] = [n for n in ee if n not in ci_run.DUCKDB_ONLY] + [f"ee-factory:{n}" for n in ee_sh]
 for suite, w in want.items():
     got = [t for i in range(1, 6) for t in ci_run.shard(ci_run.items(suite), i, 5)]
     ck(f"ci_run.py, suite {suite}: the 5 shards run every listed test once", sorted(got) == sorted(w) and len(got) == len(set(got)),

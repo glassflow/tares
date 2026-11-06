@@ -23,6 +23,10 @@ there, in its sorted place (byte order, `LC_ALL=C sort`); never list tests in ci
 The console's browser suites (`ui/tests/*.e2e.cjs`) are named in `ui/tests/e2e_suites.txt`, same rule (sorted,
 one name per line); the `e2e` job runs them in shards (`tests/ci_e2e.py`, one port per suite). Run one by hand with
 `cd ui && npm run build && TARES_E2E_PORT=<free port> node tests/<name>.e2e.cjs`.
+Browser suites locally: `cd ui && npm ci && npm run build && npx playwright install chromium`, then from the repo root
+`python tests/ci_e2e.py` (all) or `python tests/ci_e2e.py --list` (names).
+ee tests: `python tests/ci_run.py --suite ee` (Python in `ee/tests/ci_list.txt`, bash in `ee/tests/factory/ci_list.txt`).
+A licensed scratch daemon: `python ee/tests/licensed.py serve --port 8799 --data-dir $(mktemp -d) [--edition factory] [--auth] [--licence expired]`.
 A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
 `tests/test_*.py` in neither file.
 

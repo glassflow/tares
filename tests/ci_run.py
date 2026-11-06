@@ -10,7 +10,7 @@
 The tests are the ones named in tests/ci_list.txt (tests/<name>.py) and tests/factory/ci_list.txt
 (tests/factory/<name>_test.sh, the factory CLI against a real Tares). The ee suites read
 ee/tests/ci_list.txt (ee/tests/<name>.py) and ee/tests/factory/ci_list.txt
-(ee/tests/factory/<name>_test.sh) the same way. Shards are balanced by
+(ee/tests/factory/<name>_test.sh, shown as ee-factory:<name>) the same way. Shards are balanced by
 WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT_WEIGHT. A test
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
 failure."""
@@ -49,15 +49,10 @@ def names(path):
         return [ln.strip() for ln in f if ln.strip() and not ln.strip().startswith("#")]
 
 
-def names_if(path):
-    """The names in a list, or none when the list does not exist (ee/tests/factory has none yet)."""
-    return names(path) if os.path.isfile(path) else []
-
-
 def items(suite):
     if suite in ("ee", "ee-postgres"):
         py = [t for t in names(EE_PY_LIST) if suite == "ee" or t not in DUCKDB_ONLY]
-        return py + [f"factory:{t}" for t in names_if(EE_SH_LIST)]
+        return py + [f"ee-factory:{t}" for t in names(EE_SH_LIST)]
     py = [t for t in names(PY_LIST) if suite in ("duckdb", "mit") or t not in DUCKDB_ONLY]
     if suite == "mit":
         py = [t for t in py if t not in NEEDS_EE]
@@ -76,12 +71,12 @@ def shard(all_items, n, of):
 
 
 def run(t, suite="duckdb"):
-    ee = suite in ("ee", "ee-postgres")
-    base = EE_DIR if ee else HERE
-    if t.startswith("factory:"):
-        name = t.split(":", 1)[1]
-        print(f"== factory {name} ==", flush=True)
+    if t.startswith(("factory:", "ee-factory:")):
+        kind, name = t.split(":", 1)
+        base = EE_DIR if kind == "ee-factory" else HERE
+        print(f"== {kind.replace('-', ' ')} {name} ==", flush=True)
         return subprocess.call(["bash", os.path.join(base, "factory", f"{name}_test.sh")])
+    base = EE_DIR if suite in ("ee", "ee-postgres") else HERE
     print(f"== {t} ==", flush=True)
     return subprocess.call([sys.executable, os.path.join(base, f"{t}.py")])
 
