@@ -57,12 +57,9 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 15000);
   const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
   const { data: qs } = usePolling(() => api.projectQuestions(ctx.id), 15000);
-  const { data: so } = usePolling(() => api.projectSignoffs(ctx.id), 15000);
   // open questions first, each group oldest first (the API already orders by when it was asked)
   const questionRows = [...(qs?.questions ?? [])].sort((a, b) => (a.state === "open" ? 0 : 1) - (b.state === "open" ? 0 : 1));
   const openQuestions = questionRows.filter((q) => q.state === "open").length;
-  const signoffRows = so?.signoffs ?? [];
-  const signed = signoffRows.filter((r) => r.exempt || r.is_lead || r.signed_off).length;
   const overrides = crew?.handover?.overrides?.length ? crew.handover.overrides
     : crew?.handover?.override ? [crew.handover.override] : [];
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
@@ -286,30 +283,13 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </Fold>
       )}
 
-      {(signoffRows.length > 0 || overrides.length > 0) && (
-        <Fold id="signoffs" title="Sign-offs" pinnedByDefault
-              meta={signoffRows.length ? `${signed} of ${signoffRows.length} repos ready` : ""}>
-          {signoffRows.length > 0 && (
-            <ul className="fo-docs">
-              {signoffRows.map((r) => (
-                <li key={r.repo} style={{ display: "block" }}>
-                  <span className="mono">{r.repo}</span>
-                  {r.owner ? <> · {r.owner.name}</> : null}
-                  {" "}
-                  {r.exempt === "solo" ? <><span className="fo-st fo-st-done">Lead's own repo, no sign-off needed</span>{!r.owner && <> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>}</>
-                    : !r.owner ? <><span className="fo-st fo-st-wait">No area owner</span> <Link to="/settings?tab=areas">Set one under Settings, Areas</Link></>
-                    : r.exempt === "lead" || r.is_lead ? <span className="fo-st fo-st-done">Project lead, no sign-off needed</span>
-                    : r.signed_off ? <span className="fo-st fo-st-done" title={r.at ? new Date(r.at).toLocaleString() : undefined}>Signed off {r.at ? new Date(r.at).toLocaleDateString() : ""}</span>
-                    : <span className="fo-st fo-st-wait">Waiting</span>}
-                </li>
-              ))}
-            </ul>
-          )}
+      {overrides.length > 0 && (
+        <Fold id="signoffs" title="Early hand-overs" meta="" pinnedByDefault>
           {overrides.length > 0 && (
             <ul className="fo-docs">
               {overrides.map((o, i) => (
                 <li key={`${o.at}-${i}`} style={{ display: "block" }}>
-                  Handed over without all sign-offs: {o.reason}
+                  Handed over before every area owner signed off: {o.reason}
                   <small style={{ display: "block" }}>
                     {o.by_label ?? o.person?.name ?? "the project lead"} · <TimeAgo ts={o.at} />
                   </small>

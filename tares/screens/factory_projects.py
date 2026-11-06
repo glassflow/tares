@@ -20,10 +20,11 @@ from ..envelope import now_utc
 from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
                             waiting_items)
 
-# the order of the list: what needs you first, finished last
-ORDER = {**_STATE_ORDER, "done": 4}
+# the order of the list: what needs you first, kept for later and finished last
+ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
 DONE_LABEL = "Done"
-STATES = ("building", "waiting_on_you", "not_started", "ready_to_close", "done")
+LATER_LABEL = "Later"
+STATES = ("building", "waiting_on_you", "not_started", "ready_to_close", "later", "done")
 _EPOCH = datetime.fromtimestamp(0, timezone.utc)
 
 
@@ -54,6 +55,8 @@ def row_for(p: dict, tickets: list[dict], handover: dict | None, waiting: list[d
         row["last_activity_at"] = finished.isoformat() if finished else row["last_activity_at"]
         row["last_activity"] = plain_ago(finished, now) or None
         row["builders"] = 0
+    elif p.get("status") == "later":
+        row["state"], row["state_label"], row["can_close"] = "later", LATER_LABEL, False
     repos = _full_repos(handover, tickets)
     builders = row["builders"]
     state = row["state"]
@@ -61,6 +64,8 @@ def row_for(p: dict, tickets: list[dict], handover: dict | None, waiting: list[d
     parts: list[str] = []
     if state == "done":
         pass
+    elif state == "later":
+        parts.append("Kept for later")
     elif builders:
         parts.append(_count(builders, "builder"))
     else:
@@ -86,7 +91,8 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/projects")
     def factory_projects(request: Request):
         """{projects: [row], counts: {all, building, waiting_on_you, not_started, ready_to_close,
-        done}, now}. Sorted by state (waiting on you, building, not started, ready to close, done),
+        later, done}, now}. Sorted by state (waiting on you, building, not started, ready to close,
+        later, done),
         newest activity first within a state."""
         now = now_utc()
         fx = ctx.fx

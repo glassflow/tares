@@ -246,7 +246,7 @@ async def main():
                and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None}
                and [t["connected"] for t in h["tools"]] == [False, False, False, False], h)
             ck("every key of the shape", set(h) == {"edition", "headline", "waiting_for_you", "waiting_total",
-               "projects", "finished_count", "crew", "plan", "tools", "start", "now"}, sorted(h))
+               "projects", "finished_count", "later_count", "crew", "plan", "tools", "start", "now"}, sorted(h))
 
             r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
                                                     "poll": "10s", "config": {"push": True}})

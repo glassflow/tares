@@ -4,13 +4,12 @@ thing of every kind waiting for Alex, written through the running daemon's API o
   Shop:       a project Kim leads, a ticket on acme/web and one on acme/api (merged).
   Waiting for Alex:
     question   Kim's spec asks about acme/web (the Answer box, free text)
-    sign-off   the web ticket needs Alex's sign-off before Shop goes to a crew
     grants     two that Kim gave over acme/web: one to agree to, one to decline
     desk       a permission request from a builder (Allow, Answer, "stand for next time"),
                a question with two options, and a long question for the long-text state
   Lee:        has nothing waiting; the page shows "Nothing waits for you".
-  Team (TR-761): Alex leads Portal (acme/api, Kim has not signed off; acme/docs, no owner) and Notes (acme/web, his
-              own; acme/api, Kim has not signed off), so he waits on Kim for two repos. Shop gets a ticket on
+  Team (TR-761): Alex leads Portal (acme/api, acme/docs) and Notes (acme/web, acme/api), and has asked Kim one
+              question about acme/api in each, so he waits on Kim for two. Shop gets a ticket on
               acme/docs. Kim leads Billing, Lee leads Search, Mobile and Vault; Vault is private and Alex is not on
               it. Alex sees Shop, Portal and Notes under Mine and six under Team, plus one hidden stub.
   Crews:      Alex's crew (an orchestrator and a builder on Notes) and Kim's were heard a few minutes ago, Lee's two days ago (so it is "not seen in a day").
@@ -88,6 +87,9 @@ call("POST", f"/api/projects/{portal}/tickets", {"title": "Portal docs", "repo":
 notes = project("alex", "Notes")
 call("POST", f"/api/projects/{notes}/tickets", {"title": "Notes page", "repo": "acme/web"}, keys["alex"])
 call("POST", f"/api/projects/{notes}/tickets", {"title": "Notes api", "repo": "acme/api"}, keys["alex"])
+for uid in (portal, notes):
+    call("POST", f"/api/projects/{uid}/questions", {"repo": "acme/api", "text": "Does the api keep the old route?"},
+         keys["alex"])
 billing = project("kim", "Billing")
 search = project("lee", "Search")
 mobile = project("lee", "Mobile")

@@ -2,43 +2,10 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import { Button, ListRow } from "../../components/edition";
-import { cn } from "@/lib/utils";
-import type { HomeAction, HomeWaitingOn, HomeWaitingRepo } from "./home.types";
+import type { HomeWaitingOn } from "./home.types";
 
-// "You are waiting on" on a cell with more than one person: each project the person leads that
-// cannot go to a crew yet, with where every repo's owner stands. Not drawn when nothing waits.
-
-const CHIP: Record<HomeWaitingRepo["state"], string> = {
-  signed_off: "bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  waiting: "bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
-  no_owner: "bg-[var(--err-soft)] text-[color:var(--err)]",
-  yours: "bg-muted text-muted-foreground",
-};
-
-/** "example-org/service-b · Kim · waiting": the repo, who owns it and where that stands. */
-export function chipText(r: HomeWaitingRepo): string {
-  if (r.state === "no_owner") return `${r.repo} · no owner`;
-  if (r.state === "yours") return `${r.repo} · you`;
-  return `${r.repo} · ${r.owner?.name ?? "someone"} · ${r.state === "signed_off" ? "signed off" : "waiting"}`;
-}
-
-/** The buttons the page can act on: a link, or Hand over anyway. Anything else is left out. */
-function usable(actions: HomeAction[]): HomeAction[] {
-  return actions.filter((a) => (a.href ? true : a.do === "hand_over_anyway"));
-}
-
-function ActionButton({ action, onHandOver }: { action: HomeAction; onHandOver?: () => void }) {
-  const cls = "h-8 text-[13px]!" + (action.primary ? " border-foreground!" : "");
-  const href = action.href;
-  if (href) {
-    return (
-      <Button asChild variant="secondary" className={cls}>
-        {href.startsWith("/") ? <Link to={href}>{action.label}</Link> : <a href={href}>{action.label}</a>}
-      </Button>
-    );
-  }
-  return <Button variant="secondary" className={cls} onClick={onHandOver}>{action.label}</Button>;
-}
+// "You are waiting on" on a cell with more than one person: each project the person leads that has a
+// question open for someone else, so it is not ready to start yet. Not drawn when nothing waits.
 
 /** What the list holds: projects the person leads, projects nobody leads yet, or both. */
 export function scopeText(entries: HomeWaitingOn[]): string {
@@ -48,11 +15,7 @@ export function scopeText(entries: HomeWaitingOn[]): string {
   return "projects you lead, and ones with no lead yet";
 }
 
-export function YouAreWaitingOn({ entries, onHandOver }: {
-  entries: HomeWaitingOn[];
-  /** The page opens the Hand over anyway dialog for this entry. */
-  onHandOver?: (entry: HomeWaitingOn) => void;
-}) {
+export function YouAreWaitingOn({ entries }: { entries: HomeWaitingOn[] }) {
   if (entries.length === 0) return null;
   return (
     <section aria-label="You are waiting on" className="min-w-0" data-testid="waiting-on">
@@ -62,7 +25,7 @@ export function YouAreWaitingOn({ entries, onHandOver }: {
       </div>
       <div className="max-w-[860px] border border-border bg-card">
         {entries.map((e) => {
-          const actions = usable(e.actions);
+          const links = e.actions.filter((a) => a.href);
           return (
             <ListRow key={e.project.id} data-testid="waiting-on-row"
                      className="items-start justify-between gap-x-4 gap-y-3 px-[18px]! py-4!">
@@ -74,20 +37,14 @@ export function YouAreWaitingOn({ entries, onHandOver }: {
                 </Link>
                 {e.no_lead && <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="waiting-on-no-lead">No lead yet</div>}
                 <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text>{e.detail}</div>
-                {e.repos.length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {e.repos.map((r) => (
-                      <span key={r.repo} data-testid="waiting-on-chip" data-state={r.state} data-user-text
-                            className={cn("px-2 py-0.5 text-xs [overflow-wrap:anywhere]", CHIP[r.state])}>
-                        {chipText(r)}
-                      </span>
-                    ))}
-                  </div>
-                )}
               </div>
-              {actions.length > 0 && (
+              {links.length > 0 && (
                 <div className="flex max-w-full flex-none flex-wrap gap-2">
-                  {actions.map((a) => <ActionButton key={a.label} action={a} onHandOver={() => onHandOver?.(e)} />)}
+                  {links.map((a) => (
+                    <Button key={a.label} asChild variant="secondary" className="h-8 text-[13px]!">
+                      <Link to={a.href!}>{a.label}</Link>
+                    </Button>
+                  ))}
                 </div>
               )}
             </ListRow>

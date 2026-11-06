@@ -243,8 +243,9 @@ async def main():
            and rs["title"] == "project-y" and rs["detail"] ==
            "Spec and plan written, 2 tickets in GitHub. The crew has not picked it up."
            and rs["meta"] == "Spec written 2 days ago" and rs["id"] == f"ready_to_start:{py}", rs)
-        ck("two actions: read the spec, copy the command", rs["actions"] == [
+        ck("three actions: read the spec, keep it for later, copy the command", rs["actions"] == [
             {"label": "Read the spec", "primary": False, "href": f"/projects/{py}"},
+            {"label": "Later", "primary": False, "do": "later", "project": py},
             {"label": "Copy the hand-over command", "primary": True, "do": "copy",
              "text": "/tares:ship project-y"}], rs["actions"])
 

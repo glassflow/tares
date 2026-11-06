@@ -25,13 +25,13 @@ from .envelope import now_utc
 
 CACHE_SECONDS = 5
 
-# the kinds of waiting item; `permission` is a desk item asking to run a command, `signoff`,
-# `grant` (a grant waiting for your consent) and `desk` (a desk item addressed to you) come with teams
+# the kinds of waiting item; `permission` is a desk item asking to run a command, `signoff` a
+# project ready to close; `grant` (a grant waiting for your consent) and `desk` (a desk item
+# addressed to you) come with teams
 KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "permission",
          "milestone_to_check", "signoff", "grant", "desk")
 # what a button does on the page when it is not a link
-ACTIONS = ("copy", "keep_assumptions", "allow", "answer", "sign_off", "agree", "decline",
-           "hand_over_anyway", "close")
+ACTIONS = ("copy", "keep_assumptions", "allow", "answer", "agree", "decline", "close", "later")
 
 STATE_LABEL = {"building": "Building", "waiting_on_you": "Waiting on you",
                "not_started": "Not started", "ready_to_close": "Ready to close"}
@@ -442,7 +442,9 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     hidden = fx.hidden_ids() if fx else set()
     projects = [p for p in store.list_projects()
                 if p.get("kind") == "software_factory" and p["id"] not in hidden]
-    open_ps = [p for p in projects if p["status"] != "done"]
+    # a project kept for later is off the home until someone starts it
+    open_ps = [p for p in projects if p["status"] not in ("done", "later")]
+    later_count = sum(1 for p in projects if p["status"] == "later")
     ids = [p["id"] for p in open_ps]
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
@@ -471,7 +473,8 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
-            "finished_count": len(projects) - len(open_ps), "crew": crew,
+            "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
+            "crew": crew,
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}),
             # the same rows Settings shows (factory_tools, TR-1013): the chip shows `short`
             "tools": _tools(store, now, hidden),

@@ -48,9 +48,9 @@ def units():
         fp.plain_date("2026-01-05T00:00:00Z", now), fp.plain_date("2025-12-31T23:00:00Z", now),
         fp.plain_date(None, now)] == ["20 Oct", "5 Jan", "31 Dec 2025", ""],
        [fp.plain_date("2025-12-31T23:00:00Z", now)])
-    ck("the order: waiting on you, building, not started, ready to close, done",
+    ck("the order: waiting on you, building, not started, ready to close, later, done",
        sorted(fp.ORDER, key=fp.ORDER.get) == ["waiting_on_you", "building", "not_started",
-                                              "ready_to_close", "done"], fp.ORDER)
+                                              "ready_to_close", "later", "done"], fp.ORDER)
 
 
 async def main():
@@ -69,7 +69,7 @@ async def main():
             a = r.json()
             ck("the list answers, empty", r.status_code == 200 and a["projects"] == []
                and a["counts"] == {"all": 0, "building": 0, "waiting_on_you": 0, "not_started": 0,
-                                   "ready_to_close": 0, "done": 0} and "now" in a, r.text)
+                                   "ready_to_close": 0, "later": 0, "done": 0} and "now" in a, r.text)
 
             async def make(name, goal, kind="software_factory"):
                 r = await cx.post("/api/projects", json={"template": "custom", "name": name, "objects": [],
@@ -202,7 +202,7 @@ async def main():
                 "project-d": "Done", "project-e": "Done"}, {n: p["state_label"] for n, p in by.items()})
             ck("the counts are by state and add up", a["counts"] == {
                 "all": 8, "building": 2, "waiting_on_you": 1, "not_started": 2, "ready_to_close": 1,
-                "done": 2}, a["counts"])
+                "later": 0, "done": 2}, a["counts"])
             ck("tickets merged and total", by["project-b1"]["tickets"] == {"merged": 1, "blocked": 0, "total": 4}
                and by["project-z"]["tickets"] == {"merged": 2, "blocked": 0, "total": 2}, by["project-b1"])
 

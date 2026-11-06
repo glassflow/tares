@@ -324,8 +324,8 @@ FACTORY_SCHEMA = [
     )""",
     # Where the answer came from: "console" when the person gave it on the page (TR-740).
     "ALTER TABLE spec_questions ADD COLUMN IF NOT EXISTS via TEXT",
-    # The owner of a repo saying the tickets in their repo are right (TR-636); the hand-over waits
-    # for one per repo. One row per repo and project: signing again keeps the first.
+    # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
+    # since the hand-over stopped waiting for sign-offs; the rows are kept.
     """CREATE TABLE IF NOT EXISTS signoffs (
       project    TEXT,
       repo       TEXT,
@@ -1507,7 +1507,7 @@ class FactoryStore:
                             if r[9] else None)}
         return out
 
-    # ── questions to an area owner and their sign-offs (TR-636) ───────────────
+    # ── questions to an area owner (TR-636) ───────────────────────────────────
     _SQ_COLS = ("project, id, to_person_id, repo, text, asked_by, asked_at, answer, answered_by, "
                 "answered_at, state, via")
 
@@ -1613,28 +1613,6 @@ class FactoryStore:
                 f"UPDATE grants SET {', '.join(sets)} WHERE id = ? AND state = 'waiting' "
                 "RETURNING id", [*args, gid]).fetchone()
         return hit is not None
-
-    def add_signoff(self, project: str, repo: str, person_id: str, at,
-                    via: str | None = None) -> None:
-        """The area owner's sign-off for a repo, and where it came from (`via`). Signing again
-        keeps the first time; when the area has a new owner, their sign-off replaces the old
-        owner's."""
-        with self._swrite:
-            self.sc.execute("INSERT INTO signoffs (project, repo, person_id, \"at\", via) "
-                             "VALUES (?, ?, ?, ?, ?) ON CONFLICT (project, repo) DO UPDATE SET "
-                             "person_id = excluded.person_id, \"at\" = excluded.\"at\", "
-                             "via = excluded.via "
-                             "WHERE signoffs.person_id <> excluded.person_id",
-                             [project, repo, person_id, at, via])
-
-    def list_signoffs(self, project: str) -> list[dict]:
-        with self._sread:
-            rows = self.sc.execute("SELECT repo, person_id, \"at\", via FROM signoffs WHERE project = ? "
-                                    "ORDER BY \"at\", repo", [project]).fetchall()
-        refs = self._person_refs(r[1] for r in rows)
-        return [{"repo": r[0], "person_id": r[1], "person": refs.get(r[1]), "at": r[2],
-                 "via": r[3]}
-                for r in rows]
 
     def delete_milestone(self, mid: str) -> None:
         """The milestone goes; its tickets stay, without a milestone."""

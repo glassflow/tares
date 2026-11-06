@@ -1,7 +1,7 @@
 """What a person's home shows on a cell with more than one person (TR-739).
 
 `team_home(c, request)` answers for the person of the key; factory_api.register builds `c` (its
-own readers: who a ticket or desk item belongs to, the sign-off rows, the grants waiting for
+own readers: who a ticket or desk item belongs to, the grants waiting for
 consent, the review queue) and hands the function out as `fx.team_home`. `factory_home.build`
 merges what it returns into the body of GET /api/home and replaces `waiting_for_you` with it. A
 cell whose only person is `local` gets `{}` here, so its home stays what TR-729 and TR-769 return.
@@ -39,7 +39,9 @@ class Team:
     def names(self) -> dict[str, str]:
         """{project id: name} of every project."""
         if self._names is None:
-            self._names = {p["id"]: p["name"] for p in self.store.list_projects()}
+            ps = self.store.list_projects()
+            self._names = {p["id"]: p["name"] for p in ps}
+            self.later = {p["id"] for p in ps if p.get("status") == "later"}
         return self._names
 
 
@@ -65,9 +67,10 @@ def _ref(person: dict | None) -> dict | None:
 
 
 def _project(t: Team, pid: str | None) -> dict | None:
-    """{id, name} of a project the person can see, else None."""
+    """{id, name} of a project the person can see and nobody kept for later, else None."""
     name = t.names().get(pid) if pid else None
-    return {"id": pid, "name": name} if name and pid not in t.hidden else None
+    return ({"id": pid, "name": name} if name and pid not in t.hidden and pid not in t.later
+            else None)
 
 
 # ── a question a spec asked of the person ────────────────────────────────────
@@ -85,60 +88,6 @@ def question_items(t: Team) -> list[dict]:
             from_=_ref(q["asked_by_person"]), id=f"question:{project['id']}:{q['id']}",
             actions=[{"label": "Answer", "primary": True, "do": "answer",
                       "project": project["id"], "question": q["id"]}]))
-    return out
-
-
-# ── a repo the person owns, in a project that cannot go to the crew until they sign off ──
-
-def _tickets_in(tickets: list[dict], repo: str) -> list[dict]:
-    out = []
-    for tk in tickets:
-        if tk["status"] == "canceled":
-            continue
-        try:
-            if areas_mod.norm_repo(tk.get("repo")) == repo:
-                out.append(tk)
-        except ValueError:
-            pass
-    return out
-
-
-SIGNOFF_TITLES = 20   # ticket titles a sign-off action carries; `more_tickets` counts the rest
-
-
-def signoff_items(t: Team) -> list[dict]:
-    handed = set(t.store.handed_over_projects())
-    out = []
-    for p in t.store.list_projects():
-        if (p.get("kind") != "software_factory" or p["status"] == "done" or p["id"] in handed
-                or p["id"] in t.hidden):
-            continue
-        rows = [r for r in t.c.signoff_state(p["id"], p)
-                if r["owner"] and r["owner"]["id"] == t.me["id"] and not r["exempt"]
-                and not r["signed_off"]]
-        if not rows:
-            continue
-        tickets = t.store.list_tickets(p["id"])
-        lead = _ref(t.store.get_person(p["lead_person_id"])) if p.get("lead_person_id") else None
-        for r in rows:
-            mine = _tickets_in(tickets, r["repo"])
-            n = len(mine)
-            since = min((tk["created_at"] for tk in mine if tk.get("created_at")),
-                        key=lambda v: fh._dt(v) or t.now, default=p.get("created_at") or t.now)
-            who = (lead["name"] + " cannot hand the project") if lead else "The project cannot go"
-            out.append(fh.home_item(
-                "signoff", label="Sign-off needed", title=p["name"],
-                detail=f"{fh._count(n, 'ticket')} {'touches' if n == 1 else 'touch'} {r['repo']}. "
-                       f"{who} to a crew until you sign off.",
-                meta="Waiting " + fw._for(fh.plain_wait(fh._minutes(since, t.now))),
-                since=since, now=t.now, project={"id": p["id"], "name": p["name"]}, repo=r["repo"],
-                from_=lead, id=f"signoff:{p['id']}:{r['repo']}",
-                actions=[{"label": "Sign off", "primary": True, "do": "sign_off",
-                          "project": p["id"], "repo": r["repo"],
-                          "tickets": [tk["title"] for tk in mine[:SIGNOFF_TITLES]],
-                          **({"more_tickets": n - SIGNOFF_TITLES} if n > SIGNOFF_TITLES else {})},
-                         {"label": "Read the ticket" if n == 1 else f"Read the {n} tickets",
-                          "primary": False, "href": f"/projects/{p['id']}"}]))
     return out
 
 
@@ -272,7 +221,7 @@ def lead_items(t: Team) -> list[dict]:
 
 # ── the whole answer ─────────────────────────────────────────────────────────
 
-BUILDERS = [question_items, signoff_items, grant_items, desk_items, milestone_items, pr_items,
+BUILDERS = [question_items, grant_items, desk_items, milestone_items, pr_items,
             lead_items]
 
 
@@ -280,77 +229,44 @@ BUILDERS = [question_items, signoff_items, grant_items, desk_items, milestone_it
 # Part two: who the person waits on, the project list, the crews, the repos they own
 # ═════════════════════════════════════════════════════════════════════════════
 
-# ── "You are waiting on": the projects the person leads that cannot go to a crew yet ──
-
-def _repo_state(r: dict) -> str:
-    if r["owner"] is None:
-        return "no_owner"
-    if r["is_lead"]:
-        return "yours"
-    return "signed_off" if r["signed_off"] else "waiting"
-
-
-def _waiting_detail(rows: list[dict], questions: list[dict]) -> str:
-    bits = []
-    waiting = [r for r in rows if r["state"] == "waiting"]
-    if waiting:
-        names = list(dict.fromkeys(r["owner"]["name"] for r in waiting))
-        bits.append(f"Waiting for {fw._and(names)} to sign off on "
-                    f"{fw._and([r['repo'] for r in waiting])}.")
-    unowned = [r["repo"] for r in rows if r["state"] == "no_owner"]
-    if unowned:
-        bits.append(f"{fw._and(unowned)} {'has' if len(unowned) == 1 else 'have'} no owner.")
-    if questions:
-        names = list(dict.fromkeys(q["to"]["name"] for q in questions))
-        bits.append(f"{fh._count(len(questions), 'question')} open for {fw._and(names)}.")
-    return " ".join(bits) or "Everyone has signed off. The project can go to a crew."
-
+# ── "You are waiting on": the projects the person leads with a question open for someone else ──
 
 def waiting_on(t: Team) -> list[dict]:
     """One entry per project the person leads (`local` also gets those with no lead, marked
-    `no_lead`) that is not handed over yet and depends on someone
-    else: a repo another person owns (signed off or not), a repo nobody owns, or a question
-    still open. A project whose repos are all the person's own, with nothing asked, is left out."""
+    `no_lead`) that is not handed over yet and has a question open for someone else. Nothing
+    else holds a project back: a project with nothing open is ready to start, and one kept for
+    later is left out."""
     handed = set(t.store.handed_over_projects())
     out = []
     for p in t.store.list_projects():
-        if (p.get("kind") != "software_factory" or p["status"] == "done" or p["id"] in handed
-                or p["id"] in t.hidden or not t.c.leads(p, t.me["id"])):
+        if (p.get("kind") != "software_factory" or p["status"] in ("done", "later")
+                or p["id"] in handed or p["id"] in t.hidden or not t.c.leads(p, t.me["id"])):
             continue
-        rows = [{"repo": r["repo"], "owner": _ref(r["owner"]), "state": _repo_state(r)}
-                for r in t.c.signoff_state(p["id"], p)]
         questions = [{"id": q["id"], "to": _ref(q["to_person"]) or t.person(q["to_person_id"]),
                       "asked_at": fh._iso(fh._dt(q["asked_at"])),
                       "waited": fh.plain_wait(fh._minutes(q["asked_at"], t.now))}
-                     for q in t.store.list_spec_questions(p["id"], state="open")]
-        if not questions and all(r["state"] in ("yours", "signed_off") for r in rows):
+                     for q in t.store.list_spec_questions(p["id"], state="open")
+                     if q["to_person_id"] != t.me["id"]]
+        if not questions:
             continue
-        actions = []
-        if any(r["state"] in ("waiting", "no_owner") for r in rows):
-            actions.append({"label": "Hand over anyway", "primary": False,
-                            "do": "hand_over_anyway", "project": p["id"]})
-        if any(r["state"] == "no_owner" for r in rows):
-            actions.append({"label": "Set an owner", "primary": False, "href": "/settings/advanced?tab=areas"})
+        names = list(dict.fromkeys(q["to"]["name"] for q in questions))
         # a project with no lead reaches `local` only because nobody else leads it: say so
         no_lead = not p.get("lead_person_id")
-        if no_lead:
-            actions.append({"label": "Set a lead", "primary": False,
-                            "href": f"/projects/{p['id']}#people"})
+        actions = ([{"label": "Set a lead", "primary": False, "href": f"/projects/{p['id']}#people"}]
+                   if no_lead else [])
         out.append({"project": {"id": p["id"], "name": p["name"]}, "title": p["name"],
-                    "detail": _waiting_detail(rows, questions), "repos": rows,
+                    "detail": f"{fh._count(len(questions), 'question')} open for {fw._and(names)}.",
                     "open_questions": questions, "actions": actions, "no_lead": no_lead})
     return out
 
 
 def waiting_counts(entries: list[dict]) -> list[tuple[str, int]]:
-    """[(person name, how many things the person waits on them for)], most first: a repo
-    waiting for their sign-off and a question open for them each count one. People are told
-    apart by id, so two people of one name stay two entries."""
+    """[(person name, how many questions the person waits on them for)], most first. People are
+    told apart by id, so two people of one name stay two entries."""
     n: dict[str, int] = {}
     names: dict[str, str] = {}
     for e in entries:
-        for who in ([r["owner"] for r in e["repos"] if r["state"] == "waiting"]
-                    + [q["to"] for q in e["open_questions"]]):
+        for who in (q["to"] for q in e["open_questions"]):
             names[who["id"]] = who["name"]
             n[who["id"]] = n.get(who["id"], 0) + 1
     return sorted(((names[i], k) for i, k in n.items()), key=lambda kv: (-kv[1], kv[0]))
@@ -410,7 +326,7 @@ def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dic
                       "mine": bool(t.c.leads(p, t.me["id"]) or yours or r["id"] in asked)})
     stubs = []
     for p in t.store.list_projects():
-        if p["id"] in t.hidden and p.get("kind") == "software_factory" and p["status"] != "done":
+        if p["id"] in t.hidden and p.get("kind") == "software_factory" and p["status"] not in ("done", "later"):
             lead = t.person(p.get("lead_person_id"))
             stubs.append({"hidden": True, "lead": {"name": lead["name"]} if lead else None})
     counts = {"mine": sum(1 for r in shown if r["mine"]), "team": len(shown)}
@@ -491,18 +407,16 @@ def crew_limit(t: Team) -> dict:
 # ── the repos the person owns, and what waits on each ────────────────────────
 
 def areas(t: Team, waiting: list[dict]) -> list[dict]:
-    """[{repo, note}] for the repos the person owns: how many sign-offs and questions wait for
-    them there, from the items already built."""
+    """[{repo, note}] for the repos the person owns: how many questions wait for them there,
+    from the items already built."""
     out = []
     for a in sorted(areas_mod.load(t.store), key=lambda a: a["repo"]):
         if a["person_id"] != t.me["id"]:
             continue
         mine = [i for i in waiting if (i["repo"] or "").lower() == a["repo"]]
-        n_sign = sum(1 for i in mine if i["kind"] == "signoff")
         n_ask = sum(1 for i in mine if i["kind"] == "question")
-        bits = ([f"{n_sign} sign-off{'' if n_sign == 1 else 's'} asked"] if n_sign else []) + \
-               ([fh._count(n_ask, "question") + " open"] if n_ask else [])
-        out.append({"repo": a["repo"], "note": ", ".join(bits) or "nothing waiting"})
+        out.append({"repo": a["repo"], "note": fh._count(n_ask, "question") + " open" if n_ask
+                    else "nothing waiting"})
     return out
 
 

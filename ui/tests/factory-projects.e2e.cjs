@@ -104,10 +104,10 @@ const today = () => {
     ck("Open lists what is not finished, what needs you first",
        JSON.stringify(await names()) === JSON.stringify(["project-w", "project-b1", "project-b2", "project-y", "project-q", "project-z"]), (await names()).join(","));
     ck("a project that is not a factory project is not listed", !(await page.getByTestId("projects-list").innerText()).includes("project-n"));
-    ck("the tabs are in order: Open, Waiting on you, Building, Not started, Ready to close, Done, All",
+    ck("the tabs are in order: Open, Waiting on you, Building, Not started, Ready to close, Later, Done, All",
        JSON.stringify(await page.getByRole("tab").evaluateAll((t) => t.map((x) => x.firstChild.textContent.trim()))) ===
-       JSON.stringify(["Open", "Waiting on you", "Building", "Not started", "Ready to close", "Done", "All"]));
-    ck("each tab has its count", JSON.stringify(await counts()) === JSON.stringify(["6", "1", "2", "1", "2", "2", "8"]), (await counts()).join(","));
+       JSON.stringify(["Open", "Waiting on you", "Building", "Not started", "Ready to close", "Later", "Done", "All"]));
+    ck("each tab has its count", JSON.stringify(await counts()) === JSON.stringify(["6", "1", "2", "1", "2", "0", "2", "8"]), (await counts()).join(","));
     ck("the finished ones are behind a link", (await page.getByTestId("show-finished").innerText()).trim() === "Show 2 finished");
     ck("the address has no filter for Open", !new URL(page.url()).searchParams.has("state"), page.url());
 
@@ -228,7 +228,7 @@ const today = () => {
     const sent = posts.filter((p) => p.url === `/api/projects/${ids["project-z"]}/finish`);
     ck("Close sends one finish for that project, with the words", sent.length === 1 && JSON.parse(sent[0].body).words === "Closed from the Projects list", JSON.stringify(sent));
     ck("it leaves Open", !(await names()).includes("project-z") && (await rows.count()) === 5);
-    ck("the counts follow: Ready to close 1, Done 3, Open 5", JSON.stringify(await counts()) === JSON.stringify(["5", "1", "2", "1", "1", "3", "8"]), (await counts()).join(","));
+    ck("the counts follow: Ready to close 1, Done 3, Open 5", JSON.stringify(await counts()) === JSON.stringify(["5", "1", "2", "1", "1", "0", "3", "8"]), (await counts()).join(","));
     ck("the link to the finished follows", (await page.getByTestId("show-finished").innerText()).trim() === "Show 3 finished");
     await pick("done");
     ck("it is in Done, finished today", (await row("project-z").count()) === 1 && (await row("project-z").getByTestId("project-state").textContent()).trim() === "Done"
@@ -282,7 +282,7 @@ const today = () => {
             ck("empty: one sentence and New project", (await p.getByTestId("projects-empty").innerText()).replace(/\s+/g, " ").trim() === "No projects yet. Start one and hand it to the crew. New project"
                && (await p.getByTestId("projects-search").count()) === 0 && (await p.getByRole("tab").count()) === 0);
           } else if (name === "many") {
-            ck("many: 60 projects, 50 of them open", (await at.count()) === 50 && (await counts2(p))[6] === "60", String(await at.count()));
+            ck("many: 60 projects, 50 of them open", (await at.count()) === 50 && (await counts2(p))[7] === "60", String(await at.count()));
           } else if (name === "long") {
             const long = at.first();
             const goalLen = (await long.getByTestId("project-goal").getAttribute("title")).length;

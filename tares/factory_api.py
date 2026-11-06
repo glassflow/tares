@@ -1176,7 +1176,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """What factory_team reads of this module (TR-739)."""
         return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
                                work_person=work_person, my_projects=my_projects, queue=queue,
-                               settings=settings, signoff_state=signoff_state,
+                               settings=settings,
                                waits_for_me=waits_for_me, desk_is_mine=desk_is_mine,
                                is_mine=is_mine, leads=leads, stored=stored, crews_of=crews_of)
 
@@ -2535,56 +2535,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         h.project_or_404(uid)
         return {"decisions": store.list_decisions(uid)}
 
-    # ── questions to an area owner, and their sign-offs (TR-636) ──────────────
+    # ── questions to an area owner (TR-636) ──────────────────────────────────
     QUESTION_STATES = ("open", "answered")
-
-    def ticket_repos(uid: str) -> list[str]:
-        """The repos (owner/name, lowercase) the project's tickets are in, canceled ones left out."""
-        out = []
-        for t in store.list_tickets(uid):
-            if t["status"] == "canceled":
-                continue
-            try:
-                out.append(areas_mod.norm_repo(t.get("repo")))
-            except ValueError:
-                pass
-        return sorted(set(out))
-
-    def signoff_state(uid: str, p: dict) -> list[dict]:
-        """One row per repo with tickets: its area owner (None when nobody owns it), whether the
-        owner is the project's lead and whether the owner has signed off. `exempt` says why the
-        repo needs no sign-off: "solo" on a cell of one person (only `local`: the lead owns every
-        area), "lead" when the owner leads the project, else None. The hand-over waits only for
-        the rows with no `exempt`."""
-        signed = {x["repo"]: x for x in store.list_signoffs(uid)}
-        # a project with no lead is local's, as leads() reads it (TR-1021): local never signs off
-        # their own repo in it
-        lead = p.get("lead_person_id") or "local"
-        solo = store.only_local_person()
-        out = []
-        for repo in ticket_repos(uid):
-            o = h.area_owner(repo)
-            row = signed.get(repo)
-            is_lead = bool(o and lead and o["id"] == lead)
-            out.append({"repo": repo, "owner": {"id": o["id"], "name": o["name"]} if o else None,
-                        "is_lead": is_lead, "exempt": "solo" if solo else "lead" if is_lead else None,
-                        "signed_off": bool(o and row and row["person_id"] == o["id"]),
-                        "at": row["at"] if row else None,
-                        "via": row["via"] if row else None})
-        return out
-
-    def signoff_gaps(uid: str, p: dict) -> list[str]:
-        """What the hand-over still waits for, one sentence each; empty when nothing. A repo
-        that needs no sign-off (`exempt`) waits for nothing."""
-        gaps = []
-        for r in signoff_state(uid, p):
-            if r["exempt"]:
-                continue
-            if r["owner"] is None:
-                gaps.append(f"{r['repo']} has tickets but no area owner")
-            elif not r["signed_off"]:
-                gaps.append(f"{r['repo']}: {r['owner']['name']} (not signed off)")
-        return gaps
 
     @app.post("/api/projects/{uid}/questions", status_code=201)
     def ask_area(uid: str, request: Request, body: dict = Body(...)):
@@ -2642,49 +2594,16 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(ValueError(f"{q['id']} is already answered"), 409)
         return store.get_spec_question(uid, q["id"])
 
-    @app.post("/api/projects/{uid}/signoffs", status_code=201)
-    def sign_off(uid: str, request: Request, body: dict = Body(...)):
-        """{repo}: the owner of the repo says the tickets in it are right. Only that owner may,
-        and only for a repo the project has tickets in. Signing again changes nothing. The
-        hand-over waits for one per repo."""
-        p = h.project_or_404(uid)
-        me = work_person(request)
-        try:
-            repo = areas_mod.norm_repo(body.get("repo"))
-        except ValueError as e:
-            h.err(e)
-        owner = h.area_owner(repo)
-        if owner is None:
-            h.err(ValueError(f"{repo} has no area owner; set one with set_area"), 409)
-        if owner["id"] != me["id"]:
-            h.err(PermissionError(f"{repo} is {owner['name']}'s: only the area owner signs off"),
-                  403)
-        if repo not in ticket_repos(uid):
-            h.err(ValueError(f"the project has no tickets in {repo}"), 409)
-        store.add_signoff(uid, repo, me["id"], now_utc(), via=console_via(request))
-        return {"signoffs": signoff_state(uid, p)}
-
-    @app.get("/api/projects/{uid}/signoffs")
-    def list_signoffs(uid: str):
-        """Each repo the project has tickets in: its area owner, whether that is the lead and
-        whether the owner has signed off, and `waiting_for` what the hand-over still lacks."""
-        p = h.project_or_404(uid)
-        return {"signoffs": signoff_state(uid, p), "waiting_for": signoff_gaps(uid, p)}
-
     @app.post("/api/projects/{uid}/handover")
     def hand_over(uid: str, request: Request, body: dict = Body(default={})):
-        """{repos?: [{path, name}], repo?, autonomy?, override_reason?}: the spec session hands
+        """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands
         the project to the crew. Each repo is the folder it is checked out in on the crew's
         machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
         them. `autonomy` only when the person wants this project stricter than the crew
         (L3-review). Recorded with the time, the person and the crew (`crew`, else X-Tares-Crew,
         else `crew`); the orchestrator finds it in /api/crew/projects. A key with no person is
-        refused (TR-633).
-
-        On a cell with more than one person, every repo the tickets are in needs an area owner,
-        and that owner (unless they lead the project) has to have signed off (TR-636); otherwise
-        it is refused with the list. The project's lead may hand over anyway with
-        `override_reason`, which is kept on the hand-over and shown on the project's timeline."""
+        refused (TR-633). Nobody signs off first: a repo's owner is asked through a question when
+        the spec needs them. A project kept for later starts here."""
         p = h.project_or_404(uid)
         me = work_person(request)
         try:
@@ -2698,29 +2617,35 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                         + ", ".join(factory_mod.AUTONOMY))
         except (docs_mod.DocError, ValueError) as e:
             h.err(e)
-        override = None
-        gaps = signoff_gaps(uid, p)
-        if gaps:
-            reason = " ".join(str(body.get("override_reason") or "").split())[:500]
-            if not reason:
-                h.err(ValueError(
-                    "The hand-over waits for the area owners: " + "; ".join(gaps) + ". Ask them "
-                    "with ask_area and have them sign_off, or the project lead hands over anyway "
-                    "with override_reason."), 409)
-            lead = p.get("lead_person_id")
-            if not (lead == me["id"] or (not lead and h.is_admin(request))):
-                h.err(PermissionError("only the project's lead overrides the area owners' "
-                                      "sign-off; waiting for: " + "; ".join(gaps)), 403)
-            override = reason
         old = store.get_handover(uid) or {}
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
         store.set_handover(uid, repos, autonomy, by_of(request, body), now_utc(),
-                           person_of(request), crew, override)
-        if old.get("finished"):   # more work on a finished project: it is open again
+                           person_of(request), crew)
+        # more work on a finished project opens it again; one kept for later starts now
+        if old.get("finished") or p.get("status") == "later":
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
         return {"handover": store.get_handover(uid)}
+
+    @app.post("/api/projects/{uid}/later")
+    def set_later(uid: str, body: dict = Body(default={})):
+        """{later: true|false}: keep a project for later, off the home until someone starts it,
+        or start it again. Only a project the crew has not been handed, and not a finished one;
+        handing it over starts it too."""
+        p = h.project_or_404(uid)
+        later = bool(body.get("later", True))
+        if later:
+            if p.get("status") == "done":
+                h.err(ValueError("the project is finished"), 409)
+            ho = store.get_handover(uid)
+            if ho and not ho.get("finished"):
+                h.err(ValueError("the crew has the project: take it back before keeping it for later"), 409)
+            if p.get("status") != "later":
+                store.update_project(uid, status="later")
+        elif p.get("status") == "later":
+            store.update_project(uid, status="active")
+        return {"later": later}
 
     @app.post("/api/projects/{uid}/takeover")
     def take_over(uid: str, request: Request, body: dict = Body(default={})):

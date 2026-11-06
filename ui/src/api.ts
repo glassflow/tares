@@ -9,7 +9,7 @@ import type {
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
   ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
   Skill, SkillSummary,
-  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SignoffRow, SpecQuestion, LinearLink, LinearStatus, Milestone,
+  Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
   Source, SourceEvent, SourceFieldsProfile, Subscription, TestResult, Usage,
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
@@ -685,11 +685,6 @@ export const api = {
   answerQuestion: (id: string, qid: string, answer: string) =>
     request<SpecQuestion>(`/api/projects/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`,
       { method: "POST", body: JSON.stringify({ answer }) }),
-  signOff: (id: string, repo: string) =>
-    request<{ signoffs: SignoffRow[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`,
-      { method: "POST", body: JSON.stringify({ repo }) }),
-  projectSignoffs: (id: string) =>
-    request<{ signoffs: SignoffRow[]; waiting_for: string[] }>(`/api/projects/${encodeURIComponent(id)}/signoffs`),
   projectSessions: (id: string) =>
     request<{ sessions: ProjectSession[]; now: string }>(`/api/projects/${encodeURIComponent(id)}/sessions`),
   projectSession: (id: string, sid: string, offset = 0) =>

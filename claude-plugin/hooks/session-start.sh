@@ -10,7 +10,7 @@ source_kind=$(jq -r '.source // "startup"' 2>/dev/null || echo startup)
 if [ -z "${FACTORY_ROLE:-}" ]; then
   [ -n "${TARES_PROJECT:-}" ] || exit 0
   if [ "${TARES_SESSION_KIND:-}" = contributor ]; then
-    # `tares factory spec <project>` run by someone who does not lead it: answer, check, sign off; never build
+    # `tares factory spec <project>` run by someone who does not lead it: answer, check; never build
     context="This session contributes to the Tares project \`${TARES_PROJECT}\` led by someone else, on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`spec-project\` skill, section Contributor. Do not build tickets."
     [ "$source_kind" = "startup" ] || context="$context This session was resumed or compacted: load the \`spec-project\` skill again, section Contributor, and carry on from its steps."
     jq -n --arg c "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'

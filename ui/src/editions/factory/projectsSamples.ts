@@ -6,7 +6,7 @@ import type { FactoryProjectRow, FactoryProjectsData, ProjectState } from "./Fac
 const NOW = "2026-11-02T10:00:00+00:00";
 const LABEL: Record<ProjectState, string> = {
   building: "Building", waiting_on_you: "Waiting on you", not_started: "Not started",
-  ready_to_close: "Ready to close", done: "Done",
+  ready_to_close: "Ready to close", later: "Later", done: "Done",
 };
 const A = "example-org/service-a";
 const B = "example-org/service-b";
@@ -85,7 +85,7 @@ const data = (specs: Spec[]): FactoryProjectsData => {
   return {
     projects,
     counts: { all: projects.length, building: n("building"), waiting_on_you: n("waiting_on_you"),
-              not_started: n("not_started"), ready_to_close: n("ready_to_close"), done: n("done") },
+              not_started: n("not_started"), ready_to_close: n("ready_to_close"), later: n("later"), done: n("done") },
     now: NOW,
   };
 };

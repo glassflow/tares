@@ -629,7 +629,7 @@ async def set_area(repo: str, person: str) -> str:
     return _out(r)
 
 
-# ── asking an area owner while the spec is written, and their sign-off (TR-636) ──
+# ── asking an area owner while the spec is written (TR-636) ─────────────────
 
 def _question_line(q: dict) -> dict:
     return {"id": q.get("id"), "repo": q.get("repo"), "text": q.get("text"), "state": q.get("state"),
@@ -683,20 +683,6 @@ async def list_questions(state: str = "", project: str = "") -> str:
     return json.dumps([_question_line(q) for q in r.json().get("questions") or []], default=str)
 
 
-@writable()
-async def sign_off(repo: str, project: str = "") -> str:
-    """Say that the tickets in a repo (`owner/name`) are right, as the owner of that repo. Only
-    the area owner may, and only for a repo the project has tickets in. The hand-over waits for
-    one sign-off per repo (the project lead's own repos need none). Signing again changes
-    nothing. The reply lists every repo with its owner and whether it is signed."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/signoffs", json={"repo": repo})
-    return _out(r)
-
-
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
@@ -730,7 +716,7 @@ async def get_station(name: str) -> str:
 
 @writable()
 async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy: str = "",
-                    repo: str = "", override_reason: str = "") -> str:
+                    repo: str = "") -> str:
     """Hand a specced project to the crew: Tares records it with every repo it spans, who handed
     it over and to which crew, and the orchestrator picks it up from Tares on its next tick.
     `repos` is one {path, name} per repo:
@@ -741,21 +727,14 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     send your own crew's orchestrator (the reply names it) a `[TF:SHIP]` message with
     SendMessage so it starts now rather than on its tick. If your crew is not running (the
     reply says so), tell the person to run `tares factory crew up` first. Other people's crews
-    pick up their own tickets on their next tick. Needs a key with a person.
-
-    On a cell with more than one person the hand-over waits for the area owners: every repo the
-    tickets are in needs an owner (set_area), and that owner, unless they lead the project, must
-    have signed off (sign_off). Otherwise you get the list of who is missing. Only the project's
-    lead may hand over anyway, by passing `override_reason` (the person's words on why); it is
-    kept on the hand-over and shown on the project's timeline."""
+    pick up their own tickets on their next tick. Needs a key with a person. A project kept for
+    later (set_later) starts with it."""
     crew_name = _caller("crew") or "crew"
     body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
     if repo:
         body["repo"] = repo
     if autonomy:
         body["autonomy"] = autonomy
-    if override_reason:
-        body["override_reason"] = override_reason
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
@@ -771,8 +750,6 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
              for x in ho.get("repos") or []] or ["repo: (none given: pass repos=[{path, name}])"]
     if ho.get("autonomy"):
         lines.append(f"autonomy: {ho['autonomy']}")
-    if ho.get("overridden") and ho.get("override"):   # this hand-over, not an earlier one
-        lines.append(f"handed over without every sign-off: {ho['override']['reason']}")
     others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
             and s.get("name") == orch_name and s.get("crew") == crew_name
@@ -792,6 +769,23 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
             f"[TF:SHIP] {project or uid} is ready to build\nproject: {project or uid}\n"
             + "\n".join(lines))
 
+
+
+@writable()
+async def set_later(later: bool = True, project: str = "") -> str:
+    """Keep a specced project for later: the person's backlog, off their home until it is
+    started. Call it when the person says the project is for later, not to build now, and never
+    on your own judgment. `later=False` (or hand_over) starts it again. Refused for a project the
+    crew already has, and for a finished one."""
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.post(f"{TARESD}/api/projects/{uid}/later", json={"later": later})
+    if r.status_code >= 400:
+        return _out(r)
+    return ("Kept for later: it is off the home, under Later in All projects, until someone starts it."
+            if later else "Started again: it is back on the home.")
 
 @mcp.tool()
 async def my_work(crew: str = "", project: str = "") -> str:

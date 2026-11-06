@@ -1,4 +1,4 @@
-"""A person answers, signs off and agrees from the console (TR-740).
+"""A person answers and agrees from the console (TR-740).
 
 A daemon with auth on and three people with a key each (alex leads the project, kim owns
 example-org/web, lee owns nothing). The console sends the person's key and no station header; a
@@ -10,8 +10,8 @@ crew station and an answered item are refused), records their words as typed wit
 one typed in a session (a team grant needs an admin, a project grant over a repo someone else's
 lead has not agreed to waits), and keeps or overturns every assumption of the item;
 POST /api/grants/{id}/decline ends a waiting grant for the person it waits for, keeping who, when,
-from where and why; a question answered and a repo signed off from the console carry the mark
-"console", from a session they carry none; /api/desk/{ref}/allow is for the person the item is
+from where and why; a question answered from the console carries the mark
+"console", from a session it carries none; /api/desk/{ref}/allow is for the person the item is
 addressed to.
 
 Run: .venv/bin/python tests/test_console_answers.py
@@ -255,7 +255,7 @@ async def main():
         ck("a crew station cannot allow it either: 403", r.status_code == 403, r.text)
         ck("the item is still open", store.get_desk_item(d5["label"])["state"] == "open")
 
-        print("== a question answered and a repo signed off, from the console and from a session ==")
+        print("== a question answered, from the console and from a session ==")
         as_({**keys["alex"], **STATION})
         q1 = json.loads(await mf.ask_area("example-org/web", "Which page is checkout on?",
                                           project="shop"))
@@ -273,33 +273,6 @@ async def main():
         marks = {x["id"]: x.get("via") for x in r.json()["questions"]}
         ck("the questions list shows both marks", marks == {q1["id"]: "console", q2["id"]: None},
            str(marks))
-        r = await call("lee", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/web"})
-        ck("lee, who owns nothing, cannot sign off: 403", r.status_code == 403, r.text)
-        r = await call("kim", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/web"})
-        row = next((x for x in (r.json().get("signoffs") or []) if x["repo"] == "example-org/web"), {})
-        ck("kim signs off from the console: signed, marked console", r.status_code == 201
-           and row.get("signed_off") is True and row.get("via") == "console", r.text)
-        r = await call("alex", "GET", f"/api/projects/{uid}/signoffs")
-        row = next((x for x in r.json()["signoffs"] if x["repo"] == "example-org/web"), {})
-        ck("the sign-off list shows the mark", row.get("via") == "console", r.text)
-        r = await call("kim", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/web"},
-                       station=True)
-        row = next((x for x in (r.json().get("signoffs") or []) if x["repo"] == "example-org/web"), {})
-        ck("signing again from a session changes nothing", r.status_code == 201
-           and row.get("via") == "console", r.text)
-        r = await call("kim", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/api"},
-                       station=True)
-        ck("kim does not own example-org/api: 403", r.status_code == 403, r.text)
-        r = await call("alex", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/api"},
-                       station=True)
-        row = next((x for x in (r.json().get("signoffs") or []) if x["repo"] == "example-org/api"), {})
-        ck("alex signs example-org/api from a session: no mark", r.status_code == 201
-           and row.get("signed_off") is True and not row.get("via"), r.text)
-        await call("root", "PUT", "/api/areas/example-org/api", {"person_id": pid["lee"]})
-        r = await call("lee", "POST", f"/api/projects/{uid}/signoffs", {"repo": "example-org/api"})
-        row = next((x for x in (r.json().get("signoffs") or []) if x["repo"] == "example-org/api"), {})
-        ck("a new owner signing from the console replaces it, with the console mark", r.status_code == 201
-           and (row.get("owner") or {}).get("id") == pid["lee"] and row.get("via") == "console", r.text)
 
         print("== finishing the project on a console answer ==")
         for t in (t_web, t_api):
