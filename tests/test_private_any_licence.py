@@ -11,7 +11,8 @@ opened by a daemon in five states, and the same checks run in each:
   c. an expired test licence
   d. a licence check that raises (licence.state is replaced before the daemon starts; the boot
      check runs for real, because make_app does not guard it, every later one raises)
-  e. tares_ee unimportable (sys.modules["tares_ee"] = None), with a valid licence
+  e. tares_ee unimportable (sys.modules["tares_ee"] = None), with a valid licence; until TR-918
+     adds the tares.ee entry point there is no ee to load, so this state equals state b
 
 In each state:
   - GET /api/whoami names the key's own person (never `local` for Ann's or Bob's key);
@@ -22,7 +23,8 @@ In each state:
 
 It uses no route that moves to ee (people, areas, project access), so it passes in the `mit`
 suite where tares_ee is deleted. The database is written with the daemon stopped (DuckDB has one
-writer), the way a team cell would have left it.
+writer), the way a team cell would have left it. It is DuckDB-only: Store(DB, state_dsn="") keeps
+it out of the Postgres run's state, because the daemon it starts gets no TARES_* variables.
 
 Run: .venv/bin/python tests/test_private_any_licence.py
 """
@@ -153,7 +155,7 @@ def new_key(store, kid, name, person_id, scopes):
 
 
 def write_team_cell() -> dict:
-    store = Store(DB)
+    store = Store(DB, state_dsn="")
     try:
         owner = store.claim_local("owner@x.dev", "Olive Owner")
         ann = store.create_person("Ann", "ann@x.dev")
@@ -187,7 +189,7 @@ def make_project(cell: dict) -> bool:
             ck("set up: the source evts", r.status_code == 201, f"{r.status_code} {r.text[:200]}")
     finally:
         stop(proc)
-    store = Store(DB)
+    store = Store(DB, state_dsn="")
     try:
         now = now_utc() - timedelta(seconds=30)
         store.append([
@@ -219,7 +221,8 @@ def check_state(label: str, base: str, cell: dict, crashing: bool = False) -> No
             ck(f"{label}: {who}'s key is {who} ({ids[who]})", got == ids[who], f"{r.status_code} {r.text[:200]}")
         for who in ("ann", "bob"):
             r = cx.get(f"{base}/api/whoami", headers=H(keys[who]))
-            ck(f"{label}: {who}'s key is not `local`", (r.json().get("person") or {}).get("id") != "local", r.text[:200])
+            ck(f"{label}: {who}'s key is not `local`",
+               r.status_code == 200 and (r.json().get("person") or {}).get("id") != "local", f"{r.status_code} {r.text[:200]}")
 
         def read(who):
             r = cx.post(f"{base}/read", headers=H(keys[who]),
@@ -239,7 +242,7 @@ def check_state(label: str, base: str, cell: dict, crashing: bool = False) -> No
             ck(f"{label}: {who} sees P in the list only as a hidden card with its name and lead",
                code == 200 and card.get("hidden") is True and card.get("name") == "Secret"
                and "lead" in card and card.get("lead") is not None
-               and not ({"sources", "goal", "triggers", "skills", "tickets"} & set(card)),
+               and set(card) <= {"id", "name", "scope", "hidden", "lead"},
                f"{code} {json.dumps(card)[:300]}")
             code, text = read(who)
             ck(f"{label}: {who}'s read of P's source has none of P's events, and the open one",
