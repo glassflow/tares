@@ -15,6 +15,7 @@ FROM python:3.12-slim AS app
 WORKDIR /src
 COPY pyproject.toml README.md LICENSE ./
 COPY tares/ ./tares/
+COPY ee/ ./ee/
 # the wheel bundles the Claude Code plugin (hatch force-include), for `tares factory`
 COPY claude-plugin/ ./claude-plugin/
 COPY --from=ui /ui/dist ./ui/dist

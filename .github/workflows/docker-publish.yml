@@ -20,6 +20,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: No final release while RELEASE_BLOCK exists
+        run: bash scripts/check_release_block.sh "$GITHUB_REF_NAME"
+
       - uses: docker/setup-qemu-action@v3   # arm64 emulation for the multi-arch build
 
       - uses: docker/setup-buildx-action@v3

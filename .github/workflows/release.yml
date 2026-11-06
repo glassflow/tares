@@ -35,6 +35,9 @@ jobs:
           echo "tag=$TAG  pyproject=$PKG"
           [ "$TAG" = "$PKG" ] || { echo "::error::tag v$TAG does not match pyproject version $PKG"; exit 1; }
 
+      - name: No final release while RELEASE_BLOCK exists
+        run: bash scripts/check_release_block.sh "$GITHUB_REF_NAME"
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"

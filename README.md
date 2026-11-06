@@ -90,4 +90,4 @@ Bug reports and ideas are welcome via [GitHub issues](https://github.com/glassfl
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE). This licence covers everything in this repository except directories named `ee`, which are under the licence in [ee/LICENSE](ee/LICENSE).
