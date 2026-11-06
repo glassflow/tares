@@ -96,6 +96,7 @@ test_login
 test_loki
 test_mcp_auth
 test_mcp_editions
+test_mcp_ee_tools
 test_mcp_remote
 test_mcp_setup
 test_mcp_station_headers
