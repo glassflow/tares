@@ -24,6 +24,7 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_console_answers
+test_core_single_person
 test_crew_standup
 test_crews
 test_decision_answers
