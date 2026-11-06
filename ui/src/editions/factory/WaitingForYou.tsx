@@ -125,7 +125,7 @@ export function WaitingForYou({ items, renderAction, errors, panels }: {
         <h2 className="m-0! text-base!">Waiting for you</h2>
         <span className="text-[13px] text-muted-foreground">only what is addressed to you</span>
       </div>
-      <div className="max-w-[860px] border border-border bg-card">
+      <div className="border border-border bg-card">
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-7" />
         ) : (
