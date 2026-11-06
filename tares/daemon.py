@@ -6889,9 +6889,7 @@ def make_app() -> FastAPI:
     #      ee team registered it (an ee route registered in 2 wins over its fallback);
     #   4. the console catch-all below, last.
     # A route that moves to ee is deleted from core in the same PR, so no core route shadows it.
-    ee_team = team_mod._ee()
-    if ee_team is not None:
-        ee_team.register_routes(app, h)
+    team_mod.register_ee(app, h)   # never raises: a broken ee team leaves a single-person cell
     team_mod.register_fallbacks(app, h)
 
     # ── console UI (built SPA; catch-all registered last so API routes win) ──

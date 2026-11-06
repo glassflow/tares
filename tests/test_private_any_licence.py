@@ -9,8 +9,8 @@ opened by a daemon in five states, and the same checks run in each:
   a. no TARES_LICENSE
   b. a valid test licence
   c. an expired test licence
-  d. a licence check that raises (licence.state is replaced before the daemon starts; the boot
-     check runs for real, because make_app does not guard it, every later one raises)
+  d. a licence check that raises (licence.state is replaced before the daemon starts, so the boot
+     check and every later one raise; the cell boots unlicensed, TR-1057)
   e. tares_ee unimportable (sys.modules["tares_ee"] = None), with a valid licence; until TR-918
      adds the tares.ee entry point there is no ee to load, so this state equals state b
 
@@ -76,16 +76,11 @@ PRELUDE = {
     "none": "",
     "valid": "",
     "expired": "",
-    # make_app checks the licence once at boot and does not guard it, so the first check is the
-    # real one and every later check raises; nothing is remembered between checks
+    # every check raises, the boot one included: the cell must still boot, unlicensed
     "crash": (
         "import tares.licence as _L\n"
-        "_real, _n = _L.state, [0]\n"
         "def _boom(*a, **k):\n"
-        "    _n[0] += 1\n"
-        "    if _n[0] > 1:\n"
-        "        raise RuntimeError('licence check crashed on purpose')\n"
-        "    return _real(*a, **k)\n"
+        "    raise RuntimeError('licence check crashed on purpose')\n"
         "_L.state = _boom\n"
         "_L.CACHE_SECONDS = 0\n"
     ),
@@ -212,9 +207,12 @@ def check_state(label: str, base: str, cell: dict, crashing: bool = False) -> No
     print(f"== {label} ==")
     with httpx.Client(timeout=20) as cx:
         if crashing:
-            # a fresh connection: the server closes the one an unhandled error was answered on
+            # the check raises on every call, and the cell still answers: unlicensed, with the reason
             r = httpx.get(f"{base}/api/licence", headers=H(AUTH), timeout=20)
-            ck(f"{label}: the licence check is crashing here", r.status_code >= 500, f"{r.status_code} {r.text[:200]}")
+            b = r.json() if r.status_code == 200 else {}
+            ck(f"{label}: the licence check is crashing here, and the cell answers unlicensed",
+               r.status_code == 200 and b.get("valid") is False and b.get("ee_allowed") is False
+               and "failed" in (b.get("reason") or ""), f"{r.status_code} {r.text[:200]}")
         for who in ("owner", "ann", "bob"):
             r = cx.get(f"{base}/api/whoami", headers=H(keys[who]))
             got = (r.json().get("person") or {}).get("id") if r.status_code == 200 else None

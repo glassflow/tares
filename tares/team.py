@@ -243,7 +243,12 @@ def _load_ee() -> Team | None:
     try:
         found = importlib.metadata.entry_points(group=ENTRY_GROUP, name=ENTRY_NAME)
         for ep in found:
-            return ep.load()()
+            built = ep.load()()
+            if not isinstance(built, Team):   # a wrong type would fail later, on a request
+                log.warning("tares.team: ee team did not load: %s is not a tares.team.Team",
+                            type(built).__name__)
+                return None
+            return built
         return None
     except Exception as e:   # a broken ee package must not stop the cell
         log.warning("tares.team: ee team did not load: %s: %s", type(e).__name__, e)
@@ -261,11 +266,30 @@ def _ee() -> Team | None:
 
 def get() -> Team:
     """The team to use now: the ee team while the licence allows it and it loaded, else the shared
-    `SingleTeam`. Decided on every call, so a key saved or removed applies without a restart (the
-    licence check is remembered for a minute, and at once after a PUT or DELETE). An expired
-    licence still gives the ee team; its `can_add_person` refuses new people."""
+    `SingleTeam`. It reads the last licence check (`licence.ee_allowed`) and never runs one: the
+    watch in `licence.run` refreshes the check every minute, and a PUT or DELETE of the key
+    refreshes it at once, so a key saved or removed applies without a restart. An expired licence
+    still gives the ee team; its `can_add_person` refuses new people."""
     ee = _ee()
     return ee if ee is not None and licence.ee_allowed() else _SINGLE
+
+
+def register_ee(app, host) -> None:
+    """Add the ee team's routes to `app`. If registering raises, the cell runs as a single-person
+    cell: the routes it added are taken out again, the ee team is dropped (so `get()` answers
+    `SingleTeam` whatever the licence), and one log line says why. Never raises (TR-1057)."""
+    global _ee_team
+    ee = _ee()
+    if ee is None:
+        return
+    before = len(app.router.routes)
+    try:
+        ee.register_routes(app, host)
+    except Exception as e:
+        log.warning("tares.team: ee routes did not register, running without ee: %s: %s",
+                    type(e).__name__, e)
+        del app.router.routes[before:]
+        _ee_team = None
 
 
 def _set_ee_for_tests(team: Team | None) -> None:
