@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A person's picture (TR-1016): the https address the console shows instead of their initials.
 
 Checked here: the people API and whoami carry `picture`; only one https address of at most 2048
@@ -7,7 +8,7 @@ sets it on a new person, on an existing one, and when it makes the boot person t
 while any other caller's POST leaves an existing person's picture alone; the People page rows carry
 it. The cell never fetches the address.
 
-Run: .venv/bin/python tests/test_person_picture.py
+Run: .venv/bin/python ee/tests/test_person_picture.py
 """
 import asyncio
 import os
@@ -15,16 +16,14 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+import licensed   # scrubs the machine's TARES_* settings and puts the repo on sys.path
+licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-person-picture-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-picture"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_EDITION"] = "factory"
 os.environ["TARES_PR_SYNC_SECONDS"] = "off"
