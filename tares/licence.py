@@ -31,6 +31,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -240,13 +241,18 @@ def expired(lic: Licence, now: datetime | None = None) -> bool:
     return _utc(now) >= end
 
 
+def _unlicensed(used: int | None) -> dict:
+    """The state of a cell with no valid licence. `used` is the seats in use (None counts as 0)."""
+    return {"valid": False, "source": "none", "kid": None, "org": None, "seats": None, "used": used or 0,
+            "features": [], "expires": None, "days_left": None, "expired": False,
+            "over_seats": False, "ee_allowed": False, "reason": None}
+
+
 def state(text: str | None, used: int | None, now: datetime | None = None, source: str = "none") -> dict:
     """What the cell may do with this key, as a plain dict. An expired licence stays valid;
     `expired` says it ran out. `used` is the seats in use (None counts as 0)."""
     used = used or 0
-    st = {"valid": False, "source": "none", "kid": None, "org": None, "seats": None, "used": used,
-          "features": [], "expires": None, "days_left": None, "expired": False,
-          "over_seats": False, "ee_allowed": False, "reason": None}
+    st = _unlicensed(used)
     if text is None or (isinstance(text, str) and not text.strip()):
         return st
     st["source"] = source
@@ -271,6 +277,8 @@ def allows(st: dict, feature: str = "enterprise") -> bool:
 # setting, remembers the answer for a minute, warns on the desk, and answers 402 to an action
 # that needs a licence. The key text is never returned, logged or cached outside the verify call.
 
+log = logging.getLogger("tares.licence")
+
 LICENCE_ENV = "TARES_LICENSE"
 LICENCE_SETTING = "licence_key"
 WARNED_SETTING = "licence_warned"   # JSON list of "<kid>:<threshold>" the desk was told about
@@ -280,6 +288,7 @@ CACHE_SECONDS = 60
 # One cell has one store, so one slot is enough; the id only keeps a second store (a test) from
 # reading another's answer. current() edits `used` in place; callers get copies.
 _cache: tuple | None = None
+_check_failed = False   # the last check raised; it is logged once until a check works again
 
 
 def resolve(store) -> tuple[str | None, str]:
@@ -305,16 +314,28 @@ def current(store, now: datetime | None = None, force: bool = False) -> dict:
     `env_set` (TARES_LICENSE is set). The check is remembered for CACHE_SECONDS so a request does
     not repeat it; `force` checks again now (after a key is saved or removed). The seats in use
     are always read fresh."""
-    global _cache
+    global _cache, _check_failed
     used = len(store.list_people())
     c = _cache
     if not force and c is not None and c[0] == id(store) and time.monotonic() - c[1] < CACHE_SECONDS:
         _seats_in_use(c[2], used)   # keep the remembered answer's seat count current for peek()
         return dict(c[2])
-    text, source = resolve(store)
-    st = state(text, used, now, source)
-    st["stored"] = bool(store.get_setting(LICENCE_SETTING))
-    st["env_set"] = bool(os.environ.get(LICENCE_ENV, "").strip())
+    try:
+        text, source = resolve(store)
+        st = state(text, used, now, source)
+        st["stored"] = bool(store.get_setting(LICENCE_SETTING))
+        st["env_set"] = bool(os.environ.get(LICENCE_ENV, "").strip())
+        _check_failed = False
+    except Exception as e:
+        # A check that raises is an unlicensed cell, never a licensed one and never a dead daemon
+        # (TR-1057). The log names the error type only: the key text never goes in a log.
+        st = _unlicensed(used)   # not state(): the failure may be in state() itself
+        st["reason"] = f"The licence check failed ({type(e).__name__})."
+        st["stored"] = False
+        st["env_set"] = bool(os.environ.get(LICENCE_ENV, "").strip())
+        if not _check_failed:
+            log.warning("licence check failed, running without a licence: %s", type(e).__name__)
+        _check_failed = True
     _cache = (id(store), time.monotonic(), st)
     return dict(st)
 

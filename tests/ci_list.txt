@@ -12,6 +12,7 @@ test_api_keys
 test_areas
 test_auth
 test_blind_spots
+test_boot_guard
 test_budget_period
 test_builder_flow
 test_catalog_sync
