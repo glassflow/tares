@@ -1,8 +1,8 @@
 /*
  * Browser e2e for TR-741: the factory home on a cell with more than one person, "Waiting for you" with its actions.
  *
- * Starts a scratch daemon (TARES_EDITION=factory, auth on) on TARES_E2E_PORT (default 8857), MCP port +20, and a second
- * one of a single person on port +2, MCP +22, each in a clean environment and a fresh data directory; stops only those.
+ * Starts a scratch daemon (TARES_EDITION=factory, auth on, licensed: the team home is ee) on TARES_E2E_PORT (default 8857),
+ * MCP port +20, and a second one of a single person, no licence, on port +2, MCP +22, each in a clean environment and a fresh data directory; stops only those.
  * tests/seed-team-home.py fills the first through its API: Alex, Kim and Lee, a project Kim leads, and seven things
  * waiting for Alex (a sign-off, a spec question, two grants, a permission, a question with options, a long question).
  * The page is opened as Alex with his key, then as Lee, who has nothing waiting.
@@ -72,7 +72,7 @@ const tares = (() => {
   return fs.existsSync(path.join(bin, "tares")) ? path.join(bin, "tares") : "tares";
 })();
 const started = [];
-function startDaemon(port, extra, people = []) {
+function startDaemon(port, extra, people = [], licensed = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-team-home-e2e-"));
   if (people.length) {   // people on the cell before it starts: adding a second person over HTTP needs a licence
     const made = spawnSync(PY, [path.join(REPO, "tests", "_people.py"), path.join(home, "tares.duckdb"), ...people],
@@ -82,7 +82,13 @@ function startDaemon(port, extra, people = []) {
   const env = cleanEnv({ TARES_EDITION: "factory", TARES_HOME: home, TARES_PORT: String(port), TARES_MCP_PORT: String(port + 20),
                          TARES_OTLP_GRPC_PORT: "off", TARES_UI_DIST: process.env.TARES_UI_DIST || path.join(UI_DIR, "dist"),
                          PYTHONPATH: REPO, ...extra });
-  const daemon = spawn(tares, ["up", "--port", String(port), "--data-dir", home], { cwd: REPO, stdio: "ignore", env, detached: true });
+  // The team home is ee code: with people on the cell it shows only on a licensed daemon (ee/tests/licensed.py).
+  const venvPy = path.join(REPO, ".venv/bin/python");
+  const daemon = licensed
+    ? spawn(fs.existsSync(venvPy) ? venvPy : PY, [path.join(REPO, "ee", "tests", "licensed.py"), "daemon", "--seats", "50"],
+        { cwd: REPO, stdio: "ignore", detached: true,
+          env: { ...env, TARES_DB: path.join(home, "tares.duckdb"), TARES_HOST: "127.0.0.1", TARES_CATALOG: path.join(home, "none.yaml") } })
+    : spawn(tares, ["up", "--port", String(port), "--data-dir", home], { cwd: REPO, stdio: "ignore", env, detached: true });
   started.push({ daemon, home });
   console.log(`  daemon: pid ${daemon.pid}, port ${port}`);
   return daemon;
@@ -92,7 +98,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
 
 (async () => {
   startDaemon(PORT, { TARES_AUTH_TOKEN: ROOT },
-    ["Alex=alex-seed@example.com", "Kim=kim-seed@example.com", "Lee=lee-seed@example.com"]);
+    ["Alex=alex-seed@example.com", "Kim=kim-seed@example.com", "Lee=lee-seed@example.com"], true);
   startDaemon(SOLO, {});
   let browser;
   try {

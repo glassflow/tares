@@ -24,7 +24,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
-from . import factory_team
+from . import team as team_mod
 from .envelope import now_utc
 from .factory_store import MapChanged
 from .host import Host
@@ -1173,36 +1173,39 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"person": me, "crew": crew_name, **work_of(me, hidden, want)}
 
     def team_reader() -> SimpleNamespace:
-        """What factory_team reads of this module (TR-739)."""
+        """The `c` of the team interface (tares/team.py): what the team hooks read of this module
+        (TR-739). Also `h.team_reader`."""
         return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
                                work_person=work_person, my_projects=my_projects, queue=queue,
                                settings=settings,
                                waits_for_me=waits_for_me, desk_is_mine=desk_is_mine,
                                is_mine=is_mine, leads=leads, stored=stored, crews_of=crews_of)
 
+    h.team_reader = team_reader
+
     def team_home(request: Request, now=None) -> dict:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
-        one person: see factory_team. It reads what this module holds; the route stays in daemon.py."""
-        return factory_team.team_home(team_reader(), request, now or now_utc())
+        one person: see the team interface. It reads what this module holds; the route stays in daemon.py."""
+        return team_mod.get().team_home(team_reader(), request, now or now_utc())
 
     def own_stations(request: Request, rows: list[dict]) -> list[dict]:
-        """`rows` kept to the caller's own crews on a team cell (see factory_team.own_stations)."""
-        return factory_team.own_stations(team_reader(), request, rows)
+        """`rows` kept to the caller's own crews on a team cell (see the team interface)."""
+        return team_mod.get().own_stations(team_reader(), request, rows)
 
     def own_desk(request: Request, rows: list[dict]) -> list[dict]:
         """`rows` (open desk items) kept to the caller's person on a team cell."""
-        return factory_team.own_desk(team_reader(), request, rows)
+        return team_mod.get().own_desk(team_reader(), request, rows)
 
     def own_tickets(request: Request, tickets: dict, projects: list[dict]) -> dict:
         """`tickets` ({project: tickets}) kept to the caller's person on a team cell."""
-        return factory_team.own_tickets(team_reader(), request, tickets, projects)
+        return team_mod.get().own_tickets(team_reader(), request, tickets, projects)
 
     def team_projects(request: Request, open_ps: list, tickets: dict, rows: list, which: str,
                       now=None, waiting: list | None = None) -> dict:
         """The team's version of the home's `projects` (TR-739): lead, members, scope, what is
         the caller's, the Mine and Team counts; {} on a cell of one person."""
-        return factory_team.team_projects(team_reader(), request, open_ps, tickets, rows, which,
-                                          now or now_utc(), waiting or [])
+        return team_mod.get().team_projects(team_reader(), request, open_ps, tickets, rows, which,
+                                            now or now_utc(), waiting or [])
 
     @app.get("/api/crew/projects")
     def crew_projects(request: Request):

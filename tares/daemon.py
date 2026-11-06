@@ -1784,11 +1784,14 @@ def make_app() -> FastAPI:
         try:
             picture = store.check_picture(body.get("picture")) if "picture" in body else None
             email = store.check_email(body.get("email"))
-            found = store.find_person_by_email(email) if email else None
-            if found:
+            def existing(found):
                 if system and picture and picture != found.get("picture"):
                     found = store.update_person(found["id"], picture=picture) or found
                 return _person_out(found)
+
+            found = store.find_person_by_email(email) if email else None
+            if found:
+                return existing(found)
             if email and body.get("owner") is True and system:
                 claimed = store.claim_local(email, body.get("name"))
                 if claimed:
@@ -1796,6 +1799,11 @@ def make_app() -> FastAPI:
                         claimed = store.update_person(claimed["id"], picture=picture) or claimed
                     return _person_out(claimed)
             with team_mod.ADD_LOCK:   # the seat check and the insert are one step
+                # a creation of this email that held the lock first has made the row since the
+                # lookup above: this one gets that person (200), not a seat refusal
+                found = store.find_person_by_email(email) if email else None
+                if found:
+                    return existing(found)
                 ok, why = team_mod.get().can_add_person(store)
                 if not ok:
                     # the owner under another email, once `local` is claimed, is `local`

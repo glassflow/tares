@@ -43,6 +43,7 @@ test_factory_crew_standup
 test_factory_desk
 test_factory_docs_page
 test_factory_home
+test_factory_home_single
 test_factory_home_waiting
 test_factory_ledger
 test_factory_mcp

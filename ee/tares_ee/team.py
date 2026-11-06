@@ -4,13 +4,15 @@
 `Team` is `tares.team.SingleTeam` with the parts that mean something for a team filled in. This
 file starts with the people: a new person row is allowed while the licence has a seat for one more.
 Seats are counted over every row in `people`, the owner included. An expired licence keeps every
-person it already has and refuses only adding one. The other methods stay single-person until their
-own tickets move them here.
+person it already has and refuses only adding one. The team home and the team's project view are `team_home.py`; the other methods stay single-person
+until their own tickets move them here.
 """
 from __future__ import annotations
 
 from tares import licence
 from tares.team import SingleTeam
+
+from . import team_home as home
 
 EXPIRED_REASON = "The enterprise licence has expired. Renew it to add people."
 
@@ -26,3 +28,9 @@ class Team(SingleTeam):
             return False, (f"Every seat of the enterprise licence is in use ({st['used']} of "
                            f"{st['seats']}). Ask for more seats to add people.")
         return True, None
+
+    def team_home(self, c, request, now):
+        return home.team_home(c, request, now)
+
+    def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):
+        return home.team_projects(c, request, open_ps, tickets, rows, which, now, waiting)
