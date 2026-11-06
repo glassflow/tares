@@ -167,6 +167,7 @@ test_sre_timeline
 test_startup_fill
 test_state_postgres
 test_status
+test_team_interface
 test_teams_e2e
 test_ticket_assignee
 test_tracing
