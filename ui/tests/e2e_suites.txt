@@ -7,6 +7,7 @@ edition-routes
 edition-shell
 factory-crew
 factory-docs
+factory-github
 factory-home
 factory-new-project
 factory-people
