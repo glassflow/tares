@@ -77,6 +77,7 @@ test_grant_decline_sticks
 test_grants_teams
 test_handoffs
 test_homebrew_formula
+test_host
 test_http_poll
 test_incident_backfill_bulk
 test_incidents

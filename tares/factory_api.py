@@ -27,6 +27,7 @@ from . import factory_home
 from . import factory_team
 from .envelope import now_utc
 from .factory_store import MapChanged
+from .host import Host
 
 CREW_SETTING = "crew_settings"
 CLAUDE_RETRY_SETTING = "crew_claude_retry"   # stations the watch is retrying onto a new Claude Code
@@ -289,13 +290,10 @@ def project_progress(store, uid: str, tickets: list[dict] | None = None) -> dict
             "milestone": current, "progress": factory_mod.progress(tickets)}
 
 
-def register(app, store, h: SimpleNamespace) -> SimpleNamespace:
-    """`h` carries the daemon's helpers: err(exc, code), project_or_404(uid), by(request, body),
-    cc_source(), global_ids(create), current_person(request), is_system(request), is_admin(request),
-    area_owner(repo) -> the person who owns that GitHub repo (`owner/name`, any case) or None
-    (TR-627); is_admin(request) says whether the credential has the admin scope (the system
-    credential does, and so does everyone with auth off). Returns the crew readers the home page
-    shares."""
+def register(app, store, h: Host) -> SimpleNamespace:
+    """Add the crew's routes. `h` is the daemon's Host (tares/host.py), which documents the helpers
+    it carries: err, project_or_404, by, current_person, is_admin, area_owner and the rest. Returns
+    the crew readers the home page shares."""
 
     def deny(request: Request, action: str) -> None:
         why = factory_mod.may(caller(request), action)

@@ -49,6 +49,7 @@ from .connectors import (SPECS, normalize_config, redact_config, restore_secrets
                          source_type_for)
 from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
+from .host import Host
 from .envelope import now_utc
 from .models import add_usage, empty_usage
 from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
@@ -5993,7 +5994,8 @@ def make_app() -> FastAPI:
         p = store.get_project(ref) or store.get_project_by_name(ref)
         return p["id"] if p else ref
 
-    h = SimpleNamespace(
+    h = Host(
+        store, runtime,
         err=lambda e, code=400: _err(e, code), project_or_404=lambda uid: _project_or_404(uid),
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
@@ -6007,7 +6009,10 @@ def make_app() -> FastAPI:
         global_ids=lambda create=False: _global_ids(create), resolve_project=_factory_project_id,
         ticket_out=lambda uid, t, **kw: _ticket_out(uid, t, **kw),
         ensure_globals=lambda uid: _ensure_globals(uid),
-        tickets_out=lambda uid: _tickets_out(uid))
+        tickets_out=lambda uid: _tickets_out(uid),
+        caller=_CALLER.get, project_key=_pk, hidden_project=_hidden_project,
+        projects=lambda: projects)
+    app.state.host = h
     fx = factory_api.register(app, store, h)
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime))
