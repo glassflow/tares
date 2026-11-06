@@ -140,7 +140,10 @@ async def case_type():
     class NotATeam:
         def register_routes(self, app, host):
             raise AssertionError("a wrong type must never get as far as registering")
-    importlib.metadata.entry_points = lambda **kw: [_EP(lambda: NotATeam)]
+    real_eps = importlib.metadata.entry_points
+    # only the ee group is faked: pydantic and others ask for their own groups while the app builds
+    importlib.metadata.entry_points = (
+        lambda **kw: [_EP(lambda: NotATeam)] if kw.get("group") == team_mod.ENTRY_GROUP else real_eps(**kw))
     team_mod._reset_ee_for_tests()
     team_mod.FALLBACKS[:] = [PING]
     from tares.daemon import make_app
