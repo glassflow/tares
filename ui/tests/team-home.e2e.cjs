@@ -170,14 +170,14 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         await settle(page);
         await oneRead(ck, t("three people"));
         const rows = page.getByTestId("waiting-row");
-        ck(t("seven things wait for Alex"), (await rows.count()) === 7, String(await rows.count()));
+        ck(t("six things wait for Alex"), (await rows.count()) === 6, String(await rows.count()));
         const senders = await rows.evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="waiting-from"]')?.getAttribute("aria-label")));
-        ck(t("each row says who it is from: Kim four times, the crew three"),
-           senders.filter((s) => s === "From Kim").length === 4 && senders.filter((s) => s === "From Your crew").length === 3, JSON.stringify(senders));
-        ck(t("the headline counts them"), /7 things wait for you/.test(await page.getByTestId("home-headline").innerText()), await page.getByTestId("home-headline").innerText());
+        ck(t("each row says who it is from: Kim three times, the crew three"),
+           senders.filter((s) => s === "From Kim").length === 3 && senders.filter((s) => s === "From Your crew").length === 3, JSON.stringify(senders));
+        ck(t("the headline counts them"), /6 things wait for you/.test(await page.getByTestId("home-headline").innerText()), await page.getByTestId("home-headline").innerText());
         const buttons = async (text) => (await row(page, text).getByRole("button").allInnerTexts()).map((s) => s.trim()).sort();
         ck(t("the question has Answer"), (await buttons("Which page does the checkout")).join() === "Answer");
-        ck(t("the sign-off has Sign off"), (await buttons("Kim cannot hand the project")).includes("Sign off"));
+        ck(t("nothing asks for a sign-off"), (await page.getByRole("button", { name: "Sign off" }).count()) === 0);
         ck(t("a grant has Agree and Decline"), (await buttons("merge to acme/web")).join() === "Agree,Decline");
         ck(t("the permission has Allow and Answer"), (await buttons("gh api repos")).join() === "Allow,Answer");
         ck(t("the command shows as code"), (await row(page, "gh api repos").locator("code").innerText()) === "gh api repos/acme/web/statuses/abc");
@@ -204,8 +204,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
 
     // ── TR-761, live: what Alex waits on, Projects (Mine and Team), the side column; Kim's view of Shop ──
     const TEAM_NAMES = ["Shop", "Portal", "Notes", "Billing", "Search", "Mobile"];
-    const chipsOf = (loc) => loc.getByTestId("waiting-on-chip").evaluateAll((els) => els.map((e) => `${e.getAttribute("data-state")}:${e.textContent}`).sort());
-    let kim = null;   // Kim's page at 1440 stays open: she reads Shop again once Alex has signed off
+    let kim = null;   // Kim's page at 1440 stays open: she reads Shop again once Alex has answered
     for (const width of [390, 1440]) {
       const t = (s) => `live @${width}: ${s}`;
       const { ctx, page } = await open("alex", width);
@@ -223,13 +222,13 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a project's name opens the project"), (await portal.getByTestId("waiting-on-project").getAttribute("href")) === `/projects/${ids.projects.portal}`);
       ck(t("You are waiting on lists Portal and Notes, the two projects Alex leads that wait on Kim"), (await won.count()) === 2
          && (await portal.count()) === 1 && (await notes.count()) === 1, JSON.stringify(await won.allInnerTexts()));
-      ck(t("Portal: acme/api waits for Kim, acme/docs has no owner"), JSON.stringify(await chipsOf(portal)) === JSON.stringify(["no_owner:acme/docs · no owner", "waiting:acme/api · Kim · waiting"]), JSON.stringify(await chipsOf(portal)));
-      ck(t("Notes: acme/api waits for Kim, acme/web is Alex's own"), JSON.stringify(await chipsOf(notes)) === JSON.stringify(["waiting:acme/api · Kim · waiting", "yours:acme/web · you"]), JSON.stringify(await chipsOf(notes)));
-      const btns = async (loc) => (await loc.getByRole("button").allInnerTexts()).map((x) => x.trim());
-      ck(t("both rows have Hand over anyway, and Remind is not offered"), (await btns(portal)).includes("Hand over anyway") && (await btns(notes)).includes("Hand over anyway")
+      ck(t("each row says the question that is open, for Kim"), (await portal.innerText()).includes("1 question open for Kim.")
+         && (await notes.innerText()).includes("1 question open for Kim."), JSON.stringify(await won.allInnerTexts()));
+      ck(t("no repo chips, no Hand over anyway, no Set an owner, no Remind"), (await n("waiting-on-chip")) === 0
+         && (await page.getByRole("button", { name: "Hand over anyway" }).count()) === 0
+         && (await page.getByRole("link", { name: "Set an owner" }).count()) === 0
          && (await page.getByRole("button", { name: "Remind" }).count()) === 0);
-      ck(t("Set an owner is on Portal only, and links to Settings, Advanced"), (await portal.getByRole("link", { name: "Set an owner" }).getAttribute("href")) === "/settings/advanced?tab=areas"
-         && (await notes.getByRole("link", { name: "Set an owner" }).count()) === 0);
+      ck(t("Portal and Notes are not also Ready to start"), (await page.getByTestId("waiting-row").filter({ hasText: "Ready to start" }).filter({ hasText: /Portal|Notes/ }).count()) === 0);
       ck(t("the daemon's summary says Alex waits on Kim for two"), /You are waiting on Kim for 2\./.test(alexHome.summary || ""), alexHome.summary);
       await shot(page, "live-waiting-on", width);
       ck(t("the label says the list holds projects Alex leads, none marked no lead"),
@@ -313,37 +312,20 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await ctx.close();
     }
     {
-      // Kim leads Shop, and waits on Alex for acme/web and on nobody for acme/docs
+      // Kim leads Shop, and waits on Alex for the question she asked him
       const { ctx, page } = await open("kim", 1440);
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
       const shopRow = page.getByTestId("waiting-on-row").filter({ hasText: "Shop" });
-      const chips = await chipsOf(shopRow);
-      ck("kim: Shop waits for Alex on acme/web, acme/docs has no owner, acme/api is her own", (await page.getByTestId("waiting-on-row").count()) === 1
-         && JSON.stringify(chips) === JSON.stringify(["no_owner:acme/docs · no owner", "waiting:acme/web · Alex · waiting", "yours:acme/api · you"]), JSON.stringify(chips));
+      ck("kim: Shop waits for Alex's answer, and nothing else", (await page.getByTestId("waiting-on-row").count()) === 1
+         && (await shopRow.innerText()).includes("1 question open for Alex."), await shopRow.innerText());
       await shot(page, "live-kim", 1440);
       await checkWords(page, ck, "kim: live");
       kim = { ctx, page };
     }
 
     // ── acting, as Alex at 1440 ──
-    // ── F6: a sign-off over more tickets than the daemon lists by title says how many more ──
-    {
-      const { ctx, page, ctl } = await open("alex", 1440);
-      const t = (s) => `more tickets: ${s}`;
-      ctl.more = 3;
-      await page.goto(`${BASE}/`, { waitUntil: "load" });
-      await page.getByTestId("factory-home").waitFor();
-      await settle(page);
-      await row(page, "Kim cannot hand the project").getByRole("button", { name: "Sign off" }).click();
-      const sd = page.getByTestId("signoff-dialog");
-      await sd.waitFor();
-      ck(t("the box lists the titles and then says 'and 3 more'"), (await sd.getByTestId("signoff-more").count()) === 1
-         && (await sd.getByTestId("signoff-more").innerText()).trim() === "and 3 more", await sd.getByTestId("signoff-tickets").innerText());
-      await checkWords(page, ck, t("sign-off with more"));
-      await ctx.close();
-    }
     // ── F7: in a sample, a box opens and confirming it says nothing was sent ──
     {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -356,13 +338,13 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
       const note = page.getByText("This is a sample, so nothing was sent.");
-      await row(page, "project-x").filter({ hasText: "Sign-off" }).getByRole("button", { name: "Sign off" }).click();
-      const sd = page.getByTestId("signoff-dialog");
-      ck(t("Sign off opens its box"), await sd.waitFor({ timeout: 3000 }).then(() => true, () => false));
-      await sd.getByTestId("signoff-confirm").click();
+      await row(page, "Try migrations on staging").getByRole("button", { name: "Decline" }).click();
+      const sd = page.getByTestId("decline-dialog");
+      ck(t("Decline opens its box"), await sd.waitFor({ timeout: 3000 }).then(() => true, () => false));
+      await sd.getByTestId("decline-confirm").click();
       await note.first().waitFor({ timeout: 3000 }).catch(() => {});
       ck(t("confirming says nothing was sent, and the box closes"), (await note.count()) >= 1 && (await sd.count()) === 0, String(await note.count()));
-      ck(t("the row stays and the cell was not asked to change anything"), (await row(page, "project-x").filter({ hasText: "Sign-off" }).count()) === 1 && posts.length === 0, JSON.stringify(posts));
+      ck(t("the row stays and the cell was not asked to change anything"), (await row(page, "Try migrations on staging").count()) === 1 && posts.length === 0, JSON.stringify(posts));
       await note.first().waitFor({ state: "detached", timeout: 15000 }).catch(() => {});   // let the first one go, so the next is its own
       await row(page, "Try migrations on staging").getByRole("button", { name: "Agree" }).click();
       await note.first().waitFor({ timeout: 3000 }).catch(() => {});
@@ -389,14 +371,14 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await checkWords(page, ck, t("answer box"));
       await panel.getByRole("button", { name: "Cancel" }).click();
       await panel.waitFor({ state: "detached" });
-      ck(t("Cancel closes it and asks the daemon for nothing"), ctl.posts.length === 0 && (await rows.count()) === 7);
+      ck(t("Cancel closes it and asks the daemon for nothing"), ctl.posts.length === 0 && (await rows.count()) === 6);
       await q.getByRole("button", { name: "Answer" }).click();
       await panel.getByTestId("answer-text").fill("The checkout lives on /pay.");
       await panel.getByRole("button", { name: "Send" }).click();
       await q.waitFor({ state: "detached" });
       const qs = (await api("GET", `/api/projects/${ids.project}/questions`)).body.questions;
       ck(t("the answer reached the spec question, from the console"), qs[0].answer === "The checkout lives on /pay." && qs[0].via === "console" && qs[0].state === "answered", JSON.stringify(qs[0]));
-      ck(t("its row is gone and six remain"), (await rows.count()) === 6, String(await rows.count()));
+      ck(t("its row is gone and five remain"), (await rows.count()) === 5, String(await rows.count()));
 
       // Answer a crew question by option
       const colour = row(page, "Which colour for the links");
@@ -420,7 +402,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("F5: a standing option click keeps the option text as the grant, never its letter"), !!decided && decided.standing === true && stoodWords.includes("b!") && !stoodWords.includes("C"), JSON.stringify(stoodWords));
       const desk = (await api("GET", "/api/desk?state=answered")).body.desk;
       ck(t("the desk item is answered"), desk.some((d) => d.label === ids.desk.options), JSON.stringify(desk.map((d) => d.label)));
-      ck(t("five remain"), (await rows.count()) === 5, String(await rows.count()));
+      ck(t("four remain"), (await rows.count()) === 4, String(await rows.count()));
 
       // TR-1021: a question that holds the crew up comes first and is answered on its row
       const font = await api("POST", "/api/desk", { question: "Which font for the shop?", options: ["serif", "sans"],
@@ -449,60 +431,16 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          !!fontPost && JSON.parse(fontPost.body || "{}").choice === "sans" && JSON.parse(fontPost.body || "{}").words === "B", JSON.stringify(fontPost));
       const fontDecided = (await api("GET", `/api/projects/${ids.project}/decisions`)).body.decisions.find((d) => /Which font for the shop/.test(d.question));
       ck(t("TR-1021: the daemon recorded it from the console"), !!fontDecided && fontDecided.via === "console" && fontDecided.choice === "sans", JSON.stringify(fontDecided));
-      ck(t("TR-1021: five remain again"), (await rows.count()) === 5, String(await rows.count()));
+      ck(t("TR-1021: four remain again"), (await rows.count()) === 4, String(await rows.count()));
 
-      // Sign off
-      const so = row(page, "Kim cannot hand the project");
-      await so.getByRole("button", { name: "Sign off" }).click();
-      const sd = page.getByTestId("signoff-dialog");
-      await sd.waitFor();
-      ck(t("Sign off lists the ticket it covers"), (await sd.getByTestId("signoff-tickets").innerText()).trim() === "Web page");
-      await checkWords(page, ck, t("sign-off dialog"));
-      if (SHOTS) await shot(page, "sign-off-dialog", 1440);
-      await sd.getByRole("button", { name: "Cancel" }).click();
-      await sd.waitFor({ state: "detached" });
-
-      // F14, F8: Kim gives acme/web to Lee while the page is open; the daemon then refuses Alex's sign-off (403)
-      const moved = await api("PUT", "/api/areas/acme/web", { person_id: ids.people.lee }, ids.keys.kim);
-      ck(t("acme/web has a new owner, Lee, and the page still lists the sign-off"), moved.status === 200 && (await so.count()) === 1, JSON.stringify(moved));
-      ctl.posts.length = 0;
-      await so.getByRole("button", { name: "Sign off" }).click();
-      await sd.waitFor();
-      await sd.getByTestId("signoff-confirm").click();
-      const derr = sd.getByTestId("dialog-error");
-      await derr.waitFor({ timeout: 5000 }).catch(() => {});
-      const derrText = (await derr.count()) ? (await derr.innerText()).trim() : "";
-      ck(t("F14: a non-owner is told so in the box, in the daemon's words"), /Lee's: only the area owner signs off/.test(derrText), derrText);
-      ck(t("F14: the box stays open, the row stays and nothing was signed off"), (await sd.count()) === 1 && (await so.count()) === 1
-         && ctl.posts.some((x) => x.path === `/api/projects/${ids.project}/signoffs`), JSON.stringify(ctl.posts));
-      ck(t("F8: one alert on the page while the box is open, not a second one under the row"), (await page.locator('[role="alert"]').count()) === 1, String(await page.locator('[role="alert"]').count()));
-      await checkWords(page, ck, t("sign-off refusal"));
-      await sd.getByRole("button", { name: "Cancel" }).click();
-      await sd.waitFor({ state: "detached" });
-      ck(t("F8: closing the box leaves the page without an alert"), (await page.locator('[role="alert"]').count()) === 0, String(await page.locator('[role="alert"]').count()));
-      const back = await api("PUT", "/api/areas/acme/web", { person_id: ids.people.alex }, ids.keys.kim);
-      ck(t("Kim gives acme/web back to Alex"), back.status === 200, JSON.stringify(back));
-
-      await so.getByRole("button", { name: "Sign off" }).click();
-      await sd.waitFor();
-      await sd.getByTestId("signoff-confirm").click();
-      await so.waitFor({ state: "detached" });
-      const owed = (await api("GET", `/api/projects/${ids.project}/signoffs`, undefined, ids.keys.kim)).body;
-      const webRow = owed.signoffs.find((r) => r.repo === "acme/web");
-      const apiRow = owed.signoffs.find((r) => r.repo === "acme/api");
-      ck(t("acme/web is signed off by its owner, from the console"), !!webRow && webRow.signed_off === true && !!webRow.owner && webRow.owner.id === ids.people.alex && !!webRow.via && !!webRow.at, JSON.stringify(webRow));
-      ck(t("acme/api, which Alex does not own, is not signed off"), !!apiRow && apiRow.signed_off === false, JSON.stringify(apiRow));
-      ck(t("four remain"), (await rows.count()) === 4, String(await rows.count()));
-
-      // Kim, who leads Shop, sees acme/web signed off once her home is read again
+      // Kim, who leads Shop, waits on nobody once her home is read again: Alex answered her question
       await new Promise((r) => setTimeout(r, 5500));   // the daemon keeps /api/home for 5 seconds per credential
       await kim.page.reload({ waitUntil: "load" });
       await kim.page.getByTestId("factory-home").waitFor();
       await settle(kim.page);
-      const kimChips = await chipsOf(kim.page.getByTestId("waiting-on-row").filter({ hasText: "Shop" }));
-      ck(t("Kim now sees acme/web signed off by Alex"), JSON.stringify(kimChips) === JSON.stringify(["no_owner:acme/docs · no owner", "signed_off:acme/web · Alex · signed off", "yours:acme/api · you"]), JSON.stringify(kimChips));
-      await shot(kim.page, "live-kim-signed-off", 1440);
-      await checkWords(kim.page, ck, t("kim after the sign-off"));
+      ck(t("Kim no longer waits on Alex for Shop"), (await kim.page.getByTestId("waiting-on-row").filter({ hasText: "Shop" }).count()) === 0);
+      await shot(kim.page, "live-kim-answered", 1440);
+      await checkWords(kim.page, ck, t("kim after the answer"));
       await kim.ctx.close();
 
       // Agree and Decline
@@ -573,80 +511,35 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await ctx.close();
     }
 
-    // ── Hand over anyway, live: Notes has a new lead after the page listed it (403), Portal goes to the crew ──
+    // ── Later, live: Portal is kept for later from its page, leaves the home, and Start now brings it back ──
     {
-      const { ctx, page, ctl } = await open("alex", 1440);
-      const t = (s) => `hand over: ${s}`;
+      const { ctx, page } = await open("alex", 1440);
+      const t = (s) => `later: ${s}`;
+      await page.goto(`${BASE}/projects/${ids.projects.portal}`, { waitUntil: "load" });
+      await page.getByTestId("factory-project").waitFor();
+      ck(t("Portal's page offers Later, not Start now"), (await page.getByTestId("project-later").count()) === 1
+         && (await page.getByTestId("project-start-now").count()) === 0);
+      await page.getByTestId("project-later").click();
+      await page.locator('[data-testid="factory-project"][data-state="later"]').waitFor({ timeout: 10000 });
+      ck(t("its chip reads Later, and Start now takes the button's place"), (await page.getByTestId("project-chip").innerText()).trim().toLowerCase() === "later"
+         && (await page.getByTestId("project-start-now").count()) === 1 && (await page.getByTestId("project-later").count()) === 0);
+      await checkWords(page, ck, t("kept for later"));
+      await shot(page, "live-project-later", 1440);
+      await new Promise((r) => setTimeout(r, 5500));   // the daemon keeps /api/home for 5 seconds per credential
       await page.goto(`${BASE}/`, { waitUntil: "load" });
       await page.getByTestId("factory-home").waitFor();
       await settle(page);
-      const won = page.getByTestId("waiting-on-row");
-      const portal = won.filter({ hasText: "Portal" }), notes = won.filter({ hasText: "Notes" });
-      const dialog = page.getByTestId("handover-dialog"), confirm = page.getByTestId("handover-confirm"), reason = page.getByTestId("handover-reason");
-      const crewOf = async (id) => (await api("GET", `/api/projects/${id}/crew`)).body.handover;
-      ck(t("both rows are listed before anything is done"), (await portal.count()) === 1 && (await notes.count()) === 1 && !(await crewOf(ids.projects.portal)) && !(await crewOf(ids.projects.notes)));
-
-      // F4: while the page is open, Alex gives Notes to Kim; the daemon then refuses him (403)
-      const lead = await api("PATCH", `/api/projects/${ids.projects.notes}`, { lead_person_id: ids.people.kim }, ids.keys.alex);
-      ck(t("Notes has a new lead, Kim, and the page still lists it"), lead.status === 200 && (await notes.count()) === 1, JSON.stringify(lead));
-      await notes.getByRole("button", { name: "Hand over anyway" }).click();
-      await dialog.waitFor();
-      await reason.fill("Kim is out until Monday.");
-      await confirm.click();
-      const err = page.getByTestId("dialog-error");
-      await err.waitFor({ timeout: 5000 }).catch(() => {});
-      const errText = (await err.count()) ? (await err.innerText()).trim() : "";
-      ck(t("a non-lead is told so: Only the lead of Notes can hand it over."), errText === "Only the lead of Notes can hand it over.", errText);
-      ck(t("the box stays open, its row stays and nothing was handed over"), (await dialog.count()) === 1 && (await notes.count()) === 1 && !(await crewOf(ids.projects.notes)));
-      await checkWords(page, ck, t("refusal"));
-      await page.getByRole("button", { name: "Cancel" }).click();
-      await dialog.waitFor({ state: "detached" });
-      const back = await api("PATCH", `/api/projects/${ids.projects.notes}`, { lead_person_id: ids.people.alex }, ids.keys.kim);   // Alex leads Notes again, so the later counts hold
-      ck(t("Kim gives Notes back to Alex"), back.status === 200, JSON.stringify(back));
-      ctl.posts.length = 0;
-
-      // TR-895 F2: a key that can only read is told so, not that the lead must do it
-      {
-        const made = await api("POST", "/api/keys", { name: "reader-laptop", scopes: ["read"], person: { email: "alex-seed@example.com", name: "Alex" } });
-        ck(t("a read key was made for Alex"), made.status === 200 || made.status === 201, JSON.stringify(made));
-        ids.keys.reader = made.body.secret;
-        const rd = await open("reader", 1440);
-        await rd.page.goto(`${BASE}/`, { waitUntil: "load" });
-        await rd.page.getByTestId("factory-home").waitFor();
-        await settle(rd.page);
-        const rrow = rd.page.getByTestId("waiting-on-row").filter({ hasText: "Portal" });
-        await rrow.getByRole("button", { name: "Hand over anyway" }).click();
-        await rd.page.getByTestId("handover-dialog").waitFor();
-        await rd.page.getByTestId("handover-reason").fill("Kim is out until Monday.");
-        await rd.page.getByTestId("handover-confirm").click();
-        const rerr = rd.page.getByTestId("dialog-error");
-        await rerr.waitFor({ timeout: 5000 }).catch(() => {});
-        const rtext = (await rerr.count()) ? (await rerr.innerText()).trim() : "";
-        ck(t("a read key is told it can only read, naming the key"), rtext === "The key reader-laptop can only read, so it cannot hand a project over. Sign in with a key that can.", rtext);
-        await checkWords(rd.page, ck, t("read key refusal"));
-        await rd.ctx.close();
-      }
-
-      // F6: Portal, as its lead
-      await portal.getByRole("button", { name: "Hand over anyway" }).click();
-      await dialog.waitFor();
-      ck(t("Hand over is off with no reason, and with only spaces"), (await confirm.isDisabled()) && (await reason.fill("   "), await confirm.isDisabled()));
-      const why = "Kim is out until Monday, so the ticket should not wait.";
-      await reason.fill(why);
-      ck(t("Hand over is on with a reason"), await confirm.isEnabled());
-      await shot(page, "live-hand-over-dialog", 1440);
-      await checkWords(page, ck, t("dialog"));
-      await api("GET", "/api/home", undefined, ids.keys.alex);   // the daemon holds this answer for 5 seconds: it still lists Portal
-      await confirm.click();
-      await dialog.waitFor({ state: "detached", timeout: 5000 }).catch(() => {});
-      ck(t("the row leaves at once, though the daemon's cached answer still lists it"), (await portal.count()) === 0 && (await notes.count()) === 1, String(await portal.count()));
-      const post = ctl.posts.find((x) => x.path === `/api/projects/${ids.projects.portal}/handover`);
-      ck(t("the page asked /api/projects/<id>/handover with {override_reason}"), !!post && JSON.stringify(JSON.parse(post.body || "{}")) === JSON.stringify({ override_reason: why }), JSON.stringify(post));
-      const done = await crewOf(ids.projects.portal);
-      ck(t("the daemon recorded the hand-over with the reason"), !!done && JSON.stringify(done).includes(why), JSON.stringify(done));
-      ck(t("Notes was not handed over"), !(await crewOf(ids.projects.notes)));
-      await shot(page, "live-handed-over", 1440);
-      await checkWords(page, ck, t("handed over"));
+      ck(t("the home no longer waits on Kim for Portal"), (await page.getByTestId("waiting-on-row").filter({ hasText: "Portal" }).count()) === 0
+         && (await page.getByTestId("waiting-on-row").filter({ hasText: "Notes" }).count()) === 1);
+      ck(t("Portal is not among the project rows"), (await page.getByTestId("project-row").filter({ hasText: "Portal" }).count()) === 0);
+      ck(t("All projects says one is for later"), /, 1 for later/.test(await page.getByTestId("all-projects-link").innerText()), await page.getByTestId("all-projects-link").innerText());
+      await page.goto(`${BASE}/projects?state=later`, { waitUntil: "load" });
+      await page.getByText("Portal").first().waitFor({ timeout: 10000 }).catch(() => {});
+      ck(t("All projects lists it under Later"), (await page.getByText("Portal").count()) >= 1);
+      await page.goto(`${BASE}/projects/${ids.projects.portal}`, { waitUntil: "load" });
+      await page.getByTestId("project-start-now").click();
+      await page.locator('[data-testid="factory-project"]:not([data-state="later"])').waitFor({ timeout: 10000 });
+      ck(t("Start now brings it back: Later is offered again"), (await page.getByTestId("project-later").count()) === 1);
       await ctx.close();
     }
 
@@ -702,7 +595,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await checkWords(page, ck, t("one person"));
       await ctx.close();
     }
-    // ── You are waiting on, from the sample states: the section, its chips and the Hand over anyway box ──
+    // ── You are waiting on, from the sample states ──
     for (const width of [390, 1440]) {
       const t = (s) => `@${width}: ${s}`;
       const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
@@ -720,27 +613,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       }
       await page.goto(`${BASE}/?sample=threePeople`, { waitUntil: "load" });
       await page.getByTestId("waiting-on").waitFor();
-      const chips = await page.getByTestId("waiting-on-chip").evaluateAll((els) => els.map((e) => `${e.getAttribute("data-state")}:${e.textContent}`));
-      ck(t("a chip per repo, with its state and who"), chips.some((c) => c.startsWith("waiting:")) && chips.some((c) => c.startsWith("signed_off:")) && chips.some((c) => c.startsWith("no_owner:") && /no owner/.test(c)), JSON.stringify(chips));
-      ck(t("Remind is not offered"), (await page.getByRole("button", { name: "Remind" }).count()) === 0);
-      await page.getByRole("button", { name: "Hand over anyway" }).first().click();
-      const confirm = page.getByTestId("handover-confirm");
-      await page.getByTestId("handover-dialog").waitFor();
-      ck(t("Hand over is off with no reason"), await confirm.isDisabled());
-      await page.getByTestId("handover-reason").fill("   ");
-      ck(t("Hand over is off with only spaces"), await confirm.isDisabled());
-      await page.getByTestId("handover-reason").fill("Kim is out until Monday, so the ticket should not wait.");
-      ck(t("Hand over is on with a reason"), await confirm.isEnabled());
-      await shot(page, "waiting-on-dialog", width);
-      await page.getByRole("button", { name: "Cancel" }).click();
-      ck(t("Cancel closes the box"), (await page.getByTestId("handover-dialog").count()) === 0);
-      await page.getByRole("button", { name: "Hand over anyway" }).first().click();
-      await page.getByTestId("handover-dialog").waitFor();
-      await page.getByTestId("handover-reason").fill("Kim is out until Monday, so the ticket should not wait.");
-      await confirm.click();
-      const sampleNote = page.getByText("This is a sample, so nothing was sent.");
-      await sampleNote.first().waitFor({ timeout: 3000 }).catch(() => {});
-      ck(t("F7: confirming a hand-over in a sample says nothing was sent, and the box closes"), (await sampleNote.count()) >= 1 && (await page.getByTestId("handover-dialog").count()) === 0, String(await sampleNote.count()));
+      ck(t("no repo chips, no Hand over anyway and no Remind"), (await page.getByTestId("waiting-on-chip").count()) === 0
+         && (await page.getByRole("button", { name: "Hand over anyway" }).count()) === 0
+         && (await page.getByRole("button", { name: "Remind" }).count()) === 0);
       await ctx.close();
     }
     // ── Projects, from the sample states: Mine and Team, the lock, the lead line and the hidden line ──
@@ -857,7 +732,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && (await texts("quiet-crews"))[0].trim() === "Not seen in a day: Lee's crew" && !/Lee/.test((await texts("team-crew-row")).join()), JSON.stringify(await texts("quiet-crews")));
       ck(t("three crews or fewer have no Show all"), (await showAll().count()) === 0);
       ck(t("two repos are listed with what waits on each"), (await n("repo-you-own")) === 2
-         && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 sign-off asked/.test((await texts("repo-you-own"))[0])
+         && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 question open/.test((await texts("repo-you-own"))[0])
          && /nothing waiting/.test((await texts("repo-you-own"))[1]), JSON.stringify(await texts("repo-you-own")));
       ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced?tab=areas");
       ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1
@@ -912,7 +787,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await settle(page);
       ck("a live cell of one has no team crews, quiet line, repos you own or limit foot",
          (await page.getByTestId("team-crews").count()) + (await page.getByTestId("quiet-crews").count()) + (await page.getByTestId("repos-you-own").count()) + (await page.getByTestId("crew-limit").count()) === 0);
-      const NEW = ["waiting-on", "waiting-on-row", "waiting-on-chip", "projects-switch", "projects-mine", "projects-team", "hidden-row", "hidden-summary", "project-lock", "project-lead", "handover-dialog"];
+      const NEW = ["waiting-on", "waiting-on-row", "projects-switch", "projects-mine", "projects-team", "hidden-row", "hidden-summary", "project-lock", "project-lead", "handover-dialog"];
       const seen = [];
       for (const id of NEW) if ((await page.getByTestId(id).count()) > 0) seen.push(id);
       ck("a live cell of one shows none of the team home's testids", seen.length === 0, seen.join());

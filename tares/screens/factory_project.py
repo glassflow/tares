@@ -34,7 +34,7 @@ from ..factory_home import plain_ago
 # ── words ─────────────────────────────────────────────────────────────────────
 
 STAGE_LABEL = {"spec": "Spec", "build": "Build", "review": "Review", "done": "Done"}
-STATE_LABEL = {**fh.STATE_LABEL, "finished": "Finished"}
+STATE_LABEL = {**fh.STATE_LABEL, "finished": "Finished", "later": "Later"}
 
 # a ticket's state in words, by its stage key
 _STAGE_WORD = factory_mod.STAGE_WORD
@@ -289,7 +289,11 @@ def register(app, store, h, ctx):
         has_start = any(d["kind"] == "start" for d in own)
         closed = bool((handover or {}).get("finished")) or p.get("status") == "done"
         stage = stage_of(has_start, tickets, closed)
-        state = "finished" if closed else fh.project_state(p, tickets, handover, waiting)
+        later = p.get("status") == "later"
+        state = ("finished" if closed else "later" if later
+                 else fh.project_state(p, tickets, handover, waiting))
+        # Later is for a project nobody has handed to the crew yet (or the crew finished)
+        with_crew = bool(handover) and not (handover or {}).get("finished")
 
         # the answer chosen, and the person's words only when they add something (TR-1018)
         decisions = [{"question": clean(d["question"]),
@@ -351,5 +355,6 @@ def register(app, store, h, ctx):
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
                 "can_close": factory_mod.ready_to_close(p, tickets),
+                "later": later, "can_later": not later and not closed and not with_crew,
                 "people": people,
                 "now": fh._iso(now)}

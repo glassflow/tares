@@ -10,7 +10,7 @@ import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setProjectLead, type ProjectPeople, type ProjectPerson,
+  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectLead, type ProjectPeople, type ProjectPerson,
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
@@ -46,6 +46,7 @@ const CHIP: Record<ProjectPageState, string> = {
   building: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
   not_started: "border-border bg-muted text-muted-foreground",
   ready_to_close: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
+  later: "border-border bg-muted text-muted-foreground",
   finished: "border-foreground bg-foreground text-background",
 };
 
@@ -745,7 +746,7 @@ function Loading() {
 /** The page for a project that was read. `onClose` closes the project and answers when it is done or
  *  throws the cell's answer; `onDecide` keeps or overturns a call the same way. Without them the
  *  buttons only open and shut what they open. `start` is a Close part way, for a sample. */
-export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, onLead, onAdd, start }: {
+export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, onLead, onAdd, onLater, start }: {
   data: FactoryProjectData;
   onClose?: () => Promise<void>;
   onDecide?: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void>;
@@ -753,6 +754,8 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
   onAccept?: (m: ProjectMilestone) => Promise<void>;
   onLead?: (id: string) => Promise<void>;
   onAdd?: (id: string) => Promise<void>;
+  /** Keep the project for later (true) or start it again (false); answers when the cell has it. */
+  onLater?: (later: boolean) => Promise<void>;
   start?: { open: boolean; error: string };
 }) {
   const { toast } = useToast();
@@ -761,6 +764,18 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
   const [busy, setBusy] = React.useState(false);
   const [closeError, setCloseError] = React.useState(start?.error ?? "");
   const [kept, setKept] = React.useState<string[]>([]);
+  const [moving, setMoving] = React.useState(false);
+  const later = async (on: boolean) => {
+    setMoving(true);
+    try {
+      await onLater?.(on);
+      toast(on ? `${d.name} is kept for later. It is off your home until you start it.` : `${d.name} is started again. It is back on your home.`);
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : "Could not reach the cell. Try again in a moment.");
+    } finally {
+      setMoving(false);
+    }
+  };
 
   const finished = d.state === "finished";
   // a button that opens this very page has no place on it
@@ -815,8 +830,12 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
               {d.state_label}
             </span>
           </div>
-          {d.can_close && !finished && (
-            <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>
+          {(d.can_later || d.later || (d.can_close && !finished)) && (
+            <div className="flex flex-wrap gap-2">
+              {d.can_later && <Button variant="secondary" busy={moving} onClick={() => void later(true)} data-testid="project-later">Later</Button>}
+              {d.later && <Button busy={moving} onClick={() => void later(false)} data-testid="project-start-now">Start now</Button>}
+              {d.can_close && !finished && <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>}
+            </div>
           )}
         </div>
         {d.goal && <p className="m-0! max-w-[820px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
@@ -909,6 +928,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
   };
   const lead = async (person: string) => { if (!sample) { await setProjectLead(id, person); reload(); } };
   const add = async (person: string) => { if (!sample) { await addProjectMember(id, person); reload(); } };
+  const keepLater = async (on: boolean) => { if (!sample) { await setLater(id, on); reload(); } };
 
   if (!data) {
     return (
@@ -934,7 +954,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} start={sample ? sampleClose(sample) : undefined} />
     </>
   );
 }

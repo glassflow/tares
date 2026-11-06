@@ -28,6 +28,7 @@ const TABS: { key: Filter; label: string }[] = [
   { key: "building", label: "Building" },
   { key: "not_started", label: "Not started" },
   { key: "ready_to_close", label: "Ready to close" },
+  { key: "later", label: "Later" },
   { key: "done", label: "Done" },
   { key: "all", label: "All" },
 ];
@@ -38,6 +39,7 @@ const CHIP: Record<ProjectState, string> = {
   building: "border-border bg-[var(--wash)] text-foreground",
   not_started: "border-border bg-transparent text-foreground",
   ready_to_close: "border-[color:var(--ok)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
+  later: "border-border bg-muted text-muted-foreground",
   done: "border-border bg-transparent text-[color:var(--ink-soft)]",
 };
 
@@ -122,12 +124,14 @@ export function FactoryProjectsView({ data, onClose, start }: {
     if (k === "open") n.delete("state"); else n.set("state", k);
     return n;
   });
-  const count = (k: Filter) => k === "all" ? data.counts.all : k === "open" ? data.counts.all - data.counts.done : data.counts[k];
+  // Open is what is being worked on: not finished, and not kept for later
+  const count = (k: Filter) => k === "all" ? data.counts.all
+    : k === "open" ? data.counts.all - data.counts.done - (data.counts.later ?? 0) : (data.counts[k] ?? 0);
   const finished = data.counts.done;
 
   const needle = query.trim().toLowerCase();
   const shown = data.projects.filter((p) =>
-    (tab === "all" || (tab === "open" ? p.state !== "done" : p.state === tab)) &&
+    (tab === "all" || (tab === "open" ? p.state !== "done" && p.state !== "later" : p.state === tab)) &&
     (!needle || `${p.name} ${p.goal}`.toLowerCase().includes(needle)));
 
   const target = data.projects.find((p) => p.id === asking) ?? null;

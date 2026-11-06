@@ -1,6 +1,6 @@
 ---
 name: spec-project
-description: Use when the user wants to spec, plan or brainstorm a new project, feature or piece of work so that another session or a tares-factory crew can build it later (any wording, or /tares:spec). Interviews one question at a time with a recommended answer, removes unknowns with research and throwaway prototypes, has a second model attack the plan, then writes everything the build needs into a Tares project (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and a working doc each), with the tickets in Linear or GitHub Issues when the user wants them there. A session opened to contribute to someone else's project (answer area owner questions, check tickets, sign off) follows the section "Contributor" instead.
+description: Use when the user wants to spec, plan or brainstorm a new project, feature or piece of work so that another session or a tares-factory crew can build it later (any wording, or /tares:spec). Interviews one question at a time with a recommended answer, removes unknowns with research and throwaway prototypes, has a second model attack the plan, then writes everything the build needs into a Tares project (spec, plan, milestones with acceptance checks, AGENTS.md, starting prompt, tickets with dependencies and a working doc each), with the tickets in Linear or GitHub Issues when the user wants them there. A session opened to contribute to someone else's project (answer area owner questions, check tickets) follows the section "Contributor" instead.
 ---
 
 # Spec a project into Tares
@@ -52,14 +52,14 @@ when you could explain the project to a new engineer. Cover:
 - how it ships: where it runs, how a release is done and checked, how it is rolled back
 - whether it will run on a tares-factory crew, or be built by one session (see step 8)
 
-**Area owners.** On an older Tares with no `list_areas` tool (factory-protocol), skip this part and
-the sign-offs in step 8: one person owns every repo. Otherwise, once you know which repos the
+**Area owners.** On an older Tares with no `list_areas` tool (factory-protocol), skip this part:
+one person owns every repo. Otherwise, once you know which repos the
 project changes, call `list_areas` and note the
 owner of each one (`{repo, person: {id, name}}`). If a repo has none, ask the user who owns it
 (one question, recommending a person from `list_people`) and call `set_area(repo, person)`. Setting
 the owner of a repo that has one, or of a repo for someone else, needs an admin: when you are not
-one, tell the user an admin sets the owner. Tickets go to these owners (step 6), and each owner
-other than the user signs off before the hand-over.
+one, tell the user an admin sets the owner. Tickets go to these owners (step 6). Nobody signs off
+before the hand-over: an owner is asked only what the spec needs from them, with `ask_area`.
 
 When a question is about a repo whose area owner is not the user (what a module does, whether a
 change is acceptable, how it is deployed), do not guess and do not make the user relay it. Once the
@@ -188,9 +188,8 @@ Write for a reader who was not here: no "as discussed", no references to this co
    - **Tares only:** `write_ticket` once per ticket with `milestone`, `depends_on` (the
      tickets' labels, `T1`, `T2`, ...), `repo` (the GitHub `owner/name` it changes) and `assignee`
      (the email or id of that repo's area owner). Titles say what the ticket does, without a number.
-   - **Every ticket carries `repo`, in all three modes, even in a project with one repo:** the
-     hand-over only asks the area owner to sign off the repos its tickets name, so a ticket without
-     one is never checked.
+   - **Every ticket carries `repo`, in all three modes, even in a project with one repo:** it is
+     how a ticket finds its area owner and how a builder knows where to work.
 7. A working doc per ticket: `write_doc` kind `working`, titled `Working: <ticket title>`, then
    `attach_working_doc`. Working docs never go to Linear or GitHub. Use exactly these sections:
 
@@ -262,14 +261,15 @@ missing. Then tell the user, briefly:
 
 - the project name and what it holds (counts, not a dump), and the assumptions worth a glance
 - where the tickets live, with the Linear or GitHub link if any
-- **the pending sign-offs.** For each repo the tickets name, whose area owner (`list_areas`) is not
-  the user, say "acme/web: Kiran, sign-off status unknown", and a repo with no owner as "acme/ghost: no
-  area owner". No tool reads sign-offs, so the owners' status is unknown until the user reports
-  back; do not say "not signed off", say "sign-off status unknown" for each. The hand-over (step 9)
-  is what checks them. Tell the user each owner signs off from their own machine with
-  `tares factory spec "<project>"` (the exact project name, in quotes), and **stop
-  before step 9** until the user says they have, or tells you to hand over anyway. Their own
-  repos need no sign-off.
+- **the open questions.** Call `list_questions(state="open", project=<name>)`. For each one, say
+  who it is for ("Q2 for Kiran: is the cart in scope?"), and that they answer it from their own
+  machine with `tares factory spec "<project>"` (the exact project name, in quotes). The project
+  is not ready to start while one is open: it shows on the user's home under "You are waiting on".
+  Fold each answer into the spec when it comes.
+- **now or later.** Ask: "Start this now, or keep it for later?" If the user says later (a backlog
+  item, not to build yet), call `set_later(project=<name>)` and tell them it is off their home,
+  under Later in All projects, until they start it (Start now on the project page, or the
+  hand-over). Then stop: no step 9.
 - the next step:
   - one session: the command to start the build, in a terminal in the repo:
     `tares factory session <name>` (it opens Claude bound to the project, with the Tares plugin; a
@@ -290,10 +290,6 @@ Ask: "Hand this to the orchestrator now?" On yes:
 3. Tell the user the orchestrator has it and will start the builders; they talk to it with
    `tares factory crew attach orchestrator`, and watch the crew on the Crew page.
 
-If `hand_over` is refused with a list such as "acme/web: Kiran (not signed off)", say who is
-missing and stop: do not retry. Pass `override_reason` only when the user, who must lead the
-project, tells you to hand over anyway, and then use their own words as the reason.
-
 If `hand_over` says no orchestrator is running, tell the user to run `tares factory crew up` in a
 terminal (starting stations hands them the user's permissions, so the user starts them, not you).
 The orchestrator finds the project on Tares when it starts; no message is needed.
@@ -303,7 +299,7 @@ The orchestrator finds the project on Tares when it starts; no message is needed
 For a session opened by `tares factory spec <project>` by someone who is not the project's lead,
 with the first message "You are contributing to <project> led by <lead>". The project's spec and
 tickets exist; you ask nothing about the idea. Your job is to answer the questions for this person
-as an area owner and to check and sign off the tickets in their repos. Use `<project>` as `project`
+as an area owner and to check the tickets in their repos. Use `<project>` as `project`
 in every call, and the person's own words in anything you write.
 
 1. Call `read_global_docs`, then `get_doc` for the `spec` and the `plan`, and read them.
@@ -327,11 +323,9 @@ in every call, and the person's own words in anything you write.
    scope, and an ordinary key (read and ingest) is refused with 403 "this credential lacks the
    'admin' scope". Linear and GitHub edits do not go through the Tares key, so they are not refused
    this way. On that 403, do not retry and do not go around it: write the change the person wants, ticket by ticket, in your reply and
-   tell the user to pass it to <lead>, who makes it. Answering and signing off still work.
-5. For each repo the user says is right ("yes, acme/web is good"), call `sign_off(repo, project)`.
-   Never sign off on your own judgment, and never for a repo the user has not answered for. Then
-   say what is signed and what is not, and that the lead can now hand over. If `sign_off` answers
-   409 "the project has no tickets in <repo>", the lead is still planning: tell the user, and stop.
+   tell the user to pass it to <lead>, who makes it. Answering still works.
+5. When the questions are answered and the tickets checked, say so, and that <lead> can hand the
+   project over: nothing else waits for this person.
 
 ## Light mode: plan a small project and build it in this session
 

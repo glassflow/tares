@@ -4,7 +4,7 @@
 
 import { request } from "../../api";
 
-export type ProjectState = "building" | "waiting_on_you" | "not_started" | "ready_to_close" | "done";
+export type ProjectState = "building" | "waiting_on_you" | "not_started" | "ready_to_close" | "later" | "done";
 
 export interface FactoryProjectRow {
   id: string;

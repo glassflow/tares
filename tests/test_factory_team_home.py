@@ -195,23 +195,9 @@ async def main():
         ck("Alex answers it", r.status_code == 200, r.text)
         ck("it is gone", "question" not in by_kind(await home("alex")))
 
-        print("== a sign-off owed before the project goes to a crew ==")
-        k = by_kind(await home("alex"))
-        so = (k.get("signoff") or [{}])[0]
-        ck("Alex owes one for acme/web", len(k.get("signoff", [])) == 1 and so["repo"] == "acme/web"
-           and so["title"] == "Shop" and so["project"] == {"id": shop, "name": "Shop"}, k)
-        ck("it comes from Kim and says why", so["from"] == {"id": pid["kim"], "name": "Kim"}
-           and so["detail"] == "1 ticket touches acme/web. Kim cannot hand the project to a crew "
-                               "until you sign off.", so.get("detail"))
-        ck("it can be signed, and the ticket read", so["actions"] == [
-            {"label": "Sign off", "primary": True, "do": "sign_off", "project": shop,
-             "repo": "acme/web", "tickets": ["Web page"]},
-            {"label": "Read the ticket", "primary": False, "href": f"/projects/{shop}"}], so["actions"])
-        ck("Kim owns acme/api and leads: nothing owed there, nothing for Kim or Lee",
-           "signoff" not in by_kind(await home("kim")) and "signoff" not in by_kind(await home("lee")))
-        r = await call("alex", "POST", f"/api/projects/{shop}/signoffs", {"repo": "acme/web"})
-        ck("Alex signs off", r.status_code == 201, r.text)
-        ck("it is gone", "signoff" not in by_kind(await home("alex")))
+        print("== nobody owes a sign-off before the project goes to a crew ==")
+        ck("Alex owns acme/web, which Shop has a ticket in: nothing asks him to sign off",
+           not any(i["id"].startswith(f"signoff:{shop}:") for i in (await home("alex"))["waiting_for_you"]))
 
         print("== a grant that waits for the owner ==")
         r = await call("kim", "POST", "/api/grants", {"kind": "project", "project": shop,
@@ -363,45 +349,32 @@ async def main():
         ck("Kim waits on one project: Atlas (Shop went to a crew, no other project depends on anyone)",
            list(on) == [atlas] and e["title"] == "Atlas" and e["project"] == {"id": atlas, "name": "Atlas"},
            list(on))
-        st = {r_["repo"]: (r_["state"], r_["owner"]) for r_ in e["repos"]}
-        ck("each repo has its owner and state: one Kim's own, one waiting, one with no owner", st == {
-            "acme/api": ("yours", {"id": pid["kim"], "name": "Kim"}),
-            "acme/web": ("waiting", {"id": pid["alex"], "name": "Alex"}),
-            "other/lib": ("no_owner", None)}, st)
         ck("the open question names who it is for and how long it has waited",
            [(q["id"], q["to"], q["waited"]) for q in e["open_questions"]]
            == [(aq, {"id": pid["alex"], "name": "Alex"}, "just now")]
            and e["open_questions"][0]["asked_at"], e["open_questions"])
-        ck("the detail says in words what is missing", e["detail"] == (
-            "Waiting for Alex to sign off on acme/web. other/lib has no owner. 1 question open for Alex."),
-           e["detail"])
-        ck("Hand over anyway and Set an owner are offered", e["actions"] == [
-            {"label": "Hand over anyway", "primary": False, "do": "hand_over_anyway", "project": atlas},
-            {"label": "Set an owner", "primary": False, "href": "/settings/advanced?tab=areas"}], e["actions"])
-        ck("the summary adds who Kim waits on, a sign-off and a question each counting one",
-           h["summary"] == factory_team.summary(h["waiting_for_you"], [("Alex", 2)])
-           and h["summary"].endswith("You are waiting on Alex for 2."), h["summary"])
+        ck("the detail says in words what is open", e["detail"] == "1 question open for Alex.", e["detail"])
+        ck("no repo chips, no Hand over anyway and no Set an owner: nothing to do but wait",
+           "repos" not in e and e["actions"] == [], e)
+        ck("Atlas is not also Ready to start for Kim while the question is open",
+           f"ready_to_start:{atlas}" not in {i["id"] for i in h["waiting_for_you"]})
+        ck("the summary adds who Kim waits on, one question",
+           h["summary"] == factory_team.summary(h["waiting_for_you"], [("Alex", 1)])
+           and h["summary"].endswith("You are waiting on Alex for 1."), h["summary"])
         ck("Alex and Lee lead nothing: an empty list, and no second sentence",
            (await home("alex"))["you_are_waiting_on"] == [] and (await home("lee"))["you_are_waiting_on"] == []
            and "waiting on" not in (await home("alex"))["summary"])
         ck("the cell's one-person home never has the key", "you_are_waiting_on" not in one)
-        ck("Atlas has not started, but a question and a sign-off wait for Alex in it: in his mine view, "
+        ck("Atlas has not started, but a question waits for Alex in it: in his mine view, "
            "not in Lee's", atlas in [p["id"] for p in (await home_of("alex"))["projects"]]
            and atlas not in [p["id"] for p in (await home_of("lee"))["projects"]])
 
         r = await call("alex", "POST", f"/api/projects/{atlas}/questions/{aq}/answer", {"answer": "Yes"})
-        await call("alex", "POST", f"/api/projects/{atlas}/signoffs", {"repo": "acme/web"})
-        e = {x["project"]["id"]: x for x in (await home("kim"))["you_are_waiting_on"]}[atlas]
-        st = {r_["repo"]: r_["state"] for r_ in e["repos"]}
-        ck("Alex signs off and answers: the lead sees signed_off, the question is gone",
-           st["acme/web"] == "signed_off" and e["open_questions"] == []
-           and e["detail"] == "other/lib has no owner.", (st, e["detail"], e["open_questions"]))
-        ck("Hand over anyway stays for the repo with no owner only through Set an owner",
-           [a["label"] for a in e["actions"]] == ["Hand over anyway", "Set an owner"], e["actions"])
+        ck("Alex answers", r.status_code == 200, r.text)
         r = await call("kim", "PUT", "/api/areas/other/lib", {"person_id": pid["kim"]})
         ck("Kim takes other/lib", r.status_code < 300, r.text)
         h = await home("kim")
-        ck("everyone signed off and nothing asked: the project is no longer waited on",
+        ck("nothing open: Atlas is no longer waited on, though Alex owns acme/web and nobody owns other/lib",
            atlas not in {x["project"]["id"] for x in h["you_are_waiting_on"]}
            and h["summary"] == factory_team.summary(h["waiting_for_you"]), h["summary"])
         solo2 = await make_project("kim", "Kim only")
@@ -410,13 +383,17 @@ async def main():
            solo2 not in {x["project"]["id"] for x in (await home("kim"))["you_are_waiting_on"]})
         nolead = await make_project("root", "Nobody leads")
         await ticket("root", nolead, "Web part", "acme/web")
+        r = await call("root", "POST", f"/api/projects/{nolead}/questions", {"repo": "acme/web", "text": "Which page?"})
+        ck("the cell's own key asks Alex a question there", r.status_code == 201, r.text)
         ck("a project the cell's own key made has no lead", store.get_project(nolead).get("lead_person_id") is None)
         e = {x["project"]["id"]: x for x in (await home("root"))["you_are_waiting_on"]}.get(nolead) or {}
         ck("it waits on Alex and falls to local: listed, marked no_lead, with Set a lead to its People card",
-           e.get("no_lead") is True and {"label": "Set a lead", "primary": False,
-                                         "href": f"/projects/{nolead}#people"} in e.get("actions", []), e)
+           e.get("no_lead") is True and e.get("actions") == [{"label": "Set a lead", "primary": False,
+                                                               "href": f"/projects/{nolead}#people"}], e)
         ck("nobody else sees the project with no lead in their list",
            nolead not in {x["project"]["id"] for x in (await home("kim"))["you_are_waiting_on"]})
+        for q in store.list_spec_questions(nolead, state="open"):
+            await call("alex", "POST", f"/api/projects/{nolead}/questions/{q['id']}/answer", {"answer": "ok"})
         store.update_project(nolead, status="done")
         await call("kim", "POST", f"/api/projects/{atlas}/questions",
                    {"repo": "acme/web", "text": "Second one?"})
@@ -426,7 +403,7 @@ async def main():
         h = await home("kim")
         ck("a second question in two projects: both listed, the sentence counts both for Alex",
            {x["project"]["id"] for x in h["you_are_waiting_on"]} == {atlas, solo2}
-           and h["summary"].endswith("You are waiting on Alex for 3."), (h["summary"]))
+           and h["summary"].endswith("You are waiting on Alex for 2."), (h["summary"]))
         ck("projects Kim leads are not marked no_lead", all(x["no_lead"] is False for x in h["you_are_waiting_on"]))
         ck("the counts sentence for several people names each, most first",
            factory_team.summary([], [("Alex", 2), ("Lee", 1)])
@@ -549,9 +526,8 @@ async def main():
            counts["lee"] == 1 and counts["alex"] == mine_open("alex") - 1, counts)
         ck("... Kim has none addressed to her, and her headline counts no questions",
            counts["kim"] == 0 and "question" not in (await home_of("kim"))["headline"], counts)
-        two = [{"repos": [{"state": "waiting", "owner": {"id": "p1", "name": "Sam"}}], "open_questions": []},
-               {"repos": [{"state": "waiting", "owner": {"id": "p2", "name": "Sam"}}],
-                "open_questions": [{"to": {"id": "p1", "name": "Sam"}}]}]
+        two = [{"open_questions": [{"to": {"id": "p1", "name": "Sam"}}]},
+               {"open_questions": [{"to": {"id": "p2", "name": "Sam"}}, {"to": {"id": "p1", "name": "Sam"}}]}]
         ck("two people of one name are two entries in the waiting counts",
            factory_team.waiting_counts(two) == [("Sam", 2), ("Sam", 1)],
            factory_team.waiting_counts(two))
@@ -712,8 +688,7 @@ async def main():
         await call("kim", "POST", f"/api/projects/{atlas}/questions", {"repo": "acme/web", "text": "Third?"})
         n_open = len(by_kind(await home("alex")).get("question", []))
         note = next(a for a in (await home_of("alex"))["areas"] if a["repo"] == "acme/web")["note"]
-        ck("an open question shows in the repo's note", n_open == 1
-           and note == "1 sign-off asked, 1 question open", note)
+        ck("an open question shows in the repo's note", n_open == 1 and note == "1 question open", note)
 
         print("== part two: the new keys pass the same checks ==")
         for who in ("alex", "kim", "lee"):
@@ -780,20 +755,9 @@ async def main():
            frm[f"desk:{theirs['label']}"] == {"id": pid["kim"], "name": "Kim"}, frm)
         second = await make_project("kim", "Second shop")
         await ticket("kim", second, "Second page", "acme/web")
-        ck("Alex owes a sign-off on a project not yet handed over", any(
-            i["project"]["id"] == second for i in by_kind(await home("alex")).get("signoff", [])))
+        ck("Alex owns acme/web but owes nothing on a project in it that is not handed over", not any(
+            (i["project"] or {}).get("id") == second for i in (await home("alex"))["waiting_for_you"]))
         store.set_handover(second, [{"path": None, "name": "acme/web"}], None, "kim", now_utc(),
-                           person_id=pid["kim"])
-        ck("once it is handed over, nothing is owed on it", not any(
-            i["project"]["id"] == second for i in by_kind(await home("alex")).get("signoff", [])))
-        big = await make_project("kim", "Big shop")
-        for n in range(22):
-            await ticket("kim", big, f"Page {n:02d}", "acme/web")
-        so = next((i for i in by_kind(await home("alex")).get("signoff", []) if i["project"]["id"] == big), {})
-        act = (so.get("actions") or [{}])[0]
-        ck("a sign-off over many tickets lists twenty titles and counts the rest",
-           len(act.get("tickets", [])) == 20 and act.get("more_tickets") == 2, act)
-        store.set_handover(big, [{"path": None, "name": "acme/web"}], None, "kim", now_utc(),
                            person_id=pid["kim"])
         busy = await make_project("kim", "Busy")
         await ticket("kim", busy, "In flight", "acme/api", stage="doing", status="started")

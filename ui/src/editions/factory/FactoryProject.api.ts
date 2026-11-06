@@ -6,7 +6,7 @@ import { request } from "../../api";
 import type { HomeItem } from "./home.types";
 
 export type ProjectStage = "spec" | "build" | "review" | "done";
-export type ProjectPageState = "building" | "waiting_on_you" | "not_started" | "ready_to_close" | "finished";
+export type ProjectPageState = "building" | "waiting_on_you" | "not_started" | "ready_to_close" | "later" | "finished";
 
 /** A ticket's state in words, as the cell says it. */
 export type TicketState = "to do" | "in progress" | "in review" | "changes asked" | "blocked" | "merged" | "canceled";
@@ -105,10 +105,17 @@ export interface FactoryProjectData {
   terminal: { label: string; command: string }[];
   linked: { tickets_in: "Linear" | "GitHub" | null; url: string | null };
   can_close: boolean;
+  /** Kept for later: off the home until someone starts it. `can_later` when it may be kept for later now. */
+  later?: boolean;
+  can_later?: boolean;
   /** Who is on the project (TR-1023). */
   people?: ProjectPeople;
   now: string;
 }
+
+/** Keep the project for later, off the home, or start it again. */
+export const setLater = (id: string, later: boolean) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}/later`, { method: "POST", body: JSON.stringify({ later }) });
 
 /** The whole project page, in one read. */
 export const setProjectLead = (id: string, personId: string) =>

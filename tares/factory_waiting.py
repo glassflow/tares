@@ -21,8 +21,9 @@ _SHOWN_CHOICES = 3
 
 
 def _open_projects(store) -> list[dict]:
+    """The open software-factory projects; one kept for later waits for nobody until it starts."""
     return [p for p in store.list_projects()
-            if p.get("kind") == "software_factory" and p["status"] != "done"]
+            if p.get("kind") == "software_factory" and p["status"] not in ("done", "later")]
 
 
 def _for(waited: str) -> str:
@@ -216,12 +217,14 @@ def prs_to_review(store, fx, now) -> list[dict]:
 # ── projects ready to hand to the crew ────────────────────────────────────────
 
 def ready_to_start(store, fx, now) -> list[dict]:
-    """Open projects with a spec and tickets that the crew has not been handed."""
+    """Open projects with a spec and tickets that the crew has not been handed, and no question
+    still open: a project waiting on an answer is in "You are waiting on" instead."""
     projects = _open_projects(store)
     if not projects:
         return []
     tickets = store.tickets_by_project([p["id"] for p in projects])
     handed = set(store.handed_over_projects())
+    asking = {q["project"] for q in store.list_spec_questions(state="open")}   # one read, every project
     specs: dict[str, list] = {}
     for d in store.list_cell_docs():
         if d["kind"] == "spec":
@@ -230,7 +233,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
     out = []
     for p in projects:
         ts = tickets.get(p["id"]) or []
-        if not ts or p["id"] in handed or not specs.get(p["id"]):
+        if not ts or p["id"] in handed or not specs.get(p["id"]) or p["id"] in asking:
             continue
         since = min(specs[p["id"]], key=lambda t: fh._dt(t) or now)
         where = next((_TRACKER[t["owner"]] for t in ts if t.get("owner") in _TRACKER), "")
@@ -241,6 +244,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
             meta="Spec written " + fh.plain_ago(since, now), since=since, now=now,
             project=_ref(p), id=f"ready_to_start:{p['id']}",
             actions=[{"label": "Read the spec", "primary": False, "href": f"/projects/{p['id']}"},
+                     {"label": "Later", "primary": False, "do": "later", "project": p["id"]},
                      {"label": "Copy the hand-over command", "primary": True, "do": "copy",
                       "text": f"/tares:ship {p['name']}"}]))
     return out

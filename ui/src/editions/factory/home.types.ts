@@ -21,11 +21,10 @@ export type HomeVerb =
   | "allow"
   | "answer"
   | "choose"
-  | "sign_off"
   | "agree"
   | "decline"
-  | "hand_over_anyway"
-  | "close";
+  | "close"
+  | "later";
 
 // A link (`href`) or something the page does (`do`), never both.
 export interface HomeAction {
@@ -101,19 +100,11 @@ export interface HomeHiddenProject {
 
 export type HomeProjectRow = HomeProject | HomeHiddenProject;
 
-// One repo of a project the person leads, and where its owner stands.
-export interface HomeWaitingRepo {
-  repo: string;
-  owner: HomeRef | null;
-  state: "yours" | "waiting" | "signed_off" | "no_owner";
-}
-
-// A project the person leads that depends on someone else before it can go to a crew.
+// A project the person leads with a question open for someone else, so it is not ready to start.
 export interface HomeWaitingOn {
   project: HomeRef;
   title: string;
   detail: string;
-  repos: HomeWaitingRepo[];
   open_questions: { id: string; to: HomeRef | null; asked_at: string | null; waited: string }[];
   actions: HomeAction[];
   no_lead?: boolean; // nobody leads the project; it shows here because it falls to the cell's first person
@@ -139,7 +130,7 @@ export interface HomeCrewLimit {
 
 export interface HomeArea {
   repo: string;
-  note: string; // "1 sign-off asked, 1 question open", "nothing waiting"
+  note: string; // "1 question open", "nothing waiting"
 }
 
 // "not heard" is a station silent for a while; "waiting" says why in `doing`.
@@ -209,6 +200,7 @@ export interface HomeData {
   crew_limit?: HomeCrewLimit;
   areas?: HomeArea[];
   finished_count: number;
+  later_count?: number; // projects kept for later, off the home
   crew: HomeCrew;
   plan: HomePlan;
   tools: HomeTool[];

@@ -61,14 +61,6 @@ export function answerQuestion(project: string, question: string, answer: string
   });
 }
 
-/** The owner of a repo says the project's tickets in it are right. */
-export function signOff(project: string, repo: string): Promise<unknown> {
-  return request(`/api/projects/${enc(project)}/signoffs`, {
-    method: "POST",
-    body: JSON.stringify({ repo }),
-  });
-}
-
 /** Agree to a grant that waits for the person. */
 export function consentGrant(grant: string): Promise<unknown> {
   return request(`/api/grants/${enc(grant)}/consent`, { method: "POST", body: JSON.stringify({}) });
@@ -82,11 +74,10 @@ export function declineGrant(grant: string, reason: string): Promise<unknown> {
   });
 }
 
-/** The project's lead hands it to a crew although a repo's owner has not signed off, and says why.
- *  The daemon refuses with a sentence when the person is not the lead (403) or the reason is empty (409). */
-export function handOverAnyway(project: string, reason: string): Promise<unknown> {
-  return request(`/api/projects/${enc(project)}/handover`, {
+/** Keep a project for later, off the home until someone starts it, or start it again. */
+export function keepForLater(project: string, later = true): Promise<unknown> {
+  return request(`/api/projects/${enc(project)}/later`, {
     method: "POST",
-    body: JSON.stringify({ override_reason: reason }),
+    body: JSON.stringify({ later }),
   });
 }

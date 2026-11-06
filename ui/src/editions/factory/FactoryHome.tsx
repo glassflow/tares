@@ -13,18 +13,18 @@ import { useSample } from "../sample";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
 import {
-  allowDesk, answerQuestion, consentGrant, declineGrant, deskReply, finishProject, getHome, handOverAnyway, keepAssumption, signOff,
+  allowDesk, answerQuestion, consentGrant, declineGrant, deskReply, finishProject, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, HomeWaitingOn,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
 import { Detail, DetailLines } from "./HomeDetail";
 import { CrewLimit, ReposYouOwn, TeamCrews } from "./TeamSide";
 import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
-import { AnswerPanel, DeclineDialog, HandOverDialog, SignOffDialog, type AnswerGiven } from "./WaitingActions";
+import { AnswerPanel, DeclineDialog, type AnswerGiven } from "./WaitingActions";
 import { WaitingForYou } from "./WaitingForYou";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { YouAreWaitingOn } from "./YouAreWaitingOn";
@@ -91,7 +91,7 @@ type OnAction = (a: HomeAction, item?: HomeItem) => void;
 
 const BUSY_LABEL: Partial<Record<HomeVerb, string>> = {
   keep_assumptions: "Keeping...", allow: "Allowing...", close: "Closing...", agree: "Agreeing...",
-  answer: "Sending...", choose: "Sending...", sign_off: "Signing...", decline: "Declining...",
+  answer: "Sending...", choose: "Sending...", decline: "Declining...", later: "Moving...",
 };
 
 function ActionButton({ action, item, onAction, state }: {
@@ -221,13 +221,15 @@ interface TeamProjectsProps {
 
 const PROJECTS_FIRST = 6;
 
-function Projects({ projects, stubs, finished, team }: {
-  projects: HomeProject[]; stubs: HomeHiddenProject[]; finished: number; team?: TeamProjectsProps;
+function Projects({ projects, stubs, finished, later = 0, team }: {
+  projects: HomeProject[]; stubs: HomeHiddenProject[]; finished: number; later?: number; team?: TeamProjectsProps;
 }) {
   const [all, setAll] = React.useState(false);
   const shown = team && !all ? projects.slice(0, PROJECTS_FIRST) : projects;
-  const link = projects.length > 0 || finished > 0 ? (
-    <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]! underline">All projects, {finished} finished</Link>
+  const link = projects.length > 0 || finished > 0 || later > 0 ? (
+    <Link to="/projects" className="text-xs text-[color:var(--accent-deep)]! underline" data-testid="all-projects-link">
+      All projects, {finished} finished{later > 0 && `, ${later} for later`}
+    </Link>
   ) : undefined;
   return (
     <section aria-label="Projects" className="min-w-0" data-testid="projects">
@@ -390,12 +392,11 @@ const RIGHT = "flex min-w-0 flex-[1_1_300px] flex-col gap-6";
 
 const START_TITLE = "Get your factory going";
 
-export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown, projectsView, onProjectsView }: {
+export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStart, onStartHidden, showStart, onStartShown, projectsView, onProjectsView }: {
   data: HomeData; onAction?: OnAction; rows?: Record<string, RowState>; notice?: React.ReactNode;
   /** Mine or Team on a team cell's Projects (Mine unless told); the page reads the list again for the other. */
   projectsView?: ProjectsView; onProjectsView?: (v: ProjectsView) => void;
   /** Hand over anyway on a row of You are waiting on. */
-  onHandOver?: (entry: HomeWaitingOn) => void;
   /** A panel open under a waiting row, by row id (the answer box on a team home). */
   panels?: Record<string, React.ReactNode>;
   /** What Hide this list and Show it again call; a sample passes ones that touch nothing. */
@@ -429,8 +430,8 @@ export function FactoryHomeView({ data, onAction, onHandOver, rows, notice, pane
           ) : (
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
-          {isTeam(data) && <YouAreWaitingOn entries={data.you_are_waiting_on ?? []} onHandOver={onHandOver} />}
-          <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} team={team} />
+          {isTeam(data) && <YouAreWaitingOn entries={data.you_are_waiting_on ?? []} />}
+          <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} />
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
@@ -483,20 +484,6 @@ export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
 // ── actions ────────────────────────────────────────────────────────────────────
 
 /** The sentence of a refusal, or a plain one when the cell could not be reached. */
-/** Why a hand-over was refused. The daemon refuses a key that can only read (admin scope), a key with
- *  no person, and a person who is not the project's lead, each with its own sentence; say which one,
- *  and name the key when the key is the cause. */
-function handOverRefusal(e: unknown, project: string, key?: string): string {
-  const message = e instanceof ApiError ? e.message : "";
-  if (e instanceof ApiError && e.status === 403) {
-    const who = key ? `The key ${key}` : "This key";
-    if (/lacks the .* scope/i.test(message)) return `${who} can only read, so it cannot hand a project over. Sign in with a key that can.`;
-    if (/has no person/i.test(message)) return `${who} has no person, so it cannot hand a project over. An admin binds it in Settings, Keys.`;
-    return `Only the lead of ${project} can hand it over.`;
-  }
-  return reason(e);
-}
-
 function reason(e: unknown): string {
   return e instanceof ApiError && e.message ? e.message : "Could not reach the cell. Try again in a moment.";
 }
@@ -520,7 +507,7 @@ function grantWords(who: string, command: string, where: string): string {
   return say(`${cut.slice(0, Math.max(cut.lastIndexOf(" "), 1))} ...`);
 }
 
-interface Done { item?: string; project?: string; handedOver?: string }
+interface Done { item?: string; project?: string; later?: string }
 
 function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
   item: HomeItem; desk: string; mayLimit: boolean; onClose: () => void; onDone: (r: AllowedGrant) => void;
@@ -610,21 +597,18 @@ function CloseDialog({ item, project, onClose, onDone }: {
 }
 
 const SAMPLE_NOTE = "This is a sample, so nothing was sent.";
-const SAMPLE_OPENS = ["answer", "sign_off", "decline"];
+const SAMPLE_OPENS = ["answer", "decline"];
 
-/** Everything the buttons of the page do. With `live` off (a sample) Copy works and the answer, sign-off
+/** Everything the buttons of the page do. With `live` off (a sample) Copy works and the answer
  *  and decline panels open, but nothing reaches the cell: the page says so. `changed` tells the page what
  *  to hide at once and to read again. */
 function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const { toast } = useToast();
-  const { credentialName } = useEdition();
   const [rows, setRows] = React.useState<Record<string, RowState>>({});
   const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
   const [answering, setAnswering] = React.useState<{ item: HomeItem; action: HomeAction } | null>(null);
-  const [signing, setSigning] = React.useState<{ item: HomeItem; project: string; repo: string; tickets: string[]; more: number } | null>(null);
   const [declining, setDeclining] = React.useState<{ item: HomeItem; grant: string } | null>(null);
-  const [handing, setHanding] = React.useState<{ entry: HomeWaitingOn; busy: boolean; error: string | null } | null>(null);
   const working = React.useRef(new Set<string>());
   const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
   React.useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
@@ -710,13 +694,25 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       }
     } else if (a.do === "answer") {
       if (typeof a.desk === "string" || (a.project && a.question)) { clearError(item.id); setAnswering({ item, action: a }); }
-    } else if (a.do === "sign_off") {
+    } else if (a.do === "later") {
       const project = String(a.project ?? item.project?.id ?? "");
-      const repo = String(a.repo ?? item.repo ?? "");
-      if (project && repo) {
-        clearError(item.id);
-        setSigning({ item, project, repo, tickets: Array.isArray(a.tickets) ? a.tickets.map(String) : [], more: Number(a.more_tickets) || 0 });
-      }
+      if (!project) return;
+      const name = item.project?.name ?? item.title;
+      working.current.add(item.id);
+      update(item.id, () => ({ busy: "later" }));
+      void (async () => {
+        try {
+          await keepForLater(project);
+          toast(`${name} is kept for later. It is under Later in All projects.`);
+          update(item.id, () => null);
+          changed({ item: item.id, later: project });
+        } catch (e) {
+          update(item.id, () => ({ error: reason(e) }));
+          changed();
+        } finally {
+          working.current.delete(item.id);
+        }
+      })();
     } else if (a.do === "agree") {
       if (typeof a.grant === "string") {
         const grant = a.grant;
@@ -724,20 +720,6 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       }
     } else if (a.do === "decline") {
       if (typeof a.grant === "string") { clearError(item.id); setDeclining({ item, grant: a.grant }); }
-    }
-  };
-
-  const handOver = (entry: HomeWaitingOn) => setHanding({ entry, busy: false, error: null });
-  const confirmHandOver = async (entry: HomeWaitingOn, why: string) => {
-    if (!live) { setHanding(null); toast(SAMPLE_NOTE); return; }   // a sample never calls the cell
-    setHanding({ entry, busy: true, error: null });
-    try {
-      await handOverAnyway(entry.project.id, why);
-      toast(`${entry.project.name} is handed over. The crew can start it.`);
-      setHanding(null);
-      changed({ handedOver: entry.project.id });
-    } catch (e) {
-      setHanding({ entry, busy: false, error: handOverRefusal(e, entry.project.name, credentialName) });
     }
   };
 
@@ -766,23 +748,12 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
             changed({ item: allow.item.id });
           }} />
       )}
-      {signing && (
-        <SignOffDialog key={signing.item.id} item={signing.item} repo={signing.repo} tickets={signing.tickets} more={signing.more}
-          busy={rows[signing.item.id]?.busy === "sign_off"} error={rows[signing.item.id]?.error ?? null}
-          onClose={() => { clearError(signing.item.id); setSigning(null); }}
-          onConfirm={() => void run(signing.item, "sign_off", () => signOff(signing.project, signing.repo),
-            `Signed off ${signing.repo}.`, () => setSigning(null))} />
-      )}
       {declining && (
         <DeclineDialog key={declining.item.id} item={declining.item}
           busy={rows[declining.item.id]?.busy === "decline"} error={rows[declining.item.id]?.error ?? null}
           onClose={() => { clearError(declining.item.id); setDeclining(null); }}
           onConfirm={(why) => void run(declining.item, "decline", () => declineGrant(declining.grant, why),
             "Declined. The grant is revoked.", () => setDeclining(null))} />
-      )}
-      {handing && (
-        <HandOverDialog key={handing.entry.project.id} entry={handing.entry} busy={handing.busy} error={handing.error}
-          onClose={() => setHanding(null)} onConfirm={(why) => void confirmHandOver(handing.entry, why)} />
       )}
       {close && (
         <CloseDialog key={close.item.id} item={close.item} project={close.project} onClose={() => setClose(null)}
@@ -796,8 +767,8 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   );
   // A refusal shows once: in the dialog while one is open for the row, under the row otherwise.
   const underRows = Object.fromEntries(Object.entries(rows).map(([id, s]) =>
-    [id, id === signing?.item.id || id === declining?.item.id ? { ...s, error: undefined } : s]));
-  return { rows: underRows, onAction, onHandOver: handOver, dialogs, panels };
+    [id, id === declining?.item.id ? { ...s, error: undefined } : s]));
+  return { rows: underRows, onAction, dialogs, panels };
 }
 
 // ── pages ──────────────────────────────────────────────────────────────────────
@@ -806,14 +777,14 @@ const ALL_SAMPLES: Record<string, HomeData> = { ...HOME_SAMPLES, ...HOME_SAMPLES
 
 function SampleHome({ sample }: { sample: string }) {
   const [tries, setTries] = React.useState(0);
-  const { rows, onAction, onHandOver, dialogs, panels } = useHomeActions(false, () => {});
+  const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
   const [view, setView] = React.useState<ProjectsView>("mine");
   let body: React.ReactNode;
   if (sample === "loading") body = <FactoryHomeLoading />;
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={sampleView(ALL_SAMPLES[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={sampleView(ALL_SAMPLES[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -824,7 +795,7 @@ function SampleHome({ sample }: { sample: string }) {
 }
 
 /** What the page shows at once after a change, until the daemon's own answer catches up. */
-interface Overlay { items: Set<string>; projects: Set<string>; handedOver: Set<string>; until: number }
+interface Overlay { items: Set<string>; projects: Set<string>; later: Set<string>; until: number }
 
 function hhmm(d: Date): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -843,12 +814,12 @@ function LiveHome() {
   }, [data, overlay]);
   React.useEffect(() => () => clearTimeout(timer.current), []);
 
-  const { rows, onAction, onHandOver, dialogs, panels } = useHomeActions(true, (done) => {
+  const { rows, onAction, dialogs, panels } = useHomeActions(true, (done) => {
     if (done) {
       setOverlay((o) => ({
         items: new Set([...(o?.items ?? []), ...(done.item ? [done.item] : [])]),
         projects: new Set([...(o?.projects ?? []), ...(done.project ? [done.project] : [])]),
-        handedOver: new Set([...(o?.handedOver ?? []), ...(done.handedOver ? [done.handedOver] : [])]),
+        later: new Set([...(o?.later ?? []), ...(done.later ? [done.later] : [])]),
         until: Date.now() + CACHE_MS,
       }));
     }
@@ -864,16 +835,17 @@ function LiveHome() {
     const shown: HomeData = overlay ? {
       ...data,
       waiting_for_you: data.waiting_for_you.filter((i) => !overlay.items.has(i.id)),
-      ...(data.you_are_waiting_on ? { you_are_waiting_on: data.you_are_waiting_on.filter((w) => !overlay.handedOver.has(w.project.id)) } : {}),
-      projects: data.projects.filter((p) => !isProject(p) || !overlay.projects.has(p.id)),
+      ...(data.you_are_waiting_on ? { you_are_waiting_on: data.you_are_waiting_on.filter((w) => !overlay.later.has(w.project.id)) } : {}),
+      projects: data.projects.filter((p) => !isProject(p) || (!overlay.projects.has(p.id) && !overlay.later.has(p.id))),
       finished_count: data.finished_count + data.projects.filter((p) => isProject(p) && overlay.projects.has(p.id)).length,
+      later_count: (data.later_count ?? 0) + data.projects.filter((p) => isProject(p) && overlay.later.has(p.id) && !overlay.projects.has(p.id)).length,
     } : data;
     const notice = error ? (
       <Banner tone="warn" data-testid="stale-banner">
         Could not refresh. Showing what we had at {hhmm(readAt ?? new Date())}.
       </Banner>
     ) : undefined;
-    body = <FactoryHomeView data={shown} onAction={onAction} onHandOver={onHandOver} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload}
+    body = <FactoryHomeView data={shown} onAction={onAction} rows={rows} panels={panels} notice={notice} onStartHidden={reload} onStartShown={reload}
                            projectsView={view} onProjectsView={(v) => { setView(v); reload(); }} />;
   }
   return (

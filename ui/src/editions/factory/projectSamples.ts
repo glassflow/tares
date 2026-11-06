@@ -103,7 +103,7 @@ function make(p: Parts): FactoryProjectData {
     id: PID, name: p.name, goal: p.goal, stage: p.stage ?? "build",
     stage_label: { spec: "Spec", build: "Build", review: "Review", done: "Done" }[p.stage ?? "build"],
     state, state_label: p.state_label ?? { building: "Building", waiting_on_you: "Waiting on you", not_started: "Not started",
-      ready_to_close: "Ready to close", finished: "Finished" }[state],
+      ready_to_close: "Ready to close", later: "Later", finished: "Finished" }[state],
     waiting: p.waiting ?? [], counts, moving, moving_total: p.moving_total ?? moving.length, tickets_href: TICKETS,
     next: p.next ?? null, milestones: p.milestones ?? [], decisions: p.decisions ?? [], calls: p.calls ?? [],
     docs: p.docs ?? DOCS, terminal: p.terminal ?? TERMINAL,

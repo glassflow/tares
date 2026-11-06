@@ -1,15 +1,14 @@
-"""Questions to an area owner while a spec is written, and their sign-off before the hand-over (TR-636).
+"""Questions to an area owner while a spec is written (TR-636), and a hand-over that waits for
+nobody's sign-off.
 
-A daemon with auth on. First a cell of one person (only `local`): the hand-over is not held up by
-areas or sign-offs. Then three people with a key each (ashish leads the project, kiran owns
-acme/web, lee owns nothing): ask_area goes to the owner and a repo with no owner is refused; only
-the person a question is for answers it; it shows in their my_work until they do; the hand-over is
-refused with the list of who has not signed off, and accepted once the area owner has (the lead's
-own repo needs none); only an area owner signs off; a repo with tickets and no area owner blocks;
-only the project's lead overrides, the reason is kept and shows on the project's timeline; asks in
-parallel threads get distinct ids.
+A daemon with auth on. First a cell of one person (only `local`). Then three people with a key each
+(ashish leads the project, kiran owns acme/web, lee owns nothing): ask_area goes to the owner and a
+repo with no owner is refused; only the person a question is for answers it; it shows in their
+my_work until they do; the hand-over goes through whoever owns the repos, and the sign-off routes
+and tool are gone; asks in parallel threads get distinct ids. The overrides kept from before stay
+readable on the hand-over and the timeline.
 
-Run: .venv/bin/python tests/test_spec_signoff.py
+Run: .venv/bin/python tests/test_spec_questions.py
 """
 import asyncio
 import json
@@ -89,18 +88,10 @@ async def main():
                               {"repos": [{"path": os.path.join(_TMP, "r"), "name": "acme/api"}],
                                **extra})
 
-        print("== a cell of one person: no area owner, no sign-off, and the hand-over goes through ==")
+        print("== a cell of one person: no area owner, and the hand-over goes through ==")
         ck("only local is on the cell", store.only_local_person())
         solo = await make_project("root", "solo")
         await ticket("root", solo, "S-a", "acme/web")
-        r = await call("root", "GET", f"/api/projects/{solo}/signoffs")
-        ck("signoffs still lists the repo, with no owner", r.status_code == 200
-           and r.json()["signoffs"][0]["owner"] is None and r.json()["waiting_for"] == [], r.text)
-        row = r.json()["signoffs"][0]
-        ck("and says the repo needs no sign-off, so the page does not read 'No area owner' or "
-           "'Waiting'", row["exempt"] == "solo" and row["signed_off"] is False, r.text)
-        ck("the repos ready count counts it as ready", sum(
-            1 for x in r.json()["signoffs"] if x["exempt"] or x["signed_off"]) == 1, r.text)
         r = await handover("root", solo)
         ck("hand-over with an unowned repo and no sign-off: accepted", r.status_code == 200
            and r.json()["handover"]["override"] is None, r.text)
@@ -123,16 +114,6 @@ async def main():
         ck("ashish leads the project", store.get_project(uid)["lead_person_id"] == pid["ashish"])
         await ticket("ashish", uid, "api work", "acme/api")
         await ticket("ashish", uid, "web work", "acme/web")
-
-        r = await call("ashish", "GET", f"/api/projects/{uid}/signoffs")
-        rows_ = {x["repo"]: x for x in r.json()["signoffs"]}
-        ck("the lead's own repo needs no sign-off", rows_["acme/api"]["exempt"] == "lead"
-           and rows_["acme/api"]["is_lead"] is True, r.text)
-        ck("another person's repo is waiting: owner kiran, not exempt, not signed",
-           rows_["acme/web"]["exempt"] is None and rows_["acme/web"]["owner"]["name"] == "kiran"
-           and rows_["acme/web"]["signed_off"] is False, r.text)
-        ck("the ready count is 1 of 2", sum(1 for x in r.json()["signoffs"]
-                                            if x["exempt"] or x["signed_off"]) == 1, r.text)
 
         print("== ask_area goes to the owner of the repo ==")
         as_(keys["ashish"])
@@ -193,81 +174,31 @@ async def main():
         ck("list_questions state=open is empty", json.loads(
             await mf.list_questions(state="open", project="signoff-main")) == [])
 
-        print("== the hand-over waits for the area owner ==")
-        r = await handover("ashish", uid)
-        ck("refused (409), naming acme/web and kiran", r.status_code == 409
-           and "acme/web: kiran (not signed off)" in r.text, r.text)
-        ck("the lead's own repo is not on the list", "acme/api" not in r.text, r.text)
-        ck("nothing was recorded", store.get_handover(uid) is None)
+        print("== the hand-over waits for nobody's sign-off ==")
         r = await call("ashish", "GET", f"/api/projects/{uid}/signoffs")
-        ck("signoffs says what it waits for", r.json()["waiting_for"] == ["acme/web: kiran (not signed off)"],
-           r.text)
-        r = await call("ashish", "POST", f"/api/projects/{uid}/signoffs", {"repo": "acme/web"})
-        ck("the lead cannot sign off kiran's repo: 403", r.status_code == 403, r.text)
-        r = await call("lee", "POST", f"/api/projects/{uid}/signoffs", {"repo": "acme/web"})
-        ck("nor can lee: 403", r.status_code == 403, r.text)
-        r = await call("kiran", "POST", f"/api/projects/{uid}/signoffs", {"repo": "acme/ghost"})
-        ck("a repo with no owner cannot be signed: 409", r.status_code == 409, r.text)
-        ck("no sign-off row yet", store.list_signoffs(uid) == [])
-        r = await call("kiran", "POST", f"/api/projects/{uid}/signoffs", {"repo": "acme/db"})
-        ck("a repo the project has no tickets in: refused", r.status_code in (403, 409), r.text)
-        as_(keys["kiran"])
-        out = json.loads(await mf.sign_off("acme/web", project="signoff-main"))
-        row = next(x for x in out["signoffs"] if x["repo"] == "acme/web")
-        ck("kiran signs off acme/web", row["signed_off"] is True and row["owner"]["name"] == "kiran", out)
-        out = json.loads(await mf.sign_off("acme/web", project="signoff-main"))
-        ck("signing again changes nothing", len(store.list_signoffs(uid)) == 1, out)
+        ck("the sign-off route is gone", r.status_code in (404, 405), r.text)
+        r = await call("kiran", "POST", f"/api/projects/{uid}/signoffs", {"repo": "acme/web"})
+        ck("and nobody can sign off any more", r.status_code in (404, 405), r.text)
+        ck("the crew has no sign_off tool", not hasattr(mf, "sign_off"))
+        await call("ashish", "POST", f"/api/projects/{uid}/questions", {"repo": "acme/web", "text": "Still there?"})
         as_(keys["ashish"])
         out = await mf.hand_over(project="signoff-main", repos=[{"path": os.path.join(_TMP, "r"),
                                                                   "name": "acme/api"}])
-        ck("hand_over now goes through", out.startswith("Recorded"), out)
+        ck("kiran's repo has nobody's sign-off, a question is even open: hand_over goes through",
+           out.startswith("Recorded"), out)
         ck("with no override on it", store.get_handover(uid)["override"] is None)
-
-        print("== a repo with tickets and no area owner blocks ==")
         blocked = await make_project("ashish", "signoff-unowned")
         await ticket("ashish", blocked, "db work", "acme/db")
-        await ticket("ashish", blocked, "web work", "acme/web")
-        r = await call("kiran", "POST", f"/api/projects/{blocked}/signoffs", {"repo": "acme/web"})
-        ck("kiran signs acme/web there too", r.status_code == 201, r.text)
-        r = await call("ashish", "GET", f"/api/projects/{blocked}/signoffs")
-        rows_ = {x["repo"]: x for x in r.json()["signoffs"]}
-        ck("on a cell of several people a repo with no owner is not exempt (reads 'No area owner')",
-           rows_["acme/db"]["owner"] is None and rows_["acme/db"]["exempt"] is None
-           and rows_["acme/db"]["signed_off"] is False, r.text)
         r = await handover("ashish", blocked)
-        ck("refused: acme/db has tickets but no area owner", r.status_code == 409
-           and "acme/db has tickets but no area owner" in r.text and "acme/web" not in
-           r.text.split("waits for the area owners:")[1].split("Ask them")[0], r.text)
-        ck("not recorded", store.get_handover(blocked) is None)
-
-        print("== only the lead overrides, and the reason is kept and shown ==")
-        why = "kiran is out until Monday and the web part is a one-line change"
-        r = await handover("kiran", blocked, override_reason=why)
-        ck("kiran (not the lead) cannot override: 403", r.status_code == 403
-           and "lead" in r.text, r.text)
-        r = await handover("lee", blocked, override_reason=why)
-        ck("lee cannot either: 403", r.status_code == 403, r.text)
-        ck("still not recorded", store.get_handover(blocked) is None)
-        r = await handover("ashish", blocked, override_reason="   ")
-        ck("a blank reason is no reason: 409", r.status_code == 409, r.text)
-        r = await handover("ashish", blocked, override_reason=why)
-        ho = (r.json() or {}).get("handover") or {}
-        ck("the lead overrides: 200, reason on the hand-over", r.status_code == 200
-           and (ho.get("override") or {}).get("reason") == why
-           and ((ho["override"].get("person") or {}).get("id") == pid["ashish"]), r.text)
-        r = await call("ashish", "GET", f"/api/projects/{blocked}/timeline")
-        ev = (r.json() or {}).get("events") or []
-        ck("the project timeline shows it", r.status_code == 200 and len(ev) == 1
-           and ev[0]["kind"] == "handover_override" and why in ev[0]["text"], r.text)
-        r = await call("ashish", "GET", f"/api/projects/{blocked}/crew")
-        ck("and so does the project's crew view", (r.json()["handover"].get("override") or {}
-                                                   ).get("reason") == why, r.text)
+        ck("a repo with tickets and no area owner holds nothing up either", r.status_code == 200, r.text)
+        nl = await make_project("lee", "signoff-by-lee")
+        await ticket("lee", nl, "web by lee", "acme/web")
+        r = await handover("lee", nl, override_reason="kiran is away")
+        ck("an override_reason is no longer a thing: accepted and not kept", r.status_code == 200
+           and r.json()["handover"]["override"] is None and store.list_handover_overrides(nl) == [], r.text)
         r = await call("ashish", "GET", f"/api/projects/{uid}/timeline")
-        ck("a project handed over properly has no such event", (r.json() or {}).get("events") in (None, []),
+        ck("a hand-over leaves no override event on the timeline", (r.json() or {}).get("events") in (None, []),
            r.text)
-        r = await handover("lee", uid, override_reason="not needed")
-        ck("an override nobody needed is not stored", r.status_code == 200
-           and r.json()["handover"]["override"] is None, r.text)
 
         print("== parallel asks never share a number ==")
         pj = await make_project("ashish", "signoff-parallel")
@@ -306,86 +237,6 @@ async def main():
         r = await call("kiran", "GET", f"/api/projects/{priv}/questions")
         ck("and kiran cannot read its questions: 404", r.status_code == 404, r.text)
 
-
-        print("== the area changes hands: the new owner signs, the old owner's row does not count ==")
-        mv = await make_project("ashish", "signoff-moved")
-        await ticket("ashish", mv, "web again", "acme/web")
-        r = await call("kiran", "POST", f"/api/projects/{mv}/signoffs", {"repo": "acme/web"})
-        ck("kiran signs acme/web", r.status_code == 201, r.text)
-        first_at = store.list_signoffs(mv)[0]["at"]
-        r = await call("kiran", "POST", f"/api/projects/{mv}/signoffs", {"repo": "acme/web"})
-        ck("kiran signing again keeps the first row and time", r.status_code == 201
-           and len(store.list_signoffs(mv)) == 1 and store.list_signoffs(mv)[0]["at"] == first_at, r.text)
-        r = await call("ashish", "PUT", "/api/areas/acme/web", {"person_id": pid["lee"]})
-        ck("acme/web moves to lee", r.status_code < 300, r.text)
-        r = await call("ashish", "GET", f"/api/projects/{mv}/signoffs")
-        ck("kiran's sign-off no longer counts: the repo reads not signed off",
-           r.json()["signoffs"][0]["signed_off"] is False and r.json()["signoffs"][0]["owner"]["name"] == "lee"
-           and r.json()["waiting_for"] == ["acme/web: lee (not signed off)"], r.text)
-        r = await handover("ashish", mv)
-        ck("hand-over is refused until lee signs", r.status_code == 409
-           and "acme/web: lee (not signed off)" in r.text, r.text)
-        r = await call("lee", "POST", f"/api/projects/{mv}/signoffs", {"repo": "acme/web"})
-        ck("lee signs: 201", r.status_code == 201, r.text)
-        rows = store.list_signoffs(mv)
-        ck("the row is lee's now, one row", len(rows) == 1 and rows[0]["person_id"] == pid["lee"], rows)
-        r = await call("ashish", "GET", f"/api/projects/{mv}/signoffs")
-        ck("the repo reads signed off", r.json()["signoffs"][0]["signed_off"] is True
-           and r.json()["waiting_for"] == [], r.text)
-        r = await handover("ashish", mv)
-        ck("hand-over goes through after the new owner signs", r.status_code == 200
-           and r.json()["handover"]["override"] is None, r.text)
-        r = await call("ashish", "PUT", "/api/areas/acme/web", {"person_id": pid["kiran"]})
-        ck("acme/web moves back to kiran", r.status_code < 300, r.text)
-        r = await call("ashish", "GET", f"/api/projects/{mv}/signoffs")
-        ck("lee's row does not count for kiran, who has not signed again",
-           r.json()["signoffs"][0]["signed_off"] is False
-           and r.json()["waiting_for"] == ["acme/web: kiran (not signed off)"], r.text)
-        r = await handover("ashish", mv)
-        ck("a further hand-over is refused again", r.status_code == 409, r.text)
-
-        print("== a later hand-over keeps the override record ==")
-        kp = await make_project("ashish", "signoff-keep")
-        await ticket("ashish", kp, "web keep", "acme/web")
-        why2 = "kiran is away and it is a one-line change"
-        r = await handover("ashish", kp, override_reason=why2)
-        ck("the lead overrides", r.status_code == 200 and r.json()["handover"]["override"]["reason"] == why2,
-           r.text)
-        at1 = store.get_handover(kp)["override"]["at"]
-        r = await call("kiran", "POST", f"/api/projects/{kp}/signoffs", {"repo": "acme/web"})
-        ck("kiran signs afterwards", r.status_code == 201, r.text)
-        r = await handover("ashish", kp)
-        ck("a second hand-over with nothing missing is accepted", r.status_code == 200, r.text)
-        ov = (store.get_handover(kp).get("override") or {})
-        ck("the reason and its time are still there", ov.get("reason") == why2 and ov.get("at") == at1, r.text)
-        r = await call("ashish", "GET", f"/api/projects/{kp}/timeline")
-        ev = (r.json() or {}).get("events") or []
-        ck("and so is the timeline event", len(ev) == 1 and ev[0]["kind"] == "handover_override"
-           and why2 in ev[0]["text"], r.text)
-
-        print("== an override stays with the person who made it (TR-640) ==")
-        f6 = await make_project("ashish", "signoff-f6")
-        await ticket("ashish", f6, "web f6", "acme/web")
-        r = await handover("ashish", f6, override_reason="kiran is away")
-        ck("the lead overrides", r.status_code == 200, r.text)
-        r = await call("kiran", "POST", f"/api/projects/{f6}/signoffs", {"repo": "acme/web"})
-        ck("kiran signs afterwards", r.status_code == 201, r.text)
-        r = await handover("lee", f6)
-        ck("lee hands over again, with no reason", r.status_code == 200
-           and (r.json()["handover"]["person"] or {}).get("id") == pid["lee"], r.text)
-        ho = store.get_handover(f6)
-        ck("the override is still ashish's, not lee's", (ho["override"]["person"] or {}).get("id")
-           == pid["ashish"] and "ashish" in (ho["override"]["by_label"] or ""), str(ho["override"]))
-        row = store.sc.execute("SELECT override_person_id FROM handovers WHERE project = ?",
-                                [f6]).fetchone()
-        ck("override_person_id is stored", row[0] == pid["ashish"], row)
-        r = await call("ashish", "GET", f"/api/projects/{f6}/timeline")
-        ev = (r.json() or {}).get("events") or []
-        ck("and the timeline event names ashish", len(ev) == 1 and "ashish" in (ev[0]["by"] or "")
-           and "lee" not in (ev[0]["by"] or ""), r.text)
-        store.sc.execute("UPDATE handovers SET override_person_id = NULL WHERE project = ?", [f6])
-        ck("a row from before the column falls back to the handing person",
-           (store.get_handover(f6)["override"]["person"] or {}).get("id") == pid["lee"])
 
         print("== every override is listed, once, across timeline pages (TR-640) ==")
         ov = await make_project("ashish", "signoff-overrides")
@@ -433,34 +284,6 @@ async def main():
         ck("none repeats and none is lost across the pages", sorted(seen_ev) == sorted(
             ["first, old", "second, by lee", "third", "fourth, newest"]), str(seen_ev))
 
-        print("== canceled tickets do not hold the hand-over ==")
-        cp = await make_project("ashish", "signoff-canceled")
-        await ticket("ashish", cp, "api part", "acme/api")
-        gone = await ticket("ashish", cp, "dropped ghost work", "acme/ghost")
-        r = await call("ashish", "PUT", f"/api/projects/{cp}/tickets/{gone.get('ref') or gone['id']}",
-                       {"status": "canceled"})
-        ck("the ticket in acme/ghost is canceled", r.status_code == 200, r.text)
-        r = await call("ashish", "GET", f"/api/projects/{cp}/signoffs")
-        ck("acme/ghost is not listed and nothing is awaited", [x["repo"] for x in r.json()["signoffs"]]
-           == ["acme/api"] and r.json()["waiting_for"] == [], r.text)
-        r = await handover("ashish", cp)
-        ck("hand-over goes through with no owner for the canceled repo", r.status_code == 200, r.text)
-
-        print("== a repo the project has no tickets in cannot be signed, even by its owner ==")
-        nt = await make_project("ashish", "signoff-no-tickets")
-        await ticket("ashish", nt, "api only", "acme/api")
-        r = await call("kiran", "POST", f"/api/projects/{nt}/signoffs", {"repo": "acme/web"})
-        ck("kiran owns acme/web but the project has no tickets there: 409", r.status_code == 409
-           and "the project has no tickets in acme/web" in r.text, r.text)
-        ck("no row was written", store.list_signoffs(nt) == [])
-
-        print("== the override reason is cut to 500 characters ==")
-        lp = await make_project("ashish", "signoff-long-reason")
-        await ticket("ashish", lp, "web long", "acme/web")
-        r = await handover("ashish", lp, override_reason="x" * 700)
-        ck("accepted, stored as 500", r.status_code == 200
-           and len(r.json()["handover"]["override"]["reason"]) == 500, r.text)
-
         print("== a private project's questions stay out of a person's my_work who cannot see it ==")
         store.add_spec_question(priv, pid["kiran"], "acme/web", "private question", pid["ashish"],
                                 datetime.now(timezone.utc))
@@ -471,13 +294,13 @@ async def main():
                                                     for q in r.json()["spec_questions"])
            and "private question" not in r.text, r.text)
 
-        print("== deleting a project takes its questions and sign-offs ==")
+        print("== deleting a project takes its questions, old sign-offs and overrides ==")
         dp = await make_project("ashish", "signoff-doomed")
         await ticket("ashish", dp, "web doomed", "acme/web")
         r = await call("ashish", "POST", f"/api/projects/{dp}/questions", {"repo": "acme/web", "text": "q"})
         ck("a question on it", r.status_code == 201, r.text)
-        r = await call("kiran", "POST", f"/api/projects/{dp}/signoffs", {"repo": "acme/web"})
-        ck("a sign-off on it", r.status_code == 201, r.text)
+        store.sc.execute("INSERT INTO signoffs (project, repo, person_id, \"at\") VALUES (?, 'acme/web', ?, now())",
+                          [dp, pid["kiran"]])   # a sign-off kept from before
         store.set_handover(dp, [{"path": "/w/x"}], None, "", datetime.now(timezone.utc), pid["ashish"],
                            None, "doomed override")
         count = lambda t: store.sc.execute(f"SELECT COUNT(*) FROM {t} WHERE project = ?", [dp]).fetchone()[0]
@@ -541,29 +364,6 @@ async def main():
         r = await call("kiran", "GET", "/api/crew/my-work", project="signoff-mw2")
         ck("the route filters the same way", [q["project"] for q in r.json()["spec_questions"]]
            == ["signoff-mw2"], r.text)
-
-        print("== hand_over says 'without every sign-off' only for the hand-over that was overridden ==")
-        hv = await make_project("ashish", "signoff-says")
-        await ticket("ashish", hv, "web says", "acme/web")
-        as_(keys["ashish"])
-        repos_ = [{"path": os.path.join(_TMP, "r"), "name": "acme/api"}]
-        out = await mf.hand_over(project="signoff-says", repos=repos_, override_reason="kiran is away")
-        ck("the overridden hand-over says so, with the reason",
-           "handed over without every sign-off: kiran is away" in out, out)
-        ck("get_handover marks it overridden", store.get_handover(hv)["overridden"] is True)
-        r = await call("kiran", "POST", f"/api/projects/{hv}/signoffs", {"repo": "acme/web"})
-        ck("kiran signs afterwards", r.status_code == 201, r.text)
-        out = await mf.hand_over(project="signoff-says", repos=repos_)
-        ck("a later clean hand-over does not say it", out.startswith("Recorded")
-           and "without every sign-off" not in out, out)
-        ho = store.get_handover(hv)
-        ck("it is not overridden, though the page still lists the earlier override",
-           ho["overridden"] is False and ho["override"]["reason"] == "kiran is away"
-           and len(ho["overrides"]) == 1, str(ho))
-        out = await mf.hand_over(project="signoff-says", repos=repos_, override_reason="again, still away")
-        ck("an override on a hand-over that needed none is not stored", "without every sign-off" not in out
-           and store.get_handover(hv)["overridden"] is False and len(store.get_handover(hv)["overrides"]) == 1,
-           out)
 
         print("== the hand-over and its override log entry are saved together ==")
         tx = await make_project("ashish", "signoff-txn")
@@ -642,7 +442,7 @@ async def main():
            [o["reason"] for o in store.list_handover_overrides(tie)] == ["reason a", "reason z"],
            str(store.list_handover_overrides(tie)))
 
-        print("== an area owner answers and signs off with an ordinary person key (no admin scope) ==")
+        print("== an area owner answers with an ordinary person key (no admin scope) ==")
         for who in ("ashish", "kiran", "lee"):
             r = await call("root", "POST", "/api/keys", {"name": f"{who}-plain", "scopes": ["read", "ingest"],
                                                          "person_id": pid[who]})
@@ -667,8 +467,6 @@ async def main():
         keys["projkey"] = {"Authorization": f"Bearer {r.json()['secret']}"}
         r = await call("projkey", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "x"})
         ck("a project key cannot answer: 403", r.status_code == 403, r.text)
-        r = await call("projkey", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
-        ck("nor sign off: 403", r.status_code == 403, r.text)
         ck("still open after those", store.get_spec_question(pl, "Q1")["state"] == "open")
         r = await call("kiran_plain", "POST", f"/api/projects/{pl}/questions/Q1/answer", {"answer": "8080"})
         ck("kiran answers with his plain key (REST)", r.status_code == 200 and r.json()["state"] == "answered"
@@ -678,25 +476,7 @@ async def main():
         out = await mf.answer_question("Q2", "localhost", project="signoff-plain-keys")
         ck("and answers the second through the MCP tool", not out.startswith("error")
            and json.loads(out)["state"] == "answered", out)
-        r = await call("lee_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
-        ck("lee's plain key cannot sign off kiran's repo: 403", r.status_code == 403, r.text)
-        r = await call("ashish_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
-        ck("nor the lead's plain key: 403", r.status_code == 403, r.text)
-        r = await call("nobody", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
-        ck("nor a plain key with no person: 403", r.status_code == 403, r.text)
-        r = await call("kiran_ro", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
-        ck("nor kiran's read-only key: 403", r.status_code == 403, r.text)
-        ck("no sign-off row yet", store.list_signoffs(pl) == [])
-        r = await call("kiran_plain", "POST", f"/api/projects/{pl}/signoffs", {"repo": "acme/plain"})
-        ck("kiran signs off with his plain key (REST)", r.status_code == 201
-           and r.json()["signoffs"][0]["signed_off"] is True, r.text)
-        store.sc.execute("DELETE FROM signoffs WHERE project = ?", [pl])
-        as_(keys["kiran_plain"])
-        out = await mf.sign_off("acme/plain", project="signoff-plain-keys")
-        ck("and through the MCP tool", not out.startswith("error")
-           and json.loads(out)["signoffs"][0]["signed_off"] is True, out)
-
-        print("== only those two routes take an ordinary key; the rest of a project stays admin ==")
+        print("== only answering takes an ordinary key; the rest of a project stays admin ==")
         for label, method, path, body in (
             ("asking an area owner", "POST", f"/api/projects/{pl}/questions", {"repo": "acme/plain", "text": "x"}),
             ("handing over", "POST", f"/api/projects/{pl}/handover", {}),
@@ -713,8 +493,6 @@ async def main():
         ck("set up: a private project", r.status_code < 300, r.text)
         r = await call("lee_plain", "POST", f"/api/projects/{pp}/questions/Q1/answer", {"answer": "x"})
         ck("a plain key of a non-member gets 404 on answering", r.status_code == 404, f"{r.status_code} {r.text}")
-        r = await call("lee_plain", "POST", f"/api/projects/{pp}/signoffs", {"repo": "acme/plain"})
-        ck("and 404 on signing off", r.status_code == 404, f"{r.status_code} {r.text}")
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

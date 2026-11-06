@@ -23,22 +23,13 @@ const asked: HomeItem[] = [
     meta: "Asked 40 minutes ago · project-x", waited: "40 minutes",
     actions: [{ label: "Answer", primary: true, do: "answer" }],
   }),
-  item("signoff:project-x:service-a", {
-    kind: "signoff", label: "Sign-off", title: "project-x", from: kim, project: projectX, repo: "example-org/service-a",
-    detail: "3 tickets touch example-org/service-a. Kim cannot hand the project to a crew until you sign off.",
-    meta: "Waiting 2 hours · your repo: example-org/service-a", waited: "2 hours",
-    actions: [
-      { label: "Read the 3 tickets", primary: false, href: "/projects/project-x" },
-      { label: "Sign off", primary: true, do: "sign_off" },
-    ],
-  }),
   item("grant:g1", {
     kind: "grant", label: "Permission", title: "Try migrations on staging", from: kim, project: projectX,
     detail: "Kim's builder wants a standing permission that covers example-org/service-a. It starts once you agree.",
     meta: "Waiting 1 day · project grant on project-x, given by Kim", waited: "1 day",
     actions: [
-      { label: "Decline", primary: false, do: "decline" },
-      { label: "Agree", primary: true, do: "agree" },
+      { label: "Decline", primary: false, do: "decline", grant: "g1" },
+      { label: "Agree", primary: true, do: "agree", grant: "g1" },
     ],
   }),
   item("desk:d1", {
@@ -59,30 +50,17 @@ const asked: HomeItem[] = [
   }),
 ];
 
-const handOver = { label: "Hand over anyway", primary: false, do: "hand_over_anyway" as const };
-
-/** Two projects the person leads: one waits on Kim, one has a repo nobody owns. */
+/** Two projects the person leads, each with a question open for someone else. */
 const waitingOn: HomeWaitingOn[] = [
   {
-    project: projectY, title: "project-y",
-    detail: "Waiting for Kim to sign off on example-org/service-b. 1 question open for Kim.",
-    repos: [
-      { repo: "example-org/service-a", owner: null, state: "yours" },
-      { repo: "example-org/service-b", owner: kim, state: "waiting" },
-      { repo: "example-org/service-d", owner: lee, state: "signed_off" },
-    ],
+    project: projectY, title: "project-y", detail: "1 question open for Kim.",
     open_questions: [{ id: "q1", to: kim, asked_at: null, waited: "3 hours" }],
-    actions: [handOver],
+    actions: [],
   },
   {
-    project: projectZ, title: "project-z",
-    detail: "example-org/service-c has no owner.",
-    repos: [
-      { repo: "example-org/service-a", owner: null, state: "yours" },
-      { repo: "example-org/service-c", owner: null, state: "no_owner" },
-    ],
-    open_questions: [],
-    actions: [handOver, { label: "Set an owner", primary: false, href: "/settings/advanced?tab=areas" }],
+    project: projectZ, title: "project-z", detail: "2 questions open for Kim and Lee.",
+    open_questions: [{ id: "q1", to: kim, asked_at: null, waited: "1 day" }, { id: "q2", to: lee, asked_at: null, waited: "2 hours" }],
+    actions: [],
   },
 ];
 
@@ -99,7 +77,7 @@ const TEAM_PROJECTS: HomeProject[] = [
   }),
   row("project-x", kim, [alex], {
     goal: "Bill teams per seat, monthly or yearly.", state: "not_started", state_label: "Not started",
-    milestone: "Waiting on your answer and sign-off", tickets: { merged: 0, blocked: 0, total: 7 }, yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
+    milestone: "Waiting on your answer", tickets: { merged: 0, blocked: 0, total: 7 }, yours: 3, yours_text: "3 tickets yours, 4 Kim's", mine: true,
   }),
   row("project-z", alex, [], {
     goal: "About 1,000 answer articles so AI assistants cite the product.", milestone: "Now on M4: 1,000 articles live",
@@ -166,7 +144,7 @@ const CREW_LIMIT = {
   text: "The team allows up to merge. Yours can be stricter, not looser.",
 };
 const AREAS: HomeArea[] = [
-  { repo: "example-org/service-a", note: "1 sign-off asked" },
+  { repo: "example-org/service-a", note: "1 question open" },
   { repo: "example-org/service-d", note: "nothing waiting" },
 ];
 const MORE_CREWS: HomeTeamCrew[] = [
@@ -176,7 +154,7 @@ const MORE_CREWS: HomeTeamCrew[] = [
 ].map(([n, m, h, d]) => crewRow({ id: n.toLowerCase(), name: n }, `${n}'s crew`, m, h, d));
 
 const TEAM_KEYS = {
-  summary: "6 things wait for you. You are waiting on Kim for 1 sign-off.",
+  summary: "5 things wait for you. You are waiting on Kim for 2 and Lee for 1.",
   you_are_waiting_on: waitingOn,
   ...projectKeys(TEAM_PROJECTS),
   crews: [OWN_CREW, KIM_CREW],
@@ -227,11 +205,11 @@ export const longText: HomeData = team(
   "1 thing waits for you.",
   {
     ...projectKeys([LONG_PROJECT, TEAM_PROJECTS[3]]),
-    summary: "1 thing waits for you. You are waiting on Kim for 1 sign-off.",
+    summary: "1 thing waits for you. You are waiting on Kim for 1.",
     crews: [OWN_CREW, crewRow({ ...kim, name: "Alexandria Kimberley-Lee-Hargreaves-Montgomery" }, "Alexandria Kimberley-Lee-Hargreaves-Montgomery's crew",
                               "a-laptop-with-a-long-machine-name-2026", "1 minute ago", `Building ${LONG_NAME}.`, 1)],
     crews_quiet: ["Lee's crew with a name that is long enough to wrap onto a second line on a phone"],
-    areas: [{ repo: "example-org/a-repository-with-a-very-long-name-service-b", note: "1 sign-off asked, 2 questions open, nothing else waits there" }],
+    areas: [{ repo: "example-org/a-repository-with-a-very-long-name-service-b", note: "2 questions open, nothing else waits there" }],
     you_are_waiting_on: [{ ...waitingOn[0], project: { ...projectY, name: LONG_NAME }, title: LONG_NAME }],
   },
 );
@@ -240,7 +218,7 @@ export const longText: HomeData = team(
 export const manyItems: HomeData = team(
   Array.from({ length: 30 }, (_, i) => item(`question:n${i}`, {
     kind: "question", label: "Question for you", title: `project-x, Q${i + 1}`, from: i % 2 ? kim : lee, project: projectX,
-    detail: `Should ticket ${i + 1} wait for the sign-off on example-org/service-a?`,
+    detail: `Should ticket ${i + 1} wait for the change on example-org/service-a?`,
     meta: `Asked ${i + 2} hours ago · project-x`, waited: `${i + 2} hours`,
     actions: [{ label: "Answer", primary: true, do: "answer" }],
   })),

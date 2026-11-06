@@ -234,6 +234,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   field to add one line.
 
 ### Changed
+- The hand-over no longer waits for area owners to sign off: a project with a spec and tickets is ready to start once no question is open. "You are waiting on" lists only the projects with a question open for someone else, and a project is never both there and in Ready to start. Sign-off and Hand over anyway are gone from the home, the API (`/signoffs`, `override_reason`) and the crew tools (`sign_off`). Plugin 0.6.6: the spec lists the open questions and asks whether to start now or keep the project for later.
+- A project can be kept for later: Later on its Ready to start card or its page takes it off the home, it shows under Later in All projects, and Start now or the hand-over brings it back (`POST /api/projects/{id}/later`, the `set_later` tool).
 - Agents can have a monthly budget (`budget_period: month`, resets on the 1st UTC); existing budgets stay lifetime.
 - An agent's page shows this month's spend next to a monthly budget (`budget_spent_usd` on `GET /api/agents/builtin`), and a test pins the month boundary in UTC.
 - CI reads its test list from tests/ci_list.txt.
