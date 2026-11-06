@@ -127,6 +127,7 @@ jobs:
         run: |
           pip install -e ".[postgres-state]"
           bash tests/check_ci_list.sh ee/tests/ci_list.txt
+          bash tests/check_ci_list.sh ee/tests/factory/ci_list.txt
           if [ "${{ matrix.db }}" = postgres ]; then
             export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
             export PYTHONPATH="$PWD/tests/pg_harness"
