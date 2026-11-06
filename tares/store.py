@@ -657,6 +657,7 @@ def _scope_sql(scope) -> tuple[str, list]:
     return sql + ")", params
 
 
+# Licence-independent by design (TR-915): never consult licence or team here.
 def _exclude_sql(exclude, sources=None, sessions=None) -> tuple[str, list]:
     """Rows that belong to projects the caller cannot see -> ('AND ...' SQL, params). `exclude` is
     {"ids": [project ids], "names": [project names], "shared": [the shared finding and
@@ -1523,6 +1524,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 self._truncate_entity_label(src, lab)
 
     # ── reads ───────────────────────────────────────────────────────────────
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def read_window(self, sources: list[str], key: str | None, since: datetime, cap: int = 12,
                          filters: list | None = None, where: dict | None = None,
                          include_payload: bool = False, scope: dict | None = None,
@@ -2644,6 +2646,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                 "goal, kind, lead_person_id, scope FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def private_projects(self) -> list[dict]:
         """The private projects, as {id, name, scope}: the one small query every cell-wide read
         runs to learn whether it has anything to hide (usually it has not)."""
@@ -2705,6 +2708,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [{"person_id": r[0], "added_by": r[1], "added_at": r[2], "reason": r[3]}
                 for r in rows]
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def is_project_member(self, uid: str, person_id: str | None) -> bool:
         """The project's lead, or a person on its member list."""
         if not person_id:
@@ -3848,6 +3852,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [u["id"] for u in self.list_projects()
                 if u["id"].lower() in want or u["name"].lower() in want]
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def read_projects(self, selector: dict | None, *uids: str | None,
                       sources: list[str] | None = None,
                       unseen: set[str] | None = None,
@@ -4516,6 +4521,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def get_api_key(self, kid: str) -> dict | None:
         return next((k for k in self.list_api_keys() if k["id"] == kid), None)
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def find_api_key(self, hash_: str) -> dict | None:
         """Active (non-revoked) key by secret hash, or None."""
         with self._sread:
@@ -4527,6 +4533,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return {"id": r[0], "name": r[1], "scopes": json.loads(r[2]), "last_used_at": r[3],
                 "project": r[4], "person_id": r[5]}
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def key_person_id(self, kid: str) -> str | None:
         """The person an active key is bound to, None for an unbound or unknown key (unlike a
         credential's person, this never falls back to `local`)."""

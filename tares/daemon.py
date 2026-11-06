@@ -918,6 +918,7 @@ def make_app() -> FastAPI:
         open instance, where no key is checked)."""
         return getattr(request.state, "project_key", None)
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _resolve_credential(request) -> tuple[set, dict] | tuple[None, None]:
         """Token from the request -> (scopes, identity), or (None, None) if unknown/absent."""
         tok = _bearer(request.headers.get("authorization")) or request.headers.get("x-tares-token", "")
@@ -945,6 +946,7 @@ def make_app() -> FastAPI:
         return ({"id": p["id"], "name": p["name"], "email": p["email"],
                  "picture": p.get("picture")} if p else None)
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _key_person(key: dict) -> dict | None:
         """Who a key acts as: the person it is bound to. A key nobody has bound acts as `local`
         while `local` is the only person on the cell (a single-user cell keeps working), and as
@@ -955,6 +957,7 @@ def make_app() -> FastAPI:
             return _person_ref(store.get_person("local"))
         return None
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _current_person(request) -> dict | None:
         """The person making this request ({id, name, email}), or None for the system credential
         and for a key with no person. Always read from the credential, never from a header or the
@@ -993,6 +996,7 @@ def make_app() -> FastAPI:
     # argument. Auth off has no guard, so nothing is set and every project is visible.
     _CALLER: contextvars.ContextVar = contextvars.ContextVar("tares_caller", default=None)
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _can_see(p: dict, request=None) -> bool:
         """May this caller see project `p`? A team project: anyone who gets this far. A private
         one: the system credential, a project key for it, and the people on it (its lead and its
@@ -1011,14 +1015,17 @@ def make_app() -> FastAPI:
         person = _current_person(request)
         return bool(person and store.is_project_member(p["id"], person["id"]))
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_projects() -> list[dict]:
         """The private projects this caller cannot see; usually none, and then one small query
         is all a cell-wide read adds (TR-629)."""
         return [p for p in store.private_projects() if not _can_see(p)]
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_ids() -> set[str]:
         return {p["id"] for p in _hidden_projects()}
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _read_exclude() -> dict | None:
         """What event reads leave out: the rows of the projects the caller cannot see."""
         hp = _hidden_projects()
@@ -1028,6 +1035,7 @@ def make_app() -> FastAPI:
                 "shared": sorted(n for n, c in runtime.catalog.sources.items()
                                  if c.connector in _SHARED_CONNECTORS)}
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_sources(hidden: set[str]) -> set[str]:
         """Sources that belong only to hidden projects. A source shared with a project the caller
         can see stays; its hidden rows are dropped row by row (store._exclude_sql)."""
@@ -1035,6 +1043,7 @@ def make_app() -> FastAPI:
             return set()
         return {n for n, uids in store.source_memberships().items() if uids and set(uids) <= hidden}
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _owned_by_hidden(kind: str, name: str, hidden: set[str]) -> bool:
         """An object whose every project is hidden from the caller (one it shares with a project
         they can see stays visible)."""
@@ -1043,10 +1052,12 @@ def make_app() -> FastAPI:
         uids = store.projects_using(kind, name)
         return bool(uids) and set(uids) <= hidden
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _is_hidden(kind: str, name: str, hidden: set[str]) -> bool:
         return bool(hidden) and (name in _hidden_sources(hidden) if kind == "source"
                                  else _owned_by_hidden(kind, name, hidden))
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _gone_if_hidden(kind: str, name: str, message: str) -> None:
         """A named object that belongs only to private projects the caller cannot see answers a
         write exactly as one that is not there: the same 404 and the same body (TR-944). A name
@@ -4070,6 +4081,7 @@ def make_app() -> FastAPI:
                                    if uid in store.projects_using("trigger", t.name)),
                 "skills": [s["name"] for s in store.list_skills(uid)]}
 
+    # Licence-independent by design (TR-915): never consult licence or team here.
     def _hidden_project(p: dict) -> dict:
         """A private project as someone not on it sees it: enough to name it and to hand its
         lead over, nothing of what is in it."""
