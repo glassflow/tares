@@ -31,6 +31,8 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 import httpx
 from fastapi import Request
 
+import _people
+
 from tares.host import Host
 from tares.licence import LicenceRequired
 
@@ -75,6 +77,9 @@ async def main():
     missing = [m for m in MEMBERS if m not in set(dir(Host))]
     ck("Host lists every member of the contract", not missing, ", ".join(missing))
     from tares.daemon import make_app
+    # the two people the keys below act as are on the cell before it starts: adding a second
+    # person over HTTP needs a licence and is tested under ee/tests
+    _people.seed(os.environ["TARES_DB"], [("Pat", "pat@example.com"), ("Ada", "ada@example.com")])
     app = make_app()
     store = app.state.store
     h = getattr(app.state, "host", None)

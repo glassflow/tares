@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import threading
 from typing import Any, Callable
 
 from . import licence
@@ -38,6 +39,10 @@ log = logging.getLogger("tares.team")
 
 ENTRY_GROUP = "tares.ee"
 ENTRY_NAME = "team"
+
+# Held around "can this team add a person" and the insert that follows, so two requests cannot both
+# pass the seat check and write past the seats. The daemon handlers run in a thread pool.
+ADD_LOCK = threading.Lock()
 
 ADD_PERSON_REASON = "Adding people needs an enterprise licence. Tares works for one person without one."
 ASSIGN_REASON = "Assigning tickets to people needs an enterprise licence."

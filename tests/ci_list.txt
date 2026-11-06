@@ -101,6 +101,7 @@ test_otlp
 test_otlp_grpc
 test_owner_claims_local
 test_people
+test_people_single
 test_person_attribution
 test_personal_docs
 test_pickup

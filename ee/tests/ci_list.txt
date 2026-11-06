@@ -15,6 +15,7 @@ test_grant_decline_sticks
 test_grants_teams
 test_my_work
 test_owner_claims_local_team
+test_people_seats
 test_people_team
 test_person_attribution_team
 test_person_picture

@@ -13,7 +13,7 @@
  * its own browser download is missing.
  */
 const http = require("http");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -52,7 +52,7 @@ function waitFor(url, tries = 150) {
   });
 }
 
-function startDaemon(port, auth) {
+function startDaemon(port, auth, people = []) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-settings-e2e-"));
   const venvPy = path.join(REPO, ".venv/bin/python");
   const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
@@ -61,6 +61,10 @@ function startDaemon(port, auth) {
                 TARES_EDITION: "platform", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };
   delete env.TARES_AUTH_TOKEN;
   if (auth) env.TARES_AUTH_TOKEN = ROOT;
+  if (people.length) {   // people on the cell before it starts: adding a second person over HTTP needs a licence
+    const seeded = spawnSync(py, [path.join(REPO, "tests", "_people.py"), env.TARES_DB, ...people], { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
+    if (seeded.status !== 0) { console.log("FAIL could not seed people: " + (seeded.stderr || seeded.stdout)); process.exit(1); }
+  }
   const d = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], { cwd: REPO, env, stdio: "ignore" });
   process.on("exit", () => { try { d.kill(); } catch { /* gone */ } });
   return { d, tmp, base: `http://127.0.0.1:${port}` };
@@ -81,7 +85,7 @@ async function accessText(browser, base, token) {
 }
 
 (async () => {
-  const on = startDaemon(8813, true);
+  const on = startDaemon(8813, true, ["Bob B=bob@example.com", "Alice A=alice@example.com"]);
   const off = startDaemon(8814, false);
   if (!(await waitFor(`${on.base}/health`)) || !(await waitFor(`${off.base}/health`))) {
     console.log("FAIL daemons did not start"); process.exit(1);

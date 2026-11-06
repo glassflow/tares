@@ -72,8 +72,13 @@ const tares = (() => {
   return fs.existsSync(path.join(bin, "tares")) ? path.join(bin, "tares") : "tares";
 })();
 const started = [];
-function startDaemon(port, extra) {
+function startDaemon(port, extra, people = []) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-team-home-e2e-"));
+  if (people.length) {   // people on the cell before it starts: adding a second person over HTTP needs a licence
+    const made = spawnSync(PY, [path.join(REPO, "tests", "_people.py"), path.join(home, "tares.duckdb"), ...people],
+      { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
+    if (made.status !== 0) { console.log("FAIL could not seed people: " + (made.stderr || made.stdout)); process.exit(1); }
+  }
   const env = cleanEnv({ TARES_EDITION: "factory", TARES_HOME: home, TARES_PORT: String(port), TARES_MCP_PORT: String(port + 20),
                          TARES_OTLP_GRPC_PORT: "off", TARES_UI_DIST: process.env.TARES_UI_DIST || path.join(UI_DIR, "dist"),
                          PYTHONPATH: REPO, ...extra });
@@ -86,7 +91,8 @@ function startDaemon(port, extra) {
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 (async () => {
-  startDaemon(PORT, { TARES_AUTH_TOKEN: ROOT });
+  startDaemon(PORT, { TARES_AUTH_TOKEN: ROOT },
+    ["Alex=alex-seed@example.com", "Kim=kim-seed@example.com", "Lee=lee-seed@example.com"]);
   startDaemon(SOLO, {});
   let browser;
   try {

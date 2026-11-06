@@ -12,7 +12,7 @@
  * its own browser download is missing. TARES_E2E_SHOTS=<dir> saves a screenshot of each step.
  */
 const http = require("http");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -68,6 +68,10 @@ const userLine = (sid, text) => JSON.stringify({
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-crew-e2e-"));
   const venvPy = path.join(REPO, ".venv/bin/python");
   const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
+  // two people on the cell before it starts: adding a second person over HTTP needs a licence
+  const seeded = spawnSync(py, [path.join(REPO, "tests", "_people.py"), path.join(tmp, "crew.duckdb"), "ashish=ashish@example.com", "kiran=kiran-test@example.com"],
+    { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
+  if (seeded.status !== 0) { console.log("FAIL could not seed people: " + (seeded.stderr || seeded.stdout)); process.exit(1); }
   const daemon = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], {
     cwd: REPO,
     env: { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "crew.duckdb"),
