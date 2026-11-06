@@ -408,6 +408,16 @@ async def main():
         await ticket("kim", solo2, "Own repo work", "acme/api")
         ck("a project whose repos are all Kim's, with nothing asked, is left out",
            solo2 not in {x["project"]["id"] for x in (await home("kim"))["you_are_waiting_on"]})
+        nolead = await make_project("root", "Nobody leads")
+        await ticket("root", nolead, "Web part", "acme/web")
+        ck("a project the cell's own key made has no lead", store.get_project(nolead).get("lead_person_id") is None)
+        e = {x["project"]["id"]: x for x in (await home("root"))["you_are_waiting_on"]}.get(nolead) or {}
+        ck("it waits on Alex and falls to local: listed, marked no_lead, with Set a lead to its People card",
+           e.get("no_lead") is True and {"label": "Set a lead", "primary": False,
+                                         "href": f"/projects/{nolead}#people"} in e.get("actions", []), e)
+        ck("nobody else sees the project with no lead in their list",
+           nolead not in {x["project"]["id"] for x in (await home("kim"))["you_are_waiting_on"]})
+        store.update_project(nolead, status="done")
         await call("kim", "POST", f"/api/projects/{atlas}/questions",
                    {"repo": "acme/web", "text": "Second one?"})
         await call("kim", "POST", f"/api/projects/{solo2}/questions",
@@ -417,6 +427,7 @@ async def main():
         ck("a second question in two projects: both listed, the sentence counts both for Alex",
            {x["project"]["id"] for x in h["you_are_waiting_on"]} == {atlas, solo2}
            and h["summary"].endswith("You are waiting on Alex for 3."), (h["summary"]))
+        ck("projects Kim leads are not marked no_lead", all(x["no_lead"] is False for x in h["you_are_waiting_on"]))
         ck("the counts sentence for several people names each, most first",
            factory_team.summary([], [("Alex", 2), ("Lee", 1)])
            == "Nothing waits for you. You are waiting on Alex for 2 and Lee for 1.")

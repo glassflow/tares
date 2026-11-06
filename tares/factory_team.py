@@ -307,7 +307,8 @@ def _waiting_detail(rows: list[dict], questions: list[dict]) -> str:
 
 
 def waiting_on(t: Team) -> list[dict]:
-    """One entry per project the person leads that is not handed over yet and depends on someone
+    """One entry per project the person leads (`local` also gets those with no lead, marked
+    `no_lead`) that is not handed over yet and depends on someone
     else: a repo another person owns (signed off or not), a repo nobody owns, or a question
     still open. A project whose repos are all the person's own, with nothing asked, is left out."""
     handed = set(t.store.handed_over_projects())
@@ -330,9 +331,14 @@ def waiting_on(t: Team) -> list[dict]:
                             "do": "hand_over_anyway", "project": p["id"]})
         if any(r["state"] == "no_owner" for r in rows):
             actions.append({"label": "Set an owner", "primary": False, "href": "/settings/advanced?tab=areas"})
+        # a project with no lead reaches `local` only because nobody else leads it: say so
+        no_lead = not p.get("lead_person_id")
+        if no_lead:
+            actions.append({"label": "Set a lead", "primary": False,
+                            "href": f"/projects/{p['id']}#people"})
         out.append({"project": {"id": p["id"], "name": p["name"]}, "title": p["name"],
                     "detail": _waiting_detail(rows, questions), "repos": rows,
-                    "open_questions": questions, "actions": actions})
+                    "open_questions": questions, "actions": actions, "no_lead": no_lead})
     return out
 
 

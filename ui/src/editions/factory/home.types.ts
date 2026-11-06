@@ -116,6 +116,7 @@ export interface HomeWaitingOn {
   repos: HomeWaitingRepo[];
   open_questions: { id: string; to: HomeRef | null; asked_at: string | null; waited: string }[];
   actions: HomeAction[];
+  no_lead?: boolean; // nobody leads the project; it shows here because it falls to the cell's first person
 }
 
 export interface HomeTeamCrew {
