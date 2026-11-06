@@ -1149,30 +1149,31 @@ from . import mcp_outcomes  # noqa: E402,F401  (the outcome tools of the factory
 
 def _register_ee_tools() -> None:
     """Register the tools of the ee team (if any) on `mcp` and name them in EE_TOOLS. A failure is
-    logged once and leaves EE_TOOLS empty; a name that is already a core tool is skipped."""
+    logged once and takes back what was registered; a tool that cannot be taken back stays named in
+    EE_TOOLS, so the licence still hides it. A name that is already a core tool is skipped."""
     EE_TOOLS.clear()
     ee = team_mod._ee()
     if ee is None:
         return
     log = logging.getLogger("tares.mcp")
+    added: list[str] = []
     try:
         taken = {t.name for t in mcp._tool_manager.list_tools()}
-        added: list[str] = []
         for fn in ee.mcp_tools():
             if fn.__name__ in taken:
                 log.warning("ee tool %s skipped: a core tool has that name", fn.__name__)
                 continue
             mcp.tool()(fn)
             added.append(fn.__name__)
+            EE_TOOLS.add(fn.__name__)
     except Exception as e:
         log.warning("ee tools did not register: %s: %s", type(e).__name__, e)
-        for name in added:   # none stays listed outside EE_TOOLS, where the licence would not hide it
+        for name in added:
             try:
                 mcp.remove_tool(name)
             except Exception:
-                pass
-        return
-    EE_TOOLS.update(added)
+                continue   # still registered: it stays in EE_TOOLS and is hidden without a licence
+            EE_TOOLS.discard(name)
 
 
 _register_ee_tools()

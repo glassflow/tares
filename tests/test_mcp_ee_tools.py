@@ -7,7 +7,10 @@ Team.mcp_tools() are registered into EE_TOOLS and listed only while the licence 
                licence text and does not run the tool.
   Allowed      listed after the outcome tools of a factory cell; call_tool runs it.
   Safety       a tool named like a core tool is skipped; a team whose mcp_tools raises leaves
-               EE_TOOLS empty; _visible keeps its old answer with its default ee_on.
+               EE_TOOLS empty; a tool that cannot be taken back stays in EE_TOOLS; a tool list
+               that raises is survived; _visible keeps its old answer with its default ee_on.
+  _ee_on       the real one, with the daemon call stubbed: ee_allowed true and false, any error
+               or a body without ee_allowed gives False, the TTL, one answer per token.
 
 Run: python tests/test_mcp_ee_tools.py
 """
@@ -84,6 +87,7 @@ def call(name):
     return blocks[0].text
 
 
+real_ee_on = ms._ee_on
 ms._ee_on = fake_ee_on
 ms._surface = surface("factory")
 
@@ -109,6 +113,35 @@ team_mod._set_ee_for_tests(FakeTeam([read_clash]))
 ms._register_ee_tools()
 ck("a tool named like a core tool is skipped", ms.EE_TOOLS == set(), str(ms.EE_TOOLS))
 ck("the core tool is still the core one", "list_tickets" in names())
+
+real_list, real_remove = ms.mcp._tool_manager.list_tools, ms.mcp.remove_tool
+def _list_boom():
+    raise RuntimeError("list failed")
+ms.mcp._tool_manager.list_tools = _list_boom
+team_mod._set_ee_for_tests(FakeTeam([ee_ping]))
+try:
+    ms._register_ee_tools()
+    raised = None
+except Exception as e:
+    raised = e
+finally:
+    ms.mcp._tool_manager.list_tools = real_list
+ck("a tool list that raises does not break the import", raised is None, repr(raised))
+ck("and leaves EE_TOOLS empty", ms.EE_TOOLS == set(), str(ms.EE_TOOLS))
+
+def _remove_boom(name):
+    raise RuntimeError("remove failed")
+ms.mcp.remove_tool = _remove_boom
+team_mod._set_ee_for_tests(Boom())
+try:
+    ms._register_ee_tools()
+finally:
+    ms.mcp.remove_tool = real_remove
+ck("a tool that cannot be taken back stays in EE_TOOLS", ms.EE_TOOLS == {"ee_ping"}, str(ms.EE_TOOLS))
+ALLOWED = False
+ck("so the licence still hides it", "ee_ping" not in names())
+ms.mcp.remove_tool("ee_ping")   # leave the registry as it was
+ms.EE_TOOLS.clear()
 
 print("== an ee team with one tool ==")
 team_mod._set_ee_for_tests(FakeTeam([ee_ping]))
@@ -139,6 +172,86 @@ os.environ["FACTORY_ROLE"] = "builder"
 ck("listed for a crew station while allowed", "ee_ping" in names())
 del os.environ["FACTORY_ROLE"]
 ck("call_tool runs it while allowed", call("ee_ping") == "pong" and RAN == ["ee_ping"], str(RAN))
+
+print("== the real _ee_on, the daemon call stubbed ==")
+
+
+class Resp:
+    def __init__(self, status, body):
+        self.status_code, self._body = status, body
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(self.status_code)
+
+    def json(self):
+        return self._body
+
+
+URLS = []
+REPLY = {"r": Resp(200, {"ee_allowed": True})}
+
+
+class FakeCx:
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+    async def get(self, url):
+        URLS.append(url)
+        r = REPLY["r"]
+        if isinstance(r, Exception):
+            raise r
+        return r
+
+
+real_cx, real_tok, real_http = ms._cx, ms.AUTH_TOKEN, ms._HTTP
+old_ttl = os.environ.get("TARES_MCP_SURFACE_TTL")
+ms._cx = lambda *a, **k: FakeCx()
+ms._HTTP = False
+
+
+def ee_on(tok="t1", ttl="30"):
+    ms.AUTH_TOKEN = tok
+    os.environ["TARES_MCP_SURFACE_TTL"] = ttl
+    return asyncio.run(real_ee_on())
+
+
+try:
+    ms._EE_ON.clear()
+    REPLY["r"] = Resp(200, {"ee_allowed": True, "valid": False})
+    ck("ee_allowed true gives True, whatever else the body says", ee_on() is True)
+    ck("it asks the licence route", URLS and URLS[-1].endswith("/api/licence"), str(URLS))
+    ms._EE_ON.clear()
+    REPLY["r"] = Resp(200, {"ee_allowed": False, "valid": True})
+    ck("ee_allowed false gives False, even for a valid key", ee_on() is False)
+    for label, reply in (("a 403", Resp(403, {})), ("a 500", Resp(500, {})),
+                         ("a body without ee_allowed", Resp(200, {"valid": True})),
+                         ("a request that raises", RuntimeError("down"))):
+        ms._EE_ON.clear()
+        REPLY["r"] = reply
+        ck(f"{label} gives False", ee_on() is False)
+    ms._EE_ON.clear(); URLS.clear()
+    REPLY["r"] = Resp(500, {})
+    ee_on(); REPLY["r"] = Resp(200, {"ee_allowed": True})
+    ck("an error is not kept: the next look asks again and can say True", ee_on() is True and len(URLS) == 2, str(URLS))
+    ms._EE_ON.clear(); URLS.clear()
+    a = ee_on("t1"); REPLY["r"] = Resp(200, {"ee_allowed": False}); b = ee_on("t1")
+    ck("a second look within the TTL reuses the answer", a is True and b is True and len(URLS) == 1, str(URLS))
+    c = ee_on("t2")
+    ck("each token has its own answer", c is False and len(URLS) == 2, str(URLS))
+    REPLY["r"] = Resp(200, {"ee_allowed": True})
+    d = ee_on("t1", ttl="0")
+    ck("a TTL of 0 asks every time", d is True and len(URLS) == 3, str(URLS))
+    ms._EE_ON.clear(); URLS.clear()
+    REPLY["r"] = Resp(200, {"ee_allowed": True})
+    ee_on("t1", ttl="junk"); ee_on("t1", ttl="junk")
+    ck("a TTL that is not a number falls back to 30 s", len(URLS) == 1, str(URLS))
+finally:
+    ms._cx, ms.AUTH_TOKEN, ms._HTTP = real_cx, real_tok, real_http
+    ms._EE_ON.clear()
+    if old_ttl is None:
+        os.environ.pop("TARES_MCP_SURFACE_TTL", None)
+    else:
+        os.environ["TARES_MCP_SURFACE_TTL"] = old_ttl
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
