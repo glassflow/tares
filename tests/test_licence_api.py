@@ -204,7 +204,8 @@ async def daemon_b(B, bodies):
     """The environment holds a key that is not valid."""
     print("== B: TARES_LICENSE is not a valid key, a valid one is stored ==")
     async with httpx.AsyncClient(base_url=B, timeout=30) as cx:
-        g = (await cx.get("/api/licence", headers=H(AUTH))).json()
+        r = await cx.get("/api/licence", headers=H(AUTH)); bodies.append(r.text)
+        g = r.json()
         ck("env invalid, nothing stored: source env, not valid, with its reason", g["source"] == "env"
            and g["valid"] is False and g["reason"] and g["env_set"] is True and g["stored"] is False, g)
         r = await cx.put("/api/licence", headers=H(AUTH), json={"key": LIC_A}); bodies.append(r.text)
@@ -217,9 +218,10 @@ async def daemon_b(B, bodies):
         g = r.json()
         ck("GET: the invalid env key still wins over the valid stored one", g["source"] == "env"
            and g["valid"] is False and g["org"] is None and g["stored"] is True, g)
-        m = (await cx.get("/metrics")).text
+        m = (await cx.get("/metrics")).text; bodies.append(m)
         ck("/metrics: valid 0", metric(m, "tares_licence_valid") == 0.0)
-        g = (await cx.delete("/api/licence", headers=H(AUTH))).json()
+        r = await cx.delete("/api/licence", headers=H(AUTH)); bodies.append(r.text)
+        g = r.json()
         ck("DELETE removes the stored key, env stays", g["stored"] is False and g["source"] == "env", g)
 
 
@@ -227,7 +229,8 @@ async def daemon_c(B, bodies):
     """The environment holds a valid key."""
     print("== C: TARES_LICENSE is valid, another valid key is stored ==")
     async with httpx.AsyncClient(base_url=B, timeout=30) as cx:
-        g = (await cx.get("/api/licence", headers=H(AUTH))).json()
+        r = await cx.get("/api/licence", headers=H(AUTH)); bodies.append(r.text)
+        g = r.json()
         ck("env valid: source env, valid, its org", g["source"] == "env" and g["valid"] is True
            and g["org"] == "Beta Org" and g["env_set"] is True and g["stored"] is False, g)
         r = await cx.put("/api/licence", headers=H(AUTH), json={"key": LIC_A}); bodies.append(r.text)
@@ -235,10 +238,11 @@ async def daemon_c(B, bodies):
         ck("PUT valid while env is set: 200, env_in_use true", r.status_code == 200 and p["env_in_use"] is True, r.text)
         ck("... still the env key in force (Beta Org, source env)", p["source"] == "env"
            and p["org"] == "Beta Org" and p["stored"] is True, p)
-        g = (await cx.get("/api/licence", headers=H(AUTH))).json()
+        r = await cx.get("/api/licence", headers=H(AUTH)); bodies.append(r.text)
+        g = r.json()
         ck("GET: the env key wins over the stored one", g["source"] == "env" and g["org"] == "Beta Org"
            and g["seats"] == 3, g)
-        m = (await cx.get("/metrics")).text
+        m = (await cx.get("/metrics")).text; bodies.append(m)
         ck("/metrics: seats 3 from the env key", metric(m, "tares_licence_seats") == 3.0)
 
 
@@ -409,7 +413,7 @@ def in_process():
 
 async def main():
     ps = {}
-    for name, env in (("a", {}), ("b", {"TARES_LICENSE": BROKEN}), ("c", {"TARES_LICENSE": LIC_B})):
+    for name, env in (("a", {}), ("b", {"TARES_LICENSE": BAD}), ("c", {"TARES_LICENSE": LIC_B})):
         ps[name] = start(name, **env)
     bodies = {"a": [], "b": [], "c": []}
     try:
@@ -435,7 +439,7 @@ async def main():
        bodies["a"] and not any(leaks(b, LIC_A) or leaks(b, LIC_B) or leaks(b, BAD) for b in bodies["a"]),
        len(bodies["a"]))
     ck("B: no body holds the stored or the env key", bodies["b"] and not any(
-        leaks(b, LIC_A) or leaks(b, BROKEN + BROKEN) for b in bodies["b"]))
+        leaks(b, LIC_A) or leaks(b, BAD) for b in bodies["b"]))
     ck("C: no body holds the stored or the env key", bodies["c"] and not any(
         leaks(b, LIC_A) or leaks(b, LIC_B) for b in bodies["c"]))
     log = open(ps["a"][2]).read() + open(ps["b"][2]).read() + open(ps["c"][2]).read()

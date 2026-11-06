@@ -209,7 +209,7 @@ def set_storage_probe(fn) -> None:
 
 
 def set_licence_probe(fn) -> None:
-    """`fn()` returns the licence state (tares.licence.current); read on every scrape."""
+    """`fn()` returns the licence state (tares.licence.peek: the remembered answer, no database read); read on every scrape."""
     global _licence_probe
     _licence_probe = fn
 

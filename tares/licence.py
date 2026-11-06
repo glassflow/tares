@@ -276,7 +276,9 @@ LICENCE_SETTING = "licence_key"
 WARNED_SETTING = "licence_warned"   # JSON list of "<kid>:<threshold>" the desk was told about
 CACHE_SECONDS = 60
 
-# (store id, monotonic time, state) of the last answer; ee_allowed() reads the state
+# (store id, monotonic time, state) of the last answer; ee_allowed() reads the state.
+# One cell has one store, so one slot is enough; the id only keeps a second store (a test) from
+# reading another's answer. current() edits `used` in place; callers get copies.
 _cache: tuple | None = None
 
 
