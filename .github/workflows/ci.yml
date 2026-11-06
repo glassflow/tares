@@ -40,9 +40,62 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [duckdb, postgres]
+        suite: [duckdb, postgres, mit]
         shard: [1, 2, 3, 4, 5]
     # test_state_postgres moves a store into it; the postgres suite keeps every store in it
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: pg
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Before the console build and the install, so both run without ee.
+      - name: Delete every ee directory (mit run)
+        if: matrix.suite == 'mit'
+        run: find . -name node_modules -prune -o -type d -name ee -print | xargs -r rm -rf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Console build (the daemon serves ui/dist)
+        run: |
+          npm ci
+          npm run build
+        working-directory: ui
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Backend + factory CLI — tests
+        run: |
+          pip install -e ".[postgres-state]"
+          if [ "${{ matrix.suite }}" = mit ]; then
+            python -c "import importlib.util as u; assert u.find_spec('tares_ee') is None, 'tares_ee is importable in the mit run'"
+          fi
+          export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
+          bash tests/check_ci_list.sh tests/ci_list.txt
+          bash tests/check_ci_list.sh tests/factory/ci_list.txt
+          if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
+          python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
+
+  # The enterprise code's own tests, ee/tests/ci_list.txt (tests/ci_run.py --suite ee), with the
+  # state in DuckDB and in Postgres. They run with a test licence the test root signed.
+  test-ee:
+    name: test-ee (${{ matrix.db }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        db: [duckdb, postgres]
     services:
       postgres:
         image: postgres:16-alpine
@@ -70,14 +123,70 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - name: Backend + factory CLI — tests
+      - name: Enterprise tests
         run: |
           pip install -e ".[postgres-state]"
-          export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
-          bash tests/check_ci_list.sh tests/ci_list.txt
-          bash tests/check_ci_list.sh tests/factory/ci_list.txt
-          if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
-          python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
+          bash tests/check_ci_list.sh ee/tests/ci_list.txt
+          if [ "${{ matrix.db }}" = postgres ]; then
+            export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
+            export PYTHONPATH="$PWD/tests/pg_harness"
+            python tests/ci_run.py --suite ee-postgres
+          else
+            python tests/ci_run.py --suite ee
+          fi
+
+  # The wheel is what users install: build it, install it in a fresh environment away from the
+  # checkout, import tares_ee from it, and start the daemon with no licence key and with a bad one.
+  # The cell must come up either way and say what it found at /api/licence.
+  wheel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - name: Console build (the wheel bundles ui/dist)
+        run: |
+          npm ci
+          npm run build
+        working-directory: ui
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the wheel
+        run: python -m pip wheel . --no-deps -w "$RUNNER_TEMP/wheel"
+      - name: Install it and start the daemon
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install "$RUNNER_TEMP"/wheel/tares-*.whl
+          cd "$RUNNER_TEMP"
+          export PATH="$RUNNER_TEMP/venv/bin:$PATH"
+          python -c "import tares_ee"
+          # boot <port> <licence source it must report> <valid it must report>
+          boot() {
+            home="$RUNNER_TEMP/home-$1"
+            log="$RUNNER_TEMP/taresd-$1.log"
+            TARES_HOME="$home" TARES_PORT="$1" TARES_OTLP_GRPC_PORT=off taresd > "$log" 2>&1 &
+            pid=$!
+            up=
+            for _ in $(seq 60); do
+              if curl -fs "http://127.0.0.1:$1/health" > /dev/null; then up=1; break; fi
+              sleep 0.5
+            done
+            if [ -z "$up" ]; then
+              echo "taresd gave no /health answer within 30 s:"; cat "$log"; kill "$pid"; exit 1
+            fi
+            got=$(curl -fs "http://127.0.0.1:$1/api/licence")
+            kill "$pid"
+            echo "$1: $got"
+            echo "$got" | python -c "import json, sys; d = json.load(sys.stdin); assert d['source'] == '$2' and d['valid'] is $3, d"
+          }
+          boot 18787 none False
+          TARES_LICENSE=TL1.not.valid boot 18797 env False
 
   # The browser e2e suites named in ui/tests/e2e_suites.txt (tests/ci_e2e.py gives each its own port),
   # in 2 shards. Each suite starts its own scratch daemons, so tares is installed and Playwright's
