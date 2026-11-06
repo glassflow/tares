@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A private project stays out of the AI SRE screens (TR-892).
 
 Lee leads Zephyrwatch, a private project that holds a watcher, an investigator and an incident on
@@ -8,7 +9,7 @@ not exist, and the home, services, settings, runbooks and timeline screens do no
 its agents or its service. Lee, the cell's own key and a key for the project still see all of it.
 An open project's watcher and incident show to everyone, and with auth off everything shows.
 
-Run: .venv/bin/python tests/test_sre_private_screens.py
+Run: .venv/bin/python ee/tests/test_sre_private_screens.py
 """
 import asyncio
 import json
@@ -17,11 +18,9 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-from _env import scrub_os_environ
-scrub_os_environ()
-sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-sre-private-screens-")
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
@@ -29,6 +28,7 @@ os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-sre-private"
 os.environ["TARES_EDITION"] = "sre"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_SCHEDULE_CLOCK_SECONDS"] = "3600"
 os.environ["TARES_WATCH_SECONDS"] = "3600"

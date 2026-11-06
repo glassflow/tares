@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A private project is unknown to anyone who is not on it (TR-625). Its lead, its members, the
 system credential and a project key for it see it; everyone else gets 404 on every route under
 /api/projects/{uid}, MCP tools included, and sees it in the list only as a name with its lead.
@@ -6,12 +7,13 @@ The sweep reads the daemon's own route list (/openapi.json), so a route added la
 without anyone remembering to add it here. A route that must not 404 for a stranger goes in
 ALLOWLIST with its reason; the test fails if the list grows.
 
-Run: .venv/bin/python tests/test_private_routes.py
+Run: .venv/bin/python ee/tests/test_private_routes.py
 """
 import asyncio, json, logging, os, re, shutil, socket, subprocess, sys, tempfile
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 import tares.mcp_server as m
 
@@ -55,8 +57,8 @@ def H(tok):
 def start(name):
     db, port = os.path.join(TMP, name + ".duckdb"), free_port()
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
-           "TARES_AUTH_TOKEN": AUTH}
-    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+           "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
+    proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc, f"http://127.0.0.1:{port}"
 
