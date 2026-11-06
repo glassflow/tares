@@ -61,6 +61,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
 from . import licence
+from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
@@ -6866,6 +6867,20 @@ def make_app() -> FastAPI:
         `cost_usd` is a floor: `uncosted_calls` counts rows whose model had no known price, and
         runs from before metering existed are absent entirely."""
         return store.model_usage_summary(days=max(1, min(int(days), 366)))
+
+    # ── the team seam (TR-914): the order every route registration follows ──
+    # FastAPI answers with the first route that matches, so the order is the contract:
+    #   1. core routes, factory_api.register and screens.register_all (all above);
+    #   2. the ee team's routes, when tares_ee loads, whatever the licence (each ee route answers
+    #      licence_required itself while the licence does not allow it);
+    #   3. the fallbacks: one route per path that moved to ee, answering licence_required when no
+    #      ee team registered it (an ee route registered in 2 wins over its fallback);
+    #   4. the console catch-all below, last.
+    # A route that moves to ee is deleted from core in the same PR, so no core route shadows it.
+    ee_team = team_mod._ee()
+    if ee_team is not None:
+        ee_team.register_routes(app, h)
+    team_mod.register_fallbacks(app, h)
 
     # ── console UI (built SPA; catch-all registered last so API routes win) ──
     @app.get("/{path:path}", include_in_schema=False)
