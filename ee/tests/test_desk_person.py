@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A desk item is for one person, and only that person's words answer it (TR-634).
 
 Covers: an item about Q's ticket is addressed to Q (else the lead, else the caller; `to` takes a
@@ -9,7 +10,7 @@ in; the decision is Q's; a standing answer becomes a grant given by Q (project b
 on request), and a project grant over a repo Q owns waits for the project's lead; an item from before
 items were addressed keeps the older rule.
 
-Run: .venv/bin/python tests/test_desk_person.py
+Run: .venv/bin/python ee/tests/test_desk_person.py
 """
 import asyncio
 import json
@@ -20,17 +21,15 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-deskperson-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-deskperson"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 
 import httpx
 
