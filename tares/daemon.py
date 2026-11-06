@@ -60,6 +60,7 @@ from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_
                              resolve_anthropic_headers, resolve_api_base, resolve_provider,
                              DEFAULT_API_BASE)
 from . import metrics as _metrics
+from . import licence
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
@@ -712,6 +713,7 @@ def make_app() -> FastAPI:
         except Exception:
             _metrics.set_info(None)
         _metrics.prime(providers=[p["id"] for p in providers_mod.list_providers(store)["providers"]])
+        _metrics.set_licence_probe(licence.peek)
         # providers the environment handed the cell list their models now, not on a click
         asyncio.create_task(providers_mod.discover_env_entries(store))
         loop_stop = asyncio.Event()
@@ -724,6 +726,8 @@ def make_app() -> FastAPI:
         watch_task = asyncio.create_task(watch_mod.run(runtime, loop_stop))
         # pull requests read again in the background, not only when a project is opened (TR-1010)
         pr_sync_task = asyncio.create_task(factory_api.sync_prs(store, loop_stop))
+        # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
+        licence_task = asyncio.create_task(licence.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
               f"console at / · agent API at /read · management API at /api")
         # optional OTLP gRPC receiver (:4317). Needs grpcio + opentelemetry-proto; off if absent.
@@ -744,6 +748,7 @@ def make_app() -> FastAPI:
         schedule_task.cancel()
         watch_task.cancel()
         pr_sync_task.cancel()
+        licence_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
         runtime.shutdown()
@@ -756,6 +761,15 @@ def make_app() -> FastAPI:
     app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
                        allow_headers=["*"])
+
+    # One answer for an action that needs a licence the cell does not have (TR-912). The three
+    # keys sit at the top of the body, not under `detail`, so a client can read `code` directly.
+    @app.exception_handler(licence.LicenceRequired)
+    async def _licence_required(_request, e: licence.LicenceRequired):
+        return JSONResponse({"code": "licence_required", "message": e.message,
+                             "url": licence.LICENCE_URL}, status_code=402)
+
+    licence.current(store, force=True)
 
     # ── auth: scoped credentials ──────────────────────────────────────────────
     # Three scopes — read (consume: reads, catalog reads, subscribe), ingest (contribute:
@@ -3298,6 +3312,37 @@ def make_app() -> FastAPI:
         store.set_setting("anthropic_key", None)
         key, origin = resolve_anthropic_headers(store)
         return {"ok": True, "configured": bool(key), "source": origin}
+
+    # ── the enterprise licence (TR-912) ──
+    # Not under /api/settings: that prefix is admin even to read, and any signed-in person may see
+    # whether the cell is licensed. A project key is refused by the allowlist. Writing needs admin.
+    # The key text is never returned and never logged.
+    def _licence_body(force: bool = False) -> dict:
+        return licence.current(store, force=force)
+
+    @app.get("/api/licence")
+    def get_licence():
+        return _licence_body()
+
+    @app.put("/api/licence")
+    def put_licence(body: dict = Body(...)):
+        key = body.get("key")
+        key = key.strip() if isinstance(key, str) else ""
+        if not key:
+            _err(ValueError("key is required (DELETE removes the stored enterprise licence)"))
+        lic = licence.verify(key)
+        if isinstance(lic, licence.Invalid):
+            _err(ValueError(lic.reason))
+        store.set_setting(licence.LICENCE_SETTING, key)
+        print(f"taresd: licence key stored (kid {lic.kid})", flush=True)
+        return {**_licence_body(force=True),
+                "env_in_use": bool(os.environ.get(licence.LICENCE_ENV, "").strip())}
+
+    @app.delete("/api/licence")
+    def delete_licence():
+        store.set_setting(licence.LICENCE_SETTING, None)
+        print("taresd: licence key removed", flush=True)
+        return _licence_body(force=True)
 
     # ── model access through a gateway (TR-281): stored on the cell like the key ──────────
     # Where model calls go, and the credential for it. Saved here they win over the environment,
@@ -6011,7 +6056,9 @@ def make_app() -> FastAPI:
         ensure_globals=lambda uid: _ensure_globals(uid),
         tickets_out=lambda uid: _tickets_out(uid),
         caller=_CALLER.get, project_key=_pk, hidden_project=_hidden_project,
-        projects=lambda: projects)
+        projects=lambda: projects,
+        licence_state=lambda: licence.current(store),
+        licence_required=licence.licence_required)
     app.state.host = h
     fx = factory_api.register(app, store, h)
     # the edition screens (tares/screens/__init__.py lists them)

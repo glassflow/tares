@@ -3,8 +3,9 @@
 A daemon with auth on. Code that only has the host (app.state.host) adds a route that uses
 h.current_person, h.is_admin, h.require_admin and h.err. A person key (ingest scope, no admin)
 gets 403 from require_admin, an admin key 200, and a call with no key 401 from the guard. The class
-lists every member of the contract, Host(...) keeps its store and runtime, and licence_state() has
-the stub shape with `used` counting the people on the cell.
+lists every member of the contract, Host(...) keeps its store and runtime, licence_state() is the
+cell's licence check (TR-912) with `used` counting the people on the cell, and licence_required()
+raises the error the daemon answers with 402.
 
 Run: .venv/bin/python tests/test_host.py
 """
@@ -31,6 +32,7 @@ import httpx
 from fastapi import Request
 
 from tares.host import Host
+from tares.licence import LicenceRequired
 
 P = F = 0
 
@@ -46,12 +48,11 @@ MEMBERS = [
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "start_who", "by",
     "require_admin", "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404",
     "resolve_project", "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out",
-    "area_owner", "hidden_project", "projects", "licence_state",
+    "area_owner", "hidden_project", "projects", "licence_state", "licence_required",
 ]
 
-STUB = {"valid": False, "source": "none", "kid": None, "org": None, "seats": None, "used": None,
-        "features": [], "expires": None, "days_left": None, "expired": False, "over_seats": False,
-        "ee_allowed": False, "reason": None}
+STATE_KEYS = {"valid", "source", "kid", "org", "seats", "used", "features", "expires", "days_left",
+              "expired", "over_seats", "ee_allowed", "reason", "stored", "env_set"}
 
 
 def add_route(h, app):
@@ -137,6 +138,14 @@ async def main():
         ck("licence_state counts the people on the cell",
            h.licence_state()["used"] == len(store.list_people()) and h.licence_state()["used"] >= 3,
            h.licence_state())
+        ck("licence_state is the cell's licence check: none here, the full shape",
+           set(h.licence_state()) == STATE_KEYS and h.licence_state()["source"] == "none"
+           and h.licence_state()["valid"] is False, h.licence_state())
+        try:
+            h.licence_required("Teams need a licence.")
+            ck("licence_required raises", False, "no error")
+        except LicenceRequired as e:
+            ck("licence_required raises LicenceRequired with the message", e.message == "Teams need a licence.")
 
     # the class itself
     ck("every member is a method with a docstring",
@@ -152,9 +161,24 @@ async def main():
     fake = Host(FakeStore(), "the-runtime")
     ck("Host(...) exposes store and runtime", fake.store.list_people()[0]["id"] == "a"
        and fake.runtime == "the-runtime")
-    state = fake.licence_state()
-    ck("licence_state has the stub shape, used counts people",
-       state == {**STUB, "used": 2}, state)
+    ck("licence_state is the daemon's helper, passed through",
+       Host(FakeStore(), None, licence_state=lambda: {"used": 2}).licence_state() == {"used": 2})
+    try:
+        fake.licence_state()
+        ck("licence_state without its helper is named", False, "no error")
+    except RuntimeError as e:
+        ck("licence_state without its helper is named", "licence_state" in str(e), str(e))
+    try:
+        Host(FakeStore(), None, licence_required=lambda m: (_ for _ in ()).throw(LicenceRequired(m))
+             ).licence_required("no")
+        ck("licence_required through the helper raises", False, "no error")
+    except LicenceRequired as e:
+        ck("licence_required through the helper raises", e.message == "no")
+    try:
+        Host(FakeStore(), None, licence_required=lambda m: None).licence_required("still")
+        ck("licence_required never returns, even if the helper does", False, "returned")
+    except LicenceRequired as e:
+        ck("licence_required never returns, even if the helper does", e.message == "still")
     try:
         fake.is_admin(None)
         ck("a missing helper is named", False, "no error")

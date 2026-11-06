@@ -26,13 +26,17 @@ Unknown features are kept and ignored. verify() never raises on garbage input.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
 import json
+import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from typing import NoReturn
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -260,3 +264,164 @@ def state(text: str | None, used: int | None, now: datetime | None = None, sourc
 
 def allows(st: dict, feature: str = "enterprise") -> bool:
     return bool(st.get("valid")) and feature in st.get("features", ())
+
+
+# ── the cell side (TR-912): where the key comes from, and what the cell does about it ──
+# Everything above is pure. Below, the cell reads its key from the environment or from its stored
+# setting, remembers the answer for a minute, warns on the desk, and answers 402 to an action
+# that needs a licence. The key text is never returned, logged or cached outside the verify call.
+
+LICENCE_ENV = "TARES_LICENSE"
+LICENCE_SETTING = "licence_key"
+WARNED_SETTING = "licence_warned"   # JSON list of "<kid>:<threshold>" the desk was told about
+CACHE_SECONDS = 60
+
+# (store id, monotonic time, state) of the last answer; ee_allowed() reads the state
+_cache: tuple | None = None
+
+
+def resolve(store) -> tuple[str | None, str]:
+    """(key text, source). The environment wins when it is set and not blank, even when its key
+    is not valid; else the stored setting; else (None, "none")."""
+    env = os.environ.get(LICENCE_ENV, "").strip()
+    if env:
+        return env, "env"
+    stored = (store.get_setting(LICENCE_SETTING) or "").strip()
+    if stored:
+        return stored, "settings"
+    return None, "none"
+
+
+def _seats_in_use(st: dict, used: int) -> dict:
+    st["used"] = used
+    st["over_seats"] = bool(st["valid"] and used > (st["seats"] or 0))
+    return st
+
+
+def current(store, now: datetime | None = None, force: bool = False) -> dict:
+    """The cell's licence as `state()` says it, plus `stored` (a key is saved on the cell) and
+    `env_set` (TARES_LICENSE is set). The check is remembered for CACHE_SECONDS so a request does
+    not repeat it; `force` checks again now (after a key is saved or removed). The seats in use
+    are always read fresh."""
+    global _cache
+    used = len(store.list_people())
+    c = _cache
+    if not force and c is not None and c[0] == id(store) and time.monotonic() - c[1] < CACHE_SECONDS:
+        _seats_in_use(c[2], used)   # keep the remembered answer's seat count current for peek()
+        return dict(c[2])
+    text, source = resolve(store)
+    st = state(text, used, now, source)
+    st["stored"] = bool(store.get_setting(LICENCE_SETTING))
+    st["env_set"] = bool(os.environ.get(LICENCE_ENV, "").strip())
+    _cache = (id(store), time.monotonic(), st)
+    return dict(st)
+
+
+def peek() -> dict | None:
+    """The last answer `current()` gave, without reading the state database (a metrics scrape
+    must not). None before the first check. `used` is as fresh as the last `current()` call."""
+    c = _cache
+    return dict(c[2]) if c is not None else None
+
+
+def ee_allowed(feature: str = "enterprise") -> bool:
+    """Whether the last licence check allows `feature`. False before the first check."""
+    c = _cache
+    return c is not None and allows(c[2], feature)
+
+
+class LicenceRequired(Exception):
+    """An action needs a licence the cell does not have. The daemon answers it with HTTP 402."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
+
+
+def licence_required(message: str) -> NoReturn:
+    raise LicenceRequired(message)
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def _warnings(st: dict) -> list[tuple[str, str]]:
+    """(threshold, question) for each warning this state calls for, most urgent first."""
+    org, exp = st["org"], st["expires"]
+    out = []
+    days = st["days_left"]
+    if st["expired"] or days <= 0:
+        if st["expired"]:
+            out.append(("0", f"The enterprise licence for {org} ran out on {exp}. Add a new key "
+                             "under Settings, Licence, or the enterprise features stop working."))
+        else:
+            out.append(("0", f"The enterprise licence for {org} ends today ({exp}). Add a new key "
+                             "under Settings, Licence."))
+    elif days <= 7:
+        out.append(("7", f"The enterprise licence for {org} ends in {_plural(days, 'day')} ({exp})."))
+    elif days <= 30:
+        out.append(("30", f"The enterprise licence for {org} ends in {_plural(days, 'day')} ({exp})."))
+    if st["over_seats"]:
+        out.append(("seats", f"The enterprise licence for {org} covers {_plural(st['seats'], 'seat')} "
+                             f"and {'1 person is' if st['used'] == 1 else str(st['used']) + ' people are'} on the cell."))
+    return out
+
+
+def _crossed(st: dict) -> list[str]:
+    """Every threshold the state has passed, whether or not it was warned about."""
+    days = st["days_left"]
+    got = [t for t, limit in (("30", 30), ("7", 7), ("0", 0)) if days <= limit]
+    if st["over_seats"]:
+        got.append("seats")
+    return got
+
+
+def licence_desk(store, now: datetime | None = None) -> list[dict]:
+    """Tell the desk about a licence that is close to its end, has ended, or covers fewer seats
+    than there are people. Each threshold (30 days, 7 days, ended, over seats) is told once per
+    licence (its kid); a renewed licence has a new kid and starts fresh. When a licence is first
+    seen past several thresholds, only the most urgent is posted and the others count as told.
+    A licence that is not valid says nothing here. Returns the desk items added."""
+    st = current(store, now, force=now is not None)
+    if not st["valid"]:
+        return []
+    kid = st["kid"]
+    try:
+        warned = [w for w in json.loads(store.get_setting(WARNED_SETTING) or "[]")
+                  if isinstance(w, str) and w.startswith(kid + ":")]
+    except ValueError:
+        warned = []
+    added = []
+    told = list(warned)
+    try:
+        for threshold, question in _warnings(st):
+            if f"{kid}:{threshold}" in warned:
+                continue
+            added.append(store.add_desk_item(None, question, "", [], "", "", "", [], False, "tares",
+                                             [], _utc(now)))
+            told.append(f"{kid}:{threshold}")
+        # what was crossed counts as told, so a lower threshold passed together with the urgent
+        # one is not posted later
+        told += [f"{kid}:{t}" for t in _crossed(st) if f"{kid}:{t}" not in told]
+    finally:
+        # the list keeps the keys of this licence only: a renewal (a new kid) starts fresh
+        if told != warned:
+            store.set_setting(WARNED_SETTING, json.dumps(told))
+    return added
+
+
+async def run(store, stop: asyncio.Event) -> None:
+    """The cell's licence watch: every minute, refresh the check and warn on the desk. Never
+    stops on an error."""
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(licence_desk, store)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"taresd: licence check failed: {type(e).__name__}", flush=True)
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=CACHE_SECONDS)
+        except asyncio.TimeoutError:
+            pass

@@ -87,6 +87,7 @@ test_ingest_bypass_cooldown
 test_ingest_key
 test_labels
 test_licence
+test_licence_api
 test_linear
 test_login
 test_loki
