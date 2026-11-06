@@ -1679,7 +1679,9 @@ def make_app() -> FastAPI:
     def _body_person(request: Request, body: dict) -> str | None:
         """The person id a key request names: `person_id` (must exist), or `person: {email, name}`
         (found by email or made: `cloud` when the system credential asks, as the control plane
-        does, `key` otherwise). None when it names neither."""
+        does, `key` otherwise). None when it names neither. A person who is not on the cell yet
+        needs the licence's seats; the owner (the system credential's `owner: true`) arriving under
+        an email nobody has, once `local` is claimed, is `local`: never refused, never a new row."""
         pid = str(body.get("person_id") or "").strip()
         if pid:
             if not store.get_person(pid):
@@ -1692,11 +1694,22 @@ def make_app() -> FastAPI:
             _err(ValueError("person needs an email: {email, name?}"))
         ident = getattr(request.state, "credential", None) or {}
         system = ident.get("kind") == "system"
+        owner = system and spec.get("owner") is True   # from the control plane only
         try:
-            # `owner: true` comes from the control plane (the system credential) only
+            email = store.check_email(spec["email"])
+            if email and not store.find_person_by_email(email):
+                local = store.get_person("local")
+                if owner and local and not local["email"] and not local["emails"]:
+                    pass   # claims the unclaimed `local` below: not a new row
+                else:
+                    ok, why = team_mod.get().can_add_person(store)
+                    if not ok:
+                        if owner and local:
+                            return local["id"]
+                        h.licence_required(why)
             return store.person_or_create(
                 spec["email"], spec.get("name"), via="cloud" if system else "key",
-                owner=system and spec.get("owner") is True)["id"]
+                owner=owner)["id"]
         except ValueError as e:
             _err(e, 409 if "already belongs" in str(e) else 400)
 
@@ -1781,6 +1794,15 @@ def make_app() -> FastAPI:
                     if picture:
                         claimed = store.update_person(claimed["id"], picture=picture) or claimed
                     return _person_out(claimed)
+            ok, why = team_mod.get().can_add_person(store)
+            if not ok:
+                # the owner under another email, once `local` is claimed, is `local`
+                local = store.get_person("local") if email and system and body.get("owner") is True else None
+                if not local:
+                    h.licence_required(why)
+                if picture and picture != local.get("picture"):
+                    local = store.update_person("local", picture=picture) or local
+                return _person_out(local)
             p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
                                     bool(body.get("is_admin")), via="admin")
             if picture:
@@ -1809,6 +1831,12 @@ def make_app() -> FastAPI:
         if not admin and not own:
             raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
                                                         "can change a person")
+        if admin and not own and ident.get("kind") != "system" and not licence.ee_allowed():
+            # without ee an admin edits themselves; anyone else needs the licence (a person who is
+            # not on the cell answers 404 below, as before)
+            mine = (_current_person(request) or {}).get("id")
+            if mine != pid and store.get_person(pid):
+                h.licence_required("Changing other people needs an enterprise licence.")
         allowed = (("name", "email", "emails", "github", "is_admin", "picture") if admin
                    else ("name", "picture"))
         fields = {k: body[k] for k in allowed if k in body}

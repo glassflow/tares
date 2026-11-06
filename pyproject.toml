@@ -51,9 +51,11 @@ otlp-grpc = ["grpcio>=1.60", "opentelemetry-proto>=1.20"]
 # local install keeps its state in DuckDB and needs none of this.
 postgres-state = ["psycopg[binary]>=3.1"]
 
-# The `tares.ee` entry point group (`[project.entry-points."tares.ee"]`) is not declared yet: hatch
-# writes no group for an empty table. Its first entry, `team = "tares_ee.team:Team"`, is added by
-# the ticket that ships the ee Team (TR-918).
+# The enterprise code is loaded through the `tares.ee` entry point group (tares/team.py). Core
+# never imports it; with no valid licence the cell uses SingleTeam instead.
+[project.entry-points."tares.ee"]
+team = "tares_ee.team:Team"
+
 [project.scripts]
 tares = "tares.cli:main"
 taresd = "tares.cli:run_daemon"

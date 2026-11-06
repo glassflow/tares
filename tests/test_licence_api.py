@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _env import clean_env, scrub_os_environ
+import _people
 scrub_os_environ()
 
 TMP = tempfile.mkdtemp(prefix="tares-licence-api-")
@@ -164,7 +165,7 @@ async def daemon_a(B, bodies):
 
         r = await get(reader)
         ck("a read key of a person: GET 200", r.status_code == 200 and r.json()["org"] == "Acme", r.text)
-        ck("... and sees the new person in `used`", r.json()["used"] >= 2, r.text)
+        ck("... and sees Ada in `used`", r.json()["used"] >= 2, r.text)
         r = await put(LIC_B, reader)
         ck("... PUT 403", r.status_code == 403, r.text)
         r = await delete(reader)
@@ -413,6 +414,8 @@ def in_process():
 
 async def main():
     ps = {}
+    # Ada is on cell A before it starts: a new person over HTTP needs ee, and this test runs without it
+    _people.seed(os.path.join(TMP, "a.duckdb"), [("Ada", "ada@example.com")])
     for name, env in (("a", {}), ("b", {"TARES_LICENSE": BAD}), ("c", {"TARES_LICENSE": LIC_B})):
         ps[name] = start(name, **env)
     bodies = {"a": [], "b": [], "c": []}

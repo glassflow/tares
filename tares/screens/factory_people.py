@@ -22,6 +22,7 @@ import os
 
 from fastapi import Body, HTTPException, Request
 
+from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import plain_ago
 
@@ -99,6 +100,10 @@ def register(app, store, h, ctx):
         else:
             text = ("Add a teammate by email. They sign in to this cell the way you do, and their "
                     "keys and crew are their own.")
+        if can_add and not cloud:    # on Cloud the workspace decides, not the cell's licence
+            ok, why = team_mod.get().can_add_person(store)
+            if not ok:     # the licence has no seat for one more (or no licence): say why
+                can_add, text = False, why
         return {"people": rows(request, now), "can_add": can_add, "add_text": text,
                 "cloud": cloud, "workspace_href": _workspace_url() or None, "now": now.isoformat()}
 
@@ -119,5 +124,8 @@ def register(app, store, h, ctx):
         name = " ".join(str((body or {}).get("name") or "").split())[:120] or None
         if store.find_person_by_email(email):
             raise HTTPException(409, f"{email} is already on this cell")
+        ok, why = team_mod.get().can_add_person(store)
+        if not ok:
+            h.licence_required(why)
         p = store.person_or_create(email, name, via="admin")
         return {"id": p["id"], "name": p["name"] or email, "email": p.get("email")}
