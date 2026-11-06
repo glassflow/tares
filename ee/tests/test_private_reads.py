@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A private project's events and cell-wide lists stay out of reach of anyone not on it (TR-629).
 
 Three parts:
@@ -14,7 +15,7 @@ Three parts:
    nothing of p1 to Bob; Ann's return it. Slack's /tares ask knows no person and sees no private
    project at all.
 
-Run: .venv/bin/python tests/test_private_reads.py
+Run: .venv/bin/python ee/tests/test_private_reads.py
 """
 import asyncio, hashlib, hmac, json, os, shutil, signal, socket, subprocess, sys, tempfile, threading, time
 from datetime import timedelta
@@ -24,6 +25,7 @@ from urllib.parse import urlencode
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 from tares.envelope import Envelope, now_utc
 from tares.store import Store, _exclude_sql
@@ -207,8 +209,8 @@ async def _until(fn, tries=60):
 
 def spawn(port, extra=None):
     env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
-           "TARES_AUTH_TOKEN": AUTH, **(extra or {})}
-    return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+           "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence(), **(extra or {})}
+    return subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

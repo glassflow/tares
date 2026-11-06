@@ -53,7 +53,6 @@ test_factory_orchestrator_mock
 test_factory_people
 test_factory_plan
 test_factory_pr_sync
-test_factory_private_screens
 test_factory_project_github
 test_factory_project_page
 test_factory_projects_page
@@ -116,14 +115,7 @@ test_pickup
 test_plugin_challenger
 test_postgres
 test_pricing
-test_private_admin_routes
 test_private_any_licence
-test_private_raw_routes
-test_private_reads
-test_private_routes
-test_private_services
-test_private_writes
-test_project_access
 test_project_keys
 test_project_later
 test_project_timeline
@@ -159,7 +151,6 @@ test_sre_home_note_link
 test_sre_home_read_key
 test_sre_incident_hold
 test_sre_incidents
-test_sre_private_screens
 test_sre_runbooks
 test_sre_series
 test_sre_services

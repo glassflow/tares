@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A private project stays out of the factory screens (TR-892).
 
 Lee leads Vault, a private factory project. Kim and Alex are teammates with admin keys who are not
@@ -7,7 +8,7 @@ every list the screens return (projects, tickets, reviews, docs, crew, settings,
 out, its tickets, its pull requests, its documents, its builder and its people's grants. Lee, the
 cell's own key and a key for Vault still see all of it. With auth off everything shows.
 
-Run: .venv/bin/python tests/test_factory_private_screens.py
+Run: .venv/bin/python ee/tests/test_factory_private_screens.py
 """
 import asyncio
 import json
@@ -17,17 +18,15 @@ import tempfile
 from datetime import timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-factory-private-screens-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-private-screens"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_EDITION"] = "factory"
 
 import httpx

@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A private project stays out of the service views (TR-906).
 
 Lee leads Zephyrwatch, a private project that holds a source (zephyr-logs) with the service
@@ -9,7 +10,7 @@ exactly like a name that does not exist, and a service both projects feed counts
 see. Two people reading one warm cache each get their own answer. Lee and the cell's own key still
 see all of it.
 
-Run: .venv/bin/python tests/test_private_services.py
+Run: .venv/bin/python ee/tests/test_private_services.py
 """
 import asyncio
 import json
@@ -18,11 +19,9 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-from _env import scrub_os_environ
-scrub_os_environ()
-sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 TMP = tempfile.mkdtemp(prefix="tares-private-services-")
 os.environ["TARES_DB"] = os.path.join(TMP, "t.duckdb")
@@ -30,6 +29,7 @@ os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-private-services"
 os.environ["TARES_EDITION"] = "sre"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_TRIGGER_DEBOUNCE_SECONDS"] = "0"
 os.environ["TARES_SCHEDULE_CLOCK_SECONDS"] = "3600"
 os.environ["TARES_WATCH_SECONDS"] = "3600"

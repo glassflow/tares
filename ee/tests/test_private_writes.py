@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """Writes on a private project's objects answer as if the object were not there (TR-944).
 
 A person who is not on a private project, even with an admin-scope key, must not pause, change,
@@ -6,13 +7,14 @@ source, trigger, agent, MCP server, run or rule proposal gets the same 404, with
 as it gives for a name that does not exist. Ann leads the project and keeps access; so does the
 system credential. An agent or a trigger that a visible project also uses stays reachable.
 
-Run: .venv/bin/python tests/test_private_writes.py
+Run: .venv/bin/python ee/tests/test_private_writes.py
 """
 import asyncio, os, shutil, signal, socket, subprocess, sys, tempfile
 
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 from tares.envelope import now_utc
 from tares.store import Store
@@ -40,8 +42,8 @@ def H(tok):
 
 def spawn(port):
     env = {**clean_env(), "TARES_DB": DB, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
-           "TARES_AUTH_TOKEN": AUTH}
-    return subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+           "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
+    return subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
