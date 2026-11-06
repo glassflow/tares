@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """GET /api/home on a cell with more than one person, what is addressed to the caller (TR-739).
 
 A daemon with auth on and the factory edition. First a cell of one person (only `local`): the
@@ -10,7 +11,7 @@ pull request in Kim's project. Each carries who it comes from, ends when it is d
 Kim's or Lee's list. Every item is of a known kind, an action is a link or a thing to do, and
 every string passes the words check and holds no em dash.
 
-Run: .venv/bin/python tests/test_factory_team_home.py
+Run: .venv/bin/python ee/tests/test_factory_team_home.py
 """
 import asyncio
 import json
@@ -21,15 +22,16 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-team-home-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-team-home"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 os.environ["TARES_EDITION"] = "factory"

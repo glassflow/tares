@@ -1,12 +1,14 @@
+# Tares enterprise licence, see ee/LICENSE
 """Area owners (TR-627): the cell knows which person owns each GitHub repo. An admin sets any
 repo; a person may claim an unowned repo for themselves; matching ignores case.
 
-Run: .venv/bin/python tests/test_areas.py
+Run: .venv/bin/python ee/tests/test_areas.py
 """
 import asyncio, json, logging, os, shutil, socket, subprocess, sys, tempfile
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 import tares.mcp_server as m
 import tares.mcp_factory as mf
@@ -46,10 +48,11 @@ def H(tok):
 
 def start(name, auth):
     db, port = os.path.join(TMP, name + ".duckdb"), free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
+    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+           "TARES_LICENSE": licensed.test_licence()}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
-    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+    proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc, f"http://127.0.0.1:{port}"
 

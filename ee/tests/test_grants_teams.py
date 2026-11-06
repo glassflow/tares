@@ -1,15 +1,16 @@
+# Tares enterprise licence, see ee/LICENSE
 """Grants by kind (TR-630): team, project and personal grants as rows. A project grant that names
 a repo someone else owns waits until that owner consents, and one from a person who is neither the
 project's lead nor an admin waits for the lead too (an admin, when the project has no lead). The old grants docs become rows on the
 first start and stay as they were. With auth off the one person is `local` and grants work as before.
 
-Run: .venv/bin/python tests/test_grants_teams.py
+Run: .venv/bin/python ee/tests/test_grants_teams.py
 """
 import asyncio, json, os, shutil, socket, subprocess, sys, tempfile
 import httpx
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 import logging
 import tares.mcp_server as m
@@ -50,10 +51,11 @@ def H(tok):
 
 def start(db, auth):
     port = free_port()
-    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
+    env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
+           "TARES_LICENSE": licensed.test_licence()}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
-    proc = subprocess.Popen([sys.executable, "-c", "from tares.cli import run_daemon; run_daemon()"],
+    proc = subprocess.Popen(licensed.daemon_argv(),
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return proc, f"http://127.0.0.1:{port}"
 

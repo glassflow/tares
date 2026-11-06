@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A declined grant stays declined (TR-834).
 
 A grant that waits for the project's lead is declined; a consent that comes after it, or that
@@ -16,7 +17,7 @@ landing before it takes effect (409, still revoked, no line in the grants doc); 
 one grant, the second losing the race to the first (the grant is in effect, no 409, its line stays
 in the grants doc); activate_waiting_grant writes areas and needs_lead only for a waiting grant.
 
-Run: .venv/bin/python tests/test_grant_decline_sticks.py
+Run: .venv/bin/python ee/tests/test_grant_decline_sticks.py
 """
 import asyncio
 import os
@@ -24,15 +25,16 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-grant-decline-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-grant-decline"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 

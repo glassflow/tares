@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """Questions to an area owner while a spec is written (TR-636), and a hand-over that waits for
 nobody's sign-off.
 
@@ -8,7 +9,7 @@ my_work until they do; the hand-over goes through whoever owns the repos, and th
 and tool are gone; asks in parallel threads get distinct ids. The overrides kept from before stay
 readable on the hand-over and the timeline.
 
-Run: .venv/bin/python tests/test_spec_questions.py
+Run: .venv/bin/python ee/tests/test_spec_questions.py
 """
 import asyncio
 import json
@@ -20,15 +21,16 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = licensed.REPO
 sys.path.insert(0, ROOT)
 
 _TMP = tempfile.mkdtemp(prefix="tares-spec-signoff-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-spec-signoff"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
