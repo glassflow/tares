@@ -24,15 +24,12 @@ test_claude_usage
 test_clean_env
 test_cli
 test_cloud_connect
-test_console_answers
 test_core_single_person
 test_crew_standup
 test_crews
 test_decision_answers
 test_degraded
 test_delete_cascade
-test_desk_person
-test_desk_unaddressed_login
 test_docs
 test_duckdb_memory
 test_edition

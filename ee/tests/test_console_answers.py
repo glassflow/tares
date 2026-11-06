@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A person answers and agrees from the console (TR-740).
 
 A daemon with auth on and three people with a key each (alex leads the project, kim owns
@@ -14,7 +15,7 @@ from where and why; a question answered from the console carries the mark
 "console", from a session it carries none; /api/desk/{ref}/allow is for the person the item is
 addressed to.
 
-Run: .venv/bin/python tests/test_console_answers.py
+Run: .venv/bin/python ee/tests/test_console_answers.py
 """
 import asyncio
 import json
@@ -25,17 +26,15 @@ import tempfile
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-console-answers-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-console-answers"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 
 import httpx
 

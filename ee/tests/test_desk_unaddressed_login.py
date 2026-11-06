@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """A person with a login can answer or allow a desk item that has no addressee (TR-898).
 
 Items from before desk items were addressed carry no person. Only the person `local` had them in
@@ -7,7 +8,7 @@ project's lead and `local` may act on such an item; a key that can only ingest a
 lead may not (it must not grant a permission). An item addressed to someone else stays theirs,
 and a key with no person is still refused.
 
-Run: .venv/bin/python tests/test_desk_unaddressed_login.py
+Run: .venv/bin/python ee/tests/test_desk_unaddressed_login.py
 """
 import asyncio
 import json
@@ -17,17 +18,15 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _env import scrub_os_environ
-scrub_os_environ()
-
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, ROOT)
+import licensed   # scrubs the machine's TARES_* settings and puts the repo and tests/ on sys.path
+licensed.install_test_root()
 
 _TMP = tempfile.mkdtemp(prefix="tares-desk-unaddressed-")
 os.environ["TARES_DB"] = os.path.join(_TMP, "api.duckdb")
 os.environ["TARES_CATALOG"] = os.path.join(_TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-desk-unaddressed"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
+os.environ["TARES_LICENSE"] = licensed.test_licence()
 
 import httpx
 
