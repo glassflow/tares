@@ -172,6 +172,23 @@ async def main():
         r = await cx.post("/api/people", json={"name": "Pat", "email": "pat@example.com"})
         ck("POST /api/people with Pat's email finds Pat (200)",
            r.status_code == 200 and r.json()["id"] == pat_id, f"{r.status_code} {r.text[:200]}")
+        # the loser of two creations of one email: its lookup ran before the winner's insert, so it
+        # misses Pat once, and must find Pat again inside the lock (200), not meet the seat check (402)
+        real, calls = store.find_person_by_email, []
+
+        def stale_once(email):
+            calls.append(email)
+            return None if len(calls) == 1 else real(email)
+
+        store.find_person_by_email = stale_once
+        try:
+            r = await cx.post("/api/people", json={"name": "Pat", "email": "pat@example.com"})
+        finally:
+            store.find_person_by_email = real
+        ck("a create whose first lookup missed Pat still finds Pat inside the lock (200, not 402)",
+           r.status_code == 200 and r.json()["id"] == pat_id and len(calls) >= 2,
+           f"{r.status_code} {r.text[:200]} lookups={len(calls)}")
+        eq("still two people after it", len(await people()), 2)
         r = await cx.post("/api/factory/people", json={"email": "pat@example.com"})
         eq("POST /api/factory/people for Pat is the same answer as ever (409)", r.status_code, 409)
         eq("still two people", len(await people()), 2)
