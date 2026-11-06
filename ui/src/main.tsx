@@ -91,6 +91,7 @@ const router = createBrowserRouter([
       // a project's decisions on their own page (edition cells)
       { path: "projects/:id/decisions", element: <ByEdition path="/projects/:id/decisions" today={<NotFound />} /> },
       { path: "projects/:id/calls", element: <ByEdition path="/projects/:id/calls" today={<NotFound />} /> },
+      { path: "projects/:id/github", element: <ByEdition path="/projects/:id/github" today={<NotFound />} /> },
       { path: "projects/:id/docs", element: <ByEdition path="/projects/:id/docs" today={<NotFound />} /> },
       { path: "sources", element: <Sources /> },
       { path: "sources/discover", element: <SourceDiscover /> },

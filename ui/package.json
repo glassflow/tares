@@ -19,6 +19,7 @@
     "test:edition-shell": "vite build && node tests/edition-shell.e2e.cjs",
     "test:factory-projects": "vite build && node tests/factory-projects.e2e.cjs",
     "test:factory-project": "vite build && node tests/factory-project.e2e.cjs",
+    "test:factory-github": "vite build && node tests/factory-github.e2e.cjs",
     "test:sre-services": "vite build && node tests/sre-services.e2e.cjs",
     "test:sre-home": "vite build && node tests/sre-home.e2e.cjs",
     "test:sre-start": "vite build && node tests/sre-start.e2e.cjs",

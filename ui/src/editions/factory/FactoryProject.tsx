@@ -7,6 +7,7 @@ import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
+import { PR_CHIP, PrSize } from "./prParts";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
@@ -260,6 +261,46 @@ function TicketRow({ t }: { t: MovingTicket }) {
       <span className="col-start-2 pt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere] md:col-start-auto md:row-start-auto">{t.pr?.state_text ?? ""}</span>
       <span aria-hidden className="col-start-3 row-start-1 text-right text-muted-foreground md:col-start-auto md:row-start-auto">{"›"}</span>
     </Link>
+  );
+}
+
+function RecentPrs({ d }: { d: FactoryProjectData }) {
+  const prs = d.prs_recent ?? [];
+  const total = d.prs_total ?? 0;
+  if (total === 0) return null;
+  return (
+    <section id="pull-requests" aria-label="Pull requests" className="min-w-0 scroll-mt-4" data-testid="recent-prs">
+      <SectionHead title="Pull requests" aside={
+        <Link to={`/projects/${encodeURIComponent(d.id)}/github`} data-testid="github-link" className={cn("text-xs", LINK)}>
+          All {total} pull {total === 1 ? "request" : "requests"} {"›"}
+        </Link>} />
+      <div className={CARD}>
+        {prs.map((p) => (
+          <div key={p.url ?? p.ticket} className={ROW} data-testid="recent-pr" data-state={p.state}>
+            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
+              <div className="flex min-w-0 flex-[1_1_280px] items-baseline gap-2.5">
+                <span className="flex-none font-mono text-xs font-medium">{p.number ? `#${p.number}` : "PR"}</span>
+                {p.url ? (
+                  <a href={p.url} target="_blank" rel="noopener noreferrer" data-user-text
+                     className="font-medium text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+                    {p.title} <span aria-hidden className="font-normal text-muted-foreground">{"↗"}</span>
+                  </a>
+                ) : <span className="font-medium [overflow-wrap:anywhere]" data-user-text>{p.title}</span>}
+              </div>
+              <span className={cn("flex-none border px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", PR_CHIP[p.state])}>
+                {p.state_label}
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-muted-foreground">
+              <Link to={p.ticket_href} className={LINK}>{p.ticket}</Link>
+              {p.when && <><span aria-hidden>{"·"}</span><span>{p.when}</span></>}
+              {p.ci && <><span aria-hidden>{"·"}</span><span className={p.ci === "CI failing" ? "text-[color:var(--err)]" : undefined}>{p.ci}</span></>}
+              {p.size && <><span aria-hidden>{"·"}</span><PrSize s={p.size} /></>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -863,6 +904,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
         <div className="grid min-w-0 gap-6">
           <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} onKeep={onKeep} />
           <Moving d={d} />
+          <RecentPrs d={d} />
           <section id="milestones" aria-label="Milestones" className="min-w-0 scroll-mt-4" data-testid="milestones">
             <SectionHead title="Milestones" />
             {d.milestones.length === 0 ? (

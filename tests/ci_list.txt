@@ -56,6 +56,7 @@ test_factory_people
 test_factory_plan
 test_factory_pr_sync
 test_factory_private_screens
+test_factory_project_github
 test_factory_project_page
 test_factory_projects_page
 test_factory_repomap

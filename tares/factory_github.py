@@ -41,8 +41,8 @@ ERROR_BACKOFF = 300   # a read that failed is tried again after this long, not e
 def stale(pr: dict | None) -> bool:
     if not pr or not pr.get("repo"):
         return False
-    if pr.get("merged"):
-        return False            # a merged PR does not change any more
+    if pr.get("merged") and "changed_files" in pr:
+        return False            # a merged PR does not change any more (read once for its size)
     at = pr.get("checked_at")
     try:
         when = datetime.fromisoformat(str(at)) if at else None
@@ -127,6 +127,13 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 "head": head, "state": pr.get("state"), "merged": bool(pr.get("merged")),
                 "merge_commit": pr.get("merge_commit_sha") if pr.get("merged") else None,
                 "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs),
+                # what the change was, for the project's GitHub page: the same read, no extra call
+                "created_at": pr.get("created_at"), "closed_at": pr.get("closed_at"),
+                "author": (pr.get("user") or {}).get("login"),
+                "merged_by": (pr.get("merged_by") or {}).get("login"),
+                "base": (pr.get("base") or {}).get("ref"), "draft": bool(pr.get("draft")),
+                "commits": pr.get("commits"), "changed_files": pr.get("changed_files"),
+                "additions": pr.get("additions"), "deletions": pr.get("deletions"),
                 # an `error` status is the reviewer failing to run, not a verdict
                 "verdict": {"success": "pass", "failure": "changes",
                             "pending": "pending"}.get(review.get("state")) if review else None,

@@ -52,6 +52,9 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // the calls the crew made without the person, on their own page
     "/projects/:id/calls": { page: React.lazy(() => import("./factory/FactoryCalls")), fallback: { redirect: "/projects/:id" } },
 
+    // a project's pull requests, by repo
+    "/projects/:id/github": { page: React.lazy(() => import("./factory/FactoryProjectGitHub")), fallback: { redirect: "/projects/:id" } },
+
     // every document of one project, on its own page
     "/projects/:id/docs": { page: React.lazy(() => import("./factory/FactoryProjectDocs")), fallback: { redirect: "/projects/:id" } },
 

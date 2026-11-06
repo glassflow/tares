@@ -23,7 +23,7 @@ export function YouAreWaitingOn({ entries }: { entries: HomeWaitingOn[] }) {
         <h2 className="m-0! text-base!">You are waiting on</h2>
         <span className="text-[13px] text-muted-foreground" data-testid="waiting-on-scope">{scopeText(entries)}</span>
       </div>
-      <div className="max-w-[860px] border border-border bg-card">
+      <div className="border border-border bg-card">
         {entries.map((e) => {
           const links = e.actions.filter((a) => a.href);
           return (

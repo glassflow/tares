@@ -307,7 +307,7 @@ async def main():
                set(a) == {"id", "name", "goal", "stage", "stage_label", "state", "state_label", "waiting",
                           "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
                           "decisions", "calls", "calls_past", "docs", "terminal", "linked", "can_close", "now",
-                          "people", "docs_total", "later", "can_later"}, sorted(a))
+                          "people", "docs_total", "later", "can_later", "prs_total", "prs_recent"}, sorted(a))
             ck("no ticket lists under the milestones and no no_milestone", "no_milestone" not in a
                and all("tickets" not in m for m in a["milestones"]), sorted(a))
             ck("identity and stage", a["id"] == px and a["name"] == "project-x"
@@ -431,7 +431,7 @@ async def main():
                (a["decisions"][1]["answer"], a["decisions"][0]["answer"], a["decisions"][0]["said"]) == ("tabs", "MIT", None),
                a["decisions"])
             bad = [(p, k, s) for p, k, s in strings(a)
-                   if s[:1] in ("/", "~") and k not in ("url", "href", "tickets_href")]
+                   if s[:1] in ("/", "~") and k not in ("url", "href", "tickets_href", "ticket_href")]
             ck("no value starts with / or ~ except a link", bad == [], bad)
             shown = {k: v for k, v in a.items() if k != "terminal"}
             hits = [n for n in STATIONS + SESSIONS if n in json.dumps(shown)]

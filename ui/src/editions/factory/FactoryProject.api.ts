@@ -85,6 +85,10 @@ export interface FactoryProjectData {
   stage_label: string;
   state: ProjectPageState;
   state_label: string;
+  /** how many pull requests the project's GitHub page lists */
+  prs_total?: number;
+  /** the three newest pull requests */
+  prs_recent?: ProjectPr[];
   waiting: HomeItem[];
   counts: {
     total: number; to_do: number; in_progress: number; in_review: number;
@@ -145,3 +149,54 @@ export const acceptMilestone = (id: string, milestone: string) =>
   request<unknown>(`/api/projects/${encodeURIComponent(id)}/milestones/${encodeURIComponent(milestone)}/accept`, {
     method: "POST", body: JSON.stringify({}),
   });
+
+// The body of GET /api/factory/projects/{id}/github: the project's pull requests by repo, as GitHub
+// said when Tares last read them. `title` and `ticket_title` carry a person's own text.
+export type PrState = "open" | "draft" | "merged" | "closed";
+
+export interface ProjectPr {
+  number: number | null;
+  url: string | null;
+  repo: string | null;
+  title: string;
+  ticket: string;
+  ticket_title: string;
+  ticket_href: string;
+  state: PrState;
+  state_label: string;
+  /** "CI green", "CI failing", "CI running"; null when merged, closed or unknown. */
+  ci: string | null;
+  /** "round 2: passed", from the crew's reviewer; null before a review. */
+  review: string | null;
+  branch: string | null;
+  base: string | null;
+  head: string | null;
+  /** "merged 2 days ago by kim", "opened 3 hours ago by tares-bot", "closed 1 day ago". */
+  when: string;
+  size: { files: number; additions: number; deletions: number; commits: number | null } | null;
+  error: string | null;
+}
+
+export interface ProjectRepoPrs {
+  name: string | null;
+  url: string | null;
+  counts: { open: number; merged: number; closed: number };
+  /** lines added and removed by the merged pull requests */
+  added: number;
+  removed: number;
+  prs: ProjectPr[];
+}
+
+export interface ProjectGitHubData {
+  id: string;
+  name: string;
+  repos: ProjectRepoPrs[];
+  counts: { open: number; merged: number; closed: number };
+  /** "1 minute ago": when Tares last read GitHub for this project; null before any read. */
+  checked: string | null;
+  github_error: string | null;
+  now: string;
+}
+
+export const factoryProjectGitHub = (id: string) =>
+  request<ProjectGitHubData>(`/api/factory/projects/${encodeURIComponent(id)}/github`);

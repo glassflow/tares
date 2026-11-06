@@ -17,6 +17,10 @@ text that names one shows the repo instead. The one place a station name appears
 terminal command that opens a builder's session, because `tares factory crew attach` takes it.
 
 `stage_of` and `who_words` are used by the ticket page (TR-760) as well.
+
+GET /api/factory/projects/{uid}/github is the project's GitHub page: every pull request its
+tickets opened, by repo, open, merged or closed without merging, with CI, the review, the size of
+the change and who merged it, as GitHub said when Tares last read it.
 """
 from __future__ import annotations
 
@@ -26,6 +30,7 @@ from fastapi import HTTPException, Request
 
 from .. import factory as factory_mod
 from .. import factory_api
+from .. import factory_github
 from .. import factory_home as fh
 from .. import factory_waiting as fw
 from ..envelope import now_utc
@@ -138,6 +143,94 @@ def _pr_out(t: dict) -> dict | None:
     return {"number": number, "url": url, "state_text": text}
 
 
+_PR_STATE_LABEL = {"open": "Open", "draft": "Draft", "merged": "Merged",
+                   "closed": "Closed without merging"}
+_PR_ORDER = {"open": 0, "draft": 0, "merged": 1, "closed": 2}
+
+
+def pr_state(t: dict) -> str | None:
+    """open, draft, merged or closed (without merging) for a ticket's pull request; None for a
+    ticket with none. Merged also when the ticket says so and GitHub was never read (_pr_out)."""
+    pr = t.get("pr") or {}
+    if not (pr.get("url") or pr.get("number")):
+        return None
+    if pr.get("merged") or (not pr.get("state") and t.get("stage") in ("merged", "shipped")):
+        return "merged"
+    if pr.get("state") == "closed":
+        return "closed"
+    return "draft" if pr.get("draft") else "open"
+
+
+def hidden_paths(handover: dict | None) -> dict[str, str]:
+    """The crew's folders, each to the repo name free text shows instead."""
+    hidden = {}
+    for r in (handover or {}).get("repos") or []:
+        if r.get("path"):
+            name = r.get("name") or r["path"].rstrip("/").rsplit("/", 1)[-1] or "the repo"
+            base = r["path"].rstrip("/")
+            if base:                                  # with or without a trailing slash
+                hidden[base] = name
+    return hidden
+
+
+def cleaner(handover: dict | None):
+    hidden = hidden_paths(handover)
+
+    def clean(text):
+        out = str(text or "")
+        for path in sorted(hidden, key=len, reverse=True):
+            out = out.replace(path, hidden[path])
+        return out
+    return clean
+
+
+def pr_card(t: dict, ref: str, uid: str, review: str | None, now, clean=str) -> dict:
+    """One pull request on the GitHub page, worded for people."""
+    pr = t.get("pr") or {}
+    state = pr_state(t)
+    number = pr.get("number")
+    if number is None and pr.get("url"):
+        m = _PR_NUMBER.search(str(pr["url"]))
+        number = int(m.group(1)) if m else None
+    repo = pr.get("repo") or (factory_github.parse_pr(pr.get("url") or "") or (None,))[0]
+    if state == "merged":
+        when = plain_ago(pr.get("merged_at"), now)
+        when = " ".join(x for x in ("merged", when, f"by {pr['merged_by']}" if pr.get("merged_by") else "") if x)
+    elif state == "closed":
+        when = " ".join(x for x in ("closed", plain_ago(pr.get("closed_at"), now)) if x)
+    else:
+        when = " ".join(x for x in ("opened", plain_ago(pr.get("created_at"), now),
+                                    f"by {pr['author']}" if pr.get("author") else "") if x)
+    size = None
+    if pr.get("changed_files") is not None:
+        size = {"files": pr["changed_files"], "additions": pr.get("additions") or 0,
+                "deletions": pr.get("deletions") or 0, "commits": pr.get("commits")}
+    return {"number": number, "url": pr.get("url") or (f"https://github.com/{repo}/pull/{number}"
+                                                       if repo and number else None),
+            "repo": repo, "title": clean(pr.get("title") or t["title"]), "ticket": ref,
+            "ticket_title": clean(t["title"]), "ticket_href": f"/projects/{uid}/tickets/{ref}",
+            "state": state, "state_label": _PR_STATE_LABEL[state],
+            "ci": None if state in ("merged", "closed") else _CI_WORD.get(pr.get("ci") or ""),
+            "review": review, "branch": pr.get("branch"), "base": pr.get("base"),
+            "head": (pr.get("head") or "")[:7] or None, "when": when, "size": size,
+            "error": pr.get("error"), "_at": str(pr.get("merged_at") or pr.get("closed_at")
+                                                  or pr.get("created_at") or "")}
+
+
+def recent_prs(tickets: list[dict], uid: str, reviews: dict, now, clean=str, n: int = 3) -> list[dict]:
+    """The `n` pull requests the project's tickets opened last (newest first; a PR GitHub never
+    dated goes by its number)."""
+    with_pr = [t for t in tickets if pr_state(t)]
+    with_pr.sort(key=lambda t: (str((t["pr"] or {}).get("created_at") or ""),
+                                (t["pr"] or {}).get("number") or 0), reverse=True)
+    out = []
+    for t in with_pr[:n]:
+        c = pr_card(t, factory_mod.label(t), uid, _review_out(reviews.get(t["id"]), t), now, clean)
+        c.pop("_at")
+        out.append(c)
+    return out
+
+
 def _review_out(last: dict | None, t: dict) -> str | None:
     v = factory_api.verdict_now(t, last)
     if not v:
@@ -207,19 +300,7 @@ def register(app, store, h, ctx):
         refs = {t["id"]: factory_mod.label(t) for t in tickets}
 
         # the crew's folders stay on the crew's machine: free text that names one shows the repo
-        hidden = {}
-        for r in (handover or {}).get("repos") or []:
-            if r.get("path"):
-                name = r.get("name") or r["path"].rstrip("/").rsplit("/", 1)[-1] or "the repo"
-                base = r["path"].rstrip("/")
-                if base:                                  # with or without a trailing slash
-                    hidden[base] = name
-
-        def clean(text):
-            out = str(text or "")
-            for path in sorted(hidden, key=len, reverse=True):
-                out = out.replace(path, hidden[path])
-            return out
+        clean = cleaner(handover)
 
         def ticket_out(t: dict) -> dict:
             done = factory_mod.finished(t)
@@ -350,11 +431,67 @@ def register(app, store, h, ctx):
                 "stage": stage, "stage_label": STAGE_LABEL[stage],
                 "state": state, "state_label": STATE_LABEL[state],
                 "waiting": waiting, "counts": counts, "moving": moving, "moving_total": len(movers),
-                "tickets_href": f"/tickets?project={uid}", "next": nxt, "milestones": out_ms,
+                "tickets_href": f"/tickets?project={uid}", "next": nxt,
+                # how many pull requests the GitHub page lists (the header links it when any)
+                "prs_total": sum(1 for t in tickets if pr_state(t)),
+                # the three newest pull requests, as the GitHub page words them
+                "prs_recent": recent_prs(tickets, uid, reviews, now, clean), "milestones": out_ms,
                 "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "docs_total": docs_total, "terminal": terminal,
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
                 "can_close": factory_mod.ready_to_close(p, tickets),
                 "later": later, "can_later": not later and not closed and not with_crew,
                 "people": people,
+                "now": fh._iso(now)}
+
+    @app.get("/api/factory/projects/{uid}/github")
+    async def factory_project_github(uid: str, request: Request):
+        """The project's GitHub page: its pull requests by repo (the open ones first, then merged,
+        then closed without merging, newest first in each), read again from GitHub when stale,
+        waiting at most a moment for it (factory_api.refresh_prs)."""
+        p = store.get_project(uid)
+        if (p is None or p.get("kind") != "software_factory" or p.get("status") == "draft"
+                or not h.can_see(p)):
+            raise HTTPException(404, f"no factory project {uid!r}")
+        await factory_api.refresh_prs(store, uid)
+        now = now_utc()
+        tickets = store.list_tickets(uid)
+        reviews = store.last_reviews([t["id"] for t in tickets if pr_state(t)])
+        handover = store.get_handover(uid) or {}
+        clean = cleaner(handover)
+        cards = [pr_card(t, factory_mod.label(t), uid, _review_out(reviews.get(t["id"]), t), now, clean)
+                 for t in tickets if pr_state(t)]
+        order = [r.get("name") for r in handover.get("repos") or [] if r.get("name")]
+        by_repo: dict[str, list[dict]] = {}
+        for c in cards:
+            by_repo.setdefault(c["repo"] or "", []).append(c)
+        repos = []
+        for name in sorted(by_repo, key=lambda n: (not n, order.index(n.rsplit("/", 1)[-1])
+                                                   if n.rsplit("/", 1)[-1] in order else len(order), n)):
+            prs = sorted(by_repo[name], key=lambda c: c["_at"], reverse=True)
+            prs.sort(key=lambda c: _PR_ORDER[c["state"]])
+            for c in prs:
+                c.pop("_at")
+            merged = [c for c in prs if c["state"] == "merged"]
+            repos.append({"name": name or None,
+                          "url": f"https://github.com/{name}" if name else None,
+                          "counts": {"open": sum(c["state"] in ("open", "draft") for c in prs),
+                                     "merged": len(merged),
+                                     "closed": sum(c["state"] == "closed" for c in prs)},
+                          "added": sum((c["size"] or {}).get("additions", 0) for c in merged),
+                          "removed": sum((c["size"] or {}).get("deletions", 0) for c in merged),
+                          "prs": prs})
+        # the last read that worked; a failed read says why instead
+        checked = max((str((t.get("pr") or {}).get("checked_at") or "") for t in tickets
+                       if pr_state(t) and not (t.get("pr") or {}).get("error")), default="")
+        errors = [c["error"] for c in cards if c["error"]]
+        shared = errors[0] if errors and len(set(errors)) == 1 else None
+        for c in cards:          # one reason for all of them is said once, at the top
+            if shared and c["error"] == shared:
+                c["error"] = None
+        return {"id": p["id"], "name": p["name"], "repos": repos,
+                "counts": {k: sum(r["counts"][k] for r in repos) for k in ("open", "merged", "closed")},
+                "checked": plain_ago(checked, now) if checked else None,
+                "github_error": (errors[0][:1].upper() + errors[0][1:] + ".") if shared
+                                else (f"{len(errors)} could not be read, each says why." if errors else None),
                 "now": fh._iso(now)}
