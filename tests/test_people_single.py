@@ -227,6 +227,27 @@ async def main():
         await cx.aclose()
 
 
+async def one_person_cell():
+    """A cell with only `local`: an admin key bound to no one is that person, so it renames them."""
+    from tares import daemon
+    daemon.DB_PATH = os.path.join(TMP, "one.duckdb")   # read once at import: point the new cell at its own file
+    app = daemon.make_app()
+    async with app.router.lifespan_context(app):
+        cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                               headers=H(ROOT))
+        print("== one person on the cell: an unbound admin key is that person ==")
+        eq("one person", len((await cx.get("/api/people")).json()["people"]), 1)
+        r = await cx.post("/api/keys", json={"name": "unbound", "scopes": ["admin"]})
+        secret = r.json()["secret"]
+        r = await cx.patch("/api/people/local", headers=H(secret), json={"name": "Solo"})
+        ck("it renames local (200)", r.status_code == 200 and r.json()["name"] == "Solo",
+           f"{r.status_code} {r.text[:200]}")
+        r = await cx.patch("/api/people/nobody-here", headers=H(secret), json={"name": "X"})
+        eq("a person who is not there is 404", r.status_code, 404)
+        await cx.aclose()
+
+
 asyncio.run(main())
+asyncio.run(one_person_cell())
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

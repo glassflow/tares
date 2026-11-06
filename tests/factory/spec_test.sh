@@ -65,6 +65,7 @@ api POST /api/projects '{"template": "custom", "kind": "software_factory", "name
 check "the lead of an existing project gets the usual prompt" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Lead case)" ] && [ "$(last | jq -r .cwd)" = "$T/shop" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q contributor "$T/leadcase.out"'
 
 # Auth on, three people with a key each: Ashish leads "Acme web", Kiran does not, the root token is no person.
+seed_people "$T/tares2" "Ashish=ashish@example.com" "Kiran=kiran@example.com"
 start_tares "$T/tares2" root-tok
 root_tok=$TARES_AUTH_TOKEN
 for who in Ashish Kiran; do

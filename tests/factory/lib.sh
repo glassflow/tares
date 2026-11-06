@@ -11,6 +11,15 @@ unset FACTORY_STATION FACTORY_ROLE FACTORY_PARENT FACTORY_CREW FACTORY_ORCHESTRA
 TARES_PIDS=""
 stop_tares() { local p; for p in $TARES_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; TARES_PIDS=""; }
 
+# People on a cell before it starts: `seed_people <dir> "Name=email" ...`. Adding a second person over
+# HTTP needs a licence (ee/tests), so a test that only needs them there makes them here, once, in the
+# database start_tares will open (no daemon may be running on it).
+seed_people() { # dir "Name=email"...
+  local dir=$1; shift
+  mkdir -p "$dir"
+  (cd "$ROOT" && PYTHONPATH="$ROOT" "$PY" tests/_people.py "$dir/tares.duckdb" "$@") || { echo "FAIL could not seed people"; exit 1; }
+}
+
 start_tares() { # dir [token]
   local dir=$1 token=${2:-} port
   mkdir -p "$dir"

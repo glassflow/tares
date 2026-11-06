@@ -14,6 +14,7 @@ import asyncio
 import os
 import sys
 import tempfile
+import time
 from datetime import date, timedelta
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,7 @@ os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 import httpx
 
 from tares import team as team_mod
+from tares_ee.team import Team
 
 P = F = 0
 
@@ -181,6 +183,35 @@ async def main():
         eq("the single-person team again", type(team_mod.get()).__name__, "SingleTeam")
         r = await add("gus@example.com", "Gus")
         ck("a new person is refused", refused(r), f"{r.status_code} {r.text[:200]}")
+
+        print("== many adds at once never pass the seats ==")
+        await licence(licensed.test_licence(seats=6))
+        eq("four people, two seats left", len(await people()), 4)
+        real = Team.can_add_person
+
+        def slow(self, st):
+            answer = real(self, st)
+            time.sleep(0.05)   # widen the window between the check and the insert
+            return answer
+
+        Team.can_add_person = slow
+        try:
+            async def via(i):
+                if i % 3 == 0:
+                    return await add(f"race{i}@example.com", f"Race {i}")
+                if i % 3 == 1:
+                    return await cx.post("/api/keys", json={
+                        "name": f"race{i}", "scopes": ["admin"],
+                        "person": {"email": f"race{i}@example.com", "name": f"Race {i}"}})
+                return await cx.post("/api/factory/people", json={"email": f"race{i}@example.com"})
+            rs = await asyncio.gather(*[via(i) for i in range(9)])
+        finally:
+            Team.can_add_person = real
+        made = [r for r in rs if r.status_code == 201]
+        eq("two of nine were made", len(made), 2)
+        ck("the rest were refused for the licence", all(refused(r) for r in rs if r.status_code != 201),
+           str([r.status_code for r in rs]))
+        eq("six people, never more than the seats", len(await people()), 6)
 
         await cx.aclose()
 

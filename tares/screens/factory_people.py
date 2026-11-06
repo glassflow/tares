@@ -124,8 +124,9 @@ def register(app, store, h, ctx):
         name = " ".join(str((body or {}).get("name") or "").split())[:120] or None
         if store.find_person_by_email(email):
             raise HTTPException(409, f"{email} is already on this cell")
-        ok, why = team_mod.get().can_add_person(store)
-        if not ok:
-            h.licence_required(why)
-        p = store.person_or_create(email, name, via="admin")
+        with team_mod.ADD_LOCK:   # the seat check and the insert are one step
+            ok, why = team_mod.get().can_add_person(store)
+            if not ok:
+                h.licence_required(why)
+            p = store.person_or_create(email, name, via="admin")
         return {"id": p["id"], "name": p["name"] or email, "email": p.get("email")}

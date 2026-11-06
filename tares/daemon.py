@@ -1697,19 +1697,20 @@ def make_app() -> FastAPI:
         owner = system and spec.get("owner") is True   # from the control plane only
         try:
             email = store.check_email(spec["email"])
-            if email and not store.find_person_by_email(email):
-                local = store.get_person("local")
-                if owner and local and not local["email"] and not local["emails"]:
-                    pass   # claims the unclaimed `local` below: not a new row
-                else:
-                    ok, why = team_mod.get().can_add_person(store)
-                    if not ok:
-                        if owner and local:
-                            return local["id"]
-                        h.licence_required(why)
-            return store.person_or_create(
-                spec["email"], spec.get("name"), via="cloud" if system else "key",
-                owner=owner)["id"]
+            with team_mod.ADD_LOCK:   # the seat check and the insert are one step
+                if email and not store.find_person_by_email(email):
+                    local = store.get_person("local")
+                    if owner and local and not local["email"] and not local["emails"]:
+                        pass   # claims the unclaimed `local` below: not a new row
+                    else:
+                        ok, why = team_mod.get().can_add_person(store)
+                        if not ok:
+                            if owner and local:
+                                return local["id"]
+                            h.licence_required(why)
+                return store.person_or_create(
+                    spec["email"], spec.get("name"), via="cloud" if system else "key",
+                    owner=owner)["id"]
         except ValueError as e:
             _err(e, 409 if "already belongs" in str(e) else 400)
 
@@ -1794,17 +1795,18 @@ def make_app() -> FastAPI:
                     if picture:
                         claimed = store.update_person(claimed["id"], picture=picture) or claimed
                     return _person_out(claimed)
-            ok, why = team_mod.get().can_add_person(store)
-            if not ok:
-                # the owner under another email, once `local` is claimed, is `local`
-                local = store.get_person("local") if email and system and body.get("owner") is True else None
-                if not local:
-                    h.licence_required(why)
-                if picture and picture != local.get("picture"):
-                    local = store.update_person("local", picture=picture) or local
-                return _person_out(local)
-            p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
-                                    bool(body.get("is_admin")), via="admin")
+            with team_mod.ADD_LOCK:   # the seat check and the insert are one step
+                ok, why = team_mod.get().can_add_person(store)
+                if not ok:
+                    # the owner under another email, once `local` is claimed, is `local`
+                    local = store.get_person("local") if email and system and body.get("owner") is True else None
+                    if not local:
+                        h.licence_required(why)
+                    if picture and picture != local.get("picture"):
+                        local = store.update_person("local", picture=picture) or local
+                    return _person_out(local)
+                p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
+                                        bool(body.get("is_admin")), via="admin")
             if picture:
                 p = store.update_person(p["id"], picture=picture) or p
         except ValueError as e:
