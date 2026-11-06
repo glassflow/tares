@@ -50,7 +50,7 @@ MEMBERS = [
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "start_who", "by",
     "require_admin", "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404",
     "resolve_project", "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out",
-    "area_owner", "hidden_project", "projects", "licence_state", "licence_required",
+    "area_owner", "hidden_project", "projects", "licence_state", "licence_required", "team_reader",
 ]
 
 STATE_KEYS = {"valid", "source", "kid", "org", "seats", "used", "features", "expires", "days_left",

@@ -178,10 +178,31 @@ def defaults(store):
        and t.resolve_crew(" ops ", "local", "m") == ("ops", ""))
     rows = [1, 2]
     tickets = {"t": 1}
-    ck("team home: {} and the own_* hooks pass their rows on unchanged",
-       t.team_home(None, None, None) == {} and t.own_stations(None, None, rows) is rows
-       and t.own_desk(None, None, rows) is rows and t.own_tickets(None, None, tickets, []) is tickets
-       and t.team_projects(None, None, [], [], [], "all", None, []) == {})
+    from types import SimpleNamespace as NS
+    one = NS(store=NS(only_local_person=lambda: True),
+             h=NS(current_person=lambda r: {"id": "local"}, is_system=lambda r: False),
+             work_person=lambda r: {"id": "local"})
+    ck("team home: {} and the own_* hooks pass their rows on unchanged on a one-person cell",
+       t.team_home(one, None, None) == {} and t.own_stations(one, None, rows) is rows
+       and t.own_desk(one, None, rows) is rows and t.own_tickets(one, None, tickets, []) is tickets
+       and t.team_projects(one, None, [], [], [], "all", None, []) == {})
+    many = NS(store=NS(only_local_person=lambda: False),
+              h=NS(current_person=lambda r: {"id": "ann"}, is_system=lambda r: False),
+              work_person=lambda r: {"id": "ann"},
+              desk_is_mine=lambda d, me: d["to"] == me, is_mine=lambda tk, me, p: tk["who"] == me)
+    stations = [{"person": {"id": "ann"}}, {"person": {"id": "bob"}}, {"person": None}]
+    desk = [{"to": "ann"}, {"to": "bob"}]
+    tks = {"p": [{"who": "ann"}, {"who": "bob"}]}
+    ck("without a team, a person caller of a many-person cell keeps only their own rows (no licence)",
+       t.own_stations(many, None, stations) == [stations[0]] and t.own_desk(many, None, desk) == [desk[0]]
+       and t.own_tickets(many, None, tks, [{"id": "p"}]) == {"p": [{"who": "ann"}]})
+    anon = NS(store=many.store, h=NS(current_person=lambda r: None, is_system=lambda r: False),
+              work_person=many.work_person)
+    system = NS(store=many.store, h=NS(current_person=lambda r: None, is_system=lambda r: True),
+                work_person=many.work_person, desk_is_mine=many.desk_is_mine, is_mine=many.is_mine)
+    ck("a caller with no person is not cut; the system credential is cut to the person it acts for",
+       t.own_stations(anon, None, stations) is stations
+       and t.own_stations(system, None, stations) == [stations[0]])
     ck("register_routes does nothing and mcp_tools is []",
        t.register_routes(None, None) is None and t.mcp_tools() == [])
 

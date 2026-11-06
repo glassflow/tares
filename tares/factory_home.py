@@ -430,6 +430,14 @@ def _tools(store, now, hidden) -> list[dict]:
             for t in factory_tools.tools(store, now, hidden)]
 
 
+def _cut(fx, name: str, request, rows, *more):
+    """`rows` cut to the caller by the team interface's filter `name` (own_stations, own_desk,
+    own_tickets). Unchanged on a cell of one person, without a request, or for an `fx` with no
+    such filter."""
+    fn = getattr(fx, name, None)
+    return fn(request, rows, *more) if fn is not None and request is not None else rows
+
+
 def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
@@ -450,6 +458,12 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     milestones = store.milestones_by_project(ids)
     desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
     waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now, hidden)
+    # a person's home never lists another person's desk item, licence or not (core, TR-1048)
+    mine_desk = _cut(fx, "own_desk", request, desk)
+    if not team and len(mine_desk) != len(desk):
+        gone = {f"{kind}:{d['label']}" for d in desk if d not in mine_desk
+                for kind in ("permission", "question")}
+        waiting = [w for w in waiting if w["id"] not in gone]
     rows = []
     for p in open_ps:
         row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
@@ -462,9 +476,9 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
                                                   team["waiting_for_you"])}
     # on a team cell "Your crew" is the caller's own crew; the others are the side column's rows
     # and so are its open questions and the tickets it works on: the caller's person's, not the cell's
-    mine = fx.own_stations(request, stations) if team else stations
-    own = fx.own_tickets(request, tickets, open_ps) if team else tickets
-    desk_open = len(fx.own_desk(request, desk) if team else desk)
+    mine = _cut(fx, "own_stations", request, stations)
+    own = _cut(fx, "own_tickets", request, tickets, open_ps)
+    desk_open = len(mine_desk)
     crew = _crew(mine, settings, {p["id"] for p in open_ps}, own, desk_open, now)
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None

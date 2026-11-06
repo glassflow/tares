@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """What a person's home shows on a cell with more than one person (TR-739).
 
 `team_home(c, request)` answers for the person of the key; factory_api.register builds `c` (its
@@ -11,15 +12,13 @@ the single-person home uses. Nothing here is kept: it is all read from what the 
 """
 from __future__ import annotations
 
-from . import areas as areas_mod
-from . import factory as factory_mod
-from . import factory_home as fh
-from . import factory_waiting as fw
+from tares import areas as areas_mod
+from tares import factory as factory_mod, factory_home as fh, factory_waiting as fw
 
 YOUR_CREW = {"crew": True, "name": "Your crew"}
 
 
-class Team:
+class HomeRead:
     """One read of the home for one person: who they are, what they cannot see, and the crew
     rows, read once and only when something asks for them."""
 
@@ -44,7 +43,6 @@ class Team:
             self.later = {p["id"] for p in ps if p.get("status") == "later"}
         return self._names
 
-
     def people(self) -> dict[str, str]:
         """{person id: name} of everyone on the cell."""
         if self._people is None:
@@ -54,6 +52,14 @@ class Team:
     def person(self, pid: str | None) -> dict | None:
         """{id, name} of a person by id, or None."""
         return {"id": pid, "name": self.people().get(pid) or pid} if pid else None
+
+
+def _for_team(c, request) -> bool:
+    """True when the team home answers: a cell of more than one person and a caller with a person
+    (or the system)."""
+    if c.store.only_local_person():
+        return False
+    return not (c.h.current_person(request) is None and not c.h.is_system(request))
 
 
 def _ref(person: dict | None) -> dict | None:
@@ -66,7 +72,7 @@ def _ref(person: dict | None) -> dict | None:
     return out
 
 
-def _project(t: Team, pid: str | None) -> dict | None:
+def _project(t: HomeRead, pid: str | None) -> dict | None:
     """{id, name} of a project the person can see and nobody kept for later, else None."""
     name = t.names().get(pid) if pid else None
     return ({"id": pid, "name": name} if name and pid not in t.hidden and pid not in t.later
@@ -75,7 +81,7 @@ def _project(t: Team, pid: str | None) -> dict | None:
 
 # ── a question a spec asked of the person ────────────────────────────────────
 
-def question_items(t: Team) -> list[dict]:
+def question_items(t: HomeRead) -> list[dict]:
     out = []
     for q in t.store.list_spec_questions(state="open", to_person_id=t.me["id"]):
         project = _project(t, q["project"])
@@ -93,7 +99,7 @@ def question_items(t: Team) -> list[dict]:
 
 # ── a grant that waits for the person to agree ───────────────────────────────
 
-def grant_items(t: Team) -> list[dict]:
+def grant_items(t: HomeRead) -> list[dict]:
     rows = [g for g in t.store.all_grant_rows()
             if g["state"] == "waiting" and g["kind"] == "project"
             and t.c.waits_for_me(g, t.request)]
@@ -130,7 +136,7 @@ def grant_items(t: Team) -> list[dict]:
 
 # ── a desk item addressed to the person ──────────────────────────────────────
 
-def _desk_from(t: Team, d: dict) -> dict | None:
+def _desk_from(t: HomeRead, d: dict) -> dict | None:
     """The person's own crew when the crew that asked is theirs, else the person whose crew
     asked; an item no crew is known for comes from the person who put it on the desk, else from
     the person's crew."""
@@ -149,7 +155,7 @@ def _desk_from(t: Team, d: dict) -> dict | None:
     return _ref(t.store.get_person(who["id"])) or who
 
 
-def desk_items(t: Team) -> list[dict]:
+def desk_items(t: HomeRead) -> list[dict]:
     rows = [d for d in t.store.list_desk("open")
             if t.c.desk_is_mine(d, t.me["id"]) and d["project"] not in t.hidden]
     out = []
@@ -182,7 +188,7 @@ def desk_items(t: Team) -> list[dict]:
 
 # ── milestones of the projects the person leads whose tickets all merged ─────
 
-def milestone_items(t: Team) -> list[dict]:
+def milestone_items(t: HomeRead) -> list[dict]:
     """The single-person rule (factory_waiting.milestones_to_check, TR-1017 and TR-1021), kept to
     the projects the person leads: only what truly needs them, nothing for a project ready to
     close, and the crew's unrecorded checks stay the crew's on a project it works on."""
@@ -193,7 +199,7 @@ def milestone_items(t: Team) -> list[dict]:
 
 # ── pull requests the reviewer passed, in the projects the person leads or holds tickets in ──
 
-def pr_items(t: Team) -> list[dict]:
+def pr_items(t: HomeRead) -> list[dict]:
     from types import SimpleNamespace
     mine = t.c.my_projects(t.request)   # None: nothing narrows the list (the cell's own credential)
     fx = SimpleNamespace(queue=t.c.queue, settings=lambda: t.c.settings(t.request))
@@ -203,7 +209,7 @@ def pr_items(t: Team) -> list[dict]:
 
 # ── what the single-person home asks of whoever leads a project, kept for its lead ──
 
-def lead_items(t: Team) -> list[dict]:
+def lead_items(t: HomeRead) -> list[dict]:
     """A spec ready to hand to the crew, calls the crew made, a project ready to close: the
     single-person home shows them to the one person, a team home to the project's lead."""
     from types import SimpleNamespace
@@ -231,7 +237,7 @@ BUILDERS = [question_items, grant_items, desk_items, milestone_items, pr_items,
 
 # ── "You are waiting on": the projects the person leads with a question open for someone else ──
 
-def waiting_on(t: Team) -> list[dict]:
+def waiting_on(t: HomeRead) -> list[dict]:
     """One entry per project the person leads (`local` also gets those with no lead, marked
     `no_lead`) that is not handed over yet and has a question open for someone else. Nothing
     else holds a project back: a project with nothing open is ready to start, and one kept for
@@ -277,7 +283,7 @@ def waiting_counts(entries: list[dict]) -> list[tuple[str, int]]:
 PROJECT_VIEWS = ("mine", "team")
 
 
-def _yours_text(t: Team, tickets: list[dict], p: dict) -> tuple[int, str]:
+def _yours_text(t: HomeRead, tickets: list[dict], p: dict) -> tuple[int, str]:
     """(how many of the project's tickets are the person's, "1 ticket yours, 1 Kim's")."""
     mine, others = 0, {}
     for tk in tickets:
@@ -309,9 +315,9 @@ def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dic
     it, holds a ticket in it, or an item in `waiting` is in it. `rows` are the home's project rows of
     the projects the person can see (`open_ps`, with their `tickets`); a private project they are
     not on is not among them and shows only as {hidden: true, lead: {name}} in the team view."""
-    if not _applies(c, request):
+    if not _for_team(c, request):
         return {}
-    t = Team(c, request, c.work_person(request), now)
+    t = HomeRead(c, request, c.work_person(request), now)
     by_id = {p["id"]: p for p in open_ps}
     asked = {(i["project"] or {}).get("id") for i in waiting}   # projects with something for the person
     shown = []
@@ -343,7 +349,7 @@ def team_projects(c, request, open_ps: list[dict], tickets: dict, rows: list[dic
 QUIET_MINUTES = 24 * 60
 
 
-def _crew_label(t: Team, crew: dict) -> str:
+def _crew_label(t: HomeRead, crew: dict) -> str:
     if crew["person_id"] == t.me["id"]:
         return "Your crew"
     who = (_ref(crew["person"]) or {}).get("name")
@@ -369,7 +375,7 @@ def _crew_doing(stations: list[dict], own: bool = True) -> str:
     return "Idle." if live else "Not running."
 
 
-def crews(t: Team) -> tuple[list[dict], list[str]]:
+def crews(t: HomeRead) -> tuple[list[dict], list[str]]:
     """(the crews heard from in the last 24 hours, the person's own first, then each other
     person's, newest first; the names of the crews not heard from since)."""
     own, others, quiet = [], [], []
@@ -393,7 +399,7 @@ _UP_TO = {"L3-review": "up to merge",
           "L4-ship": "merging on its own after review and green CI"}
 
 
-def crew_limit(t: Team) -> dict:
+def crew_limit(t: HomeRead) -> dict:
     """{mine, team, text}: the autonomy of the person's crew and the team's, in words. The
     person's can be stricter than the team's, never looser (factory.stricter_than_team)."""
     team = t.c.stored("crew_settings").get("autonomy")
@@ -406,7 +412,7 @@ def crew_limit(t: Team) -> dict:
 
 # ── the repos the person owns, and what waits on each ────────────────────────
 
-def areas(t: Team, waiting: list[dict]) -> list[dict]:
+def areas(t: HomeRead, waiting: list[dict]) -> list[dict]:
     """[{repo, note}] for the repos the person owns: how many questions wait for them there,
     from the items already built."""
     out = []
@@ -433,51 +439,12 @@ def summary(waiting: list[dict], counts: list[tuple[str, int]] | None = None) ->
     return first + " You are waiting on " + fw._and([f"{name} for {k}" for name, k in counts]) + "."
 
 
-def _applies(c, request) -> bool:
-    """Whether the team keys apply: a cell with more than one person, and a caller with a person
-    (or the cell's own credential)."""
-    if c.store.only_local_person():
-        return False
-    return not (c.h.current_person(request) is None and not c.h.is_system(request))
-
-
-def own_stations(c, request, rows: list[dict]) -> list[dict]:
-    """The stations of the caller's own crews, for "Your crew" on the home: on a team cell the
-    other people's crews are the side column's rows, not members of the caller's. Every station
-    for a caller the single-person home answers."""
-    if not _applies(c, request):
-        return rows
-    me = c.work_person(request)["id"]
-    return [s for s in rows if (s["person"] or {}).get("id") == me]
-
-
-def own_desk(c, request, rows: list[dict]) -> list[dict]:
-    """The open desk items addressed to the caller's person, for the crew's open questions on the
-    home. Every item for a caller the single-person home answers."""
-    if not _applies(c, request):
-        return rows
-    me = c.work_person(request)["id"]
-    return [d for d in rows if c.desk_is_mine(d, me)]
-
-
-def own_tickets(c, request, tickets: dict[str, list[dict]], projects: list[dict]) -> dict[str, list[dict]]:
-    """{project: the tickets that are the caller's person's} (assigned to them, or to their project's
-    lead when unassigned), so the crew's work and the stations' held tickets are the caller's, never
-    another crew's that reuses a station name. Every ticket for a caller the single-person home
-    answers."""
-    if not _applies(c, request):
-        return tickets
-    me = c.work_person(request)["id"]
-    by_id = {p["id"]: p for p in projects}
-    return {pid: [t for t in ts if c.is_mine(t, me, by_id.get(pid))] for pid, ts in tickets.items()}
-
-
 def team_home(c, request, now) -> dict:
     """The team keys of the home body for the caller, or {} for a caller the single-person home
     answers: a cell of one, or a key with no person."""
-    if not _applies(c, request):
+    if not _for_team(c, request):
         return {}
-    t = Team(c, request, c.work_person(request), now)
+    t = HomeRead(c, request, c.work_person(request), now)
     waiting = fh.order_waiting([i for build in BUILDERS for i in build(t)], now)
     on = waiting_on(t)
     crew_rows, quiet = crews(t)

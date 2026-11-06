@@ -4,11 +4,11 @@ Core knows one person. `SingleTeam` is that cell: nobody to assign to, no areas,
 crew per name. The enterprise code in `tares_ee` plays the same interface as `tares_ee.team.Team`,
 a subclass of `SingleTeam`, and `get()` hands it out only while the licence allows it.
 
-    from tares import team as team_mod       # never `from tares.factory_team import Team`
+    from tares import team as team_mod
     team_mod.get().resolve_crew(name, person_id, machine)
 
-(`tares/factory_team.py` has a class `Team` of its own, one person's home read. It is a different
-thing and keeps that name until its code moves into ee.)
+(`tares_ee/team_home.py` has a class `HomeRead` of its own, one person's home read. It is not part of
+this interface.)
 
 Three rules shape the interface:
 
@@ -130,15 +130,16 @@ class Team:
         machine, at)`, which returns the crew's id."""
         raise NotImplementedError
 
-    # ── team home (the hooks for tares/factory_team.py) ──
+    # ── team home (the team home itself is ee code, the three row filters are core) ──
     def team_home(self, c, request, now) -> dict:
         """The team page's body for the caller, or {} when the cell has no team page."""
         raise NotImplementedError
 
     def own_stations(self, c, request, rows: list) -> list:
-        """`rows` (the crew's stations) cut to what the caller may see. A single-person cell sees
-        all of them. The filter that keeps a caller's own rows on a cell with more than one person
-        is filled in here, not in the callers."""
+        """`rows` (the crew's stations) cut to what the caller may see. A one-person cell sees all
+        of them; on a cell with more than one person a person caller sees only their own. The
+        single-person implementation does this without a licence, so a team database that is not
+        licensed never shows one person's rows to another."""
         raise NotImplementedError
 
     def own_desk(self, c, request, rows: list) -> list:
@@ -219,14 +220,33 @@ class SingleTeam(Team):
     def team_home(self, c, request, now):
         return {}
 
+    @staticmethod
+    def _applies(c, request) -> bool:
+        """True when rows are cut to the caller's own: a cell with more than one person and a
+        caller with a person (or the system). Licence and team are not consulted."""
+        if c.store.only_local_person():
+            return False
+        return not (c.h.current_person(request) is None and not c.h.is_system(request))
+
     def own_stations(self, c, request, rows):
-        return rows
+        if not self._applies(c, request):
+            return rows
+        me = c.work_person(request)["id"]
+        return [s for s in rows if (s["person"] or {}).get("id") == me]
 
     def own_desk(self, c, request, rows):
-        return rows
+        if not self._applies(c, request):
+            return rows
+        me = c.work_person(request)["id"]
+        return [d for d in rows if c.desk_is_mine(d, me)]
 
     def own_tickets(self, c, request, tickets, projects):
-        return tickets
+        if not self._applies(c, request):
+            return tickets
+        me = c.work_person(request)["id"]
+        by_id = {p["id"]: p for p in projects}
+        return {pid: [t for t in ts if c.is_mine(t, me, by_id.get(pid))]
+                for pid, ts in tickets.items()}
 
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):
         return {}

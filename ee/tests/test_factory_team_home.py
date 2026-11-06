@@ -40,9 +40,9 @@ import httpx
 
 from tares import factory as factory_mod
 from tares import factory_home as fh
-from tares import factory_team
 from tares import words
 from tares.store import now_utc
+from tares_ee import team_home as th
 
 P = F = 0
 
@@ -137,17 +137,17 @@ async def main():
         ck("no summary key", "summary" not in one, sorted(one))
         ck("the single-person kinds, not the team ones", {i["kind"] for i in one["waiting_for_you"]}
            == {"permission", "question"}, [i["kind"] for i in one["waiting_for_you"]])
-        real = factory_team.team_home
-        factory_team.team_home = lambda c, request, now: {}
+        real = th.team_home
+        th.team_home = lambda c, request, now: {}
         try:
             plain = await home("root")
         finally:
-            factory_team.team_home = real
+            th.team_home = real
         drop = ("now", "start")
         ck("the body equals what the home gives with no team part", (
             {k: v for k, v in one.items() if k not in drop}
             == {k: v for k, v in plain.items() if k not in drop}))
-        ck("team_home itself answers {} for a cell of one", factory_team.team_home(
+        ck("team_home itself answers {} for a cell of one", th.team_home(
             type("C", (), {"store": store})(), None, now_utc()) == {})
         ck("a key with no person is the cell's own key: same body", (await home("root"))["waiting_total"]
            == one["waiting_total"])
@@ -308,13 +308,13 @@ async def main():
             h = await home(who)
             w = h["waiting_for_you"]
             ck(f"{who.capitalize()}: the total is the list, the summary counts it",
-               h["waiting_total"] == len(w) and h["summary"] == factory_team.summary(w), h["summary"])
+               h["waiting_total"] == len(w) and h["summary"] == th.summary(w), h["summary"])
         h = await home("kim")
         w = h["waiting_for_you"]
         key = lambda i: (not i["blocking"], i["older"], i["kind"] == "signoff", i["since"])
         ck("Kim's list: what holds the crew up first, then the rest, oldest first in each (TR-1021)",
            [key(i) for i in w] == sorted(key(i) for i in w), [(i["kind"], i["blocking"], i["since"]) for i in w])
-        ck("the summary has a sentence for none, one and many", [factory_team.summary([{}] * n) for n in (0, 1, 4)]
+        ck("the summary has a sentence for none, one and many", [th.summary([{}] * n) for n in (0, 1, 4)]
            == ["Nothing waits for you.", "1 thing waits for you.", "4 things wait for you."])
         h = await home("root")
         ck("the cell's own key is the person local: nothing addressed to them, and every pull "
@@ -361,7 +361,7 @@ async def main():
         ck("Atlas is not also Ready to start for Kim while the question is open",
            f"ready_to_start:{atlas}" not in {i["id"] for i in h["waiting_for_you"]})
         ck("the summary adds who Kim waits on, one question",
-           h["summary"] == factory_team.summary(h["waiting_for_you"], [("Alex", 1)])
+           h["summary"] == th.summary(h["waiting_for_you"], [("Alex", 1)])
            and h["summary"].endswith("You are waiting on Alex for 1."), h["summary"])
         ck("Alex and Lee lead nothing: an empty list, and no second sentence",
            (await home("alex"))["you_are_waiting_on"] == [] and (await home("lee"))["you_are_waiting_on"] == []
@@ -378,7 +378,7 @@ async def main():
         h = await home("kim")
         ck("nothing open: Atlas is no longer waited on, though Alex owns acme/web and nobody owns other/lib",
            atlas not in {x["project"]["id"] for x in h["you_are_waiting_on"]}
-           and h["summary"] == factory_team.summary(h["waiting_for_you"]), h["summary"])
+           and h["summary"] == th.summary(h["waiting_for_you"]), h["summary"])
         solo2 = await make_project("kim", "Kim only")
         await ticket("kim", solo2, "Own repo work", "acme/api")
         ck("a project whose repos are all Kim's, with nothing asked, is left out",
@@ -408,7 +408,7 @@ async def main():
            and h["summary"].endswith("You are waiting on Alex for 2."), (h["summary"]))
         ck("projects Kim leads are not marked no_lead", all(x["no_lead"] is False for x in h["you_are_waiting_on"]))
         ck("the counts sentence for several people names each, most first",
-           factory_team.summary([], [("Alex", 2), ("Lee", 1)])
+           th.summary([], [("Alex", 2), ("Lee", 1)])
            == "Nothing waits for you. You are waiting on Alex for 2 and Lee for 1.")
         for uid in (atlas, solo2):
             for q in store.list_spec_questions(uid, state="open"):
@@ -531,8 +531,8 @@ async def main():
         two = [{"open_questions": [{"to": {"id": "p1", "name": "Sam"}}]},
                {"open_questions": [{"to": {"id": "p2", "name": "Sam"}}, {"to": {"id": "p1", "name": "Sam"}}]}]
         ck("two people of one name are two entries in the waiting counts",
-           factory_team.waiting_counts(two) == [("Sam", 2), ("Sam", 1)],
-           factory_team.waiting_counts(two))
+           th.waiting_counts(two) == [("Sam", 2), ("Sam", 1)],
+           th.waiting_counts(two))
         ck("the stub has the same shape in two homes with no other key", all(
             set(p) == {"hidden", "lead"} for p in (await home_of("kim", "team"))["projects"] if p.get("hidden")))
 
@@ -775,7 +775,7 @@ async def main():
             "h": type("H", (), {"current_person": lambda self, r: None,
                                 "is_system": lambda self, r: False})()})()
         ck("a project key, which names no person, gets none of the team keys",
-           factory_team.team_home(nobody, None, now_utc()) == {})
+           th.team_home(nobody, None, now_utc()) == {})
         r = await call("lee", "POST", "/api/grants", {"kind": "project", "project": vault,
                                                       "words": "ship the Vault launch codes",
                                                       "areas": ["acme/web"]})
