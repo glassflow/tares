@@ -232,6 +232,31 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && (await notes.getByRole("link", { name: "Set an owner" }).count()) === 0);
       ck(t("the daemon's summary says Alex waits on Kim for two"), /You are waiting on Kim for 2\./.test(alexHome.summary || ""), alexHome.summary);
       await shot(page, "live-waiting-on", width);
+      ck(t("the label says the list holds projects Alex leads, none marked no lead"),
+         (await page.getByTestId("waiting-on-scope").innerText()) === "projects you lead" && (await n("waiting-on-no-lead")) === 0);
+      {
+        // a project nobody leads falls to the cell's first person: the row says so and offers Set a lead
+        const other = await open("alex", width);
+        await other.page.route(/\/api\/home(\?|$)/, async (route) => {
+          const res = await route.fetch();
+          const data = await res.json();
+          for (const e of data.you_are_waiting_on || []) if (e.title === "Notes") {
+            e.no_lead = true;
+            e.actions = [...e.actions, { label: "Set a lead", primary: false, href: `/projects/${e.project.id}#people` }];
+          }
+          return route.fulfill({ response: res, json: data });
+        });
+        await other.page.goto(`${BASE}/`, { waitUntil: "load" });
+        await other.page.getByTestId("waiting-on").waitFor();
+        const nrow = other.page.getByTestId("waiting-on-row").filter({ hasText: "Notes" });
+        ck(t("with one project of no lead, the label names both kinds"),
+           (await other.page.getByTestId("waiting-on-scope").innerText()) === "projects you lead, and ones with no lead yet");
+        ck(t("the row of no lead says No lead yet, and only that row"),
+           (await nrow.getByTestId("waiting-on-no-lead").count()) === 1 && (await other.page.getByTestId("waiting-on-no-lead").count()) === 1);
+        ck(t("Set a lead opens the project's People card"),
+           (await nrow.getByRole("link", { name: "Set a lead" }).getAttribute("href")) === `/projects/${ids.projects.notes}#people`);
+        await other.ctx.close();
+      }
 
       // d. Projects: Mine and Team
       const rowsN = () => page.getByTestId("project-row").count();

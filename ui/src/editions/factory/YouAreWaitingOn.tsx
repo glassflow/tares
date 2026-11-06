@@ -40,6 +40,14 @@ function ActionButton({ action, onHandOver }: { action: HomeAction; onHandOver?:
   return <Button variant="secondary" className={cls} onClick={onHandOver}>{action.label}</Button>;
 }
 
+/** What the list holds: projects the person leads, projects nobody leads yet, or both. */
+export function scopeText(entries: HomeWaitingOn[]): string {
+  const none = entries.filter((e) => e.no_lead).length;
+  if (none === 0) return "projects you lead";
+  if (none === entries.length) return "projects with no lead yet";
+  return "projects you lead, and ones with no lead yet";
+}
+
 export function YouAreWaitingOn({ entries, onHandOver }: {
   entries: HomeWaitingOn[];
   /** The page opens the Hand over anyway dialog for this entry. */
@@ -50,7 +58,7 @@ export function YouAreWaitingOn({ entries, onHandOver }: {
     <section aria-label="You are waiting on" className="min-w-0" data-testid="waiting-on">
       <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="m-0! text-base!">You are waiting on</h2>
-        <span className="text-[13px] text-muted-foreground">projects you lead</span>
+        <span className="text-[13px] text-muted-foreground" data-testid="waiting-on-scope">{scopeText(entries)}</span>
       </div>
       <div className="max-w-[860px] border border-border bg-card">
         {entries.map((e) => {
@@ -64,6 +72,7 @@ export function YouAreWaitingOn({ entries, onHandOver }: {
                       className="block w-fit font-semibold text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
                   {e.title}
                 </Link>
+                {e.no_lead && <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="waiting-on-no-lead">No lead yet</div>}
                 <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text>{e.detail}</div>
                 {e.repos.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
