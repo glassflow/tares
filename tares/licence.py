@@ -39,8 +39,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 LICENCE_URL = "https://docs.glassflow.ai/tares/enterprise"
 
-# Root kid -> raw 32-byte Ed25519 public key. The production root goes here when it exists.
-ROOT_PUBLIC_KEYS: dict[str, bytes] = {}
+# Root kid -> raw 32-byte Ed25519 public key. The private half is kept offline (TR-907).
+ROOT_PUBLIC_KEYS: dict[str, bytes] = {
+    "fd683bfc46806063": bytes.fromhex(
+        "bebfb4028e29e36ee2e96a75fdf1031d94cad1e67873431807f10254c41a6137"
+    ),
+}
 
 _roots: dict[str, bytes] = ROOT_PUBLIC_KEYS
 
