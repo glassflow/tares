@@ -6,7 +6,7 @@ projects they may see, how to turn an error into an HTTP answer. Those helpers a
 `make_app()`. `make_app()` builds one `Host` from them and hands it on (`app.state.host`, and the
 `h` argument of `factory_api.register` and `screens.register_all`).
 
-A `Host` holds no logic of its own, apart from `require_admin` and `licence_state`. Each method
+A `Host` holds no logic of its own, apart from `require_admin`. Each method
 calls the helper the daemon gave it, so a call through `h` does exactly what the daemon's own
 route would do. A helper the daemon did not give raises a RuntimeError that names it.
 """
@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from fastapi import Request
 
+from .licence import LicenceRequired
+
 if TYPE_CHECKING:
     from .projects import Engine as ProjectEngine
 
@@ -24,7 +26,7 @@ HELPERS = (
     "err", "caller", "current_person", "is_admin", "is_system", "project_key", "start_who", "by",
     "can_see", "hidden_ids", "read_exclude", "hidden_sources", "project_or_404", "resolve_project",
     "cc_source", "global_ids", "ensure_globals", "ticket_out", "tickets_out", "area_owner",
-    "hidden_project", "projects",
+    "hidden_project", "projects", "licence_state", "licence_required",
 )
 
 
@@ -157,9 +159,14 @@ class Host:
 
     # ── the licence ──
     def licence_state(self) -> dict:
-        """The cell's licence. Until a licence check exists this says there is none: not valid,
-        no features, ee not allowed. `used` is the number of people on the cell."""
-        return {"valid": False, "source": "none", "kid": None, "org": None, "seats": None,
-                "used": len(self.store.list_people()), "features": [], "expires": None,
-                "days_left": None, "expired": False, "over_seats": False, "ee_allowed": False,
-                "reason": None}
+        """The cell's licence as `tares.licence.state` says it (valid, source, org, seats, used,
+        features, expires, days_left, expired, over_seats, ee_allowed, reason), plus `stored` and
+        `env_set`. Checked at most once a minute; `used` is the number of people on the cell now."""
+        return self._call("licence_state")
+
+    def licence_required(self, message: str) -> NoReturn:
+        """Stop an action that needs a licence the cell does not have: the caller gets HTTP 402
+        with {code: "licence_required", message, url}. `message` is plain words for the person.
+        Never returns."""
+        self._call("licence_required", message)
+        raise LicenceRequired(message)   # the daemon's helper always raises; this keeps the promise

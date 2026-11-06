@@ -56,6 +56,11 @@ if AVAILABLE:
     EVENTS_STORED = Gauge("tares_events_stored", "Events in the database")
     LOOP_LAG = Gauge("tares_event_loop_lag_seconds", "How late the event loop ran its last one-second timer")
     LOOP_STALLS = Counter("tares_event_loop_stalls_total", "Timer ticks that ran more than half a second late")
+    LICENCE_VALID = Gauge("tares_licence_valid", "1 while the cell holds a valid licence key")
+    LICENCE_SEATS = Gauge("tares_licence_seats", "Seats the licence covers (0 when there is none)")
+    LICENCE_USED = Gauge("tares_licence_used", "People on the cell, counted against the licence's seats")
+    LICENCE_DAYS_LEFT = Gauge("tares_licence_days_left", "Days until the licence ends; negative once "
+                              "it has ended (0 when there is none)")
     INFO = Gauge("tares_info", "Build information", ["version"])
     HTTP_SECONDS = Histogram("tares_http_request_duration_seconds",
                              "Wall time of an HTTP request until the app returns (the whole body "
@@ -64,6 +69,7 @@ if AVAILABLE:
                              buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10))
 
 _storage_probe = None
+_licence_probe = None
 
 
 # ── hooks, called from the daemon; each a no-op without the library ────────────
@@ -202,6 +208,12 @@ def set_storage_probe(fn) -> None:
     _storage_probe = fn
 
 
+def set_licence_probe(fn) -> None:
+    """`fn()` returns the licence state (tares.licence.peek: the remembered answer, no database read); read on every scrape."""
+    global _licence_probe
+    _licence_probe = fn
+
+
 def set_info(version: str | None) -> None:
     if AVAILABLE:
         INFO.labels(version=version or "unknown").set(1)
@@ -232,6 +244,16 @@ def render() -> tuple[bytes, str]:
             STORAGE_PCT.set(float(st.get("pct_used") or 0))
             INGEST_PAUSED.set(1 if st.get("paused") else 0)
             EVENTS_STORED.set(float(st.get("events") or 0))
+        except Exception:   # a scrape must never fail over a gauge
+            pass
+    if _licence_probe is not None:
+        try:
+            lic = _licence_probe() or {}
+            valid = bool(lic.get("valid"))
+            LICENCE_VALID.set(1 if valid else 0)
+            LICENCE_SEATS.set(float(lic.get("seats") or 0) if valid else 0)
+            LICENCE_USED.set(float(lic.get("used") or 0))
+            LICENCE_DAYS_LEFT.set(float(lic.get("days_left") or 0) if valid else 0)
         except Exception:   # a scrape must never fail over a gauge
             pass
     return generate_latest(REGISTRY), CONTENT_TYPE_LATEST
