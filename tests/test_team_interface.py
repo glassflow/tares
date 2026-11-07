@@ -363,12 +363,15 @@ def no_import():
     tree = ast.parse(open(os.path.join(ROOT, "tares", "team.py"), encoding="utf-8").read())
     rows = [sorted((e.elts[0].value, e.elts[1].value) for e in n.value.elts) for n in tree.body
             if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "FALLBACKS"]
-    ck("FALLBACKS in the shipped module holds the four area routes, the three project access routes, the two grant consent routes and nothing else",
+    ck("FALLBACKS in the shipped module holds the four area routes, the three project access routes, the two grant consent routes, the three question routes and nothing else",
        rows == [[("DELETE", "/api/areas/{owner}/{name}"), ("DELETE", "/api/projects/{uid}/members/{person_id}"),
-                 ("GET", "/api/areas"), ("PATCH", "/api/projects/{uid}"),
+                 ("GET", "/api/areas"), ("GET", "/api/projects/{uid}/questions"), ("PATCH", "/api/projects/{uid}"),
                  ("POST", "/api/grants/{gid}/consent"), ("POST", "/api/grants/{gid}/decline"),
                  ("POST", "/api/projects/{uid}/members"),
+                 ("POST", "/api/projects/{uid}/questions"),
+                 ("POST", "/api/projects/{uid}/questions/{qid}/answer"),
                  ("PUT", "/api/areas"), ("PUT", "/api/areas/{owner}/{name}")]], str(rows))
+    ck("FALLBACKS has twelve rows", len(rows[0]) == 12 if rows else False, str(rows))
 
 
 def case(name):

@@ -38,6 +38,7 @@ import httpx
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
+from tares_ee import mcp_questions as mq
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
 
@@ -119,14 +120,14 @@ async def main():
 
         print("== ask_area goes to the owner of the repo ==")
         as_(keys["ashish"])
-        out = json.loads(await mf.ask_area("acme/web", "Which page does the checkout live on?",
+        out = json.loads(await mq.ask_area("acme/web", "Which page does the checkout live on?",
                                            project="signoff-main"))
         ck("Q1 is addressed to kiran", out["id"] == "Q1" and out["to"] == "kiran"
            and out["state"] == "open" and out["asked_by"] == "ashish", out)
-        out = await mf.ask_area("acme/ghost", "Anyone there?", project="signoff-main")
+        out = await mq.ask_area("acme/ghost", "Anyone there?", project="signoff-main")
         ck("a repo with no area owner is refused with the way out", out.startswith("error 409")
-           and "acme/ghost has no area owner; set one with set_area" in out, out)
-        out = await mf.ask_area("not-a-repo", "x", project="signoff-main")
+           and "acme/ghost has no owner on this cell" in out, out)
+        out = await mq.ask_area("not-a-repo", "x", project="signoff-main")
         ck("a name that is not owner/name is refused", out.startswith("error 400"), out)
         ck("only Q1 exists", [q["id"] for q in store.list_spec_questions(uid)] == ["Q1"])
 
@@ -142,13 +143,13 @@ async def main():
         r = await call("lee", "POST", f"/api/projects/{uid}/questions/Q1/answer", {"answer": "mine"})
         ck("another person cannot answer: 403", r.status_code == 403, r.text)
         as_(keys["lee"])
-        out = await mf.answer_question("Q1", "mine", project="signoff-main")
+        out = await mq.answer_question("Q1", "mine", project="signoff-main")
         ck("answer_question as lee: refused", out.startswith("error 403"), out)
         ck("still open", store.get_spec_question(uid, "Q1")["state"] == "open")
         r = await call("kiran", "POST", f"/api/projects/{uid}/questions/Q9/answer", {"answer": "x"})
         ck("an unknown id: 404", r.status_code == 404, r.text)
         as_(keys["kiran"])
-        out = json.loads(await mf.answer_question("Q1", "On the cart page.", project="signoff-main"))
+        out = json.loads(await mq.answer_question("Q1", "On the cart page.", project="signoff-main"))
         ck("kiran answers", out["state"] == "answered" and out["answer"] == "On the cart page."
            and out["id"] == "Q1", out)
         q = store.get_spec_question(uid, "Q1")
@@ -171,10 +172,10 @@ async def main():
         ck("it leaves kiran's my_work", (await call("kiran", "GET", "/api/crew/my-work")
                                          ).json()["spec_questions"] == [])
         as_(keys["ashish"])
-        lq = json.loads(await mf.list_questions(project="signoff-main"))
+        lq = json.loads(await mq.list_questions(project="signoff-main"))
         ck("list_questions shows the answer", len(lq) == 1 and lq[0]["answer"] == "On the cart page.", lq)
         ck("list_questions state=open is empty", json.loads(
-            await mf.list_questions(state="open", project="signoff-main")) == [])
+            await mq.list_questions(state="open", project="signoff-main")) == [])
 
         print("== the hand-over waits for nobody's sign-off ==")
         r = await call("ashish", "GET", f"/api/projects/{uid}/signoffs")
@@ -475,7 +476,7 @@ async def main():
            and r.json()["answer"] == "8080", r.text)
         await call("ashish", "POST", f"/api/projects/{pl}/questions", {"repo": "acme/plain", "text": "Which host?"})
         as_(keys["kiran_plain"])
-        out = await mf.answer_question("Q2", "localhost", project="signoff-plain-keys")
+        out = await mq.answer_question("Q2", "localhost", project="signoff-plain-keys")
         ck("and answers the second through the MCP tool", not out.startswith("error")
            and json.loads(out)["state"] == "answered", out)
         print("== only answering takes an ordinary key; the rest of a project stays admin ==")

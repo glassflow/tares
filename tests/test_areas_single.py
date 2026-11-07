@@ -110,7 +110,7 @@ def tools():
     names = [t.name for t in asyncio.run(ms.mcp.list_tools())]
     ck("list_areas is not a tool", "list_areas" not in names, str(names))
     ck("set_area is not a tool", "set_area" not in names, str(names))
-    ck("ask_area (a core tool) is still there", "ask_area" in names, str(names))
+    ck("ask_area is not a tool", "ask_area" not in names, str(names))
     ck("no ee tool is registered", ms.EE_TOOLS == set(), str(ms.EE_TOOLS))
 
 
