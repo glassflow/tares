@@ -27,6 +27,7 @@ test_cli
 test_cloud_connect
 test_core_single_person
 test_crew_dispatch
+test_crew_fake_claude
 test_crew_standup
 test_crew_startup_time
 test_crew_state
@@ -106,6 +107,7 @@ test_openai_provider
 test_otlp
 test_otlp_grpc
 test_owner_claims_local
+test_parity
 test_people
 test_people_single
 test_person_attribution

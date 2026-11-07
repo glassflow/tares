@@ -6,7 +6,7 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
-F="$here/../../claude-plugin/bin/factory"
+F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$here/../../claude-plugin/bin/factory}"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT

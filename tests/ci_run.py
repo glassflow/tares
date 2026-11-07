@@ -13,7 +13,10 @@ ee/tests/ci_list.txt (ee/tests/<name>.py) and ee/tests/factory/ci_list.txt
 (ee/tests/factory/<name>_test.sh, shown as ee-factory:<name>) the same way. Shards are balanced by
 WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT_WEIGHT. A test
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
-failure."""
+failure.
+
+The environment is passed on as it is. The unchanged bash suites run against the Python engine on
+Mac and Linux with FACTORY_BIN="tares factory" TARES_FACTORY_ENGINE=python python tests/ci_run.py."""
 import argparse
 import os
 import subprocess

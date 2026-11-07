@@ -10,7 +10,7 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
 T=$(mktemp -d)
-mkdir -p "$T/kit-under-test" "$T/bin" "$T/claude"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="$T/kit-under-test/bin/factory"
+mkdir -p "$T/kit-under-test" "$T/bin" "$T/claude"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$T/kit-under-test/bin/factory}"
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export FACTORY_UPDATE_POLL=1 FACTORY_ASK_POLL=1 FACTORY_STOP_WAIT=2
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t

@@ -4433,6 +4433,16 @@
       "note": ""
     },
     {
+      "name": "factory-bin",
+      "kind": "suite",
+      "what": "runs the factory CLI under test as the command in FACTORY_BIN",
+      "ticket": "TR-952",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Lets the unchanged bash suites run against the Python engine: FACTORY_BIN=\"tares factory\"."
+    },
+    {
       "name": "fake-claude",
       "kind": "suite",
       "what": "stand-in claude binary for the tests",
@@ -4451,6 +4461,16 @@
       "python": "",
       "ported": false,
       "note": "The Python engine will not shell out to ps; this goes with the Python fake claude."
+    },
+    {
+      "name": "fake_claude.py",
+      "kind": "suite",
+      "what": "the Python stand-in for claude and ps",
+      "ticket": "TR-952",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Runs on Windows; test_crew_fake_claude.py compares it with the bash fakes."
     },
     {
       "name": "freeze_test.sh",
@@ -4521,6 +4541,16 @@
       "python": "",
       "ported": false,
       "note": ""
+    },
+    {
+      "name": "parity.py",
+      "kind": "suite",
+      "what": "runs a scenario against both engines and counts the scenarios that pass against Python",
+      "ticket": "TR-952",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "The module docstring defines a scenario; --coverage lists them all."
     },
     {
       "name": "parse_test.sh",

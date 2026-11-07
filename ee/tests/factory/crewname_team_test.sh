@@ -10,7 +10,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/../../.." && pwd)"
 . "$repo/tests/factory/lib.sh"
 T=$(mktemp -d)
-mkdir -p "$T/kit-under-test"; cp -R "$repo/claude-plugin/." "$T/kit-under-test/"; F="$T/kit-under-test/bin/factory"
+mkdir -p "$T/kit-under-test"; cp -R "$repo/claude-plugin/." "$T/kit-under-test/"; F="${FACTORY_BIN:+$repo/tests/factory/factory-bin}"; F="${F:-$T/kit-under-test/bin/factory}"
 export HOME="$T/home" FACTORY_HOME="$T/fhome" FACTORY_CREW_HOME="$T/crew-default" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$repo/tests/factory/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 unset FACTORY_CREW_NAME FACTORY_CREW FACTORY_ORCHESTRATOR
