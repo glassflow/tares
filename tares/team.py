@@ -46,6 +46,7 @@ ADD_LOCK = threading.Lock()
 
 ADD_PERSON_REASON = "Adding people needs an enterprise licence. Tares works for one person without one."
 ASSIGN_REASON = "Assigning tickets to people needs an enterprise licence."
+ADDRESS_REASON = "Addressing a question to someone else needs an enterprise licence."
 
 
 class Team:
