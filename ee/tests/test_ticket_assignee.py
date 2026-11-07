@@ -42,7 +42,7 @@ import httpx
 
 from tares import github_tickets as gt
 from tares import linear
-from tares import ticket_assignee
+from tares_ee import ticket_assignee
 import tares.mcp_server as m
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on

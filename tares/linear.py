@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import ticket_assignee
+from . import team as team_mod
 from .envelope import Envelope, now_utc
 
 
@@ -299,20 +299,24 @@ async def sync_project(store, uid: str) -> list[Envelope]:
     people: dict = {}
     nameless = [i for i in issues if isinstance(i.get("assignee"), dict)
                 and not str(i["assignee"].get("email") or "").strip()]
-    ticket_assignee.warn_nameless(project, len(nameless))
+    team = team_mod.get()
+    team.assignee_warn_nameless(project, len(nameless))
     for iss in issues:
         seen.add(iss["id"])
         status = status_of(iss.get("state"))
-        who, raw = ticket_assignee.from_linear(store, iss.get("assignee"), people)
+        mapped = team.assignee_from_linear(store, iss.get("assignee"), people)   # None: not synced
         pos = float(iss.get("sortOrder") or 0)
         ident = iss.get("identifier") or iss["id"]
         ms = ms_ids.get((iss.get("projectMilestone") or {}).get("id") or "")
         cur = have.get(iss["id"])
         if cur is None:
+            who = {} if mapped is None else {"assignee_person_id": mapped[0],
+                                             "assignee_raw": mapped[1]}
             store.create_ticket(uid, "linear", iss.get("title") or ident, status, pos,
                                 external_id=iss["id"], identifier=ident, url=iss.get("url"),
-                                milestone=ms, assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.sync_join(store, project, who, status)
+                                milestone=ms, **who)
+            if mapped is not None:
+                team.assignee_sync_join(store, project, mapped[0], status)
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in Linear: {iss.get('title')}", {"status": status}))
             continue
@@ -335,9 +339,9 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes.update(identifier=ident, url=iss.get("url"))
         if cur["milestone"] != ms:
             changes["milestone"] = ms
-        if (cur["assignee_person_id"], cur["assignee_raw"]) != (who, raw):
-            changes.update(assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.sync_join(store, project, who, status)
+        if mapped is not None and (cur["assignee_person_id"], cur["assignee_raw"]) != mapped:
+            changes.update(assignee_person_id=mapped[0], assignee_raw=mapped[1])
+            team.assignee_sync_join(store, project, mapped[0], status)
         if changes:
             store.update_ticket(cur["id"], why=f"Linear marked it "
                                 f"{(iss.get('state') or {}).get('name') or status}", **changes)

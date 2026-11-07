@@ -236,6 +236,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   field to add one line.
 
 ### Changed
+- Ticket assignees (naming an assignee on a ticket, and Linear and GitHub setting one on sync) are part of the enterprise code (TR-920). Without an enterprise licence, naming an assignee answers 402 `licence_required`, clearing one still works, and a sync never changes who a ticket is assigned to; an assignee already stored still shows. With a licence nothing changes.
 - Repo owners (the `/api/areas` routes and the MCP tools `list_areas` and `set_area`) are part of the enterprise code (TR-919). Without an enterprise licence those routes answer 402 `licence_required` and the tools are not listed; with one nothing changes.
 - The hand-over no longer waits for area owners to sign off: a project with a spec and tickets is ready to start once no question is open. "You are waiting on" lists only the projects with a question open for someone else, and a project is never both there and in Ready to start. Sign-off and Hand over anyway are gone from the home, the API (`/signoffs`, `override_reason`) and the crew tools (`sign_off`). Plugin 0.6.6: the spec lists the open questions and asks whether to start now or keep the project for later.
 - A project can be kept for later: Later on its Ready to start card or its page takes it off the home, it shows under Later in All projects, and Start now or the hand-over brings it back (`POST /api/projects/{id}/later`, the `set_later` tool).

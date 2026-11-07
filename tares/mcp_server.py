@@ -973,8 +973,11 @@ async def list_tickets(project: str = "") -> str:
 
 def _assignee_note(t: dict) -> str:
     """"assignee: Kiran", or "unowned (kiran@x.com is not on this cell)", or "unowned"."""
-    from .ticket_assignee import note
-    return note(t)
+    a = t.get("assignee")
+    if a:
+        return f"assignee: {a['name']}"
+    raw = t.get("assignee_raw")
+    return f"unowned ({raw} is not on this cell)" if raw else "unowned"
 
 
 def _pr_brief(pr: dict | None) -> dict | None:
@@ -1022,8 +1025,9 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
     (owner/name), for a project that spans several repos ("" clears it; a Linear or GitHub ticket
     takes only this, and attach_working_doc); `assignee` is the person it is for (a person id or
     an email; an email nobody on the cell has is kept as written and the ticket shows as unowned;
-    "" clears it). Assigning someone to a ticket of a private project adds them to it. Returns
-    the ticket with its label (T<n>)."""
+    "" clears it). Assigning someone to a ticket of a private project adds them to it. Naming an
+    assignee needs an enterprise licence; without one, leave it out. Returns the ticket with its
+    label (T<n>)."""
     body: dict = {"title": title}
     if repo is not None:
         body["repo"] = repo

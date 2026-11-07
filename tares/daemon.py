@@ -73,7 +73,6 @@ from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
-from . import ticket_assignee
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -5351,12 +5350,20 @@ def make_app() -> FastAPI:
             ctx["last_review"] = store.last_reviews([t["id"] for t in tickets if t["stage"]])
         return ctx
 
+    def _assignee_view(t: dict) -> dict:
+        """The ticket's `assignee` ({id, name} or None) and `assignee_raw` (set only while nobody
+        on the cell is the assignee). A read of what is stored: it shows whatever the licence."""
+        person = store.get_person(t["assignee_person_id"]) if t.get("assignee_person_id") else None
+        if person:
+            return {"assignee": {"id": person["id"], "name": person["name"]}, "assignee_raw": None}
+        return {"assignee": None, "assignee_raw": t.get("assignee_raw")}
+
     def _ticket_out(uid: str, t: dict, with_doc: bool = False, ctx: dict | None = None) -> dict:
         ctx = ctx or _plan_ctx(uid)
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
                                  "position", "working_doc", "updated_at", "number", "milestone",
                                  "holder", "stage", "stage_reason", "pr", "repo")}
-        out.update(ticket_assignee.view(store, t))   # assignee {id, name} | None, assignee_raw
+        out.update(_assignee_view(t))   # assignee {id, name} | None, assignee_raw
         out["label"] = factory_mod.label(t)
         out["pr_note"] = factory_api.pr_note(t)
         out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
@@ -5446,7 +5453,7 @@ def make_app() -> FastAPI:
         """(person id, raw) for the `assignee` a caller sent; 404 for text that is neither a
         person id nor an email."""
         try:
-            return ticket_assignee.resolve(store, v)
+            return team_mod.get().assignee_resolve(store, v)
         except ValueError as e:
             _err(KeyError(str(e)), 404)
 
@@ -5526,7 +5533,7 @@ def make_app() -> FastAPI:
                                   repo=_repo_ok(body.get("repo")),
                                   assignee_person_id=who, assignee_raw=raw)
         if joins:
-            ticket_assignee.join(store, project, who, _added_by(request))
+            team_mod.get().assignee_join(store, project, who, _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -5578,7 +5585,8 @@ def make_app() -> FastAPI:
             why = (f"marked {fields['status'].replace('_', ' ')} in Tares" if "status" in fields else None)
             store.update_ticket(t["id"], why=why, **fields)
         if joins:
-            ticket_assignee.join(store, project, fields["assignee_person_id"], _added_by(request))
+            team_mod.get().assignee_join(store, project, fields["assignee_person_id"],
+                                         _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
 
     @app.delete("/api/projects/{uid}/tickets/{ref}")

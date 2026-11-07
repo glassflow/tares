@@ -5,8 +5,9 @@
 file starts with the people: a new person row is allowed while the licence has a seat for one more.
 Seats are counted over every row in `people`, the owner included. An expired licence keeps every
 person it already has and refuses only adding one. The team home and the team's project view are
-`team_home.py`; the area owners are `areas.py` (routes) and `mcp_areas.py` (MCP tools); the other
-methods stay single-person until their own tickets move them here.
+`team_home.py`; the area owners are `areas.py` (routes) and `mcp_areas.py` (MCP tools); ticket
+assignees are `ticket_assignee.py`; the other methods stay single-person until their own tickets
+move them here.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from tares import licence
 from tares.team import SingleTeam
 
 from . import areas, mcp_areas
+from . import ticket_assignee as assignees
 from . import team_home as home
 
 EXPIRED_REASON = "The enterprise licence has expired. Renew it to add people."
@@ -36,6 +38,24 @@ class Team(SingleTeam):
 
     def area_owner(self, store, repo):
         return areas.owner(store, repo)
+
+    def assignee_from_linear(self, store, assignee, cache=None):
+        return assignees.from_linear(store, assignee, cache)
+
+    def assignee_from_github(self, store, issue):
+        return assignees.from_github(store, issue)
+
+    def assignee_warn_nameless(self, project, count):
+        assignees.warn_nameless(project, count)
+
+    def assignee_sync_join(self, store, project, person_id, status):
+        assignees.sync_join(store, project, person_id, status)
+
+    def assignee_join(self, store, project, person_id, added_by=None):
+        assignees.join(store, project, person_id, added_by)
+
+    def assignee_resolve(self, store, ref):
+        return assignees.resolve(store, ref)
 
     def team_home(self, c, request, now):
         return home.team_home(c, request, now)
