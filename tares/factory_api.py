@@ -2015,6 +2015,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if person is None:
                 h.err(KeyError(f"no person {said!r} on this cell: give a person id or an email "
                                "(list_people shows who is here)"), 404)
+            if not team_mod.enabled():
+                # addressing a second person is a team feature; the caller, or `local` on a
+                # cell of one (a key nobody bound acts as them), is not
+                caller = person_of(request) or ("local" if h.is_system(request) else None)
+                if person["id"] != caller and not (
+                        person["id"] == "local" and store.only_local_person()):
+                    h.licence_required(team_mod.ADDRESS_REASON)
             project = store.get_project(uid) if uid else None
             if (project and project.get("scope") == "private"
                     and not store.is_project_member(uid, person["id"])):
