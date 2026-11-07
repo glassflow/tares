@@ -53,7 +53,8 @@ pp = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
 deps = pp["project"]["dependencies"]
 ck("psutil and keyring are runtime dependencies with lower bounds",
    any(d.startswith("psutil>=") for d in deps) and any(d.startswith("keyring>=") for d in deps), short(deps))
-ck("the keyring line is exactly `    \"keyring>=24\",`", '    "keyring>=24",\n' in PYPROJECT.read_text(encoding="utf-8"))
+# One keyring entry only (TR-949 added it first; a second line here would be a duplicate dependency).
+ck("keyring is listed once, as `\"keyring>=24\"`", sum(d.replace(" ", "") == "keyring>=24" for d in deps) == 1 and sum(d.startswith("keyring") for d in deps) == 1, short(deps))
 ck("jsonschema is in the dev group only, not a runtime dependency",
    any(d.startswith("jsonschema") for d in pp.get("dependency-groups", {}).get("dev", []))
    and not any(d.startswith("jsonschema") for d in deps), short(pp.get("dependency-groups")))
