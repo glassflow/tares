@@ -56,6 +56,7 @@ def H(tok):
 AREAS_REASON = "Repo owners need an enterprise licence."
 ACCESS_REASON = "Changing a project's lead, privacy or members needs an enterprise licence."
 CONSENT_REASON = "Agreeing to someone else's grant needs an enterprise licence."
+QUESTIONS_REASON = "Questions to repo owners need an enterprise licence."
 
 
 def exact_402(r, reason=AREAS_REASON):
@@ -77,6 +78,12 @@ ACCESS = (("PATCH", "/api/projects/{uid}", {"lead_person_id": "{pid}"}),
 # TR-922: agreeing to or declining a grant that waits; {gid} is filled in
 CONSENT = (("POST", "/api/grants/{gid}/consent", None),
            ("POST", "/api/grants/{gid}/decline", {"reason": "no"}))
+
+
+# TR-923: the questions a spec asks a repo's owner; {uid} and {qid} (a question addressed to the caller) are filled in
+QUESTIONS = (("POST", "/api/projects/{uid}/questions", {"repo": "acme/web", "text": "Is the cart in scope?"}),
+             ("GET", "/api/projects/{uid}/questions", None),
+             ("POST", "/api/projects/{uid}/questions/{qid}/answer", {"answer": "yes"}))
 
 
 def fill(path, body, uid, pid, mid):
@@ -113,6 +120,14 @@ async def main():
             g = store.get_grant_row(gid)
             return (g["state"], g["consents"])
 
+        # a question waiting for the person the test's key acts as, so an unlicensed answer would work
+        qid = store.add_spec_question(uid, "local", "acme/web", "Is the cart in scope?", pid, "2026-01-01T00:00:00Z")["id"]
+
+        def questions_state():
+            return [(q["id"], q["state"], q.get("answer")) for q in store.list_spec_questions(uid)]
+
+        questions_before = questions_state()
+
         gids = {n: waiting_grant(f"grant {n}") for n in ("a", "b", "c", "d")}
         waiting_before = {n: grant_state(g) for n, g in gids.items()}
 
@@ -138,6 +153,12 @@ async def main():
                    f"{r.status_code} {r.text[:120]}")
             ck(f"{why}: the waiting grant is still waiting, with no consent or decline",
                grant_state(gids["a"]) == waiting_before["a"], str(grant_state(gids["a"])))
+            for method, path, body in QUESTIONS:
+                r = await cx.request(method, path.format(uid=uid, qid=qid), json=body)
+                ck(f"{why}: {method} {path} is 402 licence_required", exact_402(r, QUESTIONS_REASON),
+                   f"{r.status_code} {r.text[:120]}")
+            ck(f"{why}: nothing was asked and the question is still open and unanswered",
+               questions_state() == questions_before, str(questions_state()))
 
         print("== ee is installed ==")
         ck("the ee areas routes are registered whatever the licence",
@@ -192,6 +213,10 @@ async def main():
         for method, path, body in CONSENT:
             r = await cx.request(method, path.format(gid=gids["c"]), json=body)
             ck(f"{method} {path} is 402 again", exact_402(r, CONSENT_REASON), f"{r.status_code} {r.text[:120]}")
+        for method, path, body in QUESTIONS:
+            r = await cx.request(method, path.format(uid=uid, qid=qid), json=body)
+            ck(f"{method} {path} is 402 again", exact_402(r, QUESTIONS_REASON), f"{r.status_code} {r.text[:120]}")
+        ck("the question is untouched", questions_state() == questions_before, str(questions_state()))
         ck("the waiting grant is untouched", grant_state(gids["c"]) == waiting_before["c"],
            str(grant_state(gids["c"])))
         ck("what was agreed and declined stays so",

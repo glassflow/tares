@@ -60,6 +60,9 @@ owner of each one (`{repo, person: {id, name}}`). If a repo has none, ask the us
 the owner of a repo that has one, or of a repo for someone else, needs an admin: when you are not
 one, tell the user an admin sets the owner. Tickets go to these owners (step 6). Nobody signs off
 before the hand-over: an owner is asked only what the spec needs from them, with `ask_area`.
+`ask_area`, `list_questions` and `answer_question` come with an enterprise licence, like `list_areas`: when
+they are not tools, ask the user what you need to know yourself and skip the rest of this part and
+the open-questions step below.
 
 When a question is about a repo whose area owner is not the user (what a module does, whether a
 change is acceptable, how it is deployed), do not guess and do not make the user relay it. Once the
@@ -261,7 +264,7 @@ missing. Then tell the user, briefly:
 
 - the project name and what it holds (counts, not a dump), and the assumptions worth a glance
 - where the tickets live, with the Linear or GitHub link if any
-- **the open questions.** Call `list_questions(state="open", project=<name>)`. For each one, say
+- **the open questions** (only when `list_questions` is a tool). Call `list_questions(state="open", project=<name>)`. For each one, say
   who it is for ("Q2 for Kiran: is the cart in scope?"), and that they answer it from their own
   machine with `tares factory spec "<project>"` (the exact project name, in quotes). The project
   is not ready to start while one is open: it shows on the user's home under "You are waiting on".
