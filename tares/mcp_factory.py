@@ -513,7 +513,8 @@ def _grant_line(g: dict) -> str:
     day = str(g.get("given_at") or "")[:10]
     text = f'- [{g["id"]}, {g["kind"]}, {where}] "{g["words"]}" ({day})'
     if g["state"] == "waiting":
-        text += ", waiting for " + ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+        names = ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+        text += f", waiting for {names}" if names else ", waiting and not in effect"
     elif (g.get("given_by") or {}).get("name"):
         text += f", given by {g['given_by']['name']}"
     return text
@@ -575,9 +576,10 @@ async def add_grant(words: str, kind: str = "", project: str = "",
     old name), `project` (this project only, name it in `project`) or `personal` (what may run on
     the person's own machine, for the key's own person). Without `kind`, a `project` makes it a
     project grant and no project a team grant. `areas` lists the GitHub repos (owner/name) a
-    project grant reaches into: it waits, not in effect, until each repo's area owner (other than
-    the giver) calls consent_grant. A project grant from someone who is neither the project's
-    lead nor an admin also waits for the lead (an admin, when the project has none). `scope` is
+    project grant reaches into, and needs an enterprise licence: the grant then waits, not in
+    effect, until each repo's area owner (other than the giver) calls consent_grant. A project
+    grant from someone who is neither the project's lead nor an admin also waits for the lead (an
+    admin, when the project has none). Without a licence a grant takes effect at once. `scope` is
     the older name of `kind`. Only the person's own session or the orchestrator, relaying the
     person verbatim, may add one."""
     body = {"words": words, "kind": kind or scope, "project": project, "areas": areas or [],
@@ -585,17 +587,6 @@ async def add_grant(words: str, kind: str = "", project: str = "",
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/grants", json=body)
     return _out(r, ("line", "added", "grant"))
-
-
-@writable()
-async def consent_grant(id: str) -> str:
-    """Say yes, as the owner of a repo a project grant names or as the project's lead (an admin,
-    when it has none), to grant `id` (like `G7`). `read_grants` lists the ones waiting for you.
-    Only a person it waits for can; the grant is in effect once all of them have. Never call it
-    for someone else: the answer is their own."""
-    async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/api/grants/{id.strip()}/consent")
-    return _out(r)
 
 
 # ── asking an area owner while the spec is written (TR-636) ─────────────────

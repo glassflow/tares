@@ -7,7 +7,8 @@ Seats are counted over every row in `people`, the owner included. An expired lic
 person it already has and refuses only adding one. The team home and the team's project view are
 `team_home.py`; the area owners are `areas.py` (routes) and `mcp_areas.py` (MCP tools); ticket
 assignees are `ticket_assignee.py`; a project's lead, privacy and members are `access.py` (routes) and
-`mcp_access.py` (MCP tool); the other methods stay single-person until their own tickets
+`mcp_access.py` (MCP tool); grants that wait for someone's consent are `grants.py` (routes) and
+`mcp_grants.py` (MCP tool); the other methods stay single-person until their own tickets
 move them here.
 """
 from __future__ import annotations
@@ -15,7 +16,8 @@ from __future__ import annotations
 from tares import licence
 from tares.team import SingleTeam
 
-from . import access, areas, mcp_access, mcp_areas
+from . import access, areas, mcp_access, mcp_areas, mcp_grants
+from . import grants as consent
 from . import ticket_assignee as assignees
 from . import team_home as home
 
@@ -58,6 +60,15 @@ class Team(SingleTeam):
     def assignee_resolve(self, store, ref):
         return assignees.resolve(store, ref)
 
+    def grant_waiting_for(self, c, grant):
+        return consent.waiting_for(c, grant)
+
+    def grants_waiting_for_me(self, c, grants, request):
+        return consent.waiting_for_me(c, grants, request)
+
+    def settle_grant(self, c, grant, request):
+        return consent.settle_on_read(c, grant, request)
+
     def team_home(self, c, request, now):
         return home.team_home(c, request, now)
 
@@ -67,6 +78,7 @@ class Team(SingleTeam):
     def register_routes(self, app, host):
         areas.register_routes(app, host)
         access.register_routes(app, host)
+        consent.register_routes(app, host)
 
     def mcp_tools(self):
-        return [*mcp_areas.TOOLS, *mcp_access.TOOLS]
+        return [*mcp_areas.TOOLS, *mcp_access.TOOLS, *mcp_grants.TOOLS]

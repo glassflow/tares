@@ -26,6 +26,7 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_core_single_person
+test_crew_client
 test_crew_dispatch
 test_crew_fake_claude
 test_crew_standup
@@ -76,6 +77,7 @@ test_github_app
 test_github_credentials
 test_github_tickets
 test_goal_first
+test_grants_single
 test_handoffs
 test_homebrew_formula
 test_host
@@ -91,6 +93,7 @@ test_licence
 test_licence_api
 test_linear
 test_login
+test_login_keyring
 test_loki
 test_mcp_auth
 test_mcp_editions
