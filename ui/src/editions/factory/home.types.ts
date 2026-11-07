@@ -208,3 +208,10 @@ export interface HomeData {
   start?: StartBlock;
   now: string;
 }
+
+/** What the team's part of the home gives the page: the agree and decline buttons, and sending the
+ *  answer to a question a project's spec asked. `act` says whether it took the action. */
+export interface TeamHomeHandler {
+  act(action: HomeAction, item: HomeItem): boolean;
+  answer(project: string, question: string, words: string): Promise<unknown>;
+}
