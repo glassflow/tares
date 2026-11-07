@@ -59,7 +59,8 @@ What the check compares:
     dispatcher_cases  the arms of the main case, `crew` case, `spawn` case, and the early help case
     env_vars          every FACTORY_*, TARES_*, CLAUDE_*, CMUX_* name, TARESD_URL, NO_COLOR, FORCE_COLOR, HOME, TMPDIR, PATH
                       in the bash files, hooks.json and tares/cli.py:_factory
-    state_files       every $CREW_HOME/<file> the bash names, and the $HOME dotfiles it reads
+    state_files       every $CREW_HOME/<file> the bash names, the $HOME dotfiles it reads, and the per-repo
+                      $repo/.factory/<name> paths and info/exclude (each needs an external row with a needle)
     test_suites       every file in tests/factory
 Line numbers move with every edit; they are not compared. --refresh-lines brings them up to date.
 """
@@ -93,6 +94,7 @@ FUNC_RE = re.compile(
 ENV_RE = re.compile(r"\b(?:(?:FACTORY|TARES|CLAUDE|CMUX)_[A-Z0-9_]*[A-Z0-9]|TARESD_URL|NO_COLOR|FORCE_COLOR|HOME|TMPDIR|PATH)\b")
 HOME_FILE_RE = re.compile(r"\$HOME\"?/(\.[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.*$-]+)*)")
 CREW_FILE_RE = re.compile(r"(?:CREW_HOME|FACTORY_HOME)\}?\"?/(\{[a-z,]+\}|[A-Za-z0-9_.-]+)")
+REPO_FILE_RE = re.compile(r"\$\{?(?:repo|FACTORY_REPO)\}?\"?/(\.factory/[A-Za-z0-9_.-]+)|\b(info/exclude)\b")
 STATION_FILE_RE = re.compile(r"/(?:\$\{?\w+\}?|\$\([^)]*\))\.(settings\.json|lock|done|pace|wake|grants)")
 
 
@@ -313,6 +315,11 @@ def check_lists(problems, data, files, factory_path, ledger_path):
         got = m.group(1)
         if not any(isinstance(r.get("needle"), str) and r["needle"] and (r["needle"] in got or got in r["needle"]) for r in ext_rows):
             found["$HOME/" + got] = "read as $HOME/%s" % got
+    for m in REPO_FILE_RE.finditer(text):
+        got = m.group(1) or m.group(2)
+        if not any(isinstance(r.get("needle"), str) and r["needle"] and (r["needle"] in got or got in r["needle"]) for r in ext_rows):
+            key = ("<repo>/.git/" if got.startswith("info/") else "<repo>/") + got
+            found[key] = "named as %s" % key
     compare(problems, "state_files", found, state_rows, "state file", "the crew's files")
 
     # test suites
