@@ -6,7 +6,7 @@ import ActionError from "../ActionError";
 import ConfirmDialog from "../ConfirmDialog";
 import { ErrorState, Picker, usePolling } from "../bits";
 import { FACTORY_POLL_MS, ViewHead, type Ctx } from "./common";
-import { usePeople } from "./access";
+import { usePeople } from "../usePeople";
 import type { Grant, GrantKind } from "../../types";
 
 // What the people on this project allow the crew to do, in their words (TR-630). A project grant

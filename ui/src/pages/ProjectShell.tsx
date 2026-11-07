@@ -17,7 +17,8 @@ import { SkillView, SkillsView } from "../components/project/skills";
 import { ClaudeSessionView, ClaudeSessionsView, DocView, DocsView, TicketView, TicketsView } from "../components/project/docs";
 import { GrantsView } from "../components/project/grants";
 import FactoryOverview from "../components/project/factory";
-import { MembersView, AccessLine } from "../components/project/access";
+import { AccessMark } from "../components/project/accessMark";
+import { EePage, Slot } from "../eeSlots";
 import { HistoryView, KeysView, McpView, SubscribersView } from "../components/project/settings";
 import type { ProjectSummary, Template, RecipeAction, RecipeActionOption, Source } from "../types";
 
@@ -250,7 +251,7 @@ export default function ProjectShell({ s, id, reload, template }: {
       case "settings":
         return view.name === "subscribers" ? <SubscribersView ctx={ctx} />
           : view.name === "keys" ? <KeysView ctx={ctx} />
-          : view.name === "members" ? <MembersView ctx={ctx} />
+          : view.name === "members" ? <EePage slot="page.project.members" ctx={ctx} />
           : view.name === "history" ? <HistoryView ctx={ctx} />
           : <McpView ctx={ctx} />;
     }
@@ -317,7 +318,7 @@ export default function ProjectShell({ s, id, reload, template }: {
               ? ` Paused: ${pausedSources.length === sourceCount ? "sources" : `${pausedSources.length} of ${sourceCount} sources`}, triggers and agents are off.`
               : " Paused: triggers and agents are off; sources keep ingesting.")}
           </p>
-          <AccessLine ctx={ctx} />
+          <Slot name="project.access" ctx={ctx} fallback={<AccessMark ctx={ctx} />} />
         </div>
         <div className="btnrow">
           {pauseButton}

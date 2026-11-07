@@ -7,7 +7,7 @@ import type {
   GithubAppTest, GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
-  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
+  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
@@ -561,16 +561,6 @@ export const api = {
       { method: "POST", body: JSON.stringify({ handled }) }),
   projectHealth: (id: string) =>
     request<ProjectHealth>(`/api/projects/${encodeURIComponent(id)}/health`),
-  // Who leads a project and who can see it. The lead changes both; an admin changes the lead only.
-  setProjectAccess: (id: string, body: { lead_person_id?: string; scope?: ProjectScope }) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
-  // Members: the lead only. Each answers with the project.
-  addProjectMember: (id: string, personId: string) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}/members`,
-      { method: "POST", body: JSON.stringify({ person_id: personId }) }),
-  removeProjectMember: (id: string, personId: string) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(personId)}`,
-      { method: "DELETE" }),
   // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
   // sources to delete too; one another project still uses is kept (and reported) either way.
   deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>
@@ -669,11 +659,6 @@ export const api = {
     request<{ messages: CrewMessage[] }>(
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
   areas: () => request<Area[]>("/api/areas"),
-  setArea: (repo: string, personId: string, note?: string) =>
-    request<Area>(`/api/areas/${ownerName(repo).split("/").map(encodeURIComponent).join("/")}`,
-      { method: "PUT", body: JSON.stringify({ person_id: personId, ...(note !== undefined ? { note } : {}) }) }),
-  deleteArea: (repo: string) =>
-    request<{ ok: boolean }>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }),
   grants: (project: string) => request<GrantsView>(`/api/grants?project=${encodeURIComponent(project)}`),
   addGrant: (body: { kind: GrantKind; project: string; words: string; areas: string[] }) =>
     request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),

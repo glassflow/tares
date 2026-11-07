@@ -1,28 +1,19 @@
+// Tares enterprise licence, see ee/LICENSE
 import { useState } from "react";
 
-import { api } from "../../api";
 import type { Person, ProjectMember } from "../../types";
-import { Picker, usePolling } from "../bits";
-import ActionError from "../ActionError";
-import { Lock } from "../icons";
-import { ViewHead, type Ctx } from "./common";
+import { Picker } from "../../components/bits";
+import ActionError from "../../components/ActionError";
+import { Lock } from "../../components/icons";
+import { usePeople } from "../../components/usePeople";
+import { ViewHead, type Ctx } from "../../components/project/common";
+import { addProjectMember, removeProjectMember, setProjectAccess } from "../api";
 
 // Who leads a project, whether it is open to the team or private, and who is on it. The lead
 // changes the scope and the members; an admin changes the lead only. The calls need the admin
 // scope, so a key without it sees all of this read-only. With auth off everyone has the admin
 // scope and the one person is `local`. The system credential (the root token) has no person: it
 // sees every private project and may manage access, but it leads nothing.
-
-/** The people on the cell, who the caller is, and whether the caller's key has the admin scope
- *  (the project calls need it; the person's own admin flag does not count). Empty or false until
- *  they load. */
-export function usePeople() {
-  const { data: me } = usePolling(() => api.whoami(), 60000);
-  const { data: people } = usePolling(() => api.people(), 60000);
-  const meId = me?.person?.id ?? null;
-  const list: Person[] = people?.people ?? [];
-  return { list, meId, isAdmin: !!me?.scopes?.includes("admin"), kind: me?.kind };
-}
 
 /** The caller against this project: the lead, an admin, or neither. */
 function useAccess(ctx: Ctx) {
@@ -39,7 +30,7 @@ function useAccess(ctx: Ctx) {
 
 /** Pick a person and make them the project's lead. Shared by the project page and the list's
  *  row for a private project the admin is not on. */
-export function LeadPicker({ id, people, onDone, onCancel }: {
+function LeadPicker({ id, people, onDone, onCancel }: {
   id: string; people: Person[]; onDone: () => void; onCancel: () => void;
 }) {
   const [pick, setPick] = useState("");
@@ -48,7 +39,7 @@ export function LeadPicker({ id, people, onDone, onCancel }: {
   const chosen = people.some((p) => p.id === pick) ? pick : "";
   const save = async () => {
     setBusy(true); setErr(undefined);
-    try { await api.setProjectAccess(id, { lead_person_id: chosen }); onDone(); }
+    try { await setProjectAccess(id, { lead_person_id: chosen }); onDone(); }
     catch (e) { setErr(e); }
     setBusy(false);
   };
@@ -68,12 +59,30 @@ export function LeadPicker({ id, people, onDone, onCancel }: {
   );
 }
 
+/** A private project the admin is not on, in the Projects list: a "Change lead" button that opens
+ *  the picker in place. `lead` is the current one, left out of the choices. */
+export function ChangeLead({ id, lead, people, onDone }: {
+  id: string; lead?: { id: string } | null; people: Person[]; onDone: () => void;
+}) {
+  const { isAdmin } = usePeople();
+  const [open, setOpen] = useState(false);
+  if (!isAdmin) return null;
+  return (
+    <div style={{ marginTop: 8 }}>
+      {open ? (
+        <LeadPicker id={id} people={people.filter((p) => p.id !== lead?.id)}
+                    onDone={() => { setOpen(false); onDone(); }} onCancel={() => setOpen(false)} />
+      ) : <button type="button" onClick={() => setOpen(true)}>Change lead</button>}
+    </div>
+  );
+}
+
 const REASON: Record<ProjectMember["reason"], string> = {
   lead: "lead", manual: "added by hand", ticket: "assignee of a ticket",
 };
 
 /** "Lead: <name>" with its controls, under the project's name. */
-export function AccessLine({ ctx }: { ctx: Ctx }) {
+export function ProjectAccess({ ctx }: { ctx: Ctx }) {
   const { list, isLead, isAdmin } = useAccess(ctx);
   const [changing, setChanging] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -84,7 +93,7 @@ export function AccessLine({ ctx }: { ctx: Ctx }) {
 
   const setScope = async (scope: "team" | "private") => {
     setBusy(true); setErr(undefined);
-    try { await api.setProjectAccess(ctx.id, { scope }); ctx.refresh(); }
+    try { await setProjectAccess(ctx.id, { scope }); ctx.refresh(); }
     catch (e) { setErr(e); }
     setBusy(false);
   };
@@ -132,7 +141,7 @@ export function AccessLine({ ctx }: { ctx: Ctx }) {
 }
 
 /** Settings, Members: who is on the project, and for its lead, who is added or removed. */
-export function MembersView({ ctx }: { ctx: Ctx }) {
+export function ProjectMembers({ ctx }: { ctx: Ctx }) {
   const { list, canMembers, leadNeedsAdmin } = useAccess(ctx);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState<string>();
@@ -167,7 +176,7 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
                 <td style={{ textAlign: "right" }}>
                   {canMembers && m.reason !== "lead" && (
                     <button type="button" className="danger" disabled={busy === m.id}
-                            onClick={() => run(m.id, () => api.removeProjectMember(ctx.id, m.id))}>
+                            onClick={() => run(m.id, () => removeProjectMember(ctx.id, m.id))}>
                       {busy === m.id ? "Removing…" : "Remove"}
                     </button>
                   )}
@@ -187,7 +196,7 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
                         options={["", ...candidates.map((p) => p.id)]}
                         labels={{ "": "Choose a person", ...Object.fromEntries(candidates.map((p) => [p.id, p.name])) }} />
                 <button type="button" className="primary" disabled={!!busy || !chosen}
-                        onClick={() => run("add", () => api.addProjectMember(ctx.id, chosen))}>
+                        onClick={() => run("add", () => addProjectMember(ctx.id, chosen))}>
                   {busy === "add" ? "Adding…" : "Add"}
                 </button>
               </div>
