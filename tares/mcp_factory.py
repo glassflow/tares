@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import re
 
-from . import areas as areas_mod
 from .mcp_server import TARESD, _caller, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
 
@@ -596,36 +595,6 @@ async def consent_grant(id: str) -> str:
     for someone else: the answer is their own."""
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/grants/{id.strip()}/consent")
-    return _out(r)
-
-
-@mcp.tool()
-async def list_areas() -> str:
-    """Who owns which GitHub repo on this Tares: [{repo, person: {id, name}, note}]. A repo is
-    `owner/name`; matching ignores case."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/areas")
-    return _out(r)
-
-
-@writable()
-async def set_area(repo: str, person: str) -> str:
-    """Say who owns a GitHub repo (`owner/name`). `person` is their id or email (list_people
-    shows them). An admin may set or change any repo; anyone else may only claim a repo nobody
-    owns yet, for themselves."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/people")
-        if r.status_code >= 400:
-            return _out(r)
-        p = _person_in(r.json().get("people") or [], person)
-        if p is None:
-            return f"no person {person!r}; list_people shows the ones there are"
-        try:
-            repo = areas_mod.norm_repo(repo.strip().strip("/"))
-        except ValueError as e:
-            return str(e)
-        owner, name = repo.split("/")
-        r = await cx.put(f"{TARESD}/api/areas/{owner}/{name}", json={"person_id": p["id"]})
     return _out(r)
 
 

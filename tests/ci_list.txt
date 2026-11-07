@@ -9,6 +9,7 @@ test_agent_stats
 test_agents
 test_ai_sre_demo
 test_api_keys
+test_areas_single
 test_auth
 test_blind_spots
 test_boot_guard

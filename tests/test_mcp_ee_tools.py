@@ -22,9 +22,11 @@ sys.path.insert(0, ROOT)
 from _env import scrub_os_environ
 scrub_os_environ()
 
-from tares import mcp_server as ms
 from tares import team as team_mod
 from tares.team import SingleTeam
+
+team_mod._set_ee_for_tests(None)   # an installed ee team would put its own tools in the first list
+from tares import mcp_server as ms
 
 P = F = 0
 def ck(l, c, d=""):

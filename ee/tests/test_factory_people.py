@@ -34,7 +34,7 @@ os.environ["TARES_PR_SYNC_SECONDS"] = "off"
 
 import httpx
 
-from tares import areas as areas_mod
+from tares_ee import areas as areas_mod
 from tares import words
 
 P = F = 0
