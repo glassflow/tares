@@ -1,15 +1,16 @@
 # Tares enterprise licence, see ee/LICENSE
-"""The area routes and the project access routes with ee installed but the cell not licensed (TR-919, TR-921).
+"""The area, project access and grant consent routes with ee installed but the cell not licensed (TR-919, TR-921, TR-922).
 
 With the ee package installed, which is how the wheel ships, `register_ee` adds the `/api/areas`
 routes whatever the licence, so the 402 `licence_required` comes only from each route's own check.
-The same holds for `PATCH /api/projects/{uid}` and the two `/members` routes (TR-921).
+The same holds for `PATCH /api/projects/{uid}` and the two `/members` routes (TR-921), and for
+`POST /api/grants/{gid}/consent` and `.../decline` (TR-922).
 Core's tests/test_areas_single.py runs with no ee team and so never reaches that check. Here the ee
-team is present and the licence is missing or has no enterprise feature: all four
-routes answer 402 and write nothing. A licence that expired keeps working, as it does for every
+team is present and the licence is missing or has no enterprise feature: every one of
+these routes answers 402 and writes nothing (a grant that waits stays waiting). A licence that expired keeps working, as it does for every
 ee action (an expired licence is still valid). The licensed behaviour is ee/tests/test_areas.py.
 
-The ee team also hands out the two MCP tools, so `Team.mcp_tools()` is pinned here.
+The ee team also hands out the MCP tools, so `Team.mcp_tools()` is pinned here.
 
 In process, no ports: the key is stored through PUT /api/licence.
 
@@ -54,6 +55,7 @@ def H(tok):
 
 AREAS_REASON = "Repo owners need an enterprise licence."
 ACCESS_REASON = "Changing a project's lead, privacy or members needs an enterprise licence."
+CONSENT_REASON = "Agreeing to someone else's grant needs an enterprise licence."
 
 
 def exact_402(r, reason=AREAS_REASON):
@@ -70,6 +72,11 @@ ROUTES = (("GET", "/api/areas", None),
 ACCESS = (("PATCH", "/api/projects/{uid}", {"lead_person_id": "{pid}"}),
           ("POST", "/api/projects/{uid}/members", {"person_id": "{mid}"}),
           ("DELETE", "/api/projects/{uid}/members/{mid}", None))
+
+
+# TR-922: agreeing to or declining a grant that waits; {gid} is filled in
+CONSENT = (("POST", "/api/grants/{gid}/consent", None),
+           ("POST", "/api/grants/{gid}/decline", {"reason": "no"}))
 
 
 def fill(path, body, uid, pid, mid):
@@ -94,6 +101,21 @@ async def main():
 
         before = access_state()
 
+        # a project that is never handed to a lead: a grant that waits on it waits for an admin
+        other = (await cx.post("/api/projects", json={"template": "custom", "name": "Docs", "objects": []})).json()["id"]
+
+        def waiting_grant(words):
+            """A grant a team cell left waiting for an admin (the project has no lead to wait for)."""
+            return store.add_grant_row("project", words, project=other, given_by=pid, state="waiting",
+                                       needs_lead=True)["id"]
+
+        def grant_state(gid):
+            g = store.get_grant_row(gid)
+            return (g["state"], g["consents"])
+
+        gids = {n: waiting_grant(f"grant {n}") for n in ("a", "b", "c", "d")}
+        waiting_before = {n: grant_state(g) for n, g in gids.items()}
+
         async def licence(text):
             r = await cx.put("/api/licence", json={"key": text})
             ck("the licence is stored", r.status_code == 200, r.text[:200])
@@ -110,6 +132,12 @@ async def main():
                    f"{r.status_code} {r.text[:120]}")
             ck(f"{why}: the project's lead and members are unchanged", access_state() == before,
                f"{access_state()} {before}")
+            for method, path, body in CONSENT:
+                r = await cx.request(method, path.format(gid=gids["a"]), json=body)
+                ck(f"{why}: {method} {path} is 402 licence_required", exact_402(r, CONSENT_REASON),
+                   f"{r.status_code} {r.text[:120]}")
+            ck(f"{why}: the waiting grant is still waiting, with no consent or decline",
+               grant_state(gids["a"]) == waiting_before["a"], str(grant_state(gids["a"])))
 
         print("== ee is installed ==")
         ck("the ee areas routes are registered whatever the licence",
@@ -140,6 +168,17 @@ async def main():
         ck("a licensed member add works (200)", r.status_code == 200, r.text[:200])
         ck("and the member is on the project", mid in access_state()[2], str(access_state()))
         handed = access_state()
+        waiting_for = (await cx.get("/api/grants", params={"project": other})).json()
+        ck("a licensed read shows who each waiting grant waits for", any(
+            x["id"] == gids["a"] and x["waiting_for"] for x in waiting_for["grants"]), str(waiting_for)[:300])
+        r = await cx.post(f"/api/grants/{gids['a']}/consent")
+        ck("a licensed consent works (200)", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+        ck("and the grant is in effect", grant_state(gids["a"])[0] == "active", str(grant_state(gids["a"])))
+        r = await cx.post(f"/api/grants/{gids['b']}/decline", json={"reason": "not this"})
+        ck("a licensed decline works (200)", r.status_code == 200, f"{r.status_code} {r.text[:200]}")
+        ck("and the grant is revoked, the decline kept", grant_state(gids["b"])[0] == "revoked"
+           and grant_state(gids["b"])[1][0].get("declined") is True, str(grant_state(gids["b"])))
+        after_licensed = {n: grant_state(g) for n, g in gids.items()}
 
         print("== licence removed again: the same routes refuse and the saved area stays ==")
         await licence(licensed.test_licence(features=("other",)))
@@ -150,6 +189,19 @@ async def main():
             p, b = fill(path, body, uid, pid, mid)
             r = await cx.request(method, p, json=b)
             ck(f"{method} {path} is 402 again", exact_402(r, ACCESS_REASON), f"{r.status_code} {r.text[:120]}")
+        for method, path, body in CONSENT:
+            r = await cx.request(method, path.format(gid=gids["c"]), json=body)
+            ck(f"{method} {path} is 402 again", exact_402(r, CONSENT_REASON), f"{r.status_code} {r.text[:120]}")
+        ck("the waiting grant is untouched", grant_state(gids["c"]) == waiting_before["c"],
+           str(grant_state(gids["c"])))
+        ck("what was agreed and declined stays so",
+           (grant_state(gids["a"]), grant_state(gids["b"])) == (after_licensed["a"], after_licensed["b"]))
+        r = await cx.get("/api/grants", params={"project": other})
+        again = {x["id"]: x for x in r.json()["grants"]}
+        ck("without the licence a read leaves the waiting grant waiting",
+           r.status_code == 200 and again[gids["c"]]["state"] == "waiting"
+           and again[gids["c"]]["in_effect"] is False and grant_state(gids["c"]) == waiting_before["c"],
+           str(again.get(gids["c"])))
         ck("the saved area is untouched", [e["repo"] for e in areas_mod.load(store)] == ["acme/web"])
         ck("the project's lead and members are untouched", access_state() == handed, f"{access_state()} {handed}")
 
@@ -165,8 +217,8 @@ async def main():
 
         print("== the MCP tools the team hands out ==")
         names = [f.__name__ for f in Team().mcp_tools()]
-        ck("Team.mcp_tools() is list_areas, set_area and set_project_access",
-           names == ["list_areas", "set_area", "set_project_access"], str(names))
+        ck("Team.mcp_tools() is list_areas, set_area, set_project_access and consent_grant",
+           names == ["list_areas", "set_area", "set_project_access", "consent_grant"], str(names))
         ck("the first two are the plain functions of mcp_areas", list(Team().mcp_tools())[:2] == list(mcp_areas.TOOLS))
 
         await cx.aclose()
