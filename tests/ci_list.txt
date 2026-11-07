@@ -26,6 +26,7 @@ test_cli
 test_cloud_connect
 test_core_single_person
 test_crew_standup
+test_crew_state
 test_decision_answers
 test_degraded
 test_delete_cascade
