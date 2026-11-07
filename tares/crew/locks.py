@@ -58,7 +58,8 @@ def _pid_alive_windows(pid: int) -> bool:
 
 def pid_alive(pid: int) -> bool:
     """Does a process with this id run. A process we may not signal still runs."""
-    if pid <= 0:
+    if pid <= 0 or pid > 0x7FFFFFFF:
+        # Not a process id (a corrupt pid file): no such process, and os.kill would raise OverflowError.
         return False
     if _is_windows():
         return _pid_alive_windows(pid)

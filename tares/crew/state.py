@@ -65,6 +65,11 @@ def read_text(path) -> str:
         return f.read()
 
 
+def loads_json(text: str):
+    """json.loads, but a leading byte order mark (Notepad adds one) is skipped, as jq skips it."""
+    return json.loads(text[1:] if text.startswith("\ufeff") else text)
+
+
 def atomic_write_text(path, text: str, *, mode=None) -> None:
     """Write `text` (UTF-8, LF as given) to a temp file beside `path`, then os.replace it over `path`.
     Windows refuses the replace while a reader has the file open, so a PermissionError is retried a few
@@ -115,7 +120,7 @@ def read_json(path, default=_MISSING):
     """The parsed file. A missing or unreadable file, or one that is not JSON, gives `default` when one is
     given, else a CrewError that says which file."""
     try:
-        return json.loads(read_text(path))
+        return loads_json(read_text(path))
     except (OSError, ValueError) as e:
         if default is not _MISSING:
             return default
@@ -255,7 +260,7 @@ def merge_crew_defaults(paths=None, templates=None) -> None:
         return
     tpl = Path(templates) if templates else kit_templates()
     try:
-        merged = merge_objects(json.loads(read_text(tpl / "crew.json")), json.loads(read_text(cfg)))
+        merged = merge_objects(loads_json(read_text(tpl / "crew.json")), loads_json(read_text(cfg)))
     except ValueError:
         raise CrewError(f"{paths.shown('crew.json')} is not valid JSON") from None
     if not isinstance(merged, dict):

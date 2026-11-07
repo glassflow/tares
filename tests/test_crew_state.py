@@ -887,6 +887,50 @@ if HAVE_BASH:
 else:
     skip_oracle("lock timing against bash")
 
+# the takeover re-checks the holder: a lock another command took meanwhile is left alone
+h = newhome("lock-recheck")
+dead = subprocess.Popen([sys.executable, "-c", "pass"])
+dead.wait()
+ld = lock_dir(h)
+ld.parent.mkdir(parents=True, exist_ok=True)
+ld.mkdir()
+(ld / "pid").write_text(f"{dead.pid}\n")
+real_read_pid = locks._read_pid
+seen = {"n": 0}
+
+
+def second_taker(lock):
+    seen["n"] += 1
+    return str(dead.pid) if seen["n"] == 1 else str(os.getpid())
+
+
+locks._read_pid = second_taker
+try:
+    r = py_lock(h)
+finally:
+    locks._read_pid = real_read_pid
+ck("a stale lock a third command took before the takeover is left alone", r[0] == "locked" and (ld / "pid").read_text() == f"{dead.pid}\n" and ld.is_dir(), short(r[:2]))
+ck("...and no .takeover folder is left", not Path(str(ld) + ".takeover").exists())
+
+# a corrupt pid file is a dead holder, not a crash
+def attempt(fn):
+    """fn() or the exception it raised, so a broken fix shows as a FAIL line and not a crash."""
+    try:
+        return fn()
+    except Exception as ex:
+        return ex
+
+
+ck("pid_alive says no to a number no process can have", attempt(lambda: locks.pid_alive(99999999999999999999)) is False)
+h = newhome("lock-hugepid")
+ld = lock_dir(h)
+ld.parent.mkdir(parents=True, exist_ok=True)
+ld.mkdir()
+(ld / "pid").write_text("99999999999999999999\n")
+r = attempt(lambda: py_lock(h))
+ck("a lock whose pid file holds a huge number is stale and taken over", isinstance(r, tuple) and r[0] == "ok" and (ld / "pid").read_text() == f"{os.getpid()}\n", short(r))
+locks.release_lock("crew-reviewer", CrewPaths.at(h))
+
 # python-only lock behaviour
 h = newhome("lock-py")
 locks.station_lock("crew-releaser", CrewPaths.at(h))
@@ -955,13 +999,26 @@ src = Path(locks.__file__).read_text()
 ck("locks.py calls os.kill once, after the Windows branch has returned", len(re.findall(r"^\s+os\.kill\(", src, re.M)) == 1 and src.index("return _pid_alive_windows(pid)") < src.index("    os.kill(pid, 0)"))
 
 # ====================================================================================
+print("\n== a file with a byte order mark ==")
+hb_ = newhome("bom")
+Path(hb_).mkdir(parents=True)
+bomfile = Path(hb_) / "bom.json"
+bomfile.write_bytes(b"\xef\xbb\xbf" + b'{"a": 1}\n')
+ck("read_json reads a file that starts with a byte order mark", attempt(lambda: state.read_json(bomfile)) == {"a": 1}, short(attempt(lambda: state.read_json(bomfile))))
+hb2 = newhome("bom-crew")
+Path(hb2).mkdir(parents=True)
+cfgp = CrewPaths.at(hb2).crew_cfg
+cfgp.write_bytes(b"\xef\xbb\xbf" + b'{"human": {"name": "Ana"}}\n')
+attempt(lambda: state.merge_crew_defaults(CrewPaths.at(hb2)))
+ck("merge_crew_defaults reads a crew.json with a byte order mark and keeps the person's value", attempt(lambda: state.read_json(cfgp)["human"]["name"]) == "Ana", short(attempt(lambda: state.read_json(cfgp, None))))
+
 print("\n== import ==")
 probe = ("import sys, time\nsys.path.insert(0, %r)\nt = time.time()\nimport tares.crew\ndt = time.time() - t\n"
          "std = set(sys.stdlib_module_names) | set(sys.builtin_module_names) | {'__main__', '_virtualenv'}\n"
          "extra = sorted({m.split('.')[0] for m in sys.modules} - std - {'tares'})\n"
          "heavy = [m for m in sys.modules if m.split('.')[0] in ('duckdb','fastapi','uvicorn','starlette','httpx','requests','psutil','pydantic','numpy','pandas','anthropic','openai','filelock') or m in ('tares.daemon','tares.cli','tares.store')]\n"
          "import json\nprint(json.dumps({'extra': extra, 'heavy': heavy, 'secs': dt, 'tares': sorted(m for m in sys.modules if m.startswith('tares'))}))\n") % str(ROOT)
-r = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, cwd=str(T))
+r = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True, cwd=str(T))
 info = json.loads(r.stdout) if r.returncode == 0 else {}
 ck("importing tares.crew works in a bare interpreter", r.returncode == 0, r.stderr[-400:])
 ck("importing tares.crew pulls in no duckdb, fastapi, tares.daemon or other heavy module", info.get("heavy") == [], short(info.get("heavy")))
