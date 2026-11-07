@@ -335,7 +335,8 @@ def _factory(argv: list[str]):
         claude = env.get("CLAUDE_BIN") or shutil.which("claude", path=env.get("PATH")) or "claude"
         if not setup(env["TARES_FACTORY_URL"].rstrip("/"), env.get("TARES_AUTH_TOKEN", ""), home, claude):
             raise SystemExit(1)
-    os.execve("/bin/bash", ["bash", str(script), *argv], env)
+    from .crew.dispatch import run
+    run(argv, env, script)
 
 
 def main():

@@ -26,7 +26,9 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_core_single_person
+test_crew_dispatch
 test_crew_standup
+test_crew_startup_time
 test_crew_state
 test_decision_answers
 test_degraded
