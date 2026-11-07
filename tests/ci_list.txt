@@ -32,6 +32,7 @@ test_crew_fake_claude
 test_crew_standup
 test_crew_startup_time
 test_crew_state
+test_crews_single
 test_decision_answers
 test_degraded
 test_delete_cascade
