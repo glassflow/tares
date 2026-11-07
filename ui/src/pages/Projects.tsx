@@ -1,8 +1,8 @@
-import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
-import { LeadPicker, usePeople } from "../components/project/access";
+import { usePeople } from "../components/usePeople";
+import { Slot } from "../eeSlots";
 import { ErrorState, TimeAgo, projectGoal, usePolling } from "../components/bits";
 import { Activity, Lock, Search } from "../components/icons";
 import { ProgressRing, progressText } from "../components/ProgressRing";
@@ -119,8 +119,7 @@ export default function Projects() {
 
   const projects = (inst?.projects ?? []).filter((p) => !p.default);
   const loose = inst?.projects.find((p) => p.default && !p.hidden)?.objects.length ?? 0;
-  const { list: people, isAdmin } = usePeople();
-  const [handing, setHanding] = useState<string>();   // the hidden project whose lead is being changed
+  const { list: people } = usePeople();
   const counts: Record<Show, number> = {
     all: projects.length,
     done: projects.filter((p) => p.status === "done").length,
@@ -221,19 +220,9 @@ export default function Projects() {
                           <span className="proj-lead">
                             {u.lead ? `Private, led by ${u.lead.name}` : "Private, no lead"}
                           </span>
-                          {handing === u.id && (
-                            <div style={{ marginTop: 8 }}>
-                              <LeadPicker id={u.id} people={people.filter((p) => p.id !== u.lead?.id)}
-                                          onDone={() => { setHanding(undefined); reloadInst(); }}
-                                          onCancel={() => setHanding(undefined)} />
-                            </div>
-                          )}
+                          <Slot name="projects.changeLead" id={u.id} lead={u.lead} people={people} onDone={reloadInst} />
                         </td>
-                        <td className="pj-actions">
-                          {isAdmin && handing !== u.id && (
-                            <button type="button" onClick={() => setHanding(u.id)}>Change lead</button>
-                          )}
-                        </td>
+                        <td className="pj-actions" />
                       </tr>
                     );
                   }

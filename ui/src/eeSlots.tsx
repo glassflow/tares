@@ -85,11 +85,11 @@ export function Slot({ name, fallback = null, ...props }: { name: string; fallba
 }
 
 /** A whole ee page: the slot when loaded, a skeleton while the licence is being read, else the licence note. */
-export function EePage({ slot }: { slot: string }) {
+export function EePage({ slot, ...props }: { slot: string; [prop: string]: unknown }) {
   const { loading, eeAllowed } = useLicence();
   useSyncExternalStore(subscribe, snapshot);
   const C = slots.get(slot);
-  if (C) return <C />;
+  if (C) return <C {...props} />;
   if (failed) return <Banner tone="warn">This part of the console did not load. Reload the page to try again.</Banner>;
   if (loading || (eeAllowed && load)) return <SkeletonRows />;
   return <LicenceNeeded variant="page" />;

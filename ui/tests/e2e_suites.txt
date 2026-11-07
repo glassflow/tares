@@ -6,6 +6,7 @@ crew-people
 edition-routes
 edition-shell
 ee-chunk
+ee-project-access
 factory-crew
 factory-docs
 factory-github
