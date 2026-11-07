@@ -22,8 +22,11 @@ os.environ["HOME"] = os.path.join(ROOT, "home")
 os.environ["TARES_HOME"] = os.path.join(ROOT, "tares")
 os.environ["FACTORY_CREW_HOME"] = os.path.join(ROOT, "no-crew")
 for k in ("TARESD_URL", "TARES_FACTORY_URL", "TARES_AUTH_TOKEN", "TARES_CLOUD_URL", "TARES_KEYRING",
-          "TARES_FACTORY_TOKEN_FILE", "FACTORY_STATION", "PYTHON_KEYRING_BACKEND"):
+          "TARES_FACTORY_TOKEN_FILE", "FACTORY_STATION"):
     os.environ.pop(k, None)
+# If the stub below ever fails to install, keyring must fall back to a backend that refuses everything,
+# never to the machine's real keychain.
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 os.environ["TARES_KEYRING"] = "on"      # the keychain is opt-in; the stub backend below stands in for it
 
 import keyring  # noqa: E402
@@ -42,6 +45,7 @@ class Stub(keyring.backend.KeyringBackend):
         self.calls = []
         self.refuse = False
         self.forget = False     # says yes to a write and keeps nothing
+        self.broken_get = False  # a locked keychain: every read raises
 
     def set_password(self, service, username, password):
         self.calls.append(("set", service, username))
@@ -53,6 +57,8 @@ class Stub(keyring.backend.KeyringBackend):
 
     def get_password(self, service, username):
         self.calls.append(("get", service, username))
+        if self.broken_get:
+            raise keyring.errors.KeyringLocked("locked")
         return self.items.get((service, username))
 
     def delete_password(self, service, username):
@@ -64,6 +70,7 @@ class Stub(keyring.backend.KeyringBackend):
 
 STUB = Stub()
 keyring.set_keyring(STUB)      # before tares.login looks: the real keychain is never asked
+assert keyring.get_keyring() is STUB, "the stub keychain did not install; refusing to go on"
 
 from tares import login as L  # noqa: E402
 from tares.crew import perms, state  # noqa: E402
@@ -87,7 +94,9 @@ def reset(backend=None):
     STUB.calls.clear()
     STUB.refuse = False
     STUB.forget = False
+    STUB.broken_get = False
     keyring.set_keyring(backend or STUB)
+    assert keyring.get_keyring() is (backend or STUB), "the test keychain did not install"
     L._told.clear()
     L.login_file().unlink(missing_ok=True)
 
@@ -319,6 +328,177 @@ STUB.items[("tares", BASE)] = "nvf_lost_1"
 rc, out, err = captured(L.logout)
 ck("logout clears both the file and the keychain entry, though the control plane was asked with a key from the keychain", rc == 0 and STUB.items == {} and not L.login_file().exists(), (rc, STUB.items))
 
+print("the line after login says why the key is in the file: the keychain is off by default")
+for label, setting in (("TARES_KEYRING unset", None), ("TARES_KEYRING=off", "off")):
+    reset()
+    os.environ.pop("TARES_KEYRING", None)
+    if setting:
+        os.environ["TARES_KEYRING"] = setting
+    browser()
+    rc, out, err = captured(L.login, BASE, wait=10)
+    ck(f"{label}: the line says the keychain is off and how to turn it on",
+       f"The key is saved in {L.login_file()}, readable only by you, because the OS keychain is off "
+       f"(set TARES_KEYRING=on to use it)." in out and "no OS keychain works" not in out, out)
+os.environ["TARES_KEYRING"] = "on"
+reset(keyring.backends.fail.Keyring())
+browser()
+rc, out, err = captured(L.login, BASE, wait=10)
+ck("TARES_KEYRING=on but no keychain works: it says that instead",
+   "because no OS keychain works on this machine." in out and "is off" not in out, out)
+
+print("logout while the saved key cannot be read: nothing is deleted, the key is not forgotten")
+
+
+def keychain_login():
+    reset()
+    browser()
+    captured(L.login, BASE, wait=10)
+    return key_now(), L.login_file().read_bytes()
+
+
+def refused(label, rc, out, err, key, before, words):
+    ck(f"{label}: exit 1 and the reason in plain words", rc == 1 and words in out and "not signed in" not in out, (rc, out, err))
+    ck(f"{label}: login.json is untouched", L.login_file().read_bytes() == before)
+    ck(f"{label}: the keychain entry is kept", STUB.items.get(("tares", BASE)) == key, STUB.items)
+    ck(f"{label}: the key was not sent anywhere and is in no output", len(WORLD["logouts"]) == n_before and key not in out + err,
+       WORLD["logouts"])
+
+
+key, before = keychain_login()
+os.environ["TARES_KEYRING"] = "off"                       # (b) the keychain is off after a keychain login
+n_before = len(WORLD["logouts"])
+rc, out, err = captured(L.logout)
+refused("keychain off", rc, out, err, key, before, "the OS keychain is off here (TARES_KEYRING is not on)")
+ck("keychain off: it says what to do", "TARES_KEYRING=on" in out, out)
+os.environ["TARES_KEYRING"] = "on"
+STUB.broken_get = True                                    # (a) a locked or denied keychain
+rc, out, err = captured(L.logout)
+refused("keychain locked", rc, out, err, key, before, "the OS keychain would not give it (locked, or access was denied)")
+STUB.broken_get = False
+keyring.set_keyring(keyring.backends.fail.Keyring())      # on, but no keychain works now
+rc, out, err = captured(L.logout)
+refused("no keychain works now", rc, out, err, key, before, "no OS keychain works on this machine now")
+keyring.set_keyring(STUB)
+rc, out, err = captured(L.logout)
+ck("with the keychain back, logout takes the key off the workspace and clears everything",
+   rc == 0 and WORLD["logouts"][-1] == f"Bearer {key}" and STUB.items == {} and not L.login_file().exists(), (rc, out, WORLD["logouts"]))
+reset()
+L.login_file().write_text(json.dumps({"cell_url": BASE, "cloud": BASE, "cell": "factory", "key_store": "keychain"}))
+rc, out, err = captured(L.logout)
+ck("a keychain that answers with no entry is not signed in: logout clears the file and exits 0",
+   rc == 0 and "not signed in" in out and not L.login_file().exists(), (rc, out))
+
+print("login while the saved key cannot be read: it stops before making a new key")
+key, before = keychain_login()
+for label, setup, words in (
+        ("keychain off", lambda: os.environ.__setitem__("TARES_KEYRING", "off"), "the OS keychain is off here"),
+        ("keychain locked", lambda: setattr(STUB, "broken_get", True), "would not give it (locked, or access was denied)")):
+    setup()
+    n_before, n_made = len(WORLD["logouts"]), WORLD["n"]
+    browser()
+    rc, out, err = captured(L.login, BASE, wait=3)
+    ck(f"{label}: login stops with exit 1 and says why", rc == 1 and words in out and "tares login:" in out, (rc, out, err))
+    ck(f"{label}: no new key was made and nothing was removed", WORLD["n"] == n_made and len(WORLD["logouts"]) == n_before, WORLD["n"])
+    ck(f"{label}: login.json and the keychain entry are as they were",
+       L.login_file().read_bytes() == before and STUB.items.get(("tares", BASE)) == key, STUB.items)
+    ck(f"{label}: it names the old key's id and how to start over", "key kc" in out and f"delete {L.login_file()}" in out, out)
+    os.environ["TARES_KEYRING"] = "on"
+    STUB.broken_get = False
+browser()
+rc, out, err = captured(L.login, BASE, wait=10)
+ck("with the keychain readable, login replaces the key and revokes the old one",
+   rc == 0 and f"Bearer {key}" in WORLD["logouts"] and STUB.items.get(("tares", BASE)) == key_now() != key, (rc, out, WORLD["logouts"]))
+
+print("a login that cannot be saved safely: no traceback, the new key is revoked, the old login is kept")
+real_owner_only = perms.owner_only
+reset()
+legacy2 = dict(legacy, key="nvf_old2_legacykey")      # gitleaks:allow, a fake key for a test
+L.login_file().parent.mkdir(parents=True, exist_ok=True)
+L.login_file().write_text(json.dumps(legacy2))
+perms.owner_only = lambda *a, **k: False              # icacls failing, or a chmod that cannot be done
+try:
+    before = L.login_file().read_bytes()
+    s, out, err = captured(L.saved)
+    ck("saved() with a file that cannot be made private: no traceback, the key is still returned",
+       (s or {}).get("key") == "nvf_old2_legacykey", s)
+    ck("...and the file is left as it was", L.login_file().read_bytes() == before)
+    ck("...with nothing said about a move", "moved your saved key" not in err and out == "", (out, err))
+    reset()
+    STUB.items[("tares", BASE)] = "nvf_prev_inkeychain"
+    L.login_file().write_text(json.dumps({"cell_url": BASE, "cloud": BASE, "cell": "factory", "key_store": "keychain",
+                                          "key_id": "prev", "machine": "m1"}))
+    before = L.login_file().read_bytes()
+    n_before = len(WORLD["logouts"])
+    browser()
+    rc, out, err = captured(L.login, BASE, wait=10)
+    ck("login: exit 1 with a message, not a traceback", rc == 1 and "could not save the login" in out and "readable by you only" in out, (rc, out, err))
+    ck("login: the key it had just made was revoked", WORLD["logouts"][n_before:] == [f"Bearer {key_now()}"], WORLD["logouts"][n_before:])
+    ck("login: the old login is as it was, file and keychain entry",
+       L.login_file().read_bytes() == before and STUB.items == {("tares", BASE): "nvf_prev_inkeychain"}, (STUB.items,))
+    ck("login: the new key is in no output", key_now() not in out + err)
+    reset()
+    keyring.set_keyring(keyring.backends.fail.Keyring())       # no keychain: the file path fails the same way
+    browser()
+    n_before = len(WORLD["logouts"])
+    rc, out, err = captured(L.login, BASE, wait=10)
+    ck("login with no keychain: the same, and nothing is saved",
+       rc == 1 and "could not save the login" in out and not L.login_file().exists()
+       and WORLD["logouts"][n_before:] == [f"Bearer {key_now()}"], (rc, out, WORLD["logouts"][n_before:]))
+finally:
+    perms.owner_only = real_owner_only
+reset()
+
+print("the crew's key file: a failed write says so and changes nothing")
+crew2 = Path(ROOT) / "crew2"
+crew2.mkdir()
+os.environ["FACTORY_CREW_HOME"] = str(crew2)
+perms.owner_only = lambda *a, **k: False
+try:
+    rc, out, err = captured(L._crew_follows, "nvf_for_the_crew")
+    ck("_crew_follows: False and a plain message naming the file", rc is False and "could not update the crew's key file" in out
+       and str(crew2 / ".tares-token") in out, (rc, out))
+    ck("...no key file and no temp file left, no key in the output", not (crew2 / ".tares-token").exists()
+       and not list(crew2.glob("*.tmp")) and "nvf_for_the_crew" not in out + err, list(crew2.iterdir()))
+    (crew2 / ".tares-token").write_text("nvf_theirs\n")
+    rc, out, err = captured(L._crew_follows, "", "nvf_theirs")
+    ck("a logout that cannot empty the file reports it and leaves the file alone",
+       rc is False and "could not update the crew's key file" in out
+       and (crew2 / ".tares-token").read_text() == "nvf_theirs\n" and not list(crew2.glob("*.tmp")), (rc, out))
+finally:
+    perms.owner_only = real_owner_only
+os.environ["FACTORY_CREW_HOME"] = os.path.join(ROOT, "no-crew")
+
+print("owner_only on Mac and Linux: False when the chmod fails")
+orig_windows_fn, orig_chmod = perms._windows, os.chmod
+perms._windows = lambda: False
+target2 = Path(ROOT) / "chmod-target"
+target2.write_text("x")
+
+
+def bad_chmod(*a, **k):
+    raise PermissionError("no")
+
+
+try:
+    ck("a chmod that works gives True and mode 600", perms.owner_only(target2) is True and mode(target2) == 0o600, oct(mode(target2)))
+    os.chmod = bad_chmod
+    ck("a chmod that fails gives False, not a traceback", perms.owner_only(target2) is False)
+    refused_write = ""
+    try:
+        state.atomic_write_text(Path(ROOT) / "private.txt", "secret-fake", mode=0o600, private=True)
+    except CrewError as e:
+        refused_write = str(e)
+    ck("and a private write is refused: nothing written, no temp file",
+       "readable by you only" in refused_write and not (Path(ROOT) / "private.txt").exists()
+       and not list(Path(ROOT).glob("private.txt.*")), refused_write)
+finally:
+    os.chmod, perms._windows = orig_chmod, orig_windows_fn
+
+print("no real keychain backend was ever loaded")
+real = [m for m in sys.modules if m.startswith("keyring.backends.")
+        and m.rsplit(".", 1)[-1] in ("macOS", "Windows", "SecretService", "kwallet", "libsecret", "chainer")]
+ck("only the stub and the refusing backend were used", real == [], real)
+
 print("stations read the crew key from its file, never from the keychain")
 reset()
 STUB.items[("tares", BASE)] = "nvf_person_key"
@@ -355,19 +535,37 @@ calls = []
 orig_windows, orig_run = perms._windows, subprocess.run
 
 
+WHOAMI = b'"azuread\\kirank","S-1-12-1-1111-2222-3333-4444"\r\n'    # an Azure AD login: its name may not resolve in icacls
+
+
 def fake_run(cmd, **kw):
     calls.append(cmd)
+    if cmd[0] == "whoami":
+        return subprocess.CompletedProcess(cmd, fake_run.whoami_rc, stdout=fake_run.whoami_out, stderr=b"")
     return subprocess.CompletedProcess(cmd, fake_run.rc)
 
 
 fake_run.rc = 0
+fake_run.whoami_rc, fake_run.whoami_out = 0, WHOAMI
 perms._windows = lambda: True
 os.environ["USERNAME"], os.environ["USERDOMAIN"] = "kiran", "WORKGROUP"
 try:
     target = Path(ROOT) / "win-token"
-    ck("owner_only runs icacls for the user alone",
-       perms.owner_only(target, run=fake_run) is True and calls[-1] == ["icacls", str(target), "/inheritance:r", "/grant:r", "WORKGROUP\\kiran:F"],
-       calls)
+    ck("owner_only runs icacls for the user alone, named by security identifier",
+       perms.owner_only(target, run=fake_run) is True
+       and calls[-2] == ["whoami", "/user", "/fo", "csv", "/nh"]
+       and calls[-1] == ["icacls", str(target), "/inheritance:r", "/grant:r", "*S-1-12-1-1111-2222-3333-4444:F"], calls)
+    ck("icacls_command is pure: it grants whoever it is given, else DOMAIN\\name from the environment",
+       perms.icacls_command(target, "*S-1-5-21-7-8-9-1001") == ["icacls", str(target), "/inheritance:r", "/grant:r", "*S-1-5-21-7-8-9-1001:F"]
+       and perms.icacls_command(target) == ["icacls", str(target), "/inheritance:r", "/grant:r", "WORKGROUP\\kiran:F"])
+    for label, rc_, out_ in (("whoami fails", 1, WHOAMI), ("whoami prints something else", 0, b"not csv at all\r\n"),
+                             ("whoami prints a name where the SID goes", 0, b'"a\\b","kiran"\r\n"'), ("whoami prints nothing", 0, b"")):
+        fake_run.whoami_rc, fake_run.whoami_out = rc_, out_
+        calls.clear()
+        ck(f"{label}: icacls gets DOMAIN\\name instead",
+           perms.owner_only(target, run=fake_run) is True and calls[-1] == ["icacls", str(target), "/inheritance:r", "/grant:r", "WORKGROUP\\kiran:F"], calls)
+    fake_run.whoami_rc, fake_run.whoami_out = 0, WHOAMI
+    ck("whoami missing: the same fallback", perms.windows_grantee(run=lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError())) == "WORKGROUP\\kiran")
     fake_run.rc = 5
     ck("and says false when icacls fails", perms.owner_only(target, run=fake_run) is False)
     ck("and when icacls is missing", perms.owner_only(target, run=lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError())) is False)
@@ -384,7 +582,8 @@ try:
     perms.owner_only = spy
     state.write_token("nvf_win_key_1", paths)
     ck("write_token restricts the temp file before the key is in it", seen.get("content_before") == b"", seen)
-    ck("the icacls call carries the path and the user, not the key", len(calls) == 1 and "nvf_win_key_1" not in " ".join(calls[0]), calls)
+    icacls_calls = [c for c in calls if c[0] == "icacls"]
+    ck("the icacls call carries the path and the user, not the key", len(icacls_calls) == 1 and "nvf_win_key_1" not in " ".join(" ".join(c) for c in calls), calls)
     ck("the crew file holds the key", (crew / ".tares-token").read_text() == "nvf_win_key_1\n")
     perms.owner_only = real_owner
     fake_run.rc = 1

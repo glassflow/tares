@@ -7,6 +7,11 @@ never on a command line, never in a log line or an error text. The key comes fro
 bash: TARES_AUTH_TOKEN for the person's own terminal, the crew's key file for a station (never the OS
 keychain: stations read a file).
 
+Time limits: bash's curl `--max-time N` caps the whole request. httpx has no total limit, only one per step
+(connect, write, each read), so a request here is also stopped at N seconds in total while its body comes
+in. The one step that can still run past N is waiting for the first byte of the answer: it can take N
+seconds to connect, N to write and N to read the headers (3N at worst), where curl gives up at N.
+
 A `TaresClient` is one command's view of Tares: like bash, it asks once whether Tares answers, and keeps
 the project list and the settings it read, so later calls reuse them.
 """
@@ -14,6 +19,7 @@ import os
 import re
 import socket
 import sys
+import time
 from urllib.parse import quote
 
 import httpx
@@ -27,6 +33,18 @@ SETTING_KEYS = "autonomy releaser release_profile prod_pattern challenger builde
 
 MCP_INITIALIZE = ('{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26",'
                   '"capabilities":{},"clientInfo":{"name":"tares-factory","version":"0"}}}')
+
+
+class _Answer:
+    """What a request got: the status and the whole body (all a caller reads of it)."""
+
+    def __init__(self, status_code: int, content: bytes):
+        self.status_code = status_code
+        self.content = content
+
+    @property
+    def text(self) -> str:
+        return self.content.decode("utf-8", "replace")
 
 
 class TaresHTTPError(CrewError):
@@ -176,10 +194,19 @@ class TaresClient:
 
     def _request(self, method: str, url: str, headers: dict, content, seconds: float):
         """One request: the response, or TaresHTTPError with curl's text for a transport failure. A status
-        of 400 or more is left to the caller (curl's -f)."""
+        of 400 or more is left to the caller (curl's -f). `seconds` limits each step and, while the body
+        comes in, the whole request (see the module docstring)."""
+        deadline = time.monotonic() + seconds
         try:
-            return self._client().request(method, url, headers=headers, content=content,
-                                          timeout=httpx.Timeout(seconds))
+            with self._client().stream(method, url, headers=headers, content=content,
+                                       timeout=httpx.Timeout(seconds)) as r:
+                body = bytearray()
+                for chunk in r.iter_bytes():
+                    body += chunk
+                    if time.monotonic() > deadline:
+                        raise TaresHTTPError(f"curl: (28) Operation timed out after {int(seconds * 1000)} "
+                                             f"milliseconds with {len(body)} bytes received")
+                return _Answer(r.status_code, bytes(body))
         except httpx.HTTPError as e:
             raise TaresHTTPError(_curl_text(e, url, seconds)) from None
         except httpx.InvalidURL:

@@ -26,6 +26,15 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# a regression in the TARES_KEYRING gate must fail this test, never reach a person's OS keychain
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+try:
+    import keyring  # noqa: E402
+    import keyring.backends.fail  # noqa: E402
+    keyring.set_keyring(keyring.backends.fail.Keyring())
+except ImportError:
+    pass
+
 from _crew_fake import fake_crew_env  # noqa: E402
 from tares.crew import dispatch  # noqa: E402
 
@@ -295,7 +304,7 @@ EXEC_PROBE = (
 def run_stub(argv, env):
     payload = json.dumps({"argv": argv, "env": env, "script": str(STUB)})
     # the probe's own environment has a variable the env dict lacks: it must not reach the script
-    penv = {"PATH": os.environ.get("PATH", ""), "PARENT_ONLY": "leaks"}
+    penv = {"PATH": os.environ.get("PATH", ""), "PARENT_ONLY": "leaks", "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
     r = subprocess.run([sys.executable, "-I", "-c", EXEC_PROBE, payload], capture_output=True, text=True, encoding="utf-8", env=penv, cwd=str(T))
     return r
 
@@ -346,7 +355,7 @@ LIGHT_PROBE = (
     "sys.argv = ['tares', 'factory'] + sys.argv[2:]\n"
     "tares.cli.main()\n"
 ) % (str(ROOT), HEAVY)
-env_light = {"PATH": os.environ.get("PATH", ""), "HOME": str(T), "TARES_HOME": str(T / "th")}
+env_light = {"PATH": os.environ.get("PATH", ""), "HOME": str(T), "TARES_HOME": str(T / "th"), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
 for mode, args in (("python", ["zz"]), ("bash", ["roster"])):
     r = subprocess.run([sys.executable, "-I", "-c", LIGHT_PROBE, mode, *args], capture_output=True, text=True, env=env_light, cwd=str(T))
     try:
@@ -402,7 +411,7 @@ MOD_PROBE = (
     "dispatch.PORTED[('zz',)] = lambda argv, env: (print('python ran', argv, env.get('KEEP')), 5)[-1]\n"
     "sys.argv = ['tares.crew'] + sys.argv[1:]\nrunpy.run_module('tares.crew', run_name='__main__')\n"
 ) % str(ROOT)
-r = subprocess.run([sys.executable, "-I", "-c", MOD_PROBE, "zz", "x"], capture_output=True, text=True, env={"PATH": os.environ.get("PATH", ""), "KEEP": "yes"}, cwd=str(T))
+r = subprocess.run([sys.executable, "-I", "-c", MOD_PROBE, "zz", "x"], capture_output=True, text=True, env={"PATH": os.environ.get("PATH", ""), "KEEP": "yes", "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}, cwd=str(T))
 ck("`python -m tares.crew` calls a registered Python command with argv and os.environ, and exits with its code",
    r.returncode == 5 and r.stdout == "python ran ['zz', 'x'] yes\n", short((r.returncode, r.stdout, r.stderr[-300:])))
 

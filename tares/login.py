@@ -35,6 +35,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from .crew.errors import CrewError
+
 KEYRING_SERVICE = "tares"
 DEFAULT_CLOUD = "https://console.tares-glassflow.com"
 MIN_VERSION = (1, 44, 0)
@@ -60,12 +62,17 @@ def _tell_once(key: str, text: str, stream=None) -> None:
         print(text, file=stream or sys.stderr, flush=True)
 
 
+def _gate_on() -> bool:
+    """Is the keychain switched on (TARES_KEYRING=on, or keychain, 1, true, yes)? Off by default."""
+    return os.getenv("TARES_KEYRING", "").strip().lower() in ("on", "keychain", "1", "true", "yes")
+
+
 def _keyring():
-    """The keyring module when TARES_KEYRING=on (or keychain, 1, true, yes) and this machine has a keychain
-    that works, else None. Off by default, so no key leaves login.json until the readers that still look
-    there (mcp-headers, ship.py, the bash doctor) can read the keychain. keyring's fail and null backends
-    have priority 0 or less."""
-    if os.getenv("TARES_KEYRING", "").strip().lower() not in ("on", "keychain", "1", "true", "yes"):
+    """The keyring module when the keychain is switched on (TARES_KEYRING) and this machine has a keychain
+    that works, else None; `_gate_on()` tells the two apart. Off by default, so no key leaves login.json
+    until the readers that still look there (mcp-headers, ship.py, the bash doctor) can read the keychain.
+    keyring's fail and null backends have priority 0 or less."""
+    if not _gate_on():
         return None
     try:
         import keyring
@@ -100,14 +107,19 @@ def _kc_set(kr, account: str, key: str) -> bool:
         return False
 
 
-def _kc_get(account: str) -> str:
+def _kc_get(account: str) -> tuple[str, str]:
+    """(key, problem). problem is "" when the keychain answered: an empty key then means there is no
+    entry. Else why it could not be asked: "off" (TARES_KEYRING is not on), "unusable" (on, but no
+    keychain works here) or "error" (the keychain refused: locked, access denied, timed out)."""
+    if not _gate_on():
+        return "", "off"
     kr = _keyring()
     if kr is None:
-        return ""
+        return "", "unusable"
     try:
-        return kr.get_password(KEYRING_SERVICE, account) or ""
+        return kr.get_password(KEYRING_SERVICE, account) or "", ""
     except Exception:  # noqa: BLE001
-        return ""
+        return "", "error"
 
 
 def _kc_delete(account: str) -> None:
@@ -142,25 +154,56 @@ def _account(data: dict) -> str:
     return str(data["cell_url"]).rstrip("/")
 
 
-def saved() -> dict | None:
-    """The saved login, or None. A file that cannot be read or lacks the essentials is ignored. The
-    key comes from the keychain; a key still in the file (an older login, or a machine with no keychain)
-    is used as it is, and moved to the keychain first when there is one."""
+def _load() -> tuple[dict | None, str, str]:
+    """(login.json's content, the key, why the key could not be read). The key is the one in the file, else
+    the one in the keychain. When the file says the key is in the keychain and the keychain could not be
+    asked, `why` is "off", "unusable" or "error" (see _kc_get); with no key and no `why` there is simply
+    no key there. A key still in the file (an older login, or a machine with no keychain) is used as it
+    is, and moved to the keychain first when there is one."""
     data = _read_file()
     if data is None:
-        return None
+        return None, "", ""
     key = data.get("key") or ""
     if key:
         if _migrate(data):
             data = _read_file() or data
-        return {**data, "key": key}
-    key = _kc_get(_account(data))
+        return data, key, ""
+    key, problem = _kc_get(_account(data))
+    if key or data.get("key_store") != "keychain":
+        return data, key, ""
+    return data, "", problem
+
+
+def saved() -> dict | None:
+    """The saved login, or None. A file that cannot be read or lacks the essentials is ignored, and so is
+    one whose key cannot be read (said once, on stderr)."""
+    data, key, why = _load()
     if key:
         return {**data, "key": key}
-    if data.get("key_store") == "keychain" and _keyring() is None:
+    if why in ("off", "unusable"):
         _tell_once("no-keychain", "tares: the saved key is in the OS keychain, which cannot be used here "
                    "(TARES_KEYRING is not on, or no keychain works on this machine). Run tares login again.")
+    elif why == "error":
+        _tell_once("keychain-error", "tares: the saved key is in the OS keychain, which would not give it "
+                   "(locked, or access was denied). Unlock it and try again.")
     return None
+
+
+def _unreadable(why: str, data: dict, what: str) -> str:
+    """Plain words for a saved key that is in the keychain and cannot be read now, and what to do."""
+    if why == "off":
+        cause = "the OS keychain is off here (TARES_KEYRING is not on)"
+        fix = "Run this again with TARES_KEYRING=on."
+    elif why == "unusable":
+        cause = "no OS keychain works on this machine now"
+        fix = "Run this again on the machine that saved it, or with its keychain working."
+    else:
+        cause = "the OS keychain would not give it (locked, or access was denied)"
+        fix = "Unlock the keychain, allow the access, and run this again."
+    key_id = data.get("key_id") or ""
+    named = f" (key {key_id} on {data.get('cell') or data.get('cell_url')})" if key_id else ""
+    return (f"{what}: the saved key{named} is in the OS keychain, but {cause}, so it cannot be read "
+            f"and taken off the workspace. {login_file()} and the keychain entry were left as they are. {fix}")
 
 
 def _migrate(data: dict) -> bool:
@@ -173,7 +216,7 @@ def _migrate(data: dict) -> bool:
     rest["key_store"] = "keychain"
     try:
         _write_file(rest)
-    except OSError:
+    except (OSError, CrewError):     # a file that cannot be made private is left as it was
         return False
     _tell_once("migrated", f"tares: moved your saved key from {login_file()} into {keychain_name(kr)}.")
     return True
@@ -181,12 +224,26 @@ def _migrate(data: dict) -> bool:
 
 def _save(data: dict) -> str:
     """Save a login: the key in the keychain and the rest in login.json; where no keychain works, all of
-    it in login.json (0600). Returns where the key went: the keychain's name, or the file's path."""
+    it in login.json (0600). Returns where the key went: the keychain's name, or the file's path. When
+    the file cannot be written, the keychain entry goes back to what it held and the error is raised."""
     kr = _keyring()
     meta = {k: v for k, v in data.items() if k not in ("key", "key_store")}
-    if kr is not None and _kc_set(kr, _account(data), data["key"]):
-        _write_file({**meta, "key_store": "keychain"})
-        return keychain_name(kr)
+    if kr is not None:
+        account = _account(data)
+        try:
+            before = kr.get_password(KEYRING_SERVICE, account)
+        except Exception:  # noqa: BLE001
+            before = None
+        if _kc_set(kr, account, data["key"]):
+            try:
+                _write_file({**meta, "key_store": "keychain"})
+            except (OSError, CrewError):
+                if before:
+                    _kc_set(kr, account, before)
+                else:
+                    _kc_delete(account)
+                raise
+            return keychain_name(kr)
     _write_file({**meta, "key": data["key"], "key_store": "file"})
     return str(login_file())
 
@@ -340,6 +397,14 @@ def mcp_setting(cell_url: str) -> str:
 def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) -> int:
     import httpx
     cloud = (cloud or os.getenv("TARES_CLOUD_URL") or DEFAULT_CLOUD).rstrip("/")
+    # A saved key that cannot be read cannot be taken off the workspace either: stop before a new one is
+    # made, so the last record of a live key is never overwritten.
+    old_data, old_key, why = _load()
+    if old_data is not None and not old_key and why:
+        print(_unreadable(why, old_data, "tares login") + f" Or, to start over, delete {login_file()} "
+              "and remove that key yourself under Security > API keys.")
+        return 1
+    old = {**old_data, "key": old_key} if old_data is not None and old_key else None
     machine = _machine()
     state = secrets.token_urlsafe(24)
     # PKCE (RFC 7636): the page only ever sees the challenge; /exchange wants the verifier, which
@@ -395,8 +460,13 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
               f"tares login needs {MIN_VERSION_TEXT} or later. Nothing was saved.")
         return 1
 
-    old = saved()
-    where = _save(data)
+    try:
+        where = _save(data)
+    except (OSError, CrewError) as e:
+        _revoke(data)
+        print(f"tares login: could not save the login ({e}). The key just made for this machine was "
+              f"removed, and the saved login (if any) is as it was.")
+        return 1
     if old and _account(old) != _account(data):
         _kc_delete(_account(old))        # the previous workspace's key leaves the keychain too
     _crew_follows(data["key"])
@@ -408,9 +478,13 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
     print(f"tares login: this machine ({machine}) is connected to {data['cell']} "
           f"({data['cell_url']}), Tares {version}.")
     if where == str(login_file()):
-        why = ("no OS keychain works on this machine" if _keyring() is None
-               else "the OS keychain would not take it")
-        print(f"  The key is saved in {where}, readable only by you, because {why}.")
+        if not _gate_on():
+            reason = "the OS keychain is off (set TARES_KEYRING=on to use it)"
+        elif _keyring() is None:
+            reason = "no OS keychain works on this machine"
+        else:
+            reason = "the OS keychain would not take it"
+        print(f"  The key is saved in {where}, readable only by you, because {reason}.")
     else:
         print(f"  The key is saved in {where}.")
     print(f"  tares factory and tares status use it now. {mcp_setting(data['cell_url'])}")
@@ -418,11 +492,16 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
 
 
 def logout() -> int:
-    data = saved()
-    if not data:
+    data, key, why = _load()
+    if data is not None and not key and why:
+        # The login is there but its key cannot be read: deleting it would lose the last record of a live key.
+        print(_unreadable(why, data, "tares logout"))
+        return 1
+    if not key:
         _forget()
         print("tares logout: this machine is not signed in.")
         return 0
+    data = {**data, "key": key}
     ok, _how = _revoke(data)
     _forget()
     crew = _crew_follows("", data["key"])

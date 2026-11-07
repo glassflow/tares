@@ -58,6 +58,7 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_MCP_HOST`, `TARES_MCP_PORT`, `TARES_MCP_TRANSPORT` | the MCP endpoint (127.0.0.1:8788, streamable-http) |
 | `TARESD_URL` | where `tares-mcp` finds the daemon |
 | `TARES_AUTH_TOKEN` | turns auth on; also the token `tares-mcp` presents |
+| `TARES_KEYRING` | `on` lets `tares login` keep its key in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `login.json`; off by default, because the plugin's MCP header helper, `ship.py` and the bash doctor still read the file |
 | `TARES_CATALOG` | a catalog file to import on first boot (only while the catalog is empty) |
 | `ANTHROPIC_API_KEY` | model key for Tares agents and Ask; a key saved in the console wins |
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -29,6 +30,14 @@ ROOT = tempfile.mkdtemp()
 os.environ["HOME"] = os.path.join(ROOT, "home")
 for k in [k for k in os.environ if k.startswith(("TARES", "FACTORY"))]:
     os.environ.pop(k)
+# a regression in the TARES_KEYRING gate must fail this test, never reach a person's OS keychain
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+try:
+    import keyring  # noqa: E402
+    import keyring.backends.fail  # noqa: E402
+    keyring.set_keyring(keyring.backends.fail.Keyring())
+except ImportError:
+    pass
 
 from tares.crew import client as C  # noqa: E402
 from tares.crew import state  # noqa: E402
@@ -477,6 +486,85 @@ ck("prime asks Tares, keeps the key and reads the settings", pc.tares_state == "
    and pc._settings is not None)
 pd, _ = machine({"TARES_FACTORY_URL": DEAD})
 ck("prime stops plainly when no Tares answers", "no Tares answers at" in str(err_of(pd.prime)))
+
+print("time limits: the numbers bash's curl --max-time gave, and a whole-request cap on the body")
+import httpx  # noqa: E402
+
+
+class _Resp:
+    status_code = 200
+
+    def iter_bytes(self):
+        yield b'{"status":"ok"}'
+
+
+class _Stream:
+    def __enter__(self):
+        return _Resp()
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class RecordingHttp:
+    """Stands in for httpx.Client: records the Timeout each request is made with, answers 200, no network."""
+
+    def __init__(self):
+        self.timeouts = []
+
+    def stream(self, method, url, headers=None, content=None, timeout=None):
+        self.timeouts.append(timeout)
+        return _Stream()
+
+    def close(self):
+        pass
+
+
+tc, _ = machine()
+rec = tc._http = RecordingHttp()
+tc.tares_http("GET", "/api/crew/anything")
+tc.key_ok(TOKEN)
+tc.tares_on()
+tc.mcp_on()
+ck("tares_http waits 15 seconds, key_ok 10, /health 5 and the MCP initialize 5 (curl --max-time)",
+   rec.timeouts == [httpx.Timeout(15), httpx.Timeout(10), httpx.Timeout(5), httpx.Timeout(5)]
+   and all(t.connect == t.read == t.write == t.pool for t in rec.timeouts) and rec.timeouts[0].read == 15,
+   [(t.connect, t.read) for t in rec.timeouts])
+tc._http = None
+
+
+class Drip(BaseHTTPRequestHandler):
+    """Answers 200 at once, then one byte every quarter second for ten seconds: every single read is
+    quick, so only a limit on the whole request stops it."""
+
+    def do_GET(self):  # noqa: N802
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        try:
+            for _ in range(40):
+                self.wfile.write(b"x")
+                self.wfile.flush()
+                time.sleep(0.25)
+        except OSError:
+            pass
+
+    def log_message(self, *a):
+        pass
+
+
+drip = ThreadingHTTPServer(("127.0.0.1", 0), Drip)
+threading.Thread(target=drip.serve_forever, daemon=True).start()
+dc, _ = machine()
+t0 = time.monotonic()
+e = err_of(dc._request, "GET", f"http://127.0.0.1:{drip.server_address[1]}/slow", {}, None, 1)
+took = time.monotonic() - t0
+ck("a body that keeps trickling in is cut at the limit in total, with curl's text",
+   isinstance(e, TaresHTTPError) and str(e).startswith("curl: (28) Operation timed out after 1000 milliseconds with ")
+   and e.status is None, (e, took))
+ck("...after about a second, not when the ten-second trickle ends", 0.9 <= took < 4, took)
+drip.shutdown()
+dc.close()
 
 print("the key is in no log line and no process was started")
 ck("no header but Authorization (and no URL or body) ever carried the key",

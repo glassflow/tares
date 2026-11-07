@@ -297,7 +297,7 @@
       "dropped": false,
       "python": "tares.crew.client:TaresClient.tares_http",
       "ported": true,
-      "note": ""
+      "note": "Time limits differ from curl: curl --max-time 15 caps the whole request; httpx has only a limit per step (connect, write, each read). The client also stops a body that is still coming in after 15 seconds in total; waiting for the first byte can still take up to three steps (45 seconds). Same for tares_on, mcp_on and key_ok."
     },
     {
       "name": "uri",
@@ -341,7 +341,7 @@
       "dropped": false,
       "python": "tares.crew.client:TaresClient.keep_token",
       "ported": true,
-      "note": ""
+      "note": "Differs from bash on purpose: when the key file cannot be made private (chmod, or icacls on Windows) the client raises CrewError and writes nothing, where bash ignores a failed write and chmod. A key file that cannot be made private is not kept."
     },
     {
       "name": "crew_projects",
