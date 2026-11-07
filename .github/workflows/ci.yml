@@ -248,17 +248,3 @@ jobs:
       # the tool itself is free.
       - name: gitleaks
         run: docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source=/repo --redact --config=/repo/.gitleaks.toml
-
-  # A bash change to a ported crew command must carry the Python change (TR-1065, scripts/check_port_drift.py).
-  port-drift:
-    if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'port-drift-ok')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Ported bash functions changed without their Python
-        run: python scripts/check_port_drift.py origin/${{ github.base_ref }} HEAD

@@ -226,6 +226,106 @@ code, out = r.run()
 ck("a package module is named by its __init__.py", code == 1 and "tares/crew/pkg/__init__.py" in out, f"exit {code}: {out}")
 r.done()
 
+# F1: definitions that are not `name() {` alone on the line must be seen too
+STYLES = """#!/usr/bin/env bash
+oneliner() { jq -rn --arg p "$1" '$p | @uri'; }
+commented() { # a note after the brace; the body follows
+  echo "commented ${1}"
+}
+continued() { crew_projects | jq -c --arg p "$1" \\
+  '.[] | select(.name == $p)'; }
+trailing() { pace_json | jq -e '.tried | length'; }          # a note after the closing brace
+afterwards() {
+  echo "afterwards ${1}"
+}
+"""
+
+
+def styles_ledger(names):
+    led = ledger()
+    led["functions"] = [{"name": n, "kind": "function", "ticket": "TR-1", "dropped": False, "python": "tares.crew.%s:run" % n,
+                         "ported": True, "note": ""} for n in names]
+    led["helpers"] = []
+    return led
+
+
+STYLE_NAMES = ["oneliner", "commented", "continued", "trailing", "afterwards"]
+for name, old, new_ in (("oneliner", "@uri", "@uri2"), ("commented", 'echo "commented ${1}"', 'echo "commented ${1} x"'),
+                        ("continued", "select(.name == $p)", "select(.id == $p)"), ("trailing", "length", "length + 1"),
+                        ("afterwards", 'echo "afterwards ${1}"', 'echo "afterwards"')):
+    r = Repo({FACTORY: STYLES, "tares/crew/%s.py" % name: "x = 1\n"}, styles_ledger(STYLE_NAMES))
+    r.branch()
+    r.commit({FACTORY: STYLES.replace(old, new_)})
+    code, out = r.run()
+    ck("a change in the %s() style function exits 1 and names it" % name, code == 1 and "%s()" % name in out, f"exit {code}: {out}")
+    others = [n for n in STYLE_NAMES if n != name and ("%s()" % n) in out]
+    ck("only %s() is named (each style ends at its own end)" % name, not others, out)
+    r.done()
+r = Repo({FACTORY: STYLES}, styles_ledger(STYLE_NAMES))
+r.branch()
+r.commit({FACTORY: STYLES.replace("# a note after the closing brace", "# another note")})
+code, out = r.run()
+ck("a change only in the comment after a one-line function counts as a change", code == 1 and "trailing()" in out, f"exit {code}: {out}")
+r.done()
+
+# a ported row whose function the parser cannot find must not pass quietly
+led = styles_ledger(STYLE_NAMES)
+led["functions"].append({"name": "not_there", "kind": "function", "ticket": "TR-1", "dropped": False, "python": "tares.crew.x:y",
+                         "ported": True, "note": ""})
+r = Repo({FACTORY: STYLES}, led)
+r.branch()
+r.commit({FACTORY: STYLES.replace("@uri", "@uri2")})
+code, out = r.run()
+ck("a ported row whose function is in neither revision exits 2 and names it", code == 2 and "not_there" in out, f"exit {code}: {out}")
+r.done()
+led = ledger()
+led["helpers"][0]["file"] = "claude-plugin/bin/unknown-script"
+r = Repo(None, led)
+r.branch()
+code, out = r.run()
+ck("a ported helper row with an unwatched file exits 2 and names it", code == 2 and "guard_check" in out and "unknown-script" in out and "not a watched script" in out, f"exit {code}: {out}")
+r.done()
+# but a ported function the PR removes (it is there at the merge base) is a drift, not an error
+r = scenario({FACTORY: BASH.replace('neighbour() {\n  echo "next ${1}"\n}\n', '')})
+code, out = r.run()
+ck("a ported function removed by the PR is a drift (exit 1), not an error", code == 1 and "neighbour" in out, f"exit {code}: {out}")
+r.done()
+
+# F3: a sibling file inside a package counts as touching the package
+led = ledger()
+led["functions"][2]["python"] = "tares.crew.pkg:run"
+r = Repo({FACTORY: BASH, GUARD: GUARD_SH, "tares/crew/pkg/__init__.py": "def run(): pass\n"}, led)
+r.branch()
+r.commit({FACTORY: BASH.replace('echo "next ${1}"', 'echo "next"'), "tares/crew/pkg/helpers.py": "x = 1\n"})
+code, out = r.run()
+ck("a changed file inside the package folder counts as the package's Python change", code == 0, f"exit {code}: {out}")
+r.done()
+r = Repo({FACTORY: BASH, GUARD: GUARD_SH, "tares/crew/pkg/__init__.py": "def run(): pass\n"}, led)
+r.branch()
+r.commit({FACTORY: BASH.replace('echo "next ${1}"', 'echo "next"'), "tares/crew/pkgother/x.py": "x = 1\n"})
+code, out = r.run()
+ck("a file in a folder that only shares the package's name prefix does not count", code == 1, f"exit {code}: {out}")
+r.done()
+
+# F3: a dropped row is not checked, even when it says ported
+led = ledger()
+led["functions"][0]["dropped"] = "not needed in Python"
+r = Repo(None, led)
+r.branch()
+r.commit({FACTORY: BASH.replace('tr A-Z a-z', 'tr A-Z a-z | sed s/x/y/')})
+code, out = r.run()
+ck("a dropped row is not checked", code == 0, f"exit {code}: {out}")
+r.done()
+
+# F3: a function defined twice is compared as a whole (a change in the first definition counts)
+DUP = BASH + 'slugify() {\n  echo "second ${1}"\n}\n'
+r = Repo({FACTORY: DUP, GUARD: GUARD_SH, "tares/crew/state.py": "def slugify(): pass\n"})
+r.branch()
+r.commit({FACTORY: DUP.replace('tr A-Z a-z', 'tr A-Z a-z | sed s/x/y/')})
+code, out = r.run()
+ck("a change in the first of two definitions of one name exits 1", code == 1 and "slugify" in out, f"exit {code}: {out}")
+r.done()
+
 # the base moved ahead after the branch point: that is not the PR's change
 r = Repo()
 r.branch()
@@ -279,6 +379,23 @@ ck("a missing command line argument exits 2", res.returncode == 2, f"exit {res.r
 src = CHECK.read_text(encoding="utf-8")
 ck("the script imports no duckdb, fastapi or tares", not any(w in src for w in ("import duckdb", "import fastapi", "import tares", "from tares")))
 ck("the script has no em dash", chr(0x2014) not in src)
+
+# the real tree: the parser sees every top-level definition, and every ported ledger row (F1: it used to miss 14)
+sys.path.insert(0, str(ROOT / "scripts"))
+import check_port_drift as cpd  # noqa: E402
+import re  # noqa: E402
+
+for rel in cpd.SCRIPTS:
+    text = (ROOT / rel).read_text(encoding="utf-8")
+    defs = {m.group(1) for line in text.splitlines() for m in [cpd.DEF_RE.match(line)] if m}
+    seen = cpd.functions(text)
+    ck("every top-level definition of %s is parsed" % rel, defs == set(seen), "missing: %s" % sorted(defs - set(seen))[:5])
+led_real = json.loads((ROOT / "scripts" / "crew_ledger.json").read_text(encoding="utf-8"))
+for rel, name, spec in cpd.ported_rows(led_real):
+    if name not in cpd.functions((ROOT / rel).read_text(encoding="utf-8")):
+        ck("ported row %s() is found in %s" % (name, rel), False)
+ck("every ported ledger row is found in its script", True)
+ck("the check watches at least the 32 rows ported by M1", len(cpd.ported_rows(led_real)) >= 32)
 
 # the real tree: this branch has no bash change yet against itself
 res = subprocess.run([sys.executable, str(CHECK), "HEAD", "HEAD"], capture_output=True, text=True, cwd=str(ROOT))

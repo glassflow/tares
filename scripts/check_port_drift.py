@@ -21,15 +21,23 @@ commit it did not make. In CI <head> is the PR's merge commit and <base> is orig
 
 Which functions: those of claude-plugin/bin/factory and of the helper scripts the ledger's `helpers`
 section lists (claude-plugin/bin/factory-heavy, mcp-headers, hooks/guard.sh, hooks/session-start.sh). A
-function runs from the line `name() {` (at the start of the line) to the next line that is exactly `}`,
-the style of these files. Braces are never counted, because `${x}`, heredocs and `case` would break that.
-Functions defined inside another function (indented) are part of the outer one. A function whose body
+function starts at a line `name() {` (at the start of the line; a comment or a command may follow the
+brace) and runs to the next line that is `}` (a trailing comment is fine), the style of these files. A line
+like `name() { cmd; }` is a one-line function, even when its command goes on over a backslash. Braces are never counted otherwise, because `${x}`, heredocs
+and `case` would break that. Functions defined inside another function (indented) are part of the outer one. A function whose body
 differs, that was removed or that was renamed counts as changed; a renamed one is found by its old name.
 
 Escape hatch: `--labels` containing `port-drift-ok` prints a note and exits 0 before any work.
 
+A ported row whose function is found in neither revision, or whose `file` is not one of the watched scripts,
+is an error (exit 2), never a pass: a check that cannot see a function must not say it is unchanged.
+
+What "changed its Python" means: the row's Python module file is in the PR's diff. Any edit to that file
+counts, so a module several rows share (today tares/crew/client.py) is satisfied by any edit to it. The check
+does not compare the Python symbol itself.
+
 Exit status: 0 when clean, 1 when a ported function changed without its Python file, 2 for a bad command
-line, an unreadable ledger or an unknown revision.
+line, an unreadable ledger, an unknown revision or a ported row it cannot find.
 """
 from __future__ import annotations
 
@@ -46,7 +54,9 @@ import check_ledger  # noqa: E402  (the same file lists as the ledger check, no 
 
 ROOT = HERE.parent
 SKIP_LABEL = "port-drift-ok"
-DEF_RE = re.compile(r"^([A-Za-z_][\w.:+-]*)\(\)\s*\{\s*$")
+DEF_RE = re.compile(r"^([A-Za-z_][\w.:+-]*)\(\)\s*\{(.*)$")
+ONE_LINE_END_RE = re.compile(r"[;&]\s*\}\s*(#.*)?$")  # `name() { cmd; }` and `name() { cmd; }  # note`: bash needs the ; (or &) before the closing brace
+CLOSE_RE = re.compile(r"^\}\s*(#.*)?$")
 SCRIPTS = [check_ledger.FACTORY_REL] + list(check_ledger.HELPER_RELS)
 
 
@@ -82,9 +92,16 @@ def functions(text):
         if not m:
             i += 1
             continue
-        j = i + 1
-        while j < len(lines) and lines[j] != "}":
-            j += 1
+        rest, k = m.group(2).strip(), i
+        while lines[k].rstrip().endswith("\\") and k + 1 < len(lines):  # the command goes on over a backslash
+            k += 1
+            rest += " " + lines[k].strip()
+        if not rest.startswith("#") and ONE_LINE_END_RE.search(rest):
+            j = k  # a one-line function (its command may run over several lines)
+        else:
+            j = i + 1
+            while j < len(lines) and not CLOSE_RE.match(lines[j]):
+                j += 1
         body = "\n".join(lines[i:j + 1])
         name = m.group(1)
         out[name] = out[name] + "\n" + body if name in out else body
@@ -127,8 +144,9 @@ def ported_rows(data):
             if not isinstance(spec, str) or not spec.strip():
                 continue
             rel = check_ledger.FACTORY_REL if section == "functions" else row.get("file")
-            if rel in SCRIPTS:
-                out.append((rel, row["name"], spec))
+            if rel not in SCRIPTS:
+                raise Bad("ported row %s() names the file %r, which is not a watched script" % (row["name"], rel))
+            out.append((rel, row["name"], spec))
     return out
 
 
@@ -164,7 +182,11 @@ def check(repo, base, head, ledger):
 
     drifts, seen = [], set()
     for rel, name, spec in rows:
-        if funcs(mb, rel).get(name) == funcs(head_sha, rel).get(name):
+        before, after = funcs(mb, rel).get(name), funcs(head_sha, rel).get(name)
+        if before is None and after is None:
+            raise Bad("the ported function %s() of %s is in neither %s nor %s; the ledger or this parser is wrong"
+                      % (name, rel, mb[:9], head_sha[:9]))
+        if before == after:
             continue
         pyfile = python_file(repo, head_sha, spec)
         pkg_dir = pyfile.rsplit("/", 1)[0] + "/" if pyfile.endswith("/__init__.py") else None
