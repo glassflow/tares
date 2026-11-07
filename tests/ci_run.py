@@ -13,7 +13,14 @@ ee/tests/ci_list.txt (ee/tests/<name>.py) and ee/tests/factory/ci_list.txt
 (ee/tests/factory/<name>_test.sh, shown as ee-factory:<name>) the same way. Shards are balanced by
 WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT_WEIGHT. A test
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
-failure."""
+failure.
+
+The environment is passed on as it is. With FACTORY_BIN set to a command ("tares factory", or
+"python -m tares.crew") the bash suites run that command in place of the bash script; a suite that edits a
+copy of the plugin also sets TARES_PLUGIN_DIR to that copy, so the command hands bash the copy. Then
+TARES_FACTORY_ENGINE picks the engine: bash runs every command in bash through the dispatcher; python
+runs only the ported commands and fails the rest with exit 2 ("not yet ported"), so it passes a suite only
+once every command the suite uses is ported. Mac and Linux only (the suites are bash)."""
 import argparse
 import os
 import subprocess

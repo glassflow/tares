@@ -5,7 +5,7 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
-F="$here/../../claude-plugin/bin/factory"
+F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$here/../../claude-plugin/bin/factory}"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
