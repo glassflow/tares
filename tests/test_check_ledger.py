@@ -209,5 +209,46 @@ ck("every row has an owner or a reason", all(
     (isinstance(r.get("ticket"), str) and re.match(r"^TR-\d+$", r["ticket"])) or (isinstance(r.get("dropped"), str) and r["dropped"].strip())
     for k, v in load().items() if isinstance(v, list) for r in v))
 
+# callers before callees (TR-1072): a function that a lower-numbered ticket calls is owned by that ticket or an earlier one,
+# or its row has a note that names the caller's ticket (a partial port or a stub there).
+# CALLS is read off the bash by hand (name matching finds calls in strings and comments too): add a pair when a ticket's
+# ownership changes or a function gains a caller. Read-only views (cmd_crew, usage, ...) and desk_json (ported with the client) are left out.
+CALLS = [
+    ("launch", "kit_dir"), ("launch", "iw_launch_note"), ("launch", "pace_launch_note"), ("launch", "kit_version"),
+    ("boot_prompt", "idle_wake_on"), ("boot_prompt", "idle_wake_note"),
+    ("cmd_spawn", "halted"), ("cmd_spawn", "pace_read"),
+    ("cmd_crew_up", "start_watch"), ("cmd_crew_up", "installed_tares"), ("cmd_crew_up", "clash_text"),
+    ("cmd_down", "stop_watch"), ("cmd_revive", "rearm_text"), ("regrant_station", "rearm_text"), ("rearm_text", "pace_read"),
+    ("cc_movable", "cc_backoff"), ("cc_pick", "cc_backoff"),
+    ("claude_move", "cc_delay"), ("claude_move", "cc_retry_sync"), ("claude_move", "prune_spares"),
+    ("cmd_crew_update", "upgrades_frozen"), ("watch_claude_move", "upgrades_frozen"),
+    ("cmd_doctor", "doctor_cmux"), ("cmd_doctor", "doctor_lsp"),
+]
+num = lambda t: int(t.split("-")[1])
+
+
+def late_pairs(functions):
+    fn = {r["name"]: r for r in functions}
+    late = []
+    for caller, callee in CALLS:
+        ct, et = fn[caller]["ticket"], fn[callee]["ticket"]
+        if num(et) > num(ct) and not re.search(r"\b%s\b" % re.escape(ct), fn[callee].get("note", "")):
+            late.append("%s (%s) calls %s (%s)" % (caller, ct, callee, et))
+    return late
+
+
+late = late_pairs(load()["functions"])
+ck("no function is owned by a later ticket than its caller unless its note names the caller's ticket (%d pairs)" % len(CALLS), not late, "; ".join(late))
+# the check bites: without its note a late callee is named; a note naming a longer ticket number does not count
+data = load()
+for r in data["functions"]:
+    if r["name"] == "kit_version":
+        r["note"] = ""
+ck("a late callee with no note is caught", late_pairs(data["functions"]) == ["launch (TR-953) calls kit_version (TR-965)"], str(late_pairs(data["functions"])))
+for r in data["functions"]:
+    if r["name"] == "kit_version":
+        r["note"] = "Called by launch (TR-9530)."
+ck("a note naming TR-9530 does not stand for TR-953", len(late_pairs(data["functions"])) == 1)
+
 print(f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)
