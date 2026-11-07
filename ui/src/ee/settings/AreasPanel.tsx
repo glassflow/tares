@@ -1,10 +1,12 @@
+// Tares enterprise licence, see ee/LICENSE
 import { useState } from "react";
 
-import { api } from "../api";
-import type { Area } from "../types";
-import ActionError from "./ActionError";
-import ConfirmDialog from "./ConfirmDialog";
-import { ErrorState, Picker, usePolling } from "./bits";
+import { api } from "../../api";
+import type { Area } from "../../types";
+import ActionError from "../../components/ActionError";
+import ConfirmDialog from "../../components/ConfirmDialog";
+import { ErrorState, Picker, usePolling } from "../../components/bits";
+import { deleteArea, setArea } from "../api";
 
 // Who owns each GitHub repo (TR-627). A project grant that names a repo waits for its owner to
 // agree. An admin sets, changes and removes owners; anyone else may take a repo nobody owns yet,
@@ -36,7 +38,7 @@ export default function AreasPanel() {
     if (!draft) return;
     setBusy(true); setErr(undefined);
     try {
-      await api.setArea(draft.repo.trim(), draft.person, draft.note.trim());
+      await setArea(draft.repo.trim(), draft.person, draft.note.trim());
       setDraft(undefined);
       reload();
     } catch (e) { setErr(e); }
@@ -44,7 +46,7 @@ export default function AreasPanel() {
   };
   const remove = async (a: Area) => {
     setRemoving(undefined); setErr(undefined);
-    try { await api.deleteArea(a.repo); reload(); }
+    try { await deleteArea(a.repo); reload(); }
     catch (e) { setErr(e); }
   };
 
