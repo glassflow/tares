@@ -45,6 +45,8 @@ REQUIRED = ["tests/test_crew_packaging.py", "tests/factory/parity.py"]
 
 SUMMARY = re.compile(r"(\d+) passed, (\d+) failed")
 TAIL_LINES = 40
+MAX_FAIL_LINES = 60
+FAIL_LINE = re.compile(r"^\s*FAIL\b")
 
 
 class Result:
@@ -194,8 +196,14 @@ def main(argv):
     ran_tests = [r for r in ran if r.kind != "coverage"]  # the coverage report alone is not a test
     idle = [r for r in results if not r.failed and not r.executed]
     for r in failed:
+        lines = r.output.rstrip("\n").splitlines()
+        # a test that prints a long list of "ok" lines after its failure would hide it in the tail
+        fails = [ln for ln in lines if FAIL_LINE.match(ln)]
+        if fails:
+            print("\n---- %s (exit %d), its %d FAIL lines ----" % (r.name, r.code, len(fails)))
+            print("\n".join(ln[:600] for ln in fails[:MAX_FAIL_LINES]))
         print("\n---- %s (exit %d), last %d lines ----" % (r.name, r.code, TAIL_LINES))
-        print("\n".join(r.output.rstrip("\n").splitlines()[-TAIL_LINES:]))
+        print("\n".join(lines[-TAIL_LINES:]))
     print("\nci_windows: %d ran and passed, %d failed, %d skipped (ran nothing)"
           % (len(ran), len(failed), len(idle)))
     for r in idle:

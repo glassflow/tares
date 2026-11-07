@@ -1013,9 +1013,9 @@ attempt(lambda: state.merge_crew_defaults(CrewPaths.at(hb2)))
 ck("merge_crew_defaults reads a crew.json with a byte order mark and keeps the person's value", attempt(lambda: state.read_json(cfgp)["human"]["name"]) == "Ana", short(attempt(lambda: state.read_json(cfgp, None))))
 
 print("\n== import ==")
-probe = ("import sys, time\nsys.path.insert(0, %r)\nt = time.time()\nimport tares.crew\ndt = time.time() - t\n"
+probe = ("import sys, time\nsys.path.insert(0, %r)\nbefore = set(sys.modules)\nt = time.time()\nimport tares.crew\ndt = time.time() - t\n"
          "std = set(sys.stdlib_module_names) | set(sys.builtin_module_names) | {'__main__', '_virtualenv'}\n"
-         "extra = sorted({m.split('.')[0] for m in sys.modules} - std - {'tares'})\n"
+         "extra = sorted({m.split('.')[0] for m in set(sys.modules) - before} - std - {'tares'})\n"
          "heavy = [m for m in sys.modules if m.split('.')[0] in ('duckdb','fastapi','uvicorn','starlette','httpx','requests','psutil','pydantic','numpy','pandas','anthropic','openai','filelock') or m in ('tares.daemon','tares.cli','tares.store')]\n"
          "import json\nprint(json.dumps({'extra': extra, 'heavy': heavy, 'secs': dt, 'tares': sorted(m for m in sys.modules if m.startswith('tares'))}))\n") % str(ROOT)
 r = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True, cwd=str(T))

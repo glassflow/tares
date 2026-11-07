@@ -230,7 +230,10 @@ ck("...with errors replaced, not raised", all(kw.get("errors") == "replace" for 
 log.clear()
 with mock.patch.object(sys, "stdout", Stream(log, "out")), mock.patch.object(sys, "stderr", Stream(log, "err")), \
         mock.patch.object(os, "execve", lambda *a: None):
-    dispatch.run(["roster"], {}, "/x")
+    try:
+        dispatch.run(["roster"], {}, "/x")
+    except SystemExit:  # Windows has no bash route: an unported command exits 2 there
+        pass
 ck("the bash route leaves the streams alone", log == [], short(log))
 ns = NoReconfigure()
 with ported({("zu",): lambda argv, env: print("é名") or 0}), mock.patch.object(sys, "stdout", ns), mock.patch.object(sys, "stderr", NoReconfigure()):

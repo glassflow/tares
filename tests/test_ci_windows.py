@@ -95,6 +95,11 @@ ck("the failing test is named, with its output", "FAIL  tests/test_crew_state.py
 ck("the others still ran", "tests/test_crew_packaging.py" in out and "parity.py alpha" in out, out)
 ck("the summary names the failure", "ci_windows: FAIL: tests/test_crew_state.py" in out, out)
 
+print("a failure early in a long output is not lost in the tail")
+LONG = "print('  FAIL the early one  detail-xyz')\nfor i in range(120):\n    print('  ok   filler %d' % i)\nprint('0 passed, 1 failed')\nraise SystemExit(1)\n"
+code, out = runner(tree({"test_crew_state.py": LONG}, parity()))
+ck("its FAIL line is printed on its own", code == 1 and "its 1 FAIL lines" in out and out.count("FAIL the early one  detail-xyz") == 1, out)
+
 print("a test that crashes (a traceback, not a clean failure)")
 code, out = runner(tree({"test_crew_state.py": "raise RuntimeError('boom')\n"}, parity()))
 ck("exit 1 and the traceback is shown", code == 1 and "RuntimeError: boom" in out, out)
