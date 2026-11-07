@@ -1265,7 +1265,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting."
+      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which port it with a stub for pace_read until TR-962; TR-961 completes it."
     },
     {
       "name": "pace_read",

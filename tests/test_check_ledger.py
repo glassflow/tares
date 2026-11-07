@@ -216,7 +216,7 @@ CALLS = [
     ("boot_prompt", "idle_wake_on"), ("boot_prompt", "idle_wake_note"),
     ("cmd_spawn", "halted"), ("cmd_spawn", "pace_read"),
     ("cmd_crew_up", "start_watch"), ("cmd_crew_up", "installed_tares"), ("cmd_crew_up", "clash_text"),
-    ("cmd_down", "stop_watch"),
+    ("cmd_down", "stop_watch"), ("cmd_revive", "rearm_text"),
 ]
 fn = {r["name"]: r for r in load()["functions"]}
 num = lambda t: int(t.split("-")[1])
