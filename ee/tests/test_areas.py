@@ -11,7 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 import tares.mcp_server as m
-import tares.mcp_factory as mf
+from tares_ee import mcp_areas as ma
+from tares.factory import norm_repo
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
 
@@ -63,7 +64,7 @@ def owners(rows):
 
 def unit():
     print("== the store helper ==")
-    from tares import areas
+    from tares_ee import areas
     from tares.store import Store
     s = Store(os.path.join(TMP, "unit.duckdb"))
     kiran = s.create_person("Kiran", "kiran@x.dev")
@@ -87,11 +88,11 @@ def unit():
     for pasted in ("https://github.com/GlassFlow/Tares", "https://github.com/glassflow/tares.git",
                    "github.com/glassflow/tares/", "https://www.github.com/glassflow/tares/pull/393",
                    "git@github.com:glassflow/tares.git", "  http://github.com/glassflow/tares  "):
-        ck(f"a pasted address is the repo: {pasted.strip()}", areas.norm_repo(pasted) == "glassflow/tares",
-           areas.norm_repo(pasted))
+        ck(f"a pasted address is the repo: {pasted.strip()}", norm_repo(pasted) == "glassflow/tares",
+           norm_repo(pasted))
     for bad in ("https://gitlab.com/glassflow/tares", "https://github.com/glassflow"):
         try:
-            areas.norm_repo(bad); ok = False
+            norm_repo(bad); ok = False
         except ValueError:
             ok = True
         ck(f"not a GitHub repo: {bad} refused", ok)
@@ -267,31 +268,31 @@ async def auth_on():
 
             print("== the MCP tools ==")
             who = {"k": J_}
-            m._cx = mf._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=who["k"])
-            m.TARESD = mf.TARESD = B
+            m._cx = lambda timeout=10: httpx.AsyncClient(timeout=timeout, headers=who["k"])
+            m.TARESD = B
             who["k"] = ROOT
-            out = await mf.set_area("glassflow/tares-cloud", "KIRAN@x.dev")
+            out = await ma.set_area("glassflow/tares-cloud", "KIRAN@x.dev")
             ck("set_area by email, as an admin", json.loads(out)["person"]["id"] == kiran, out)
-            ck("... the list shows it", [a["repo"] for a in json.loads(await mf.list_areas())]
+            ck("... the list shows it", [a["repo"] for a in json.loads(await ma.list_areas())]
                == ["glassflow/tares-cloud"])
-            out = await mf.set_area("Glassflow/Tares-Cloud", jo)
+            out = await ma.set_area("Glassflow/Tares-Cloud", jo)
             ck("... by id and in another case, it replaces the one entry", json.loads(out)["person"]["id"] == jo
-               and len(json.loads(await mf.list_areas())) == 1, out)
+               and len(json.loads(await ma.list_areas())) == 1, out)
             who["k"] = J_
-            out = await mf.set_area("glassflow/mcp-claim", "jo@x.dev")
+            out = await ma.set_area("glassflow/mcp-claim", "jo@x.dev")
             ck("a person claims an unowned repo through the tool", json.loads(out)["person"]["id"] == jo, out)
-            out = await mf.set_area("glassflow/mcp-claim", "kiran@x.dev")
+            out = await ma.set_area("glassflow/mcp-claim", "kiran@x.dev")
             ck("... but cannot give it to Kiran: the refusal is text", out.startswith("error 403"), out)
-            out = await mf.set_area("glassflow/x", "ghost@x.dev")
+            out = await ma.set_area("glassflow/x", "ghost@x.dev")
             ck("... an unknown person is named", "ghost@x.dev" in out and "no person" in out, out)
-            out = await mf.set_area("justone", "jo@x.dev")
+            out = await ma.set_area("justone", "jo@x.dev")
             ck("... a repo without owner/name is refused", "owner/name" in out, out)
-            before = json.loads(await mf.list_areas())
+            before = json.loads(await ma.list_areas())
             for bad in ("glassflow/a#b", "glassflow/a?b", "glassflow/a b"):
-                out = await mf.set_area(bad, "jo@x.dev")
+                out = await ma.set_area(bad, "jo@x.dev")
                 ck(f"... {bad!r} is refused, not cut short at the # or ?",
                    "owner/name" in out and not out.startswith("{"), out)
-            ck("... and nothing was saved by those", json.loads(await mf.list_areas()) == before, "")
+            ck("... and nothing was saved by those", json.loads(await ma.list_areas()) == before, "")
 
             print("== project keys stay closed ==")
             r = await cx.post(f"{B}/api/projects", headers=ROOT, json={"template": "custom", "name": "P1", "objects": []})

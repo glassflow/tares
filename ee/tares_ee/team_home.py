@@ -12,7 +12,7 @@ the single-person home uses. Nothing here is kept: it is all read from what the 
 """
 from __future__ import annotations
 
-from tares import areas as areas_mod
+from . import areas as areas_mod
 from tares import factory as factory_mod, factory_home as fh, factory_waiting as fw
 
 YOUR_CREW = {"crew": True, "name": "Your crew"}

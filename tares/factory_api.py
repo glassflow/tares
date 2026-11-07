@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 from fastapi import Body, HTTPException, Request
 
-from . import areas as areas_mod
 from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
@@ -684,7 +683,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         if raw_areas and kind != "project":
             h.err(ValueError("areas belong to a project grant"))
         try:
-            areas = list(dict.fromkeys(areas_mod.norm_repo(a) for a in raw_areas))
+            areas = list(dict.fromkeys(factory_mod.norm_repo(a) for a in raw_areas))
         except ValueError as e:
             h.err(e)
         person = h.current_person(request)
@@ -2257,7 +2256,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         areas = []
         for ref in d["tickets"]:
             try:
-                areas.append(areas_mod.norm_repo((by_ref.get(ref) or {}).get("repo")))
+                areas.append(factory_mod.norm_repo((by_ref.get(ref) or {}).get("repo")))
             except ValueError:
                 pass
         areas = list(dict.fromkeys(areas))
@@ -2549,7 +2548,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         project = h.project_or_404(uid)
         me = work_person(request)
         try:
-            repo = areas_mod.norm_repo(body.get("repo"))
+            repo = factory_mod.norm_repo(body.get("repo"))
         except ValueError as e:
             h.err(e)
         text = str(body.get("text") or "").strip()

@@ -359,8 +359,13 @@ def no_import():
                     if re.match(r"\s*(import|from)\s+tares_ee\b", line):
                         bad.append(f"{os.path.relpath(p, ROOT)}:{i}")
     ck("no file under tares/ imports tares_ee", not bad, bad)
-    ck("FALLBACKS is empty in the shipped module",
-       open(os.path.join(ROOT, "tares", "team.py"), encoding="utf-8").read().count("FALLBACKS: list[tuple[str, str, str]] = []") == 1)
+    import ast   # the live list is emptied by the cases, so read the shipped one from the source
+    tree = ast.parse(open(os.path.join(ROOT, "tares", "team.py"), encoding="utf-8").read())
+    rows = [sorted((e.elts[0].value, e.elts[1].value) for e in n.value.elts) for n in tree.body
+            if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "FALLBACKS"]
+    ck("FALLBACKS in the shipped module holds the four area routes and nothing else",
+       rows == [[("DELETE", "/api/areas/{owner}/{name}"), ("GET", "/api/areas"), ("PUT", "/api/areas"),
+                 ("PUT", "/api/areas/{owner}/{name}")]], str(rows))
 
 
 def case(name):

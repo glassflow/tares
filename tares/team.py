@@ -332,7 +332,13 @@ def _reset_ee_for_tests() -> None:
 # ── routes that moved out of core ──
 # (method, path, message): one row per route that lives in ee. Without ee the row answers
 # `licence_required`. A ticket that moves a route out of core adds its rows in the same PR.
-FALLBACKS: list[tuple[str, str, str]] = []
+AREAS_REASON = "Repo owners need an enterprise licence."
+FALLBACKS: list[tuple[str, str, str]] = [
+    ("GET", "/api/areas", AREAS_REASON),
+    ("PUT", "/api/areas", AREAS_REASON),
+    ("PUT", "/api/areas/{owner}/{name}", AREAS_REASON),
+    ("DELETE", "/api/areas/{owner}/{name}", AREAS_REASON),
+]
 
 
 def register_fallbacks(app, host) -> None:

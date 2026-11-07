@@ -53,8 +53,7 @@ def register(app, store, h, ctx):
                                                    "done": p.get("status") == "done"})
         owns: dict[str, list[str]] = {}
         try:
-            from .. import areas as areas_mod
-            for a in areas_mod.view(store):
+            for a in team_mod.get().areas(store):
                 owns.setdefault(a["person"]["id"], []).append(a["repo"])
         except Exception:
             pass
