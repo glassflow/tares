@@ -5,6 +5,7 @@ component-gallery
 crew-people
 edition-routes
 edition-shell
+ee-chunk
 factory-crew
 factory-docs
 factory-github

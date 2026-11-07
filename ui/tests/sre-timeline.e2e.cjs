@@ -132,7 +132,7 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
         const u = new URL(req.url());
         if (u.pathname === ROUTE) seen.list.push(u.searchParams);
         else if (u.pathname === RAW) seen.raw.push(u.searchParams);
-        else if (u.pathname.startsWith("/api/") && u.pathname !== "/api/whoami") seen.other.push(u.pathname);
+        else if (u.pathname.startsWith("/api/") && u.pathname !== "/api/whoami" && u.pathname !== "/api/licence") seen.other.push(u.pathname);
       });
       return seen;
     };

@@ -211,6 +211,13 @@ export function ownerName(repo: string): string {
   return r;
 }
 
+/** What GET /api/licence answers (TR-912). Never the key text. `ee_allowed` is the cell's own answer. */
+export type LicenceState = {
+  valid: boolean; source: "env" | "settings" | "none"; kid: string | null; org: string | null;
+  seats: number | null; used: number; features: string[]; expires: string | null; days_left: number | null;
+  expired: boolean; over_seats: boolean; ee_allowed: boolean; reason: string | null; stored: boolean; env_set: boolean;
+};
+
 export const api = {
   // login_url is present only on a cloud-managed cell (daemon TARES_LOGIN_URL) — it tells the
   // logged-out console where to send the browser to authenticate.
@@ -270,6 +277,10 @@ export const api = {
     request<ApiKey>(`/api/keys/${id}/person`, { method: "PUT", body: JSON.stringify({ person_id: personId }) }),
   revokeKey: (id: string) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
   whoami: () => request<Whoami>("/api/whoami"),
+  licence: () => request<LicenceState>("/api/licence"),
+  setLicence: (key: string) =>
+    request<LicenceState & { env_in_use?: boolean }>("/api/licence", { method: "PUT", body: JSON.stringify({ key }) }),
+  deleteLicence: () => request<{ ok?: boolean }>("/api/licence", { method: "DELETE" }),
   people: () => request<{ people: Person[] }>("/api/people"),
   createPerson: (body: { name: string; email?: string; github?: string; is_admin?: boolean }) =>
     request<Person>("/api/people", { method: "POST", body: JSON.stringify(body) }),

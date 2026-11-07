@@ -182,6 +182,8 @@ async function viaExpectOneCall(requests, route = "/api/home") {
 
   let c = await viaExpectOneCall([req("GET", "/api/whoami"), req("GET", "/api/home?x=1")]);
   ck("expectOneCall: one read, whoami not counted, query ignored", same(c, [true, true]), JSON.stringify(c));
+  c = await viaExpectOneCall([req("GET", "/api/licence"), req("GET", "/api/home")]);
+  ck("expectOneCall: the licence read is not counted", same(c, [true, true]), JSON.stringify(c));
   c = await viaExpectOneCall([req("GET", "/api/home"), req("GET", "/api/home")]);
   ck("expectOneCall: two reads of the route fail", same(c, [false, true]), JSON.stringify(c));
   c = await viaExpectOneCall([req("GET", "/api/home"), req("GET", "/api/projects")]);
