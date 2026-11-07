@@ -21,10 +21,13 @@ def fake_crew_env(tmp: Path, base: dict | None = None) -> dict:
     for d in (crew, home, fhome, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
     shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", crew / "crew.json")
-    (crew / "stations.json").write_text("{}\n")
+    (crew / "stations.json").write_text("{}\n", encoding="utf-8")
     ps = bindir / "ps"
     if not ps.exists():
-        ps.symlink_to(FACTORY_DIR / "fake-ps")
+        try:
+            ps.symlink_to(FACTORY_DIR / "fake-ps")
+        except OSError:  # Windows: a symlink needs a privilege a runner or a person often lacks
+            shutil.copy(FACTORY_DIR / "fake-ps", ps)
     for f in ("fake-claude", "fake-ps"):
         (FACTORY_DIR / f).chmod(0o755)
     env = {k: v for k, v in (os.environ if base is None else base).items()
@@ -41,5 +44,5 @@ def fake_crew_env(tmp: Path, base: dict | None = None) -> dict:
         # a regression in the TARES_KEYRING gate must fail a test, never reach a person's OS keychain
         PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring",
     )
-    (tmp / "gitconfig").write_text("[user]\n\tname = Test Crew\n")
+    (tmp / "gitconfig").write_text("[user]\n\tname = Test Crew\n", encoding="utf-8")
     return env

@@ -995,7 +995,7 @@ try:
     ck("a holder pid is judged by the same path on Windows", locks._holder_alive("4242") and seen == [4242, 4242])
 finally:
     os.kill, locks._pid_alive_windows, locks._is_windows = real_kill, real_win, real_is_win
-src = Path(locks.__file__).read_text()
+src = Path(locks.__file__).read_text(encoding="utf-8")
 ck("locks.py calls os.kill once, after the Windows branch has returned", len(re.findall(r"^\s+os\.kill\(", src, re.M)) == 1 and src.index("return _pid_alive_windows(pid)") < src.index("    os.kill(pid, 0)"))
 
 # ====================================================================================
@@ -1026,13 +1026,13 @@ ck("...and nothing outside the standard library", info.get("extra") == [], short
 ck("...and only the tares.crew modules and tares itself", set(info.get("tares", [])) <= {"tares", "tares.crew", "tares.crew.errors", "tares.crew.paths", "tares.crew.state", "tares.crew.locks", "tares.crew.perms"},
    short(info.get("tares")))
 ck("...in well under a second", info.get("secs", 99) < 1.0, str(info.get("secs")))
-init_src = (ROOT / "tares" / "__init__.py").read_text()
+init_src = (ROOT / "tares" / "__init__.py").read_text(encoding="utf-8")
 ck("tares/__init__.py itself imports nothing heavy", "import" not in init_src.replace('"""', ""), init_src[:200])
 pkg = sorted(p.name for p in (ROOT / "tares" / "crew").iterdir() if p.suffix == ".py")
 ck("the package has the modules the ticket names", {"__init__.py", "paths.py", "state.py", "locks.py"} <= set(pkg), str(pkg))
 sv = ROOT / "tares" / "crew" / "schemas" / "schema_version.json"
-ck("schemas/schema_version.json is shipped (TR-1064) and holds the schema version as JSON", sv.is_file() and json.loads(sv.read_text()).get("schema_version") == 1, str(sv))
-pyproject = (ROOT / "pyproject.toml").read_text()
+ck("schemas/schema_version.json is shipped (TR-1064) and holds the schema version as JSON", sv.is_file() and json.loads(sv.read_text(encoding="utf-8")).get("schema_version") == 1, str(sv))
+pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 ck("the wheel ships the whole tares package, so tares.crew with it", re.search(r'packages = \["tares"', pyproject) is not None)
 
 # ====================================================================================
