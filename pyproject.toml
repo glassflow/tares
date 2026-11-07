@@ -35,6 +35,7 @@ dependencies = [
     # small, so base: a fleet scrapes every cell without an extra to remember.
     "prometheus-client>=0.20",
     "cryptography>=42",  # Ed25519 licence check, tares/licence.py
+    "keyring>=24",  # tares login keeps the key in the OS keychain (tares/login.py); a file is the fallback
 ]
 
 [project.urls]

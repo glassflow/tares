@@ -17,6 +17,33 @@ from urllib.parse import parse_qs, urlparse
 
 HOME = tempfile.mkdtemp()
 os.environ["TARES_HOME"] = HOME
+# a regression in the TARES_KEYRING gate must fail this test, never reach a person's OS keychain
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+TRIPWIRE = []       # what anything asked the keychain; a regression in the TARES_KEYRING gate shows up here
+try:
+    import keyring  # noqa: E402
+    import keyring.backend  # noqa: E402
+
+    class Tripwire(keyring.backend.KeyringBackend):
+        """An in-memory keychain that keeps nothing and writes down every question. Its priority is above 0,
+        so if the gate ever let login use a keychain this one would be picked: never the real one."""
+        priority = 1
+
+        def get_password(self, service, username):
+            TRIPWIRE.append(("get", service, username))
+
+        def set_password(self, service, username, password):
+            TRIPWIRE.append(("set", service, username))
+
+        def delete_password(self, service, username):
+            TRIPWIRE.append(("delete", service, username))
+
+    keyring.set_keyring(Tripwire())
+except ImportError:
+    pass
+# the saved key stays in the file here: this test never touches a real OS keychain
+# (tests/test_login_keyring.py covers the keychain with a stub backend)
+os.environ["TARES_KEYRING"] = "off"
 # a crew home that does not exist, so no login here touches the real ~/factory
 os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
 for k in ("TARESD_URL", "TARES_FACTORY_URL", "TARES_AUTH_TOKEN", "TARES_CLOUD_URL"):
@@ -292,6 +319,8 @@ L.logout()
 ck("logout leaves a key it did not end alone",
    (crew / ".tares-token").read_text().strip() == "my-own-tares-root")
 os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
+
+ck("the OS keychain was never asked (TARES_KEYRING is off here)", TRIPWIRE == [], TRIPWIRE)
 
 srv.shutdown()
 print(f"\n{P} passed, {F} failed")

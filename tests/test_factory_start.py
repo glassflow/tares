@@ -27,6 +27,15 @@ for _k in ("TARES_PROJECT", "TARES_PROJECT_NAME", "TARES_FACTORY_URL", "TARES_FA
            "TARES_LOGIN_URL", "TARES_GITHUB_CONNECT_URL", "TARES_LINEAR_CONNECT_URL"):
     os.environ.pop(_k, None)
 
+# a regression in the TARES_KEYRING gate must fail this test, never reach a person's OS keychain
+os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+try:
+    import keyring  # noqa: E402
+    import keyring.backends.fail  # noqa: E402
+    keyring.set_keyring(keyring.backends.fail.Keyring())
+except ImportError:
+    pass
+
 import httpx
 from fastapi import FastAPI
 

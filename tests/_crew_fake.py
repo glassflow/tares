@@ -38,6 +38,8 @@ def fake_crew_env(tmp: Path, base: dict | None = None) -> dict:
         PATH=str(bindir) + os.pathsep + env.get("PATH", ""),
         TARESD_URL="http://127.0.0.1:9",  # nothing listens: roster works without Tares
         TARES_HOME=str(tmp / "tares-home"),
+        # a regression in the TARES_KEYRING gate must fail a test, never reach a person's OS keychain
+        PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring",
     )
     (tmp / "gitconfig").write_text("[user]\n\tname = Test Crew\n")
     return env

@@ -14,6 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 
+from . import perms
 from .errors import CrewError
 from .paths import CREW_NAME_RULE, CrewPaths
 
@@ -70,10 +71,13 @@ def loads_json(text: str):
     return json.loads(text[1:] if text.startswith("\ufeff") else text)
 
 
-def atomic_write_text(path, text: str, *, mode=None) -> None:
+def atomic_write_text(path, text: str, *, mode=None, private: bool = False) -> None:
     """Write `text` (UTF-8, LF as given) to a temp file beside `path`, then os.replace it over `path`.
     Windows refuses the replace while a reader has the file open, so a PermissionError is retried a few
-    times with short sleeps. The file keeps the mode it had, else `mode`, else what `>` would give."""
+    times with short sleeps. The file keeps the mode it had, else `mode`, else what `>` would give.
+    `private` is for a file that holds a key: the temp file is made readable by its owner only (mode 0600,
+    or on Windows an access list naming the current user) before the key is written to it, and a file
+    that cannot be restricted is refused, not written."""
     path = Path(path)
     data = text.encode("utf-8")
     if mode is None:
@@ -84,6 +88,10 @@ def atomic_write_text(path, text: str, *, mode=None) -> None:
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
+            if private:
+                mode = 0o600
+                if not perms.owner_only(tmp):
+                    raise CrewError(f"could not make {path} readable by you only")
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -439,4 +447,4 @@ def crew_key(paths=None, env=None) -> str:
 def write_token(token: str, paths=None) -> None:
     """The key as keep_token writes it: the token and a newline, readable by the person only."""
     paths = paths or CrewPaths.from_env()
-    atomic_write_text(paths.token_file, f"{token}\n", mode=0o600)
+    atomic_write_text(paths.token_file, f"{token}\n", mode=0o600, private=True)
