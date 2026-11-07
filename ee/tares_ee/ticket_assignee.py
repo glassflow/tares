@@ -1,3 +1,4 @@
+# Tares enterprise licence, see ee/LICENSE
 """Who a ticket is for (TR-631): the assignee, wherever the ticket lives.
 
 A ticket has an assignee person, or none: then it shows as unowned together with the assignee as
@@ -6,7 +7,8 @@ ticket's `owner` column, which says where it lives (tares, linear or github), an
 `holder`, the crew station working it.
 
 Linear and GitHub name the assignee; the sync maps it to a person here. Tares tickets take an
-assignee from the ticket routes and write_ticket.
+assignee from the ticket routes and write_ticket. Showing a stored assignee (`view`, `note`) is a
+read and stays in core, in `daemon.py` and `mcp_server.py`.
 """
 from __future__ import annotations
 
@@ -100,21 +102,3 @@ def sync_join(store, project: dict, person_id: str | None, status: str) -> None:
     does not bring in everyone who ever finished or dropped a ticket."""
     if status not in ("done", "canceled"):
         join(store, project, person_id, "system")
-
-
-def view(store, t: dict) -> dict:
-    """The ticket's `assignee` ({id, name} or None) and `assignee_raw` (set only while nobody on
-    the cell is the assignee)."""
-    person = store.get_person(t["assignee_person_id"]) if t.get("assignee_person_id") else None
-    if person:
-        return {"assignee": {"id": person["id"], "name": person["name"]}, "assignee_raw": None}
-    return {"assignee": None, "assignee_raw": t.get("assignee_raw")}
-
-
-def note(t: dict) -> str:
-    """One line for text output: "assignee: Kiran", or why nobody is."""
-    a = t.get("assignee")
-    if a:
-        return f"assignee: {a['name']}"
-    raw = t.get("assignee_raw")
-    return f"unowned ({raw} is not on this cell)" if raw else "unowned"
