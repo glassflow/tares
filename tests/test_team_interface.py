@@ -363,9 +363,10 @@ def no_import():
     tree = ast.parse(open(os.path.join(ROOT, "tares", "team.py"), encoding="utf-8").read())
     rows = [sorted((e.elts[0].value, e.elts[1].value) for e in n.value.elts) for n in tree.body
             if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "FALLBACKS"]
-    ck("FALLBACKS in the shipped module holds the four area routes and nothing else",
-       rows == [[("DELETE", "/api/areas/{owner}/{name}"), ("GET", "/api/areas"), ("PUT", "/api/areas"),
-                 ("PUT", "/api/areas/{owner}/{name}")]], str(rows))
+    ck("FALLBACKS in the shipped module holds the four area routes, the three project access routes and nothing else",
+       rows == [[("DELETE", "/api/areas/{owner}/{name}"), ("DELETE", "/api/projects/{uid}/members/{person_id}"),
+                 ("GET", "/api/areas"), ("PATCH", "/api/projects/{uid}"), ("POST", "/api/projects/{uid}/members"),
+                 ("PUT", "/api/areas"), ("PUT", "/api/areas/{owner}/{name}")]], str(rows))
 
 
 def case(name):
