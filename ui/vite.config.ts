@@ -9,6 +9,12 @@ const TARESD = "http://127.0.0.1:8787";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  build: {
+    rollupOptions: {
+      // The enterprise console code is one lazy chunk, dist/assets/ee-<hash>.js (TR-926).
+      output: { manualChunks: (id: string) => (id.includes("/src/ee/") ? "ee" : undefined) },
+    },
+  },
   resolve: { alias: { "@": path.resolve(__dirname, "src") } },
   server: {
     proxy: Object.fromEntries(

@@ -6,6 +6,8 @@ import App from "./App";
 import AuthGate from "./components/AuthGate";
 import { EditionProvider, useEdition } from "./editions/edition";
 import { ByEdition } from "./editions/routes";
+import { EeLoader } from "./eeSlots";
+import { LicenceProvider } from "./licence";
 import AgentActivity, { ConnectPage } from "./pages/Activity";
 import Ask from "./pages/Ask";
 import CatalogExport from "./pages/CatalogExport";
@@ -167,7 +169,10 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <AuthGate>
       <EditionProvider>
-        <RouterProvider router={router} />
+        <LicenceProvider>
+          <EeLoader />
+          <RouterProvider router={router} />
+        </LicenceProvider>
       </EditionProvider>
     </AuthGate>
   </React.StrictMode>,
