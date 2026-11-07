@@ -732,14 +732,19 @@ def start_holder(kind, h, s="crew-reviewer"):
         p = subprocess.Popen(["bash", str(HARNESS), "hold", s], env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
     else:
         code = (f"import sys, time; sys.path.insert(0, {str(ROOT)!r}); from tares.crew import locks, CrewPaths; "
-                f"locks.station_lock({s!r}, CrewPaths.at({str(h)!r})); print('held', flush=True); time.sleep(120)")
+                f"locks.station_lock({s!r}, CrewPaths.at({str(h)!r})); import os; print('held', os.getpid(), flush=True); time.sleep(120)")
         p = subprocess.Popen([sys.executable, "-c", code], env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
     line = p.stdout.readline().decode().strip()
-    assert line == "held", f"{kind} holder did not take the lock: {line!r} {p.stderr.read(500)!r}"
+    assert line.split()[:1] == ["held"], f"{kind} holder did not take the lock: {line!r} {p.stderr.read(500)!r}"
+    # On Windows a venv's python.exe starts the real interpreter as a child, so Popen.pid is the launcher's;
+    # the pid in <lock>/pid is the interpreter's own, which the holder prints.
+    p.holder_pid = int(line.split()[1]) if len(line.split()) > 1 else p.pid
     return p
 
 
 def kill(p):
+    if os.name == "nt":  # the launcher and the interpreter under it both go
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
     p.kill()
     p.wait()
     p.stdout.close()
@@ -767,12 +772,12 @@ for kind in ("bash", "python") if HAVE_BASH else ("python",):
     h = newhome(f"lock-{kind}-holder")
     holder = start_holder(kind, h)
     pidfile = (lock_dir(h) / "pid").read_text()
-    ck(f"{kind} holder writes its own pid and a newline into <lock>/pid", pidfile == f"{holder.pid}\n", repr(pidfile))
+    ck(f"{kind} holder writes its own pid and a newline into <lock>/pid", pidfile == f"{holder.holder_pid}\n", repr(pidfile))
     r = py_lock(h)
     ck(f"a {kind}-held lock refuses Python with the typed error and bash's text",
-       r[0] == "locked" and r[1] == MSG.format(pid=holder.pid, s="crew-reviewer") and r[3].holder == str(holder.pid) and isinstance(r[3], CrewError), short(r))
+       r[0] == "locked" and r[1] == MSG.format(pid=holder.holder_pid, s="crew-reviewer") and r[3].holder == str(holder.holder_pid) and isinstance(r[3], CrewError), short(r))
     ck(f"...at once, without waiting", r[2] < 1.5, f"{r[2]:.2f}s")
-    ck(f"...and the line carries the tares factory: prefix", r[3].line == "tares factory: " + MSG.format(pid=holder.pid, s="crew-reviewer"))
+    ck(f"...and the line carries the tares factory: prefix", r[3].line == "tares factory: " + MSG.format(pid=holder.holder_pid, s="crew-reviewer"))
     if HAVE_BASH:
         rc, _, err = bash(h, "station_lock", "crew-reviewer")
         ck(f"a {kind}-held lock refuses bash with the same text Python raises", rc == 1 and err == r[3].line + "\n", f"rc={rc} {err!r}")

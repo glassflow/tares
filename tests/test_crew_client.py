@@ -347,7 +347,8 @@ if os.name == "nt":
     # no mode bits: the access list names one account and nothing is inherited (icacls prints one entry per line with ":(")
     acl = subprocess.run(["icacls", str(tok)], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     entries = [ln for ln in acl.splitlines() if ":(" in ln]
-    ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and len(entries) == 1 and "(F)" in entries[0], acl)
+    ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and len(entries) == 1 and "(F)" in entries[0],
+       "text=%r entries=%r acl=%r" % (tok.read_text(), entries, acl))
 else:
     ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and mode(tok) == 0o600, oct(mode(tok)) if tok.exists() else "missing")
 before = tok.stat().st_mtime_ns

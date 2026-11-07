@@ -59,7 +59,9 @@ T = Path(tempfile.mkdtemp(prefix="tares crew dispatch "))
 HAVE_BASH = os.name != "nt" and Path("/bin/bash").exists()
 # A bare environment is enough for Python on Mac and Linux. On Windows the interpreter will not start
 # without SYSTEMROOT ("failed to get random numbers"), so a probe's environment carries it.
-SYS_ENV = {"SYSTEMROOT": os.environ["SYSTEMROOT"]} if os.name == "nt" and "SYSTEMROOT" in os.environ else {}
+# a bare `-I` probe on Windows still needs the system root and a home (Path.home() reads USERPROFILE) to start
+SYS_ENV = ({k: os.environ[k] for k in ("SYSTEMROOT", "USERPROFILE", "HOME", "TEMP", "TMP") if k in os.environ}
+           if os.name == "nt" else {})
 ENGINE = dispatch.ENGINE_VAR
 
 calls = []
@@ -297,7 +299,7 @@ ck("the bash route calls os.execve('/bin/bash', ['bash', script, *argv], env)",
    execs == [("/bin/bash", ["bash", "/some dir/factory", "roster", "-x", "a b"], {"K": "v", ENGINE: ""})], short(execs))
 env_obj = {"K": "v"}
 code, out, err, execs = call_run(["roster"], env_obj, Path("/p/factory"))
-ck("...with the same env object and a script given as a Path turned into text", execs and execs[0][2] is env_obj and execs[0][1][1] == "/p/factory", short(execs))
+ck("...with the same env object and a script given as a Path turned into text", execs and execs[0][2] is env_obj and execs[0][1][1] == str(Path("/p/factory")), short(execs))
 
 STUB = T / "stub factory"
 STUB.write_text('echo "ARGC=$#"\n'
