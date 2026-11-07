@@ -268,6 +268,33 @@ code, out = r.run()
 ck("a change only in the comment after a one-line function counts as a change", code == 1 and "trailing()" in out, f"exit {code}: {out}")
 r.done()
 
+# F5 and F6: a multi-line function closed by `} # note`, and one opened by `name() { # note; }` (the comment
+# on the open line even ends like a one-line function, but the body follows on the next lines)
+COMMENTS = """#!/usr/bin/env bash
+closed() {
+  echo "closed ${1}"
+  echo "closed again"
+} # a note after the closing brace
+held() { # a note that looks like the end of a one-line function; }
+  echo "held ${1}"
+  echo "held again"
+}
+tail_fn() {
+  echo "tail ${1}"
+}
+"""
+COMMENT_NAMES = ["closed", "held", "tail_fn"]
+for name, old, new_ in (("closed", 'echo "closed again"', 'echo "closed twice"'),
+                        ("held", 'echo "held again"', 'echo "held twice"'),
+                        ("tail_fn", 'echo "tail ${1}"', 'echo "tail"')):
+    r = Repo({FACTORY: COMMENTS}, styles_ledger(COMMENT_NAMES))
+    r.branch()
+    r.commit({FACTORY: COMMENTS.replace(old, new_)})
+    code, out = r.run()
+    ck("a change in the body of %s() (comment style) exits 1 and names it" % name, code == 1 and "%s()" % name in out, f"exit {code}: {out}")
+    others = [n for n in COMMENT_NAMES if n != name and ("%s()" % n) in out]
+    ck("only %s() is named (the comment styles end at their own end)" % name, not others, out)
+    r.done()
 # a ported row whose function the parser cannot find must not pass quietly
 led = styles_ledger(STYLE_NAMES)
 led["functions"].append({"name": "not_there", "kind": "function", "ticket": "TR-1", "dropped": False, "python": "tares.crew.x:y",

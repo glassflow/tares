@@ -209,5 +209,23 @@ ck("every row has an owner or a reason", all(
     (isinstance(r.get("ticket"), str) and re.match(r"^TR-\d+$", r["ticket"])) or (isinstance(r.get("dropped"), str) and r["dropped"].strip())
     for k, v in load().items() if isinstance(v, list) for r in v))
 
+# callers before callees (TR-1072): a function that a lower-numbered ticket calls is owned by that ticket or an earlier one,
+# or its row has a note that names the caller's ticket (a partial port or a stub there)
+CALLS = [
+    ("launch", "kit_dir"), ("launch", "iw_launch_note"), ("launch", "pace_launch_note"),
+    ("boot_prompt", "idle_wake_on"), ("boot_prompt", "idle_wake_note"),
+    ("cmd_spawn", "halted"), ("cmd_spawn", "pace_read"),
+    ("cmd_crew_up", "start_watch"), ("cmd_crew_up", "installed_tares"), ("cmd_crew_up", "clash_text"),
+    ("cmd_down", "stop_watch"),
+]
+fn = {r["name"]: r for r in load()["functions"]}
+num = lambda t: int(t.split("-")[1])
+late = []
+for caller, callee in CALLS:
+    ct, et = fn[caller]["ticket"], fn[callee]["ticket"]
+    if num(et) > num(ct) and ct not in fn[callee].get("note", ""):
+        late.append("%s (%s) calls %s (%s)" % (caller, ct, callee, et))
+ck("no function is owned by a later ticket than its caller unless its note names the caller's ticket (%d pairs)" % len(CALLS), not late, "; ".join(late))
+
 print(f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)

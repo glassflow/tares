@@ -814,7 +814,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called first by launch (TR-953), which needs a partial port: the checkout plugin folder, with the frozen branch left out until TR-965 adds upgrades_frozen and frozen_phys. TR-965 completes it."
     },
     {
       "name": "on_frozen_copy",
@@ -843,22 +843,22 @@
       "kind": "function",
       "line": 799,
       "what": "installed tares plugins of another version",
-      "ticket": "TR-965",
+      "ticket": "TR-956",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Warns about another installed tares plugin; called from crew up, spec, session and doctor but it reads the plugin install record the kit work owns."
+      "note": "Moved here from TR-965: crew up warns about another installed tares plugin first. Spec, session and doctor (TR-966, TR-969) call it too. It reads the plugin install record, so TR-965 keeps the kit freeze but not this check."
     },
     {
       "name": "clash_text",
       "kind": "function",
       "line": 804,
       "what": "what to do about a plugin clash",
-      "ticket": "TR-965",
+      "ticket": "TR-956",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Companion to installed_tares."
+      "note": "Moved here from TR-965, with installed_tares: it words the warning that crew up prints."
     },
     {
       "name": "compact_window",
@@ -953,11 +953,11 @@
       "kind": "function",
       "line": 929,
       "what": "is the crew halted",
-      "ticket": "TR-955",
+      "ticket": "TR-954",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Checks the HALT file; cmd_halt and cmd_resume write it."
+      "note": "Moved here from TR-955: cmd_spawn refuses to start while the crew is halted. cmd_halt and cmd_resume (TR-955) write the HALT file; halted only checks it."
     },
     {
       "name": "prime",
@@ -1001,7 +1001,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Needed first by cmd_down (TR-955, through stop_watch), which ports the pid file read it needs; TR-958 completes it."
     },
     {
       "name": "start_watch",
@@ -1012,7 +1012,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called first by cmd_crew_up (TR-956), which stubs it: crew up on Python skips the watch and prints \"watch: not ported yet\" (TR-956 step 4). TR-958 ports start_watch with the watch it starts."
     },
     {
       "name": "stop_watch",
@@ -1023,7 +1023,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called first by cmd_down (TR-955), which needs a partial port: read the pid file, stop that process and remove the file. TR-958 completes it with the watch itself."
     },
     {
       "name": "store_crew_name",
@@ -1228,11 +1228,11 @@
       "kind": "function",
       "line": 1416,
       "what": "is idle wake on",
-      "ticket": "TR-961",
+      "ticket": "TR-953",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Moved here from TR-961: launch and boot_prompt call it first. It only reads the idle_wake crew setting; TR-957 and TR-958 call it too."
     },
     {
       "name": "idle_wake_state",
@@ -1250,11 +1250,11 @@
       "kind": "function",
       "line": 1422,
       "what": "what the watch says about idle wake",
-      "ticket": "TR-961",
+      "ticket": "TR-953",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Moved here from TR-961: boot_prompt prints it. TR-958 sends the same text from the watch."
     },
     {
       "name": "rearm_text",
@@ -1276,7 +1276,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc."
     },
     {
       "name": "pace_closed",
@@ -1441,7 +1441,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by launch (TR-953), which needs a stub that does nothing until TR-962 ports the real note (the pace station put). TR-953 must say so in its working doc."
     },
     {
       "name": "pace_plan",
@@ -1518,7 +1518,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by launch (TR-953), which needs a stub that does nothing until TR-961 ports the real note (the wake file update). TR-953 must say so in its working doc."
     },
     {
       "name": "wake_base_min",
