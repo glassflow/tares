@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import { Button, Panel } from "../../components/edition";
 import type { HomeArea, HomeCrewLimit, HomeTeamCrew } from "./home.types";
-import { colourOf } from "./WaitingForYou";
+import { colourOf } from "./Sender";
 
 // What the side column of a cell with more than one person adds: how far the person's crew may go,
 // the other crews, and the repos the person owns. A cell of one keeps today's column.
