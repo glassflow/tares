@@ -22,12 +22,14 @@ seed_people() { # dir "Name=email"...
 
 # A project made private. Making one private over HTTP is an ee route (it needs a licence), so a test
 # that only needs the private project writes the scope in the database, with no daemon running on it:
-# stop_tares, `make_private <dir> <project id>`, then start_tares again on the same dir.
+# stop_tares, `make_private <dir> <project id>`, then start_tares again on the same dir. The daemon has
+# been up on that file, so under the postgres suite its state is in Postgres: open the Store as the
+# daemon does (the runner's PYTHONPATH, no state_dsn), not DuckDB only as seed_people does.
 make_private() { # dir project-id
-  (cd "$ROOT" && PYTHONPATH="$ROOT" "$PY" -c "
+  (cd "$ROOT" && PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" "$PY" -c "
 import sys
 from tares.store import Store
-s = Store(sys.argv[1] + '/tares.duckdb', state_dsn='')
+s = Store(sys.argv[1] + '/tares.duckdb')
 s.set_project_scope(sys.argv[2], 'private')
 del s" "$1" "$2") || { echo "FAIL could not make the project private"; exit 1; }
 }
