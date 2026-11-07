@@ -26,6 +26,7 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_core_single_person
+test_crew_client
 test_crew_dispatch
 test_crew_standup
 test_crew_startup_time
@@ -90,6 +91,7 @@ test_licence
 test_licence_api
 test_linear
 test_login
+test_login_keyring
 test_loki
 test_mcp_auth
 test_mcp_editions

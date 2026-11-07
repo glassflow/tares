@@ -185,8 +185,8 @@
       "what": "is this a station or crew session",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.in_crew_session",
+      "ported": true,
       "note": ""
     },
     {
@@ -196,8 +196,8 @@
       "what": "the crew key a station reads from its token file",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.crew_key",
+      "ported": true,
       "note": ""
     },
     {
@@ -207,8 +207,8 @@
       "what": "the key to use for Tares calls",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_token",
+      "ported": true,
       "note": ""
     },
     {
@@ -218,8 +218,8 @@
       "what": "text telling how to get a key",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.no_key_hint",
+      "ported": true,
       "note": ""
     },
     {
@@ -229,8 +229,8 @@
       "what": "address of the Tares",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -240,8 +240,8 @@
       "what": "address of the Tares MCP endpoint",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.mcp_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -251,8 +251,8 @@
       "what": "does Tares answer /health",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_on",
+      "ported": true,
       "note": ""
     },
     {
@@ -262,8 +262,8 @@
       "what": "die when no Tares answers",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.require_tares",
+      "ported": true,
       "note": ""
     },
     {
@@ -273,8 +273,8 @@
       "what": "does the MCP endpoint answer",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.mcp_on",
+      "ported": true,
       "note": ""
     },
     {
@@ -284,8 +284,8 @@
       "what": "die when no MCP server answers",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.require_mcp",
+      "ported": true,
       "note": ""
     },
     {
@@ -295,8 +295,8 @@
       "what": "HTTP call to Tares with the key on stdin",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_http",
+      "ported": true,
       "note": ""
     },
     {
@@ -306,8 +306,8 @@
       "what": "percent-encode a string",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:uri",
+      "ported": true,
       "note": ""
     },
     {
@@ -317,8 +317,8 @@
       "what": "does Tares accept a key",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.key_ok",
+      "ported": true,
       "note": ""
     },
     {
@@ -328,8 +328,8 @@
       "what": "the name Tares gives a key",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:key_name",
+      "ported": true,
       "note": ""
     },
     {
@@ -339,8 +339,8 @@
       "what": "copy the person key to the crew token file",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.keep_token",
+      "ported": true,
       "note": ""
     },
     {
@@ -350,8 +350,8 @@
       "what": "projects handed to the crew, from Tares",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.crew_projects",
+      "ported": true,
       "note": ""
     },
     {
@@ -361,8 +361,8 @@
       "what": "the same, dies when Tares cannot say",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.crew_projects_or_die",
+      "ported": true,
       "note": ""
     },
     {
@@ -372,8 +372,8 @@
       "what": "one project row by name",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.project_row",
+      "ported": true,
       "note": ""
     },
     {
@@ -383,8 +383,8 @@
       "what": "project and repo path pairs",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.project_repo_rows",
+      "ported": true,
       "note": ""
     },
     {
@@ -394,8 +394,8 @@
       "what": "every repo path of every project",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.all_repos",
+      "ported": true,
       "note": ""
     },
     {
@@ -405,8 +405,8 @@
       "what": "default crew settings",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:settings_defaults",
+      "ported": true,
       "note": ""
     },
     {
@@ -416,8 +416,8 @@
       "what": "crew settings as saved on Tares",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.settings_raw",
+      "ported": true,
       "note": ""
     },
     {
@@ -427,8 +427,8 @@
       "what": "crew setting keys not set yet",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:settings_missing",
+      "ported": true,
       "note": ""
     },
     {
@@ -438,8 +438,8 @@
       "what": "crew settings with defaults, cached",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.crew_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -449,8 +449,8 @@
       "what": "one crew setting value",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.setting",
+      "ported": true,
       "note": ""
     },
     {
@@ -460,8 +460,8 @@
       "what": "is the releaser setting on",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.releaser_on",
+      "ported": true,
       "note": ""
     },
     {
@@ -471,8 +471,8 @@
       "what": "the roles this crew runs",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.crew_roles",
+      "ported": true,
       "note": ""
     },
     {
@@ -537,8 +537,8 @@
       "what": "read grants from Tares as markdown",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.grants_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -548,8 +548,8 @@
       "what": "grants markdown, or nothing when unreadable",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.grants_md",
+      "ported": true,
       "note": ""
     },
     {
@@ -559,8 +559,8 @@
       "what": "fingerprint of a grants text",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:grants_sum",
+      "ported": true,
       "note": ""
     },
     {
@@ -966,8 +966,8 @@
       "what": "decide Tares and settings once per command",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.prime",
+      "ported": true,
       "note": "Runs at the start of most commands; asks Tares once and keeps the answer."
     },
     {
@@ -1967,9 +1967,9 @@
       "what": "open desk items from Tares",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.client:TaresClient.desk_json",
+      "ported": true,
+      "note": "Ported with the client (TR-949); the desk commands that use it are TR-957."
     },
     {
       "name": "desk_block",
@@ -4061,7 +4061,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "The key may move to the OS keychain (TR-949); stations still need a file path for mcp-headers."
+      "note": "The key stays a 0600 file (owner-only ACL on Windows) for stations; the OS keychain holds the person's login key (TR-949), stations never read it."
     },
     {
       "name": "pace.json",
@@ -4363,7 +4363,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Read by doctor and mcp-headers (TR-972); the key may move to the OS keychain (TR-949)."
+      "note": "Since TR-949 tares login can keep the key in the OS keychain (opt-in with TARES_KEYRING=on) and login.json then keeps only the non-secret fields. Off by default: doctor, mcp-headers (TR-972) and ship.py still read .key from the file, so the default flips only when they read the keychain."
     },
     {
       "name": "tares-factory-heavy.lock",

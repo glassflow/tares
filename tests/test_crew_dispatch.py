@@ -358,7 +358,7 @@ for mode, args in (("python", ["zz"]), ("bash", ["roster"])):
     if mode == "python":
         ck("...and the tares modules loaded are the light ones",
            set(info.get("tares", [])) <= {"tares", "tares.cli", "tares.config", "tares.login", "tares.crew", "tares.crew.dispatch",
-                                          "tares.crew.errors", "tares.crew.paths", "tares.crew.state", "tares.crew.locks"},
+                                          "tares.crew.errors", "tares.crew.paths", "tares.crew.perms", "tares.crew.state", "tares.crew.locks"},
            short(info.get("tares")))
 bad = []
 for f in sorted((ROOT / "tares" / "crew").glob("*.py")):

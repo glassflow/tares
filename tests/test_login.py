@@ -17,6 +17,9 @@ from urllib.parse import parse_qs, urlparse
 
 HOME = tempfile.mkdtemp()
 os.environ["TARES_HOME"] = HOME
+# the saved key stays in the file here: this test never touches a real OS keychain
+# (tests/test_login_keyring.py covers the keychain with a stub backend)
+os.environ["TARES_KEYRING"] = "off"
 # a crew home that does not exist, so no login here touches the real ~/factory
 os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
 for k in ("TARESD_URL", "TARES_FACTORY_URL", "TARES_AUTH_TOKEN", "TARES_CLOUD_URL"):
