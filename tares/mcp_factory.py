@@ -589,60 +589,6 @@ async def add_grant(words: str, kind: str = "", project: str = "",
     return _out(r, ("line", "added", "grant"))
 
 
-# ── asking an area owner while the spec is written (TR-636) ─────────────────
-
-def _question_line(q: dict) -> dict:
-    return {"id": q.get("id"), "repo": q.get("repo"), "text": q.get("text"), "state": q.get("state"),
-            "to": (q.get("to_person") or {}).get("name"),
-            "asked_by": (q.get("asked_by_person") or {}).get("name"), "asked_at": q.get("asked_at"),
-            "answer": q.get("answer"), "answered_at": q.get("answered_at")}
-
-
-@writable()
-async def ask_area(repo: str, text: str, project: str = "") -> str:
-    """Ask the owner of a repo (`owner/name`) a question while the spec is written: the person
-    set with set_area. It lands in their my_work as a spec question until they answer it; ask it
-    here and tell the person you did, then carry on with what does not depend on the answer.
-    Refused with 'has no area owner; set one with set_area' when nobody owns the repo."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions", json={"repo": repo, "text": text})
-    if r.status_code >= 400:
-        return _out(r)
-    return json.dumps(_question_line(r.json()), default=str)
-
-
-@writable()
-async def answer_question(id: str, answer: str, project: str = "") -> str:
-    """Answer a question a spec asked you as the owner of a repo (Q1, Q2... as my_work lists
-    them). Only the person it is addressed to may answer."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions/{id}/answer",
-                          json={"answer": answer})
-    if r.status_code >= 400:
-        return _out(r)
-    return json.dumps(_question_line(r.json()), default=str)
-
-
-@mcp.tool()
-async def list_questions(state: str = "", project: str = "") -> str:
-    """The questions a spec asked area owners, oldest first, with the answers. `state` is open
-    or answered; empty lists both."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.get(f"{TARESD}/api/projects/{uid}/questions", params={"state": state})
-    if r.status_code >= 400:
-        return _out(r)
-    return json.dumps([_question_line(q) for q in r.json().get("questions") or []], default=str)
-
-
 def _station_line(s: dict) -> dict:
     return {k: s.get(k) for k in ("name", "role", "parent", "state", "state_reason",
                                   "quiet_minutes", "project_name", "session", "last_at",
@@ -754,7 +700,8 @@ async def my_work(crew: str = "", project: str = "") -> str:
     (their tickets a station holds, with the holder and stage), `led_projects` (projects they
     lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
     `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
-    spec asked them as the owner of a repo: answer each with answer_question). `crew`
+    spec asked them as the owner of a repo, always empty without an enterprise licence: answer each
+    with answer_question). `crew`
     names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
     only its own person's tickets. `project` (a name or an id) keeps `spec_questions` to that
     project: question numbers restart in each project, so name it when you work on one. Empty

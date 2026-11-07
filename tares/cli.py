@@ -286,7 +286,14 @@ def _logout(args: argparse.Namespace):
 
 def plugin_dir() -> Path:
     """The Claude Code plugin for Tares: inside the installed package, or claude-plugin/ in a
-    checkout (an editable install)."""
+    checkout (an editable install). TARES_PLUGIN_DIR, when set, names the plugin to use instead: a
+    test hook, so a suite that edits a copy of the plugin has `tares factory` read that copy."""
+    override = os.environ.get("TARES_PLUGIN_DIR")
+    if override:
+        d = Path(override)
+        if not (d / "bin" / "factory").is_file():
+            raise SystemExit(f"tares: TARES_PLUGIN_DIR ({override}) has no bin/factory")
+        return d
     here = Path(__file__).resolve().parent
     for d in (here / "claude-plugin", here.parent / "claude-plugin"):
         if (d / "bin" / "factory").is_file():

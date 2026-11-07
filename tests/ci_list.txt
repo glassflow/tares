@@ -28,6 +28,7 @@ test_cloud_connect
 test_core_single_person
 test_crew_client
 test_crew_dispatch
+test_crew_fake_claude
 test_crew_packaging
 test_crew_standup
 test_crew_startup_time
@@ -79,6 +80,7 @@ test_github_tickets
 test_goal_first
 test_grants_single
 test_handoffs
+test_handover_single
 test_homebrew_formula
 test_host
 test_http_poll
@@ -110,6 +112,7 @@ test_openai_provider
 test_otlp
 test_otlp_grpc
 test_owner_claims_local
+test_parity
 test_people
 test_people_single
 test_person_attribution

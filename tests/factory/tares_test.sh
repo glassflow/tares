@@ -6,7 +6,7 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
-F="$here/../../claude-plugin/bin/factory"
+F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$here/../../claude-plugin/bin/factory}"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 unset TARES_URL TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
@@ -86,6 +86,8 @@ check "a station kept by name gets the id when its settings are written again" '
 # The orchestrator runs `factory spawn` with its settings env, not the human's shell: it still finds
 # the crew home, Tares and the token, and gives the builder the same.
 orch_env=(HOME="$HOME" PATH="$PATH" CLAUDE_BIN="$CLAUDE_BIN" FAKE_CLAUDE_STATE="$FAKE_CLAUDE_STATE" FACTORY_PAUSE=0)
+# Under FACTORY_BIN (the engine under test) env -i would drop the command to run, and what it needs to find it.
+for v in FACTORY_BIN TARES_FACTORY_ENGINE TARES_PLUGIN_DIR PYTHONPATH; do [ -z "${!v:-}" ] || orch_env+=("$v=${!v}"); done
 while IFS= read -r kv; do orch_env+=("$kv"); done < <(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$FACTORY_CREW_HOME/stations/crew-orchestrator.settings.json")
 env -i "${orch_env[@]}" "$F" spawn builder "Links App" m3 "$repo" "work T3" >"$T/orch.out" 2>&1
 check "orchestrator's own spawn reaches Tares with the token file" 'grep -q "started links-app-build-m3" "$T/orch.out"'

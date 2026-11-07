@@ -1018,13 +1018,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                    "why", "context", "blocks", "tickets", "blocking", "created_at")}
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
-        names = {x["id"]: x["name"] for x in store.list_projects()}
-        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
-                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
-                  "asked_at": q["asked_at"]}
-                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
-                 if q["project"] in names and q["project"] not in hidden
-                 and (not want or q["project"] == want)]
+        asked = team_mod.get().open_questions_for(team_reader(), me["id"], hidden, want)
         return {"ready": ready, "in_progress": doing, "led_projects": led, "desk": desk,
                 "spec_questions": asked}
 
@@ -2423,65 +2417,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The person's answers on this project, newest first."""
         h.project_or_404(uid)
         return {"decisions": store.list_decisions(uid)}
-
-    # ── questions to an area owner (TR-636) ──────────────────────────────────
-    QUESTION_STATES = ("open", "answered")
-
-    @app.post("/api/projects/{uid}/questions", status_code=201)
-    def ask_area(uid: str, request: Request, body: dict = Body(...)):
-        """{repo, text}: a question from the spec for the person who owns the repo (owner/name),
-        numbered Q1, Q2... in the project. It shows in the owner's my_work until they answer.
-        Anyone who can see the project may ask. A repo nobody owns is refused."""
-        project = h.project_or_404(uid)
-        me = work_person(request)
-        try:
-            repo = factory_mod.norm_repo(body.get("repo"))
-        except ValueError as e:
-            h.err(e)
-        text = str(body.get("text") or "").strip()
-        if not text:
-            h.err(ValueError("text: the question for the area owner"))
-        if len(text) > 4000:
-            h.err(ValueError("keep the question to 4000 characters"))
-        owner = h.area_owner(repo)
-        if owner is None:
-            h.err(ValueError(f"{repo} has no area owner; set one with set_area"), 409)
-        if project.get("scope") == "private" and not store.is_project_member(uid, owner["id"]):
-            h.err(PermissionError(f"{owner['name']} owns {repo} but is not on this private "
-                                  "project: ask the project lead to add them"), 403)
-        return store.add_spec_question(uid, owner["id"], repo, text, me["id"], now_utc())
-
-    @app.get("/api/projects/{uid}/questions")
-    def list_questions(uid: str, state: str = ""):
-        """The project's questions to area owners, oldest first; `state` open or answered."""
-        h.project_or_404(uid)
-        st = state.strip().lower()
-        if st and st not in QUESTION_STATES:
-            h.err(ValueError("state is one of: " + ", ".join(QUESTION_STATES)))
-        return {"questions": store.list_spec_questions(uid, st or None)}
-
-    @app.post("/api/projects/{uid}/questions/{qid}/answer")
-    def answer_question(uid: str, qid: str, request: Request, body: dict = Body(...)):
-        """{answer}: the person the question is addressed to answers it. Anyone else is refused."""
-        h.project_or_404(uid)
-        me = work_person(request)
-        q = store.get_spec_question(uid, qid)
-        if q is None:
-            h.err(KeyError(f"project has no question {qid!r}"), 404)
-        if q["to_person_id"] != me["id"]:
-            who = (q["to_person"] or {}).get("name") or q["to_person_id"]
-            h.err(PermissionError(f"{q['id']} is for {who}: only they answer it"), 403)
-        if q["state"] != "open":
-            h.err(ValueError(f"{q['id']} is already answered"), 409)
-        answer = str(body.get("answer") or "").strip()
-        if not answer:
-            h.err(ValueError("answer: your reply to the question"))
-        if len(answer) > 4000:
-            h.err(ValueError("keep the answer to 4000 characters"))
-        if not store.answer_spec_question(uid, q["id"], answer, me["id"], now_utc(),
-                                         via=console_via(request)):
-            h.err(ValueError(f"{q['id']} is already answered"), 409)
-        return store.get_spec_question(uid, q["id"])
 
     @app.post("/api/projects/{uid}/handover")
     def hand_over(uid: str, request: Request, body: dict = Body(default={})):

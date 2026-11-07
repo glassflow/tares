@@ -340,6 +340,7 @@ def _reset_ee_for_tests() -> None:
 AREAS_REASON = "Repo owners need an enterprise licence."
 ACCESS_REASON = "Changing a project's lead, privacy or members needs an enterprise licence."
 CONSENT_REASON = "Agreeing to someone else's grant needs an enterprise licence."
+QUESTIONS_REASON = "Questions to repo owners need an enterprise licence."
 FALLBACKS: list[tuple[str, str, str]] = [
     ("GET", "/api/areas", AREAS_REASON),
     ("PUT", "/api/areas", AREAS_REASON),
@@ -350,6 +351,9 @@ FALLBACKS: list[tuple[str, str, str]] = [
     ("DELETE", "/api/projects/{uid}/members/{person_id}", ACCESS_REASON),
     ("POST", "/api/grants/{gid}/consent", CONSENT_REASON),
     ("POST", "/api/grants/{gid}/decline", CONSENT_REASON),
+    ("POST", "/api/projects/{uid}/questions", QUESTIONS_REASON),
+    ("GET", "/api/projects/{uid}/questions", QUESTIONS_REASON),
+    ("POST", "/api/projects/{uid}/questions/{qid}/answer", QUESTIONS_REASON),
 ]
 
 

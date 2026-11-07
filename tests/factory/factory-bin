@@ -1,0 +1,11 @@
+#!/bin/sh
+# Runs the factory CLI under test as the command in $FACTORY_BIN, one or more words ("tares factory").
+# The suites run "$F" with $F set to this file when FACTORY_BIN is set, so every call stays quoted and a
+# two-word command works; with FACTORY_BIN unset they run the bash script directly, as they always did.
+# A call that lost the variable (an `env -i` that did not carry it) stops here, not by running its first
+# argument as a command.
+if [ -z "${FACTORY_BIN:-}" ]; then
+  echo "factory-bin: FACTORY_BIN is empty; this call dropped it (carry it through env -i)" >&2
+  exit 97
+fi
+exec $FACTORY_BIN "$@"
