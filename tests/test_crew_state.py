@@ -1030,7 +1030,8 @@ init_src = (ROOT / "tares" / "__init__.py").read_text()
 ck("tares/__init__.py itself imports nothing heavy", "import" not in init_src.replace('"""', ""), init_src[:200])
 pkg = sorted(p.name for p in (ROOT / "tares" / "crew").iterdir() if p.suffix == ".py")
 ck("the package has the modules the ticket names", {"__init__.py", "paths.py", "state.py", "locks.py"} <= set(pkg), str(pkg))
-ck("no schema_version.json yet (a later ticket)", not (ROOT / "tares" / "crew" / "schemas").exists())
+sv = ROOT / "tares" / "crew" / "schemas" / "schema_version.json"
+ck("schemas/schema_version.json is shipped (TR-1064) and holds the schema version as JSON", sv.is_file() and json.loads(sv.read_text()).get("schema_version") == 1, str(sv))
 pyproject = (ROOT / "pyproject.toml").read_text()
 ck("the wheel ships the whole tares package, so tares.crew with it", re.search(r'packages = \["tares"', pyproject) is not None)
 

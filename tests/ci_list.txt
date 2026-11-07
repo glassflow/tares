@@ -29,6 +29,7 @@ test_core_single_person
 test_crew_client
 test_crew_dispatch
 test_crew_fake_claude
+test_crew_packaging
 test_crew_standup
 test_crew_startup_time
 test_crew_state
