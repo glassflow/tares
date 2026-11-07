@@ -40,6 +40,7 @@ import httpx
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
+from tares_ee import mcp_questions as mq
 from tares import factory
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
@@ -256,9 +257,9 @@ async def main():
 
         print("== a question answered, from the console and from a session ==")
         as_({**keys["alex"], **STATION})
-        q1 = json.loads(await mf.ask_area("example-org/web", "Which page is checkout on?",
+        q1 = json.loads(await mq.ask_area("example-org/web", "Which page is checkout on?",
                                           project="shop"))
-        q2 = json.loads(await mf.ask_area("example-org/web", "Which page is the cart on?",
+        q2 = json.loads(await mq.ask_area("example-org/web", "Which page is the cart on?",
                                           project="shop"))
         r = await call("kim", "POST", f"/api/projects/{uid}/questions/{q1['id']}/answer",
                        {"answer": "The cart page."})

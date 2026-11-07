@@ -217,8 +217,9 @@ async def main():
 
         print("== the MCP tools the team hands out ==")
         names = [f.__name__ for f in Team().mcp_tools()]
-        ck("Team.mcp_tools() is list_areas, set_area, set_project_access and consent_grant",
-           names == ["list_areas", "set_area", "set_project_access", "consent_grant"], str(names))
+        ck("Team.mcp_tools() is list_areas, set_area, set_project_access, consent_grant and the three question tools",
+           names == ["list_areas", "set_area", "set_project_access", "consent_grant",
+                     "ask_area", "answer_question", "list_questions"], str(names))
         ck("the first two are the plain functions of mcp_areas", list(Team().mcp_tools())[:2] == list(mcp_areas.TOOLS))
 
         await cx.aclose()
