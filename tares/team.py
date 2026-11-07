@@ -333,11 +333,15 @@ def _reset_ee_for_tests() -> None:
 # (method, path, message): one row per route that lives in ee. Without ee the row answers
 # `licence_required`. A ticket that moves a route out of core adds its rows in the same PR.
 AREAS_REASON = "Repo owners need an enterprise licence."
+ACCESS_REASON = "Changing a project's lead, privacy or members needs an enterprise licence."
 FALLBACKS: list[tuple[str, str, str]] = [
     ("GET", "/api/areas", AREAS_REASON),
     ("PUT", "/api/areas", AREAS_REASON),
     ("PUT", "/api/areas/{owner}/{name}", AREAS_REASON),
     ("DELETE", "/api/areas/{owner}/{name}", AREAS_REASON),
+    ("PATCH", "/api/projects/{uid}", ACCESS_REASON),
+    ("POST", "/api/projects/{uid}/members", ACCESS_REASON),
+    ("DELETE", "/api/projects/{uid}/members/{person_id}", ACCESS_REASON),
 ]
 
 

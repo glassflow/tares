@@ -6,7 +6,8 @@ file starts with the people: a new person row is allowed while the licence has a
 Seats are counted over every row in `people`, the owner included. An expired licence keeps every
 person it already has and refuses only adding one. The team home and the team's project view are
 `team_home.py`; the area owners are `areas.py` (routes) and `mcp_areas.py` (MCP tools); ticket
-assignees are `ticket_assignee.py`; the other methods stay single-person until their own tickets
+assignees are `ticket_assignee.py`; a project's lead, privacy and members are `access.py` (routes) and
+`mcp_access.py` (MCP tool); the other methods stay single-person until their own tickets
 move them here.
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 from tares import licence
 from tares.team import SingleTeam
 
-from . import areas, mcp_areas
+from . import access, areas, mcp_access, mcp_areas
 from . import ticket_assignee as assignees
 from . import team_home as home
 
@@ -65,6 +66,7 @@ class Team(SingleTeam):
 
     def register_routes(self, app, host):
         areas.register_routes(app, host)
+        access.register_routes(app, host)
 
     def mcp_tools(self):
-        return [*mcp_areas.TOOLS]
+        return [*mcp_areas.TOOLS, *mcp_access.TOOLS]

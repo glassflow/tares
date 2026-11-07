@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # puts the repo and tests/ on sys.path
 from _env import clean_env
 import tares.mcp_server as m
+from tares_ee import mcp_access
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
 
@@ -238,31 +239,31 @@ async def auth_on():
             ck("list_people lists everyone with id, name, email", {x["email"] for x in ppl if x["email"]}
                >= {"pia@x.dev", "quinn@x.dev", "ada@x.dev"} and all("id" in x and "name" in x for x in ppl),
                str(ppl)[:300])
-            out = json.loads(await m.set_project_access("Mine", scope="private",
+            out = json.loads(await mcp_access.set_project_access("Mine", scope="private",
                                                         add_members=["QUINN@x.dev", pr]))
             ck("set_project_access: scope, and members by email or id", out["scope"] == "private"
                and out["lead"]["id"] == pp
                and ids(out["members"]) == [(pp, "lead"), (pq, "manual"), (pr, "manual")], str(out)[:300])
-            out = json.loads(await m.set_project_access("Mine", remove_members=["quinn@x.dev"]))
+            out = json.loads(await mcp_access.set_project_access("Mine", remove_members=["quinn@x.dev"]))
             ck("... removing by email", ids(out["members"]) == [(pp, "lead"), (pr, "manual")], str(out)[:300])
-            out = json.loads(await m.set_project_access("Mine", lead="ada@x.dev"))
+            out = json.loads(await mcp_access.set_project_access("Mine", lead="ada@x.dev"))
             ck("... naming the lead by email", out["lead"]["id"] == pa, str(out)[:300])
-            bad = await m.set_project_access("Mine", scope="team")
+            bad = await mcp_access.set_project_access("Mine", scope="team")
             ck("... Pia is no longer the lead: the refusal comes back as text",
                bad.startswith("error 403") and "only the project lead" in bad, bad)
-            bad = await m.set_project_access("Mine", add_members=["ghost@x.dev"])
+            bad = await mcp_access.set_project_access("Mine", add_members=["ghost@x.dev"])
             ck("... an unknown person is named", "ghost@x.dev" in bad and "no person" in bad, bad)
-            out = json.loads(await m.set_project_access("Mine"))
+            out = json.loads(await mcp_access.set_project_access("Mine"))
             ck("... with nothing to change it reads the project", out["scope"] == "private"
                and out["lead"]["id"] == pa, str(out)[:300])
             combo = (await mk(cx, B, "Combo", P_)).json()["id"]
-            raw = await m.set_project_access("Combo", lead="ada@x.dev", scope="private",
+            raw = await mcp_access.set_project_access("Combo", lead="ada@x.dev", scope="private",
                                              add_members=["quinn@x.dev"], remove_members=[""])
             out = json.loads(raw) if raw.startswith("{") else {"error": raw}
             ck("a lead handed over in the same call as scope and members: all of it lands",
                out.get("lead", {}).get("id") == pa and out.get("scope") == "private"
                and (pq, "manual") in ids(out.get("members", [])), raw[:300])
-            out = json.loads(await m.set_project_access("Combo", add_members=["", "  "]))
+            out = json.loads(await mcp_access.set_project_access("Combo", add_members=["", "  "]))
             ck("... a blank person is skipped, not a crash", out["lead"]["id"] == pa, str(out)[:300])
 
             print("== deleting ==")

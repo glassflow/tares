@@ -111,7 +111,7 @@ check "a caller with no person (the root token) stays today's flow" '[ "$(last |
 TARES_AUTH_TOKEN=$ashish_tok api POST /api/projects '{"template": "custom", "name": "Plain notes", "objects": []}' >/dev/null
 mkproj "$ashish_tok" "Secret plan"
 hid=$(api GET /api/projects | jq -r '.projects[] | select(.name == "Secret plan") | .id')
-TARES_AUTH_TOKEN=$ashish_tok api PATCH "/api/projects/$hid" '{"scope": "private"}' >/dev/null
+stop_tares; make_private "$T/tares2" "$hid"; start_tares "$T/tares2" root-tok   # PATCH is ee: set the scope in the database
 check "fixture: Plain notes is led by Ashish and is not a software factory project" '[ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Plain notes\") | .lead.name + \"/\" + (.kind // \"none\")" | cut -d/ -f1)" = Ashish ] && [ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Plain notes\") | .kind")" != software_factory ]'
 check "fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind" '[ "$(TARES_AUTH_TOKEN=$kiran_tok api GET /api/projects | jq -r ".projects[] | select(.name == \"Secret plan\") | [.hidden, .lead.name, (.kind // \"none\")] | join(\",\")")" = true,Ashish,none ] && [ "$(TARES_AUTH_TOKEN=$ashish_tok api GET /api/projects | jq -r ".projects[] | select(.name == \"Secret plan\") | .kind")" = software_factory ]'
 (cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Plain notes" >"$T/plainnotes.out" 2>&1)
