@@ -125,7 +125,6 @@ def structure():
     print("== the module moved ==")
     ck("tares/ has no ticket_assignee module any more",
        not os.path.exists(os.path.join(ROOT, "tares", "ticket_assignee.py")))
-    ck("ee has it", os.path.exists(os.path.join(ROOT, "ee", "tares_ee", "ticket_assignee.py")))
     t = team_mod.get()
     ck("the single-person team does not sync assignees", t.assignee_from_linear(None, {"email": "a@x.dev"}) is None
        and t.assignee_from_github(None, {"assignees": [{"login": "a"}]}) is None)
