@@ -368,6 +368,9 @@ LIGHT_PROBE = (
 ) % (str(ROOT), HEAVY)
 env_light = {**SYS_ENV, "PATH": os.environ.get("PATH", ""), "HOME": str(T), "TARES_HOME": str(T / "th"), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
 for mode, args in (("python", ["zz"]), ("bash", ["roster"])):
+    if mode == "bash" and os.name == "nt":
+        print("  skip  the bash route in a bare interpreter: Windows has no bash route (an unported command exits 2)")
+        continue
     r = subprocess.run([sys.executable, "-I", "-c", LIGHT_PROBE, mode, *args], capture_output=True, text=True, env=env_light, cwd=str(T))
     try:
         info = json.loads(r.stdout.strip().splitlines()[-1])

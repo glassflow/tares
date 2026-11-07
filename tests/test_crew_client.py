@@ -344,11 +344,19 @@ ck("key_ok with no key asks without a header", c.key_ok("") is False and seen()[
 c.keep_token()
 tok = home / ".tares-token"
 if os.name == "nt":
-    # no mode bits: the access list names one account and nothing is inherited (icacls prints one entry per line with ":(")
+    # No mode bits. icacls prints one entry per line with ":(". The engine drops every inherited entry and grants the
+    # person full control; SYSTEM, Administrators and OWNER RIGHTS keep their own entries on a file made by an elevated
+    # account (the runner is one) and always could read it, so those are expected. What must be absent is anything
+    # that opens the file to other people: Everyone, Users, Authenticated Users.
     acl = subprocess.run(["icacls", str(tok)], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
     entries = [ln for ln in acl.splitlines() if ":(" in ln]
-    ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and len(entries) == 1 and "(F)" in entries[0],
-       "text=%r entries=%r acl=%r" % (tok.read_text(), entries, acl))
+    low = " ".join(entries).lower()
+    me = (os.environ.get("USERNAME") or "").lower()
+    open_to_others = [w for w in ("everyone", "builtin\\users", "authenticated users", "nt authority\\interactive") if w in low]
+    ck("the token is kept in a file only the person reads",
+       tok.read_text() == "stub-token\n" and me != "" and any(me in e.lower() and "(f)" in e.lower() for e in entries)
+       and not open_to_others and not any("(i)" in e.lower() for e in entries),
+       "text=%r entries=%r open_to_others=%r" % (tok.read_text(), entries, open_to_others))
 else:
     ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and mode(tok) == 0o600, oct(mode(tok)) if tok.exists() else "missing")
 before = tok.stat().st_mtime_ns
