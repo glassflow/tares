@@ -87,6 +87,10 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 
+## Crew engine port
+
+Once a crew command is ported to Python, change both engines in the same PR: CI (`port-drift`, its own workflow) fails a PR that edits a ported bash function without touching its Python module file. It looks at the file, not the function: any edit to `tares/crew/client.py` satisfies every function ported there, so the reviewer still checks that the matching Python changed. It also fails when it cannot find a ported function at all. The `port-drift-ok` label skips it; add or remove the label and the job runs again.
+
 ## Release
 
 Final releases are held while the file `RELEASE_BLOCK` exists; `scripts/check_release_block.sh`

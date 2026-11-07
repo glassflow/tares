@@ -120,6 +120,7 @@ test_person_attribution
 test_personal_docs
 test_pickup
 test_plugin_challenger
+test_port_drift
 test_postgres
 test_pricing
 test_private_any_licence

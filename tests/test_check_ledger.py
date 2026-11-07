@@ -130,6 +130,66 @@ save(led, data)
 code, out = run("--ledger", str(led))
 ck("a row with no owner and not dropped fails", code == 1, f"exit {code}: {out}")
 
+# (e2) things the bash can gain that the ledger must hear about: an env var, a state file, a cmux line
+base = FACTORY.read_text(encoding="utf-8")
+
+
+def bash_copy(name, extra):
+    p = tmp / name
+    p.write_text(base + extra, encoding="utf-8")
+    return p
+
+
+code, out = run("--list-only", "--bash", str(bash_copy("env_new", "\n# reads $FACTORY_ZZ_NEW_KNOB\n")))
+ck("a new env var in the bash exits 1 and is named", code == 1 and "FACTORY_ZZ_NEW_KNOB" in out and "environment variable" in out, f"exit {code}: {out}")
+code, out = run("--list-only", "--bash", str(bash_copy("state_new", '\n# writes "$CREW_HOME/zz-new-state"\n')))
+ck("a new state file in the bash exits 1 and is named", code == 1 and "zz-new-state" in out and "state file" in out, f"exit {code}: {out}")
+code, out = run("--list-only", "--bash", str(bash_copy("home_new", '\n# reads "$HOME/.zz-new-dotfile"\n')))
+ck("a new $HOME dotfile in the bash exits 1 and is named", code == 1 and ".zz-new-dotfile" in out, f"exit {code}: {out}")
+code, out = run("--list-only", "--bash", str(bash_copy("repo_new", '\n# writes "$repo/.factory/zz-new-dir"\n')))
+ck("a new per-repo .factory path in the bash exits 1 and is named", code == 1 and ".factory/zz-new-dir" in out, f"exit {code}: {out}")
+code, out = run("--list-only", "--bash", str(bash_copy("cmux_new", "\n# zz_new_cmux_line talks to cmux\n")))
+ck("a new cmux line in the bash exits 1 and is named", code == 1 and "zz_new_cmux_line" in out and "cmux" in out, f"exit {code}: {out}")
+
+# and the ledger rows that cover them, taken away one by one
+for section, label in (("env_vars", "env var"), ("state_files", "state file"), ("cmux_touchpoints", "cmux touchpoint"),
+                       ("hook_entries", "hook entry")):
+    data = load()
+    # an external state file is only seen through its row, so take a crew_home one; the rest: the last row
+    pick = [r for r in data[section] if r.get("scope") != "external"] or data[section]
+    gone = pick[-1]["name"]
+    data[section] = [r for r in data[section] if r is not pick[-1]]
+    save(led, data)
+    code, out = run("--list-only", "--ledger", str(led))
+    ck("a deleted %s row exits 1 and is named" % label, code == 1 and ("cmux mention" if section == "cmux_touchpoints" else gone) in out and "missing" in out, f"exit {code}: {out}")
+for name in ("<repo>/.factory/worktrees", "<repo>/.git/info/exclude"):
+    data = load()
+    ck("the ledger has a row for %s" % name, any(r["name"] == name for r in data["state_files"]))
+    data["state_files"] = [r for r in data["state_files"] if r["name"] != name]
+    save(led, data)
+    code, out = run("--list-only", "--ledger", str(led))
+    ck("a deleted row for %s exits 1 and is named" % name, code == 1 and name in out, f"exit {code}: {out}")
+
+# a row listed twice
+for section in ("functions", "env_vars", "state_files", "hook_entries", "dispatcher_cases"):
+    data = load()
+    dup = data[section][0]["name"]
+    data[section].append(dict(data[section][0]))
+    save(led, data)
+    code, out = run("--list-only", "--ledger", str(led))
+    ck("a duplicate %s row exits 1 and is named" % section, code == 1 and "twice" in out and dup in out, f"exit {code}: {out}")
+
+# --list-only leaves the ported and owner rules out; the full check applies them
+data = load()
+data["functions"][0]["ticket"] = None
+data["functions"][1]["ported"] = True
+data["functions"][1]["python"] = ""
+save(led, data)
+code, out = run("--list-only", "--ledger", str(led))
+ck("--list-only skips the owner and ported rules", code == 0, f"exit {code}: {out}")
+code, out = run("--ledger", str(led))
+ck("the full check applies the owner and ported rules to the same ledger", code == 1 and "no owning ticket" in out and "ported but its python field is empty" in out, f"exit {code}: {out}")
+
 # (f) the Markdown copy
 md1, md2 = tmp / "one.md", tmp / "two.md"
 c1, o1 = run("--export-md", str(md1))

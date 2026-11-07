@@ -4246,6 +4246,36 @@
       "note": ""
     },
     {
+      "name": "<repo>/.factory/worktrees",
+      "kind": "file",
+      "scope": "external",
+      "path": "<repo>/.factory/worktrees/",
+      "reads": true,
+      "writes": true,
+      "needle": ".factory/worktrees",
+      "what": "worktrees of a project's builders, inside the project's own repo",
+      "ticket": "TR-968",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Made by spawn builder (TR-954); tidy may remove inside it, and tidy_roots lists it for every repo."
+    },
+    {
+      "name": "<repo>/.git/info/exclude",
+      "kind": "file",
+      "scope": "external",
+      "path": "<repo>/.git/info/exclude (the line .factory/)",
+      "reads": true,
+      "writes": true,
+      "needle": "info/exclude",
+      "what": "spawn builder appends a .factory/ line so git ignores the worktrees folder",
+      "ticket": "TR-954",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Found through git rev-parse --git-common-dir, so it is the shared exclude file of a linked worktree too; appended only when the line is missing."
+    },
+    {
       "name": "templates/crew.json",
       "kind": "file",
       "scope": "external",
