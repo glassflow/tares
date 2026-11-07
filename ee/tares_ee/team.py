@@ -9,7 +9,7 @@ person it already has and refuses only adding one. The team home and the team's 
 assignees are `ticket_assignee.py`; a project's lead, privacy and members are `access.py` (routes) and
 `mcp_access.py` (MCP tool); grants that wait for someone's consent are `grants.py` (routes) and
 `mcp_grants.py` (MCP tool); the questions a spec asks a repo's owner are `questions.py` (routes) and
-`mcp_questions.py` (MCP tools); the other methods stay single-person until their own tickets
+`mcp_questions.py` (MCP tools); crews kept apart by machine are `crews.py`; the other methods stay single-person until their own tickets
 move them here.
 """
 from __future__ import annotations
@@ -17,7 +17,7 @@ from __future__ import annotations
 from tares import licence
 from tares.team import SingleTeam
 
-from . import access, areas, mcp_access, mcp_areas, mcp_grants, mcp_questions
+from . import access, areas, crews, mcp_access, mcp_areas, mcp_grants, mcp_questions
 from . import grants as consent
 from . import questions
 from . import ticket_assignee as assignees
@@ -73,6 +73,9 @@ class Team(SingleTeam):
 
     def open_questions_for(self, c, person_id, hidden, want):
         return questions.open_questions_for(c, person_id, hidden, want)
+
+    def resolve_crew(self, name, person_id, machine):
+        return crews.resolve_crew(name, person_id, machine)
 
     def team_home(self, c, request, now):
         return home.team_home(c, request, now)
