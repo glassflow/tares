@@ -1,8 +1,9 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { api, ApiError, cloudApi, type CloudResult } from "../../api";
+import { api, ApiError, cloudApi, isLicenceRequired, type CloudResult } from "../../api";
 import { signInLink, slugFromHost, useCloud, useWorkspaceOverview } from "../../cloud";
+import LicenceNeeded from "../../components/LicenceNeeded";
 import { Banner, Button, Initials, Input, ListRow, ListSection, Skeleton, StatusDot } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
@@ -110,12 +111,13 @@ function AddPerson({ data, adder, onAdded }: { data: FactoryPeopleData; adder: A
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const [signedOut, setSignedOut] = React.useState(false);
+  const [licence, setLicence] = React.useState(false);
   const cloud = adder.kind === "cloud";
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     const to = email.trim();
     if (!to) { setError("Enter an email address."); return; }
-    setBusy(true); setError(""); setSignedOut(false);
+    setBusy(true); setError(""); setSignedOut(false); setLicence(false);
     try {
       if (adder.kind === "cloud") {
         const r = await adder.invite(to);
@@ -128,7 +130,8 @@ function AddPerson({ data, adder, onAdded }: { data: FactoryPeopleData; adder: A
         onAdded(`Added ${p.name}.`);
       }
     } catch (err) {
-      setError(err instanceof ApiError ? sentence(err.message) : "That did not go through. Try again in a moment.");
+      if (isLicenceRequired(err)) setLicence(true);
+      else setError(err instanceof ApiError ? sentence(err.message) : "That did not go through. Try again in a moment.");
     } finally {
       setBusy(false);
     }
@@ -143,6 +146,7 @@ function AddPerson({ data, adder, onAdded }: { data: FactoryPeopleData; adder: A
           {!cloud && <Input label="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} data-testid="people-name" />}
           <Button type="submit" busy={busy} data-testid="people-submit">{cloud ? "Send invite" : "Add"}</Button>
         </div>
+        {licence && <LicenceNeeded what="Adding people" />}
         {signedOut && adder.kind === "cloud" && <SignIn loginUrl={adder.loginUrl} />}
       </form>
     </ListSection>

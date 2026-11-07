@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api } from "../../api";
 import type { Person, ProjectMember } from "../../types";
 import { Picker, usePolling } from "../bits";
+import ActionError from "../ActionError";
 import { Lock } from "../icons";
 import { ViewHead, type Ctx } from "./common";
 
@@ -43,12 +44,12 @@ export function LeadPicker({ id, people, onDone, onCancel }: {
 }) {
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
   const chosen = people.some((p) => p.id === pick) ? pick : "";
   const save = async () => {
     setBusy(true); setErr(undefined);
     try { await api.setProjectAccess(id, { lead_person_id: chosen }); onDone(); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
+    catch (e) { setErr(e); }
     setBusy(false);
   };
   return (
@@ -62,7 +63,7 @@ export function LeadPicker({ id, people, onDone, onCancel }: {
         </button>
         <button type="button" disabled={busy} onClick={onCancel}>Cancel</button>
       </div>
-      {err && <div className="alert error" style={{ margin: "6px 0 0" }}>{err}</div>}
+      {err != null && <ActionError error={err} what="Changing who leads a project" style={{ margin: "6px 0 0" }} />}
     </>
   );
 }
@@ -76,7 +77,7 @@ export function AccessLine({ ctx }: { ctx: Ctx }) {
   const { list, isLead, isAdmin } = useAccess(ctx);
   const [changing, setChanging] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
   if (ctx.s.lead === undefined) return null;   // a daemon from before leads
   const lead = ctx.s.lead;
   const scope = ctx.s.scope ?? "team";
@@ -84,7 +85,7 @@ export function AccessLine({ ctx }: { ctx: Ctx }) {
   const setScope = async (scope: "team" | "private") => {
     setBusy(true); setErr(undefined);
     try { await api.setProjectAccess(ctx.id, { scope }); ctx.refresh(); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
+    catch (e) { setErr(e); }
     setBusy(false);
   };
 
@@ -125,7 +126,7 @@ export function AccessLine({ ctx }: { ctx: Ctx }) {
             : "Team: everyone on this cell can open this project."}
         </p>
       )}
-      {err && <div className="alert error">{err}</div>}
+      {err != null && <ActionError error={err} what="Making a project private" />}
     </div>
   );
 }
@@ -135,7 +136,7 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
   const { list, canMembers, leadNeedsAdmin } = useAccess(ctx);
   const [pick, setPick] = useState("");
   const [busy, setBusy] = useState<string>();
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
   const members = ctx.s.members ?? [];
   const onIt = new Set(members.map((m) => m.id));
   const candidates = list.filter((p) => !onIt.has(p.id));
@@ -144,7 +145,7 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
   const run = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key); setErr(undefined);
     try { await fn(); ctx.refresh(); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
+    catch (e) { setErr(e); }
     setBusy(undefined);
   };
 
@@ -154,7 +155,7 @@ export function MembersView({ ctx }: { ctx: Ctx }) {
                 sub={ctx.s.scope === "private"
                   ? "Only the lead and these people can open this project."
                   : "Everyone on this cell can open this project. Members are the people it is set up for."} />
-      {err && <div className="alert error">{err}</div>}
+      {err != null && <ActionError error={err} what="Changing who is on a project" />}
       {members.length ? (
         <table>
           <thead><tr><th>person</th><th>why they are on it</th><th aria-label="actions" /></tr></thead>

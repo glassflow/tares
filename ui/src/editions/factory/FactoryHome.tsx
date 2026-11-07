@@ -6,7 +6,8 @@ import {
   Toaster, useToast, type Tone,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
-import { ApiError } from "../../api";
+import { ApiError, isLicenceRequired } from "../../api";
+import { licenceSentence } from "@/components/LicenceNeeded";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
@@ -485,6 +486,7 @@ export function FactoryHomeError({ onRetry }: { onRetry?: () => void }) {
 
 /** The sentence of a refusal, or a plain one when the cell could not be reached. */
 function reason(e: unknown): string {
+  if (isLicenceRequired(e)) return licenceSentence();   // plain words under the row, never the raw answer
   return e instanceof ApiError && e.message ? e.message : "Could not reach the cell. Try again in a moment.";
 }
 

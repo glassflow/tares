@@ -36,6 +36,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import LicenceNeeded from "@/components/LicenceNeeded";
 import { applyTheme, currentTheme, type Theme } from "@/theme";
 
 const TONES: Tone[] = ["working", "waiting", "ready", "done", "bad", "quiet"];
@@ -462,6 +463,11 @@ export default function Components() {
           Could not refresh service-a.
         </Banner>
         <Banner tone="warn">{LONG}</Banner>
+      </Section>
+
+      <Section title="Licence needed">
+        <LicenceNeeded what="Adding people" />
+        <LicenceNeeded variant="page" />
       </Section>
 
       <Section title="Toast">

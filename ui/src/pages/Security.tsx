@@ -14,6 +14,7 @@ import OwnerOnly from "../components/OwnerOnly";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
+import ActionError from "../components/ActionError";
 import { copyText } from "../editions/copyText";
 
 // Four distinct credential concepts, one box each:
@@ -637,7 +638,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
   const shownName = (p: Person) => authOn && p.id === "local" && p.name === "You" ? "Local (no login)" : p.name;
   const [editing, setEditing] = useState<PersonDraft>();   // id "new": the add form
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
 
   const start = (p?: Person) => {
     setErr(undefined);
@@ -666,7 +667,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
       }
       setEditing(undefined);
       onChanged();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    } catch (e) { setErr(e); }
     setBusy(false);
   };
   const form = (d: PersonDraft) => (
@@ -725,7 +726,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
         Everyone who works on this instance. Each API key belongs to a person, so you can tell whose
         agent or script is acting.
       </p>
-      {(loadErr || err) && <div className="alert error">{err ?? loadErr}</div>}
+      {(loadErr || err != null) && <ActionError error={err ?? loadErr} what="Adding people" />}
 
       {editing?.id === "new" && <div className="panel" style={{ marginBottom: 12 }}>{form(editing)}</div>}
 

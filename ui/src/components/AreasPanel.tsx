@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import { api } from "../api";
 import type { Area } from "../types";
+import ActionError from "./ActionError";
 import ConfirmDialog from "./ConfirmDialog";
 import { ErrorState, Picker, usePolling } from "./bits";
 
@@ -19,7 +20,7 @@ export default function AreasPanel() {
   const [draft, setDraft] = useState<Draft>();
   const [removing, setRemoving] = useState<Area>();
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
 
   // the admin scope, not the person's display flag: it is what the daemon checks
   const admin = !!me?.scopes.includes("admin");
@@ -38,13 +39,13 @@ export default function AreasPanel() {
       await api.setArea(draft.repo.trim(), draft.person, draft.note.trim());
       setDraft(undefined);
       reload();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    } catch (e) { setErr(e); }
     setBusy(false);
   };
   const remove = async (a: Area) => {
     setRemoving(undefined); setErr(undefined);
     try { await api.deleteArea(a.repo); reload(); }
-    catch (e) { setErr(String((e as Error).message ?? e)); }
+    catch (e) { setErr(e); }
   };
 
   const form = (d: Draft) => (
@@ -89,7 +90,7 @@ export default function AreasPanel() {
         The person who owns each GitHub repo. A project grant that names a repo waits for its owner to
         agree.{!admin && " Take a repo nobody owns yet; an admin changes the rest."}
       </p>
-      {err && <div className="alert error">{err}</div>}
+      {err != null && <ActionError error={err} what="Repo owners" />}
 
       {draft?.isNew && <div className="panel" style={{ marginBottom: 12 }}>{form(draft)}</div>}
 
