@@ -15,6 +15,7 @@ import type {
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
 } from "./types";
 import type { TimelineThread } from "./components/ProjectActivity";
+import { ENTERPRISE_URL, licenceSentence } from "./components/LicenceNeeded";
 
 const TOKEN_KEY = "tares_token";
 export const auth = {
@@ -148,6 +149,18 @@ export class ApiError extends Error {
   }
 }
 
+/** The cell answered a team action with 402 `licence_required`: the action needs an enterprise
+ *  licence. `message` is the plain sentence and `url` the page that explains it. Show it with
+ *  `<LicenceNeeded>`, never as an error. */
+export class LicenceRequired extends ApiError {
+  url: string;
+  constructor(message: string, status = 402, url: string = ENTERPRISE_URL) {
+    super(message, status); this.url = url;
+  }
+}
+
+export const isLicenceRequired = (e: unknown): e is LicenceRequired => e instanceof LicenceRequired;
+
 function unauthorized() {
   auth.clear();
   window.dispatchEvent(new Event("tares-auth-required"));
@@ -170,8 +183,17 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
+      // the licence answer keeps its keys at the top level of the body, not under `detail`
+      if (body && typeof body === "object" && body.code === "licence_required") {
+        throw new LicenceRequired(
+          typeof body.message === "string" && body.message ? body.message : licenceSentence(),
+          402,
+          typeof body.url === "string" && body.url ? body.url : ENTERPRISE_URL,
+        );
+      }
       detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
-    } catch {
+    } catch (e) {
+      if (isLicenceRequired(e)) throw e;
       /* non-JSON error body */
     }
     const wait = Number(res.headers.get("Retry-After"));

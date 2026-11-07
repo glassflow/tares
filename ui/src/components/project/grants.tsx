@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../../api";
+import ActionError from "../ActionError";
 import ConfirmDialog from "../ConfirmDialog";
 import { ErrorState, Picker, usePolling } from "../bits";
 import { FACTORY_POLL_MS, ViewHead, type Ctx } from "./common";
@@ -23,7 +24,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
   const [adding, setAdding] = useState(false);
   const [revoking, setRevoking] = useState<Grant>();
   const [busy, setBusy] = useState<string>();
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
 
   if (error && !data) return <ErrorState error={error} what="the grants" onRetry={reload} />;
   const here = data?.grants ?? [];
@@ -43,7 +44,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
     try {
       await (what === "consent" ? api.consentGrant(g.id) : api.revokeGrant(g.id));
       reload();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    } catch (e) { setErr(e); }
     setBusy(undefined);
   };
 
@@ -72,7 +73,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
                 sub="What you allow the crew to do in this project, in your own words. Team grants hold in every project.">
         {!adding && <button type="button" className="primary" onClick={() => { setErr(undefined); setAdding(true); }}>Add a grant</button>}
       </ViewHead>
-      {err && <div className="alert error">{err}</div>}
+      {err != null && <ActionError error={err} what="Agreeing to a grant" />}
       {adding && <GrantForm ctx={ctx} onCancel={() => setAdding(false)} onSaved={() => { setAdding(false); reload(); }} />}
       {data === undefined ? <div className="dim">loading…</div> : here.length ? (
         <table>{head}<tbody>{here.map(row)}</tbody></table>
