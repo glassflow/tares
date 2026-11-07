@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { Picker, usePolling } from "../../components/bits";
 import { usePeople } from "../../components/usePeople";
-import type { Grant } from "../../types";
+import type { Grant, GrantsView } from "../../types";
 import { consentGrant } from "../api";
 
 // The team side of the Grants view (TR-630): who has agreed to a grant, the Consent button for the
@@ -19,11 +19,12 @@ export function GrantAgreedBy({ part, grant }: { part: "head" | "cell"; grant?: 
 }
 
 /** The Consent button, for the person a waiting grant waits for (or an admin, when it waits for one). */
-export function GrantConsent({ grant, waitingForMe, busy, onBusy, reload, onError }: {
-  grant: Grant; waitingForMe: Grant[]; busy: boolean;
+export function GrantConsent({ grant, list, busy, onBusy, reload, onError }: {
+  grant: Grant; list?: GrantsView; busy: boolean;
   onBusy: (id?: string) => void; reload: () => void; onError: (e: unknown) => void;
 }) {
   const { meId, isAdmin } = usePeople();
+  const waitingForMe = list?.waiting_for_me ?? [];
   const may = grant.state === "waiting" && (waitingForMe.some((g) => g.id === grant.id)
     || (!!meId && grant.waiting_for.some((w) => w.id === meId))
     || (isAdmin && grant.waiting_for.some((w) => w.id === "admin")));
@@ -38,10 +39,10 @@ export function GrantConsent({ grant, waitingForMe, busy, onBusy, reload, onErro
 
 /** Grants of other projects that wait for the caller's yes: they may not see those projects. `row`
  *  and `head` are the core's own, so the table looks the same as the one above it. */
-export function GrantsWaitingElsewhere({ here, waitingForMe, row, head }: {
-  here: Grant[]; waitingForMe: Grant[]; row: (g: Grant) => React.ReactNode; head: React.ReactNode;
+export function GrantsWaitingElsewhere({ here, list, row, head }: {
+  here: Grant[]; list?: GrantsView; row: (g: Grant) => React.ReactNode; head: React.ReactNode;
 }) {
-  const elsewhere = waitingForMe.filter((g) => !here.some((h) => h.id === g.id));
+  const elsewhere = (list?.waiting_for_me ?? []).filter((g) => !here.some((h) => h.id === g.id));
   if (!elsewhere.length) return null;
   return (
     <>

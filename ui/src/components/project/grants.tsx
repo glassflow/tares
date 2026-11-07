@@ -28,7 +28,6 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
 
   if (error && !data) return <ErrorState error={error} what="the grants" onRetry={reload} />;
   const here = data?.grants ?? [];
-  const waitingForMe = data?.waiting_for_me ?? [];
   const leads = !!meId && ctx.s.lead?.id === meId;
 
   const mayRevoke = (g: Grant) => g.state !== "revoked" && (isAdmin || leads
@@ -52,7 +51,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
       <td>{g.in_effect ? <span className="badge ok">In effect</span>
         : g.state === "waiting" ? <span className="badge paused">Waiting for {waitingNames(g) || "no one"}</span> : g.state}</td>
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-        <Slot name="grants.consent" grant={g} waitingForMe={waitingForMe} busy={busy === g.id}
+        <Slot name="grants.consent" grant={g} list={data} busy={busy === g.id}
               onBusy={setBusy} reload={reload} onError={setErr} />
         {mayRevoke(g) && <> <button className="danger" disabled={busy === g.id} onClick={() => setRevoking(g)}>Revoke</button></>}
       </td>
@@ -71,7 +70,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
       {data === undefined ? <div className="dim">loading…</div> : here.length ? (
         <table>{head}<tbody>{here.map(row)}</tbody></table>
       ) : !adding && <div className="empty">No grants yet. Add one, or tell a session what it may do.</div>}
-      <Slot name="grants.waitingElsewhere" here={here} waitingForMe={waitingForMe} row={row} head={head} />
+      <Slot name="grants.waitingElsewhere" here={here} list={data} row={row} head={head} />
       {revoking && (
         <ConfirmDialog title="Revoke this grant?" danger confirmLabel="Revoke"
           message={`“${revoking.words}” stops applying and is never in effect again.`}
