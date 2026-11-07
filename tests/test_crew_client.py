@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 ROOT = tempfile.mkdtemp()
 os.environ["HOME"] = os.path.join(ROOT, "home")
+os.environ["USERPROFILE"] = os.environ["HOME"]  # Windows reads this before HOME
 for k in [k for k in os.environ if k.startswith(("TARES", "FACTORY"))]:
     os.environ.pop(k)
 # a regression in the TARES_KEYRING gate must fail this test, never reach a person's OS keychain
@@ -188,7 +189,16 @@ spawned = []
 real_popen = subprocess.Popen
 
 
+# On Windows the client restricts the key file with icacls, after asking whoami for the user's SID
+# (tares/crew/perms.py): those two are the only processes it may start, and nothing else.
+WINDOWS_OK = ("whoami", "icacls")
+
+
 def no_popen(*a, **kw):
+    argv = a[0] if a else kw.get("args")
+    if os.name == "nt" and isinstance(argv, (list, tuple)) and argv \
+            and Path(str(argv[0])).stem.lower() in WINDOWS_OK:
+        return real_popen(*a, **kw)
     spawned.append(a)
     raise AssertionError("the client must not start a process")
 
@@ -333,7 +343,22 @@ ck("key_ok: Tares refuses another", c.key_ok("nvf_dead0000_revoked") is False)
 ck("key_ok with no key asks without a header", c.key_ok("") is False and seen()[-1]["auth"] is None)
 c.keep_token()
 tok = home / ".tares-token"
-ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and mode(tok) == 0o600, oct(mode(tok)) if tok.exists() else "missing")
+if os.name == "nt":
+    # No mode bits. icacls prints one entry per line with ":(". The engine drops every inherited entry and grants the
+    # person full control; SYSTEM, Administrators and OWNER RIGHTS keep their own entries on a file made by an elevated
+    # account (the runner is one) and always could read it, so those are expected. What must be absent is anything
+    # that opens the file to other people: Everyone, Users, Authenticated Users.
+    acl = subprocess.run(["icacls", str(tok)], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+    entries = [ln for ln in acl.splitlines() if ":(" in ln]
+    low = " ".join(entries).lower()
+    me = (os.environ.get("USERNAME") or "").lower()
+    open_to_others = [w for w in ("everyone", "builtin\\users", "authenticated users", "nt authority\\interactive") if w in low]
+    ck("the token is kept in a file only the person reads",
+       tok.read_text() == "stub-token\n" and me != "" and any(me in e.lower() and "(f)" in e.lower() for e in entries)
+       and not open_to_others and not any("(i)" in e.lower() for e in entries),
+       "text=%r entries=%r open_to_others=%r" % (tok.read_text(), entries, open_to_others))
+else:
+    ck("the token is kept in a file only the person reads", tok.read_text() == "stub-token\n" and mode(tok) == 0o600, oct(mode(tok)) if tok.exists() else "missing")
 before = tok.stat().st_mtime_ns
 n = len(seen())
 c.keep_token()

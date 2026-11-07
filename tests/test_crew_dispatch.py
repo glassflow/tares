@@ -57,6 +57,11 @@ def short(x, n=300):
 
 T = Path(tempfile.mkdtemp(prefix="tares crew dispatch "))
 HAVE_BASH = os.name != "nt" and Path("/bin/bash").exists()
+# A bare environment is enough for Python on Mac and Linux. On Windows the interpreter will not start
+# without SYSTEMROOT ("failed to get random numbers"), so a probe's environment carries it.
+# a bare `-I` probe on Windows still needs the system root and a home (Path.home() reads USERPROFILE) to start
+SYS_ENV = ({k: os.environ[k] for k in ("SYSTEMROOT", "USERPROFILE", "HOME", "TEMP", "TMP") if k in os.environ}
+           if os.name == "nt" else {})
 ENGINE = dispatch.ENGINE_VAR
 
 calls = []
@@ -172,7 +177,7 @@ with ported(TABLE):
     ck("...and runs nothing", not execs and calls == [], short((execs, calls)))
     ck("an invalid value fails even for a command that would go to bash", call_run(["roster"], {ENGINE: "x"})[0] == 2)
 ck("the old fallback variable is not read", "TARES_FACTORY_BASH_FALLBACK" not in
-   (ROOT / "tares" / "crew" / "dispatch.py").read_text() + (ROOT / "tares" / "cli.py").read_text())
+   (ROOT / "tares" / "crew" / "dispatch.py").read_text(encoding="utf-8") + (ROOT / "tares" / "cli.py").read_text(encoding="utf-8"))
 
 # ---------- what a Python command gets and returns ----------
 print("python route")
@@ -227,7 +232,10 @@ ck("...with errors replaced, not raised", all(kw.get("errors") == "replace" for 
 log.clear()
 with mock.patch.object(sys, "stdout", Stream(log, "out")), mock.patch.object(sys, "stderr", Stream(log, "err")), \
         mock.patch.object(os, "execve", lambda *a: None):
-    dispatch.run(["roster"], {}, "/x")
+    try:
+        dispatch.run(["roster"], {}, "/x")
+    except SystemExit:  # Windows has no bash route: an unported command exits 2 there
+        pass
 ck("the bash route leaves the streams alone", log == [], short(log))
 ns = NoReconfigure()
 with ported({("zu",): lambda argv, env: print("é名") or 0}), mock.patch.object(sys, "stdout", ns), mock.patch.object(sys, "stderr", NoReconfigure()):
@@ -247,9 +255,10 @@ UTF_PROBE = (
     "dispatch.run(['zu'], {}, '/x')\n"
 ) % str(ROOT)
 r = subprocess.run([sys.executable, "-I", "-c", UTF_PROBE], capture_output=True, cwd=str(T))
-ck("in a latin-1 console a Python command still writes UTF-8 to stdout", r.stdout.decode("utf-8", "replace") == "é名 out\n" and r.returncode == 0,
+# bytes, so the check sees the encoding; Windows ends a printed line with CRLF, which is not what this check is about
+ck("in a latin-1 console a Python command still writes UTF-8 to stdout", r.stdout.decode("utf-8", "replace").replace("\r\n", "\n") == "é名 out\n" and r.returncode == 0,
    short((r.stdout, r.stderr[-200:])))
-ck("...and to stderr", r.stderr.decode("utf-8", "replace") == "é名 err\n", short(r.stderr))
+ck("...and to stderr", r.stderr.decode("utf-8", "replace").replace("\r\n", "\n") == "é名 err\n", short(r.stderr))
 
 # ---------- the Windows branch ----------
 print("windows")
@@ -290,7 +299,7 @@ ck("the bash route calls os.execve('/bin/bash', ['bash', script, *argv], env)",
    execs == [("/bin/bash", ["bash", "/some dir/factory", "roster", "-x", "a b"], {"K": "v", ENGINE: ""})], short(execs))
 env_obj = {"K": "v"}
 code, out, err, execs = call_run(["roster"], env_obj, Path("/p/factory"))
-ck("...with the same env object and a script given as a Path turned into text", execs and execs[0][2] is env_obj and execs[0][1][1] == "/p/factory", short(execs))
+ck("...with the same env object and a script given as a Path turned into text", execs and execs[0][2] is env_obj and execs[0][1][1] == str(Path("/p/factory")), short(execs))
 
 STUB = T / "stub factory"
 STUB.write_text('echo "ARGC=$#"\n'
@@ -306,7 +315,7 @@ EXEC_PROBE = (
 def run_stub(argv, env):
     payload = json.dumps({"argv": argv, "env": env, "script": str(STUB)})
     # the probe's own environment has a variable the env dict lacks: it must not reach the script
-    penv = {"PATH": os.environ.get("PATH", ""), "PARENT_ONLY": "leaks", "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
+    penv = {**SYS_ENV, "PATH": os.environ.get("PATH", ""), "PARENT_ONLY": "leaks", "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
     r = subprocess.run([sys.executable, "-I", "-c", EXEC_PROBE, payload], capture_output=True, text=True, encoding="utf-8", env=penv, cwd=str(T))
     return r
 
@@ -357,8 +366,11 @@ LIGHT_PROBE = (
     "sys.argv = ['tares', 'factory'] + sys.argv[2:]\n"
     "tares.cli.main()\n"
 ) % (str(ROOT), HEAVY)
-env_light = {"PATH": os.environ.get("PATH", ""), "HOME": str(T), "TARES_HOME": str(T / "th"), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
+env_light = {**SYS_ENV, "PATH": os.environ.get("PATH", ""), "HOME": str(T), "TARES_HOME": str(T / "th"), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
 for mode, args in (("python", ["zz"]), ("bash", ["roster"])):
+    if mode == "bash" and os.name == "nt":
+        print("  skip  the bash route in a bare interpreter: Windows has no bash route (an unported command exits 2)")
+        continue
     r = subprocess.run([sys.executable, "-I", "-c", LIGHT_PROBE, mode, *args], capture_output=True, text=True, env=env_light, cwd=str(T))
     try:
         info = json.loads(r.stdout.strip().splitlines()[-1])
@@ -413,7 +425,7 @@ MOD_PROBE = (
     "dispatch.PORTED[('zz',)] = lambda argv, env: (print('python ran', argv, env.get('KEEP')), 5)[-1]\n"
     "sys.argv = ['tares.crew'] + sys.argv[1:]\nrunpy.run_module('tares.crew', run_name='__main__')\n"
 ) % str(ROOT)
-r = subprocess.run([sys.executable, "-I", "-c", MOD_PROBE, "zz", "x"], capture_output=True, text=True, env={"PATH": os.environ.get("PATH", ""), "KEEP": "yes", "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}, cwd=str(T))
+r = subprocess.run([sys.executable, "-I", "-c", MOD_PROBE, "zz", "x"], capture_output=True, text=True, env={**SYS_ENV, "PATH": os.environ.get("PATH", ""), "KEEP": "yes", "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}, cwd=str(T))
 ck("`python -m tares.crew` calls a registered Python command with argv and os.environ, and exits with its code",
    r.returncode == 5 and r.stdout == "python ran ['zz', 'x'] yes\n", short((r.returncode, r.stdout, r.stderr[-300:])))
 
@@ -435,7 +447,7 @@ if recorded:
     ck("...with the environment _factory built (the address it resolved)", a_env.get("TARESD_URL") == "http://127.0.0.1:9" and a_env.get("TARES_FACTORY_URL") == "http://127.0.0.1:9"
        and a_env.get("TARES_FACTORY_SOURCE") == "environment" and a_env.get("FACTORY_CREW_HOME") == ENV_F["FACTORY_CREW_HOME"], short(a_env.get("TARES_FACTORY_SOURCE")))
     ck("...and the plugin's factory script", Path(a_script) == tares.cli.plugin_dir() / "bin" / "factory" and Path(a_script).is_file(), short(a_script))
-src = (ROOT / "tares" / "cli.py").read_text()
+src = (ROOT / "tares" / "cli.py").read_text(encoding="utf-8")
 ck("cli.py no longer execs bash itself", "os.execve" not in src, "")
 
 FACTORY_PROBE = (

@@ -21,6 +21,7 @@ test_check_ledger
 test_ci_check
 test_ci_e2e
 test_ci_list
+test_ci_windows
 test_claude_usage
 test_clean_env
 test_cli

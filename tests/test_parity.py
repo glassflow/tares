@@ -77,6 +77,18 @@ ck("a string under an id key in JSON is replaced, under another key it is kept",
 ck("a uuid is replaced", parity.norm_text("id 123e4567-e89b-12d3-a456-426614174000") == "id <ID>")
 ck("words and small numbers are kept", parity.norm_text("started 3 stations, port 8788") == "started 3 stations, port 8788")
 ck("CRLF becomes LF", parity.norm_text("a\r\nb") == "a\nb")
+# A Windows temp folder (TR-1066): its backslashes are doubled inside JSON text, its drive letter can change case,
+# and a name can hold a space and a letter outside ASCII. A Path with backslashes in its name is enough here.
+wtmp = Path("C:\\Users\\Jane Do\u00e9\\parity-x")
+nw = parity.norm_text('{"cwd": "C:\\\\Users\\\\Jane Do\u00e9\\\\parity-x\\\\crew"} and C:\\Users\\Jane Do\u00e9\\parity-x\\home', wtmp)
+ck("a Windows temp folder is replaced as a plain path and with its backslashes doubled in JSON text",
+   nw == '{"cwd": "<TMP>\\\\crew"} and <TMP>\\home', nw)
+with mock.patch.object(parity, "is_windows", lambda: True):
+    nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
+ck("...and on Windows the drive letter and folder case do not matter", nc == "in <TMP>\\crew", nc)
+with mock.patch.object(parity, "is_windows", lambda: False):
+    nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
+ck("...elsewhere case still matters", "<TMP>" not in nc, nc)
 
 j1 = parity.norm_file('{"b": 1, "pid": 4242, "started_at": 1762510272, "a": "x"}', "s.json")
 j2 = parity.norm_file('{\n  "a": "x",\n  "started_at": 1762510999,\n  "pid": 17,\n  "b": 1\n}', "s.json")
@@ -105,6 +117,24 @@ ck("the scenario environment drops the person's Claude, XDG, GH, crew, Tares and
    not [k for k in lent if k != "KEEP_ME" and k in env_b], str([k for k in lent if k in env_b and k != "KEEP_ME"]))
 ck("...keeps the rest and points HOME and the engine at the scenario",
    env_b.get("KEEP_ME") == "yes" and env_b["HOME"] == str(work / "env" / "home") and env_b["TARES_FACTORY_ENGINE"] == "bash", str(env_b.get("HOME")))
+
+# TR-1066: the fake Claude Code is a launcher named `claude`, first on PATH and also CLAUDE_BIN.
+launcher = Path(env_b["CLAUDE_BIN"])
+ck("the fake Claude Code is named claude (claude.cmd on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
+ck("...in the first folder of PATH", env_b["PATH"].split(os.pathsep)[0] == str(launcher.parent), env_b["PATH"][:200])
+found_claude = shutil.which("claude", path=env_b["PATH"])
+ck("...so `claude` by name finds it, not a real one", found_claude is not None and Path(found_claude).resolve() == launcher.resolve(), str(found_claude))
+r = subprocess.run([found_claude or str(launcher), "--version"], env=env_b, capture_output=True, text=True, encoding="utf-8", errors="replace")
+ck("...and it runs the Python fake (the version it prints, exit 0)", r.returncode == 0 and r.stdout.strip() != "", f"{r.returncode} {r.stdout!r} {r.stderr!r}")
+r = subprocess.run([found_claude or str(launcher), "agents"], env={**env_b, "FAKE_CLAUDE_AGENTS_FAIL": "1"}, capture_output=True,
+                   text=True, encoding="utf-8", errors="replace")
+ck("...and the fake's exit code reaches the caller (a failing `claude agents` exits 1)", r.returncode == 1, f"{r.returncode} {r.stderr!r}")
+if sys.platform != "win32":
+    ck("on POSIX the launcher is an executable script", os.access(launcher, os.X_OK) and launcher.read_text(encoding="utf-8").startswith("#!/bin/sh"))
+else:
+    raw = launcher.read_bytes()
+    ck("on Windows the launcher is CRLF, passes the exit code on, and holds no non-ASCII path",
+       b"\r\n" in raw and b"exit /b %ERRORLEVEL%" in raw and all(c < 128 for c in raw), raw[:200])
 
 # --- the suites and the count ---------------------------------------------------------------------
 found = parity.suite_scenarios()

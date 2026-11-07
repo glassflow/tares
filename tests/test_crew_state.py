@@ -694,19 +694,23 @@ def reader():
     while not stop.is_set():
         try:
             json.loads(state.read_text(f))
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):  # Windows refuses an open while the file is being replaced
             pass
         except ValueError as ex:
             torn.append(ex)
+        if os.name == "nt":
+            time.sleep(0.005)  # a reader that never pauses can hold the file open past the engine's few retries
 
 
 state.atomic_write_text(f, big + "\n")
-rt = threading.Thread(target=reader)
+rt = threading.Thread(target=reader, daemon=True)
 rt.start()
-for i in range(60):
-    state.atomic_write_text(f, (big if i % 2 else '{"small": 1}') + "\n")
-stop.set()
-rt.join()
+try:
+    for i in range(60):
+        state.atomic_write_text(f, (big if i % 2 else '{"small": 1}') + "\n")
+finally:
+    stop.set()
+    rt.join(10)
 ck("a reader polling while the file is rewritten never sees a partial file", not torn, short(torn[:1]))
 ck("read_json: a file that is not JSON gives the default, or a CrewError naming it",
    state.read_json(T / "nope.json", 7) == 7)
@@ -732,14 +736,19 @@ def start_holder(kind, h, s="crew-reviewer"):
         p = subprocess.Popen(["bash", str(HARNESS), "hold", s], env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
     else:
         code = (f"import sys, time; sys.path.insert(0, {str(ROOT)!r}); from tares.crew import locks, CrewPaths; "
-                f"locks.station_lock({s!r}, CrewPaths.at({str(h)!r})); print('held', flush=True); time.sleep(120)")
+                f"locks.station_lock({s!r}, CrewPaths.at({str(h)!r})); import os; print('held', os.getpid(), flush=True); time.sleep(120)")
         p = subprocess.Popen([sys.executable, "-c", code], env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
     line = p.stdout.readline().decode().strip()
-    assert line == "held", f"{kind} holder did not take the lock: {line!r} {p.stderr.read(500)!r}"
+    assert line.split()[:1] == ["held"], f"{kind} holder did not take the lock: {line!r} {p.stderr.read(500)!r}"
+    # On Windows a venv's python.exe starts the real interpreter as a child, so Popen.pid is the launcher's;
+    # the pid in <lock>/pid is the interpreter's own, which the holder prints.
+    p.holder_pid = int(line.split()[1]) if len(line.split()) > 1 else p.pid
     return p
 
 
 def kill(p):
+    if os.name == "nt":  # the launcher and the interpreter under it both go
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
     p.kill()
     p.wait()
     p.stdout.close()
@@ -767,12 +776,12 @@ for kind in ("bash", "python") if HAVE_BASH else ("python",):
     h = newhome(f"lock-{kind}-holder")
     holder = start_holder(kind, h)
     pidfile = (lock_dir(h) / "pid").read_text()
-    ck(f"{kind} holder writes its own pid and a newline into <lock>/pid", pidfile == f"{holder.pid}\n", repr(pidfile))
+    ck(f"{kind} holder writes its own pid and a newline into <lock>/pid", pidfile == f"{holder.holder_pid}\n", repr(pidfile))
     r = py_lock(h)
     ck(f"a {kind}-held lock refuses Python with the typed error and bash's text",
-       r[0] == "locked" and r[1] == MSG.format(pid=holder.pid, s="crew-reviewer") and r[3].holder == str(holder.pid) and isinstance(r[3], CrewError), short(r))
+       r[0] == "locked" and r[1] == MSG.format(pid=holder.holder_pid, s="crew-reviewer") and r[3].holder == str(holder.holder_pid) and isinstance(r[3], CrewError), short(r))
     ck(f"...at once, without waiting", r[2] < 1.5, f"{r[2]:.2f}s")
-    ck(f"...and the line carries the tares factory: prefix", r[3].line == "tares factory: " + MSG.format(pid=holder.pid, s="crew-reviewer"))
+    ck(f"...and the line carries the tares factory: prefix", r[3].line == "tares factory: " + MSG.format(pid=holder.holder_pid, s="crew-reviewer"))
     if HAVE_BASH:
         rc, _, err = bash(h, "station_lock", "crew-reviewer")
         ck(f"a {kind}-held lock refuses bash with the same text Python raises", rc == 1 and err == r[3].line + "\n", f"rc={rc} {err!r}")
@@ -995,7 +1004,7 @@ try:
     ck("a holder pid is judged by the same path on Windows", locks._holder_alive("4242") and seen == [4242, 4242])
 finally:
     os.kill, locks._pid_alive_windows, locks._is_windows = real_kill, real_win, real_is_win
-src = Path(locks.__file__).read_text()
+src = Path(locks.__file__).read_text(encoding="utf-8")
 ck("locks.py calls os.kill once, after the Windows branch has returned", len(re.findall(r"^\s+os\.kill\(", src, re.M)) == 1 and src.index("return _pid_alive_windows(pid)") < src.index("    os.kill(pid, 0)"))
 
 # ====================================================================================
@@ -1013,9 +1022,9 @@ attempt(lambda: state.merge_crew_defaults(CrewPaths.at(hb2)))
 ck("merge_crew_defaults reads a crew.json with a byte order mark and keeps the person's value", attempt(lambda: state.read_json(cfgp)["human"]["name"]) == "Ana", short(attempt(lambda: state.read_json(cfgp, None))))
 
 print("\n== import ==")
-probe = ("import sys, time\nsys.path.insert(0, %r)\nt = time.time()\nimport tares.crew\ndt = time.time() - t\n"
+probe = ("import sys, time\nsys.path.insert(0, %r)\nbefore = set(sys.modules)\nt = time.time()\nimport tares.crew\ndt = time.time() - t\n"
          "std = set(sys.stdlib_module_names) | set(sys.builtin_module_names) | {'__main__', '_virtualenv'}\n"
-         "extra = sorted({m.split('.')[0] for m in sys.modules} - std - {'tares'})\n"
+         "extra = sorted({m.split('.')[0] for m in set(sys.modules) - before} - std - {'tares'})\n"
          "heavy = [m for m in sys.modules if m.split('.')[0] in ('duckdb','fastapi','uvicorn','starlette','httpx','requests','psutil','pydantic','numpy','pandas','anthropic','openai','filelock') or m in ('tares.daemon','tares.cli','tares.store')]\n"
          "import json\nprint(json.dumps({'extra': extra, 'heavy': heavy, 'secs': dt, 'tares': sorted(m for m in sys.modules if m.startswith('tares'))}))\n") % str(ROOT)
 r = subprocess.run([sys.executable, "-I", "-c", probe], capture_output=True, text=True, cwd=str(T))
@@ -1026,13 +1035,13 @@ ck("...and nothing outside the standard library", info.get("extra") == [], short
 ck("...and only the tares.crew modules and tares itself", set(info.get("tares", [])) <= {"tares", "tares.crew", "tares.crew.errors", "tares.crew.paths", "tares.crew.state", "tares.crew.locks", "tares.crew.perms"},
    short(info.get("tares")))
 ck("...in well under a second", info.get("secs", 99) < 1.0, str(info.get("secs")))
-init_src = (ROOT / "tares" / "__init__.py").read_text()
+init_src = (ROOT / "tares" / "__init__.py").read_text(encoding="utf-8")
 ck("tares/__init__.py itself imports nothing heavy", "import" not in init_src.replace('"""', ""), init_src[:200])
 pkg = sorted(p.name for p in (ROOT / "tares" / "crew").iterdir() if p.suffix == ".py")
 ck("the package has the modules the ticket names", {"__init__.py", "paths.py", "state.py", "locks.py"} <= set(pkg), str(pkg))
 sv = ROOT / "tares" / "crew" / "schemas" / "schema_version.json"
-ck("schemas/schema_version.json is shipped (TR-1064) and holds the schema version as JSON", sv.is_file() and json.loads(sv.read_text()).get("schema_version") == 1, str(sv))
-pyproject = (ROOT / "pyproject.toml").read_text()
+ck("schemas/schema_version.json is shipped (TR-1064) and holds the schema version as JSON", sv.is_file() and json.loads(sv.read_text(encoding="utf-8")).get("schema_version") == 1, str(sv))
+pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
 ck("the wheel ships the whole tares package, so tares.crew with it", re.search(r'packages = \["tares"', pyproject) is not None)
 
 # ====================================================================================

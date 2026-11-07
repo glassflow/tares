@@ -159,8 +159,12 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids."""
     s = s.replace("\r\n", "\n")
     if tmp is not None:
-        for p in {str(tmp), os.path.realpath(tmp), tmp.as_posix(), Path(os.path.realpath(tmp)).as_posix()}:
-            s = s.replace(p, "<TMP>")
+        forms = {str(tmp), os.path.realpath(tmp), tmp.as_posix(), Path(os.path.realpath(tmp)).as_posix()}
+        # a Windows path inside JSON text has its backslashes doubled; and a drive letter may change case
+        forms |= {f.replace("\\", "\\\\") for f in forms if "\\" in f}
+        flags = re.IGNORECASE if is_windows() else 0
+        for p in sorted(forms, key=len, reverse=True):
+            s = re.sub(re.escape(p), "<TMP>", s, flags=flags)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
@@ -242,12 +246,18 @@ def bash_available() -> str:
 
 
 def make_launcher(path: Path, extra: list) -> Path:
-    """An executable that runs the Python fake: a shell script, or a .cmd file on Windows."""
+    """An executable that runs the Python fake: a shell script, or a .cmd file on Windows (returns its path).
+
+    Named `claude`, it is the Claude Code of the scenario: on PATH for a command that runs `claude` by
+    name (the bash engine does for some commands, the Python engine will), and CLAUDE_BIN for the rest.
+    The .cmd form passes the fake's exit code on, and is written with CRLF whatever the platform.
+    The paths in it must be ASCII: cmd.exe reads a batch file in the console's code page."""
     if sys.platform == "win32":
         path = path.with_suffix(".cmd")
-        path.write_text('@"%s" "%s" %s %%*\r\n' % (sys.executable, FAKE_CLAUDE, " ".join(extra)))
+        lines = ['@"%s" "%s" %s %%*' % (sys.executable, FAKE_CLAUDE, " ".join(extra)), "@exit /b %ERRORLEVEL%"]
+        path.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
     else:
-        path.write_text('#!/bin/sh\nexec "%s" "%s" %s "$@"\n' % (sys.executable, FAKE_CLAUDE, " ".join(extra)))
+        path.write_text('#!/bin/sh\nexec "%s" "%s" %s "$@"\n' % (sys.executable, FAKE_CLAUDE, " ".join(extra)), encoding="utf-8")
         path.chmod(0o755)
     return path
 
@@ -264,7 +274,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
     home, crew, state, bindir = (tmp / n for n in ("home", "crew", "claude", "bin"))
     for d in (home, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
-    claude = make_launcher(bindir / "fake-claude", [])
+    claude = make_launcher(bindir / "claude", [])  # claude.cmd on Windows, which is also what `claude` finds on PATH
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
@@ -275,6 +285,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
         PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8", TARES_FACTORY_ENGINE=engine,
         TARES_HOME=str(tmp / "tares-home"),
+        PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),  # `claude` by name finds the fake first
     )
     (tmp / "gitconfig").write_text("[user]\n\tname = Test Crew\n")
     return env
