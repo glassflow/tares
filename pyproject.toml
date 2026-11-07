@@ -35,7 +35,15 @@ dependencies = [
     # small, so base: a fleet scrapes every cell without an extra to remember.
     "prometheus-client>=0.20",
     "cryptography>=42",  # Ed25519 licence check, tares/licence.py
+    # The crew engine (tares.crew) reads process state and stops stale station processes with psutil.
+    "psutil>=5.9",
+    # The crew engine keeps its tokens in the OS keychain through keyring.
+    "keyring>=24",
 ]
+
+# Tests only: tares.crew's JSON schemas are checked with it. Not a runtime dependency.
+[dependency-groups]
+dev = ["jsonschema>=4"]
 
 [project.urls]
 Homepage = "https://www.glassflow.ai/tares"
@@ -84,3 +92,6 @@ packages = ["tares", "ee/tares_ee"]
 "ui/dist" = "tares/console"
 # The Claude Code plugin, so `tares factory` and its stations run from the install.
 "claude-plugin" = "tares/claude-plugin"
+# tares/crew/schemas/*.json is inside the tares package, so `packages = ["tares"]` above already
+# ships it (hatch includes every file under a package, not only .py). tests/test_crew_packaging.py
+# builds a wheel and checks that.

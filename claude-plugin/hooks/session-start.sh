@@ -7,13 +7,24 @@ set -euo pipefail
 
 source_kind=$(jq -r '.source // "startup"' 2>/dev/null || echo startup)
 
+# One line when the installed `tares` is older than this plugin's min_tares (empty otherwise, and when
+# tares is not on PATH or the check fails). It goes after whatever the session is told below, and is
+# the only thing said in a session that would otherwise hear nothing.
+compat=""
+if command -v tares >/dev/null 2>&1; then
+  compat=$(tares hook compat --plugin-root "${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)}" 2>/dev/null </dev/null | head -n 1) || compat=""
+fi
+
 if [ -z "${FACTORY_ROLE:-}" ]; then
-  [ -n "${TARES_PROJECT:-}" ] || exit 0
+  if [ -z "${TARES_PROJECT:-}" ]; then
+    [ -z "$compat" ] || jq -n --arg c "$compat" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+    exit 0
+  fi
   if [ "${TARES_SESSION_KIND:-}" = contributor ]; then
     # `tares factory spec <project>` run by someone who does not lead it: answer, check; never build
     context="This session contributes to the Tares project \`${TARES_PROJECT}\` led by someone else, on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`spec-project\` skill, section Contributor. Do not build tickets."
     [ "$source_kind" = "startup" ] || context="$context This session was resumed or compacted: load the \`spec-project\` skill again, section Contributor, and carry on from its steps."
-    jq -n --arg c "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+    jq -n --arg c "${context}${compat:+ $compat}" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
     exit 0
   fi
   context="This session works on the Tares project \`${TARES_PROJECT_NAME:-$TARES_PROJECT}\` (id \`${TARES_PROJECT}\`) by itself (tares factory session), on ${TARES_FACTORY_URL:-the Tares} through the Tares MCP tools. Follow the \`session\` skill."
@@ -22,7 +33,7 @@ if [ -z "${FACTORY_ROLE:-}" ]; then
   else
     context="$context This session was resumed or compacted: load the \`session\` skill again, re-read the project's tickets and the working doc of the one in progress, then carry on where you left off (a takeover you already asked for is not asked again)."
   fi
-  jq -n --arg c "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+  jq -n --arg c "${context}${compat:+ $compat}" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
   exit 0
 fi
 
@@ -44,4 +55,4 @@ if [ -n "${FACTORY_HOME:-}" ] && [ -f "$FACTORY_HOME/HALT" ]; then
   context="$context The crew is halted ($(jq -r '.reason // ""' "$FACTORY_HOME/HALT" 2>/dev/null)): start nothing new until it is resumed."
 fi
 
-jq -n --arg c "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'
+jq -n --arg c "${context}${compat:+ $compat}" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $c}}'

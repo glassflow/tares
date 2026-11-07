@@ -10,6 +10,7 @@ differ, bash is right.
   state     crew.json, stations.json, events.jsonl, HALT, pace, wake and token files; names; time
   locks     the per-station lock, the same mkdir protocol as bash
   dispatch  which engine runs a `tares factory` command (PORTED, TARES_FACTORY_ENGINE)
+  version   is the installed tares new enough for the plugin (check_plugin_compat, `tares hook compat`)
 """
 from . import errors, locks, paths, state
 from .errors import CrewError, StationLockedError

@@ -4,7 +4,10 @@
     python scripts/update_homebrew_formula.py <version> <formula path>
 
 Rewrites the `url` and `sha256` lines to that version's PyPI sdist. Running it twice with the
-same version changes nothing. PyPI can lag a few minutes behind the upload, so the lookup
+same version changes nothing. The formula installs `tares==<version>` from PyPI with pip into a venv, so
+a new dependency (psutil, keyring and what keyring needs) is resolved by pip and needs no resource
+block here; it does need a binary wheel for the formula's Python (the install runs with
+`--only-binary=:all:`). PyPI can lag a few minutes behind the upload, so the lookup
 retries before it gives up.
 """
 import argparse
