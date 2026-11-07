@@ -15,6 +15,7 @@ from _env import clean_env
 import logging
 import tares.mcp_server as m
 import tares.mcp_factory as mf
+import tares_ee.mcp_grants as mg   # consent_grant moved to ee (TR-922)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)   # the MCP import turns request logs on
 
@@ -420,10 +421,10 @@ async def auth_on():
             who["k"] = KC
             gnum = next(x["id"] for x in (await cx.get(f"{B}/api/grants", headers=KA,
                         params={"project": p1})).json()["grants"] if x["words"] == "ship acme/web fixes")
-            out = await mf.consent_grant(gnum)
+            out = await mg.consent_grant(gnum)
             ck("consent_grant by C is refused", "403" in out or "not one of them" in out, out)
             who["k"] = KB
-            out = await mf.consent_grant(gnum)
+            out = await mg.consent_grant(gnum)
             ck("consent_grant by B makes it active", "active" in out, out)
             who["k"] = KA
             out = await mf.read_grants(p1)

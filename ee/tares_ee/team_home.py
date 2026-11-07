@@ -13,6 +13,7 @@ the single-person home uses. Nothing here is kept: it is all read from what the 
 from __future__ import annotations
 
 from . import areas as areas_mod
+from . import grants as grants_mod
 from tares import factory as factory_mod, factory_home as fh, factory_waiting as fw
 
 YOUR_CREW = {"crew": True, "name": "Your crew"}
@@ -102,7 +103,7 @@ def question_items(t: HomeRead) -> list[dict]:
 def grant_items(t: HomeRead) -> list[dict]:
     rows = [g for g in t.store.all_grant_rows()
             if g["state"] == "waiting" and g["kind"] == "project"
-            and t.c.waits_for_me(g, t.request)]
+            and grants_mod.waits_for_me(t.c, g, t.request)]
     if not rows:
         return []
     refs = t.store._person_refs({g["given_by"] for g in rows})
@@ -116,7 +117,7 @@ def grant_items(t: HomeRead) -> list[dict]:
         if owned:
             detail = (f"{who} gave this for {fw._and(owned)}, which you "
                       f"own. It takes effect when you agree.")
-        elif t.c.waits_for_me(g, t.request) == "admin":
+        elif grants_mod.waits_for_me(t.c, g, t.request) == "admin":
             detail = "It takes effect when an admin agrees."
         else:
             detail = (f"{who} gave this on {project['name'] if project else 'a project'}, which you "
