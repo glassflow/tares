@@ -66,14 +66,15 @@ ROUTES = (("GET", "/api/areas", None),
           ("PUT", "/api/areas", [{"repo": "acme/web", "person_id": "local"}]),
           ("PUT", "/api/areas/acme/web", {"person_id": "local"}),
           ("DELETE", "/api/areas/acme/web", None))
-# TR-921: who leads a project, whether it is private and who is on it; {uid} and {pid} are filled in
+# TR-921: who leads a project, whether it is private and who is on it; {uid}, {pid} (a lead) and {mid} (a member) are filled in
 ACCESS = (("PATCH", "/api/projects/{uid}", {"lead_person_id": "{pid}"}),
-          ("POST", "/api/projects/{uid}/members", {"person_id": "{pid}"}),
-          ("DELETE", "/api/projects/{uid}/members/{pid}", None))
+          ("POST", "/api/projects/{uid}/members", {"person_id": "{mid}"}),
+          ("DELETE", "/api/projects/{uid}/members/{mid}", None))
 
 
-def fill(path, body, uid, pid):
-    return path.format(uid=uid, pid=pid), ({k: v.format(pid=pid) for k, v in body.items()} if body else None)
+def fill(path, body, uid, pid, mid):
+    return (path.format(uid=uid, pid=pid, mid=mid),
+            ({k: v.format(pid=pid, mid=mid) for k, v in body.items()} if body else None))
 
 
 async def main():
@@ -84,11 +85,12 @@ async def main():
         store = app.state.store
 
         pid = store.create_person("Pia", "pia@x.dev")["id"]
+        mid = store.create_person("Quinn", "quinn@x.dev")["id"]
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Shop", "objects": []})).json()["id"]
 
         def access_state():
             p = store.get_project(uid)
-            return (p["lead_person_id"], p["scope"], [m["id"] for m in store.list_project_members(uid)])
+            return (p["lead_person_id"], p["scope"], [m["person_id"] for m in store.list_project_members(uid)])
 
         before = access_state()
 
@@ -102,7 +104,7 @@ async def main():
                 ck(f"{why}: {method} {path} is 402 licence_required", exact_402(r), f"{r.status_code} {r.text[:120]}")
             ck(f"{why}: nothing was written", areas_mod.load(store) == [], str(areas_mod.load(store)))
             for method, path, body in ACCESS:
-                p, b = fill(path, body, uid, pid)
+                p, b = fill(path, body, uid, pid, mid)
                 r = await cx.request(method, p, json=b)
                 ck(f"{why}: {method} {path} is 402 licence_required", exact_402(r, ACCESS_REASON),
                    f"{r.status_code} {r.text[:120]}")
@@ -134,8 +136,9 @@ async def main():
         r = await cx.patch(f"/api/projects/{uid}", json={"lead_person_id": pid})
         ck("a licensed hand over to a lead works (200)", r.status_code == 200, r.text[:200])
         ck("and the project has that lead", access_state()[0] == pid, str(access_state()))
-        r = await cx.post(f"/api/projects/{uid}/members", json={"person_id": pid})
+        r = await cx.post(f"/api/projects/{uid}/members", json={"person_id": mid})
         ck("a licensed member add works (200)", r.status_code == 200, r.text[:200])
+        ck("and the member is on the project", mid in access_state()[2], str(access_state()))
         handed = access_state()
 
         print("== licence removed again: the same routes refuse and the saved area stays ==")
@@ -144,7 +147,7 @@ async def main():
             r = await cx.request(method, path, json=body)
             ck(f"{method} {path} is 402 again", exact_402(r), f"{r.status_code} {r.text[:120]}")
         for method, path, body in ACCESS:
-            p, b = fill(path, body, uid, pid)
+            p, b = fill(path, body, uid, pid, mid)
             r = await cx.request(method, p, json=b)
             ck(f"{method} {path} is 402 again", exact_402(r, ACCESS_REASON), f"{r.status_code} {r.text[:120]}")
         ck("the saved area is untouched", [e["repo"] for e in areas_mod.load(store)] == ["acme/web"])

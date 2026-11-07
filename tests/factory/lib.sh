@@ -20,6 +20,18 @@ seed_people() { # dir "Name=email"...
   (cd "$ROOT" && PYTHONPATH="$ROOT" "$PY" tests/_people.py "$dir/tares.duckdb" "$@") || { echo "FAIL could not seed people"; exit 1; }
 }
 
+# A project made private. Making one private over HTTP is an ee route (it needs a licence), so a test
+# that only needs the private project writes the scope in the database, with no daemon running on it:
+# stop_tares, `make_private <dir> <project id>`, then start_tares again on the same dir.
+make_private() { # dir project-id
+  (cd "$ROOT" && PYTHONPATH="$ROOT" "$PY" -c "
+import sys
+from tares.store import Store
+s = Store(sys.argv[1] + '/tares.duckdb', state_dsn='')
+s.set_project_scope(sys.argv[2], 'private')
+del s" "$1" "$2") || { echo "FAIL could not make the project private"; exit 1; }
+}
+
 start_tares() { # dir [token]
   local dir=$1 token=${2:-} port
   mkdir -p "$dir"
