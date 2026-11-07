@@ -128,6 +128,16 @@ async def routes():
            and "ship acme/web fixes" not in d2["all"])
         r = await cx.post("/api/grants", json={"kind": "team", "words": "run the tests"})
         ck("adding other words changes nothing about it", store.get_grant_row(gid)["state"] == "waiting")
+        r = await cx.post("/api/grants", json={"kind": "project", "project": uid, "words": "ship acme/web fixes"})
+        ck("adding the same words again leaves it waiting (201, the same grant)",
+           r.status_code == 201 and r.json()["grant"]["id"] == gid and r.json()["grant"]["state"] == "waiting",
+           f"{r.status_code} {r.text[:200]}")
+        d = (await cx.get("/api/grants", params={"project": uid})).json()
+        ck("... it did not take effect and is in neither doc",
+           store.get_grant_row(gid)["state"] == "waiting" and "ship acme/web fixes" not in d["project"] + d["all"],
+           d["project"])
+        ck("... and no second grant of those words was made",
+           sum(1 for g in store.all_grant_rows() if g["words"] == "ship acme/web fixes") == 1)
 
         for what, path, body in (("consent", f"/api/grants/{gid}/consent", None),
                                  ("decline", f"/api/grants/{gid}/decline", {"reason": "no"})):
@@ -165,6 +175,11 @@ def tools():
     ck("add_grant and read_grants (core tools) are still there", "add_grant" in names and "read_grants" in names,
        str(names))
     ck("no ee tool is registered", ms.EE_TOOLS == set(), str(ms.EE_TOOLS))
+    from tares import mcp_factory as mf
+    line = mf._grant_line({"id": "G1", "kind": "project", "words": "ship it", "state": "waiting",
+                           "waiting_for": [], "given_at": "2026-11-07T00:00:00"})
+    ck("a waiting grant that waits for no one is not shown as 'waiting for '",
+       "waiting for" not in line and "not in effect" in line, line)
 
 
 asyncio.run(routes())

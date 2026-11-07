@@ -576,6 +576,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
             "needs_lead": needs_lead, "consents": []}))
         if active is not None or (waiting is not None and waits):
             return active or waiting, False
+        if waiting is not None and not team_mod.enabled():
+            # without ee a waiting grant is a permission nobody can agree to: it stays waiting
+            # (revoke is the one way out), and the same words added again do not make it take effect
+            return waiting, False
         if waiting is not None:
             # the lead's (or an admin's) own add of words that sit waiting for someone else's
             # consent: it takes effect, with the areas and owner consents of this add

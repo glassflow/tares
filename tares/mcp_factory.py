@@ -513,7 +513,8 @@ def _grant_line(g: dict) -> str:
     day = str(g.get("given_at") or "")[:10]
     text = f'- [{g["id"]}, {g["kind"]}, {where}] "{g["words"]}" ({day})'
     if g["state"] == "waiting":
-        text += ", waiting for " + ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+        names = ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+        text += f", waiting for {names}" if names else ", waiting and not in effect"
     elif (g.get("given_by") or {}).get("name"):
         text += f", given by {g['given_by']['name']}"
     return text
