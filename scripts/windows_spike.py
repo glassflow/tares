@@ -1117,7 +1117,7 @@ class Spike:
         d = self.plugin
         (d / "hello.txt").write_text("hello from a path with a space\n", encoding="utf-8")
         results = []
-        bash = shutil.which("bash")
+        bash = git_bash()
         # ${CLAUDE_PLUGIN_ROOT} expands to d, quoted or not
         root_win, root_posix = str(d), d.as_posix()
         if IS_WIN:
@@ -1209,7 +1209,7 @@ class Spike:
             parts.append("`where tares` (exit %s): %s" % (r["exit_code"], one_line(r["stdout"], 100) or "nothing"))
             r = st.run(["cmd", "/c", "where tares"], 20)
             parts.append("from cmd (exit %s): %s" % (r["exit_code"], one_line(r["stdout"], 100) or "nothing"))
-        bash = shutil.which("bash")
+        bash = git_bash()
         if bash:
             r = st.run([bash, "-lc", "command -v tares"], 30, primary=not IS_WIN)
             parts.append("from Git Bash `bash -lc \"command -v tares\"` (exit %s): %s" % (r["exit_code"], one_line(r["stdout"], 100) or "nothing"))
@@ -1245,8 +1245,11 @@ class Spike:
             st.details.update(det)
             st.status, st.finding = status, "dry run: " + finding
             return
+        warn = "" if lazy("psutil") else (" WARNING: psutil is missing, so the shell pid recorded may be the py launcher, not your terminal. "
+                                         "Install it (py -m pip install psutil) and run the spike again for a reliable answer.")
+        st.details["shell_pid_reliable"] = bool(lazy("psutil"))
         st.skip("NOT ANSWERED YET: the detached child is running (pid %s, %d s heartbeat). Close this terminal, wait 20 s, open a new one and run: "
-                "py scripts\\windows_spike.py --check-detached \"%s\"" % (p.pid, secs, self.heartbeat))
+                "py scripts\\windows_spike.py --check-detached \"%s\".%s" % (p.pid, secs, self.heartbeat, warn))
 
     # --- 8. keyring --------------------------------------------------------------------------
 
@@ -1297,10 +1300,11 @@ class Spike:
             "claude": self.claude, "claude_note": self.claude_why, "cwd": self.cwd, "home": str(Path.home()),
             "jobs_dir_exists": self.jobs.is_dir(), "session_name": self.name, "out": str(self.out),
             "stdout_encoding": getattr(sys.stdout, "encoding", None),
+            "in_job_object": in_job_object(),
         }
-        st.ok("%s, Python %s, psutil %s, keyring %s, claude %s%s" % (
+        st.ok("%s, Python %s, psutil %s, keyring %s, claude %s%s; this process is in a Windows job object: %s" % (
             platform.platform(), sys.version.split()[0], "installed" if lazy("psutil") else "MISSING", "installed" if lazy("keyring") else "MISSING",
-            self.claude or "NOT FOUND", " (dry run)" if self.dry else ""))
+            self.claude or "NOT FOUND", " (dry run)" if self.dry else "", st.details["in_job_object"]))
 
     def run(self):
         T = self.step
@@ -1352,12 +1356,43 @@ class Spike:
 # ---------------------------------------------------------------------------------------------
 
 
+def in_job_object():
+    """IsProcessInJob for this process (Windows only): tells whether a job object could end a station's children."""
+    if not IS_WIN:
+        return "n/a (not Windows)"
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k = ctypes.windll.kernel32
+        flag = wintypes.BOOL()
+        ok = k.IsProcessInJob(k.GetCurrentProcess(), None, ctypes.byref(flag))
+        return bool(flag.value) if ok else "unknown (IsProcessInJob failed)"
+    except Exception as e:
+        return "unknown (%r)" % e
+
+
+def git_bash():
+    """Git for Windows bash if present, else the bash on PATH (on Windows that may be the System32 WSL launcher)."""
+    if IS_WIN:
+        cands = [r"C:\Program Files\Git\bin\bash.exe", r"C:\Program Files\Git\usr\bin\bash.exe",
+                 r"C:\Program Files (x86)\Git\bin\bash.exe"]
+        gitexe = shutil.which("git")
+        if gitexe:
+            root = Path(gitexe).resolve().parent.parent
+            cands.insert(0, str(root / "bin" / "bash.exe"))
+        for cand in cands:
+            if Path(cand).exists():
+                return cand
+    return shutil.which("bash")
+
+
 def nearest_shell_pid() -> int:
     """The terminal's shell: the closest ancestor that is not a Python or py launcher."""
     me = os.getppid()
     ps = lazy("psutil")
     if not ps:
-        return me
+        return me  # without psutil this can be the py.exe launcher, not the terminal's shell
     try:
         p = ps.Process(os.getpid()).parent()
         for _ in range(6):
@@ -1465,6 +1500,9 @@ def check_detached(path: Path, require_shell_gone: bool = True, stop_child: bool
 def check_detached_mode(file: str) -> int:
     path = Path(file)
     status, msg, det = check_detached(path, require_shell_gone=True)
+    if not lazy("psutil"):
+        msg += (" CAUTION: psutil is missing, so the shell that was watched may have been the py launcher and not the terminal. "
+                "Treat a yes as unproven unless you installed psutil before the first run.")
     print("Detached child: %s" % status.upper())
     print(msg)
     rj = path.parent / RESULTS_JSON
@@ -1606,6 +1644,15 @@ def verdict(results):
     return rows, go, plan_b
 
 
+def result_line(results, go) -> str:
+    if not go:
+        return "Result: no-go until decided"
+    hook = step_by_name(results, "hook_via_claude")
+    if hook is None or hook["status"] != "ok":
+        return "Result: go, hooks failing or unverified (see the hook_via_claude step before relying on it)"
+    return "Result: go"
+
+
 def cell(text) -> str:
     return re.sub(r"\s+", " ", str(text if text is not None else "")).replace("|", "\\|").strip()
 
@@ -1638,7 +1685,7 @@ def render_markdown(results: dict) -> str:
         L += ["## Plan B", "", PLAN_B]
     L += ["## Items for the note", "",
           "Paste this section as the note \"Windows spike results\".", ""]
-    L += ["Result: go" if go else "Result: no-go until decided", ""]
+    L += [result_line(results, go), ""]
     if not go:
         bad = [r for r in rows if r[2] != "yes"]
         L.append("Hard requirements not met: " + "; ".join("%s (%s)" % (r[1], "not answered" if r[2] == "not answered" else "failed") for r in bad) + ".")
@@ -1692,7 +1739,7 @@ def print_summary(results: dict):
         print("%-20s %-8s %7s  %s" % (s["name"], s["status"], s["elapsed_ms"], one_line(s["finding"], 62)))
     rows, go, plan_b = verdict(results)
     print()
-    print("Result: go" if go else "Result: no-go until decided")
+    print(result_line(results, go))
     for r in rows:
         print("  %-62s %s" % (r[1], r[2]))
     if plan_b:
