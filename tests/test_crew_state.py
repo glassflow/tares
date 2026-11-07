@@ -694,19 +694,23 @@ def reader():
     while not stop.is_set():
         try:
             json.loads(state.read_text(f))
-        except FileNotFoundError:
+        except (FileNotFoundError, PermissionError):  # Windows refuses an open while the file is being replaced
             pass
         except ValueError as ex:
             torn.append(ex)
+        if os.name == "nt":
+            time.sleep(0.005)  # a reader that never pauses can hold the file open past the engine's few retries
 
 
 state.atomic_write_text(f, big + "\n")
-rt = threading.Thread(target=reader)
+rt = threading.Thread(target=reader, daemon=True)
 rt.start()
-for i in range(60):
-    state.atomic_write_text(f, (big if i % 2 else '{"small": 1}') + "\n")
-stop.set()
-rt.join()
+try:
+    for i in range(60):
+        state.atomic_write_text(f, (big if i % 2 else '{"small": 1}') + "\n")
+finally:
+    stop.set()
+    rt.join(10)
 ck("a reader polling while the file is rewritten never sees a partial file", not torn, short(torn[:1]))
 ck("read_json: a file that is not JSON gives the default, or a CrewError naming it",
    state.read_json(T / "nope.json", 7) == 7)
