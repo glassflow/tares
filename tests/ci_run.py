@@ -15,8 +15,12 @@ WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
 failure.
 
-The environment is passed on as it is. The unchanged bash suites run against the Python engine on
-Mac and Linux with FACTORY_BIN="tares factory" TARES_FACTORY_ENGINE=python python tests/ci_run.py."""
+The environment is passed on as it is. With FACTORY_BIN set to a command ("tares factory", or
+"python -m tares.crew") the bash suites run that command in place of the bash script; a suite that edits a
+copy of the plugin also sets TARES_PLUGIN_DIR to that copy, so the command hands bash the copy. Then
+TARES_FACTORY_ENGINE picks the engine: bash runs every command in bash through the dispatcher; python
+runs only the ported commands and fails the rest with exit 2 ("not yet ported"), so it passes a suite only
+once every command the suite uses is ported. Mac and Linux only (the suites are bash)."""
 import argparse
 import os
 import subprocess

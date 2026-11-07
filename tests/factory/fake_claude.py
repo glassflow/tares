@@ -255,6 +255,12 @@ def _bg(S: Path, args: list[str], set_agents) -> int:
         print("new conversation failed (fake)")
         return 1
     time.sleep(float(env.get("FAKE_CLAUDE_BG_DELAY") or 0))  # Claude Code takes a moment to register
+    hold = env.get("FAKE_CLAUDE_BG_HOLD")  # a file: the launch waits while it exists (two minutes at most)
+    if hold:
+        for _ in range(1200):
+            if not os.path.exists(hold):
+                break
+            time.sleep(0.1)
     name = ""
     prev = ""
     for a in args:

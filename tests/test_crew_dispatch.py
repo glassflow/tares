@@ -6,7 +6,9 @@ before and the environment reaches the script unchanged (a stub script run by a 
 subprocess); the Windows branch (no exec, a clear message, exit 2); UTF-8 forced before a Python
 command; that the dispatch path imports no duckdb, fastapi, tares.daemon or tares.store; that
 `python -m tares.crew` takes the same routes; and that tares.cli._factory really calls the dispatcher,
-end to end through tares.cli.main with a throwaway crew.
+end to end through tares.cli.main with a throwaway crew; and the test hook TARES_PLUGIN_DIR (the plugin
+folder named is the one bash runs, read at call time; unset or empty changes nothing; a folder without
+bin/factory is an error, not a fall back).
 
 Run: .venv/bin/python tests/test_crew_dispatch.py
 """
@@ -456,6 +458,48 @@ if HAVE_BASH and shutil.which("jq"):
     ck("end to end: an invalid engine exits 2", r.returncode == 2 and "must be" in r.stderr, short(r.stderr))
 else:
     print("  skip  no bash or jq: the roster checks")
+
+# ---------- TARES_PLUGIN_DIR: the plugin under test ----------
+print("TARES_PLUGIN_DIR")
+HOOK = "TARES_PLUGIN_DIR"
+KIT = T / "kit under test"
+(KIT / "bin").mkdir(parents=True)
+(KIT / "bin" / "factory").write_text('#!/usr/bin/env bash\n'
+                                     'echo "KIT $(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) $(cat "$(dirname "${BASH_SOURCE[0]}")/../marker") $*"\n')
+(KIT / "bin" / "factory").chmod(0o755)
+(KIT / "marker").write_text("v1\n")
+KIT_REAL = os.path.realpath(KIT)
+DEFAULT_PLUGIN = (ROOT / "claude-plugin").resolve()
+
+with mock.patch.dict(os.environ, {}, clear=False):
+    os.environ.pop(HOOK, None)
+    ck("without the variable plugin_dir() is the checkout's plugin, as before", tares.cli.plugin_dir().resolve() == DEFAULT_PLUGIN, short(tares.cli.plugin_dir()))
+    os.environ[HOOK] = ""
+    ck("...an empty variable is the same as none", tares.cli.plugin_dir().resolve() == DEFAULT_PLUGIN, short(tares.cli.plugin_dir()))
+    os.environ[HOOK] = str(KIT)
+    ck("with it set plugin_dir() is that folder", tares.cli.plugin_dir() == KIT, short(tares.cli.plugin_dir()))
+    os.environ[HOOK] = str(T / "no such kit")
+    try:
+        tares.cli.plugin_dir()
+        msg = ""
+    except SystemExit as e:
+        msg = str(e)
+    ck("...a folder without bin/factory stops with a message naming the variable, it does not fall back", HOOK in msg and "bin/factory" in msg, msg)
+
+if HAVE_BASH:
+    r = mod(["roster", "a b"], {HOOK: str(KIT)})
+    ck("python -m tares.crew hands bash the script of the folder named", r.returncode == 0 and r.stdout == f"KIT {KIT_REAL} v1 roster a b\n", short((r.returncode, r.stdout, r.stderr[-300:])))
+    (KIT / "marker").write_text("v2\n")
+    r = mod(["roster"], {HOOK: str(KIT)})
+    ck("...and reads the folder at call time: an edit between two calls shows", r.stdout == f"KIT {KIT_REAL} v2 roster\n", short(r.stdout))
+    r = factory(["roster"], {HOOK: str(KIT)})
+    ck("tares factory (through tares.cli.main) uses the folder named too", r.returncode == 0 and r.stdout == f"KIT {KIT_REAL} v2 roster\n", short((r.returncode, r.stdout, r.stderr[-300:])))
+    r = mod(["roster"], {HOOK: str(T / "no such kit")})
+    ck("python -m tares.crew with a folder that has no script exits 1 and says so", r.returncode == 1 and HOOK in r.stderr and r.stdout == "", short((r.returncode, r.stdout, r.stderr[-300:])))
+    r = mod(["roster"], {HOOK: str(KIT), ENGINE: "python"})
+    ck("...the engine switch still rules: engine=python refuses an unported command", r.returncode == 2 and "not yet ported" in r.stderr, short((r.returncode, r.stderr)))
+else:
+    print("  skip  no /bin/bash here: the TARES_PLUGIN_DIR runs")
 
 # ====================================================================================
 shutil.rmtree(T, ignore_errors=True)

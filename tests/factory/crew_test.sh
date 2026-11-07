@@ -7,7 +7,7 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
 T=$(mktemp -d)
-mkdir -p "$T/kit-under-test"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$T/kit-under-test/bin/factory}"
+mkdir -p "$T/kit-under-test"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$T/kit-under-test/bin/factory}"; [ -z "${FACTORY_BIN:-}" ] || export TARES_PLUGIN_DIR="$T/kit-under-test"
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
@@ -230,19 +230,20 @@ check "readable again: the next round revives it" '[ $(( $(launches) - before ))
 
 # One command at a time starts or stops a station. A restart and the watch's revive once both found the
 # same station down and both started it: two live sessions under one name.
-# The holder is a real command, mid-launch (the fake takes a few seconds to register the session), so
-# the check reads what the commands do and not how the engine keeps its lock.
+# The holder is a real command, mid-launch (the fake keeps registering the session until the suite removes the
+# hold file, however slow the machine), so the check reads what the commands do and not how the engine keeps its lock.
 killtree() { local kids k; kids=$(pgrep -P "$1" 2>/dev/null); kill -9 "$1" 2>/dev/null; for k in $kids; do killtree "$k"; done; }
 await_launches() { local _; for _ in $(seq 100); do [ $(( $(launches) - $1 )) -ge "$2" ] && return 0; sleep 0.1; done; return 1; }
 stopped crew-reviewer; before=$(launches)
-FAKE_CLAUDE_BG_DELAY=6 "$F" revive crew-reviewer >"$T/lock-holder.out" 2>&1 &
+hold="$T/bg-hold"; : > "$hold"
+FAKE_CLAUDE_BG_HOLD="$hold" "$F" revive crew-reviewer >"$T/lock-holder.out" 2>&1 &
 holder=$!
-await_launches "$before" 1
+await_launches "$before" 1; held=$?
 "$F" revive crew-reviewer >"$T/lock.out" 2>&1
-check "revive leaves a station another command is starting alone" '[ $(( $(launches) - before )) = 1 ] && grep -q "another factory command" "$T/lock.out"'
+check "revive leaves a station another command is starting alone" '[ $held = 0 ] && [ $(( $(launches) - before )) = 1 ] && grep -q "another factory command" "$T/lock.out"'
 "$F" crew watch --once >/dev/null 2>&1
-check "so does the watch" '[ $(( $(launches) - before )) = 1 ]'
-wait "$holder"
+check "so does the watch" '[ $held = 0 ] && [ $(( $(launches) - before )) = 1 ]'
+rm -f "$hold"; wait "$holder"
 check "the command that held the station started it, once" '[ $(( $(launches) - before )) = 1 ] && grep -q "started crew-reviewer" "$T/lock-holder.out"'
 stopped crew-reviewer; before=$(launches)
 FAKE_CLAUDE_BG_DELAY=60 "$F" revive crew-reviewer >/dev/null 2>&1 &

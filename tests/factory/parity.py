@@ -16,13 +16,17 @@ their checks moved over, with the same assertions.
 
 What is compared, after normalising: the exit code, stdout and stderr of every step; every file in the
 crew home; the calls made to Claude Code and the sessions it lists. Normalised away: the temp folder,
-timestamps, pids, session ids and the key order of JSON.
+timestamps, pids, session ids and the key order of JSON. Ids and epoch times are only replaced where they
+appear as such (after `backgrounded ·`, `job`, `at`, `since`, under an id or time key in JSON): a plain
+eight-digit or ten-digit number is data and is compared as it is.
 
 Result, per side: PASS, FAIL, or SKIP. The Python engine answers exit 2 with "is not yet ported" for a
 command that has not moved over; that side prints `SKIP python: not ported`. Without bash (Windows)
 the bash side prints `SKIP bash: ...`. Exit 0 when the bash side passes and the Python side passes
 (same normalised output as bash) or is skipped. Exit 1 when the bash side fails, or when Python runs
-and fails a check or differs from bash.
+and fails a check or differs from bash. On Windows a skipped bash side is expected and the Python side
+stands alone; anywhere else a skipped bash side (no bash or jq) is an error: exit 1, and the scenario
+does not count in --coverage.
 
 Coverage. A "scenario" of a bash suite (the suites named in tests/factory/ci_list.txt) is one `check
 "<label>"` call: a source line that starts, after any indentation, with `check "`. A check in a loop
@@ -133,10 +137,18 @@ scenario(Scenario(
 # Normalising
 
 ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")
-EPOCH = re.compile(r"(?<![\d.])1[5-9]\d{8}(?:\d{3})?(?![\d.])")
+# An epoch time is replaced only where it is a time: after a word that says so (`at`, `since`, `until`,
+# `ts`, `time`, `epoch`, or a name ending in _at, _ts, _time, At), with a `=`, `:` or space between. A
+# plain ten-digit number elsewhere (a port, a count, an id) is kept.
+EPOCH = re.compile(r"(?P<pre>(?<![\w.])(?:at|since|until|epoch|ts|time|\w*_at|\w*_ts|\w*_time|\w*At)[\"']?\s*[=:]?\s*[\"']?)"
+                   r"1[5-9]\d{8}(?:\d{3})?(?![\d.])")
+EPOCH_VALUE = re.compile(r"1[5-9]\d{8}(?:\d{3})?")
 UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 SESSION = re.compile(r"\bsession-\d+\b")
-JOB_ID = re.compile(r"\b[0-9a-f]{8}\b")
+# A job id (eight hex digits) is replaced only where a job id is printed: after `backgrounded ·`, or after
+# job, session, id, stop or rm. In JSON, a string under an id key is replaced whole (see ID_KEYS).
+JOB_ID = re.compile(r"(?P<pre>\bbackgrounded[^0-9a-f\n]+|\b(?:job|session|id|stop|rm)[ =:]+[\"']?)[0-9a-f]{8}\b")
+HEX8 = re.compile(r"[0-9a-f]{8}")
 PID_TEXT = re.compile(r"\b(pid|PID)([ =:]+)\d+")
 PID_KEYS = {"pid", "ppid", "watch_pid", "watchPid"}
 ID_KEYS = {"sessionId", "session_id", "id"}
@@ -151,10 +163,10 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
             s = s.replace(p, "<TMP>")
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
-    s = EPOCH.sub("<TS>", s)
+    s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
     s = PID_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}<PID>", s)
     s = SESSION.sub("<ID>", s)
-    s = JOB_ID.sub("<ID>", s)
+    s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
     return s
 
 
@@ -166,6 +178,10 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
     if isinstance(v, list):
         return [norm_json(x, tmp, key) for x in v]
     if isinstance(v, str):
+        if key in ID_KEYS and HEX8.fullmatch(v):
+            return "<ID>"
+        if TIME_KEY.search(key) and EPOCH_VALUE.fullmatch(v):
+            return "<TS>"
         return norm_text(v, tmp)
     if isinstance(v, (int, float)) and not isinstance(v, bool):
         if key in PID_KEYS:
@@ -211,9 +227,14 @@ def command_for(engine: str) -> list:
     return shlex.split(override) if override else [sys.executable, "-m", "tares.crew"]
 
 
+def is_windows() -> bool:
+    """A function so a test can patch it."""
+    return sys.platform == "win32"
+
+
 def bash_available() -> str:
     """"" when the bash engine can run here, else the reason it cannot."""
-    if sys.platform == "win32":
+    if is_windows():
         return "needs bash, which is not available on Windows"
     if not shutil.which("bash") or not shutil.which("jq"):
         return "needs bash and jq on PATH"
@@ -231,6 +252,12 @@ def make_launcher(path: Path, extra: list) -> Path:
     return path
 
 
+# What the person's own shell must not lend a scenario: the crew's and Tares' settings, Claude Code's
+# config and job folders, the XDG folders and GitHub's CLI settings (all of them move state or a login).
+STRIPPED_PREFIXES = ("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_", "PARITY_", "FAKE_CLAUDE_",
+                     "CLAUDE_CONFIG_DIR", "CLAUDE_JOB_DIR", "XDG_", "GH_")
+
+
 def crew_env(tmp: Path, engine: str) -> dict:
     """The environment of a throwaway crew: everything under tmp, the Python fake for Claude Code, no
     station or Tares settings from the person's own shell."""
@@ -239,7 +266,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
         d.mkdir(parents=True, exist_ok=True)
     claude = make_launcher(bindir / "fake-claude", [])
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_", "PARITY_", "FAKE_CLAUDE_"))
+           if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
     env.update(
         HOME=str(home), USERPROFILE=str(home), FACTORY_CREW_HOME=str(crew), FAKE_CLAUDE_STATE=str(state),
@@ -349,6 +376,12 @@ def evaluate(sc: Scenario, out=print) -> tuple:
         else:
             out(f"PASS {e}: {len(s.passed)} checks")
     b, p = sides["bash"], sides["python"]
+    if b.skip and not is_windows():
+        # Bash is the reference. Only Windows has none: elsewhere a missing bash or jq must not turn
+        # "matches bash" into "the Python engine ran".
+        code = 1
+        out(f"ERROR bash: the bash side cannot run on this host ({b.skip}); there is nothing to compare "
+            "the Python side with")
     if not b.skip and not p.skip and not b.failed and not p.failed and b.text != p.text:
         code = 1
         out("FAIL python: output differs from bash (normalised), bash first")
