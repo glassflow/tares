@@ -83,8 +83,8 @@ owner_of = owner   # the route handlers below have a path parameter called `owne
 
 def register_routes(app, host) -> None:
     """The `/api/areas` routes. Each one answers `licence_required` unless the licence allows ee,
-    before it reads the request. Without ee at all the same paths answer from
-    `tares.team.FALLBACKS`."""
+    before it does anything with the request (a body FastAPI cannot parse is a 422 first). Without
+    ee at all the same paths answer from `tares.team.FALLBACKS`."""
     store = host.store
     lock = threading.Lock()
 
