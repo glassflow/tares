@@ -792,7 +792,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by cmd_crew_update and watch_claude_move (TR-964): TR-964 stubs it as never frozen until TR-965 ports the freeze check."
     },
     {
       "name": "frozen_field",
@@ -902,7 +902,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by launch (TR-953), which stamps each station with the version of the kit it starts on. TR-953 ports it with the rest of launch (the fingerprint of the kit folder it starts on); TR-965 adds the frozen-kit use."
     },
     {
       "name": "kit_clean",
@@ -1265,7 +1265,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which port it with a stub for pace_read until TR-962; TR-961 completes it."
+      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which port it with a stub for pace_read until TR-962; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the TR-955 stub for pace_read; TR-961 completes it."
     },
     {
       "name": "pace_read",
@@ -1276,7 +1276,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc."
+      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc. Also called by rearm_text (TR-961), which uses the same stub until TR-962."
     },
     {
       "name": "pace_closed",
@@ -1705,7 +1705,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Called from claude_move to stop spare sessions after a move; retry handling lives in TR-964."
+      "note": "Called from claude_move (TR-963) to stop spare sessions after a move: TR-963 ports the stopping of spares with claude_move; TR-964 adds the retry handling."
     },
     {
       "name": "duplicate_sessions",
@@ -1760,7 +1760,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by cc_movable and cc_pick (TR-963): TR-963 stubs it as never waiting (the watch has not failed a move yet) until TR-964 ports the real check."
     },
     {
       "name": "cc_movable",
@@ -1793,7 +1793,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by claude_move (TR-963) after a failed move: TR-963 stubs it as a fixed delay of FACTORY_CC_BACKOFF seconds until TR-964 ports the doubling."
     },
     {
       "name": "cc_retry_in",
@@ -1826,7 +1826,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by claude_move (TR-963) after a move: TR-963 stubs it as a no-op until TR-964 ports the retry records."
     },
     {
       "name": "claude_move",
@@ -2442,7 +2442,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by cmd_doctor (TR-969): TR-969 ports doctor without this check (no line printed) until TR-970 adds it."
     },
     {
       "name": "doctor_lsp",
@@ -2453,7 +2453,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Called by cmd_doctor (TR-969): TR-969 ports doctor without this check (no line printed) until TR-970 adds it."
     },
     {
       "name": "lsp_offer",
