@@ -8,27 +8,26 @@ import {
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
 import { licenceSentence } from "@/components/LicenceNeeded";
+import { Slot } from "@/eeSlots";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { usePagePolling } from "../usePagePolling";
 import {
-  allowDesk, answerQuestion, consentGrant, declineGrant, deskReply, finishProject, getHome, keepAssumption, keepForLater,
+  allowDesk, deskReply, finishProject, getHome, keepAssumption, keepForLater,
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, TeamHomeHandler,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
 import { Detail, DetailLines } from "./HomeDetail";
 import { CrewLimit, ReposYouOwn, TeamCrews } from "./TeamSide";
 import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
-import { AnswerPanel, DeclineDialog, type AnswerGiven } from "./WaitingActions";
-import { WaitingForYou } from "./WaitingForYou";
+import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
-import { YouAreWaitingOn } from "./YouAreWaitingOn";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
 // connected tools. FactoryHomeView is pure: it draws the HomeData it is given. The default export
@@ -422,16 +421,16 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
             <StartChecklistHidden block={data.start} title={START_TITLE} show={showStart} onShown={onStartShown} />
           )}
           {isTeam(data) ? (
-            <WaitingForYou
-              items={data.waiting_for_you}
-              renderAction={(a, item) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} />}
+            // the team's lists are enterprise: without it the single-person list shows
+            <Slot name="home.waiting" items={data.waiting_for_you}
+              renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} />}
               errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
               panels={panels}
-            />
+              fallback={<Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />} />
           ) : (
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
-          {isTeam(data) && <YouAreWaitingOn entries={data.you_are_waiting_on ?? []} />}
+          {isTeam(data) && <Slot name="home.waitingOn" entries={data.you_are_waiting_on ?? []} />}
           <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} />
         </div>
         <aside className={RIGHT}>
@@ -610,7 +609,11 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const [allow, setAllow] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [close, setClose] = React.useState<{ item: HomeItem; project: string } | null>(null);
   const [answering, setAnswering] = React.useState<{ item: HomeItem; action: HomeAction } | null>(null);
-  const [declining, setDeclining] = React.useState<{ item: HomeItem; grant: string } | null>(null);
+  // The team's part (agree, decline, the answer to a spec question) is enterprise: its component
+  // registers a handler here when it is loaded, and `dialogRow` is the row whose dialog it shows.
+  const team = React.useRef<TeamHomeHandler | null>(null);
+  const [dialogRow, setDialogRow] = React.useState<string | null>(null);
+  const onTeamHandler = React.useCallback((h: TeamHomeHandler | null) => { team.current = h; }, []);
   const working = React.useRef(new Set<string>());
   const timers = React.useRef(new Set<ReturnType<typeof setTimeout>>());
   React.useEffect(() => () => { timers.current.forEach(clearTimeout); }, []);
@@ -715,20 +718,19 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
           working.current.delete(item.id);
         }
       })();
-    } else if (a.do === "agree") {
-      if (typeof a.grant === "string") {
-        const grant = a.grant;
-        void run(item, "agree", () => consentGrant(grant), "Agreed. The grant starts once everyone it waits for has agreed.", () => {});
-      }
-    } else if (a.do === "decline") {
-      if (typeof a.grant === "string") { clearError(item.id); setDeclining({ item, grant: a.grant }); }
+    } else if (a.do === "agree" || a.do === "decline") {
+      // without the enterprise part the buttons say what is missing, as any refused call does
+      if (!team.current?.act(a, item)) update(item.id, () => ({ error: licenceSentence() }));
     }
   };
 
   const sendAnswer = ({ item, action }: { item: HomeItem; action: HomeAction }, given: AnswerGiven) => {
     const desk = typeof action.desk === "string" ? action.desk : "";
     const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice)
-      : () => answerQuestion(String(action.project), String(action.question), given.words);
+      : () => {
+          if (!team.current) return Promise.reject(new ApiError(licenceSentence(), 402));
+          return team.current.answer(String(action.project), String(action.question), given.words);
+        };
     void run(item, "answer", call, "Answered. It is on its way back to whoever asked.", () => setAnswering(null));
   };
   const closeAnswer = () => { if (answering) clearError(answering.item.id); setAnswering(null); };
@@ -750,13 +752,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
             changed({ item: allow.item.id });
           }} />
       )}
-      {declining && (
-        <DeclineDialog key={declining.item.id} item={declining.item}
-          busy={rows[declining.item.id]?.busy === "decline"} error={rows[declining.item.id]?.error ?? null}
-          onClose={() => { clearError(declining.item.id); setDeclining(null); }}
-          onConfirm={(why) => void run(declining.item, "decline", () => declineGrant(declining.grant, why),
-            "Declined. The grant is revoked.", () => setDeclining(null))} />
-      )}
+      <Slot name="home.teamActions" run={run} clearError={clearError} rows={rows} onHandler={onTeamHandler} onDialog={setDialogRow} />
       {close && (
         <CloseDialog key={close.item.id} item={close.item} project={close.project} onClose={() => setClose(null)}
           onDone={() => {
@@ -769,7 +765,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   );
   // A refusal shows once: in the dialog while one is open for the row, under the row otherwise.
   const underRows = Object.fromEntries(Object.entries(rows).map(([id, s]) =>
-    [id, id === declining?.item.id ? { ...s, error: undefined } : s]));
+    [id, id === dialogRow ? { ...s, error: undefined } : s]));
   return { rows: underRows, onAction, dialogs, panels };
 }
 

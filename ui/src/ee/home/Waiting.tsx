@@ -1,73 +1,20 @@
+// Tares enterprise licence, see ee/LICENSE
 import * as React from "react";
+import { Link } from "react-router-dom";
 
-import { Button, EmptyState, ListRow } from "../../components/edition";
+import { Button, EmptyState, ListRow } from "@/components/edition";
 import { cn } from "@/lib/utils";
-import { Detail, DetailLines } from "./HomeDetail";
-import type { HomeAction, HomeItem } from "./home.types";
-import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
+import { Detail, DetailLines } from "@/editions/factory/HomeDetail";
+import type { HomeAction, HomeItem, HomeWaitingOn } from "@/editions/factory/home.types";
+import { Sender, senderWords } from "@/editions/factory/Sender";
+import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "@/editions/factory/waitingGroups";
 
-// "Waiting for you" on a cell with more than one person: only what is addressed to the person,
-// each item with who it comes from. A cell of one keeps the list in FactoryHome.tsx.
+// The team's side of the factory home: "Waiting for you" with who each item is from, and "You are
+// waiting on". A cell of one keeps the plain list in FactoryHome.tsx.
 
 const SHOW_FIRST = 8;
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
 const MUTED = "text-xs text-muted-foreground";
-
-// People other than the crew wear one of these, chosen by name so a person keeps their colour.
-const PEOPLE: { bg: string; fg: string }[] = [
-  { bg: "#1e0f00", fg: "#faf9ec" },
-  { bg: "#2f5d8a", fg: "#ffffff" },
-  { bg: "#6b4f8a", fg: "#ffffff" },
-];
-const CREW_COLOUR = { bg: "var(--accent)", fg: "var(--on-accent)" };
-
-export function colourOf(key: string): { bg: string; fg: string } {
-  let h = 0;
-  for (const ch of key) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-  return PEOPLE[h % PEOPLE.length];
-}
-
-/** Who an item is from, in words, for the meta line: "your crew", or the person's name. */
-export function senderWords(from: HomeItem["from"]): string {
-  return !from || from.crew === true ? "your crew" : from.name;
-}
-
-/** The mark next to a row: the crew's mark, the person's picture (TR-1016) when they have one,
- *  else the person's initial in their colour. `small` is the member square on a project row. */
-export function Sender({ from, small }: { from: HomeItem["from"]; small?: boolean }) {
-  const crew = !from || from.crew === true;
-  const name = crew ? "Your crew" : from.name;
-  const c = crew ? CREW_COLOUR : colourOf(from.id ?? from.name);
-  const [failed, setFailed] = React.useState(false);
-  const pic = !crew && from?.picture && /^https:\/\//i.test(from.picture) && !failed ? from.picture : null;
-  const size = small ? "size-5" : "mt-0.5 size-7";
-  if (crew) {
-    return (
-      <span role="img" aria-label={small ? name : `From ${name}`} title={name} data-testid={small ? "project-member" : "waiting-from"}
-            data-from="crew" className={cn("grid flex-none place-items-center border border-border bg-card", size)}>
-        <img src="/tares-mark.svg" alt="" aria-hidden className={small ? "w-3.5" : "w-4.5"} />
-      </span>
-    );
-  }
-  if (pic) {
-    return (
-      <span role="img" aria-label={small ? name : `From ${name}`} title={name} data-testid={small ? "project-member" : "waiting-from"}
-            data-from="picture" className={cn("flex-none overflow-hidden rounded-full bg-muted", size)}>
-        <img src={pic} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed(true)} className="size-full object-cover" />
-      </span>
-    );
-  }
-  return (
-    <span
-      role="img" aria-label={small ? name : `From ${name}`} title={name} data-testid={small ? "project-member" : "waiting-from"}
-      className={cn("grid flex-none select-none place-items-center font-semibold", small ? "size-5 text-[11px]" : "mt-0.5 size-7 text-[13px]")}
-      style={{ background: c.bg, color: c.fg }}
-      data-user-text
-    >
-      {(crew ? "Y" : Array.from(name)[0] ?? "?").toUpperCase()}
-    </span>
-  );
-}
 
 function Row({ item, renderAction, error, panel }: {
   item: HomeItem; renderAction: (a: HomeAction, item: HomeItem) => React.ReactNode; error?: string; panel?: React.ReactNode;
@@ -144,6 +91,54 @@ export function WaitingForYou({ items, renderAction, errors, panels }: {
             <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
           </>
         )}
+      </div>
+    </section>
+  );
+}
+
+/** What the list holds: projects the person leads, projects nobody leads yet, or both. */
+export function scopeText(entries: HomeWaitingOn[]): string {
+  const none = entries.filter((e) => e.no_lead).length;
+  if (none === 0) return "projects you lead";
+  if (none === entries.length) return "projects with no lead yet";
+  return "projects you lead, and ones with no lead yet";
+}
+
+export function YouAreWaitingOn({ entries }: { entries: HomeWaitingOn[] }) {
+  if (entries.length === 0) return null;
+  return (
+    <section aria-label="You are waiting on" className="min-w-0" data-testid="waiting-on">
+      <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="m-0! text-base!">You are waiting on</h2>
+        <span className="text-[13px] text-muted-foreground" data-testid="waiting-on-scope">{scopeText(entries)}</span>
+      </div>
+      <div className="border border-border bg-card">
+        {entries.map((e) => {
+          const links = e.actions.filter((a) => a.href);
+          return (
+            <ListRow key={e.project.id} data-testid="waiting-on-row"
+                     className="items-start justify-between gap-x-4 gap-y-3 px-[18px]! py-4!">
+              <div className="min-w-0 flex-[1_1_300px]">
+                {/* the name opens the project; the row itself holds buttons, so it is not one link */}
+                <Link to={`/projects/${encodeURIComponent(e.project.id)}`} data-testid="waiting-on-project" data-user-text
+                      className="block w-fit font-semibold text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+                  {e.title}
+                </Link>
+                {e.no_lead && <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="waiting-on-no-lead">No lead yet</div>}
+                <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text>{e.detail}</div>
+              </div>
+              {links.length > 0 && (
+                <div className="flex max-w-full flex-none flex-wrap gap-2">
+                  {links.map((a) => (
+                    <Button key={a.label} asChild variant="secondary" className="h-8 text-[13px]!">
+                      <Link to={a.href!}>{a.label}</Link>
+                    </Button>
+                  ))}
+                </div>
+              )}
+            </ListRow>
+          );
+        })}
       </div>
     </section>
   );
