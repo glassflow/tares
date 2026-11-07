@@ -194,7 +194,7 @@ ck("resolve() gives that key with its workspace", L.resolve() == (BASE, key_now(
 
 print("an older login.json with the key in it moves to the keychain once")
 reset()
-legacy = {"cloud": "https://cp.example", "cell": "acme", "cell_url": BASE + "/", "key": "nvf_old1_legacykey",
+legacy = {"cloud": "https://cp.example", "cell": "acme", "cell_url": BASE + "/", "key": "nvf_old1_legacykey",   # gitleaks:allow, a fake key for a test
           "key_id": "old1", "machine": "m1", "signed_in_at": "2026-01-01T00:00:00Z"}
 L.login_file().parent.mkdir(parents=True, exist_ok=True)
 L.login_file().write_text(json.dumps(legacy))
