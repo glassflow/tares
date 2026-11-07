@@ -1023,7 +1023,7 @@ info = json.loads(r.stdout) if r.returncode == 0 else {}
 ck("importing tares.crew works in a bare interpreter", r.returncode == 0, r.stderr[-400:])
 ck("importing tares.crew pulls in no duckdb, fastapi, tares.daemon or other heavy module", info.get("heavy") == [], short(info.get("heavy")))
 ck("...and nothing outside the standard library", info.get("extra") == [], short(info.get("extra")))
-ck("...and only the tares.crew modules and tares itself", set(info.get("tares", [])) <= {"tares", "tares.crew", "tares.crew.errors", "tares.crew.paths", "tares.crew.state", "tares.crew.locks"},
+ck("...and only the tares.crew modules and tares itself", set(info.get("tares", [])) <= {"tares", "tares.crew", "tares.crew.errors", "tares.crew.paths", "tares.crew.state", "tares.crew.locks", "tares.crew.perms"},
    short(info.get("tares")))
 ck("...in well under a second", info.get("secs", 99) < 1.0, str(info.get("secs")))
 init_src = (ROOT / "tares" / "__init__.py").read_text()

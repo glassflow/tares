@@ -299,6 +299,11 @@ def get() -> Team:
     return ee if ee is not None and licence.ee_allowed() else _SINGLE
 
 
+def enabled() -> bool:
+    """True while the ee team is the one `get()` hands out (it loaded and the licence allows it)."""
+    return get() is not _SINGLE
+
+
 def register_ee(app, host) -> None:
     """Add the ee team's routes to `app`. If registering raises, the cell runs as a single-person
     cell: the routes it added are taken out again, the ee team is dropped (so `get()` answers
@@ -334,6 +339,7 @@ def _reset_ee_for_tests() -> None:
 # `licence_required`. A ticket that moves a route out of core adds its rows in the same PR.
 AREAS_REASON = "Repo owners need an enterprise licence."
 ACCESS_REASON = "Changing a project's lead, privacy or members needs an enterprise licence."
+CONSENT_REASON = "Agreeing to someone else's grant needs an enterprise licence."
 FALLBACKS: list[tuple[str, str, str]] = [
     ("GET", "/api/areas", AREAS_REASON),
     ("PUT", "/api/areas", AREAS_REASON),
@@ -342,6 +348,8 @@ FALLBACKS: list[tuple[str, str, str]] = [
     ("PATCH", "/api/projects/{uid}", ACCESS_REASON),
     ("POST", "/api/projects/{uid}/members", ACCESS_REASON),
     ("DELETE", "/api/projects/{uid}/members/{person_id}", ACCESS_REASON),
+    ("POST", "/api/grants/{gid}/consent", CONSENT_REASON),
+    ("POST", "/api/grants/{gid}/decline", CONSENT_REASON),
 ]
 
 

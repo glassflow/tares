@@ -37,8 +37,7 @@ dependencies = [
     "cryptography>=42",  # Ed25519 licence check, tares/licence.py
     # The crew engine (tares.crew) reads process state and stops stale station processes with psutil.
     "psutil>=5.9",
-    # The crew engine keeps its tokens in the OS keychain through keyring.
-    "keyring>=24",
+    "keyring>=24",  # tares login keeps the key in the OS keychain (tares/login.py); a file is the fallback
 ]
 
 # Tests only: tares.crew's JSON schemas are checked with it. Not a runtime dependency.

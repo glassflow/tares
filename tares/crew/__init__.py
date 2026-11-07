@@ -9,11 +9,13 @@ differ, bash is right.
   paths     where each file lives (CrewPaths)
   state     crew.json, stations.json, events.jsonl, HALT, pace, wake and token files; names; time
   locks     the per-station lock, the same mkdir protocol as bash
+  perms     a file that holds a key readable by its owner only (0600, or an access list on Windows)
+  client    the engine's client for Tares (httpx); import it as `tares.crew.client`, it is not loaded here
   dispatch  which engine runs a `tares factory` command (PORTED, TARES_FACTORY_ENGINE)
   version   is the installed tares new enough for the plugin (check_plugin_compat, `tares hook compat`)
 """
-from . import errors, locks, paths, state
+from . import errors, locks, paths, perms, state
 from .errors import CrewError, StationLockedError
 from .paths import CrewPaths
 
-__all__ = ["CrewError", "CrewPaths", "StationLockedError", "errors", "locks", "paths", "state"]
+__all__ = ["CrewError", "CrewPaths", "StationLockedError", "errors", "locks", "paths", "perms", "state"]
