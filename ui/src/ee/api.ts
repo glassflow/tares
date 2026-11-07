@@ -1,6 +1,6 @@
 // Tares enterprise licence, see ee/LICENSE
 import { ownerName, request } from "../api";
-import type { Area, Project, ProjectScope } from "../types";
+import type { Area, Grant, Project, ProjectScope, SpecQuestion } from "../types";
 
 // The calls the enterprise screens make. They sit here, not in the core api object, so a build
 // without src/ee carries none of them.
@@ -25,3 +25,11 @@ export const setArea = (repo: string, personId: string, note?: string) =>
 
 export const deleteArea = (repo: string) =>
   request<{ ok: boolean }>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" });
+
+/** A person (or an admin, for a grant that waits for one) agrees to a grant. */
+export const consentGrant = (id: string) =>
+  request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" });
+
+/** Questions a spec put to the owners of the repos it changes, and their answers. */
+export const projectQuestions = (id: string) =>
+  request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`);
