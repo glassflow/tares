@@ -290,6 +290,16 @@ else:
     code, text = run("--coverage", "--require-full")
     ck("--require-full exits 1 below 100%", code == 1 and "--require-full" in text, f"{code}\n{text[-300:]}")
 
+# factory-bin: runs $FACTORY_BIN, and a call that lost the variable stops plainly (the 'tares' suite once ran
+# `env -i ... "$F" spawn` without it and executed "spawn" itself).
+FB = str(FACTORY / "factory-bin")
+if os.name != "nt" and shutil.which("sh"):
+    r = subprocess.run(["sh", FB, "spawn", "x"], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
+    ck("factory-bin without FACTORY_BIN stops with a plain message", r.returncode == 97 and "FACTORY_BIN is empty" in r.stderr
+       and "not found" not in r.stderr, f"{r.returncode} {r.stderr}")
+    r = subprocess.run(["sh", FB, "a b"], env={"PATH": "/usr/bin:/bin", "FACTORY_BIN": "echo hi"}, capture_output=True, text=True)
+    ck("factory-bin runs a two-word FACTORY_BIN with the arguments", r.returncode == 0 and r.stdout.strip() == "hi a b", r.stdout)
+
 shutil.rmtree(work, ignore_errors=True)
 print(f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)
