@@ -58,6 +58,25 @@ async function visit(browser, base, { blockChunk = false } = {}) {
       return d;
     };
 
+    // The built files: the ee chunk is reached only through a dynamic import. If the entry chunk imported
+    // it statically or index.html preloaded it, every cell would fetch it, licensed or not.
+    {
+      const fs = require("fs");
+      const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
+      const assets = fs.readdirSync(path.join(dist, "assets"));
+      const eeFiles = assets.filter((f) => /^ee-[^/]*\.js$/.test(f));
+      ck("build: exactly one ee chunk is emitted", eeFiles.length === 1, eeFiles.join(" "));
+      const html = fs.readFileSync(path.join(dist, "index.html"), "utf8");
+      ck("build: index.html does not mention the ee chunk", !/\bee-[\w-]+\.js/.test(html), "found in index.html");
+      const statics = [];
+      for (const f of assets.filter((f) => f.endsWith(".js") && !eeFiles.includes(f))) {
+        const text = fs.readFileSync(path.join(dist, "assets", f), "utf8");
+        // static imports are `from"./ee-x.js"` or `import"./ee-x.js"`; the lazy one is `import("./ee-x.js")`
+        if (/(?:from|import)\s*["'][^"']*\/?ee-[\w-]+\.js["']/.test(text)) statics.push(f);
+      }
+      ck("build: no other chunk imports the ee chunk statically", statics.length === 0, statics.join(" "));
+    }
+
     const none = await start(0, "none");
     const a = await visit(browser, none.base);
     ck("no licence: the cell says ee is not allowed", a.licence.ee_allowed === false, JSON.stringify(a.licence));

@@ -637,7 +637,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
       const page = await ctx.newPage();
       const calls = [];
-      page.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/")) calls.push(req.url()); });
+      page.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/") && new URL(req.url()).pathname !== "/api/licence") calls.push(req.url()); });
       const go = async (sample, view) => {
         await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
         await page.getByTestId("projects").waitFor();

@@ -2,7 +2,7 @@
 import { useEffect, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
 
 import LicenceNeeded from "@/components/LicenceNeeded";
-import { SkeletonRows } from "@/components/edition";
+import { Banner, SkeletonRows } from "@/components/edition";
 import { useLicence } from "./licence";
 
 /*
@@ -25,6 +25,7 @@ const load = EE["./ee/index.ts"] as (() => Promise<EeModule>) | undefined;
 const slots = new Map<string, AnyComponent>();
 const listeners = new Set<() => void>();
 let loaded = false;
+let failed = false;
 let started = false;
 let version = 0;
 
@@ -51,14 +52,21 @@ export function EeLoader() {
   useEffect(() => {
     if (!eeAllowed || started || !load) return;
     started = true;
-    load().then(
-      (mod) => {
+    const fail = (e: unknown) => {
+      failed = true;
+      console.warn("The enterprise part of the console did not load.", e);
+      emit();
+    };
+    load().then((mod) => {
+      try {
         mod.register?.(registerSlot);
-        loaded = true;
-        emit();
-      },
-      (e) => { started = false; console.warn("The enterprise part of the console did not load.", e); },
-    );
+      } catch (e) {
+        fail(e);
+        return;
+      }
+      loaded = true;
+      emit();
+    }, fail);
   }, [eeAllowed]);
   return null;
 }
@@ -82,6 +90,7 @@ export function EePage({ slot }: { slot: string }) {
   useSyncExternalStore(subscribe, snapshot);
   const C = slots.get(slot);
   if (C) return <C />;
+  if (failed) return <Banner tone="warn">This part of the console did not load. Reload the page to try again.</Banner>;
   if (loading || (eeAllowed && load)) return <SkeletonRows />;
   return <LicenceNeeded variant="page" />;
 }

@@ -14,27 +14,36 @@ export type LicenceInfo = {
 };
 
 const REFRESH_MS = 60_000;
+const RETRY_MS = 5_000;   // until the first answer arrives
 
 const LicenceContext = createContext<LicenceInfo>({ eeAllowed: false, loading: false, reload: async () => true });
 
-/** Reads GET /api/licence on mount and every 60 seconds. A failed read keeps what is shown. */
+/** Reads GET /api/licence on mount and every 60 seconds. A failed read keeps what is shown; until the
+ *  first answer it tries again every 5 seconds. */
 export function LicenceProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LicenceState>();
   const [loading, setLoading] = useState(true);
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
+  const have = useRef(false);
   const reload = useCallback(
     () => api.licence().then(
-      (s) => { if (live.current) { setState(s); setLoading(false); } return true; },
-      () => { if (live.current) setLoading(false); return false; },
+      (s) => { if (live.current) { have.current = true; setState(s); setLoading(false); } return true; },
+      () => false,   // keeps what is shown; `loading` stays true until the first answer
     ),
     [],
   );
   useEffect(() => {
-    void reload();
-    const t = window.setInterval(() => { void reload(); }, REFRESH_MS);
-    return () => window.clearInterval(t);
+    let stop = false;
+    let t: number | undefined;
+    const tick = () => {
+      void reload().then(() => {
+        if (!stop) t = window.setTimeout(tick, have.current ? REFRESH_MS : RETRY_MS);
+      });
+    };
+    tick();
+    return () => { stop = true; window.clearTimeout(t); };
   }, [reload]);
 
   const value = useMemo<LicenceInfo>(

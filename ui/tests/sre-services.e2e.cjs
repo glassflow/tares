@@ -112,7 +112,7 @@ const getJson = (p) => new Promise((res, rej) => http.get(BASE + p, (r) => {
     const names = () => page.getByTestId("service-name").allInnerTexts().then((a) => a.map((t) => t.trim()));
     const row = (n) => page.locator(`[data-testid=service-row][data-name="${n}"]`);
     const reads = [];
-    page.on("request", (r) => { if (r.method() === "GET" && new URL(r.url()).pathname.startsWith("/api/")) reads.push(r.url().replace(BASE, "")); });
+    page.on("request", (r) => { if (r.method() === "GET" && new URL(r.url()).pathname.startsWith("/api/") && new URL(r.url()).pathname !== "/api/licence") reads.push(r.url().replace(BASE, "")); });
 
     const one = expectOneCall(page, LIST);
     await page.goto(`${BASE}/services`, { waitUntil: "load" });

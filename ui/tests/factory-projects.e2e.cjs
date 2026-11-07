@@ -91,7 +91,7 @@ const today = () => {
     const states = () => rows.evaluateAll((r) => [...new Set(r.map((x) => x.dataset.state))]);
     const pick = async (k) => { await tab(k).click(); await page.waitForTimeout(100); };
     const apiReads = [];
-    page.on("request", (req) => { if (req.method() === "GET" && new URL(req.url()).pathname.startsWith("/api/")) apiReads.push(new URL(req.url()).pathname); });
+    page.on("request", (req) => { if (req.method() === "GET" && new URL(req.url()).pathname.startsWith("/api/") && new URL(req.url()).pathname !== "/api/licence") apiReads.push(new URL(req.url()).pathname); });
 
     // 1. one call feeds the page; Open is the default and hides the finished
     const one = expectOneCall(page, ROUTE);
