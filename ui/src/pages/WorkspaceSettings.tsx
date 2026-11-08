@@ -135,7 +135,10 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
   const [busy, setBusy] = useState<string>();   // "invite" or the user_id being removed
   const [o, setO] = useState<Outcome>({});
   const [msg, setMsg] = useState<string>();
-  const { eeAllowed } = useLicence();
+  const { eeAllowed, loading } = useLicence();
+  // The form stays while the licence read is on its way or cannot be answered, as it was before the licence existed;
+  // the workspace answers an invite it will not take with licence_required, which shows the line below.
+  const canInvite = eeAllowed || loading;
   const [noLicence, setNoLicence] = useState(false);   // the workspace answered the invite with licence_required
 
   const load = async () => {
@@ -208,7 +211,7 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
           </tbody>
         </table>
       )}
-      {isOwner && (eeAllowed ? (
+      {isOwner && (canInvite ? (
         <form className="btnrow" style={{ marginTop: 14, maxWidth: 560 }} onSubmit={invite}>
           <label htmlFor="ws-invite" className="sr-only">Teammate's email</label>
           <input id="ws-invite" type="email" style={{ flex: 1 }} placeholder="teammate@company.com"
@@ -218,7 +221,7 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
           </button>
         </form>
       ) : <LicenceNeeded what="Inviting people" />)}
-      {isOwner && eeAllowed && noLicence && <LicenceNeeded what="Inviting people" />}
+      {isOwner && canInvite && noLicence && <LicenceNeeded what="Inviting people" />}
     </div>
   );
 }

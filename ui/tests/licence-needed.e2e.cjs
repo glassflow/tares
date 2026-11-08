@@ -135,6 +135,45 @@ async function checkLine(page, label, what) {
       await checkLine(page, "workspace, licensed, refused", "Inviting people");
       await page.context().close();
     }
+    // the licensed part cannot be loaded: say so, never "needs an enterprise licence" on a licensed cell
+    {
+      const EE_CHUNK = /\/assets\/ee-[^/]*\.js(\?|$)/;
+      for (const [label, base, route, what] of [
+        ["settings people", platform.base, "/settings?tab=access", "Adding people"],
+        ["factory people", factory.base, "/people", "Adding people"],
+      ]) {
+        const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await page.route(EE_CHUNK, (r) => r.abort());
+        await page.goto(base + route);
+        const said = await page.getByTestId("ee-failed").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+        ck(`chunk fails, ${label}: the page says this part did not load`, said
+           && /did not load\. Reload the page/.test(await page.getByTestId("ee-failed").first().innerText()));
+        ck(`chunk fails, ${label}: no licence line on a licensed cell`, (await page.getByTestId("licence-needed").count()) === 0
+           && !(await page.locator("body").innerText()).includes(`${what} needs an enterprise licence`));
+        await page.context().close();
+      }
+    }
+    // the licence read is slow or fails: a licensed workspace keeps its invite form, no licence line
+    {
+      for (const [label, slow] of [["slow", true], ["failing", false]]) {
+        const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeCloud(page, { status: 200, body: {} });
+        await page.route(/\/api\/licence(\?|$)/, async (route) => {
+          if (!slow) return route.abort();
+          await new Promise((r) => setTimeout(r, 3500));
+          return route.continue();
+        });
+        await page.goto(`${cloudLicensed.base}/settings?tab=workspace`);
+        await page.getByRole("heading", { name: "Team" }).waitFor({ timeout: 15000 });
+        await page.waitForTimeout(2000);
+        ck(`workspace, licence read ${label}, at 2 s: the invite form shows`, (await page.locator("#ws-invite").count()) === 1);
+        ck(`workspace, licence read ${label}, at 2 s: no licence line`, (await page.getByTestId("licence-needed").count()) === 0);
+        await page.waitForTimeout(slow ? 3500 : 3000);
+        ck(`workspace, licence read ${label}, later: still the form, no line`, (await page.locator("#ws-invite").count()) === 1
+           && (await page.getByTestId("licence-needed").count()) === 0);
+        await page.context().close();
+      }
+    }
   } finally {
     await browser.close();
     for (const s of [platform, factory, cloudBare, cloudLicensed]) s.stop();

@@ -3,7 +3,7 @@ import * as React from "react";
 import { api, ApiError } from "../../api";
 import LicenceNeeded from "../../components/LicenceNeeded";
 import { Banner, Button, Initials, Input, ListRow, ListSection, Skeleton, StatusDot } from "../../components/edition";
-import { Slot, useEePending } from "../../eeSlots";
+import { EE_FAILED_WORDS, Slot, useEeFailed, useEePending } from "../../eeSlots";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { usePagePolling } from "../usePagePolling";
@@ -108,8 +108,11 @@ export function FactoryPeopleView({ data, onAdded, note, onPeopleChanged = () =>
  *  licensed part is still loading, so the line does not flash on a licensed cell). */
 function AddSlot({ data, onAdded }: { data: FactoryPeopleData; onAdded: (words: string) => void }) {
   const pending = useEePending();
+  const failed = useEeFailed();
   return <Slot name="people.add" data={data} onAdded={onAdded}
-               fallback={pending ? null : <LicenceNeeded what="Adding people" />} />;
+               fallback={pending ? null
+                 : failed ? <Banner tone="warn" data-testid="ee-failed">{EE_FAILED_WORDS}</Banner>
+                 : <LicenceNeeded what="Adding people" />} />;
 }
 
 export default function FactoryPeople() {

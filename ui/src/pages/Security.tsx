@@ -10,7 +10,7 @@ import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential,
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
-import { EePage, Slot, useEeLoaded, useEePending } from "../eeSlots";
+import { EE_FAILED_WORDS, EePage, Slot, useEeFailed, useEeLoaded, useEePending } from "../eeSlots";
 import LicenceNeeded from "../components/LicenceNeeded";
 import { extraEmails, personDraft, type PersonDraft } from "../personDraft";
 import OwnerOnly from "../components/OwnerOnly";
@@ -603,6 +603,7 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
 // people and keys (the daemon enforces it); the page just does not offer what it would refuse.
 function AccessTab() {
   const pending = useEePending();
+  const eeFailed = useEeFailed();
   const [me, setMe] = useState<Whoami>();
   const [people, setPeople] = useState<Person[]>();
   const [err, setErr] = useState<string>();
@@ -618,6 +619,7 @@ function AccessTab() {
       <AccessPanel me={me} />
       <Slot name="settings.people" people={people} admin={admin} err={err} onChanged={loadPeople} me={me}
             fallback={pending ? <div className="panel muted">loading…</div>
+                              : eeFailed ? <div className="panel muted" data-testid="ee-failed">{EE_FAILED_WORDS}</div>
                               : <YouPanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />} />
       <McpToolsPanel />
       <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />
