@@ -14,6 +14,7 @@ factory-home
 factory-new-project
 factory-people
 factory-project
+factory-project-controls
 factory-projects
 factory-reviews
 factory-settings

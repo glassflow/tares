@@ -33,6 +33,7 @@ from .. import factory_api
 from .. import factory_github
 from .. import factory_home as fh
 from .. import factory_waiting as fw
+from .. import licence
 from ..envelope import now_utc
 from ..factory_home import plain_ago
 
@@ -253,7 +254,8 @@ def register(app, store, h, ctx):
         """Who is on the project (top right of the page): its lead and its members, each {id,
         name, picture, tickets}. A member is anyone added to the project or holding an open ticket
         in it. Also whether the caller may set the lead (an admin, or the lead) and add members
-        (the lead), and the people who can be picked."""
+        (the lead), and the people who can be picked. Both are false on a cell without an
+        enterprise licence: the routes behind them answer 402 there, so the page shows no control."""
         def ref(pid):
             x = store.get_person(pid) if pid else None
             return ({"id": x["id"], "name": x["name"] or x.get("email") or x["id"],
@@ -277,8 +279,10 @@ def register(app, store, h, ctx):
         # the cell's first person before anyone signed in (no email, named "You") is nobody to pick
         everyone = [r for r in (ref(x["id"]) for x in store.list_people()
                                 if not (x["id"] == "local" and not x.get("email"))) if r]
+        team = licence.ee_allowed()
         return {"lead": lead, "members": members,
-                "can_set_lead": admin or is_lead, "can_add": is_lead or h.is_system(request),
+                "can_set_lead": team and (admin or is_lead),
+                "can_add": team and (is_lead or h.is_system(request)),
                 "you": me.get("id"), "people": everyone if (admin or is_lead) else []}
 
     @app.get("/api/factory/projects/{uid}")
