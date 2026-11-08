@@ -16,8 +16,14 @@
  *   - Tares Cloud (TARES_WORKSPACE_API_URL set, expired key): no banner, no Enterprise licence tab, no panel behind
  *     ?tab=licence, no row or link in the factory and sre settings; the same pages on a self-hosted cell have them.
  *     GET /api/licence answers as before (display only).
- * Not covered: the sre edition's banner (same Shell as factory, same link) and a cell with no auth reading
- * "Only an admin" (an open cell has no non-admin).
+ *   - the cell does not answer: GET /api/licence fails, so a team home shows its plain rows instead of the
+ *     placeholder for good, and the licence panel says "The cell did not answer."; /api/whoami fails, so the panel
+ *     says it did not learn who you are (not that only an admin can change the licence).
+ *   - removing the licence takes the Areas tab away without a reload.
+ *   - /health slow: until it answers, no licence screen shows on a Cloud cell or a self-hosted one (the five
+ *     cloud.ready guards); a self-hosted cell shows them once it has answered. At 390 the tab list is a select.
+ *   - the sre edition's banner on a self-hosted cell with an ended licence, and its link.
+ * Not covered: a cell with no auth reading "Only an admin" (an open cell has no non-admin).
  * Set SHOTS_DIR to keep screenshots at 1440 and 390 px: licence-<state>-<width>.png for none, valid, expired,
  * over_seats, env-invalid and source-env, and licence-banner-<expired|over_seats>-<width>.png.
  * Run:  cd ui && npm run build && TARES_E2E_PORT=9640 node tests/licence.e2e.cjs
@@ -70,12 +76,13 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
                                         body: body ? JSON.stringify(body) : undefined });
     return { status: r.status, body: await r.json().catch(() => ({})) };
   };
-  const open = async (d, p, width, token) => {
+  const open = async (d, p, width, token, setup) => {
     const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 } });
     if (token) await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* blocked */ } }, token);
     const page = await ctx.newPage();
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
+    if (setup) await setup(page);   // routes, set before the first request
     await page.goto(d.base + p, { waitUntil: "load" });
     return { ctx, page, errors };
   };
@@ -91,6 +98,10 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
     return (await page.getByTestId("licence-banner").count()) ? (await page.getByTestId("licence-banner").innerText()).trim() : "";
   };
   const text = (page, id) => page.getByTestId(id).innerText().then((s) => s.trim());
+  const until = async (fn, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 200)); } return false; };
+  // The Settings tabs a person can pick: the side list from 600 px up, the select below it.
+  const tabNames = (page, w) => page.evaluate((narrow) => [...document.querySelectorAll(narrow ? ".pnav-select option" : ".pnav .pnav-label")]
+    .map((e) => e.textContent.trim()), w < 600);
   const KEY = testKey();
   const bits = [KEY.slice(0, 40), KEY.slice(-40), KEY.slice(Math.floor(KEY.length / 2), Math.floor(KEY.length / 2) + 40)];
   const keyOnPage = async (page) => {   // what a person can see or select: text, markup, field values
@@ -161,9 +172,11 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       // Remove brings back None
       const again = await open(none, "/settings/advanced?tab=licence", 1440, TOKEN);
       await again.page.getByTestId("licence-remove").waitFor({ timeout: 15000 });
+      ck(t("the Areas tab shows while the licence is valid"), await until(async () => (await tabNames(again.page, 1440)).includes("Areas")), (await tabNames(again.page, 1440)).join(","));
       await again.page.getByTestId("licence-remove").click();
       await again.page.waitForFunction(() => document.querySelector('[data-testid="licence-source"]')?.textContent.trim() === "None", null, { timeout: 10000 });
       ck(t("Remove brings back None"), (await text(again.page, "licence-source")) === "None" && (await again.page.getByTestId("licence-remove").count()) === 0);
+      ck(t("and the Areas tab goes without a reload"), await until(async () => !(await tabNames(again.page, 1440)).includes("Areas")), (await tabNames(again.page, 1440)).join(","));
       ck(t("and the organisation is gone"), (await again.page.getByTestId("licence-org").count()) === 0);
       const lic3 = await api(none, "/api/licence");
       ck(t("the cell agrees"), lic3.body.valid === false && lic3.body.stored === false, JSON.stringify(lic3.body));
@@ -185,6 +198,52 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       ck(t("it says only an admin can change the licence"), /Only an admin/.test(await text(page, "licence-admin-only")));
       await ctx.close();
       await api(none, "/api/licence", { method: "DELETE" });
+    }
+    {   // the cell does not answer the licence read: the plain page shows, the panel says so
+      const t = (s) => `licence read fails: ${s}`;
+      const grant = { id: "grant-1", kind: "grant", label: "Grant", title: "Agree to merge to acme/web", detail: "Kim asks to merge.",
+                      meta: "", project: null, repo: null, from: { name: "Kim" }, since: null, waited: "1 minute",
+                      actions: [{ label: "Agree", primary: true, do: "agree", grant: "g1" }, { label: "Decline", primary: false, do: "decline", grant: "g1" }] };
+      const setup = async (page) => {
+        await page.route(/\/api\/licence(\?|$)/, (route) => route.abort());
+        await page.route(/\/api\/home(\?|$)/, async (route) => {
+          const res = await route.fetch();
+          const data = await res.json();
+          return route.fulfill({ response: res, json: { ...data, summary: "", counts: { mine: 0, team: 1 }, waiting_for_you: [grant], waiting_total: 1,
+            projects: [{ hidden: true, lead: { name: "Lee" } }], you_are_waiting_on: [], crews: [], crews_quiet: [], areas: [] } });
+        });
+      };
+      for (const w of WIDTHS) {
+        const { ctx, page, errors } = await open(none, "/", w, TOKEN, setup);
+        const shown = await page.getByTestId("waiting-row").first().waitFor({ timeout: 10000 }).then(() => true, () => false);
+        ck(t(`@${w}: a team home shows its rows, not the placeholder for good`), shown && (await page.getByTestId("waiting-pending").count()) === 0,
+           `${shown ? "rows" : "no rows"}, ${await page.getByTestId("waiting-pending").count()} placeholder`);
+        ck(t(`@${w}: no page error`), errors.length === 0, errors.join(" "));
+        await ctx.close();
+      }
+      const { ctx, page } = await open(none, "/settings/advanced?tab=licence", 1440, TOKEN, setup);
+      await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
+      const said = await until(async () => /The cell did not answer\./.test(await text(page, "licence-panel")), 10000);
+      ck(t("the panel says the cell did not answer"), said, (await text(page, "licence-panel")).slice(0, 200));
+      ck(t("and does not stay on loading"), !/loading…/.test(await text(page, "licence-panel")));
+      await ctx.close();
+    }
+    {   // whoami fails: the panel does not say only an admin can change the licence
+      const t = (s) => `whoami fails: ${s}`;
+      // the shell reads whoami too (the edition), so it must answer first; only the panel's own read fails
+      let failing = false;
+      const { ctx, page } = await open(none, "/settings/advanced", 1440, TOKEN,
+        (pg) => pg.route(/\/api\/whoami(\?|$)/, (route) => (failing ? route.abort() : route.continue())));
+      await page.waitForLoadState("networkidle");
+      failing = true;
+      await page.locator(".pnav .pnav-label", { hasText: "Enterprise licence" }).click();
+      await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
+      const said = await page.getByTestId("licence-who-failed").waitFor({ timeout: 10000 }).then(() => true, () => false);
+      ck(t("the panel says it did not learn who you are"), said && /did not say who you are/.test(await text(page, "licence-who-failed")));
+      ck(t("and does not say only an admin can change the licence"), (await page.getByTestId("licence-admin-only").count()) === 0);
+      ck(t("and shows no box"), (await page.getByTestId("licence-key").count()) === 0);
+      await checkWords(page, ck, t("panel"));
+      await ctx.close();
     }
 
     // ── expired, factory edition ──
@@ -337,14 +396,14 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       const st = (await api(cloud, "/api/licence", { token: null })).body;
       ck(t("the cell still answers valid and expired"), st.valid === true && st.expired === true, JSON.stringify(st));
       ck(t("and /health says it is a Cloud cell"), !!(await api(cloud, "/health", { token: null })).body.workspace_api_url);
-      const tabButton = (page) => page.getByRole("button", { name: "Enterprise licence" }).count();
+      const hasTab = async (page, w) => (await tabNames(page, w)).includes("Enterprise licence");
       for (const w of WIDTHS) {
         for (const p of ["/", "/settings", "/settings/advanced", "/settings/advanced?tab=licence"]) {
           const { ctx, page, errors } = await open(cloud, p, w);
           await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
           ck(t(`${p} @${w}: no banner`), (await page.getByTestId("licence-banner").count()) === 0);
           ck(t(`${p} @${w}: no licence panel, no Enterprise licence tab, no row`), (await page.getByTestId("licence-panel").count()) === 0
-             && (await tabButton(page)) === 0 && (await page.getByTestId("row-licence").count()) === 0);
+             && !(await hasTab(page, w)) && (await page.getByTestId("row-licence").count()) === 0);
           ck(t(`${p} @${w}: no page error, no crash screen, no sideways scroll`), errors.length === 0 && (await page.getByText("Unexpected Application Error").count()) === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
           if (p === "/settings/advanced?tab=licence") await shot(page, "licence-cloud", w);
           await ctx.close();
@@ -370,6 +429,65 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       await selfF.page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
       ck(t("control: the row's button opens the panel"), (await selfF.page.getByTestId("licence-panel").count()) === 1, selfF.page.url());
       await selfF.ctx.close();
+
+      // the tab list is a select at 390: a self-hosted cell has the tab at both widths, so the cloud check above bites there too
+      for (const w of WIDTHS) {
+        const { ctx, page } = await open(expired, "/settings/advanced", w);
+        await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
+        ck(t(`control @${w}: a self-hosted cell lists the Enterprise licence tab`), await hasTab(page, w), (await tabNames(page, w)).join(","));
+        await ctx.close();
+      }
+
+      // the sre edition's banner, on a self-hosted cell with an ended licence
+      for (const w of WIDTHS) {
+        const { ctx, page, errors } = await open(selfSre, "/", w);
+        const words = await banner(page);
+        ck(t(`sre / @${w}: the banner says when the licence ended`), /The enterprise licence ended on .* adding people is paused until it is renewed\./.test(words), words);
+        if (!words) { await ctx.close(); continue; }
+        ck(t(`sre / @${w}: one banner, its link goes to the licence tab`), (await page.getByTestId("licence-banner").count()) === 1
+           && (await page.getByTestId("licence-banner-link").getAttribute("href")) === "/settings/advanced?tab=licence");
+        await page.getByTestId("licence-banner-link").click();
+        await page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
+        ck(t(`sre / @${w}: the link opens the panel`), (await page.getByTestId("licence-panel").count()) === 1, page.url());
+        ck(t(`sre / @${w}: no page error, no sideways scroll`), errors.length === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
+        await ctx.close();
+      }
+
+      // /health slow: until it answers nothing says whether this is a Cloud cell, so no licence screen shows (the five cloud.ready guards).
+      // The sign-in gate holds the whole page for up to 6 s, so /health is held back until the test lets it go: the page is up and /health is not.
+      const slow = (page) => {
+        let go; const gate = new Promise((r) => { go = r; });
+        page.release = go;
+        return page.route(/\/health(\?|$)/, async (route) => { await gate; await route.continue(); });
+      };
+      const screens = async (page, w) => ({
+        banner: await page.getByTestId("licence-banner").count(), row: await page.getByTestId("row-licence").count(),
+        link: await page.getByTestId("licence-link").count(), panel: await page.getByTestId("licence-panel").count(),
+        tab: (await hasTab(page, w)) ? 1 : 0,
+      });
+      const none0 = (x) => x.banner + x.row + x.link + x.panel + x.tab === 0;
+      for (const w of WIDTHS) {
+        for (const [d, p, name, selfHosted, wants] of [
+          [cloud, "/", "cloud /", false, "banner"], [cloud, "/settings", "cloud /settings", false, "row"],
+          [cloud, "/settings/advanced?tab=licence", "cloud licence tab", false, "panel"], [sreCloud, "/settings", "sre cloud /settings", false, "link"],
+          [expired, "/", "self-hosted /", true, "banner"], [expired, "/settings", "self-hosted /settings", true, "row"],
+          [expired, "/settings/advanced", "self-hosted tabs", true, "tab"], [expired, "/settings/advanced?tab=licence", "self-hosted licence tab", true, "panel"],
+          [selfSre, "/settings", "self-hosted sre /settings", true, "link"],
+        ]) {
+          const { ctx, page, errors } = await open(d, p, w, undefined, slow);
+          await page.waitForTimeout(8000);   // past the sign-in gate's 6 s wait, /health still unanswered
+          const early = await screens(page, w);
+          ck(t(`slow /health, ${name} @${w}: no licence screen before it answers`), none0(early), JSON.stringify(early));
+          page.release(); await page.waitForTimeout(2500); await page.waitForLoadState("networkidle");
+          if (wants === "panel" && selfHosted) await page.getByTestId("licence-panel").waitFor({ timeout: 10000 }).catch(() => {});
+          if (wants === "tab" && selfHosted) await until(() => hasTab(page, w), 6000);
+          const late = await screens(page, w);
+          if (selfHosted) ck(t(`slow /health, ${name} @${w}: and the screen shows once it has answered`), late[wants] === 1, JSON.stringify(late));
+          else ck(t(`slow /health, ${name} @${w}: and still none on a Cloud cell`), none0(late), JSON.stringify(late));
+          ck(t(`slow /health, ${name} @${w}: no page error`), errors.length === 0, errors.join(" "));
+          await ctx.close();
+        }
+      }
     }
   } finally {
     await browser.close().catch(() => {});

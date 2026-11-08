@@ -7,6 +7,7 @@ import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import StandupSheet from "../components/Standup";
+import { Slot } from "../eeSlots";
 import type { CrewGroup, CrewPace, CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
@@ -176,7 +177,7 @@ function rememberPaneFolded(folded: boolean) {
 const wasOpen = (e: React.MouseEvent<HTMLElement>) => !!(e.currentTarget.parentElement as HTMLDetailsElement | null)?.open;
 
 /** A station on this page: its name repeats across crews, the crew id does not. */
-const skey = (s: { name: string; crew_id?: string | null }) => `${s.crew_id ?? ""}/${s.name}`;
+export const skey = (s: { name: string; crew_id?: string | null }) => `${s.crew_id ?? ""}/${s.name}`;
 const sameCrew = (a: { crew_id?: string | null }, b: { crew_id?: string | null }) => (a.crew_id ?? null) === (b.crew_id ?? null);
 
 /** The helpers of a station, in its own crew. */
@@ -189,7 +190,7 @@ function withHelpers(s: CrewStation, all: CrewStation[]): CrewStation[] {
 }
 
 /** Whether a crew is the viewer's own. A crew with no person (an older cell) is the viewer's. */
-const isMine = (g: { person: { id: string } | null }, myId: string) => !g.person || g.person.id === myId;
+export const isMine = (g: { person: { id: string } | null }, myId: string) => !g.person || g.person.id === myId;
 
 // ── the member list ─────────────────────────────────────────────────────────
 
@@ -230,7 +231,7 @@ function onText(s: CrewStation, withProject: boolean): string {
   return [withProject ? s.project_name : "", reason].filter(Boolean).join(": ");
 }
 
-function MemberRow({ s, all, selected, depth = 0, withProject = false }: { s: CrewStation; all: CrewStation[]; selected: string; depth?: number; withProject?: boolean }) {
+export function MemberRow({ s, all, selected, depth = 0, withProject = false }: { s: CrewStation; all: CrewStation[]; selected: string; depth?: number; withProject?: boolean }) {
   const [, setParams] = useSearchParams();
   const kids = helpersOf(s, all);
   const on = onText(s, withProject);
@@ -651,75 +652,25 @@ function crewGroups(data: Awaited<ReturnType<typeof api.crew>> | undefined): Cre
     : [];
 }
 
-const STALE_MS = 24 * 3600 * 1000;
-/** A crew nobody heard from for more than a day, by the daemon's clock. A crew with no id is the
- *  flat fallback and is current. */
-const isStale = (g: CrewGroup, now: string) =>
-  g.id !== null && (!g.last_seen || new Date(now).getTime() - new Date(g.last_seen).getTime() > STALE_MS);
-
-/** One crew: its name, machine and when it was last heard, then its stations with what each is on. */
-function CrewBlock({ g, stations, selected }: { g: CrewGroup; stations: CrewStation[]; selected: string }) {
+/** Your crew: its stations with what each is on, in one list. On a cell with an enterprise licence
+ *  the slot crew.groups (src/ee/crew) shows every person's crews instead. */
+function OwnCrew({ groups, myId, stations, selected }: { groups: CrewGroup[]; myId: string; stations: CrewStation[]; selected: string }) {
+  const mine = groups.filter((g) => isMine(g, myId)).flatMap((g) => g.stations);
+  if (!mine.length) {
+    return (
+      <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>
+        You have no crew on this cell yet: <span className="mono">tares factory crew up</span>.
+      </p>
+    );
+  }
   // helpers show under the station that started them
-  const top = g.stations.filter((s) => !(s.role === "helper" && g.stations.some((x) => x.name === s.parent)));
+  const top = mine.filter((s) => !(s.role === "helper" && mine.some((x) => x.name === s.parent)));
   return (
-    <div className="crew-block">
-      {(g.name || g.machine) && (
-        <div className="crew-block-head">
-          <b>{g.name ?? "crew"}</b>
-          {g.machine && <span className="dim">{g.machine}</span>}
-          {g.last_seen && <small className="dim">last seen <TimeAgo ts={g.last_seen} /></small>}
-        </div>
-      )}
+    <div className="crew-block" data-testid="own-crew">
       <ul className="crew-list">
         {top.map((s) => <MemberRow key={skey(s)} s={s} all={stations} selected={selected} withProject />)}
       </ul>
     </div>
-  );
-}
-
-/** Crews not seen for a day, shut. Opens by itself when the member picked is in one of them. */
-function StaleCrews({ crews, stations, selected }: { crews: CrewGroup[]; stations: CrewStation[]; selected: string }) {
-  const holds = crews.some((g) => g.stations.some((s) => skey(s) === selected));
-  const [open, setOpen] = useState(holds);
-  useEffect(() => { if (holds) setOpen(true); }, [holds]);
-  return (
-    <details className="crew-stale" open={open}
-      onToggle={(e) => { if (e.target === e.currentTarget) setOpen(e.currentTarget.open); }}>
-      <summary>Not seen recently <span className="dim">· {crews.length}</span></summary>
-      {crews.map((g) => <CrewBlock key={g.id ?? "none"} g={g} stations={stations} selected={selected} />)}
-    </details>
-  );
-}
-
-/** Every person's crews: you first, then the others by name. */
-function CrewPeople({ groups, myId, now, stations, selected }: { groups: CrewGroup[]; myId: string; now: string; stations: CrewStation[]; selected: string }) {
-  const people = new Map<string, { id: string; name: string; mine: boolean; crews: CrewGroup[] }>();
-  for (const g of groups) {
-    const mine = isMine(g, myId);
-    const id = mine ? myId : g.person!.id;
-    if (!people.has(id)) people.set(id, { id, name: mine ? "You" : g.person!.name, mine, crews: [] });
-    people.get(id)!.crews.push(g);
-  }
-  const ordered = [...people.values()].sort((a, b) => Number(b.mine) - Number(a.mine) || a.name.localeCompare(b.name));
-  return (
-    <>
-      {!people.has(myId) && (
-        <p className="dim" style={{ padding: "10px 16px", margin: 0 }}>
-          You have no crew on this cell yet: <span className="mono">tares factory crew up</span>.
-        </p>
-      )}
-      {ordered.map((p) => {
-        const fresh = p.crews.filter((g) => !isStale(g, now));
-        const stale = p.crews.filter((g) => isStale(g, now));
-        return (
-          <section key={p.id} className="crew-person">
-            <h4 className="crew-person-h">{p.name}</h4>
-            {fresh.map((g) => <CrewBlock key={g.id ?? "none"} g={g} stations={stations} selected={selected} />)}
-            {stale.length > 0 && <StaleCrews crews={stale} stations={stations} selected={selected} />}
-          </section>
-        );
-      })}
-    </>
   );
 }
 
@@ -791,7 +742,8 @@ export default function Crew() {
           <div className="crew-col">
             <div className="fo-panel">
               <header><h3>Crews</h3>{data.settings.releaser === false && <span className="dim">no releaser: tickets end at merged</span>}</header>
-              <CrewPeople groups={groups} myId={myId} now={data.now} stations={stations} selected={selected} />
+              <Slot name="crew.groups" groups={groups} myId={myId} now={data.now} stations={stations} selected={selected}
+                    fallback={<OwnCrew groups={groups} myId={myId} stations={stations} selected={selected} />} />
             </div>
             <details className="fo-panel fo-fold" open={paneOpen}
               onToggle={(e) => {
@@ -872,64 +824,61 @@ function useDesk(open: DeskItem[], onChange?: () => void) {
   return { items, allowed, onAllowed };
 }
 
-/** The desk items grouped by the person each is for: you first, then the others by name, then
- *  the ones nobody is named for (yours to answer, as before TR-634). */
-function deskGroups(items: DeskItem[], myId: string) {
-  const by = new Map<string, { key: string; label: string; name: string; mine: boolean; items: DeskItem[] }>();
-  for (const d of items) {
-    const p = d.to_person;
-    const key = !p ? "anyone" : p.id === myId ? "you" : p.id;
-    if (!by.has(key)) by.set(key, { key, label: key === "you" ? "For you" : key === "anyone" ? "For anyone" : `For ${p!.name}`, name: p?.name ?? "", mine: key !== p?.id, items: [] });
-    by.get(key)!.items.push(d);
-  }
-  const rank = (g: { key: string }) => (g.key === "you" ? 0 : g.key === "anyone" ? 2 : 1);
-  return [...by.values()].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
+export interface DeskGroup { key: string; label: string; name: string; mine: boolean; items: DeskItem[] }
+
+/** The open items. With `myId` (the Crew page) the slot desk.groups (src/ee/crew) puts them under
+ *  "For <name>" headings once they are for more than one person; without a licence the page lists
+ *  what is yours, flat. */
+function DeskList({ items, allowed, onAllowed, myId }: ReturnType<typeof useDesk> & { myId?: string }) {
+  const flat = (list: DeskItem[]) => (
+    <DeskGroupView g={{ key: "you", label: "", name: "", mine: true, items: list }} headed={false} allowed={allowed} onAllowed={onAllowed} />
+  );
+  if (myId === undefined) return flat(items);
+  return (
+    <Slot name="desk.groups" items={items} myId={myId} allowed={allowed} onAllowed={onAllowed}
+          fallback={flat(items.filter((d) => isMine({ person: d.to_person ?? null }, myId)))} />
+  );
 }
 
-/** The open items. With `myId` (the Crew page) they sit under "For <name>" headings once they are
- *  for more than one person; an item for someone else is read-only here. */
-function DeskList({ items, allowed, onAllowed, myId }: ReturnType<typeof useDesk> & { myId?: string }) {
-  const groups = myId === undefined ? [{ key: "you", label: "", name: "", mine: true, items }] : deskGroups(items, myId);
-  // headed once there is more than one group, or the one group is not yours
-  const headed = groups.length > 1 || groups.some((g) => !g.mine);
+/** One group of desk items: its heading when `headed`, the items, and where to answer. An item for
+ *  someone else (not `mine`) is read-only here. */
+export function DeskGroupView({ g, headed, allowed, onAllowed }: {
+  g: DeskGroup; headed: boolean; allowed: Record<string, DeskAllowed>; onAllowed: (a: DeskAllowed) => void;
+}) {
   return (
-    <>
-      {groups.map((g) => (
-        <div key={g.key} className="crew-desk-group">
-          {headed && <h3 className="crew-desk-for">{g.label}</h3>}
-          <ul className="crew-desk">
-            {g.items.map((d) => (
-              <li key={d.id}>
-                <b>{d.label}</b>
-                {allowed[d.id] ? <span className="fo-st fo-st-done" style={{ marginLeft: 6 }}>allowed</span>
-                  : d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
-                {d.project_name && <span className="dim"> · {d.project_name}</span>}
-                <div>{d.question}</div>
-                <div className="dim" style={{ fontSize: 13 }}>
-                  Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {sentence(d.why)}
-                  {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
-                  {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
-                </div>
-                {d.command && (allowed[d.id] ? <AllowedNote a={allowed[d.id]} />
-                  : g.mine ? <PermissionRequest d={d} onAllowed={onAllowed} />
-                  : <p className="help" style={{ margin: "6px 0 0" }}>{d.station ?? "A station"} was refused <span className="mono">{d.command}</span>. {g.name} allows it in their console.</p>)}
-              </li>
-            ))}
-          </ul>
-          {g.mine ? g.items.some((d) => !d.command) && (
-            <>
-              <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session:</p>
-              <div className="fo-cmd">
-                <code>{attachCmd("crew-orchestrator")}</code>
-                <CopyButton text={attachCmd("crew-orchestrator")} label="Copy" what="the orchestrator's attach command" />
-              </div>
-            </>
-          ) : g.items.some((d) => !d.command) && (
-            <p className="help" style={{ margin: 0 }}>{g.name} answers in their own orchestrator's session.</p>
-          )}
-        </div>
-      ))}
-    </>
+    <div className="crew-desk-group">
+      {headed && <h3 className="crew-desk-for">{g.label}</h3>}
+      <ul className="crew-desk">
+        {g.items.map((d) => (
+          <li key={d.id}>
+            <b>{d.label}</b>
+            {allowed[d.id] ? <span className="fo-st fo-st-done" style={{ marginLeft: 6 }}>allowed</span>
+              : d.blocking && <span className="fo-st fo-st-quiet" style={{ marginLeft: 6 }}>blocks work</span>}
+            {d.project_name && <span className="dim"> · {d.project_name}</span>}
+            <div>{d.question}</div>
+            <div className="dim" style={{ fontSize: 13 }}>
+              Recommended: {d.recommendation.replace(/[.!]+$/, "")}. {sentence(d.why)}
+              {d.blocks && <> Blocks: {d.blocks.replace(/[.!]+$/, "")}.</>}
+              {d.assumptions.length > 0 && <> Confirms {d.assumptions.join(", ")}.</>}
+            </div>
+            {d.command && (allowed[d.id] ? <AllowedNote a={allowed[d.id]} />
+              : g.mine ? <PermissionRequest d={d} onAllowed={onAllowed} />
+              : <p className="help" style={{ margin: "6px 0 0" }}>{d.station ?? "A station"} was refused <span className="mono">{d.command}</span>. {g.name} allows it in their console.</p>)}
+          </li>
+        ))}
+      </ul>
+      {g.mine ? g.items.some((d) => !d.command) && (
+        <>
+          <p className="help" style={{ margin: 0 }}>Answer questions in the orchestrator's session:</p>
+          <div className="fo-cmd">
+            <code>{attachCmd("crew-orchestrator")}</code>
+            <CopyButton text={attachCmd("crew-orchestrator")} label="Copy" what="the orchestrator's attach command" />
+          </div>
+        </>
+      ) : g.items.some((d) => !d.command) && (
+        <p className="help" style={{ margin: 0 }}>{g.name} answers in their own orchestrator's session.</p>
+      )}
+    </div>
   );
 }
 

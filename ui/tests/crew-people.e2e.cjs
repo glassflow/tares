@@ -1,9 +1,13 @@
 /*
- * Browser e2e for the Crew page with two people on one cell.
+ * Browser e2e for the Crew page with two people on one cell (a licensed cell), and with one (an unlicensed one).
  *  - Another person's station: the By category fold never asks for a /context reading of it
  *    (the reading is taken on its owner's machine), and says who can. Your own station still asks.
  *  - A who-am-I answer that fails: the page says it could not load that and waits; it does not
  *    treat the viewer as `local` and show someone else's crew as theirs.
+ *
+ *  - Unlicensed: the page lists your own crew flat, with no person heading, no "Not seen recently" fold and no
+ *    "For you" heading on the desk, and never fetches the enterprise chunk.
+ *  - Licensed: every person's crews under a heading each, a stale crew in its fold, the desk under "For <name>".
  *
  * Runs the real daemon on a scratch data directory and port, serving the built console.
  * Run:  npm run build && node tests/crew-people.e2e.cjs
@@ -12,7 +16,6 @@
  * its own browser download is missing. TARES_E2E_SHOTS=<dir> saves a screenshot of each step.
  */
 const http = require("http");
-const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
@@ -20,9 +23,10 @@ const path = require("path");
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { startDaemon } = require("./licensed.cjs");
 
-const PORT = 8812;
-const BASE = `http://127.0.0.1:${PORT}`;
+const PORT = Number(process.env.TARES_E2E_PORT || 8812);
+let BASE = `http://127.0.0.1:${PORT}`;
 const ROOT = "root-token-crew-people-e2e";
 const SHOTS = process.env.TARES_E2E_SHOTS || "";
 
@@ -55,9 +59,9 @@ function waitFor(url, tries = 150) {
 }
 
 const stamp = (s) => new Date(Date.now() + s * 1000).toISOString();
-const stationLine = (sid, crew, machine) => JSON.stringify({
-  type: "session_station", sessionId: sid, cwd: "/w/crew", timestamp: stamp(-30),
-  station: "crew-orchestrator", role: "orchestrator", parent: "", factory_station: "crew-orchestrator",
+const stationLine = (sid, crew, machine, { station = "crew-orchestrator", role = "orchestrator", at = -30 } = {}) => JSON.stringify({
+  type: "session_station", sessionId: sid, cwd: "/w/crew", timestamp: stamp(at),
+  station, role, parent: "", factory_station: station,
   factory_crew: crew, crew, factory_machine: machine, machine,
 });
 const userLine = (sid, text) => JSON.stringify({
@@ -66,22 +70,13 @@ const userLine = (sid, text) => JSON.stringify({
 
 (async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-crew-e2e-"));
-  const venvPy = path.join(REPO, ".venv/bin/python");
-  const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
-  // two people on the cell before it starts: adding a second person over HTTP needs a licence
-  const seeded = spawnSync(py, [path.join(REPO, "tests", "_people.py"), path.join(tmp, "crew.duckdb"), "ashish=ashish@example.com", "kiran=kiran-test@example.com"],
-    { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
-  if (seeded.status !== 0) { console.log("FAIL could not seed people: " + (seeded.stderr || seeded.stdout)); process.exit(1); }
-  const daemon = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], {
-    cwd: REPO,
-    env: { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "crew.duckdb"),
-           TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(PORT), TARES_HOST: "127.0.0.1",
-           TARES_EDITION: "platform", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_AUTH_TOKEN: ROOT,
-           TARES_UI_DIST: path.join(UI_DIR, "dist") },
-    stdio: "ignore",
-  });
-  const stop = () => { try { daemon.kill(); } catch { /* gone */ } };
+  const cells = [];
+  const stop = () => cells.forEach((d) => d.stop());
   process.on("exit", stop);
+  // a valid licence: it lets the cell have a second person
+  const licensed = await startDaemon({ port: PORT, dataDir: path.join(tmp, "licensed"), edition: "platform", licence: "valid", auth: ROOT });
+  cells.push(licensed);
+  BASE = licensed.base;
 
   ck("daemon up", await waitFor(`${BASE}/health`));
   const rootH = { authorization: `Bearer ${ROOT}` };
@@ -95,15 +90,16 @@ const userLine = (sid, text) => JSON.stringify({
     people[who] = r.json && r.json.person && r.json.person.id;
   }
   ck("two people with a key each", keys.ashish && keys.kiran && people.ashish !== people.kiran, "keys");
-  for (const [who, crew, machine] of [["ashish", "a", "ashish-mac"], ["kiran", "b", "kiran-pc"]]) {
+  // a and b are current; c is ashish's older crew, not heard from for two days
+  for (const [who, crew, machine, at] of [["ashish", "a", "ashish-mac", -30], ["kiran", "b", "kiran-pc", -30], ["ashish", "c", "ashish-old", -2 * 24 * 3600]]) {
     r = await call("POST", "/ingest/claude_code",
-      [stationLine(`e2e-${crew}`, crew, machine), userLine(`e2e-${crew}`, "working")].join("\n") + "\n",
+      [stationLine(`e2e-${crew}`, crew, machine, { at }), userLine(`e2e-${crew}`, "working")].join("\n") + "\n",
       { authorization: `Bearer ${keys[who]}`, "content-type": "application/x-ndjson" });
     ck(`${who}'s crew ${crew} is recorded`, r.status < 300, r.body);
   }
   r = await call("GET", "/api/crew", undefined, rootH);
   const crews = (r.json && r.json.crews) || [];
-  const crewOf = (who) => (crews.find((c) => c.person && c.person.id === people[who]) || {}).id;
+  const crewOf = (who) => (crews.find((c) => c.person && c.person.id === people[who] && c.machine !== "ashish-old") || {}).id;
   ck("the cell lists both crews", crewOf("ashish") && crewOf("kiran"), r.body.slice(0, 200));
 
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
@@ -144,6 +140,21 @@ const userLine = (sid, text) => JSON.stringify({
       await shot(page, "ashish-sees-own-station.png");
       await ctx.close();
     }
+    console.log("== licensed: every person's crews, a stale crew in its fold ==");
+    {
+      const { ctx, page } = await open("ashish");
+      const chunks = [];
+      page.on("request", (q) => { if (/\/assets\/ee-/.test(q.url())) chunks.push(q.url()); });
+      await page.goto(`${BASE}/crew`);
+      await page.locator(".crew-person-h", { hasText: "kiran" }).first().waitFor({ timeout: 20000 });
+      ck("the enterprise chunk was fetched", chunks.length > 0);
+      ck("your own crews come under You", await page.locator(".crew-person-h", { hasText: "You" }).count() === 1);
+      ck("the other person's under their name", await page.locator(".crew-person-h", { hasText: "kiran" }).count() === 1);
+      ck("their machine shows", await page.getByText("kiran-pc").count() >= 1);
+      ck("your stale crew sits in the Not seen recently fold", await page.locator("summary", { hasText: "Not seen recently" }).count() === 1);
+      await shot(page, "licensed-crew.png");
+      await ctx.close();
+    }
     console.log("== a failing who-am-I answer is not treated as local ==");
     {
       const { ctx, page } = await open("kiran");
@@ -163,6 +174,42 @@ const userLine = (sid, text) => JSON.stringify({
       await page.waitForTimeout(500);
       ck("after Retry the page loads", await page.getByText("load who you are").count() === 0);
       await shot(page, "whoami-back.png");
+      await ctx.close();
+    }
+    console.log("== unlicensed: your own crew, flat ==");
+    {
+      const plain = await startDaemon({ port: PORT + 2, dataDir: path.join(tmp, "plain"), edition: "platform", licence: "none", auth: ROOT });
+      cells.push(plain);
+      BASE = plain.base;
+      r = await call("POST", "/api/sources", { name: "claude_code", connector: "claude_code", poll: "10s", config: { push: true } }, rootH);
+      ck("the claude_code source is made (unlicensed)", r.status < 300, r.body);
+      // without a licence a cell has one person: whoever holds the cell's own token
+      const key = ROOT;
+      const lines = [
+        stationLine("p-a", "a", "ashish-mac"),
+        stationLine("p-a2", "a", "ashish-mac", { station: "crew-reviewer", role: "reviewer" }),
+        stationLine("p-c", "c", "ashish-old", { at: -2 * 24 * 3600 }),
+      ].join("\n") + "\n";
+      r = await call("POST", "/ingest/claude_code", lines, { authorization: `Bearer ${key}`, "content-type": "application/x-ndjson" });
+      ck("the crews are recorded", r.status < 300, r.body);
+      r = await call("POST", "/api/desk", { question: "Ship it?", recommendation: "Yes", why: "The checks pass." }, rootH);
+      ck("one desk item is added", r.status < 300, r.body);
+      const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+      await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, key);
+      const page = await ctx.newPage();
+      const chunks = [];
+      page.on("request", (q) => { if (/\/assets\/ee-/.test(q.url())) chunks.push(q.url()); });
+      await page.goto(`${BASE}/crew`);
+      await page.getByTestId("own-crew").waitFor({ timeout: 20000 });
+      await page.getByText("Ship it?").first().waitFor({ timeout: 20000 });
+      await page.waitForTimeout(800);
+      ck("both stations of your crew are listed", await page.locator("[data-testid=own-crew] li").count() >= 2);
+      ck("no person heading", await page.locator(".crew-person-h").count() === 0);
+      ck("no Not seen recently fold", await page.locator("summary", { hasText: "Not seen recently" }).count() === 0);
+      ck("the desk has no For you heading", await page.locator(".crew-desk-for").count() === 0);
+      ck("the desk item shows", await page.locator(".crew-desk li", { hasText: "Ship it?" }).count() === 1);
+      ck("the enterprise chunk is never fetched", chunks.length === 0, chunks.join(","));
+      await shot(page, "unlicensed-crew.png");
       await ctx.close();
     }
   } catch (e) {

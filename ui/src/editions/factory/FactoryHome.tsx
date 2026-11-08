@@ -712,7 +712,10 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
           "Answered. It is on its way back to whoever asked.", () => {});
       }
     } else if (a.do === "answer") {
-      if (typeof a.desk === "string" || (a.project && a.question)) { clearError(item.id); setAnswering({ item, action: a }); }
+      // a spec question is the team's part: without it there is no box to open, so the row says what is missing
+      if (live && typeof a.desk !== "string" && a.project && a.question && !team.current) {
+        update(item.id, () => ({ error: eeFailed ? EE_FAILED_WORDS : licenceSentence() }));
+      } else if (typeof a.desk === "string" || (a.project && a.question)) { clearError(item.id); setAnswering({ item, action: a }); }
     } else if (a.do === "later") {
       const project = String(a.project ?? item.project?.id ?? "");
       if (!project) return;

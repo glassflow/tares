@@ -153,6 +153,27 @@ async function visit(browser, base, { blockChunk = false } = {}) {
          (await page.locator('[data-testid="projects"] > div.border').count()) === 0, "an empty box is drawn");
       await ctx.close();
     }
+    // The answer to a spec question is the team's part too: with the chunk blocked, Answer says the part did not load (no box opens).
+    const spec = { id: "spec-1", kind: "question", label: "Question", title: "Which database?", detail: "Lee asks which database to use.",
+                   meta: "", project: null, repo: null, from: { name: "Lee" }, since: null, waited: "1 minute",
+                   actions: [{ label: "Answer", primary: true, do: "answer", project: "p1", question: "q1" }] };
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const page = await ctx.newPage();
+      await page.route(EE_CHUNK, (route) => route.abort());
+      await teamHome(page, { waiting: [spec], projects: [stub] });
+      await page.goto(`${valid.base}/`, { waitUntil: "load" });
+      await page.getByTestId("waiting-row").first().waitFor();
+      await page.waitForLoadState("networkidle");
+      await page.getByRole("button", { name: "Answer" }).click();
+      const err = page.getByTestId("row-error");
+      await err.waitFor();
+      const words = (await err.innerText()).trim();
+      ck("chunk fails to load: Answer says the part did not load", failedWords.test(words), words);
+      ck("chunk fails to load: Answer does not say a licence is needed", !/licence/i.test(words), words);
+      ck("chunk fails to load: Answer opens no box", (await page.getByTestId("answer-panel").count()) === 0);
+      await ctx.close();
+    }
     {
       const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
       const page = await ctx.newPage();
