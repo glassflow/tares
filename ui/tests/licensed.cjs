@@ -38,7 +38,7 @@ function healthy(url) {
   return new Promise((res) => http.get(url, (r) => { r.resume(); res(r.statusCode > 0); }).on("error", () => res(false)));
 }
 
-async function startDaemon({ port, dataDir, edition, licence = "valid", auth } = {}) {
+async function startDaemon({ port, dataDir, edition, licence = "valid", auth, env } = {}) {
   if (!port) throw new Error("startDaemon: port is required");
   if (!["none", "valid", "expired", "over_seats", "invalid"].includes(licence)) throw new Error(`startDaemon: unknown licence ${licence}`);
   const home = dataDir || fs.mkdtempSync(path.join(os.tmpdir(), "tares-licensed-e2e-"));
@@ -48,6 +48,7 @@ async function startDaemon({ port, dataDir, edition, licence = "valid", auth } =
     TARES_MCP_PORT: String(port + 1), TARES_OTLP_GRPC_PORT: "off", TARES_PR_SYNC_SECONDS: "off",
   };
   if (edition) extra.TARES_EDITION = edition;
+  if (env) Object.assign(extra, env);   // more TARES_* variables for this daemon, e.g. TARES_WORKSPACE_API_URL for a Cloud cell
   const args = [path.join(REPO, "ee/tests/licensed.py"), "serve", "--port", String(port), "--data-dir", home, "--licence", licence];
   if (auth) args.push(`--auth=${auth}`);
   const child = spawn(python(), args, { cwd: REPO, stdio: "ignore", env: cleanEnv(extra), detached: true });

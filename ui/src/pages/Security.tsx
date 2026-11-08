@@ -108,7 +108,10 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
   // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
   // so a hard load does not show Access and then jump.
-  const want = picked === "advanced" && !hasAdvanced ? undefined : picked;
+  // The licence tab is for self-hosted cells: Tares Cloud needs no licence, and until /health has
+  // answered we do not know which this is, so an asked-for licence tab waits like the default does.
+  const want = picked === "advanced" && !hasAdvanced ? undefined
+    : picked === "licence" && (cloud.hosted || !cloud.ready) ? undefined : picked;
   const tab: SettingsTab | undefined = workspaceApiUrl ? (want ?? "workspace")
     : want === "workspace" ? (cloud.ready ? "access" : "workspace")
     : want ?? (cloud.ready ? "access" : undefined);
@@ -117,7 +120,8 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
     : t.key === "usage" ? !workspaceApiUrl
     : t.key === "advanced" ? hasAdvanced
-    : t.key === "areas" ? eeLoaded : true);
+    : t.key === "areas" ? eeLoaded
+    : t.key === "licence" ? cloud.ready && !cloud.hosted : true);
   const groups = [...new Set(tabs.map((t) => t.group))];
   const link = (t: (typeof TABS)[number]) => (
     <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}

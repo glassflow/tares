@@ -13,6 +13,9 @@
  *   - over seats (factory): the over-seats banner says how many people and how many seats.
  *   - key in the environment (valid, then not valid): the panel says where the key comes from, shows the reason
  *     for a key that does not check out, and says the environment wins.
+ *   - Tares Cloud (TARES_WORKSPACE_API_URL set, expired key): no banner, no Enterprise licence tab, no panel behind
+ *     ?tab=licence, no row or link in the factory and sre settings; the same pages on a self-hosted cell have them.
+ *     GET /api/licence answers as before (display only).
  * Not covered: the sre edition's banner (same Shell as factory, same link) and a cell with no auth reading
  * "Only an admin" (an open cell has no non-admin).
  * Set SHOTS_DIR to keep screenshots at 1440 and 390 px: licence-<state>-<width>.png for none, valid, expired,
@@ -239,7 +242,7 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
             await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
             ck(t(`@${w}: the banner link opens the panel`), new URL(page.url()).pathname === "/settings" && new URL(page.url()).searchParams.get("tab") === "licence", page.url());
           }
-          ck(t(`${p} @${w}: no page error, no sideways scroll`), errors.length === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
+          ck(t(`${p} @${w}: no page error, no crash screen, no sideways scroll`), errors.length === 0 && (await page.getByText("Unexpected Application Error").count()) === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
           await ctx.close();
         }
       }
@@ -268,7 +271,7 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
           ck(t(`${p} @${w}: the banner counts people and seats`), words.includes(`This cell has ${st.used} people and the licence covers ${st.seats}. Adding people is paused.`), words);
           if (!words) { await ctx.close(); continue; }
           ck(t(`${p} @${w}: it is not the expired wording`), !/ended on/.test(words));
-          ck(t(`${p} @${w}: no page error, no sideways scroll`), errors.length === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
+          ck(t(`${p} @${w}: no page error, no crash screen, no sideways scroll`), errors.length === 0 && (await page.getByText("Unexpected Application Error").count()) === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
           if (p === "/") { await checkWords(page, ck, t(`banner @${w}`)); await shot(page, "licence-banner-over_seats", w); }
           else {
             await page.getByTestId("licence-banner-link").click();
@@ -322,6 +325,51 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       await page.waitForFunction(() => !document.querySelector('[data-testid="licence-remove"]'), null, { timeout: 10000 });
       ck(t("Remove takes the saved key away and leaves the environment's"), (await api(envOk, "/api/licence")).body.stored === false);
       await ctx.close();
+    }
+
+    // ── Tares Cloud: no licence screens (display only; the cell's answer is unchanged) ──
+    console.log("== cloud ==");
+    {
+      const t = (s) => `cloud: ${s}`;
+      const cloudUrl = `http://127.0.0.1:${nextPort}/api/nope`;   // answers 404, so the Workspace tab says "no access" and the page stays up
+      const cloud = await start({ dataDir: tmp("cloud"), edition: "factory", licence: "expired", env: { TARES_WORKSPACE_API_URL: cloudUrl } });
+      const sreCloud = await start({ dataDir: tmp("cloud-sre"), edition: "sre", licence: "expired", env: { TARES_WORKSPACE_API_URL: cloudUrl } });
+      const st = (await api(cloud, "/api/licence", { token: null })).body;
+      ck(t("the cell still answers valid and expired"), st.valid === true && st.expired === true, JSON.stringify(st));
+      ck(t("and /health says it is a Cloud cell"), !!(await api(cloud, "/health", { token: null })).body.workspace_api_url);
+      const tabButton = (page) => page.getByRole("button", { name: "Enterprise licence" }).count();
+      for (const w of WIDTHS) {
+        for (const p of ["/", "/settings", "/settings/advanced", "/settings/advanced?tab=licence"]) {
+          const { ctx, page, errors } = await open(cloud, p, w);
+          await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
+          ck(t(`${p} @${w}: no banner`), (await page.getByTestId("licence-banner").count()) === 0);
+          ck(t(`${p} @${w}: no licence panel, no Enterprise licence tab, no row`), (await page.getByTestId("licence-panel").count()) === 0
+             && (await tabButton(page)) === 0 && (await page.getByTestId("row-licence").count()) === 0);
+          ck(t(`${p} @${w}: no page error, no crash screen, no sideways scroll`), errors.length === 0 && (await page.getByText("Unexpected Application Error").count()) === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
+          if (p === "/settings/advanced?tab=licence") await shot(page, "licence-cloud", w);
+          await ctx.close();
+        }
+        const { ctx, page } = await open(sreCloud, "/settings", w);
+        await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
+        ck(t(`sre /settings @${w}: no Enterprise licence link, no banner`), (await page.getByTestId("licence-link").count()) === 0 && (await page.getByTestId("licence-banner").count()) === 0);
+        await ctx.close();
+      }
+      // the same pages on a self-hosted cell have them, so the checks above are not vacuous
+      const selfSre = await start({ dataDir: tmp("self-sre"), edition: "sre", licence: "expired" });
+      const { ctx, page } = await open(selfSre, "/settings", 1440);
+      await page.getByTestId("licence-link").waitFor({ timeout: 15000 }).catch(() => {});
+      ck(t("control: a self-hosted sre cell shows the Enterprise licence link"), (await page.getByTestId("licence-link").count()) === 1);
+      await page.getByTestId("licence-link").click();
+      await page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
+      ck(t("control: and the link opens the panel"), (await page.getByTestId("licence-panel").count()) === 1, page.url());
+      await ctx.close();
+      const selfF = await open(expired, "/settings", 1440);
+      await selfF.page.getByTestId("row-licence").waitFor({ timeout: 15000 }).catch(() => {});
+      ck(t("control: a self-hosted factory cell shows the row, and its button opens the panel"), (await selfF.page.getByTestId("row-licence").count()) === 1);
+      await selfF.page.getByTestId("row-licence").getByRole("link", { name: "Open licence" }).click();
+      await selfF.page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
+      ck(t("control: the row's button opens the panel"), (await selfF.page.getByTestId("licence-panel").count()) === 1, selfF.page.url());
+      await selfF.ctx.close();
     }
   } finally {
     await browser.close().catch(() => {});
