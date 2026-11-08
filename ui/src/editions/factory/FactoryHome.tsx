@@ -8,7 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
 import { licenceSentence } from "@/components/LicenceNeeded";
-import { Slot } from "@/eeSlots";
+import { Slot, useEeLoaded, useEePending, useEeSamples } from "@/eeSlots";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
@@ -19,13 +19,10 @@ import {
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeVerb, TeamHomeHandler,
+  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeProjectState, HomeSample, HomeVerb, ProjectsView, TeamHomeHandler,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
-import { HOME_SAMPLES_TEAM, sampleView } from "./homeSamplesTeam";
 import { Detail, DetailLines } from "./HomeDetail";
-import { CrewLimit, ReposYouOwn, TeamCrews } from "./TeamSide";
-import { HiddenLine, HiddenRow, LeadLine, PrivateLock, ProjectsSwitch, type ProjectsView } from "./TeamProjects";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 
@@ -147,6 +144,16 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
   );
 }
 
+/** Stands where "Waiting for you" will be while the enterprise part of the console loads. */
+function WaitingPending() {
+  return (
+    <section aria-label="Waiting for you" className="min-w-0" data-testid="waiting-pending">
+      <SectionHead title="Waiting for you" />
+      <div className="border border-border bg-card"><SkeletonRows /></div>
+    </section>
+  );
+}
+
 /** A cell with more than one person sends these keys; a cell of one never does. */
 const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
@@ -195,14 +202,14 @@ function ProjectRow({ p, team, me }: { p: HomeProject; team?: boolean; me?: stri
     <ListRow to={`/projects/${encodeURIComponent(p.id)}`} data-testid="project-row"
              className="block! text-foreground! py-3.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {team && p.scope === "private" && <PrivateLock />}
+        {team && p.scope === "private" && <Slot name="home.projectLock" />}
         <span className={cn("min-w-0 font-bold", team && "[overflow-wrap:anywhere]")} data-user-text>{p.name}</span>
         <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", CHIP_TONES[p.state])}>
           {p.state_label}
         </span>
       </div>
       <div className="mt-0.5 line-clamp-2" title={p.goal} data-user-text>{p.goal}</div>
-      {team ? <LeadLine p={p} me={me} /> : p.meta && <div className={cn(MUTED, "mt-0.5")} data-user-text>{p.meta}</div>}
+      {team ? <Slot name="home.projectLead" p={p} me={me} /> : p.meta && <div className={cn(MUTED, "mt-0.5")} data-user-text>{p.meta}</div>}
       <ProgressBar value={pct(merged)} blocked={pct(blocked)} aria-label="Tickets merged"
         className="my-2 [&>div:first-child]:bg-foreground! [&_[aria-hidden]]:bg-[repeating-linear-gradient(135deg,var(--kit-accent)_0_3px,transparent_3px_6px)]!" />
       <div className={cn(MUTED, "flex flex-wrap gap-x-3")}>
@@ -236,7 +243,7 @@ function Projects({ projects, stubs, finished, later = 0, team }: {
       <SectionHead title="Projects" aside={team ? (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           {link}
-          <ProjectsSwitch view={team.view} counts={team.counts} onView={(v) => { setAll(false); team.onView?.(v); }} />
+          <Slot name="home.projectsSwitch" view={team.view} counts={team.counts} onView={(v) => { setAll(false); team.onView?.(v); }} />
         </div>
       ) : link} />
       <div className="border border-border bg-card">
@@ -259,8 +266,7 @@ function Projects({ projects, stubs, finished, later = 0, team }: {
             </Button>
           </ListRow>
         )}
-        {stubs.map((s, i) => <HiddenRow key={i} stub={s} />)}
-        {team?.view === "mine" && team.hidden && <HiddenLine text={team.hidden} />}
+        {team && <Slot name="home.hiddenRows" stubs={stubs} hidden={team.hidden} view={team.view} />}
       </div>
     </section>
   );
@@ -301,18 +307,19 @@ function Member({ m }: { m: HomeCrewMember }) {
 function CrewCard({ data }: { data: HomeData }) {
   const { crew } = data;
   const limit = isTeam(data) ? data.crew_limit : undefined;
+  const autonomy = (
+    <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-xs">
+      <Link to="/settings#crew" className="text-foreground">Autonomy</Link>
+      <span className="text-muted-foreground">{crew.how_far.text}</span>
+    </div>
+  );
   return (
     <section aria-label="Your crew" className="min-w-0">
       <SectionHead title="Your crew" />
       <Panel>
         <div className="mb-2.5 text-[13px] text-muted-foreground">{crew.summary}</div>
         {crew.members.map((m) => <Member key={m.station} m={m} />)}
-        {limit ? <CrewLimit limit={limit} /> : (
-          <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3 text-xs">
-            <Link to="/settings#crew" className="text-foreground">Autonomy</Link>
-            <span className="text-muted-foreground">{crew.how_far.text}</span>
-          </div>
-        )}
+        {limit ? <Slot name="home.crewLimit" limit={limit} fallback={autonomy} /> : autonomy}
       </Panel>
     </section>
   );
@@ -405,7 +412,11 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
 }) {
   const { personName } = useEdition();
   const name = useFirstName();
-  const team = isTeam(data) && data.counts
+  // The team's Projects (switch, lock, lead, hidden rows) are ee: until it has registered, and on a
+  // cell without it, the single-person rows show.
+  const eeLoaded = useEeLoaded();
+  const eePending = useEePending();
+  const team = isTeam(data) && data.counts && eeLoaded
     ? { counts: data.counts, view: projectsView ?? "mine", onView: onProjectsView, me: personName, hidden: data.hidden_summary }
     : undefined;
   return (
@@ -426,7 +437,8 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
               renderAction={(a: HomeAction, item: HomeItem) => <ActionButton key={a.label} action={a} item={item} onAction={onAction} state={rows?.[item.id]} />}
               errors={Object.fromEntries(Object.entries(rows ?? {}).map(([k, v]) => [k, v.error]))}
               panels={panels}
-              fallback={<Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />} />
+              // while the ee chunk is on its way, core's rows would flash with the team's buttons on them
+              fallback={eePending ? <WaitingPending /> : <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />} />
           ) : (
             <Waiting items={data.waiting_for_you} onAction={onAction} rows={rows} />
           )}
@@ -435,8 +447,8 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
         </div>
         <aside className={RIGHT}>
           <CrewCard data={data} />
-          {isTeam(data) && <TeamCrews crews={data.crews ?? []} quiet={data.crews_quiet ?? []} />}
-          {isTeam(data) && <ReposYouOwn areas={data.areas ?? []} />}
+          {isTeam(data) && <Slot name="home.teamCrews" crews={data.crews ?? []} quiet={data.crews_quiet ?? []} />}
+          {isTeam(data) && <Slot name="home.reposYouOwn" areas={data.areas ?? []} />}
           <PlanCard data={data} />
           <Tools data={data} />
         </aside>
@@ -720,7 +732,11 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       })();
     } else if (a.do === "agree" || a.do === "decline") {
       // without the enterprise part the buttons say what is missing, as any refused call does
-      if (!team.current?.act(a, item)) update(item.id, () => ({ error: licenceSentence() }));
+      if (!team.current?.act(a, item)) {
+        // a sample sends nothing whatever the licence says; a live row says what is missing
+        if (!live) toast(SAMPLE_NOTE);
+        else update(item.id, () => ({ error: licenceSentence() }));
+      }
     }
   };
 
@@ -771,9 +787,13 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
 
 // ── pages ──────────────────────────────────────────────────────────────────────
 
-const ALL_SAMPLES: Record<string, HomeData> = { ...HOME_SAMPLES, ...HOME_SAMPLES_TEAM };
+/** The samples by name: core's, and the ones ee registers (the team's) once it has loaded. */
+function useAllSamples(): Record<string, HomeSample> {
+  const ee = useEeSamples("home");
+  return React.useMemo(() => ({ ...HOME_SAMPLES, ...ee }), [ee]);
+}
 
-function SampleHome({ sample }: { sample: string }) {
+function SampleHome({ sample, all }: { sample: string; all: Record<string, HomeSample> }) {
   const [tries, setTries] = React.useState(0);
   const { rows, onAction, dialogs, panels } = useHomeActions(false, () => {});
   const [view, setView] = React.useState<ProjectsView>("mine");
@@ -782,7 +802,7 @@ function SampleHome({ sample }: { sample: string }) {
   else if (sample === "error") {
     body = <FactoryHomeError key={tries} onRetry={() => setTries((n) => n + 1)} />;
   }
-  else body = <FactoryHomeView data={sampleView(ALL_SAMPLES[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
+  else body = <FactoryHomeView data={sampleData(all[sample], view)} projectsView={view} onProjectsView={setView} onAction={onAction} rows={rows} panels={panels} hideStart={() => Promise.resolve()} showStart={() => Promise.resolve()} />;
   return (
     <>
       {body}
@@ -791,6 +811,8 @@ function SampleHome({ sample }: { sample: string }) {
     </>
   );
 }
+
+const sampleData = (s: HomeSample, view: ProjectsView): HomeData => (typeof s === "function" ? s(view) : s);
 
 /** What the page shows at once after a change, until the daemon's own answer catches up. */
 interface Overlay { items: Set<string>; projects: Set<string>; later: Set<string>; until: number }
@@ -857,8 +879,12 @@ function LiveHome() {
 
 export default function FactoryHome() {
   const sample = useSample();
-  if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(ALL_SAMPLES, sample))) {
-    return <SampleHome key={sample} sample={sample} />;
+  const all = useAllSamples();
+  const eePending = useEePending();
+  if (sample && (sample === "loading" || sample === "error" || Object.prototype.hasOwnProperty.call(all, sample))) {
+    return <SampleHome key={sample} sample={sample} all={all} />;
   }
+  // a team sample is ee's: while the chunk loads, wait for it instead of showing the live home and swapping
+  if (sample && eePending) return <FactoryHomeLoading />;
   return <LiveHome />;
 }

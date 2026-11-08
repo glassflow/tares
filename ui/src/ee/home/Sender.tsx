@@ -1,10 +1,11 @@
+// Tares enterprise licence, see ee/LICENSE
 import * as React from "react";
 
 import { cn } from "@/lib/utils";
-import type { HomeItem } from "./home.types";
+import type { HomeItem } from "@/editions/factory/home.types";
 
 // Who a waiting item or a project member is from: the crew's mark, a person's picture or their
-// initial in a colour. Core, because the projects list and the side column draw it too.
+// initial in a colour. The team home draws it: waiting rows, the members on a project row.
 
 // People other than the crew wear one of these, chosen by name so a person keeps their colour.
 const PEOPLE: { bg: string; fg: string }[] = [

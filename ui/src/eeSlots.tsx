@@ -4,6 +4,7 @@ import { useEffect, useSyncExternalStore, type ComponentType, type ReactNode } f
 import LicenceNeeded from "@/components/LicenceNeeded";
 import { Banner, SkeletonRows } from "@/components/edition";
 import { useLicence } from "./licence";
+import type { PageSlotName, SampleSets, SlotName, SlotProps } from "./slotProps";
 
 /*
  * The seam between the console and the enterprise code in src/ee. Core pages show ee pieces through
@@ -14,15 +15,19 @@ import { useLicence } from "./licence";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyComponent = ComponentType<any>;
-export type RegisterSlot = (name: string, component: AnyComponent) => void;
+/** Each slot takes the props SlotProps (src/slotProps.ts) lists for its name, on both sides. */
+export type RegisterSlot = <N extends SlotName>(name: N, component: ComponentType<SlotProps[N]>) => void;
+/** Samples ee adds to a page's own, by page: the page shows them next to its own. */
+export type RegisterSamples = <P extends keyof SampleSets>(page: P, samples: SampleSets[P]) => void;
 
-type EeModule = { register?: (registerSlot: RegisterSlot) => void };
+type EeModule = { register?: (registerSlot: RegisterSlot, registerSamples: RegisterSamples) => void };
 
 // {} when src/ee/index.ts does not exist (the MIT-only build).
 const EE = import.meta.glob<EeModule>("./ee/index.ts");
 const load = EE["./ee/index.ts"] as (() => Promise<EeModule>) | undefined;
 
 const slots = new Map<string, AnyComponent>();
+const sampleSets = new Map<string, Record<string, unknown>>();
 const listeners = new Set<() => void>();
 let loaded = false;
 let failed = false;
@@ -38,6 +43,19 @@ export const registerSlot: RegisterSlot = (name, component) => {
   slots.set(name, component);
   emit();
 };
+
+export const registerSamples: RegisterSamples = (page, samples) => {
+  sampleSets.set(page, { ...sampleSets.get(page), ...samples });
+  emit();
+};
+
+const NO_SAMPLES = {};
+
+/** The samples ee registered for a page; none until the ee chunk has loaded (and none in the MIT build). */
+export function useEeSamples<P extends keyof SampleSets>(page: P): SampleSets[P] {
+  useSyncExternalStore(subscribe, snapshot);
+  return (sampleSets.get(page) ?? NO_SAMPLES) as SampleSets[P];
+}
 
 function subscribe(l: () => void) {
   listeners.add(l);
@@ -59,7 +77,7 @@ export function EeLoader() {
     };
     load().then((mod) => {
       try {
-        mod.register?.(registerSlot);
+        mod.register?.(registerSlot, registerSamples);
       } catch (e) {
         fail(e);
         return;
@@ -71,6 +89,14 @@ export function EeLoader() {
   return null;
 }
 
+/** True while the cell allows enterprise but the ee chunk has not registered yet (and has not failed):
+ *  a page that would show an ee piece in its place shows a skeleton, so core's plainer version never flashes. */
+export function useEePending(): boolean {
+  const { eeAllowed } = useLicence();
+  useSyncExternalStore(subscribe, snapshot);
+  return eeAllowed && !!load && !loaded && !failed;
+}
+
 /** True once the ee chunk is loaded and has registered. */
 export function useEeLoaded(): boolean {
   useSyncExternalStore(subscribe, snapshot);
@@ -78,14 +104,14 @@ export function useEeLoaded(): boolean {
 }
 
 /** Renders what ee registered under `name`; `fallback` (nothing by default) until then. */
-export function Slot({ name, fallback = null, ...props }: { name: string; fallback?: ReactNode; [prop: string]: unknown }) {
+export function Slot<N extends SlotName>({ name, fallback = null, ...props }: { name: N; fallback?: ReactNode } & SlotProps[N]) {
   useSyncExternalStore(subscribe, snapshot);
   const C = slots.get(name);
   return C ? <C {...props} /> : <>{fallback}</>;
 }
 
 /** A whole ee page: the slot when loaded, a skeleton while the licence is being read, else the licence note. */
-export function EePage({ slot, ...props }: { slot: string; [prop: string]: unknown }) {
+export function EePage<N extends PageSlotName>({ slot, ...props }: { slot: N } & SlotProps[N]) {
   const { loading, eeAllowed } = useLicence();
   useSyncExternalStore(subscribe, snapshot);
   const C = slots.get(slot);
