@@ -91,6 +91,7 @@ async def main():
                 p = await people(who)
                 ck(f"{who}: no change-the-lead control, no add-a-member control",
                    p["can_set_lead"] is False and p["can_add"] is False, str(flags(p)))
+                ck(f"{who}: nobody to pick from either (TR-930 F2)", len(p["people"]) == 0, str(flags(p)))
             ck("the lead is still named, the page still reads", (await people("lead"))["lead"]["name"] == "Lead")
 
         print("== licensed ==")
@@ -108,6 +109,21 @@ async def main():
            and p["can_add"] is True, str(flags(p)))
         p = await people("reader")
         ck("a read key may do neither and sees nobody to pick", flags(p) == (False, False, 0), str(flags(p)))
+
+        print("== a valid key on a cell without the ee package (TR-930 F1) ==")
+        from tares import team as team_mod
+        real_ee = team_mod._ee
+        team_mod._ee = lambda: None
+        try:
+            for who in ("lead", "admin", "root"):
+                p = await people(who)
+                ck(f"{who}: the key alone does not offer the controls",
+                   p["can_set_lead"] is False and p["can_add"] is False and not p["people"], str(flags(p)))
+        finally:
+            team_mod._ee = real_ee
+        p = await people("lead")
+        ck("with the package back the controls return", p["can_set_lead"] is True and p["can_add"] is True,
+           str(flags(p)))
 
         print("== the licence goes ==")
         r = await call("root", "DELETE", "/api/licence")

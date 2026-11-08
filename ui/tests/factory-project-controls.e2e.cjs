@@ -4,9 +4,10 @@
  *
  * Four scratch cells start through tests/licensed.cjs (the test licence root is trusted in that process
  * only), each on its own data directory seeded with tests/seed-factory-controls.py: one project, led by
- * the cell's owner, with two other people on the cell. Ports are TARES_E2E_PORT (default 8880) and the
+ * the cell's owner, with three other people on the cell. Ports are TARES_E2E_PORT (default 8880) and the
  * ones after it (daemon + MCP, two per cell); the suite stops only those.
- *   - licensed: Change the lead and Add a member are on the page and work (the lead moves to Kim).
+ *   - licensed: Change the lead and Add a member are on the page and work (the lead moves to Sam Roe, then
+ *     Ana Ortiz is added as a member).
  *   - no licence: the page reads the same, with neither control, and no ee chunk is requested.
  *   - expired: an expired licence keeps working, so the controls stay.
  *   - over seats: the licence is still valid, so the controls stay (the console shows its banner).
@@ -100,6 +101,17 @@ function seed(dir) {
         await page.waitForFunction(() => /Sam Roe/.test(document.querySelector('[data-testid="project-people"]').innerText), null, { timeout: 10000 });
         const now = await (await fetch(`${d.base}/api/projects/${uid}`)).json();
         ck("valid: Change the lead hands the project to Sam", now.lead && now.lead.name === "Sam Roe", JSON.stringify(now.lead));
+        // Ana is on the cell but not on the project, so the picker offers her: Add a member adds her (TR-930 F3)
+        const isAna = (m) => m.name === "Ana Ortiz";
+        ck("valid: before Add a member, Ana is not a member", !(now.members || []).some(isAna), JSON.stringify(now.members));
+        await page.getByTestId("people-add-member").first().click();
+        await page.getByRole("option", { name: "Ana Ortiz" }).click();
+        let after = now;
+        for (let i = 0; i < 50 && !(after.members || []).some(isAna); i++) {
+          await page.waitForTimeout(200);
+          after = await (await fetch(`${d.base}/api/projects/${uid}`)).json();
+        }
+        ck("valid: Add a member puts Ana on the project", (after.members || []).some(isAna), JSON.stringify(after.members));
         await ctx.close();
       }
     }

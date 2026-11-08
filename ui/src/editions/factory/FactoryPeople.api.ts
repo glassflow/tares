@@ -38,6 +38,3 @@ export interface FactoryPeopleData {
 export interface AddedPerson { id: string; name: string; email: string | null; invited: boolean }
 
 export const factoryPeople = () => request<FactoryPeopleData>("/api/factory/people");
-
-export const addPerson = (email: string, name?: string) =>
-  request<AddedPerson>("/api/factory/people", { method: "POST", body: JSON.stringify({ email, name: name || undefined }) });

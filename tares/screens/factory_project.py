@@ -34,6 +34,7 @@ from .. import factory_github
 from .. import factory_home as fh
 from .. import factory_waiting as fw
 from .. import licence
+from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import plain_ago
 
@@ -279,11 +280,11 @@ def register(app, store, h, ctx):
         # the cell's first person before anyone signed in (no email, named "You") is nobody to pick
         everyone = [r for r in (ref(x["id"]) for x in store.list_people()
                                 if not (x["id"] == "local" and not x.get("email"))) if r]
-        team = licence.ee_allowed()
+        team = team_mod.enabled()   # the ee team loaded and the licence allows it; a key alone is not enough
         return {"lead": lead, "members": members,
                 "can_set_lead": team and (admin or is_lead),
                 "can_add": team and (is_lead or h.is_system(request)),
-                "you": me.get("id"), "people": everyone if (admin or is_lead) else []}
+                "you": me.get("id"), "people": everyone if (team and (admin or is_lead)) else []}
 
     @app.get("/api/factory/projects/{uid}")
     def factory_project(uid: str, request: Request):

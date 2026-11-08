@@ -4,24 +4,22 @@
  * licence page) and never the raw answer.
  *  - Settings, People on a platform cell: Add person.
  *  - People on a factory cell: Add.
+ *  - Settings, Workspace on Tares Cloud: Invite. A cell with no licence shows the line in place of the invite
+ *    form; a licensed one shows the form, and an invite the workspace refuses with 402 shows the line.
+ * The control plane is made up too: the cell's workspace address is on its own origin and page.route answers it.
  * The answers are made up with page.route, so the suite does not depend on which routes the daemon
  * has moved out of core.
  *
- * Runs the real daemon on a scratch data directory and port, serving the built console.
+ * Runs the real daemon, licensed (tests/licensed.cjs), on a scratch data directory and port, serving the built console.
  * Run:  npm run build && node tests/licence-needed.e2e.cjs
- * Needs: tares importable by the python at TARES_E2E_PY (default: the repo .venv, else python3,
- * with the repo on PYTHONPATH). TARES_E2E_CHROME points Playwright at another Chrome binary when
+ * Needs: tares importable by the python at TARES_E2E_PY (default: the repo .venv, else python3). TARES_E2E_CHROME points Playwright at another Chrome binary when
  * its own browser download is missing.
  */
-const http = require("http");
-const { spawn } = require("child_process");
-const fs = require("fs");
-const os = require("os");
 const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
-const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { startDaemon } = require("./licensed.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8816);
 const URL_ENTERPRISE = "https://docs.glassflow.ai/tares/enterprise";
@@ -33,31 +31,33 @@ const ck = (label, cond, detail = "") => {
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
 };
 
-function waitFor(url, tries = 150) {
-  return new Promise((resolve) => {
-    const tick = () => http.get(url, (r) => { r.resume(); resolve(true); })
-      .on("error", () => (--tries > 0 ? setTimeout(tick, 200) : resolve(false)));
-    tick();
-  });
-}
-
-function startDaemon(port, edition) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-licence-e2e-"));
-  const venvPy = path.join(REPO, ".venv/bin/python");
-  const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
-  const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "l.duckdb"),
-                TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(port), TARES_HOST: "127.0.0.1",
-                TARES_EDITION: edition, TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off",
-                TARES_PR_SYNC_SECONDS: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };
-  delete env.TARES_AUTH_TOKEN; delete env.TARES_WORKSPACE_API_URL; delete env.TARES_LICENSE;
-  const d = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], { cwd: REPO, env, stdio: "ignore" });
-  process.on("exit", () => { try { d.kill(); } catch { /* gone */ } });
-  return { d, tmp, base: `http://127.0.0.1:${port}` };
+// Licensed daemons (tests/licensed.cjs): the add forms are the licence's, so they show only on a cell that has
+// one; the 402 here is the licence running out while the page is open.
+async function startCell(port, edition, licence = "valid", cloud = false) {
+  const env = cloud ? { TARES_WORKSPACE_API_URL: `http://127.0.0.1:${port}/api/ws` } : undefined;
+  const d = await startDaemon({ port, edition, licence, env });
+  process.on("exit", () => d.stop());
+  return d;
 }
 
 const refuse = (page, method, glob) => page.route(glob, (route) => route.request().method() === method
   ? route.fulfill({ status: 402, contentType: "application/json", body: JSON.stringify(BODY) })
   : route.continue());
+
+// A made-up control plane for the Workspace tab: the overview, the members, and what an invite answers.
+async function fakeCloud(page, inviteAnswer) {
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await page.route("**/api/ws", (route) => route.request().method() !== "GET" ? route.fallback() : json(route, 200, {
+    slug: "acme", state: "running", plan: "team", image_tag: "1.55.0", storage_gb: 5, storage_max_gb: 50,
+    storage_used_bytes: null, storage_pct_used: null, host: "acme.example.test", role: "owner",
+    you: { email: "owner@example.com", name: "Owner" }, is_default: false, default_url: "http://127.0.0.1:9/api/ws/default",
+  }));
+  await page.route("**/api/ws/members", (route) => {
+    if (route.request().method() === "GET") return json(route, 200, { members: [
+      { user_id: "u1", email: "owner@example.com", name: "Owner", role: "owner", status: "active" }] });
+    return json(route, inviteAnswer.status, inviteAnswer.body);
+  });
+}
 
 // the licence line is there, links to the enterprise page in a new tab, and no raw answer is on the page
 async function checkLine(page, label, what) {
@@ -73,11 +73,13 @@ async function checkLine(page, label, what) {
 }
 
 (async () => {
-  const platform = startDaemon(PORT, "platform");
-  const factory = startDaemon(PORT + 1, "factory");
-  if (!(await waitFor(`${platform.base}/health`)) || !(await waitFor(`${factory.base}/health`))) {
-    console.log("FAIL daemons did not start"); process.exit(1);
-  }
+  let platform, factory, cloudBare, cloudLicensed;
+  try {
+    platform = await startCell(PORT, "platform");
+    factory = await startCell(PORT + 2, "factory");   // each takes its port and the next (MCP)
+    cloudBare = await startCell(PORT + 4, "factory", "none", true);
+    cloudLicensed = await startCell(PORT + 6, "factory", "valid", true);
+  } catch (e) { console.log("FAIL daemons did not start: " + e.message); process.exit(1); }
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
   try {
     // platform: Settings, People, Add person
@@ -111,9 +113,70 @@ async function checkLine(page, label, what) {
       ck("factory people: the email box shows no error text", (await page.getByTestId("people-email").getAttribute("aria-invalid")) !== "true");
       await page.context().close();
     }
+    // Tares Cloud, no licence: the line replaces the invite form
+    {
+      const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+      await fakeCloud(page, { status: 200, body: {} });
+      await page.goto(`${cloudBare.base}/settings?tab=workspace`);
+      await page.getByRole("heading", { name: "Team" }).waitFor({ timeout: 15000 });
+      await checkLine(page, "workspace, no licence", "Inviting people");
+      ck("workspace, no licence: there is no invite form", (await page.locator("#ws-invite").count()) === 0);
+      await page.context().close();
+    }
+    // Tares Cloud, licensed: the form shows, and a refused invite shows the line
+    {
+      const page = await (await browser.newContext({ viewport: { width: 390, height: 900 } })).newPage();
+      await fakeCloud(page, { status: 402, body: BODY });
+      await page.goto(`${cloudLicensed.base}/settings?tab=workspace`);
+      await page.locator("#ws-invite").waitFor({ timeout: 15000 });
+      ck("workspace, licensed: no licence line before an invite", (await page.getByTestId("licence-needed").count()) === 0);
+      await page.locator("#ws-invite").fill("sam@example.com");
+      await page.locator("#ws-invite").press("Enter");
+      await checkLine(page, "workspace, licensed, refused", "Inviting people");
+      await page.context().close();
+    }
+    // the licensed part cannot be loaded: say so, never "needs an enterprise licence" on a licensed cell
+    {
+      const EE_CHUNK = /\/assets\/ee-[^/]*\.js(\?|$)/;
+      for (const [label, base, route, what] of [
+        ["settings people", platform.base, "/settings?tab=access", "Adding people"],
+        ["factory people", factory.base, "/people", "Adding people"],
+      ]) {
+        const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await page.route(EE_CHUNK, (r) => r.abort());
+        await page.goto(base + route);
+        const said = await page.getByTestId("ee-failed").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+        ck(`chunk fails, ${label}: the page says this part did not load`, said
+           && /did not load\. Reload the page/.test(await page.getByTestId("ee-failed").first().innerText()));
+        ck(`chunk fails, ${label}: no licence line on a licensed cell`, (await page.getByTestId("licence-needed").count()) === 0
+           && !(await page.locator("body").innerText()).includes(`${what} needs an enterprise licence`));
+        await page.context().close();
+      }
+    }
+    // the licence read is slow or fails: a licensed workspace keeps its invite form, no licence line
+    {
+      for (const [label, slow] of [["slow", true], ["failing", false]]) {
+        const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeCloud(page, { status: 200, body: {} });
+        await page.route(/\/api\/licence(\?|$)/, async (route) => {
+          if (!slow) return route.abort();
+          await new Promise((r) => setTimeout(r, 3500));
+          return route.continue();
+        });
+        await page.goto(`${cloudLicensed.base}/settings?tab=workspace`);
+        await page.getByRole("heading", { name: "Team" }).waitFor({ timeout: 15000 });
+        await page.waitForTimeout(2000);
+        ck(`workspace, licence read ${label}, at 2 s: the invite form shows`, (await page.locator("#ws-invite").count()) === 1);
+        ck(`workspace, licence read ${label}, at 2 s: no licence line`, (await page.getByTestId("licence-needed").count()) === 0);
+        await page.waitForTimeout(slow ? 3500 : 3000);
+        ck(`workspace, licence read ${label}, later: still the form, no line`, (await page.locator("#ws-invite").count()) === 1
+           && (await page.getByTestId("licence-needed").count()) === 0);
+        await page.context().close();
+      }
+    }
   } finally {
     await browser.close();
-    for (const s of [platform, factory]) { try { s.d.kill(); } catch { /* gone */ } fs.rmSync(s.tmp, { recursive: true, force: true }); }
+    for (const s of [platform, factory, cloudBare, cloudLicensed]) s.stop();
   }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
