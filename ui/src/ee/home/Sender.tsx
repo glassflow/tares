@@ -31,7 +31,7 @@ export function senderWords(from: HomeItem["from"]): string {
 export function Sender({ from, small }: { from: HomeItem["from"]; small?: boolean }) {
   const crew = !from || from.crew === true;
   const name = crew ? "Your crew" : from.name;
-  const c = crew ? CREW_COLOUR : colourOf(from.id ?? from.name);
+  const c = crew ? CREW_COLOUR : colourOf(from.name);
   const [failed, setFailed] = React.useState(false);
   const pic = !crew && from?.picture && /^https:\/\//i.test(from.picture) && !failed ? from.picture : null;
   const size = small ? "size-5" : "mt-0.5 size-7";

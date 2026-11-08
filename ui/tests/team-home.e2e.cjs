@@ -393,6 +393,49 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await checkWords(page, ck, t("after it loads"));
       await ctx.close();
     }
+    // ── TR-1050 F1: the cell's licence answer is slow; core's plain rows must not flash before it comes ──
+    {
+      const t = (s) => `slow licence answer: ${s}`;
+      const { ctx, page } = await open("alex", 1440);
+      let release; const hold = new Promise((r) => { release = r; });
+      const asked = [];
+      await page.route(/\/api\/licence(\?|$)/, async (route) => { asked.push(route.request().url()); await hold; await route.continue(); });
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await page.waitForTimeout(800);   // the home's own read has long come back; only the licence answer is out
+      const buttons = () => page.getByRole("button", { name: /^(Agree|Decline|Answer|Allow|Sign off|Keep)/ }).count();
+      ck(t("the licence was asked for and is held"), asked.length >= 1, String(asked.length));
+      ck(t("a placeholder stands where Waiting for you will be"), (await page.getByTestId("waiting-pending").count()) === 1);
+      ck(t("no waiting row and no row button shows before the answer comes"), (await page.getByTestId("waiting-row").count()) === 0 && (await buttons()) === 0,
+         `${await page.getByTestId("waiting-row").count()} rows, ${await buttons()} buttons`);
+      release();
+      await page.getByTestId("waiting-team").waitFor({ timeout: 10000 }).catch(() => {});
+      ck(t("then the team's list draws with its six rows and the placeholder is gone"), (await page.getByTestId("waiting-team").count()) === 1
+         && (await page.getByTestId("waiting-row").count()) === 6 && (await page.getByTestId("waiting-pending").count()) === 0);
+      await ctx.close();
+    }
+    // ── TR-1050 F4: a person has one colour: on a waiting row and on their crew's square, keyed by name ──
+    {
+      const t = (s) => `person colour: ${s}`;
+      const { ctx, page } = await open("alex", 1440);
+      await page.unroute(/\/api\/home(\?|$)/);
+      await page.route(/\/api\/home(\?|$)/, async (route) => {   // give Kim an id whose hash would pick another colour than "Kim" does
+        const res = await route.fetch();
+        const data = await res.json();
+        for (const it of data.waiting_for_you || []) if (it.from && it.from.name === "Kim") it.from.id = "u2";
+        return route.fulfill({ response: res, json: data });
+      });
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await settle(page);
+      const kimMark = page.locator('[data-testid="waiting-from"][aria-label="From Kim"]').first();
+      const crewMark = page.getByTestId("team-crew-row").filter({ hasText: "Kim's crew" }).locator("span[aria-hidden]").first();
+      const bg = (loc) => loc.evaluate((e) => getComputedStyle(e).backgroundColor);
+      ck(t("Kim has a mark on a waiting row and on her crew's row"), (await kimMark.count()) === 1 && (await crewMark.count()) === 1);
+      const a = await bg(kimMark), b = await bg(crewMark);
+      ck(t("the two agree, though the row's sender carries an id"), a === b, `${a} vs ${b}`);
+      await ctx.close();
+    }
     // ── TR-1051 F2: a sample without the team's code says "this is a sample", not "needs a licence" ──
     {
       const t = (s) => `sample, no team code: ${s}`;

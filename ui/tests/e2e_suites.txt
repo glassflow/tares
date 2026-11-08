@@ -23,6 +23,7 @@ factory-start-show
 factory-ticket
 factory-tickets
 grants-declined
+licence
 licence-needed
 login-handoff
 project-idle

@@ -10,13 +10,14 @@ daemon that trusts that root. Not a test itself.
 A licensed scratch daemon, started the way `tares up` starts one, trusting the test root:
 
     python ee/tests/licensed.py serve --port 8799 --data-dir /tmp/x [--edition factory] [--auth] \\
-        [--licence valid|expired|over_seats|none] [--seats N]
+        [--licence valid|expired|over_seats|none|invalid] [--seats N]
 
 A licensed daemon that keeps the environment it is started with (the browser suites):
 `python ee/tests/licensed.py daemon [--seats N] [--licence valid|expired|none]`.
 
 `serve` takes every `tares up` option; --licence and --seats are its own (valid is the default,
-5 seats). The licence goes in TARES_LICENSE, set after the scrub below.
+5 seats; `invalid` puts text that is not a licence in TARES_LICENSE). The licence goes in TARES_LICENSE, set
+after the scrub below.
 
 Importing this module puts the repo root, ee/ and the repo's tests/ folder on sys.path and drops the
 TARES_* and FACTORY_* settings of the machine the test runs on, as the tests under tests/ do.
@@ -105,8 +106,8 @@ def serve(args: list[str]) -> None:
     rest, kind = _take(args, "--licence")
     rest, seats = _take(rest, "--seats")
     kind = kind or "valid"
-    if kind not in ("valid", "expired", "over_seats", "none"):
-        raise SystemExit(f"licensed.py: --licence must be valid, expired, over_seats or none, not {kind!r}")
+    if kind not in ("valid", "expired", "over_seats", "none", "invalid"):
+        raise SystemExit(f"licensed.py: --licence must be valid, expired, over_seats, none or invalid, not {kind!r}")
     try:
         n = int(seats) if seats is not None else (1 if kind == "over_seats" else 5)
     except ValueError:
@@ -114,6 +115,8 @@ def serve(args: list[str]) -> None:
     install_test_root()
     if kind == "expired":
         os.environ["TARES_LICENSE"] = test_licence(seats=n, expires=(date.today() - timedelta(days=1)).isoformat())
+    elif kind == "invalid":
+        os.environ["TARES_LICENSE"] = "this-is-not-a-licence-key"
     elif kind != "none":
         os.environ["TARES_LICENSE"] = test_licence(seats=n)
     import tares.cli
@@ -128,4 +131,4 @@ if __name__ == "__main__":
         daemon(sys.argv[2:])
     else:
         raise SystemExit("usage: python ee/tests/licensed.py serve [tares up options] "
-                         "[--licence valid|expired|over_seats|none] [--seats N]")
+                         "[--licence valid|expired|over_seats|none|invalid] [--seats N]")
