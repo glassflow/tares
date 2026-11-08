@@ -13,11 +13,6 @@ export function answerQuestion(project: string, question: string, answer: string
   });
 }
 
-/** Agree to a grant that waits for the person. */
-export function consentGrant(grant: string): Promise<unknown> {
-  return request(`/api/grants/${enc(grant)}/consent`, { method: "POST", body: JSON.stringify({}) });
-}
-
 /** Decline a grant that waits for the person, with a reason when they give one. */
 export function declineGrant(grant: string, reason: string): Promise<unknown> {
   return request(`/api/grants/${enc(grant)}/decline`, {

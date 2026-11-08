@@ -370,6 +370,56 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await checkWords(page, ck, t("after a sample action"));
       await ctx.close();
     }
+    // ── TR-1051 F1: the ee chunk is slow; core's plain rows (with the team's buttons) must not flash ──
+    {
+      const t = (s) => `slow ee chunk: ${s}`;
+      const { ctx, page } = await open("alex", 1440);
+      let release; const hold = new Promise((r) => { release = r; });
+      const asked = [];
+      await page.route(/\/assets\/ee-[^/]*\.js/, async (route) => { asked.push(route.request().url()); await hold; await route.continue(); });
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await page.getByTestId("waiting-pending").waitFor({ timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(500);   // the home's own read has long come back; only the chunk is out
+      const buttons = () => page.getByRole("button", { name: /^(Agree|Decline|Answer|Allow|Sign off|Keep)/ }).count();
+      ck(t("the chunk was asked for and is held"), asked.length >= 1, String(asked.length));
+      ck(t("a placeholder stands where Waiting for you will be"), (await page.getByTestId("waiting-pending").count()) === 1);
+      ck(t("no waiting row and no row button shows before the chunk arrives"), (await page.getByTestId("waiting-row").count()) === 0 && (await buttons()) === 0,
+         `${await page.getByTestId("waiting-row").count()} rows, ${await buttons()} buttons`);
+      release();
+      await page.getByTestId("waiting-team").waitFor({ timeout: 10000 }).catch(() => {});
+      ck(t("then the team's list shows with its buttons and the placeholder is gone"), (await page.getByTestId("waiting-team").count()) === 1
+         && (await page.getByTestId("waiting-pending").count()) === 0 && (await page.getByRole("button", { name: "Agree" }).count()) >= 1);
+      await checkWords(page, ck, t("after it loads"));
+      await ctx.close();
+    }
+    // ── TR-1051 F2: a sample without the team's code says "this is a sample", not "needs a licence" ──
+    {
+      const t = (s) => `sample, no team code: ${s}`;
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
+      // a stand-in for the ee chunk that registers one team sample (the live home, with its grants) and no slots
+      await ctx.route(/\/assets\/ee-[^/]*\.js/, (route) => route.fulfill({ contentType: "text/javascript", body: `
+        const tok = (() => { try { return localStorage.getItem("tares_token"); } catch { return null; } })();
+        const home = await fetch("/api/home", { headers: tok ? { authorization: "Bearer " + tok } : {} }).then((r) => r.json());
+        export function register(registerSlot, registerSamples) { registerSamples("home", { stubTeam: home }); }` }));
+      const page = await ctx.newPage();
+      const posts = [];
+      page.on("request", (req) => { if (req.method() !== "GET" && new URL(req.url()).pathname.startsWith("/api/")) posts.push(req.url()); });
+      await page.goto(`${BASE}/?sample=stubTeam`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor({ timeout: 15000 });
+      await settle(page);
+      const decline = page.getByRole("button", { name: "Decline" }).first();
+      ck(t("the sample shows a Decline button"), (await decline.count()) === 1);
+      await decline.click();
+      const note = page.getByText("This is a sample, so nothing was sent.");
+      await note.first().waitFor({ timeout: 3000 }).catch(() => {});
+      ck(t("Decline says nothing was sent"), (await note.count()) >= 1, String(await note.count()));
+      ck(t("and not that a licence is needed, under the row or anywhere"), (await page.getByTestId("row-error").count()) === 0
+         && (await page.getByText(/needs an enterprise licence/).count()) === 0);
+      ck(t("nothing was sent to the cell"), posts.length === 0, JSON.stringify(posts));
+      await ctx.close();
+    }
     {
       const { ctx, page, ctl } = await open("alex", 1440);
       const t = (s) => `acts: ${s}`;
@@ -831,6 +881,42 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       for (const id of NEW_UNLIC) if ((await page.getByTestId(id).count()) > 0) seenUnlic.push(id);
       ck(t("three people, no licence: none of the team home's parts"), seenUnlic.length === 0, seenUnlic.join());
       ck(t("three people, no licence: no enterprise chunk was asked for"), eeAsked.length === 0, eeAsked.join());
+      // TR-1051: the team's parts are not drawn, and the team samples are not offered
+      const NOT_DRAWN = ["projects-switch", "project-lock", "project-lead", "hidden-row", "hidden-summary", "project-member", "team-crews", "team-crew-row", "quiet-crews", "repos-you-own", "crew-limit"];
+      const drawn = [];
+      for (const id of NOT_DRAWN) if ((await page.getByTestId(id).count()) > 0) drawn.push(id);
+      ck(t("three people, no licence: no Mine and Team switch, no other crews, no Repos you own"), drawn.length === 0, drawn.join());
+      ck(t("three people, no licence: the Autonomy foot of the crew card is today's"), (await page.getByRole("link", { name: "Autonomy" }).count()) === 1);
+      {
+        const sctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
+        await sctx.addInitScript(() => { try { localStorage.setItem("taresSamples", "1"); } catch { /* blocked */ } });
+        const sp = await sctx.newPage();
+        const asked2 = [];
+        sp.on("request", (rq) => { if (/\/assets\/ee-/.test(rq.url())) asked2.push(rq.url()); });
+        const live = await fetch(`http://127.0.0.1:${UNLIC}/api/home`).then((r) => r.json());
+        const headline = async (name) => {
+          await sp.goto(`http://127.0.0.1:${UNLIC}/?sample=${name}`, { waitUntil: "load" });
+          await sp.getByTestId("factory-home").waitFor({ timeout: 15000 }).catch(() => {});
+          await sp.waitForLoadState("networkidle");
+          return (await sp.getByTestId("home-headline").innerText().catch(() => "")).trim();
+        };
+        const SINGLE = { busy: /^4 things wait for you\. 2 projects are building/, empty: /^No projects yet/ };
+        const wrongSingle = [];
+        for (const [name, re] of Object.entries(SINGLE)) { const h = await headline(name); if (!re.test(h)) wrongSingle.push(`${name}: ${h}`); }
+        ck(t("three people, no licence: the single-person samples are offered"), wrongSingle.length === 0, wrongSingle.join(" | "));
+        const TEAM = ["threePeople", "nothingWaitingTeam", "longText", "manyItems", "privateNotOn", "privateOnly", "noOwnedRepos", "ownCrewQuiet", "onePerson"];
+        const offered = [];
+        for (const name of TEAM) {
+          const h = await headline(name);
+          // a name that is not a sample shows the cell's own home (the cell's headline can move with the clock, so ask again)
+          const now = await fetch(`http://127.0.0.1:${UNLIC}/api/home`).then((r) => r.json());
+          if (h !== live.headline.trim() && h !== now.headline.trim()) offered.push(`${name}: ${h}`);
+          for (const id of NOT_DRAWN) if ((await sp.getByTestId(id).count()) > 0) offered.push(`${name}: ${id}`);
+        }
+        ck(t("three people, no licence: none of the team samples is offered, so the live home shows"), offered.length === 0, offered.join(" | "));
+        ck(t("three people, no licence: samples did not ask for the enterprise chunk"), asked2.length === 0, asked2.join());
+        await sctx.close();
+      }
       await shot(page, "three-people-no-licence", width);
       await checkWords(page, ck, t("three people, no licence"));
       await ctx.close();

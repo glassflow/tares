@@ -1,12 +1,14 @@
+// Tares enterprise licence, see ee/LICENSE
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Button, Panel } from "../../components/edition";
-import type { HomeArea, HomeCrewLimit, HomeTeamCrew } from "./home.types";
+import { Button, Panel } from "@/components/edition";
+import type { HomeCrewLimitProps, HomeReposProps, HomeTeamCrewsProps } from "./home.types";
 import { colourOf } from "./Sender";
 
 // What the side column of a cell with more than one person adds: how far the person's crew may go,
-// the other crews, and the repos the person owns. A cell of one keeps today's column.
+// the other crews, and the repos the person owns. A cell of one, or one without a licence, keeps
+// today's column (slots home.crewLimit, home.teamCrews, home.reposYouOwn).
 
 const FIRST_CREWS = 3;
 const OWN_CREW = "Your crew";
@@ -21,7 +23,7 @@ function Head({ title, link }: { title: string; link?: { to: string; text: strin
 }
 
 /** The foot of the person's own crew card: the link to its settings, the person's limit and the team's. */
-export function CrewLimit({ limit }: { limit: HomeCrewLimit }) {
+export function CrewLimit({ limit }: HomeCrewLimitProps) {
   const mine = limit.mine ? limit.mine[0].toUpperCase() + limit.mine.slice(1) : "";
   return (
     <div data-testid="crew-limit" className="mt-1 border-t border-border pt-3 text-[13px]">
@@ -45,7 +47,7 @@ function CrewSquare({ name }: { name: string }) {
 }
 
 /** The other crews of the team, three rows then Show all; a crew not heard from in a day is one line below. */
-export function TeamCrews({ crews, quiet }: { crews: HomeTeamCrew[]; quiet: string[] }) {
+export function TeamCrews({ crews, quiet }: HomeTeamCrewsProps) {
   const [all, setAll] = React.useState(false);
   const others = crews.filter((c) => c.name !== OWN_CREW);
   const silent = quiet.filter((n) => n !== OWN_CREW);
@@ -87,7 +89,7 @@ export function TeamCrews({ crews, quiet }: { crews: HomeTeamCrew[]; quiet: stri
 }
 
 /** The repos the person owns, with what waits on each. */
-export function ReposYouOwn({ areas }: { areas: HomeArea[] }) {
+export function ReposYouOwn({ areas }: HomeReposProps) {
   if (areas.length === 0) return null;
   return (
     <section aria-label="Repos you own" className="min-w-0" data-testid="repos-you-own">

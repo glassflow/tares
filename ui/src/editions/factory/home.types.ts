@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { StartBlock } from "../StartChecklist.api";
 
 // The body of GET /api/home on a factory cell (tares/factory_home.py). Every string is worded for
@@ -214,4 +215,44 @@ export interface HomeData {
 export interface TeamHomeHandler {
   act(action: HomeAction, item: HomeItem): boolean;
   answer(project: string, question: string, words: string): Promise<unknown>;
+}
+
+/** Which projects a cell with more than one person lists on the home. */
+export type ProjectsView = "mine" | "team";
+
+/** A sample of the home: the data, or the data for the view the person picked (a team sample). */
+export type HomeSample = HomeData | ((view: ProjectsView) => HomeData);
+
+// What the core home gives each slot of the team home (ee/home). The map of slot names to these is
+// SlotProps in src/slotProps.ts; the ee components take the same types through ee/home/home.types.ts.
+
+export interface HomeProjectsSwitchProps {
+  view: ProjectsView; counts: { mine: number; team: number }; onView?: (v: ProjectsView) => void;
+}
+export interface HomeProjectLeadProps { p: HomeProject; me?: string }
+export interface HomeHiddenRowsProps { stubs: HomeHiddenProject[]; hidden?: string; view: ProjectsView }
+export interface HomeCrewLimitProps { limit: HomeCrewLimit }
+export interface HomeTeamCrewsProps { crews: HomeTeamCrew[]; quiet: string[] }
+export interface HomeReposProps { areas: HomeArea[] }
+export interface HomeWaitingProps {
+  items: HomeItem[];
+  /** What a button of a row is; the page decides what a click does. */
+  renderAction: (a: HomeAction, item: HomeItem) => ReactNode;
+  /** A refusal's sentence by row id, shown under that row. */
+  errors?: Record<string, string | undefined>;
+  /** A panel open under a row, by row id (the answer box). */
+  panels?: Record<string, ReactNode>;
+}
+export interface HomeWaitingOnProps { entries: HomeWaitingOn[] }
+/** The page's one call for a row: work shown, a refusal, the toast. */
+export type HomeRun = (
+  item: HomeItem, verb: "agree" | "decline", call: () => Promise<unknown>, message: string, finish: () => void,
+) => Promise<void>;
+export interface HomeTeamActionsProps {
+  run: HomeRun;
+  clearError: (id: string) => void;
+  rows: Record<string, { busy?: HomeVerb; error?: string; copied?: boolean }>;
+  onHandler: (h: TeamHomeHandler | null) => void;
+  /** The row whose dialog is open, so the page shows its refusal in the dialog and not under the row too. */
+  onDialog: (id: string | null) => void;
 }

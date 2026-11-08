@@ -2,9 +2,9 @@
 import * as React from "react";
 
 import { Button, Dialog, Textarea } from "@/components/edition";
-import type { HomeAction, HomeItem, TeamHomeHandler } from "@/editions/factory/home.types";
-import type { RowState } from "@/editions/factory/FactoryHome";
-import { answerQuestion, consentGrant, declineGrant } from "./api";
+import type { HomeAction, HomeItem, HomeTeamActionsProps } from "./home.types";
+import { consentGrant } from "../api";
+import { answerQuestion, declineGrant } from "./api";
 
 // What the team's buttons on the home do: agree to a grant, decline one (with the dialog that asks
 // why), and send the answer to a question a project's spec asked. The page owns the rows and the
@@ -37,16 +37,7 @@ export function DeclineDialog({ item, busy, error, onClose, onConfirm }: {
   );
 }
 
-type Run = (item: HomeItem, verb: "agree" | "decline", call: () => Promise<unknown>, message: string, finish: () => void) => Promise<void>;
-
-export default function TeamActions({ run, clearError, rows, onHandler, onDialog }: {
-  run: Run;
-  clearError: (id: string) => void;
-  rows: Record<string, RowState>;
-  onHandler: (h: TeamHomeHandler | null) => void;
-  /** The row whose dialog is open, so the page shows its refusal in the dialog and not under the row too. */
-  onDialog: (id: string | null) => void;
-}) {
+export default function TeamActions({ run, clearError, rows, onHandler, onDialog }: HomeTeamActionsProps) {
   const [declining, setDeclining] = React.useState<{ item: HomeItem; grant: string } | null>(null);
   // the handler is given once; it reads the page's latest functions through this ref
   const latest = React.useRef({ run, clearError });

@@ -16,8 +16,6 @@ import type { Grant, GrantKind } from "../../types";
 
 const KIND_TEXT: Record<GrantKind, string> = { team: "Team", project: "Project", personal: "Your own" };
 
-const waitingNames = (g: Grant) => g.waiting_for.map((w) => w.name ?? w.id).join(", ");
-
 export function GrantsView({ ctx }: { ctx: Ctx }) {
   const { data, error, reload } = usePolling(() => api.grants(ctx.id), FACTORY_POLL_MS);
   const { meId, isAdmin } = usePeople();
@@ -49,7 +47,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
       <td>{g.given_by?.name ?? <span className="dim">not recorded</span>}</td>
       <Slot name="grants.agreedBy" part="cell" grant={g} />
       <td>{g.in_effect ? <span className="badge ok">In effect</span>
-        : g.state === "waiting" ? <span className="badge paused">Waiting for {waitingNames(g) || "no one"}</span> : g.state}</td>
+        : g.state === "waiting" ? <span className="badge paused">Waiting<Slot name="grants.waitingFor" grant={g} /></span> : g.state}</td>
       <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
         <Slot name="grants.consent" grant={g} list={data} busy={busy === g.id}
               onBusy={setBusy} reload={reload} onError={setErr} />
@@ -65,7 +63,7 @@ export function GrantsView({ ctx }: { ctx: Ctx }) {
                 sub="What you allow the crew to do in this project, in your own words. Team grants hold in every project.">
         {!adding && <button type="button" className="primary" onClick={() => { setErr(undefined); setAdding(true); }}>Add a grant</button>}
       </ViewHead>
-      {err != null && <ActionError error={err} what="Agreeing to a grant" />}
+      {err != null && <ActionError error={err} what="Changing a grant" />}
       {adding && <GrantForm ctx={ctx} onCancel={() => setAdding(false)} onSaved={() => { setAdding(false); reload(); }} />}
       {data === undefined ? <div className="dim">loading…</div> : here.length ? (
         <table>{head}<tbody>{here.map(row)}</tbody></table>

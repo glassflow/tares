@@ -5,8 +5,8 @@ import { Link } from "react-router-dom";
 import { Button, EmptyState, ListRow } from "@/components/edition";
 import { cn } from "@/lib/utils";
 import { Detail, DetailLines } from "@/editions/factory/HomeDetail";
-import type { HomeAction, HomeItem, HomeWaitingOn } from "@/editions/factory/home.types";
-import { Sender, senderWords } from "@/editions/factory/Sender";
+import type { HomeAction, HomeItem, HomeWaitingOn, HomeWaitingOnProps, HomeWaitingProps } from "./home.types";
+import { Sender, senderWords } from "./Sender";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "@/editions/factory/waitingGroups";
 
 // The team's side of the factory home: "Waiting for you" with who each item is from, and "You are
@@ -53,15 +53,7 @@ function Row({ item, renderAction, error, panel }: {
   );
 }
 
-export function WaitingForYou({ items, renderAction, errors, panels }: {
-  items: HomeItem[];
-  /** What a button of a row is; the page decides what a click does. */
-  renderAction: (a: HomeAction, item: HomeItem) => React.ReactNode;
-  /** A refusal's sentence by row id, shown under that row. */
-  errors?: Record<string, string | undefined>;
-  /** A panel open under a row, by row id (the answer box). */
-  panels?: Record<string, React.ReactNode>;
-}) {
+export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaitingProps) {
   const [all, setAll] = React.useState(false);
   const g = groupWaiting(items);
   const rest = all ? g.rest : g.rest.slice(0, SHOW_FIRST);
@@ -104,7 +96,7 @@ export function scopeText(entries: HomeWaitingOn[]): string {
   return "projects you lead, and ones with no lead yet";
 }
 
-export function YouAreWaitingOn({ entries }: { entries: HomeWaitingOn[] }) {
+export function YouAreWaitingOn({ entries }: HomeWaitingOnProps) {
   if (entries.length === 0) return null;
   return (
     <section aria-label="You are waiting on" className="min-w-0" data-testid="waiting-on">

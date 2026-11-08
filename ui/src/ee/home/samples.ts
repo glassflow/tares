@@ -1,5 +1,6 @@
-import type { HomeArea, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeRef, HomeTeamCrew, HomeWaitingOn } from "./home.types";
-import { busy, project } from "./homeSamples";
+// Tares enterprise licence, see ee/LICENSE
+import type { HomeArea, HomeData, HomeItem, HomeProject, HomeProjectRow, HomeRef, HomeSample, HomeTeamCrew, HomeWaitingOn } from "./home.types";
+import { busy, project } from "@/editions/factory/homeSamples";
 
 // Sample bodies of the factory home on a cell with more than one person (the keys tares/factory_team.py
 // adds). They show only behind the sample flag, never on a live cell. Every name here is invented.
@@ -251,6 +252,12 @@ export const privateOnly: HomeData = team(
 /** A cell of one person: no team keys, so the page keeps the v2 list. */
 export const onePerson: HomeData = busy;
 
-export const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
+const HOME_SAMPLES_TEAM: Record<string, HomeData> = {
   onePerson, threePeople, nothingWaitingTeam: nothingWaiting, longText, manyItems, privateNotOn, privateOnly, noOwnedRepos, ownCrewQuiet,
 };
+
+/** What ee adds to the home's samples (registered in ee/index.ts): each is shown for the view the
+ *  person picked, as the cell would send it for `?projects=mine|team`. */
+export const HOME_SAMPLES_EE: Record<string, HomeSample> = Object.fromEntries(
+  Object.entries(HOME_SAMPLES_TEAM).map(([name, data]) => [name, (view: "mine" | "team") => sampleView(data, view)]),
+);
