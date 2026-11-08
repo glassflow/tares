@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 
 import type { Ctx } from "./components/project/common";
+import type { FactoryPeopleData, PersonRow } from "./editions/factory/FactoryPeople.api";
 import type {
   HomeCrewLimitProps, HomeHiddenRowsProps, HomeProjectLeadProps, HomeProjectsSwitchProps, HomeReposProps,
   HomeSample, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "./editions/factory/home.types";
-import type { Grant, GrantsView, Handover, Person } from "./types";
+import type { ApiKey, Grant, GrantsView, Handover, Person, Whoami } from "./types";
 
 /*
  * The props each slot of the console takes (see eeSlots.tsx). Core renders a slot with these props
@@ -34,6 +35,12 @@ export interface SlotProps {
   "grants.repos": { repos: string[]; onChange: (repos: string[]) => void };
   // settings
   "page.settings.areas": NoProps;
+  "settings.people": { people?: Person[]; admin: boolean; err?: string; onChanged: () => void; me?: Whoami };
+  "settings.keyPerson": { k: ApiKey; people: Person[]; admin: boolean; onChanged: () => void; onError: (message: string) => void };
+  "settings.keyPersonPick": { people: Person[]; value: string; onChange: (personId: string) => void };
+  // the factory People page
+  "people.teamLines": { p: PersonRow };
+  "people.add": { data: FactoryPeopleData; onAdded: (words: string) => void };
   // the factory home
   "home.waiting": HomeWaitingProps;
   "home.waitingOn": HomeWaitingOnProps;

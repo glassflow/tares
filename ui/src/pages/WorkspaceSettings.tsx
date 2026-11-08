@@ -4,6 +4,8 @@ import { type CloudMember, type CloudResult, type CloudWorkspaceOverview, cloudA
 import { type Cloud, reloadList, signInLink, slugFromHost, useWorkspaceOverview, type WorkspaceOverview } from "../cloud";
 import { Switch } from "../components/setup/common";
 import { UsagePanels } from "../components/UsagePanels";
+import LicenceNeeded from "../components/LicenceNeeded";
+import { useLicence } from "../licence";
 
 // Settings > Workspace on Tares Cloud (TR-375, TR-376): team, plan, storage, included credit, the
 // sign-in pin and delete, read from and written to the control plane with the person's Tares
@@ -133,6 +135,8 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
   const [busy, setBusy] = useState<string>();   // "invite" or the user_id being removed
   const [o, setO] = useState<Outcome>({});
   const [msg, setMsg] = useState<string>();
+  const { eeAllowed } = useLicence();
+  const [noLicence, setNoLicence] = useState(false);   // the workspace answered the invite with licence_required
 
   const load = async () => {
     const r = await cloudApi.members(apiUrl);
@@ -144,13 +148,14 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
   const invite = async (e: FormEvent) => {
     e.preventDefault();
     const to = email.trim();
-    setBusy("invite"); setO({}); setMsg(undefined);
+    setBusy("invite"); setO({}); setMsg(undefined); setNoLicence(false);
     const r = await cloudApi.invite(apiUrl, slug, to);
     if (r.status === "ok") {
       setEmail("");
       setMsg(`Invited ${to}. They get access when they sign in with that email.`);
       await load();
-    } else setO(outcome(r));
+    } else if (r.status === "error" && r.code === 402) setNoLicence(true);
+    else setO(outcome(r));
     setBusy(undefined);
   };
 
@@ -203,7 +208,7 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
           </tbody>
         </table>
       )}
-      {isOwner && (
+      {isOwner && (eeAllowed ? (
         <form className="btnrow" style={{ marginTop: 14, maxWidth: 560 }} onSubmit={invite}>
           <label htmlFor="ws-invite" className="sr-only">Teammate's email</label>
           <input id="ws-invite" type="email" style={{ flex: 1 }} placeholder="teammate@company.com"
@@ -212,7 +217,8 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
             {busy === "invite" ? "inviting…" : "Invite"}
           </button>
         </form>
-      )}
+      ) : <LicenceNeeded what="Inviting people" />)}
+      {isOwner && eeAllowed && noLicence && <LicenceNeeded what="Inviting people" />}
     </div>
   );
 }

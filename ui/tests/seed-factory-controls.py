@@ -1,5 +1,5 @@
 """Seed a scratch factory Tares for factory-project-controls.e2e.cjs (TR-1079): one active factory project
-led by the cell's owner, two other people on the cell (one a member), two tickets. Invented names only.
+led by the cell's owner, three other people on the cell (one a member, one to add), two tickets. Invented names only.
 Writes straight to the cell's database, so no daemon runs here. Prints the project id on the last line.
 usage: python seed-factory-controls.py <data-dir>"""
 import os, sys
@@ -16,6 +16,7 @@ if not store.get_person("local"):
     store.create_person("You", None)
 kim = store.create_person("Kim Lee", "kim@example.com")["id"]
 store.create_person("Sam Roe", "sam@example.com")
+store.create_person("Ana Ortiz", "ana@example.com")
 store.set_project_lead(uid, "local")
 store.add_project_member(uid, kim, "local")
 store.create_ticket(uid, "tares", "Add the header")

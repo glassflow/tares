@@ -1,6 +1,7 @@
 // Tares enterprise licence, see ee/LICENSE
 import { ownerName, request } from "../api";
-import type { Area, Grant, Project, ProjectScope, SpecQuestion } from "../types";
+import type { AddedPerson } from "../editions/factory/FactoryPeople.api";
+import type { ApiKey, Area, Grant, Person, Project, ProjectScope, SpecQuestion } from "../types";
 
 // The calls the enterprise screens make. They sit here, not in the core api object, so a build
 // without src/ee carries none of them.
@@ -33,3 +34,15 @@ export const consentGrant = (id: string) =>
 /** Questions a spec put to the owners of the repos it changes, and their answers. */
 export const projectQuestions = (id: string) =>
   request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`);
+
+/** Adds someone to the cell (Settings > Access). An email that is already someone's answers with that person. */
+export const createPerson = (body: { name: string; email?: string; github?: string; is_admin?: boolean }) =>
+  request<Person>("/api/people", { method: "POST", body: JSON.stringify(body) });
+
+/** Binds an API key to a person. */
+export const setKeyPerson = (id: string, personId: string) =>
+  request<ApiKey>(`/api/keys/${id}/person`, { method: "PUT", body: JSON.stringify({ person_id: personId }) });
+
+/** The People page's Add: an email, and a name that is optional. */
+export const addPerson = (email: string, name?: string) =>
+  request<AddedPerson>("/api/factory/people", { method: "POST", body: JSON.stringify({ email, name: name || undefined }) });

@@ -9,25 +9,25 @@
  *    their row; a picture that does not load falls back to the initials; you change your own.
  *  - At phone width the page fits without a sideways scroll.
  *  - The page's words keep the words list.
+ *  - A cell with no licence, open (TR-930): /people lists only you, with the licence line and no add form;
+ *    Settings, Access has no "Add person" and the key dialog no person picker; no ee chunk is requested.
  *
- * Runs the real daemon on a scratch data directory and port, serving the built console.
+ * Runs two real daemons (licensed and not, tests/licensed.cjs) on scratch data directories, serving the built console.
  * Run:  npm run build && node tests/factory-people.e2e.cjs
  */
 const http = require("http");
-const { spawn } = require("child_process");
-const fs = require("fs");
-const os = require("os");
 const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
-const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords } = require("./words.cjs");
+const { startDaemon } = require("./licensed.cjs");
 
 const ROOT = "root-token-factory-people-e2e";
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
 const PORT = Number(process.env.TARES_E2E_PORT || 8871);
-const BASE = `http://127.0.0.1:${PORT}`;
+let BASE = `http://127.0.0.1:${PORT}`;
+const EE_CHUNK = /\/assets\/ee-[^/]*\.js(\?|$)/;
 const SHOTS = process.env.SHOTS_DIR;
 
 let pass = 0, fail = 0;
@@ -59,18 +59,14 @@ function waitFor(url, tries = 150) {
 }
 
 (async () => {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-factory-people-e2e-"));
-  const venvPy = path.join(REPO, ".venv/bin/python");
-  const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
-  const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "p.duckdb"),
-                TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(PORT), TARES_HOST: "127.0.0.1",
-                TARES_EDITION: "factory", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off",
-                TARES_PR_SYNC_SECONDS: "off", TARES_UI_DIST: path.join(UI_DIR, "dist"), TARES_AUTH_TOKEN: ROOT };
-  delete env.TARES_WORKSPACE_API_URL;
-  // a licensed daemon: the page adds people, which a cell with no licence does not do (ee/tests/licensed.py)
-  const d = spawn(py, [path.join(REPO, "ee", "tests", "licensed.py"), "daemon", "--seats", "50"], { cwd: REPO, env, stdio: "ignore" });
-  process.on("exit", () => { try { d.kill(); } catch { /* gone */ } });
-  if (!(await waitFor(`${BASE}/health`))) { console.log("FAIL daemon did not start"); process.exit(1); }
+  // a licensed daemon: the page adds people, which a cell with no licence does not do. Each cell takes its
+  // port and the next (MCP); the unlicensed one sits two further on.
+  let d, bare;
+  try {
+    d = await startDaemon({ port: PORT, edition: "factory", licence: "valid", seats: 50, auth: ROOT });
+    bare = await startDaemon({ port: PORT + 2, edition: "factory", licence: "none" });   // open: the one person is you
+  } catch (e) { console.log("FAIL daemon did not start: " + e.message); process.exit(1); }
+  process.on("exit", () => { d.stop(); bare.stop(); });
 
   const root = { authorization: `Bearer ${ROOT}` };
   const bob = await call("POST", "/api/keys", { name: "bob-laptop", scopes: ["admin"], person: { email: "bob@example.com", name: "Bob B" } }, root);
@@ -166,10 +162,47 @@ function waitFor(url, tries = 150) {
     ck("390: no sideways scroll", over <= 0, String(over));
     if (SHOTS) await n.page.screenshot({ path: path.join(SHOTS, "factory-people-admin-390.png"), fullPage: true });
     await n.ctx.close();
+
+    // ---- a cell with no licence: only you, the licence line, nothing to add with
+    BASE = bare.base;
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const eeRequests = [];
+      ctx.on("request", (rq) => { if (EE_CHUNK.test(rq.url())) eeRequests.push(rq.url()); });
+      const page = await ctx.newPage();
+      await page.goto(`${BASE}/people`);
+      await page.getByTestId("people-list").waitFor({ timeout: 15000 });
+      await page.getByTestId("licence-needed").waitFor({ timeout: 15000 });
+      ck("no licence: /people lists only you", (await page.getByTestId("person-row").count()) === 1
+         && /\(you\)/.test(await page.getByTestId("person-row").first().innerText()));
+      ck("no licence: the licence line, and no add form", await page.getByTestId("licence-needed").isVisible()
+         && (await page.getByTestId("people-email").count()) === 0 && (await page.getByTestId("people-add").count()) === 0);
+      await checkWords(page, ck, "no licence");
+      if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "factory-people-nolicence-1440.png"), fullPage: true });
+      await page.goto(`${BASE}/settings?tab=access`);
+      await page.getByRole("heading", { name: "People" }).waitFor({ timeout: 15000 });
+      await page.getByTestId("you-row").waitFor({ timeout: 15000 });
+      ck("no licence: Settings, Access shows you and the licence line", (await page.getByTestId("you-row").count()) === 1
+         && await page.getByTestId("licence-needed").first().isVisible());
+      ck("no licence: no Add person button", (await page.getByRole("button", { name: "Add person" }).count()) === 0);
+      if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "settings-access-nolicence-1440.png"), fullPage: true });
+      await page.getByRole("button", { name: "Create key" }).first().click();
+      await page.getByRole("dialog", { name: "Create API key" }).waitFor({ timeout: 10000 });
+      ck("no licence: the key dialog has no person picker", (await page.getByRole("dialog").getByText("whose agent or script this is").count()) === 0);
+      ck("no licence: the ee chunk was never requested", eeRequests.length === 0, eeRequests.join(" "));
+      await ctx.close();
+      const m = await browser.newContext({ viewport: { width: 390, height: 900 } });
+      const mp = await m.newPage();
+      await mp.goto(`${BASE}/people`);
+      await mp.getByTestId("licence-needed").waitFor({ timeout: 15000 });
+      const mo = await mp.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      ck("no licence, 390: no sideways scroll", mo <= 0, String(mo));
+      if (SHOTS) await mp.screenshot({ path: path.join(SHOTS, "factory-people-nolicence-390.png"), fullPage: true });
+      await m.close();
+    }
   } finally {
     await browser.close();
-    try { d.kill(); } catch { /* gone */ }
-    fs.rmSync(tmp, { recursive: true, force: true });
+    d.stop(); bare.stop();
   }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

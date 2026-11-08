@@ -6,21 +6,17 @@
  *  - A key with no person: the Access box says it belongs to no one.
  *  - An open cell (no auth): the boot person is still "You", as before.
  *
- * Runs the real daemon on a scratch data directory and port, serving the built console.
+ * Runs the real daemon, licensed (tests/licensed.cjs), on a scratch data directory and port, serving the built console.
  * Run:  npm run build && node tests/settings-people.e2e.cjs
- * Needs: tares importable by the python at TARES_E2E_PY (default: the repo .venv, else python3,
- * with the repo on PYTHONPATH). TARES_E2E_CHROME points Playwright at another Chrome binary when
+ * Needs: tares importable by the python at TARES_E2E_PY (default: the repo .venv, else python3). TARES_E2E_CHROME points Playwright at another Chrome binary when
  * its own browser download is missing.
  */
 const http = require("http");
-const { spawn, spawnSync } = require("child_process");
-const fs = require("fs");
-const os = require("os");
 const path = require("path");
 
 const UI_DIR = path.resolve(__dirname, "..");
-const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { startDaemon } = require("./licensed.cjs");
 
 const ROOT = "root-token-settings-people-e2e";
 
@@ -44,30 +40,12 @@ function call(base, method, url, body, headers = {}) {
   });
 }
 
-function waitFor(url, tries = 150) {
-  return new Promise((resolve) => {
-    const tick = () => http.get(url, (r) => { r.resume(); resolve(true); })
-      .on("error", () => (--tries > 0 ? setTimeout(tick, 200) : resolve(false)));
-    tick();
-  });
-}
-
-function startDaemon(port, auth, people = []) {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tares-settings-e2e-"));
-  const venvPy = path.join(REPO, ".venv/bin/python");
-  const py = process.env.TARES_E2E_PY || (fs.existsSync(venvPy) ? venvPy : "python3");
-  const env = { ...process.env, HOME: tmp, PYTHONPATH: REPO, TARES_DB: path.join(tmp, "s.duckdb"),
-                TARES_CATALOG: path.join(tmp, "none.yaml"), TARES_PORT: String(port), TARES_HOST: "127.0.0.1",
-                TARES_EDITION: "platform", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off", TARES_UI_DIST: path.join(UI_DIR, "dist") };
-  delete env.TARES_AUTH_TOKEN;
-  if (auth) env.TARES_AUTH_TOKEN = ROOT;
-  if (people.length) {   // people on the cell before it starts: adding a second person over HTTP needs a licence
-    const seeded = spawnSync(py, [path.join(REPO, "tests", "_people.py"), env.TARES_DB, ...people], { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
-    if (seeded.status !== 0) { console.log("FAIL could not seed people: " + (seeded.stderr || seeded.stdout)); process.exit(1); }
-  }
-  const d = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], { cwd: REPO, env, stdio: "ignore" });
-  process.on("exit", () => { try { d.kill(); } catch { /* gone */ } });
-  return { d, tmp, base: `http://127.0.0.1:${port}` };
+// A licensed daemon (tests/licensed.cjs): Settings, Access lists and edits several people, which a cell
+// with no licence does not do (TR-930). The seats are enough for the three people here.
+async function startCell(port, auth) {
+  const d = await startDaemon({ port, edition: "platform", licence: "valid", auth: auth ? ROOT : undefined });
+  process.on("exit", () => d.stop());
+  return d;
 }
 
 async function accessText(browser, base, token) {
@@ -85,11 +63,12 @@ async function accessText(browser, base, token) {
 }
 
 (async () => {
-  const on = startDaemon(8813, true, ["Bob B=bob@example.com", "Alice A=alice@example.com"]);
-  const off = startDaemon(8814, false);
-  if (!(await waitFor(`${on.base}/health`)) || !(await waitFor(`${off.base}/health`))) {
-    console.log("FAIL daemons did not start"); process.exit(1);
-  }
+  const PORT = Number(process.env.TARES_E2E_PORT || 8813);   // each cell takes its port and the next (MCP)
+  let on, off;
+  try {
+    on = await startCell(PORT, true);
+    off = await startCell(PORT + 2, false);
+  } catch (e) { console.log("FAIL daemons did not start: " + e.message); process.exit(1); }
   const root = { authorization: `Bearer ${ROOT}` };
   const bob = await call(on.base, "POST", "/api/keys",
     { name: "bob-laptop", scopes: ["admin"], person: { email: "bob@example.com", name: "Bob B" } }, root);
@@ -121,7 +100,7 @@ async function accessText(browser, base, token) {
     ck("open cell: no Local (no login) row", !o.people.some((x) => x.includes("Local (no login)")), JSON.stringify(o.people));
   } finally {
     await browser.close();
-    for (const s of [on, off]) { try { s.d.kill(); } catch { /* gone */ } fs.rmSync(s.tmp, { recursive: true, force: true }); }
+    for (const s of [on, off]) s.stop();
   }
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

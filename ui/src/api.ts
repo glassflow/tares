@@ -103,8 +103,11 @@ async function cloudCall<T>(url: string, init?: { method?: string; slug?: string
   let body: unknown = null;
   try { body = await res.json(); } catch { /* an empty or non-JSON body */ }
   if (!res.ok) {
-    const d = (body as { detail?: unknown } | null)?.detail;
-    const detail = typeof d === "string" ? d
+    const b = body as { detail?: unknown; code?: unknown; message?: unknown } | null;
+    const d = b?.detail;
+    // a workspace without a licence answers an invite with 402 {code: "licence_required", message, url}
+    const detail = res.status === 402 && b?.code === "licence_required" && typeof b.message === "string" ? b.message
+      : typeof d === "string" ? d
       : res.status === 404 ? "Only the workspace owner can do that."
       : `Tares Cloud answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}.`;
     return { status: "error", code: res.status, detail };
@@ -273,8 +276,6 @@ export const api = {
   createKey: (name: string, scopes: string[], personId?: string) =>
     request<{ id: string; name: string; scopes: string[]; secret: string; person: { id: string; name: string } | null }>(
       "/api/keys", { method: "POST", body: JSON.stringify({ name, scopes, ...(personId ? { person_id: personId } : {}) }) }),
-  setKeyPerson: (id: string, personId: string) =>
-    request<ApiKey>(`/api/keys/${id}/person`, { method: "PUT", body: JSON.stringify({ person_id: personId }) }),
   revokeKey: (id: string) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
   whoami: () => request<Whoami>("/api/whoami"),
   licence: () => request<LicenceState>("/api/licence"),
@@ -282,8 +283,6 @@ export const api = {
     request<LicenceState & { env_in_use?: boolean }>("/api/licence", { method: "PUT", body: JSON.stringify({ key }) }),
   deleteLicence: () => request<{ ok?: boolean }>("/api/licence", { method: "DELETE" }),
   people: () => request<{ people: Person[] }>("/api/people"),
-  createPerson: (body: { name: string; email?: string; github?: string; is_admin?: boolean }) =>
-    request<Person>("/api/people", { method: "POST", body: JSON.stringify(body) }),
   updatePerson: (id: string, body: { name?: string; email?: string | null; emails?: string[]; github?: string | null; is_admin?: boolean; picture?: string | null }) =>
     request<Person>(`/api/people/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
 
