@@ -569,6 +569,13 @@ async def main():
             ck("tickets in GitHub", l == {"tickets_in": "GitHub", "url": f"https://github.com/{REPO}"}, l)
             store.set_project_github(py, None)
 
+            print("== the lead and member controls need a licence ==")
+            store.set_project_lead(px, "local")     # the caller leads it and holds an admin key
+            pe = (await cx.get(f"/api/factory/projects/{px}")).json()["people"]
+            ck("no licence: an admin who leads the project is offered neither control",
+               pe["lead"] is not None and pe["can_set_lead"] is False and pe["can_add"] is False,
+               {k: pe[k] for k in ("can_set_lead", "can_add")})
+
             print("== a platform cell still serves the page ==")
             r = await cx.put("/api/settings/edition", json={"edition": "platform"})
             ck("the edition switches to platform", r.status_code == 200, r.text)
