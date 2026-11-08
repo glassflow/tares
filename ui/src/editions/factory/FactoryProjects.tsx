@@ -63,7 +63,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
         </div>
         {p.can_close && (
           <Button variant="secondary" data-testid="project-close" onClick={() => onClose(p)}
-                  className="h-[30px] shrink-0 border-foreground! bg-[var(--white)]!">
+                  className="h-[30px] shrink-0 border-foreground! bg-[var(--input-bg)]!">
             Close
           </Button>
         )}
@@ -161,7 +161,7 @@ export function FactoryProjectsView({ data, onClose, start }: {
       ) : (
         <div className="grid gap-4">
           <Input aria-label="Search projects" placeholder="Search by name or goal" value={query} data-testid="projects-search"
-                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-[var(--white)]!" />
+                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-[var(--input-bg)]!" />
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList aria-label="Projects by state" className="h-auto flex-wrap">
               {TABS.map((t) => (

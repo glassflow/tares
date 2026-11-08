@@ -467,6 +467,47 @@ async function waitFor(url, tries = 100) {
       ck("the sample address alone shows the live cell", (await p.getByTestId("project-name").innerText()).trim() === "project-y" && (await p.getByTestId("waiting-empty").count()) === 0);
       await c.close();
     }
+    // dark mode: no field, step or command box keeps a white ground under light text
+    {
+      const c = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: "dark" });
+      await c.addInitScript(() => { try { localStorage.setItem("tares-theme", "dark"); } catch (e) { /* none */ } });
+      const p = await c.newPage();
+      await open(p, y);
+      await settle(p);
+      const pale = await p.evaluate(() => {
+        const cv = document.createElement("canvas").getContext("2d", { willReadFrequently: true });
+        const lum = (s) => { cv.clearRect(0, 0, 1, 1); cv.fillStyle = "#000"; cv.fillStyle = s; cv.fillRect(0, 0, 1, 1); const [r, g, b, a] = cv.getImageData(0, 0, 1, 1).data; return a < 128 ? null : (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; };
+        return [...document.querySelectorAll("[data-testid=factory-project] *")].filter((e) => {
+          const cs = getComputedStyle(e), bg = lum(cs.backgroundColor), fg = lum(cs.color);
+          return e.getBoundingClientRect().width > 0 && e.textContent.trim() && bg !== null && bg > 0.8 && fg !== null && fg > 0.6;
+        }).map((e) => e.textContent.trim().slice(0, 30));
+      });
+      ck("dark: no light text on a white ground (steps, command box)", pale.length === 0, JSON.stringify(pale));
+      await c.close();
+    }
+
+    // delete: the last section; the dialog asks for the name, then the project is gone
+    {
+      const { ctx: c, page: p } = await newPage(1440);
+      const d = ids["project-d"];
+      await open(p, d);
+      const T2 = (id) => p.getByTestId(id);
+      ck("a project page ends with Delete this project", (await T2("delete-project").count()) === 1 && (await txt(T2("delete-open"))) === "Delete project");
+      await T2("delete-open").click();
+      await T2("delete-dialog").waitFor();
+      ck("Delete stays off until the name is typed", await T2("delete-confirm").isDisabled());
+      await T2("delete-name").fill("project-");
+      ck("and with a wrong name", await T2("delete-confirm").isDisabled());
+      await T2("delete-cancel").click();
+      ck("Cancel keeps the project", (await (await fetch(`${BASE}/api/projects/${d}`)).status) === 200);
+      await T2("delete-open").click();
+      await T2("delete-name").fill("project-d");
+      await T2("delete-confirm").click();
+      await p.waitForURL((u) => u.pathname === "/projects");
+      ck("Delete leaves for Projects", new URL(p.url()).pathname === "/projects", p.url());
+      ck("and the project is gone", (await fetch(`${BASE}/api/projects/${d}`)).status === 404);
+      await c.close();
+    }
   } finally {
     if (browser) await browser.close();
     daemon.kill();

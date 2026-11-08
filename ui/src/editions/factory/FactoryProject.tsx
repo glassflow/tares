@@ -1,8 +1,8 @@
 import * as React from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, Initials, ProgressBar, Skeleton, Textarea, Toaster, useToast } from "../../components/edition";
+import { Banner, Button, Dialog, Initials, Input, ProgressBar, Skeleton, Textarea, Toaster, useToast } from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -105,8 +105,8 @@ function Steps({ stage, finished }: { stage: FactoryProjectData["stage"]; finish
               className={cn("flex min-w-0 flex-[1_1_0] items-center gap-1.5 text-[13px] text-muted-foreground sm:gap-2 last:flex-none",
                             "after:mx-1 after:h-0.5 after:min-w-2 after:flex-1 after:bg-border after:content-[''] last:after:hidden sm:after:mx-2",
                             done && "text-foreground after:bg-foreground", now && "font-semibold text-foreground")}>
-            <span className={cn("grid size-[22px] flex-none place-items-center border border-foreground bg-[var(--white)] font-mono text-[11px] text-foreground",
-                                done && "bg-foreground text-background", now && "bg-[var(--accent)]")}>
+            <span className={cn("grid size-[22px] flex-none place-items-center border border-foreground bg-[var(--input-bg)] font-mono text-[11px] text-foreground",
+                                done && "bg-foreground text-background", now && "bg-[var(--accent)] text-[color:var(--on-accent)]")}>
               {done ? "✓" : i + 1}
             </span>
             {name}
@@ -719,7 +719,7 @@ function Command({ label, command }: { label: string; command: string }) {
       <div className="mb-1.5 text-[13px]">{label}</div>
       <div className="flex items-stretch gap-2">
         <code data-words-exempt data-testid="command-text"
-              className="flex min-w-0 flex-1 items-center border border-border bg-[var(--white)] px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
+              className="flex min-w-0 flex-1 items-center border border-border bg-[var(--input-bg)] px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
         <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
       </div>
     </div>
@@ -787,8 +787,47 @@ function Loading() {
 /** The page for a project that was read. `onClose` closes the project and answers when it is done or
  *  throws the cell's answer; `onDecide` keeps or overturns a call the same way. Without them the
  *  buttons only open and shut what they open. `start` is a Close part way, for a sample. */
-export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, onLead, onAdd, onLater, start }: {
+/** The last thing on the page: deleting the project, behind a dialog that asks for its name. */
+function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promise<void> }) {
+  const [open, setOpen] = React.useState(false);
+  const [typed, setTyped] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState("");
+  const go = async () => {
+    setBusy(true);
+    try { await onDelete(); }
+    catch (err) { setError(err instanceof ApiError ? err.message : "Could not reach the cell. Try again in a moment."); setBusy(false); }
+  };
+  const shut = () => { if (busy) return; setOpen(false); setTyped(""); setError(""); };
+  return (
+    <section aria-label="Delete project" className="min-w-0 border-t border-border pt-5" data-testid="delete-project">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="min-w-0 flex-[1_1_320px]">
+          <h2 className="m-0! text-base!">Delete this project</h2>
+          <p className="m-0! mt-0.5 text-[13px] text-muted-foreground">Removes its tickets, decisions, calls and docs from Tares. Pull requests and branches on GitHub stay.</p>
+        </div>
+        <Button variant="secondary" className="text-[color:var(--err)]!" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
+      </div>
+      <Dialog open={open} onOpenChange={(o) => { if (!o) shut(); }} data-testid="delete-dialog"
+              title={`Delete ${name}?`}
+              description="This cannot be undone. Its tickets, decisions, calls and docs are deleted. Pull requests and branches on GitHub stay."
+              footer={<>
+                <Button variant="secondary" disabled={busy} onClick={shut} data-testid="delete-cancel">Cancel</Button>
+                <Button busy={busy} disabled={typed.trim() !== name} onClick={() => void go()} data-testid="delete-confirm">Delete project</Button>
+              </>}>
+        <form onSubmit={(e) => { e.preventDefault(); if (typed.trim() === name && !busy) void go(); }}>
+          <Input label={`Type ${name} to confirm`} value={typed} autoComplete="off" spellCheck={false}
+                 error={error || undefined} onChange={(e) => { setTyped(e.target.value); if (error) setError(""); }} data-testid="delete-name" />
+        </form>
+      </Dialog>
+    </section>
+  );
+}
+
+export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, start }: {
   data: FactoryProjectData;
+  /** Delete the project for good; the page then leaves for Projects. */
+  onDelete?: () => Promise<void>;
   onClose?: () => Promise<void>;
   onDecide?: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void>;
   onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
@@ -922,6 +961,8 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
         </div>
       </div>
 
+      {onDelete && <DeleteProject name={d.name} onDelete={onDelete} />}
+
       <Dialog open={asking} onOpenChange={(o) => { if (!o && !busy) setAsking(false); }} data-testid="close-dialog"
               title={`Close ${d.name}?`}
               description="It moves to Done. Handing it to the crew again opens it."
@@ -971,6 +1012,11 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
   const lead = async (person: string) => { if (!sample) { await setProjectLead(id, person); reload(); } };
   const add = async (person: string) => { if (!sample) { await addProjectMember(id, person); reload(); } };
   const keepLater = async (on: boolean) => { if (!sample) { await setLater(id, on); reload(); } };
+  const navigate = useNavigate();
+  const remove = async () => {
+    if (!sample) await api.deleteProject(id);
+    navigate("/projects", { replace: true });
+  };
 
   if (!data) {
     return (
@@ -996,7 +1042,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} start={sample ? sampleClose(sample) : undefined} />
     </>
   );
 }

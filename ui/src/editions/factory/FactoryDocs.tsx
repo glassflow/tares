@@ -95,7 +95,7 @@ function AddLine({ doc, sample, reload }: { doc: DocView; sample: string | null;
     <form onSubmit={submit} className="border-t border-border bg-[var(--wash)] px-5 py-3.5" data-testid="doc-add">
       <label htmlFor={inputId} className="mb-1.5 block text-xs text-muted-foreground">{add.hint}</label>
       <div className="flex gap-2">
-        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-[var(--white)]!"
+        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-[var(--input-bg)]!"
                aria-invalid={error ? true : undefined} aria-describedby={error ? `${inputId}-error` : undefined}
                onChange={(e) => { setText(e.target.value); if (error) setError(""); }} />
         <Button type="submit" busy={busy}>Add line</Button>

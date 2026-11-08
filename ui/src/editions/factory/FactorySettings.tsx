@@ -167,7 +167,7 @@ export function FactorySettingsView({ page, problem, onCrew, onGrant, onSwitch }
               <button key={c.value} type="button" role="radio" aria-checked={level === c.value} disabled={dim} data-testid={`how-${c.value}`} data-ctl
                       onClick={() => { if (c.value === level) return; if (c.value === "L4-ship") setConfirm(true); else void onCrew({ autonomy: c.value }); }}
                       className={CHOICE}>
-                <span aria-hidden className={cn("mt-[3px] grid size-4 flex-none place-items-center rounded-full border-[1.5px] border-foreground bg-[var(--white)]", level === c.value && "after:size-2 after:rounded-full after:bg-foreground")} />
+                <span aria-hidden className={cn("mt-[3px] grid size-4 flex-none place-items-center rounded-full border-[1.5px] border-foreground bg-[var(--input-bg)]", level === c.value && "after:size-2 after:rounded-full after:bg-foreground")} />
                 <span className="grid gap-0.5">
                   <span className="font-semibold">{c.title}</span>
                   <span className="text-[13px] text-muted-foreground">{c.text}</span>
@@ -185,7 +185,7 @@ export function FactorySettingsView({ page, problem, onCrew, onGrant, onSwitch }
 
         <Card dim={dim} className="mb-3">
           <Row title="Builders at once" text={crew.builders_text} data-testid="row-builders">
-            <div className="flex items-center border border-foreground bg-[var(--white)]">
+            <div className="flex items-center border border-foreground bg-[var(--input-bg)]">
               <button type="button" aria-label="One builder fewer" disabled={dim || crew.builders_max <= 1} data-ctl data-testid="builders-less"
                       onClick={() => void onCrew({ builders_max: crew.builders_max - 1 })}
                       className="size-8 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
