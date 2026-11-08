@@ -8,7 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
 import { licenceSentence } from "@/components/LicenceNeeded";
-import { EE_FAILED_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useEeSamples } from "@/eeSlots";
+import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useEeSamples, useLicenceNoAnswer } from "@/eeSlots";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
@@ -625,6 +625,9 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   // The team's part (agree, decline, the answer to a spec question) is enterprise: its component
   // registers a handler here when it is loaded, and `dialogRow` is the row whose dialog it shows.
   const eeFailed = useEeFailed();
+  const licenceNoAnswer = useLicenceNoAnswer();
+  // what a refused team action says: the part did not load, the cell did not say whether it is licensed, or no licence
+  const missing = eeFailed ? EE_FAILED_WORDS : licenceNoAnswer ? LICENCE_NO_ANSWER_WORDS : licenceSentence();
   const team = React.useRef<TeamHomeHandler | null>(null);
   const [dialogRow, setDialogRow] = React.useState<string | null>(null);
   const onTeamHandler = React.useCallback((h: TeamHomeHandler | null) => { team.current = h; }, []);
@@ -714,7 +717,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     } else if (a.do === "answer") {
       // a spec question is the team's part: without it there is no box to open, so the row says what is missing
       if (live && typeof a.desk !== "string" && a.project && a.question && !team.current) {
-        update(item.id, () => ({ error: eeFailed ? EE_FAILED_WORDS : licenceSentence() }));
+        update(item.id, () => ({ error: missing }));
       } else if (typeof a.desk === "string" || (a.project && a.question)) { clearError(item.id); setAnswering({ item, action: a }); }
     } else if (a.do === "later") {
       const project = String(a.project ?? item.project?.id ?? "");
@@ -740,7 +743,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       if (!team.current?.act(a, item)) {
         // a sample sends nothing whatever the licence says; a live row says what is missing
         if (!live) toast(SAMPLE_NOTE);
-        else update(item.id, () => ({ error: eeFailed ? EE_FAILED_WORDS : licenceSentence() }));
+        else update(item.id, () => ({ error: missing }));
       }
     }
   };
@@ -749,7 +752,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     const desk = typeof action.desk === "string" ? action.desk : "";
     const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice)
       : () => {
-          if (!team.current) return Promise.reject(new ApiError(eeFailed ? EE_FAILED_WORDS : licenceSentence(), eeFailed ? 503 : 402));
+          if (!team.current) return Promise.reject(new ApiError(missing, eeFailed || licenceNoAnswer ? 503 : 402));
           return team.current.answer(String(action.project), String(action.question), given.words);
         };
     void run(item, "answer", call, "Answered. It is on its way back to whoever asked.", () => setAnswering(null));

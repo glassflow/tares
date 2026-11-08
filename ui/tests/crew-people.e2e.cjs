@@ -8,6 +8,9 @@
  *  - Unlicensed: the page lists your own crew flat, with no person heading, no "Not seen recently" fold and no
  *    "For you" heading on the desk, and never fetches the enterprise chunk.
  *  - Licensed: every person's crews under a heading each, a stale crew in its fold, the desk under "For <name>".
+ *  - Licensed, but the enterprise chunk fails, the licence read fails or the chunk is slow: the page says so or holds a
+ *    placeholder; it never shows the one-person view for a team (#507 F2).
+ *  - A cell that lost its licence, with two people: another person's crew and desk item are not shown.
  *
  * Runs the real daemon on a scratch data directory and port, serving the built console.
  * Run:  npm run build && node tests/crew-people.e2e.cjs
@@ -102,6 +105,12 @@ const userLine = (sid, text) => JSON.stringify({
   const crewOf = (who) => (crews.find((c) => c.person && c.person.id === people[who] && c.machine !== "ashish-old") || {}).id;
   ck("the cell lists both crews", crewOf("ashish") && crewOf("kiran"), r.body.slice(0, 200));
 
+  // one desk item for each person: the licensed page puts them under "For you" and "For kiran"
+  for (const [who, q] of [["ashish", "Ashish question?"], ["kiran", "Kiran question?"]]) {
+    r = await call("POST", "/api/desk", { question: q, recommendation: "Yes", why: "The checks pass.", to: people[who] }, rootH);
+    ck(`a desk item for ${who} is added`, r.status < 300, r.body);
+  }
+
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
   const open = async (who) => {
     const ctx = await browser.newContext({ viewport: { width: 1400, height: 900 } });
@@ -152,8 +161,62 @@ const userLine = (sid, text) => JSON.stringify({
       ck("the other person's under their name", await page.locator(".crew-person-h", { hasText: "kiran" }).count() === 1);
       ck("their machine shows", await page.getByText("kiran-pc").count() >= 1);
       ck("your stale crew sits in the Not seen recently fold", await page.locator("summary", { hasText: "Not seen recently" }).count() === 1);
+      await page.getByText("Kiran question?").first().waitFor({ timeout: 15000 });
+      ck("the desk has a For you heading", await page.locator(".crew-desk-for", { hasText: "For you" }).count() === 1);
+      ck("and a For kiran heading", await page.locator(".crew-desk-for", { hasText: "For kiran" }).count() === 1);
+      ck("kiran's desk item shows, and yours", await page.getByText("Kiran question?").count() >= 1 && await page.getByText("Ashish question?").count() >= 1);
       await shot(page, "licensed-crew.png");
       await ctx.close();
+    }
+    console.log("== licensed, but the part is not there: words or a placeholder, never the one-person view ==");
+    {
+      const EE_CHUNK = /\/assets\/ee-[^/]*\.js(\?|$)/;
+      const crewPanel = (page) => page.getByRole("heading", { name: "Crews", exact: true }).waitFor({ timeout: 20000 });
+      // the chunk fails to load
+      for (const w of [1400, 390]) {
+        const { ctx, page } = await open("ashish");
+        await page.setViewportSize({ width: w, height: 900 });
+        await page.route(EE_CHUNK, (route) => route.abort());
+        await page.goto(`${licensed.base}/crew`);
+        await crewPanel(page);
+        const said = await page.getByTestId("ee-failed").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+        ck(`chunk fails @${w}: the crew and the desk say this part did not load`, said && await page.getByTestId("ee-failed").count() >= 2
+           && /did not load\. Reload the page/.test(await page.getByTestId("ee-failed").first().innerText()), String(await page.getByTestId("ee-failed").count()));
+        ck(`chunk fails @${w}: not the one-person view`, await page.getByTestId("own-crew").count() === 0 && await page.locator(".crew-desk li").count() === 0);
+        await shot(page, `chunk-fails-${w}.png`);
+        await ctx.close();
+      }
+      // the licence read fails
+      for (const w of [1400, 390]) {
+        const { ctx, page } = await open("ashish");
+        await page.setViewportSize({ width: w, height: 900 });
+        await page.route(/\/api\/licence(\?|$)/, (route) => route.abort());
+        await page.goto(`${licensed.base}/crew`);
+        await crewPanel(page);
+        const said = await page.getByTestId("licence-no-answer").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+        ck(`licence read fails @${w}: the crew and the desk say the cell did not answer`, said && await page.getByTestId("licence-no-answer").count() >= 2
+           && /The cell did not answer\./.test(await page.getByTestId("licence-no-answer").first().innerText()));
+        ck(`licence read fails @${w}: not the one-person view`, await page.getByTestId("own-crew").count() === 0 && await page.locator(".crew-desk li").count() === 0);
+        await ctx.close();
+      }
+      // the chunk is slow: a placeholder holds until it arrives, the one-person view never flashes
+      for (const w of [1400, 390]) {
+        const { ctx, page } = await open("ashish");
+        await page.setViewportSize({ width: w, height: 900 });
+        await page.route(EE_CHUNK, async (route) => { await new Promise((r) => setTimeout(r, 4500)); await route.continue(); });
+        await page.goto(`${licensed.base}/crew`);
+        await crewPanel(page);
+        let flashed = false, failedWords = false;
+        for (let i = 0; i < 6; i++) {
+          await page.waitForTimeout(500);
+          if (await page.getByTestId("own-crew").count()) flashed = true;
+          if (await page.getByTestId("ee-failed").count()) failedWords = true;
+        }
+        ck(`chunk slow @${w}: for 3 s the page shows no one-person view and no failure words`, !flashed && !failedWords, `${flashed ? "own-crew " : ""}${failedWords ? "ee-failed" : ""}`);
+        await page.locator(".crew-person-h", { hasText: "kiran" }).first().waitFor({ timeout: 20000 });
+        ck(`chunk slow @${w}: then the team view`, await page.getByTestId("own-crew").count() === 0 && await page.locator(".crew-desk-for", { hasText: "For kiran" }).count() === 1);
+        await ctx.close();
+      }
     }
     console.log("== a failing who-am-I answer is not treated as local ==");
     {
@@ -210,6 +273,33 @@ const userLine = (sid, text) => JSON.stringify({
       ck("the desk item shows", await page.locator(".crew-desk li", { hasText: "Ship it?" }).count() === 1);
       ck("the enterprise chunk is never fetched", chunks.length === 0, chunks.join(","));
       await shot(page, "unlicensed-crew.png");
+      await ctx.close();
+    }
+    console.log("== a cell that lost its licence, with two people: nobody else's crew or desk item ==");
+    {
+      // the same data directory, started again with no licence (the test licence is in the
+      // environment, so DELETE /api/licence cannot take it away; an expired one still allows the enterprise code for a while)
+      licensed.stop();
+      await new Promise((res) => setTimeout(res, 2500));
+      const lapsed = await startDaemon({ port: PORT + 4, dataDir: path.join(tmp, "licensed"), edition: "platform", licence: "none", auth: ROOT });
+      cells.push(lapsed);
+      BASE = lapsed.base;
+      r = await call("GET", "/api/licence", undefined, rootH);
+      ck("the cell has no licence", r.json && r.json.ee_allowed === false, r.body.slice(0, 200));
+      const { ctx, page } = await open("ashish");
+      const chunks = [];
+      page.on("request", (q) => { if (/\/assets\/ee-/.test(q.url())) chunks.push(q.url()); });
+      await page.goto(`${BASE}/crew`);
+      await page.getByTestId("own-crew").waitFor({ timeout: 20000 });
+      await page.getByText("Ashish question?").first().waitFor({ timeout: 20000 });
+      await page.waitForTimeout(800);
+      ck("your crew is listed", await page.locator("[data-testid=own-crew] li").count() >= 1 && await page.getByText("ashish-mac").count() >= 1, await page.locator("[data-testid=own-crew]").innerText());
+      ck("kiran's crew is not on the page", await page.getByText("kiran-pc").count() === 0);
+      ck("kiran's desk item is not on the page", await page.getByText("Kiran question?").count() === 0);
+      ck("yours shows, with no For heading", await page.locator(".crew-desk li", { hasText: "Ashish question?" }).count() === 1 && await page.locator(".crew-desk-for").count() === 0);
+      ck("no person heading, no stale fold, no chunk", await page.locator(".crew-person-h").count() === 0
+         && await page.locator("summary", { hasText: "Not seen recently" }).count() === 0 && chunks.length === 0, chunks.join(","));
+      await shot(page, "licence-lapsed-crew.png");
       await ctx.close();
     }
   } catch (e) {

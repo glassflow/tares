@@ -7,7 +7,7 @@ import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
 import StandupSheet from "../components/Standup";
-import { Slot } from "../eeSlots";
+import { EeFallback, Slot } from "../eeSlots";
 import type { CrewGroup, CrewPace, CrewProject, CrewSettingField, CrewSettings, CrewStation, DeskAllowed, DeskItem, ProjectUsage } from "../types";
 
 // The crew of a tares-factory (M3, M8): one always-on crew (orchestrator, reviewer, and a releaser
@@ -743,7 +743,7 @@ export default function Crew() {
             <div className="fo-panel">
               <header><h3>Crews</h3>{data.settings.releaser === false && <span className="dim">no releaser: tickets end at merged</span>}</header>
               <Slot name="crew.groups" groups={groups} myId={myId} now={data.now} stations={stations} selected={selected}
-                    fallback={<OwnCrew groups={groups} myId={myId} stations={stations} selected={selected} />} />
+                    fallback={<EeFallback><OwnCrew groups={groups} myId={myId} stations={stations} selected={selected} /></EeFallback>} />
             </div>
             <details className="fo-panel fo-fold" open={paneOpen}
               onToggle={(e) => {
@@ -836,7 +836,7 @@ function DeskList({ items, allowed, onAllowed, myId }: ReturnType<typeof useDesk
   if (myId === undefined) return flat(items);
   return (
     <Slot name="desk.groups" items={items} myId={myId} allowed={allowed} onAllowed={onAllowed}
-          fallback={flat(items.filter((d) => isMine({ person: d.to_person ?? null }, myId)))} />
+          fallback={<EeFallback>{flat(items.filter((d) => isMine({ person: d.to_person ?? null }, myId)))}</EeFallback>} />
   );
 }
 
