@@ -85,8 +85,9 @@ async def main():
     # discovery over MCP (best-effort live github)
     try:
         prop = _json.loads(await m.discover_source("github", {"repo": "octocat/Hello-World"}))
-        if "detail" in prop:
-            # the daemon answers an upstream failure (rate limit, no network) as {"detail": ...}, not an exception
+        if str(prop.get("detail", "")).startswith(("discover failed", "discover timed out")):
+            # the daemon answers an upstream failure (rate limit, no network) as {"detail": ...}, not an exception;
+            # any other detail (a wrong route, say) still fails the check below
             print(f"  skip discover_source live ({prop['detail']})")
         else:
             ck("discover_source(github) returns a proposed_config", "proposed_config" in prop, str(list(prop)))

@@ -311,7 +311,10 @@ async def main():
            "agent_a looked at checkout" in texts and "agent_b" not in texts, texts[:300])
         r2 = await cx.post("/read", json={"selector": {"service": "checkout"}, "window": "1h",
                                           "project": "Alpha"}, headers=H(key_a))
-        ck("naming its own project by name works", r2.status_code == 200 and r2.json()["rows"] == rows)
+        # a row's "offset" is whole seconds since its event, so two reads a second apart differ by it
+        same = lambda xs: [{k: v for k, v in x.items() if k != "offset"} for x in xs]
+        ck("naming its own project by name works",
+           r2.status_code == 200 and same(r2.json()["rows"]) == same(rows), r2.text[:300])
         r = await cx.post(f"/api/projects/{a}/stats", json={"by": "agent", "window": "1h"},
                           headers=H(key_a))
         st = r.json().get("stats", "")
