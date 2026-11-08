@@ -662,8 +662,6 @@ export const api = {
   grants: (project: string) => request<GrantsView>(`/api/grants?project=${encodeURIComponent(project)}`),
   addGrant: (body: { kind: GrantKind; project: string; words: string; areas: string[] }) =>
     request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),
-  consentGrant: (id: string) =>
-    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" }),
   declineGrant: (id: string, reason?: string) =>
     request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/decline`,
       { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
@@ -698,8 +696,6 @@ export const api = {
   projectCrew: (id: string) =>
     request<{ stations: CrewStation[]; handover: Handover | null; now: string }>(
       `/api/projects/${encodeURIComponent(id)}/crew`),
-  projectQuestions: (id: string) =>
-    request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`),
   answerQuestion: (id: string, qid: string, answer: string) =>
     request<SpecQuestion>(`/api/projects/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`,
       { method: "POST", body: JSON.stringify({ answer }) }),

@@ -9,6 +9,7 @@ import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
 import { Slot } from "../../eeSlots";
 import { AccessMark } from "./accessMark";
 import { Goal } from "./overview";
+import Fold from "./Fold";
 import type { DocSummary, Milestone, ProjectRepo, ProjectSession, RepoPR, Ticket } from "../../types";
 
 // The page of a software factory project (kind "software_factory"): a project a spec session
@@ -57,12 +58,6 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
   const { data: asm } = usePolling(() => api.assumptions(ctx.id), 15000);
   const { data: decisions, reload: reloadDecisions } = usePolling(() => api.projectDecisions(ctx.id), 15000);
   const { data: rp } = usePolling(() => api.projectRepos(ctx.id), 30000);
-  const { data: qs } = usePolling(() => api.projectQuestions(ctx.id), 15000);
-  // open questions first, each group oldest first (the API already orders by when it was asked)
-  const questionRows = [...(qs?.questions ?? [])].sort((a, b) => (a.state === "open" ? 0 : 1) - (b.state === "open" ? 0 : 1));
-  const openQuestions = questionRows.filter((q) => q.state === "open").length;
-  const overrides = crew?.handover?.overrides?.length ? crew.handover.overrides
-    : crew?.handover?.override ? [crew.handover.override] : [];
   // the repos the project touches (TR-463); picking one narrows the ticket list to its tickets
   const repos = rp?.repos ?? [];
   const [repoKey, setRepoKey] = useState<string | null>(null);
@@ -262,44 +257,9 @@ export default function FactoryOverview({ ctx }: { ctx: Ctx }) {
         </Fold>
       </div>
 
-      {questionRows.length > 0 && (
-        <Fold id="questions" title="Questions for the team" pinnedByDefault
-              meta={`${openQuestions} open · ${questionRows.length - openQuestions} answered`}>
-          <ul className="fo-docs">
-            {questionRows.map((q) => (
-              <li key={q.id} style={{ display: "block" }}>
-                <b>{q.id}</b> For {q.to_person?.name ?? "the area owner"} · <span className="mono">{q.repo}</span>
-                <div>{q.text}</div>
-                {q.state === "answered" ? (
-                  <small style={{ display: "block" }}>
-                    Answered by {q.answered_by_person?.name ?? q.answered_by ?? "the area owner"}
-                    {q.answered_at && <> <TimeAgo ts={q.answered_at} /></>}: {q.answer}
-                  </small>
-                ) : (
-                  <small style={{ display: "block" }}>Asked <TimeAgo ts={q.asked_at} /></small>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Fold>
-      )}
+      <Slot name="project.teamQuestions" project={ctx.id} />
 
-      {overrides.length > 0 && (
-        <Fold id="signoffs" title="Early hand-overs" meta="" pinnedByDefault>
-          {overrides.length > 0 && (
-            <ul className="fo-docs">
-              {overrides.map((o, i) => (
-                <li key={`${o.at}-${i}`} style={{ display: "block" }}>
-                  Handed over before every area owner signed off: {o.reason}
-                  <small style={{ display: "block" }}>
-                    {o.by_label ?? o.person?.name ?? "the project lead"} · <TimeAgo ts={o.at} />
-                  </small>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Fold>
-      )}
+      <Slot name="project.signoffs" handover={crew?.handover} />
 
       {repos.length > 0 && (
         <Fold id="github" title="GitHub" icon={<GitHubMark />}
@@ -518,53 +478,6 @@ function quiet(s: ProjectSession, now?: string): number {
 }
 
 type Shown = "finished" | "idle" | null;
-
-/** A section that folds, with a pin: a pinned one is open on every visit and does not fold.
- *  Pins are this browser's, per section, across projects. */
-function Fold({ id, title, icon, meta, pinnedByDefault, children }: {
-  id: string; title: string; icon?: React.ReactNode; meta: React.ReactNode; pinnedByDefault?: boolean;
-  children: React.ReactNode;
-}) {
-  const key = `tares.factory.pin.${id}`;
-  const [pinned, setPinned] = useState<boolean>(() => {
-    try {
-      const v = localStorage.getItem(key);
-      return v === null ? !!pinnedByDefault : v === "1";
-    } catch { return !!pinnedByDefault; }
-  });
-  const [open, setOpen] = useState(pinned);
-  const togglePin = (e: React.MouseEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    const next = !pinned;
-    setPinned(next);
-    if (next) setOpen(true);
-    try { localStorage.setItem(key, next ? "1" : "0"); } catch { /* the pin lasts this visit */ }
-  };
-  return (
-    <details className={`fo-panel fo-fold${pinned ? " is-pinned" : ""}`} open={pinned || open}
-             onToggle={(e) => {
-               // only its own: a fold inside (the merged pull requests) toggling is not this one
-               if (e.target !== e.currentTarget || pinned) return;
-               setOpen((e.target as HTMLDetailsElement).open);
-             }}>
-      <summary onClick={(e) => { if (pinned) e.preventDefault(); }}>
-        <span className="fo-fold-h">{icon}{title}</span>
-        <span className="fo-fold-right">
-          <span className="fo-meta">{meta}</span>
-          <button type="button" className={`fo-pin${pinned ? " on" : ""}`} onClick={togglePin}
-                  aria-pressed={pinned} aria-label={pinned ? `Unpin ${title}` : `Pin ${title} open`}
-                  title={pinned ? "Pinned open: click to let it fold" : "Pin open: stays open on every visit"}>
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-              <path d="M9.5 1.5l5 5-2 .5-2.5 2.5.5 3-1.5 1.5-3-3L2.5 14.5 1.5 13.5 5 10 2 7l1.5-1.5 3 .5L9 3.5z"
-                    fill={pinned ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-            </svg>
-          </button>
-        </span>
-      </summary>
-      {children}
-    </details>
-  );
-}
 
 function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?: Shown }) {
   if (shown === "finished") return <span className="fo-st fo-st-done" title="it finished the last ticket">finished</span>;
