@@ -908,7 +908,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         const offered = [];
         for (const name of TEAM) {
           const h = await headline(name);
-          if (h !== live.headline.trim()) offered.push(`${name}: ${h}`);   // a name that is not a sample shows the cell's own home
+          // a name that is not a sample shows the cell's own home (the cell's headline can move with the clock, so ask again)
+          const now = await fetch(`http://127.0.0.1:${UNLIC}/api/home`).then((r) => r.json());
+          if (h !== live.headline.trim() && h !== now.headline.trim()) offered.push(`${name}: ${h}`);
           for (const id of NOT_DRAWN) if ((await sp.getByTestId(id).count()) > 0) offered.push(`${name}: ${id}`);
         }
         ck(t("three people, no licence: none of the team samples is offered, so the live home shows"), offered.length === 0, offered.join(" | "));

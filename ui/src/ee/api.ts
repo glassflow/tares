@@ -28,7 +28,7 @@ export const deleteArea = (repo: string) =>
 
 /** A person (or an admin, for a grant that waits for one) agrees to a grant. */
 export const consentGrant = (id: string) =>
-  request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" });
+  request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST", body: JSON.stringify({}) });
 
 /** Questions a spec put to the owners of the repos it changes, and their answers. */
 export const projectQuestions = (id: string) =>

@@ -3,7 +3,8 @@ import * as React from "react";
 
 import { Button, Dialog, Textarea } from "@/components/edition";
 import type { HomeAction, HomeItem, HomeTeamActionsProps } from "./home.types";
-import { answerQuestion, consentGrant, declineGrant } from "./api";
+import { consentGrant } from "../api";
+import { answerQuestion, declineGrant } from "./api";
 
 // What the team's buttons on the home do: agree to a grant, decline one (with the dialog that asks
 // why), and send the answer to a question a project's spec asked. The page owns the rows and the

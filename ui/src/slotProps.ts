@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
+
 import type { Ctx } from "./components/project/common";
 import type {
   HomeCrewLimitProps, HomeHiddenRowsProps, HomeProjectLeadProps, HomeProjectsSwitchProps, HomeReposProps,
   HomeSample, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "./editions/factory/home.types";
-import type { Person } from "./types";
+import type { Grant, GrantsView, Handover, Person } from "./types";
 
 /*
  * The props each slot of the console takes (see eeSlots.tsx). Core renders a slot with these props
@@ -19,6 +21,17 @@ export interface SlotProps {
   "project.access": { ctx: Ctx };
   "page.project.members": { ctx: Ctx };
   "projects.changeLead": { id: string; lead?: { id: string } | null; people: Person[]; onDone: () => void };
+  // the overview of a project, and its Grants view
+  "project.teamQuestions": { project: string };
+  "project.signoffs": { handover?: Handover | null };
+  "grants.agreedBy": { part: "head" | "cell"; grant?: Grant };
+  "grants.waitingFor": { grant: Grant };
+  "grants.consent": {
+    grant: Grant; list?: GrantsView; busy: boolean;
+    onBusy: (id?: string) => void; reload: () => void; onError: (e: unknown) => void;
+  };
+  "grants.waitingElsewhere": { here: Grant[]; list?: GrantsView; row: (g: Grant) => ReactNode; head: ReactNode };
+  "grants.repos": { repos: string[]; onChange: (repos: string[]) => void };
   // settings
   "page.settings.areas": NoProps;
   // the factory home

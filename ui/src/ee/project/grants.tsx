@@ -18,6 +18,12 @@ export function GrantAgreedBy({ part, grant }: { part: "head" | "cell"; grant?: 
   return <td className="help">{(grant?.consents ?? []).filter((c) => !c.declined).map((c) => c.name).join(", ")}</td>;
 }
 
+/** After "Waiting" in the state cell: " for Kim, Lee", who the grant waits for. Nothing when nobody is named. */
+export function GrantWaitingFor({ grant }: { grant: Grant }) {
+  const names = grant.waiting_for.map((w) => w.name ?? w.id).join(", ");
+  return names ? <> for {names}</> : null;
+}
+
 /** The Consent button, for the person a waiting grant waits for (or an admin, when it waits for one). */
 export function GrantConsent({ grant, list, busy, onBusy, reload, onError }: {
   grant: Grant; list?: GrantsView; busy: boolean;
