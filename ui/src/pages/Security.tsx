@@ -9,6 +9,7 @@ import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
+import LicencePanel from "../components/LicencePanel";
 import { EePage, useEeLoaded } from "../eeSlots";
 import OwnerOnly from "../components/OwnerOnly";
 import AdvancedPanel from "../editions/AdvancedPanel";
@@ -26,13 +27,14 @@ import { copyText } from "../editions/copyText";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "edition" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability" | "advanced";
+type SettingsTab = "workspace" | "usage" | "access" | "edition" | "licence" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability" | "advanced";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access, people and API keys" },
   { key: "edition", label: "Edition" },
+  { key: "licence", label: "Enterprise licence" },
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
   { key: "observability", label: "Observability", group: "Agents" },
@@ -164,6 +166,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <AccessTab />}
       {tab === "edition" && <EditionPanel />}
+      {tab === "licence" && <LicencePanel />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "areas" && <EePage slot="page.settings.areas" />}

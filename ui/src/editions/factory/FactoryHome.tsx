@@ -8,7 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
 import { licenceSentence } from "@/components/LicenceNeeded";
-import { Slot, useEeLoaded, useEePending, useEeSamples } from "@/eeSlots";
+import { EE_FAILED_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useEeSamples } from "@/eeSlots";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
 import { useSample } from "../sample";
@@ -246,7 +246,8 @@ function Projects({ projects, stubs, finished, later = 0, team }: {
           <Slot name="home.projectsSwitch" view={team.view} counts={team.counts} onView={(v) => { setAll(false); team.onView?.(v); }} />
         </div>
       ) : link} />
-      <div className="border border-border bg-card">
+      {/* only hidden stubs and no team part to draw them (not loaded, or failed): nothing to put in the box */}
+      {!(projects.length === 0 && stubs.length > 0 && !team) && <div className="border border-border bg-card">
         {projects.length === 0 ? (
           stubs.length > 0 ? null : team && team.view === "mine" ? (
             <EmptyState title="No projects of yours yet." />
@@ -267,7 +268,7 @@ function Projects({ projects, stubs, finished, later = 0, team }: {
           </ListRow>
         )}
         {team && <Slot name="home.hiddenRows" stubs={stubs} hidden={team.hidden} view={team.view} />}
-      </div>
+      </div>}
     </section>
   );
 }
@@ -623,6 +624,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   const [answering, setAnswering] = React.useState<{ item: HomeItem; action: HomeAction } | null>(null);
   // The team's part (agree, decline, the answer to a spec question) is enterprise: its component
   // registers a handler here when it is loaded, and `dialogRow` is the row whose dialog it shows.
+  const eeFailed = useEeFailed();
   const team = React.useRef<TeamHomeHandler | null>(null);
   const [dialogRow, setDialogRow] = React.useState<string | null>(null);
   const onTeamHandler = React.useCallback((h: TeamHomeHandler | null) => { team.current = h; }, []);
@@ -735,7 +737,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
       if (!team.current?.act(a, item)) {
         // a sample sends nothing whatever the licence says; a live row says what is missing
         if (!live) toast(SAMPLE_NOTE);
-        else update(item.id, () => ({ error: licenceSentence() }));
+        else update(item.id, () => ({ error: eeFailed ? EE_FAILED_WORDS : licenceSentence() }));
       }
     }
   };
@@ -744,7 +746,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
     const desk = typeof action.desk === "string" ? action.desk : "";
     const call = desk ? () => deskReply(desk, given.words, given.standing, given.choice)
       : () => {
-          if (!team.current) return Promise.reject(new ApiError(licenceSentence(), 402));
+          if (!team.current) return Promise.reject(new ApiError(eeFailed ? EE_FAILED_WORDS : licenceSentence(), eeFailed ? 503 : 402));
           return team.current.answer(String(action.project), String(action.question), given.words);
         };
     void run(item, "answer", call, "Answered. It is on its way back to whoever asked.", () => setAnswering(null));

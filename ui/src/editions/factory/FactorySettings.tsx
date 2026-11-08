@@ -246,6 +246,9 @@ export function FactorySettingsView({ page, problem, onCrew, onGrant, onSwitch }
           <Row title="People" text="Who is on this cell, and adding a teammate." data-testid="row-team">
             <Button asChild variant="secondary"><Link to="/people">Open People</Link></Button>
           </Row>
+          <Row title="Enterprise licence" text="The licence for a team: see it, paste a key or remove one." data-testid="row-licence">
+            <Button asChild variant="secondary"><Link to="/settings/advanced?tab=licence">Open licence</Link></Button>
+          </Row>
         </Card>
       </Section>
 

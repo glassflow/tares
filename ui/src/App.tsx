@@ -7,6 +7,7 @@ import { api, auth } from "./api";
 import type { Whoami } from "./types";
 import { useCloud, useWorkspaceOverview } from "./cloud";
 import CommandPalette from "./components/CommandPalette";
+import LicenceBanner from "./components/LicenceBanner";
 import WorkspaceSwitcher from "./components/WorkspaceSwitcher";
 import {
   Activity, Chat, ChevronLeft, ChevronRight, Database, ExternalLink, Eye, Flag, GitHub, Grid, Lock,
@@ -313,6 +314,7 @@ function PlatformApp() {
           <Breadcrumbs />
         </header>
         <main className="main">
+          <LicenceBanner />
           <Outlet />
         </main>
       </div>

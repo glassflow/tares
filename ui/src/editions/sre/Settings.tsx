@@ -444,6 +444,9 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
           )}
         </div>
       )}
+      <div className="border-t border-border px-4 py-3 text-[13px] text-muted-foreground md:px-[18px]" data-testid="licence-link-row">
+        <Link to="/settings/advanced?tab=licence" className="text-foreground! underline!" data-testid="licence-link">Enterprise licence</Link>: see it, paste a key or remove one.
+      </div>
     </Sec>
   );
 }

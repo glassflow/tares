@@ -4,6 +4,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { api, auth } from "../api";
 import { useCloud, useWorkspaceOverview } from "../cloud";
 import CommandPalette from "../components/CommandPalette";
+import LicenceBanner from "../components/LicenceBanner";
 import WorkspaceSwitcher from "../components/WorkspaceSwitcher";
 import { Moon, Search, Sun } from "../components/icons";
 import { Button } from "../components/edition";
@@ -233,6 +234,7 @@ export default function EditionShell() {
           </nav>
         )}
         <main className="main min-w-0 flex-1">
+          <LicenceBanner />
           <Outlet />
         </main>
       </div>

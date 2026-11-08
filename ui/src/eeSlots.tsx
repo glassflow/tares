@@ -92,10 +92,19 @@ export function EeLoader() {
 /** True while the cell allows enterprise but the ee chunk has not registered yet (and has not failed):
  *  a page that would show an ee piece in its place shows a skeleton, so core's plainer version never flashes. */
 export function useEePending(): boolean {
-  const { eeAllowed } = useLicence();
+  const { eeAllowed, loading } = useLicence();
   useSyncExternalStore(subscribe, snapshot);
-  return eeAllowed && !!load && !loaded && !failed;
+  return (loading || eeAllowed) && !!load && !loaded && !failed;
 }
+
+/** True when the ee chunk failed to load or to register. */
+export function useEeFailed(): boolean {
+  useSyncExternalStore(subscribe, snapshot);
+  return failed;
+}
+
+/** The plain line for a failed ee chunk, the same wherever it shows. */
+export const EE_FAILED_WORDS = "This part of the console did not load. Reload the page to try again.";
 
 /** True once the ee chunk is loaded and has registered. */
 export function useEeLoaded(): boolean {
@@ -116,7 +125,7 @@ export function EePage<N extends PageSlotName>({ slot, ...props }: { slot: N } &
   useSyncExternalStore(subscribe, snapshot);
   const C = slots.get(slot);
   if (C) return <C {...props} />;
-  if (failed) return <Banner tone="warn">This part of the console did not load. Reload the page to try again.</Banner>;
+  if (failed) return <Banner tone="warn" data-testid="ee-failed">{EE_FAILED_WORDS}</Banner>;
   if (loading || (eeAllowed && load)) return <SkeletonRows />;
   return <LicenceNeeded variant="page" />;
 }

@@ -7,7 +7,8 @@
  *   const d = await startDaemon({ port, dataDir, edition: "factory", licence: "valid", auth: "tok" });
  *   ... d.base, d.stop()
  *
- * licence: "none" | "valid" | "expired" | "over_seats" (default "valid"). The daemon gets a clean
+ * licence: "none" | "valid" | "expired" | "over_seats" | "invalid" (default "valid"; invalid puts text that is not a
+ * licence in TARES_LICENSE). The daemon gets a clean
  * environment (no TARES_* or FACTORY_* of the machine), the console in ui/dist (TARES_UI_DIST overrides)
  * and the code under test on PYTHONPATH. Python: TARES_E2E_PY, else the repo's .venv, else python3.
  */
@@ -39,7 +40,7 @@ function healthy(url) {
 
 async function startDaemon({ port, dataDir, edition, licence = "valid", auth } = {}) {
   if (!port) throw new Error("startDaemon: port is required");
-  if (!["none", "valid", "expired", "over_seats"].includes(licence)) throw new Error(`startDaemon: unknown licence ${licence}`);
+  if (!["none", "valid", "expired", "over_seats", "invalid"].includes(licence)) throw new Error(`startDaemon: unknown licence ${licence}`);
   const home = dataDir || fs.mkdtempSync(path.join(os.tmpdir(), "tares-licensed-e2e-"));
   const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
   const extra = {
