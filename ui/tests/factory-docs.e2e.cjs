@@ -104,7 +104,12 @@ async function waitFor(url, tries = 100) {
         await addBox.getByRole("button", { name: "Add line" }).click();
         const res = await answer;
         const body = res.ok() ? await res.json().catch(() => ({})) : {};
-        if (res.ok() && body.added !== false) await rereadDone;
+        if (res.ok() && body.added !== false) {
+          // The page polls every 60 s, so without a limit a missing re-read would pass after the poll. It must come at once.
+          let timer;
+          const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error("the page did not re-read the document after the line was added")), 10000); });
+          try { await Promise.race([rereadDone, late]); } finally { clearTimeout(timer); }
+        }
         else await addBox.getByTestId("doc-add-error").waitFor();
       } finally {
         page.off("response", onResponse);
