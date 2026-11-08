@@ -8,6 +8,7 @@ import httpx
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _env import clean_env
+import _people
 from tares import docs as docs_mod
 import tares.mcp_server as m
 
@@ -35,10 +36,14 @@ def H(tok):
     return {"Authorization": f"Bearer {tok}"}
 
 
-def start(db, port, auth):
+def start(db, port, auth, people=()):
+    """Start a daemon on a fresh database. `people` are put on the cell first: adding a second
+    person over HTTP needs a licence and is tested under ee/tests."""
     for p in (db, db + ".wal"):
         if os.path.exists(p):
             os.remove(p)
+    if people:
+        _people.seed(db, list(people))
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off"}
     if auth:
         env["TARES_AUTH_TOKEN"] = AUTH
@@ -48,7 +53,9 @@ def start(db, port, auth):
 
 async def auth_on():
     port = "8875"
-    proc = start("/tmp/personal_docs_on.duckdb", port, True)
+    proc = start("/tmp/personal_docs_on.duckdb", port, True,
+                 people=[("Person A", "person-a@example.test"), ("Person B", "person-b@example.test"),
+                         ("Person C", "person-c@example.test")])
     B = f"http://127.0.0.1:{port}"
     try:
         if not await _wait(f"{B}/health"):

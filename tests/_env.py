@@ -30,6 +30,7 @@ def clean_env(**overrides) -> dict:
     dir, then `overrides` applied (a value of None removes the key)."""
     env = {k: v for k, v in os.environ.items() if not _leaks(k)}
     env["TARES_HOME"] = _temp_home()
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"   # never a person's real keychain
     for k, v in overrides.items():
         if v is None:
             env.pop(k, None)
@@ -44,3 +45,4 @@ def scrub_os_environ() -> None:
     for k in [k for k in os.environ if _leaks(k)]:
         del os.environ[k]
     os.environ["TARES_HOME"] = _temp_home()
+    os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"   # never a person's real keychain

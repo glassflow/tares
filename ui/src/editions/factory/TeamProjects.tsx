@@ -2,7 +2,7 @@ import { Lock } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "@/lib/utils";
 import type { HomeHiddenProject, HomeProject } from "./home.types";
-import { Sender } from "./WaitingForYou";
+import { Sender } from "./Sender";
 
 // The parts of the Projects section that only a cell with more than one person has: the Mine and
 // Team switch, the lock on a private project, who leads it and who is on it, the quiet row that stands

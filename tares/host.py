@@ -12,6 +12,7 @@ route would do. A helper the daemon did not give raises a RuntimeError that name
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Callable, NoReturn
 
 from fastapi import Request
@@ -170,3 +171,12 @@ class Host:
         Never returns."""
         self._call("licence_required", message)
         raise LicenceRequired(message)   # the daemon's helper always raises; this keeps the promise
+
+    # ── the team interface ──
+    def team_reader(self) -> SimpleNamespace:
+        """The `c` the team interface (`tares.team.Team`) takes as its first argument: what the
+        factory modules know, as one namespace (store, host, stations, work_of, work_person,
+        my_projects, queue, settings, desk_is_mine, is_mine, leads, stored, crews_of, mirror_in,
+        mirror_out, visible_grant, grants_view). `factory_api.register` sets it; before that it raises
+        a RuntimeError."""
+        raise RuntimeError("this Host was built without the 'team_reader' helper")

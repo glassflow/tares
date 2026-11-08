@@ -5,6 +5,8 @@ component-gallery
 crew-people
 edition-routes
 edition-shell
+ee-chunk
+ee-project-access
 factory-crew
 factory-docs
 factory-github
@@ -20,6 +22,7 @@ factory-start-show
 factory-ticket
 factory-tickets
 grants-declined
+licence-needed
 login-handoff
 project-idle
 projects-list

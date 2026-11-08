@@ -18,13 +18,12 @@ from types import SimpleNamespace
 
 from fastapi import Body, HTTPException, Request
 
-from . import areas as areas_mod
 from . import claude_usage
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
-from . import factory_team
+from . import team as team_mod
 from .envelope import now_utc
 from .factory_store import MapChanged
 from .host import Host
@@ -414,76 +413,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     # ── grants by kind (TR-630) ───────────────────────────────────────────────
     # A grant is a row: team (what every project starts from), project (what the work may do) or
-    # personal (what may run on the holder's machine). A project grant that names a repo whose
-    # area owner is not the giver waits until that owner consents; one from someone who is neither
-    # the project's lead nor an admin also waits for the lead (for an admin when the project has
-    # no lead). A grant in effect is also written to the grants docs (as before), so what reads
-    # those docs keeps working.
-    def pending_owners(areas, given_by, consents) -> list[dict]:
-        """The owners of `areas` who have still to consent: not the giver, not already consented."""
-        done = {c["person_id"] for c in consents}
-        out: dict[str, dict] = {}
-        for repo in areas:
-            o = h.area_owner(repo)
-            if o and o["id"] != given_by and o["id"] not in done:
-                out[o["id"]] = {"id": o["id"], "name": o["name"]}
-        return list(out.values())
-
-    def pending_lead(project, needs_lead, consents) -> list[dict]:
-        """The lead who has still to consent, or {id: "admin"} when the project has no lead."""
-        if not needs_lead or any(c.get("as") == "admin" for c in consents):
-            return []
-        lead = (store.get_project(project) or {}).get("lead_person_id") if project else None
-        if not lead:
-            return [{"id": "admin", "name": "an admin"}]
-        if lead in {c["person_id"] for c in consents}:
-            return []
-        return [{"id": lead, "name": (store._person_refs({lead}).get(lead) or {}).get("name")}]
-
-    def waiting_for(g: dict) -> list[dict]:
-        if g["state"] != "waiting":
-            return []
-        out = pending_owners(g["areas"], g["given_by"], g["consents"])
-        have = {w["id"] for w in out}
-        return out + [w for w in pending_lead(g["project"], g["needs_lead"], g["consents"])
-                      if w["id"] not in have]
-
-    def waits_for_me(g: dict, request: Request) -> str | None:
-        """How this caller may consent to g: "person" (they are named), "admin" (the grant waits
-        for an admin and the credential has the admin scope), or None."""
-        ids = {w["id"] for w in waiting_for(g)}
-        person = h.current_person(request)
-        if person and person["id"] in ids:
-            return "person"
-        if "admin" in ids and h.is_admin(request):
-            return "admin"
-        return None
-
-    def settle(g: dict, by: str) -> dict:
-        """A grant still waiting with nobody left to wait for (an owner removed, the repo given
-        to the giver) takes effect now."""
-        if g["state"] == "waiting" and not waiting_for(g):
-            mirror_in(g, by)   # first: a failure leaves it waiting, to settle on the next try
-            if not store.activate_waiting_grant(g["id"]):
-                now = store.get_grant_row(g["id"])
-                if now is not None and now["state"] == "active":
-                    return now   # another settle took it into effect first: its line stays
-                # declined or revoked since it was read: it stays so, and its line comes back out
-                mirror_out(g, by)
-                h.err(ValueError(f"{g['id']} is no longer waiting"), 409)
-            g = store.get_grant_row(g["id"])
-        return g
-
-    def settle_on_read(g: dict, request: Request) -> dict:
-        """Settle a grant the reader may see, as Tares and not as the reader. One that fails
-        stays as it was and does not fail the read."""
-        if g["state"] != "waiting" or not visible_grant(g, request):
-            return g
-        try:
-            return settle(g, "tares")
-        except Exception:
-            return g
-
+    # personal (what may run on the holder's machine). For one person all three take effect at once.
+    # With an enterprise licence a project grant that names a repo whose area owner is not the giver
+    # waits until that owner consents, and one from someone who is neither the project's lead nor an
+    # admin also waits for the lead (for an admin when the project has no lead): the waiting is
+    # `team_mod.get().grant_waiting_for`, and agreeing is in ee (tares_ee/grants.py). A grant in
+    # effect is also written to the grants docs (as before), so what reads those docs keeps working.
+    # A grant that waits is never in effect and never in the docs: without ee it stays waiting and
+    # can only be revoked.
     def grant_out(g: dict, refs: dict) -> dict:
         def ref(pid):
             return refs.get(pid) or {"id": pid, "name": None}
@@ -495,7 +432,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 "consents": [{**ref(c["person_id"]), "at": c["at"],
                              **{k: c[k] for k in ("via", "declined", "reason") if c.get(k)}}
                             for c in g["consents"]],
-                "waiting_for": waiting_for(g), "in_effect": g["state"] == "active"}
+                "waiting_for": team_mod.get().grant_waiting_for(team_reader(), g),
+                "in_effect": g["state"] == "active"}
 
     def grants_view(rows: list[dict]) -> list[dict]:
         ids = {g["given_by"] for g in rows} | {g["holder_person_id"] for g in rows}
@@ -587,13 +525,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 return False
         return True
 
-    def grant_or_404(gid: str, request: Request, consenting: bool = False) -> dict:
-        """The grant, or 404. Someone a grant waits for may see it to consent, even on a private
-        project they are not in (they get its words and areas, not the project)."""
+    def grant_or_404(gid: str, request: Request) -> dict:
+        """The grant, or 404."""
         g = store.get_grant_row(gid)
-        if g is None or not (visible_grant(g, request)
-                             or (consenting and g["kind"] == "project"
-                                 and waits_for_me(g, request))):
+        if g is None or not visible_grant(g, request):
             h.err(KeyError(f"unknown grant {gid!r}"), 404)
         return g
 
@@ -611,14 +546,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
             uid = h.project_or_404(h.resolve_project(project.strip()))["id"]
         person = h.current_person(request)
         mine = person["id"] if person else None
-        every = [settle_on_read(g, request) for g in store.all_grant_rows()]
+        team = team_mod.get()
+        every = [team.settle_grant(team_reader(), g, request) for g in store.all_grant_rows()]
         rows = [g for g in every if g["state"] != "revoked" and (
             g["kind"] == "team"
             or (g["kind"] == "project" and uid is not None and g["project"] == uid)
             or (g["kind"] == "personal" and mine is not None and g["holder_person_id"] == mine
                 and g["project"] in (None, uid)))]
-        mine_to_consent = [g for g in every if g["state"] == "waiting" and g["kind"] == "project"
-                           and waits_for_me(g, request)]
+        mine_to_consent = team.grants_waiting_for_me(team_reader(), every, request)
         return {**grants_out(uid), "grants": grants_view(rows),
                 "waiting_for_me": grants_view(mine_to_consent),
                 "known_words": sorted({g["words"] for g in every if g["kind"] == "team" or (
@@ -636,9 +571,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                                  g["holder_person_id"]) == (kind, uid, words, holder)]
         active = next((g for g in twins if g["state"] == "active"), None)
         waiting = next((g for g in twins if g["state"] == "waiting"), None)
-        waits = bool(pending_owners(areas, pid, []) or pending_lead(uid, needs_lead, []))
+        waits = bool(team_mod.get().grant_waiting_for(team_reader(), {
+            "state": "waiting", "kind": kind, "project": uid, "areas": areas, "given_by": pid,
+            "needs_lead": needs_lead, "consents": []}))
         if active is not None or (waiting is not None and waits):
             return active or waiting, False
+        if waiting is not None and not team_mod.enabled():
+            # without ee a waiting grant is a permission nobody can agree to: it stays waiting
+            # (revoke is the one way out), and the same words added again do not make it take effect
+            return waiting, False
         if waiting is not None:
             # the lead's (or an admin's) own add of words that sit waiting for someone else's
             # consent: it takes effect, with the areas and owner consents of this add
@@ -663,10 +604,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """{kind: team|project|personal, words, project?, areas?}: one grant, quoting the person,
         dated today (`scope: all|project` is the older name for kind). Team needs the admin
         scope; project, the project's lead, an area owner for repos they own, or the admin
-        scope; personal, a key that belongs to a person, for themselves. A project grant that
-        names a repo owned by someone other than the giver waits for that owner, and one from a
-        person who is neither the project's lead nor an admin waits for the lead too (for an admin
-        when the project has no lead). Only the
+        scope; personal, a key that belongs to a person, for themselves. All three take effect at
+        once. With an enterprise licence a project grant that names a repo owned by someone other
+        than the giver waits for that owner, and one from a person who is neither the project's
+        lead nor an admin waits for the lead too (for an admin when the project has no lead);
+        without one, `areas` answers 402. Only the
         orchestrator among the crew may add one; a person's own session may."""
         deny(request, "grants")
         project_ref = str(body.get("project") or "").strip()
@@ -683,8 +625,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
             h.err(ValueError("areas is a list of repos, like [\"acme/web\"]"))
         if raw_areas and kind != "project":
             h.err(ValueError("areas belong to a project grant"))
+        if raw_areas and not team_mod.enabled():
+            h.licence_required("Grants that wait for an area owner need an enterprise licence.")
         try:
-            areas = list(dict.fromkeys(areas_mod.norm_repo(a) for a in raw_areas))
+            areas = list(dict.fromkeys(factory_mod.norm_repo(a) for a in raw_areas))
         except ValueError as e:
             h.err(e)
         person = h.current_person(request)
@@ -715,35 +659,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {**grants_out(uid if kind != "personal" else None), "added": added, "line": line,
                 "grant": grants_view([row])[0]}
 
-    @app.post("/api/grants/{gid}/consent")
-    def consent_grant(gid: str, request: Request):
-        """The owner of a repo the grant names, or the project's lead (an admin when it has none)
-        when the giver is neither, says yes. Only someone it is waiting for may, even on a private
-        project they are not in; the grant takes effect when the last of them has."""
-        deny(request, "grants")
-        g = grant_or_404(gid, request, consenting=True)
-        person = h.current_person(request)
-        if g["state"] != "waiting":
-            h.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to consent to"), 409)
-        how = waits_for_me(g, request)
-        if how is None:
-            names = ", ".join(w["name"] or w["id"] for w in waiting_for(g))
-            h.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
-                                  "one of them"), 403)
-        entry = {"person_id": person["id"] if person else "system", "at": now_utc().isoformat()}
-        if how == "admin":
-            entry["as"] = "admin"
-        if console_via(request):
-            entry["via"] = "console"
-        consents = g["consents"] + [entry]
-        # only while it still waits: a decline that came since the read must stay a decline
-        if not store.consent_waiting_grant(g["id"], consents):
-            h.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to consent to"), 409)
-        g = settle({**g, "consents": consents}, h.by(request, None))
-        if g["state"] == "waiting":
-            g = store.get_grant_row(g["id"])
-        return {"grant": grants_view([g])[0]}
-
     @app.post("/api/grants/{gid}/revoke")
     def revoke_grant(gid: str, request: Request):
         """The giver, the project's lead, the holder of a personal grant, or the admin scope for
@@ -768,38 +683,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         if was == "active":
             mirror_out(g, h.by(request, None))
         return {"grant": grants_view([g])[0]}
-
-    @app.post("/api/grants/{gid}/decline")
-    def decline_grant(gid: str, request: Request, body: dict = Body(default={})):
-        """{reason?}: someone a waiting grant waits for says no (TR-740). The grant ends as a
-        revoked one, so every reader keeps working, and the consents list keeps who declined, when,
-        from where and why. Only someone it is waiting for may; a grant that is not waiting
-        answers 409."""
-        deny(request, "grants")
-        g = grant_or_404(gid, request, consenting=True)
-        person = h.current_person(request)
-        if g["state"] != "waiting":
-            h.err(ValueError(f"{g['id']} is {g['state']}; there is nothing to decline"), 409)
-        how = waits_for_me(g, request)
-        if how is None:
-            names = ", ".join(w["name"] or w["id"] for w in waiting_for(g))
-            h.err(PermissionError(f"{g['id']} waits for {names or 'no one'}; this key is not "
-                                  "one of them"), 403)
-        reason = str(body.get("reason") or "").strip()
-        if len(reason) > 1000:
-            h.err(ValueError("keep the reason to 1000 characters"))
-        entry = {"person_id": person["id"] if person else "system", "at": now_utc().isoformat(),
-                 "declined": True}
-        if reason:
-            entry["reason"] = reason
-        if how == "admin":
-            entry["as"] = "admin"
-        if console_via(request):
-            entry["via"] = "console"
-        # a waiting grant was never in effect, so there is nothing to take out of the grants doc
-        if not store.decline_waiting_grant(g["id"], g["consents"] + [entry]):
-            h.err(ValueError(f"{g['id']} is no longer waiting; there is nothing to decline"), 409)
-        return {"grant": grants_view([store.get_grant_row(g["id"])])[0]}
 
     def append_grant(uid: str | None, line: str, by: str) -> bool:
         """One grant line into the shared grants (uid None) or the project's own."""
@@ -1135,13 +1018,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                    "why", "context", "blocks", "tickets", "blocking", "created_at")}
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
-        names = {x["id"]: x["name"] for x in store.list_projects()}
-        asked = [{"project": names[q["project"]], "id": q["id"], "repo": q["repo"],
-                  "text": q["text"], "asked_by": (q["asked_by_person"] or {}).get("name"),
-                  "asked_at": q["asked_at"]}
-                 for q in store.list_spec_questions(state="open", to_person_id=me["id"])
-                 if q["project"] in names and q["project"] not in hidden
-                 and (not want or q["project"] == want)]
+        asked = team_mod.get().open_questions_for(team_reader(), me["id"], hidden, want)
         return {"ready": ready, "in_progress": doing, "led_projects": led, "desk": desk,
                 "spec_questions": asked}
 
@@ -1173,36 +1050,41 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"person": me, "crew": crew_name, **work_of(me, hidden, want)}
 
     def team_reader() -> SimpleNamespace:
-        """What factory_team reads of this module (TR-739)."""
+        """The `c` of the team interface (tares/team.py): what the team hooks read of this module
+        (TR-739). Also `h.team_reader`."""
         return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
                                work_person=work_person, my_projects=my_projects, queue=queue,
                                settings=settings,
-                               waits_for_me=waits_for_me, desk_is_mine=desk_is_mine,
-                               is_mine=is_mine, leads=leads, stored=stored, crews_of=crews_of)
+                               desk_is_mine=desk_is_mine, is_mine=is_mine, leads=leads,
+                               stored=stored, crews_of=crews_of, mirror_in=mirror_in,
+                               mirror_out=mirror_out, visible_grant=visible_grant,
+                               grants_view=grants_view)
+
+    h.team_reader = team_reader
 
     def team_home(request: Request, now=None) -> dict:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
-        one person: see factory_team. It reads what this module holds; the route stays in daemon.py."""
-        return factory_team.team_home(team_reader(), request, now or now_utc())
+        one person: see the team interface. It reads what this module holds; the route stays in daemon.py."""
+        return team_mod.get().team_home(team_reader(), request, now or now_utc())
 
     def own_stations(request: Request, rows: list[dict]) -> list[dict]:
-        """`rows` kept to the caller's own crews on a team cell (see factory_team.own_stations)."""
-        return factory_team.own_stations(team_reader(), request, rows)
+        """`rows` kept to the caller's own crews on a team cell (see the team interface)."""
+        return team_mod.get().own_stations(team_reader(), request, rows)
 
     def own_desk(request: Request, rows: list[dict]) -> list[dict]:
         """`rows` (open desk items) kept to the caller's person on a team cell."""
-        return factory_team.own_desk(team_reader(), request, rows)
+        return team_mod.get().own_desk(team_reader(), request, rows)
 
     def own_tickets(request: Request, tickets: dict, projects: list[dict]) -> dict:
         """`tickets` ({project: tickets}) kept to the caller's person on a team cell."""
-        return factory_team.own_tickets(team_reader(), request, tickets, projects)
+        return team_mod.get().own_tickets(team_reader(), request, tickets, projects)
 
     def team_projects(request: Request, open_ps: list, tickets: dict, rows: list, which: str,
                       now=None, waiting: list | None = None) -> dict:
         """The team's version of the home's `projects` (TR-739): lead, members, scope, what is
         the caller's, the Mine and Team counts; {} on a cell of one person."""
-        return factory_team.team_projects(team_reader(), request, open_ps, tickets, rows, which,
-                                          now or now_utc(), waiting or [])
+        return team_mod.get().team_projects(team_reader(), request, open_ps, tickets, rows, which,
+                                            now or now_utc(), waiting or [])
 
     @app.get("/api/crew/projects")
     def crew_projects(request: Request):
@@ -2133,6 +2015,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if person is None:
                 h.err(KeyError(f"no person {said!r} on this cell: give a person id or an email "
                                "(list_people shows who is here)"), 404)
+            if not team_mod.enabled():
+                # addressing a second person is a team feature; the caller, or `local` on a
+                # cell of one (a key nobody bound acts as them), is not
+                caller = person_of(request) or ("local" if h.is_system(request) else None)
+                if person["id"] != caller and not (
+                        person["id"] == "local" and store.only_local_person()):
+                    h.licence_required(team_mod.ADDRESS_REASON)
             project = store.get_project(uid) if uid else None
             if (project and project.get("scope") == "private"
                     and not store.is_project_member(uid, person["id"])):
@@ -2250,14 +2139,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 h.err(PermissionError("a grant for every project needs an admin: this answer "
                                       "can be a project grant, or an admin gives it"), 403)
             return "team", None, [], False
-        by_ref = {factory_mod.label(t): t for t in store.list_tickets(d["project"])}
         areas = []
-        for ref in d["tickets"]:
-            try:
-                areas.append(areas_mod.norm_repo((by_ref.get(ref) or {}).get("repo")))
-            except ValueError:
-                pass
-        areas = list(dict.fromkeys(areas))
+        if team_mod.enabled():   # without a team nobody owns a repo, so a repo is nothing to wait for
+            by_ref = {factory_mod.label(t): t for t in store.list_tickets(d["project"])}
+            for ref in d["tickets"]:
+                try:
+                    areas.append(factory_mod.norm_repo((by_ref.get(ref) or {}).get("repo")))
+                except ValueError:
+                    pass
+            areas = list(dict.fromkeys(areas))
         p = store.get_project(d["project"]) or {}
         leads_it = bool(giver and p.get("lead_person_id") == giver)
         owns_all = bool(areas) and giver is not None and all(
@@ -2534,65 +2424,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The person's answers on this project, newest first."""
         h.project_or_404(uid)
         return {"decisions": store.list_decisions(uid)}
-
-    # ── questions to an area owner (TR-636) ──────────────────────────────────
-    QUESTION_STATES = ("open", "answered")
-
-    @app.post("/api/projects/{uid}/questions", status_code=201)
-    def ask_area(uid: str, request: Request, body: dict = Body(...)):
-        """{repo, text}: a question from the spec for the person who owns the repo (owner/name),
-        numbered Q1, Q2... in the project. It shows in the owner's my_work until they answer.
-        Anyone who can see the project may ask. A repo nobody owns is refused."""
-        project = h.project_or_404(uid)
-        me = work_person(request)
-        try:
-            repo = areas_mod.norm_repo(body.get("repo"))
-        except ValueError as e:
-            h.err(e)
-        text = str(body.get("text") or "").strip()
-        if not text:
-            h.err(ValueError("text: the question for the area owner"))
-        if len(text) > 4000:
-            h.err(ValueError("keep the question to 4000 characters"))
-        owner = h.area_owner(repo)
-        if owner is None:
-            h.err(ValueError(f"{repo} has no area owner; set one with set_area"), 409)
-        if project.get("scope") == "private" and not store.is_project_member(uid, owner["id"]):
-            h.err(PermissionError(f"{owner['name']} owns {repo} but is not on this private "
-                                  "project: ask the project lead to add them"), 403)
-        return store.add_spec_question(uid, owner["id"], repo, text, me["id"], now_utc())
-
-    @app.get("/api/projects/{uid}/questions")
-    def list_questions(uid: str, state: str = ""):
-        """The project's questions to area owners, oldest first; `state` open or answered."""
-        h.project_or_404(uid)
-        st = state.strip().lower()
-        if st and st not in QUESTION_STATES:
-            h.err(ValueError("state is one of: " + ", ".join(QUESTION_STATES)))
-        return {"questions": store.list_spec_questions(uid, st or None)}
-
-    @app.post("/api/projects/{uid}/questions/{qid}/answer")
-    def answer_question(uid: str, qid: str, request: Request, body: dict = Body(...)):
-        """{answer}: the person the question is addressed to answers it. Anyone else is refused."""
-        h.project_or_404(uid)
-        me = work_person(request)
-        q = store.get_spec_question(uid, qid)
-        if q is None:
-            h.err(KeyError(f"project has no question {qid!r}"), 404)
-        if q["to_person_id"] != me["id"]:
-            who = (q["to_person"] or {}).get("name") or q["to_person_id"]
-            h.err(PermissionError(f"{q['id']} is for {who}: only they answer it"), 403)
-        if q["state"] != "open":
-            h.err(ValueError(f"{q['id']} is already answered"), 409)
-        answer = str(body.get("answer") or "").strip()
-        if not answer:
-            h.err(ValueError("answer: your reply to the question"))
-        if len(answer) > 4000:
-            h.err(ValueError("keep the answer to 4000 characters"))
-        if not store.answer_spec_question(uid, q["id"], answer, me["id"], now_utc(),
-                                         via=console_via(request)):
-            h.err(ValueError(f"{q['id']} is already answered"), 409)
-        return store.get_spec_question(uid, q["id"])
 
     @app.post("/api/projects/{uid}/handover")
     def hand_over(uid: str, request: Request, body: dict = Body(default={})):

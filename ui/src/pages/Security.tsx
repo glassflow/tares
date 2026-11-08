@@ -9,11 +9,12 @@ import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
-import AreasPanel from "../components/AreasPanel";
+import { EePage, useEeLoaded } from "../eeSlots";
 import OwnerOnly from "../components/OwnerOnly";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
+import ActionError from "../components/ActionError";
 import { copyText } from "../editions/copyText";
 
 // Four distinct credential concepts, one box each:
@@ -99,6 +100,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
     window.history.replaceState(null, "", url.toString());
   };
   const cloud = useCloud();
+  const eeLoaded = useEeLoaded();   // Areas is an enterprise tab
   const slackConnectUrl = cloud.health?.slack_connect_url;
   const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
   // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
@@ -112,7 +114,8 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   // spend and storage) in its place.
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
     : t.key === "usage" ? !workspaceApiUrl
-    : t.key === "advanced" ? hasAdvanced : true);
+    : t.key === "advanced" ? hasAdvanced
+    : t.key === "areas" ? eeLoaded : true);
   const groups = [...new Set(tabs.map((t) => t.group))];
   const link = (t: (typeof TABS)[number]) => (
     <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}
@@ -163,7 +166,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
       {tab === "edition" && <EditionPanel />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
-      {tab === "areas" && <AreasPanel />}
+      {tab === "areas" && <EePage slot="page.settings.areas" />}
       {tab === "github" && <GithubPanel cloud={cloud} />}
       {tab === "linear" && <LinearSettings cloud={cloud} />}
       {/* Until /health answers (it can be slow on a busy instance) the self-host panels show, so
@@ -639,7 +642,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
   const shownName = (p: Person) => authOn && p.id === "local" && p.name === "You" ? "Local (no login)" : p.name;
   const [editing, setEditing] = useState<PersonDraft>();   // id "new": the add form
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
+  const [err, setErr] = useState<unknown>();
 
   const start = (p?: Person) => {
     setErr(undefined);
@@ -668,7 +671,7 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
       }
       setEditing(undefined);
       onChanged();
-    } catch (e) { setErr(String((e as Error).message ?? e)); }
+    } catch (e) { setErr(e); }
     setBusy(false);
   };
   const form = (d: PersonDraft) => (
@@ -727,7 +730,8 @@ function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
         Everyone who works on this instance. Each API key belongs to a person, so you can tell whose
         agent or script is acting.
       </p>
-      {(loadErr || err) && <div className="alert error">{err ?? loadErr}</div>}
+      {(loadErr || err != null) && <ActionError error={err ?? loadErr}
+                                                 what={editing && editing.id !== "new" ? "Changing other people" : "Adding people"} />}
 
       {editing?.id === "new" && <div className="panel" style={{ marginBottom: 12 }}>{form(editing)}</div>}
 

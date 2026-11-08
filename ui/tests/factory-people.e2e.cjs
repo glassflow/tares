@@ -67,7 +67,8 @@ function waitFor(url, tries = 150) {
                 TARES_EDITION: "factory", TARES_OTLP_GRPC_PORT: "off", TARES_MCP_PORT: "off",
                 TARES_PR_SYNC_SECONDS: "off", TARES_UI_DIST: path.join(UI_DIR, "dist"), TARES_AUTH_TOKEN: ROOT };
   delete env.TARES_WORKSPACE_API_URL;
-  const d = spawn(py, ["-c", "from tares.cli import run_daemon; run_daemon()"], { cwd: REPO, env, stdio: "ignore" });
+  // a licensed daemon: the page adds people, which a cell with no licence does not do (ee/tests/licensed.py)
+  const d = spawn(py, [path.join(REPO, "ee", "tests", "licensed.py"), "daemon", "--seats", "50"], { cwd: REPO, env, stdio: "ignore" });
   process.on("exit", () => { try { d.kill(); } catch { /* gone */ } });
   if (!(await waitFor(`${BASE}/health`))) { console.log("FAIL daemon did not start"); process.exit(1); }
 

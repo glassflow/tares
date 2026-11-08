@@ -15,7 +15,7 @@ const ts = require("typescript");
 const { offendersIn } = require("./words.cjs");
 
 const UI_DIR = path.resolve(__dirname, "..");
-const ROOTS = ["src/editions", "src/components/edition", "src/pages/dev"];
+const ROOTS = ["src/editions", "src/components/edition", "src/pages/dev", "src/ee"];
 const SKIP_ATTRS = new Set(["className", "data-testid", "to", "href", "key"]);
 const EXEMPT_ATTRS = new Set(["data-words-exempt", "data-user-text"]);
 const OK_COMMENT = /\/\/\s*words-ok\s*$/;

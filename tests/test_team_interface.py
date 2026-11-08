@@ -178,10 +178,31 @@ def defaults(store):
        and t.resolve_crew(" ops ", "local", "m") == ("ops", ""))
     rows = [1, 2]
     tickets = {"t": 1}
-    ck("team home: {} and the own_* hooks pass their rows on unchanged",
-       t.team_home(None, None, None) == {} and t.own_stations(None, None, rows) is rows
-       and t.own_desk(None, None, rows) is rows and t.own_tickets(None, None, tickets, []) is tickets
-       and t.team_projects(None, None, [], [], [], "all", None, []) == {})
+    from types import SimpleNamespace as NS
+    one = NS(store=NS(only_local_person=lambda: True),
+             h=NS(current_person=lambda r: {"id": "local"}, is_system=lambda r: False),
+             work_person=lambda r: {"id": "local"})
+    ck("team home: {} and the own_* hooks pass their rows on unchanged on a one-person cell",
+       t.team_home(one, None, None) == {} and t.own_stations(one, None, rows) is rows
+       and t.own_desk(one, None, rows) is rows and t.own_tickets(one, None, tickets, []) is tickets
+       and t.team_projects(one, None, [], [], [], "all", None, []) == {})
+    many = NS(store=NS(only_local_person=lambda: False),
+              h=NS(current_person=lambda r: {"id": "ann"}, is_system=lambda r: False),
+              work_person=lambda r: {"id": "ann"},
+              desk_is_mine=lambda d, me: d["to"] == me, is_mine=lambda tk, me, p: tk["who"] == me)
+    stations = [{"person": {"id": "ann"}}, {"person": {"id": "bob"}}, {"person": None}]
+    desk = [{"to": "ann"}, {"to": "bob"}]
+    tks = {"p": [{"who": "ann"}, {"who": "bob"}]}
+    ck("without a team, a person caller of a many-person cell keeps only their own rows (no licence)",
+       t.own_stations(many, None, stations) == [stations[0]] and t.own_desk(many, None, desk) == [desk[0]]
+       and t.own_tickets(many, None, tks, [{"id": "p"}]) == {"p": [{"who": "ann"}]})
+    anon = NS(store=many.store, h=NS(current_person=lambda r: None, is_system=lambda r: False),
+              work_person=many.work_person)
+    system = NS(store=many.store, h=NS(current_person=lambda r: None, is_system=lambda r: True),
+                work_person=many.work_person, desk_is_mine=many.desk_is_mine, is_mine=many.is_mine)
+    ck("a caller with no person is not cut; the system credential is cut to the person it acts for",
+       t.own_stations(anon, None, stations) is stations
+       and t.own_stations(system, None, stations) == [stations[0]])
     ck("register_routes does nothing and mcp_tools is []",
        t.register_routes(None, None) is None and t.mcp_tools() == [])
 
@@ -338,8 +359,19 @@ def no_import():
                     if re.match(r"\s*(import|from)\s+tares_ee\b", line):
                         bad.append(f"{os.path.relpath(p, ROOT)}:{i}")
     ck("no file under tares/ imports tares_ee", not bad, bad)
-    ck("FALLBACKS is empty in the shipped module",
-       open(os.path.join(ROOT, "tares", "team.py"), encoding="utf-8").read().count("FALLBACKS: list[tuple[str, str, str]] = []") == 1)
+    import ast   # the live list is emptied by the cases, so read the shipped one from the source
+    tree = ast.parse(open(os.path.join(ROOT, "tares", "team.py"), encoding="utf-8").read())
+    rows = [sorted((e.elts[0].value, e.elts[1].value) for e in n.value.elts) for n in tree.body
+            if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "FALLBACKS"]
+    ck("FALLBACKS in the shipped module holds the four area routes, the three project access routes, the two grant consent routes, the three question routes and nothing else",
+       rows == [[("DELETE", "/api/areas/{owner}/{name}"), ("DELETE", "/api/projects/{uid}/members/{person_id}"),
+                 ("GET", "/api/areas"), ("GET", "/api/projects/{uid}/questions"), ("PATCH", "/api/projects/{uid}"),
+                 ("POST", "/api/grants/{gid}/consent"), ("POST", "/api/grants/{gid}/decline"),
+                 ("POST", "/api/projects/{uid}/members"),
+                 ("POST", "/api/projects/{uid}/questions"),
+                 ("POST", "/api/projects/{uid}/questions/{qid}/answer"),
+                 ("PUT", "/api/areas"), ("PUT", "/api/areas/{owner}/{name}")]], str(rows))
+    ck("FALLBACKS has twelve rows", len(rows[0]) == 12 if rows else False, str(rows))
 
 
 def case(name):

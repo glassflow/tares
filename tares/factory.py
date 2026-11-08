@@ -181,6 +181,25 @@ def repo_ok(repo) -> str | None:
     return r
 
 
+_NORM_REPO = re.compile(r"^[a-z0-9][a-z0-9._-]*/[a-z0-9._-]+$")
+# a pasted GitHub address: https://github.com/o/n(.git)(/...), github.com/o/n, git@github.com:o/n.git
+_NORM_GITHUB = re.compile(r"^(?:(?:https?://)?(?:www\.)?github\.com/|git@github\.com:)([^/]+)/([^/?#]+)")
+
+
+def norm_repo(repo) -> str:
+    """The repo as stored and matched: trimmed and lowercase, a pasted GitHub address turned
+    into `owner/name`. ValueError unless it comes out as `owner/name`. Grants, sign-offs and
+    the area owners (ee) all match repos this way."""
+    r = str(repo or "").strip().lower()
+    m = _NORM_GITHUB.match(r)
+    if m:
+        name = m.group(2)
+        r = f"{m.group(1)}/{name[:-4] if name.endswith('.git') else name}"
+    if not _NORM_REPO.match(r):
+        raise ValueError(f"{repo!r} is not a repo: write it as owner/name, like glassflow/tares")
+    return r
+
+
 def handover_repos(repos) -> list[dict]:
     """The repos a project is handed over with, each {path, name}: the folder it is checked out
     in on the crew's machine and its GitHub name (owner/name, may be empty). Takes strings (a

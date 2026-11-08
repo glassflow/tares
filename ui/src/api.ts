@@ -7,7 +7,7 @@ import type {
   GithubAppTest, GithubCredential,
   LabelFacet, ModelUsage, QueryLogEntry,
   McpServer, Plan, ProjectSetup, Resources, SetupConnect, SetupProblem, SetupStep, Template, Project, ProjectObjectKind, ProjectSummary, ProjectUpdateReport,
-  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults, ProjectScope,
+  ProjectHealth, ProjectOutline, ProjectResultDetail, ProjectResults,
   Skill, SkillSummary,
   Area, Assumption, ClaudeCodeUsage, CrewSettingField, CrewSettingsView, GrantKind, Grant, GrantsView, PersonalDoc, PersonalDocs, CrewMessage, CrewPace, CrewProject, CrewGroup, CrewSettings, CrewStation, Decision, DeskAllowed, DeskReplyBody, DeskReplied, ProjectFinished, ProjectRepo, StationDetail, DeskItem, Doc, QueueItem, RuleProposal, DocKind, DocSummary, GitHubLink, Handover, SpecQuestion, LinearLink, LinearStatus, Milestone,
   ProjectSession, Ticket, TicketStatus,
@@ -15,6 +15,7 @@ import type {
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
 } from "./types";
 import type { TimelineThread } from "./components/ProjectActivity";
+import { ENTERPRISE_URL, licenceSentence } from "./components/LicenceNeeded";
 
 const TOKEN_KEY = "tares_token";
 export const auth = {
@@ -148,6 +149,18 @@ export class ApiError extends Error {
   }
 }
 
+/** The cell answered a team action with 402 `licence_required`: the action needs an enterprise
+ *  licence. `message` is the plain sentence and `url` the page that explains it. Show it with
+ *  `<LicenceNeeded>`, never as an error. */
+export class LicenceRequired extends ApiError {
+  url: string;
+  constructor(message: string, status = 402, url: string = ENTERPRISE_URL) {
+    super(message, status); this.url = url;
+  }
+}
+
+export const isLicenceRequired = (e: unknown): e is LicenceRequired => e instanceof LicenceRequired;
+
 function unauthorized() {
   auth.clear();
   window.dispatchEvent(new Event("tares-auth-required"));
@@ -170,8 +183,17 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let detail = res.statusText;
     try {
       const body = await res.json();
+      // the licence answer keeps its keys at the top level of the body, not under `detail`
+      if (body && typeof body === "object" && body.code === "licence_required") {
+        throw new LicenceRequired(
+          typeof body.message === "string" && body.message ? body.message : licenceSentence(),
+          402,
+          typeof body.url === "string" && body.url ? body.url : ENTERPRISE_URL,
+        );
+      }
       detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
-    } catch {
+    } catch (e) {
+      if (isLicenceRequired(e)) throw e;
       /* non-JSON error body */
     }
     const wait = Number(res.headers.get("Retry-After"));
@@ -188,6 +210,13 @@ export function ownerName(repo: string): string {
   if (r.split("/").length !== 2) throw new Error(`${repo.trim()} is not a repo: write it as owner/name, like glassflow/tares`);
   return r;
 }
+
+/** What GET /api/licence answers (TR-912). Never the key text. `ee_allowed` is the cell's own answer. */
+export type LicenceState = {
+  valid: boolean; source: "env" | "settings" | "none"; kid: string | null; org: string | null;
+  seats: number | null; used: number; features: string[]; expires: string | null; days_left: number | null;
+  expired: boolean; over_seats: boolean; ee_allowed: boolean; reason: string | null; stored: boolean; env_set: boolean;
+};
 
 export const api = {
   // login_url is present only on a cloud-managed cell (daemon TARES_LOGIN_URL) — it tells the
@@ -248,6 +277,10 @@ export const api = {
     request<ApiKey>(`/api/keys/${id}/person`, { method: "PUT", body: JSON.stringify({ person_id: personId }) }),
   revokeKey: (id: string) => request<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
   whoami: () => request<Whoami>("/api/whoami"),
+  licence: () => request<LicenceState>("/api/licence"),
+  setLicence: (key: string) =>
+    request<LicenceState & { env_in_use?: boolean }>("/api/licence", { method: "PUT", body: JSON.stringify({ key }) }),
+  deleteLicence: () => request<{ ok?: boolean }>("/api/licence", { method: "DELETE" }),
   people: () => request<{ people: Person[] }>("/api/people"),
   createPerson: (body: { name: string; email?: string; github?: string; is_admin?: boolean }) =>
     request<Person>("/api/people", { method: "POST", body: JSON.stringify(body) }),
@@ -528,16 +561,6 @@ export const api = {
       { method: "POST", body: JSON.stringify({ handled }) }),
   projectHealth: (id: string) =>
     request<ProjectHealth>(`/api/projects/${encodeURIComponent(id)}/health`),
-  // Who leads a project and who can see it. The lead changes both; an admin changes the lead only.
-  setProjectAccess: (id: string, body: { lead_person_id?: string; scope?: ProjectScope }) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
-  // Members: the lead only. Each answers with the project.
-  addProjectMember: (id: string, personId: string) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}/members`,
-      { method: "POST", body: JSON.stringify({ person_id: personId }) }),
-  removeProjectMember: (id: string, personId: string) =>
-    request<Project>(`/api/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(personId)}`,
-      { method: "DELETE" }),
   // Triggers, agents and MCP servers always go with the project. `deleteSources`: which of its
   // sources to delete too; one another project still uses is kept (and reported) either way.
   deleteProject: (id: string, purgeEvents = false, deleteSources: string[] = []) =>
@@ -636,16 +659,9 @@ export const api = {
     request<{ messages: CrewMessage[] }>(
       `/api/projects/${encodeURIComponent(id)}/tickets/${encodeURIComponent(ref)}/messages`),
   areas: () => request<Area[]>("/api/areas"),
-  setArea: (repo: string, personId: string, note?: string) =>
-    request<Area>(`/api/areas/${ownerName(repo).split("/").map(encodeURIComponent).join("/")}`,
-      { method: "PUT", body: JSON.stringify({ person_id: personId, ...(note !== undefined ? { note } : {}) }) }),
-  deleteArea: (repo: string) =>
-    request<{ ok: boolean }>(`/api/areas/${repo.split("/").map(encodeURIComponent).join("/")}`, { method: "DELETE" }),
   grants: (project: string) => request<GrantsView>(`/api/grants?project=${encodeURIComponent(project)}`),
   addGrant: (body: { kind: GrantKind; project: string; words: string; areas: string[] }) =>
     request<{ added: boolean; grant: Grant }>("/api/grants", { method: "POST", body: JSON.stringify(body) }),
-  consentGrant: (id: string) =>
-    request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/consent`, { method: "POST" }),
   declineGrant: (id: string, reason?: string) =>
     request<{ grant: Grant }>(`/api/grants/${encodeURIComponent(id)}/decline`,
       { method: "POST", body: JSON.stringify(reason ? { reason } : {}) }),
@@ -680,8 +696,6 @@ export const api = {
   projectCrew: (id: string) =>
     request<{ stations: CrewStation[]; handover: Handover | null; now: string }>(
       `/api/projects/${encodeURIComponent(id)}/crew`),
-  projectQuestions: (id: string) =>
-    request<{ questions: SpecQuestion[] }>(`/api/projects/${encodeURIComponent(id)}/questions`),
   answerQuestion: (id: string, qid: string, answer: string) =>
     request<SpecQuestion>(`/api/projects/${encodeURIComponent(id)}/questions/${encodeURIComponent(qid)}/answer`,
       { method: "POST", body: JSON.stringify({ answer }) }),

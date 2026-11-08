@@ -1,4 +1,5 @@
 import { SETTINGS, VLink, sameView, sourceState, viewParam, type Ctx, type View } from "./common";
+import { useEeLoaded } from "../../eeSlots";
 import { handedBy } from "../../pages/AgentDetail";
 
 // The full setup's navigation: back to the project's Overview, the views that are always there
@@ -61,7 +62,9 @@ export default function ProjectNav({ ctx }: { ctx: Ctx }) {
     { v: { kind: "grants" }, label: "Grants" },
     { v: { kind: "claude" }, label: "Claude Code" },
   ];
-  const settings: Entry[] = SETTINGS.map(([k, label]) => ({ v: { kind: "settings", name: k }, label }));
+  const eeLoaded = useEeLoaded();
+  // Members is an enterprise page: no entry without it
+  const settings: Entry[] = SETTINGS.filter(([k]) => k !== "members" || eeLoaded).map(([k, label]) => ({ v: { kind: "settings", name: k }, label }));
   const cur = ctx.view;
   const on = (v: View) => sameView(v, cur);
 

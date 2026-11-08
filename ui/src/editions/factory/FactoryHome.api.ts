@@ -53,27 +53,6 @@ export function deskReply(ref: string, words: string, standing: boolean, choice?
   });
 }
 
-/** The person answers a question a project's spec asked them. */
-export function answerQuestion(project: string, question: string, answer: string): Promise<unknown> {
-  return request(`/api/projects/${enc(project)}/questions/${enc(question)}/answer`, {
-    method: "POST",
-    body: JSON.stringify({ answer }),
-  });
-}
-
-/** Agree to a grant that waits for the person. */
-export function consentGrant(grant: string): Promise<unknown> {
-  return request(`/api/grants/${enc(grant)}/consent`, { method: "POST", body: JSON.stringify({}) });
-}
-
-/** Decline a grant that waits for the person, with a reason when they give one. */
-export function declineGrant(grant: string, reason: string): Promise<unknown> {
-  return request(`/api/grants/${enc(grant)}/decline`, {
-    method: "POST",
-    body: JSON.stringify(reason ? { reason } : {}),
-  });
-}
-
 /** Keep a project for later, off the home until someone starts it, or start it again. */
 export function keepForLater(project: string, later = true): Promise<unknown> {
   return request(`/api/projects/${enc(project)}/later`, {

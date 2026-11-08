@@ -86,7 +86,7 @@ async function waitFor(url, tries = 150) {
     const incApi = (k) => `${LIST}/${ids[k]}`;
     const sampleReads = (page) => {
       const reads = [];
-      page.on("request", (r) => { const p = new URL(r.url()).pathname; if (r.method() === "GET" && p.startsWith("/api/") && p !== "/api/whoami") reads.push(p); });
+      page.on("request", (r) => { const p = new URL(r.url()).pathname; if (r.method() === "GET" && p.startsWith("/api/") && p !== "/api/whoami" && p !== "/api/licence") reads.push(p); });
       return reads;
     };
     // an incident page, loaded by its one read, then waited on until the status shows

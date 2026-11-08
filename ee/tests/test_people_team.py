@@ -42,7 +42,7 @@ def start(db, port):
         if os.path.exists(p):
             os.remove(p)
     env = {**clean_env(), "TARES_DB": db, "TARES_PORT": port, "TARES_OTLP_GRPC_PORT": "off",
-           "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence()}
+           "TARES_AUTH_TOKEN": AUTH, "TARES_LICENSE": licensed.test_licence(seats=50)}
     return subprocess.Popen(licensed.daemon_argv(), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 

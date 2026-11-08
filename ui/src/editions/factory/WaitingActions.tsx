@@ -1,13 +1,12 @@
 import * as React from "react";
 
-import { Button, Checkbox, Dialog, Textarea } from "../../components/edition";
+import { Button, Checkbox, Textarea } from "../../components/edition";
 import type { HomeAction, HomeItem } from "./home.types";
 
-// The panels and dialogs behind Answer and Decline on the team home. Each is told what
-// to show and calls back; the page (FactoryHome.tsx) makes the call and shows a refusal under the row.
+// The panel behind Answer on the home. It is told what to show and calls back; the page
+// (FactoryHome.tsx) makes the call and shows a refusal under the row.
 
 const ANSWER_MAX = 4000;
-const REASON_MAX = 1000;
 
 /** The words a person gives an answer, the option they picked (if they clicked one), and whether it stands for next time. */
 export interface AnswerGiven { words: string; choice?: string; standing: boolean }
@@ -59,29 +58,5 @@ export function AnswerPanel({ item, action, busy, onSend, onCancel }: {
         </div>
       </div>
     </div>
-  );
-}
-
-/** Decline: an optional reason the giver can read. */
-export function DeclineDialog({ item, busy, error, onClose, onConfirm }: {
-  item: HomeItem; busy: boolean; error: string | null; onClose: () => void; onConfirm: (reason: string) => void;
-}) {
-  const [text, setText] = React.useState("");
-  return (
-    <Dialog open onOpenChange={(o) => { if (!o && !busy) onClose(); }} data-testid="decline-dialog"
-      title="Decline this grant?" description="It ends as a revoked one, and the person who gave it can see that you said no."
-      footer={(
-        <>
-          <Button variant="secondary" disabled={busy} onClick={onClose}>Cancel</Button>
-          <Button busy={busy} onClick={() => onConfirm(text.trim())} data-testid="decline-confirm">Decline</Button>
-        </>
-      )}>
-      <div className="flex min-w-0 flex-col gap-3">
-        <p className="m-0 text-sm [overflow-wrap:anywhere]" data-user-text>{item.title}</p>
-        <Textarea label="Why (optional)" rows={3} value={text} disabled={busy} maxLength={REASON_MAX} data-testid="decline-reason"
-          onChange={(e) => setText(e.target.value)} />
-        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
-      </div>
-    </Dialog>
   );
 }

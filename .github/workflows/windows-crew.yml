@@ -1,0 +1,59 @@
+# The crew tests and the parity harness on Windows, from the first milestone (TR-1066), so a Windows
+# break shows up in the PR that causes it. Advisory for now: continue-on-error keeps a red run from
+# blocking a merge, and the job name says so. Its own workflow, so ci.yml (and the required checks) stay as they are.
+# The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py and parity.py, and fails if it ran no test.
+name: windows-crew
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-crew-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  windows-crew:
+    name: windows-crew (not required yet)
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      # A person's profile folder can hold a space and a letter outside ASCII (C:\Users\Jane Do + e-acute). HOME, USERPROFILE
+      # and the temp folders point at one for every step after this, so a path that breaks on either breaks here.
+      # The e-acute is built from its code point so this file stays ASCII.
+      - name: Profile folder with a space and a non-ASCII letter
+        shell: pwsh
+        run: |
+          $dir = 'C:\Users\runneradmin\Jane Do' + [char]0xE9
+          New-Item -ItemType Directory -Force -Path $dir, "$dir\tmp" | Out-Null
+          "USERPROFILE=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "HOME=$dir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TEMP=$dir\tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "TMP=$dir\tmp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "profile folder: $dir"
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: Install
+        shell: pwsh
+        run: |
+          # The package forces ui/dist into the wheel and fails without it. The crew engine never serves the console, so an empty folder is enough here.
+          New-Item -ItemType Directory -Force -Path ui\dist | Out-Null
+          uv venv
+          uv pip install -e .
+      - name: Crew tests and parity
+        shell: pwsh
+        run: |
+          .venv\Scripts\activate.ps1
+          python tests/ci_windows.py

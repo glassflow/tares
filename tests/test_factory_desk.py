@@ -507,6 +507,25 @@ async def main():
         out = json.loads(await mf.desk_answer(dh, typed))
         ck("a line whose origin is human still answers", out["recorded"], out)
 
+        print("== a standing answer for words that sit waiting (TR-922) ==")
+        # a grant left waiting for someone's consent: with no ee team nobody can agree to it, and the
+        # same words answered again do not make it take effect
+        said = "You may always run the linter on Shop"
+        dg = json.loads(await mf.desk_add("Linter runs?", "yes, standing", "cheap", project="Shop"))["label"]
+        await ingest([{"type": "user", "sessionId": "o1", "cwd": "/w", "timestamp": now_plus(12),
+                       "origin": {"kind": "human"}, "message": {"role": "user", "content": said}}])
+        left = app.state.store.add_grant_row("project", said, project=shop, given_by="local",
+                                             state="waiting", needs_lead=True)
+        out = json.loads(await mf.desk_answer(dg, said, standing=True))
+        row = app.state.store.get_grant_row(left["id"])
+        ck("the answer is recorded, but it did not make a grant", out["recorded"] and not out["became_a_grant"], out)
+        async with mk() as cx:
+            d = (await cx.get("/api/grants", params={"project": shop})).json()
+        ck("the waiting grant is still waiting, not in effect, and not in the project's grants doc",
+           row["state"] == "waiting" and "linter" not in d["project"]
+           and all(not g["in_effect"] for g in d["grants"] if g["id"] == left["id"]), (row, d["project"]))
+
+
 
 unit()
 asyncio.run(main())

@@ -7,7 +7,7 @@ set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
 T=$(mktemp -d)
-mkdir -p "$T/kit-under-test"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="$T/kit-under-test/bin/factory"
+mkdir -p "$T/kit-under-test"; cp -R "$here/../../claude-plugin/." "$T/kit-under-test/"; F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$T/kit-under-test/bin/factory}"; [ -z "${FACTORY_BIN:-}" ] || export TARES_PLUGIN_DIR="$T/kit-under-test"
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 unset TARES_URL TARES_AUTH_TOKEN TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE FACTORY_REPO FACTORY_WORKTREES CLAUDE_JOB_DIR TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_MCP_HOST TARES_MCP_PORT
@@ -230,22 +230,39 @@ check "readable again: the next round revives it" '[ $(( $(launches) - before ))
 
 # One command at a time starts or stops a station. A restart and the watch's revive once both found the
 # same station down and both started it: two live sessions under one name.
-lock="$FACTORY_CREW_HOME/stations/crew-reviewer.lock"
-sleep 60 & holder=$!
-mkdir "$lock"; echo "$holder" > "$lock/pid"
+# The holder is a real command, mid-launch (the fake keeps registering the session until the suite removes the
+# hold file, however slow the machine), so the check reads what the commands do and not how the engine keeps its lock.
+killtree() { local kids k; kids=$(pgrep -P "$1" 2>/dev/null); kill -9 "$1" 2>/dev/null; for k in $kids; do killtree "$k"; done; }
+await_launches() { local _; for _ in $(seq 100); do [ $(( $(launches) - $1 )) -ge "$2" ] && return 0; sleep 0.1; done; return 1; }
 stopped crew-reviewer; before=$(launches)
+hold="$T/bg-hold"; : > "$hold"
+FAKE_CLAUDE_BG_HOLD="$hold" "$F" revive crew-reviewer >"$T/lock-holder.out" 2>&1 &
+holder=$!
+await_launches "$before" 1; held=$?
 "$F" revive crew-reviewer >"$T/lock.out" 2>&1
-check "revive leaves a station another command is starting alone" '[ "$(launches)" = "$before" ] && grep -q "another factory command (pid $holder)" "$T/lock.out"'
+check "revive leaves a station another command is starting alone" '[ $held = 0 ] && [ $(( $(launches) - before )) = 1 ] && grep -q "another factory command" "$T/lock.out"'
 "$F" crew watch --once >/dev/null 2>&1
-check "so does the watch" '[ "$(launches)" = "$before" ]'
-kill "$holder"; wait "$holder" 2>/dev/null
-"$F" crew watch --once >/dev/null 2>&1
-check "a lock left by a command that is gone is taken over, and released" '[ $(( $(launches) - before )) = 1 ] && [ ! -e "$lock" ]'
-sh -c 'exit 0' & dead=$!; wait "$dead"
-mkdir "$lock" "$lock.takeover"; echo "$dead" > "$lock/pid"
+check "so does the watch" '[ $held = 0 ] && [ $(( $(launches) - before )) = 1 ]'
+rm -f "$hold"; wait "$holder"
+check "the command that held the station started it, once" '[ $(( $(launches) - before )) = 1 ] && grep -q "started crew-reviewer" "$T/lock-holder.out"'
 stopped crew-reviewer; before=$(launches)
-"$F" revive crew-reviewer >/dev/null 2>&1
-check "so is one whose takeover was cut off by a kill" '[ $(( $(launches) - before )) = 1 ] && [ ! -e "$lock" ] && [ ! -e "$lock.takeover" ]'
+FAKE_CLAUDE_BG_DELAY=60 "$F" revive crew-reviewer >/dev/null 2>&1 &
+holder=$!
+await_launches "$before" 1
+killtree "$holder"; wait "$holder" 2>/dev/null
+"$F" crew watch --once >/dev/null 2>&1
+check "a command killed while it held a station does not block the next one" '[ $(( $(launches) - before )) = 2 ]'
+stopped crew-reviewer; before=$(launches)
+"$F" revive crew-reviewer >"$T/lock2.out" 2>&1
+check "and the station is free again afterwards" '[ $(( $(launches) - before )) = 1 ] && ! grep -q "another factory command" "$T/lock2.out"'
+if [ -z "${FACTORY_BIN:-}" ]; then # the bash engine keeps its lock as a folder; this is its own clean-up of one left half-cleared
+  lock="$FACTORY_CREW_HOME/stations/crew-reviewer.lock"
+  sh -c 'exit 0' & dead=$!; wait "$dead"
+  mkdir "$lock" "$lock.takeover"; echo "$dead" > "$lock/pid"
+  stopped crew-reviewer; before=$(launches)
+  "$F" revive crew-reviewer >/dev/null 2>&1
+  check "so is one whose takeover was cut off by a kill" '[ $(( $(launches) - before )) = 1 ] && [ ! -e "$lock" ] && [ ! -e "$lock.takeover" ]'
+fi
 s0=$(stops); before=$(launches)
 FAKE_CLAUDE_BG_DELAY=3 FACTORY_STOP_WAIT=2 "$F" restart crew-reviewer >"$T/race-restart.out" 2>&1 &
 racer=$!
@@ -259,7 +276,8 @@ s0=$(stops)
 FAKE_CLAUDE_STOP_DELAY=2 FACTORY_STOP_WAIT=4 "$F" restart crew-reviewer >/dev/null 2>&1 &
 racer=$!
 for _ in $(seq 100); do [ "$(stops)" != "$s0" ] && break; sleep 0.1; done
-check "restart holds the lock while it stops the station" '[ -d "$lock" ] && kill -0 "$(cat "$lock/pid")" 2>/dev/null'
+"$F" restart crew-reviewer >"$T/hold.out" 2>&1 || true
+check "restart holds the station while it stops it" 'grep -q "another factory command" "$T/hold.out"'
 wait "$racer"
 # A dead station reads as gone, so the orchestrator's roster check revives it even with no watch running.
 agent_gone() { local tmp; tmp=$(mktemp); jq --arg id "$(st "$1" .id)" 'map(if .id == $id then .state = "done" | del(.pid) else . end)' "$FAKE_CLAUDE_STATE/agents.json" > "$tmp" && mv "$tmp" "$FAKE_CLAUDE_STATE/agents.json"; }

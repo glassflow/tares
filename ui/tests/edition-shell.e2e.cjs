@@ -116,7 +116,7 @@ async function waitFor(url, tries = 150) {
     // until the account menu opens, and then reads the version once.
     const trackReads = (page) => {
       const gets = [];
-      page.on("request", (r) => { if (r.method() === "GET") { const p = new URL(r.url()).pathname; if (p.startsWith("/api/") && p !== "/api/whoami") gets.push(p); } });
+      page.on("request", (r) => { if (r.method() === "GET") { const p = new URL(r.url()).pathname; if (p.startsWith("/api/") && p !== "/api/whoami" && p !== "/api/licence") gets.push(p); } });
       return gets;
     };
 

@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from .connectors.github import _normalize_repo
-from . import ticket_assignee
+from . import team as team_mod
 from .envelope import Envelope, now_utc
 
 API_URL = "https://api.github.com/graphql"
@@ -245,19 +245,23 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         raise GitHubTicketsError(err)
     ms_ids = _sync_milestones(store, uid, milestones, issues)
     seen, out = set(), []
+    team = team_mod.get()
     for iss in issues:
         seen.add(iss["id"])
         status = status_of(iss)
         pos = float(iss["number"])
         ident = identifier_of(iss)
         ms = ms_ids.get((iss.get("milestone") or {}).get("id") or "")
-        who, raw = ticket_assignee.from_github(store, iss)
+        mapped = team.assignee_from_github(store, iss)   # None: assignees are not synced
         cur = have.get(iss["id"])
         if cur is None:
+            who = {} if mapped is None else {"assignee_person_id": mapped[0],
+                                             "assignee_raw": mapped[1]}
             store.create_ticket(uid, "github", iss.get("title") or ident, status, pos,
                                 external_id=iss["id"], identifier=ident, url=iss.get("url"),
-                                milestone=ms, assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.sync_join(store, project, who, status)
+                                milestone=ms, **who)
+            if mapped is not None:
+                team.assignee_sync_join(store, project, mapped[0], status)
             out.append(_env(project, link, iss, "created",
                             f"{ident} added in GitHub: {iss.get('title')}", {"status": status}))
             continue
@@ -280,9 +284,9 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             changes.update(identifier=ident, url=iss.get("url"))
         if cur["milestone"] != ms:
             changes["milestone"] = ms
-        if (cur["assignee_person_id"], cur["assignee_raw"]) != (who, raw):
-            changes.update(assignee_person_id=who, assignee_raw=raw)
-            ticket_assignee.sync_join(store, project, who, status)
+        if mapped is not None and (cur["assignee_person_id"], cur["assignee_raw"]) != mapped:
+            changes.update(assignee_person_id=mapped[0], assignee_raw=mapped[1])
+            team.assignee_sync_join(store, project, mapped[0], status)
         if changes:
             store.update_ticket(cur["id"], why=f"GitHub shows the issue {status.replace('_', ' ')}",
                                 **changes)

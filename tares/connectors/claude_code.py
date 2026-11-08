@@ -19,6 +19,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from .. import team as team_mod
 from ..envelope import Envelope, now_utc
 from .base import Connector
 
@@ -167,9 +168,11 @@ class ClaudeCodeConnector(Connector):
         at = self._ts(o)
         # the crew (TR-628): this recording's person, the crew's name and the machine; a line
         # with no person (the system credential) joins the crew of `local`
-        crew_id = self.store.resolve_crew(
+        # (without an enterprise licence the team drops the machine: one crew per name)
+        crew_name, machine = team_mod.get().resolve_crew(
             str(o.get("factory_crew") or o.get("crew") or ""), self.person_id,
-            str(o.get("factory_machine") or o.get("machine") or ""), at)
+            str(o.get("factory_machine") or o.get("machine") or ""))
+        crew_id = self.store.resolve_crew(crew_name, self.person_id, machine, at)
         self.store.set_session_station(sid, name, role, parent, p["id"] if p else None, at,
                                        crew_id)
 

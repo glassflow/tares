@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import re
 
-from . import areas as areas_mod
 from .mcp_server import TARESD, _caller, _cx, _person_in, _default_project, _out, _project_id, mcp, writable
 
 
@@ -514,7 +513,8 @@ def _grant_line(g: dict) -> str:
     day = str(g.get("given_at") or "")[:10]
     text = f'- [{g["id"]}, {g["kind"]}, {where}] "{g["words"]}" ({day})'
     if g["state"] == "waiting":
-        text += ", waiting for " + ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+        names = ", ".join(w["name"] or w["id"] for w in g["waiting_for"])
+        text += f", waiting for {names}" if names else ", waiting and not in effect"
     elif (g.get("given_by") or {}).get("name"):
         text += f", given by {g['given_by']['name']}"
     return text
@@ -576,9 +576,10 @@ async def add_grant(words: str, kind: str = "", project: str = "",
     old name), `project` (this project only, name it in `project`) or `personal` (what may run on
     the person's own machine, for the key's own person). Without `kind`, a `project` makes it a
     project grant and no project a team grant. `areas` lists the GitHub repos (owner/name) a
-    project grant reaches into: it waits, not in effect, until each repo's area owner (other than
-    the giver) calls consent_grant. A project grant from someone who is neither the project's
-    lead nor an admin also waits for the lead (an admin, when the project has none). `scope` is
+    project grant reaches into, and needs an enterprise licence: the grant then waits, not in
+    effect, until each repo's area owner (other than the giver) calls consent_grant. A project
+    grant from someone who is neither the project's lead nor an admin also waits for the lead (an
+    admin, when the project has none). Without a licence a grant takes effect at once. `scope` is
     the older name of `kind`. Only the person's own session or the orchestrator, relaying the
     person verbatim, may add one."""
     body = {"words": words, "kind": kind or scope, "project": project, "areas": areas or [],
@@ -586,101 +587,6 @@ async def add_grant(words: str, kind: str = "", project: str = "",
     async with _cx(10) as cx:
         r = await cx.post(f"{TARESD}/api/grants", json=body)
     return _out(r, ("line", "added", "grant"))
-
-
-@writable()
-async def consent_grant(id: str) -> str:
-    """Say yes, as the owner of a repo a project grant names or as the project's lead (an admin,
-    when it has none), to grant `id` (like `G7`). `read_grants` lists the ones waiting for you.
-    Only a person it waits for can; the grant is in effect once all of them have. Never call it
-    for someone else: the answer is their own."""
-    async with _cx(10) as cx:
-        r = await cx.post(f"{TARESD}/api/grants/{id.strip()}/consent")
-    return _out(r)
-
-
-@mcp.tool()
-async def list_areas() -> str:
-    """Who owns which GitHub repo on this Tares: [{repo, person: {id, name}, note}]. A repo is
-    `owner/name`; matching ignores case."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/areas")
-    return _out(r)
-
-
-@writable()
-async def set_area(repo: str, person: str) -> str:
-    """Say who owns a GitHub repo (`owner/name`). `person` is their id or email (list_people
-    shows them). An admin may set or change any repo; anyone else may only claim a repo nobody
-    owns yet, for themselves."""
-    async with _cx(10) as cx:
-        r = await cx.get(f"{TARESD}/api/people")
-        if r.status_code >= 400:
-            return _out(r)
-        p = _person_in(r.json().get("people") or [], person)
-        if p is None:
-            return f"no person {person!r}; list_people shows the ones there are"
-        try:
-            repo = areas_mod.norm_repo(repo.strip().strip("/"))
-        except ValueError as e:
-            return str(e)
-        owner, name = repo.split("/")
-        r = await cx.put(f"{TARESD}/api/areas/{owner}/{name}", json={"person_id": p["id"]})
-    return _out(r)
-
-
-# ── asking an area owner while the spec is written (TR-636) ─────────────────
-
-def _question_line(q: dict) -> dict:
-    return {"id": q.get("id"), "repo": q.get("repo"), "text": q.get("text"), "state": q.get("state"),
-            "to": (q.get("to_person") or {}).get("name"),
-            "asked_by": (q.get("asked_by_person") or {}).get("name"), "asked_at": q.get("asked_at"),
-            "answer": q.get("answer"), "answered_at": q.get("answered_at")}
-
-
-@writable()
-async def ask_area(repo: str, text: str, project: str = "") -> str:
-    """Ask the owner of a repo (`owner/name`) a question while the spec is written: the person
-    set with set_area. It lands in their my_work as a spec question until they answer it; ask it
-    here and tell the person you did, then carry on with what does not depend on the answer.
-    Refused with 'has no area owner; set one with set_area' when nobody owns the repo."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions", json={"repo": repo, "text": text})
-    if r.status_code >= 400:
-        return _out(r)
-    return json.dumps(_question_line(r.json()), default=str)
-
-
-@writable()
-async def answer_question(id: str, answer: str, project: str = "") -> str:
-    """Answer a question a spec asked you as the owner of a repo (Q1, Q2... as my_work lists
-    them). Only the person it is addressed to may answer."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/questions/{id}/answer",
-                          json={"answer": answer})
-    if r.status_code >= 400:
-        return _out(r)
-    return json.dumps(_question_line(r.json()), default=str)
-
-
-@mcp.tool()
-async def list_questions(state: str = "", project: str = "") -> str:
-    """The questions a spec asked area owners, oldest first, with the answers. `state` is open
-    or answered; empty lists both."""
-    async with _cx(10) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        r = await cx.get(f"{TARESD}/api/projects/{uid}/questions", params={"state": state})
-    if r.status_code >= 400:
-        return _out(r)
-    return json.dumps([_question_line(q) for q in r.json().get("questions") or []], default=str)
 
 
 def _station_line(s: dict) -> dict:
@@ -794,7 +700,8 @@ async def my_work(crew: str = "", project: str = "") -> str:
     (their tickets a station holds, with the holder and stage), `led_projects` (projects they
     lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
     `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
-    spec asked them as the owner of a repo: answer each with answer_question). `crew`
+    spec asked them as the owner of a repo, always empty without an enterprise licence: answer each
+    with answer_question). `crew`
     names your crew; empty means the crew this session belongs to. The orchestrator of a crew works from this, so it starts
     only its own person's tickets. `project` (a name or an id) keeps `spec_questions` to that
     project: question numbers restart in each project, so name it when you work on one. Empty

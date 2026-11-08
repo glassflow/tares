@@ -286,13 +286,48 @@ def _logout(args: argparse.Namespace):
 
 def plugin_dir() -> Path:
     """The Claude Code plugin for Tares: inside the installed package, or claude-plugin/ in a
-    checkout (an editable install)."""
+    checkout (an editable install). TARES_PLUGIN_DIR, when set, names the plugin to use instead: a
+    test hook, so a suite that edits a copy of the plugin has `tares factory` read that copy."""
+    override = os.environ.get("TARES_PLUGIN_DIR")
+    if override:
+        d = Path(override)
+        if not (d / "bin" / "factory").is_file():
+            raise SystemExit(f"tares: TARES_PLUGIN_DIR ({override}) has no bin/factory")
+        return d
     here = Path(__file__).resolve().parent
     for d in (here / "claude-plugin", here.parent / "claude-plugin"):
         if (d / "bin" / "factory").is_file():
             return d
     raise SystemExit("tares: the Claude Code plugin is missing from this install "
                      f"(looked in {here / 'claude-plugin'} and {here.parent / 'claude-plugin'})")
+
+
+HOOKS = ("compat",)
+
+
+def _hook(argv: list[str]):
+    """`tares hook <name>`: small checks the Claude Code plugin's hooks call. `compat` prints one line
+    when the installed tares is older than the plugin's min_tares, else nothing; it exits 0 either way.
+    Needs only the standard library (no daemon, no database), so a hook can call it at every start."""
+    p = argparse.ArgumentParser(prog="tares hook", description="Checks the Claude Code plugin's hooks call.")
+    p.add_argument("name", help="the check to run: " + ", ".join(HOOKS))
+    p.add_argument("--plugin-root", default="",
+                   help="the plugin's folder (default $CLAUDE_PLUGIN_ROOT, which Claude Code sets for its hooks)")
+    args = p.parse_args(argv)
+    if args.name not in HOOKS:
+        print(f"tares hook: unknown hook {args.name!r} (known: {', '.join(HOOKS)})", file=sys.stderr)
+        raise SystemExit(2)
+    root = args.plugin_root or os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    line = ""
+    if root:
+        try:
+            from .crew.version import check_plugin_compat
+            line = check_plugin_compat(root)
+        except Exception:
+            line = ""
+    if line:
+        print(line)
+    raise SystemExit(0)
 
 
 def _factory(argv: list[str]):
@@ -335,7 +370,8 @@ def _factory(argv: list[str]):
         claude = env.get("CLAUDE_BIN") or shutil.which("claude", path=env.get("PATH")) or "claude"
         if not setup(env["TARES_FACTORY_URL"].rstrip("/"), env.get("TARES_AUTH_TOKEN", ""), home, claude):
             raise SystemExit(1)
-    os.execve("/bin/bash", ["bash", str(script), *argv], env)
+    from .crew.dispatch import run
+    run(argv, env, script)
 
 
 def main():
@@ -343,6 +379,8 @@ def main():
     reject_legacy_env()
     if len(sys.argv) > 1 and sys.argv[1] == "factory":
         _factory(sys.argv[2:])
+    if len(sys.argv) > 1 and sys.argv[1] == "hook":
+        _hook(sys.argv[2:])
     p = argparse.ArgumentParser(prog="tares", description="Tares; a data plane for AI agents.")
     p.add_argument("--version", action="version", version=f"tares {_pkg_version()}")
     sub = p.add_subparsers(dest="cmd")
@@ -383,6 +421,8 @@ def main():
 
     sub.add_parser("factory", help="the tares-factory crew of Claude Code sessions: "
                                    "`tares factory help` lists its commands")
+
+    sub.add_parser("hook", help="checks the Claude Code plugin's hooks call: `tares hook compat`")
 
     li = sub.add_parser("login", help="connect this machine to one of your Tares Cloud workspaces "
                                       "(opens your browser)")

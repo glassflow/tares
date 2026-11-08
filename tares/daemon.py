@@ -64,7 +64,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import areas as areas_mod, claude_usage, factory_api, standup as standup_mod
+from . import claude_usage, factory_api, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -73,7 +73,6 @@ from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
 from . import github_tickets as _gh_tickets
-from . import ticket_assignee
 from . import skills as skills_mod
 from . import providers as providers_mod
 from .runtime import Runtime
@@ -786,6 +785,7 @@ def make_app() -> FastAPI:
     # a project's skills: what its agents are told to do, so writing one is a catalog write
     _SKILLS_PATH = re.compile(r"^/api/projects/[^/]+/skills(/|$)")
 
+    # the route lives in ee (tares_ee/areas.py); the rule stays here, or a person's own claim would need admin
     _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke|decline))?$")
     _REPLY_WRITE = re.compile(r"^/api/desk/[^/]+/reply$")
@@ -1679,7 +1679,9 @@ def make_app() -> FastAPI:
     def _body_person(request: Request, body: dict) -> str | None:
         """The person id a key request names: `person_id` (must exist), or `person: {email, name}`
         (found by email or made: `cloud` when the system credential asks, as the control plane
-        does, `key` otherwise). None when it names neither."""
+        does, `key` otherwise). None when it names neither. A person who is not on the cell yet
+        needs the licence's seats; the owner (the system credential's `owner: true`) arriving under
+        an email nobody has, once `local` is claimed, is `local`: never refused, never a new row."""
         pid = str(body.get("person_id") or "").strip()
         if pid:
             if not store.get_person(pid):
@@ -1692,11 +1694,23 @@ def make_app() -> FastAPI:
             _err(ValueError("person needs an email: {email, name?}"))
         ident = getattr(request.state, "credential", None) or {}
         system = ident.get("kind") == "system"
+        owner = system and spec.get("owner") is True   # from the control plane only
         try:
-            # `owner: true` comes from the control plane (the system credential) only
-            return store.person_or_create(
-                spec["email"], spec.get("name"), via="cloud" if system else "key",
-                owner=system and spec.get("owner") is True)["id"]
+            email = store.check_email(spec["email"])
+            with team_mod.ADD_LOCK:   # the seat check and the insert are one step
+                if email and not store.find_person_by_email(email):
+                    local = store.get_person("local")
+                    if owner and local and not local["email"] and not local["emails"]:
+                        pass   # claims the unclaimed `local` below: not a new row
+                    else:
+                        ok, why = team_mod.get().can_add_person(store)
+                        if not ok:
+                            if owner and local:
+                                return local["id"]
+                            h.licence_required(why)
+                return store.person_or_create(
+                    spec["email"], spec.get("name"), via="cloud" if system else "key",
+                    owner=owner)["id"]
         except ValueError as e:
             _err(e, 409 if "already belongs" in str(e) else 400)
 
@@ -1770,19 +1784,37 @@ def make_app() -> FastAPI:
         try:
             picture = store.check_picture(body.get("picture")) if "picture" in body else None
             email = store.check_email(body.get("email"))
-            found = store.find_person_by_email(email) if email else None
-            if found:
+            def existing(found):
                 if system and picture and picture != found.get("picture"):
                     found = store.update_person(found["id"], picture=picture) or found
                 return _person_out(found)
+
+            found = store.find_person_by_email(email) if email else None
+            if found:
+                return existing(found)
             if email and body.get("owner") is True and system:
                 claimed = store.claim_local(email, body.get("name"))
                 if claimed:
                     if picture:
                         claimed = store.update_person(claimed["id"], picture=picture) or claimed
                     return _person_out(claimed)
-            p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
-                                    bool(body.get("is_admin")), via="admin")
+            with team_mod.ADD_LOCK:   # the seat check and the insert are one step
+                # a creation of this email that held the lock first has made the row since the
+                # lookup above: this one gets that person (200), not a seat refusal
+                found = store.find_person_by_email(email) if email else None
+                if found:
+                    return existing(found)
+                ok, why = team_mod.get().can_add_person(store)
+                if not ok:
+                    # the owner under another email, once `local` is claimed, is `local`
+                    local = store.get_person("local") if email and system and body.get("owner") is True else None
+                    if not local:
+                        h.licence_required(why)
+                    if picture and picture != local.get("picture"):
+                        local = store.update_person("local", picture=picture) or local
+                    return _person_out(local)
+                p = store.create_person(body.get("name"), email, body.get("emails"), body.get("github"),
+                                        bool(body.get("is_admin")), via="admin")
             if picture:
                 p = store.update_person(p["id"], picture=picture) or p
         except ValueError as e:
@@ -1809,6 +1841,12 @@ def make_app() -> FastAPI:
         if not admin and not own:
             raise HTTPException(status_code=403, detail="only an admin, or the person themselves, "
                                                         "can change a person")
+        if admin and not own and ident.get("kind") != "system" and not licence.ee_allowed():
+            # without ee an admin edits themselves; anyone else needs the licence (a person who is
+            # not on the cell answers 404 below, as before)
+            mine = (_current_person(request) or {}).get("id")
+            if mine != pid and store.get_person(pid):
+                h.licence_required("Changing other people needs an enterprise licence.")
         allowed = (("name", "email", "emails", "github", "is_admin", "picture") if admin
                    else ("name", "picture"))
         fields = {k: body[k] for k in allowed if k in body}
@@ -1822,83 +1860,6 @@ def make_app() -> FastAPI:
         if not p:
             _err(KeyError(f"no person {pid!r}"), 404)
         return _person_out(p)
-
-    # ── Area owners (TR-627): the person who owns each GitHub repo ──
-    _areas_lock = threading.Lock()
-
-    @app.get("/api/areas")
-    def list_areas():
-        """[{repo, person: {id, name}, note}], one per repo."""
-        return areas_mod.view(store)
-
-    @app.put("/api/areas")
-    def replace_areas(body: list = Body(...)):
-        """Admin only. Replace the whole list with [{repo, person_id, note?}]. A repo given twice
-        keeps its last entry; repos are saved in lowercase."""
-        try:
-            with _areas_lock:
-                areas_mod.save(store, body)
-        except ValueError as e:
-            _err(e, 400)
-        return areas_mod.view(store)
-
-    @app.put("/api/areas/{owner}/{name}")
-    def set_area(owner: str, name: str, request: Request, body: dict = Body(...)):
-        """{person_id, note?}. An admin sets or reassigns any repo. Anyone else may only claim a
-        repo nobody owns yet, for themselves: who they are comes from their key, never the body."""
-        try:
-            repo = areas_mod.norm_repo(f"{owner}/{name}")
-        except ValueError as e:
-            _err(e, 400)
-        pid = str(body.get("person_id") or "").strip()
-        if not pid or store.get_person(pid) is None:
-            _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 400)
-        admin = _is_admin(request)
-        me = None
-        if not admin:
-            me = _current_person(request)
-            if not me:
-                raise HTTPException(status_code=403, detail="this key belongs to no person, so it "
-                                    "cannot claim a repo; ask an admin to set the owner")
-            if pid != me["id"]:
-                raise HTTPException(status_code=403, detail="you can claim a repo only for "
-                                    "yourself; ask an admin to set another person as owner")
-        # the unowned check, the load and the save are one step: handlers run in the thread
-        # pool, and two claims at once would each save a list without the other's repo
-        with _areas_lock:
-            if not admin:
-                held = areas_mod.owner(store, repo)
-                if held and held["id"] != me["id"]:
-                    raise HTTPException(status_code=403, detail=f"{repo} already belongs to "
-                                        f"{held['name']}; ask an admin to reassign it")
-            current = areas_mod.load(store)
-            old = next((e for e in current if e["repo"] == repo), None)
-            entries = [e for e in current if e["repo"] != repo]
-            # a reassign keeps the note the repo had unless the body names one
-            note = body["note"] if "note" in body else (old or {}).get("note")
-            entries.append({"repo": repo, "person_id": pid, "note": note})
-            try:
-                areas_mod.save(store, entries)
-            except ValueError as e:
-                _err(e, 400)
-            # the answer is built before the lock is let go: a delete in between would leave
-            # nothing to find
-            out = next(a for a in areas_mod.view(store) if a["repo"] == repo)
-        return out
-
-    @app.delete("/api/areas/{owner}/{name}")
-    def delete_area(owner: str, name: str):
-        """Admin only. Take a repo's owner away."""
-        try:
-            repo = areas_mod.norm_repo(f"{owner}/{name}")
-        except ValueError as e:
-            _err(e, 400)
-        with _areas_lock:
-            current = areas_mod.load(store)
-            left = [e for e in current if e["repo"] != repo]
-            gone = len(left) != len(current)
-            store.set_setting(areas_mod.AREAS_SETTING, json.dumps(left))
-        return {"ok": True, "removed": gone}
 
     @app.get("/api/whoami")
     def whoami(request: Request):
@@ -4136,77 +4097,6 @@ def make_app() -> FastAPI:
         sre_home.clear_cache()   # the AI SRE home reads the projects (the demo row), so show this one
         return projects.get(out["id"])
 
-    @app.patch("/api/projects/{uid}")
-    def set_project_access(uid: str, request: Request, body: dict = Body(...)):
-        """{lead_person_id?, scope?}: who leads the project and whether it is `team` or
-        `private`. The lead changes both. An admin (or the system credential) changes the lead
-        only, which is also how a project with no lead is claimed. Nobody else changes either.
-        Answers with the project. A private project the caller is not on is unknown to them,
-        except that an admin (the admin scope, which the guard already requires for this route)
-        may still hand it to a lead, so it is never left without one."""
-        p = store.get_project(uid)
-        body = body or {}
-        hand_over_only = _is_admin(request) and "lead_person_id" in body and "scope" not in body
-        if p is None or not (_can_see(p) or hand_over_only):
-            _err(KeyError(f"unknown project {uid!r}"), 404)
-        want_lead, want_scope = "lead_person_id" in body, "scope" in body
-        if not (want_lead or want_scope):
-            _err(ValueError("say lead_person_id, scope or both"))
-        person = _current_person(request)
-        is_lead = bool(person and p["lead_person_id"] == person["id"])
-        if not is_lead and (want_scope or not _is_admin(request)):
-            raise HTTPException(status_code=403, detail="only the project lead can change this")
-        if want_scope and body["scope"] not in ("team", "private"):
-            _err(ValueError("scope is team or private"))
-        if want_lead:
-            lead = str(body["lead_person_id"] or "").strip()
-            if not lead:
-                _err(ValueError("lead_person_id must be a person id"))
-            if store.get_person(lead) is None:
-                _err(KeyError(f"no person {lead!r}; GET /api/people lists them"), 404)
-            old_lead = p["lead_person_id"]
-            store.set_project_lead(uid, lead)
-            if old_lead and old_lead != lead:   # the one who handed it over stays on it
-                store.add_project_member(uid, old_lead, person["id"] if person else "system")
-        if want_scope:
-            store.set_project_scope(uid, body["scope"])
-        out = projects.get(uid)
-        return out if _can_see(store.get_project(uid)) else _hidden_project(out)
-
-    def _lead_or_system(request, uid: str) -> dict:
-        """The project, when this caller may change who is on it: its lead, or the system
-        credential (an admin who is not the lead may not)."""
-        p = _project_or_404(uid)
-        person = _current_person(request)
-        if not (person and p["lead_person_id"] == person["id"]) and not _is_system(request):
-            raise HTTPException(status_code=403, detail="only the project lead can change this")
-        return p
-
-    @app.post("/api/projects/{uid}/members")
-    def add_project_member(uid: str, request: Request, body: dict = Body(...)):
-        """{person_id}: put a person on the project. Adding someone already on it changes
-        nothing. Answers with the project."""
-        p = _lead_or_system(request, uid)
-        pid = str((body or {}).get("person_id") or "").strip()
-        if not pid:
-            _err(ValueError("person_id is required"))
-        if store.get_person(pid) is None:
-            _err(KeyError(f"no person {pid!r}; GET /api/people lists them"), 404)
-        if pid != p["lead_person_id"]:   # the lead is a member already
-            by = _current_person(request)
-            store.add_project_member(uid, pid, by["id"] if by else "system")
-        return projects.get(uid)
-
-    @app.delete("/api/projects/{uid}/members/{person_id}")
-    def remove_project_member(uid: str, person_id: str, request: Request):
-        """Take a person off the project. The lead cannot be taken off: hand the project to
-        someone else first. Answers with the project."""
-        p = _lead_or_system(request, uid)
-        if person_id == p["lead_person_id"]:
-            _err(ValueError("the lead is always a member; make someone else the lead first"), 409)
-        store.remove_project_member(uid, person_id)
-        return projects.get(uid)
-
     @app.get("/api/projects/{uid}")
     def get_project(uid: str, request: Request):
         if _pk(request):
@@ -5389,12 +5279,20 @@ def make_app() -> FastAPI:
             ctx["last_review"] = store.last_reviews([t["id"] for t in tickets if t["stage"]])
         return ctx
 
+    def _assignee_view(t: dict) -> dict:
+        """The ticket's `assignee` ({id, name} or None) and `assignee_raw` (set only while nobody
+        on the cell is the assignee). A read of what is stored: it shows whatever the licence."""
+        person = store.get_person(t["assignee_person_id"]) if t.get("assignee_person_id") else None
+        if person:
+            return {"assignee": {"id": person["id"], "name": person["name"]}, "assignee_raw": None}
+        return {"assignee": None, "assignee_raw": t.get("assignee_raw")}
+
     def _ticket_out(uid: str, t: dict, with_doc: bool = False, ctx: dict | None = None) -> dict:
         ctx = ctx or _plan_ctx(uid)
         out = {k: t[k] for k in ("id", "owner", "identifier", "url", "title", "status",
                                  "position", "working_doc", "updated_at", "number", "milestone",
                                  "holder", "stage", "stage_reason", "pr", "repo")}
-        out.update(ticket_assignee.view(store, t))   # assignee {id, name} | None, assignee_raw
+        out.update(_assignee_view(t))   # assignee {id, name} | None, assignee_raw
         out["label"] = factory_mod.label(t)
         out["pr_note"] = factory_api.pr_note(t)
         out["milestone_name"] = ctx["ms"].get(t["milestone"]) if t["milestone"] else None
@@ -5484,7 +5382,7 @@ def make_app() -> FastAPI:
         """(person id, raw) for the `assignee` a caller sent; 404 for text that is neither a
         person id nor an email."""
         try:
-            return ticket_assignee.resolve(store, v)
+            return team_mod.get().assignee_resolve(store, v)
         except ValueError as e:
             _err(KeyError(str(e)), 404)
 
@@ -5564,7 +5462,7 @@ def make_app() -> FastAPI:
                                   repo=_repo_ok(body.get("repo")),
                                   assignee_person_id=who, assignee_raw=raw)
         if joins:
-            ticket_assignee.join(store, project, who, _added_by(request))
+            team_mod.get().assignee_join(store, project, who, _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
@@ -5616,7 +5514,8 @@ def make_app() -> FastAPI:
             why = (f"marked {fields['status'].replace('_', ' ')} in Tares" if "status" in fields else None)
             store.update_ticket(t["id"], why=why, **fields)
         if joins:
-            ticket_assignee.join(store, project, fields["assignee_person_id"], _added_by(request))
+            team_mod.get().assignee_join(store, project, fields["assignee_person_id"],
+                                         _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
 
     @app.delete("/api/projects/{uid}/tickets/{ref}")
@@ -6055,7 +5954,7 @@ def make_app() -> FastAPI:
         by=lambda request, body=None: _by(request, body), cc_source=lambda: _cc_source(),
         current_person=lambda request: _current_person(request),
         start_who=lambda request: _start_who(request),
-        area_owner=lambda repo: areas_mod.owner(store, repo),
+        area_owner=lambda repo: team_mod.get().area_owner(store, repo),
         is_system=lambda request: _is_system(request),
         is_admin=lambda request: _is_admin(request),
         hidden_ids=lambda: _hidden_ids(), can_see=lambda p: _can_see(p),

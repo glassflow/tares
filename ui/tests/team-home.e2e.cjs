@@ -1,8 +1,9 @@
 /*
  * Browser e2e for TR-741: the factory home on a cell with more than one person, "Waiting for you" with its actions.
  *
- * Starts a scratch daemon (TARES_EDITION=factory, auth on) on TARES_E2E_PORT (default 8857), MCP port +20, and a second
- * one of a single person on port +2, MCP +22, each in a clean environment and a fresh data directory; stops only those.
+ * Starts a scratch daemon (TARES_EDITION=factory, auth on, licensed: the team home is ee) on TARES_E2E_PORT (default 8857),
+ * MCP port +20, a second one of a single person, no licence, on port +2, MCP +22, and a third of three people and no licence on port +4,
+ * MCP +24, each in a clean environment and a fresh data directory; stops only those.
  * tests/seed-team-home.py fills the first through its API: Alex, Kim and Lee, a project Kim leads, and seven things
  * waiting for Alex (a sign-off, a spec question, two grants, a permission, a question with options, a long question).
  * The page is opened as Alex with his key, then as Lee, who has nothing waiting.
@@ -27,6 +28,7 @@ const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8857);
 const SOLO = PORT + 2;
+const UNLIC = PORT + 4;   // three people, no licence (TR-932)
 const BASE = `http://127.0.0.1:${PORT}`;
 const ROOT = "root-token-team-home-e2e";
 const SHOTS = process.env.SHOTS_DIR;
@@ -72,12 +74,23 @@ const tares = (() => {
   return fs.existsSync(path.join(bin, "tares")) ? path.join(bin, "tares") : "tares";
 })();
 const started = [];
-function startDaemon(port, extra) {
+function startDaemon(port, extra, people = [], licensed = false) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "tares-team-home-e2e-"));
+  if (people.length) {   // people on the cell before it starts: adding a second person over HTTP needs a licence
+    const made = spawnSync(PY, [path.join(REPO, "tests", "_people.py"), path.join(home, "tares.duckdb"), ...people],
+      { cwd: REPO, env: { ...process.env, PYTHONPATH: REPO }, encoding: "utf8" });
+    if (made.status !== 0) { console.log("FAIL could not seed people: " + (made.stderr || made.stdout)); process.exit(1); }
+  }
   const env = cleanEnv({ TARES_EDITION: "factory", TARES_HOME: home, TARES_PORT: String(port), TARES_MCP_PORT: String(port + 20),
                          TARES_OTLP_GRPC_PORT: "off", TARES_UI_DIST: process.env.TARES_UI_DIST || path.join(UI_DIR, "dist"),
                          PYTHONPATH: REPO, ...extra });
-  const daemon = spawn(tares, ["up", "--port", String(port), "--data-dir", home], { cwd: REPO, stdio: "ignore", env, detached: true });
+  // The team home is ee code: with people on the cell it shows only on a licensed daemon (ee/tests/licensed.py).
+  const venvPy = path.join(REPO, ".venv/bin/python");
+  const daemon = licensed
+    ? spawn(fs.existsSync(venvPy) ? venvPy : PY, [path.join(REPO, "ee", "tests", "licensed.py"), "daemon", "--seats", "50"],
+        { cwd: REPO, stdio: "ignore", detached: true,
+          env: { ...env, TARES_DB: path.join(home, "tares.duckdb"), TARES_HOST: "127.0.0.1", TARES_CATALOG: path.join(home, "none.yaml") } })
+    : spawn(tares, ["up", "--port", String(port), "--data-dir", home], { cwd: REPO, stdio: "ignore", env, detached: true });
   started.push({ daemon, home });
   console.log(`  daemon: pid ${daemon.pid}, port ${port}`);
   return daemon;
@@ -86,15 +99,20 @@ function startDaemon(port, extra) {
 const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
 (async () => {
-  startDaemon(PORT, { TARES_AUTH_TOKEN: ROOT });
+  startDaemon(PORT, { TARES_AUTH_TOKEN: ROOT },
+    ["Alex=alex-seed@example.com", "Kim=kim-seed@example.com", "Lee=lee-seed@example.com"], true);
   startDaemon(SOLO, {});
+  startDaemon(UNLIC, {}, ["Alex=alex-seed@example.com", "Kim=kim-seed@example.com"]);   // plus the owner: three people
   let browser;
   try {
-    ck("daemons up", (await waitFor(`${BASE}/health`)) && (await waitFor(`http://127.0.0.1:${SOLO}/health`)));
+    ck("daemons up", (await waitFor(`${BASE}/health`)) && (await waitFor(`http://127.0.0.1:${SOLO}/health`))
+       && (await waitFor(`http://127.0.0.1:${UNLIC}/health`)));
     const seeded = spawnSync(PY, [path.join(__dirname, "seed-team-home.py"), String(PORT), ROOT], { encoding: "utf8" });
     ck("seed ran", seeded.status === 0, (seeded.stderr || seeded.stdout || "").slice(-300));
     const solo = spawnSync(PY, [path.join(__dirname, "seed-factory-home.py"), String(SOLO)], { encoding: "utf8" });
     ck("seed of one person ran", solo.status === 0, (solo.stderr || solo.stdout || "").slice(-300));
+    const unlic = spawnSync(PY, [path.join(__dirname, "seed-factory-home.py"), String(UNLIC)], { encoding: "utf8" });
+    ck("seed of three people without a licence ran", unlic.status === 0, (unlic.stderr || unlic.stdout || "").slice(-300));
     if (seeded.status !== 0) throw new Error("no seed");
     const ids = JSON.parse(seeded.stdout.trim().split("\n").pop());
 
@@ -110,7 +128,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
     const open = async (who, width, base = BASE) => {
       const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
-      const token = who === "solo" ? null : ids.keys[who];
+      const token = who === "solo" || who === "unlicensed" ? null : ids.keys[who];
       await ctx.addInitScript((t) => { try { if (t) localStorage.setItem("tares_token", t); } catch { /* blocked */ } }, token);
       const page = await ctx.newPage();
       const ctl = { fail: false, hold: null, reads: 0, posts: [], more: 0 };
@@ -625,7 +643,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
       const page = await ctx.newPage();
       const calls = [];
-      page.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/")) calls.push(req.url()); });
+      page.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/") && new URL(req.url()).pathname !== "/api/licence") calls.push(req.url()); });
       const go = async (sample, view) => {
         await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
         await page.getByTestId("projects").waitFor();
@@ -795,6 +813,31 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     }
     const soloHome = await fetch(`http://127.0.0.1:${SOLO}/api/home`).then((r) => r.json());
     ck("a cell of one person has no team keys in /api/home", !("you_are_waiting_on" in soloHome) && !("crews_quiet" in soloHome));
+    // ── three people and no licence: the single-person home, and no enterprise code (TR-932) ──
+    for (const width of [390, 1440]) {
+      const t = (s) => `@${width}: ${s}`;
+      const { ctx, page } = await open("unlicensed", width);
+      const eeAsked = [];
+      page.on("request", (rq) => { if (/\/assets\/ee-/.test(rq.url())) eeAsked.push(rq.url()); });
+      await page.goto(`http://127.0.0.1:${UNLIC}/`, { waitUntil: "load" });
+      const up = await page.getByTestId("factory-home").waitFor({ timeout: 15000 }).then(() => true, () => false);
+      ck(t("three people, no licence: the home shows"), up);
+      await settle(page);
+      ck(t("three people, no licence: the single-person rows, no sender square, Keep and Allow as before"),
+         (await page.getByTestId("waiting-row").count()) >= 3 && (await page.getByTestId("waiting-from").count()) === 0
+         && (await page.getByRole("button", { name: "Allow" }).count()) >= 1);
+      const NEW_UNLIC = ["waiting-on", "waiting-on-row", "projects-switch", "team-crews", "repos-you-own", "crew-limit", "decline-dialog"];
+      const seenUnlic = [];
+      for (const id of NEW_UNLIC) if ((await page.getByTestId(id).count()) > 0) seenUnlic.push(id);
+      ck(t("three people, no licence: none of the team home's parts"), seenUnlic.length === 0, seenUnlic.join());
+      ck(t("three people, no licence: no enterprise chunk was asked for"), eeAsked.length === 0, eeAsked.join());
+      await shot(page, "three-people-no-licence", width);
+      await checkWords(page, ck, t("three people, no licence"));
+      await ctx.close();
+    }
+    const unlicHome = await fetch(`http://127.0.0.1:${UNLIC}/api/home`).then((r) => r.json());
+    ck("three people, no licence: no team keys in /api/home",
+       !["summary", "crews", "crews_quiet", "areas", "counts", "you_are_waiting_on"].some((k) => k in unlicHome), Object.keys(unlicHome).join());
   } finally {
     if (browser) await browser.close();
     for (const { daemon, home } of started) {

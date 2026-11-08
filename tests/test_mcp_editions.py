@@ -128,7 +128,7 @@ async def factory():
         ck("the outcome tools come first", n[:4] == list(OUTCOMES), str(n[:6]))
         ck("no building-block tool", not set(OBJECTS) & set(n), str(sorted(set(OBJECTS) & set(n))))
         ck("no AI SRE outcome tool", not set(SRE_OUTCOMES) & set(n), str(sorted(set(SRE_OUTCOMES) & set(n))))
-        ck("answer_question is a crew tool and stays", "answer_question" in n)
+        ck("answer_question is an ee tool: not listed without a licence", "answer_question" not in n)
         ck("the crew's tools stay", "list_tickets" in n and "desk_list" in n and "hand_over" in n, str(n))
         ck("a hidden tool answers in a sentence",
            await call("read", {"selector": {"a": "b"}}) == "This tool is off on this Tares. An admin "

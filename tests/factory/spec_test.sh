@@ -5,7 +5,7 @@
 set -uo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 . "$here/lib.sh"
-F="$here/../../claude-plugin/bin/factory"
+F="${FACTORY_BIN:+$here/factory-bin}"; F="${F:-$here/../../claude-plugin/bin/factory}"
 T=$(cd "$(mktemp -d)" && pwd -P)
 export HOME="$T/home" FACTORY_CREW_HOME="$T/crew" FAKE_CLAUDE_STATE="$T/claude" CLAUDE_BIN="$here/fake-claude" FACTORY_PAUSE=0
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
@@ -65,6 +65,7 @@ api POST /api/projects '{"template": "custom", "kind": "software_factory", "name
 check "the lead of an existing project gets the usual prompt" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Lead case)" ] && [ "$(last | jq -r .cwd)" = "$T/shop" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env" && ! grep -q contributor "$T/leadcase.out"'
 
 # Auth on, three people with a key each: Ashish leads "Acme web", Kiran does not, the root token is no person.
+seed_people "$T/tares2" "Ashish=ashish@example.com" "Kiran=kiran@example.com"
 start_tares "$T/tares2" root-tok
 root_tok=$TARES_AUTH_TOKEN
 for who in Ashish Kiran; do
@@ -110,7 +111,7 @@ check "a caller with no person (the root token) stays today's flow" '[ "$(last |
 TARES_AUTH_TOKEN=$ashish_tok api POST /api/projects '{"template": "custom", "name": "Plain notes", "objects": []}' >/dev/null
 mkproj "$ashish_tok" "Secret plan"
 hid=$(api GET /api/projects | jq -r '.projects[] | select(.name == "Secret plan") | .id')
-TARES_AUTH_TOKEN=$ashish_tok api PATCH "/api/projects/$hid" '{"scope": "private"}' >/dev/null
+stop_tares; make_private "$T/tares2" "$hid"; start_tares "$T/tares2" root-tok   # PATCH is ee: set the scope in the database
 check "fixture: Plain notes is led by Ashish and is not a software factory project" '[ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Plain notes\") | .lead.name + \"/\" + (.kind // \"none\")" | cut -d/ -f1)" = Ashish ] && [ "$(api GET /api/projects | jq -r ".projects[] | select(.name == \"Plain notes\") | .kind")" != software_factory ]'
 check "fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind" '[ "$(TARES_AUTH_TOKEN=$kiran_tok api GET /api/projects | jq -r ".projects[] | select(.name == \"Secret plan\") | [.hidden, .lead.name, (.kind // \"none\")] | join(\",\")")" = true,Ashish,none ] && [ "$(TARES_AUTH_TOKEN=$ashish_tok api GET /api/projects | jq -r ".projects[] | select(.name == \"Secret plan\") | .kind")" = software_factory ]'
 (cd "$T/shop/src" && TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Plain notes" >"$T/plainnotes.out" 2>&1)
@@ -137,7 +138,8 @@ for src in startup compact; do
   ctx=$(hookctx $src TARES_PROJECT="Acme web")
   check "a plain bound session ($src) still follows the session skill" 'grep -q "Follow the .session. skill\|load the .session. skill again" <<<"$ctx" && ! grep -q "Contributor" <<<"$ctx"'
 done
-check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\": \"startup\"}" | env -u FACTORY_ROLE -u TARES_PROJECT TARES_SESSION_KIND=contributor bash "$hook")" ]'
+# CLAUDE_PLUGIN_ROOT points at a folder with no min_tares.txt, so an older tares installed here cannot add its compat line.
+check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\": \"startup\"}" | env -u FACTORY_ROLE -u TARES_PROJECT TARES_SESSION_KIND=contributor CLAUDE_PLUGIN_ROOT="$T" bash "$hook")" ]'
 skill="$here/../../claude-plugin/skills/spec-project/SKILL.md"
 check "the Contributor section asks my_work for this project's questions (Q numbers restart per project)" 'sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "Call .my_work(project=<project>). and read .person. (who this is) and .spec_questions." && sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "restart in each project"'
 

@@ -4,11 +4,11 @@ Core knows one person. `SingleTeam` is that cell: nobody to assign to, no areas,
 crew per name. The enterprise code in `tares_ee` plays the same interface as `tares_ee.team.Team`,
 a subclass of `SingleTeam`, and `get()` hands it out only while the licence allows it.
 
-    from tares import team as team_mod       # never `from tares.factory_team import Team`
+    from tares import team as team_mod
     team_mod.get().resolve_crew(name, person_id, machine)
 
-(`tares/factory_team.py` has a class `Team` of its own, one person's home read. It is a different
-thing and keeps that name until its code moves into ee.)
+(`tares_ee/team_home.py` has a class `HomeRead` of its own, one person's home read. It is not part of
+this interface.)
 
 Three rules shape the interface:
 
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import threading
 from typing import Any, Callable
 
 from . import licence
@@ -39,8 +40,13 @@ log = logging.getLogger("tares.team")
 ENTRY_GROUP = "tares.ee"
 ENTRY_NAME = "team"
 
+# Held around "can this team add a person" and the insert that follows, so two requests cannot both
+# pass the seat check and write past the seats. The daemon handlers run in a thread pool.
+ADD_LOCK = threading.Lock()
+
 ADD_PERSON_REASON = "Adding people needs an enterprise licence. Tares works for one person without one."
 ASSIGN_REASON = "Assigning tickets to people needs an enterprise licence."
+ADDRESS_REASON = "Addressing a question to someone else needs an enterprise licence."
 
 
 class Team:
@@ -125,15 +131,16 @@ class Team:
         machine, at)`, which returns the crew's id."""
         raise NotImplementedError
 
-    # ── team home (the hooks for tares/factory_team.py) ──
+    # ── team home (the team home itself is ee code, the three row filters are core) ──
     def team_home(self, c, request, now) -> dict:
         """The team page's body for the caller, or {} when the cell has no team page."""
         raise NotImplementedError
 
     def own_stations(self, c, request, rows: list) -> list:
-        """`rows` (the crew's stations) cut to what the caller may see. A single-person cell sees
-        all of them. The filter that keeps a caller's own rows on a cell with more than one person
-        is filled in here, not in the callers."""
+        """`rows` (the crew's stations) cut to what the caller may see. A one-person cell sees all
+        of them; on a cell with more than one person a person caller sees only their own. The
+        single-person implementation does this without a licence, so a team database that is not
+        licensed never shows one person's rows to another."""
         raise NotImplementedError
 
     def own_desk(self, c, request, rows: list) -> list:
@@ -214,14 +221,33 @@ class SingleTeam(Team):
     def team_home(self, c, request, now):
         return {}
 
+    @staticmethod
+    def _applies(c, request) -> bool:
+        """True when rows are cut to the caller's own: a cell with more than one person and a
+        caller with a person (or the system). Licence and team are not consulted."""
+        if c.store.only_local_person():
+            return False
+        return not (c.h.current_person(request) is None and not c.h.is_system(request))
+
     def own_stations(self, c, request, rows):
-        return rows
+        if not self._applies(c, request):
+            return rows
+        me = c.work_person(request)["id"]
+        return [s for s in rows if (s["person"] or {}).get("id") == me]
 
     def own_desk(self, c, request, rows):
-        return rows
+        if not self._applies(c, request):
+            return rows
+        me = c.work_person(request)["id"]
+        return [d for d in rows if c.desk_is_mine(d, me)]
 
     def own_tickets(self, c, request, tickets, projects):
-        return tickets
+        if not self._applies(c, request):
+            return tickets
+        me = c.work_person(request)["id"]
+        by_id = {p["id"]: p for p in projects}
+        return {pid: [t for t in ts if c.is_mine(t, me, by_id.get(pid))]
+                for pid, ts in tickets.items()}
 
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):
         return {}
@@ -274,6 +300,11 @@ def get() -> Team:
     return ee if ee is not None and licence.ee_allowed() else _SINGLE
 
 
+def enabled() -> bool:
+    """True while the ee team is the one `get()` hands out (it loaded and the licence allows it)."""
+    return get() is not _SINGLE
+
+
 def register_ee(app, host) -> None:
     """Add the ee team's routes to `app`. If registering raises, the cell runs as a single-person
     cell: the routes it added are taken out again, the ee team is dropped (so `get()` answers
@@ -307,7 +338,24 @@ def _reset_ee_for_tests() -> None:
 # ── routes that moved out of core ──
 # (method, path, message): one row per route that lives in ee. Without ee the row answers
 # `licence_required`. A ticket that moves a route out of core adds its rows in the same PR.
-FALLBACKS: list[tuple[str, str, str]] = []
+AREAS_REASON = "Repo owners need an enterprise licence."
+ACCESS_REASON = "Changing a project's lead, privacy or members needs an enterprise licence."
+CONSENT_REASON = "Agreeing to someone else's grant needs an enterprise licence."
+QUESTIONS_REASON = "Questions to repo owners need an enterprise licence."
+FALLBACKS: list[tuple[str, str, str]] = [
+    ("GET", "/api/areas", AREAS_REASON),
+    ("PUT", "/api/areas", AREAS_REASON),
+    ("PUT", "/api/areas/{owner}/{name}", AREAS_REASON),
+    ("DELETE", "/api/areas/{owner}/{name}", AREAS_REASON),
+    ("PATCH", "/api/projects/{uid}", ACCESS_REASON),
+    ("POST", "/api/projects/{uid}/members", ACCESS_REASON),
+    ("DELETE", "/api/projects/{uid}/members/{person_id}", ACCESS_REASON),
+    ("POST", "/api/grants/{gid}/consent", CONSENT_REASON),
+    ("POST", "/api/grants/{gid}/decline", CONSENT_REASON),
+    ("POST", "/api/projects/{uid}/questions", QUESTIONS_REASON),
+    ("GET", "/api/projects/{uid}/questions", QUESTIONS_REASON),
+    ("POST", "/api/projects/{uid}/questions/{qid}/answer", QUESTIONS_REASON),
+]
 
 
 def register_fallbacks(app, host) -> None:

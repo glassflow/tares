@@ -484,7 +484,7 @@ function manyServices() {
         const q = T(p);
         const label = `sample ${state} ${width}`;
         const calls = [];
-        p.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/") && new URL(req.url()).pathname !== "/api/whoami") calls.push(req.method() + " " + new URL(req.url()).pathname); });
+        p.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/") && new URL(req.url()).pathname !== "/api/whoami" && new URL(req.url()).pathname !== "/api/licence") calls.push(req.method() + " " + new URL(req.url()).pathname); });
         await p.goto(`${BASE}/runbooks?sample=${state}`, { waitUntil: "load" });
         if (state === "loading") await p.getByTestId("rb-loading").waitFor();
         else if (state === "error") await q.banner.waitFor();
