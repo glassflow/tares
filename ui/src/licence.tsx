@@ -9,6 +9,8 @@ export type LicenceInfo = {
   eeAllowed: boolean;
   /** the first answer is still on its way */
   loading: boolean;
+  /** the last read failed and there is no answer yet: the cell did not answer. It tries again by itself. */
+  failed: boolean;
   /** reads the licence again, after a change; false when the cell did not answer */
   reload: () => Promise<boolean>;
 };
@@ -16,21 +18,22 @@ export type LicenceInfo = {
 const REFRESH_MS = 60_000;
 const RETRY_MS = 5_000;   // until the first answer arrives
 
-const LicenceContext = createContext<LicenceInfo>({ eeAllowed: false, loading: false, reload: async () => true });
+const LicenceContext = createContext<LicenceInfo>({ eeAllowed: false, loading: false, failed: false, reload: async () => true });
 
 /** Reads GET /api/licence on mount and every 60 seconds. A failed read keeps what is shown; until the
  *  first answer it tries again every 5 seconds. */
 export function LicenceProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<LicenceState>();
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
   const live = useRef(true);
   useEffect(() => () => { live.current = false; }, []);
 
   const have = useRef(false);
   const reload = useCallback(
     () => api.licence().then(
-      (s) => { if (live.current) { have.current = true; setState(s); setLoading(false); } return true; },
-      () => false,   // keeps what is shown; `loading` stays true until the first answer
+      (s) => { if (live.current) { have.current = true; setState(s); setLoading(false); setFailed(false); } return true; },
+      () => { if (live.current && !have.current) setFailed(true); return false; },   // keeps what is shown; until the first answer it says the cell did not answer
     ),
     [],
   );
@@ -47,8 +50,8 @@ export function LicenceProvider({ children }: { children: ReactNode }) {
   }, [reload]);
 
   const value = useMemo<LicenceInfo>(
-    () => ({ state, eeAllowed: state?.ee_allowed === true, loading, reload }),
-    [state, loading, reload],
+    () => ({ state, eeAllowed: state?.ee_allowed === true, loading, failed, reload }),
+    [state, loading, failed, reload],
   );
   return <LicenceContext.Provider value={value}>{children}</LicenceContext.Provider>;
 }

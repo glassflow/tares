@@ -4,6 +4,8 @@
  * licence page) and never the raw answer.
  *  - Settings, People on a platform cell: Add person.
  *  - People on a factory cell: Add.
+ *  - A licensed cell whose licence read fails: People and Settings Access say the cell did not answer, never that a
+ *    licence is needed (#507 F1), at 1440 and 390, early and late.
  *  - Settings, Workspace on Tares Cloud: Invite. A cell with no licence shows the line in place of the invite
  *    form; a licensed one shows the form, and an invite the workspace refuses with 402 shows the line.
  * The control plane is made up too: the cell's workspace address is on its own origin and page.route answers it.
@@ -151,6 +153,28 @@ async function checkLine(page, label, what) {
         ck(`chunk fails, ${label}: no licence line on a licensed cell`, (await page.getByTestId("licence-needed").count()) === 0
            && !(await page.locator("body").innerText()).includes(`${what} needs an enterprise licence`));
         await page.context().close();
+      }
+    }
+    // the licence read fails on a licensed cell: the add part says the cell did not answer, never "needs an enterprise licence"
+    {
+      for (const [label, base, route, what] of [
+        ["settings people", platform.base, "/settings?tab=access", "Adding people"],
+        ["factory people", factory.base, "/people", "Adding people"],
+      ]) {
+        for (const w of [1440, 390]) {
+          const page = await (await browser.newContext({ viewport: { width: w, height: 900 } })).newPage();
+          await page.route(/\/api\/licence(\?|$)/, (r) => r.abort());
+          await page.goto(base + route);
+          const said = await page.getByTestId("licence-no-answer").first().waitFor({ timeout: 15000 }).then(() => true, () => false);
+          ck(`licence read fails, ${label} @${w}: the page says the cell did not answer`, said
+             && /The cell did not answer\./.test(await page.getByTestId("licence-no-answer").first().innerText()));
+          for (const [when, ms] of [["early", 0], ["late", 6000]]) {
+            if (ms) await page.waitForTimeout(ms);
+            ck(`licence read fails, ${label} @${w}, ${when}: no licence line`, (await page.getByTestId("licence-needed").count()) === 0
+               && !(await page.locator("body").innerText()).includes(`${what} needs an enterprise licence`));
+          }
+          await page.context().close();
+        }
       }
     }
     // the licence read is slow or fails: a licensed workspace keeps its invite form, no licence line

@@ -92,9 +92,10 @@ export function EeLoader() {
 /** True while the cell allows enterprise but the ee chunk has not registered yet (and has not failed):
  *  a page that would show an ee piece in its place shows a skeleton, so core's plainer version never flashes. */
 export function useEePending(): boolean {
-  const { eeAllowed, loading } = useLicence();
+  const { eeAllowed, loading, failed: noAnswer } = useLicence();
   useSyncExternalStore(subscribe, snapshot);
-  return (loading || eeAllowed) && !!load && !loaded && !failed;
+  // a licence read that keeps failing does not hold the placeholder: the plain page shows, and the licence read goes on trying
+  return ((loading && !noAnswer) || eeAllowed) && !!load && !loaded && !failed;
 }
 
 /** True when the ee chunk failed to load or to register. */
@@ -106,10 +107,35 @@ export function useEeFailed(): boolean {
 /** The plain line for a failed ee chunk, the same wherever it shows. */
 export const EE_FAILED_WORDS = "This part of the console did not load. Reload the page to try again.";
 
-/** True once the ee chunk is loaded and has registered. */
+/** The plain line for a licence read the cell did not answer, the same wherever it shows. */
+export const LICENCE_NO_ANSWER_WORDS = "The cell did not answer. Try again in a moment.";
+
+/** True when the licence read failed and there is no answer to go on: whether the cell is licensed is
+ *  not known, so a fallback must not say a licence is needed. */
+export function useLicenceNoAnswer(): boolean {
+  const { failed: noAnswer, eeAllowed } = useLicence();
+  return noAnswer && !eeAllowed;
+}
+
+/** What a core fallback shows in place of an ee part that is not there: `pending` while it loads
+ *  (a skeleton unless given), the failed-chunk words, the no-answer words, else `children`, the plain
+ *  version for a cell with no licence. */
+export function EeFallback({ children, pending = <SkeletonRows /> }: { children: ReactNode; pending?: ReactNode }) {
+  const isPending = useEePending();
+  const chunkFailed = useEeFailed();
+  const noAnswer = useLicenceNoAnswer();
+  if (isPending) return <>{pending}</>;
+  if (chunkFailed) return <Banner tone="warn" data-testid="ee-failed">{EE_FAILED_WORDS}</Banner>;
+  if (noAnswer) return <Banner tone="warn" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</Banner>;
+  return <>{children}</>;
+}
+
+/** True once the ee chunk is loaded and has registered, and while the cell's licence still allows it:
+ *  a licence removed or ended takes a team part (a tab, a row) away without a reload. */
 export function useEeLoaded(): boolean {
+  const { eeAllowed } = useLicence();
   useSyncExternalStore(subscribe, snapshot);
-  return loaded;
+  return loaded && eeAllowed;
 }
 
 /** Renders what ee registered under `name`; `fallback` (nothing by default) until then. */
@@ -122,10 +148,12 @@ export function Slot<N extends SlotName>({ name, fallback = null, ...props }: { 
 /** A whole ee page: the slot when loaded, a skeleton while the licence is being read, else the licence note. */
 export function EePage<N extends PageSlotName>({ slot, ...props }: { slot: N } & SlotProps[N]) {
   const { loading, eeAllowed } = useLicence();
+  const noAnswer = useLicenceNoAnswer();
   useSyncExternalStore(subscribe, snapshot);
   const C = slots.get(slot);
   if (C) return <C {...props} />;
   if (failed) return <Banner tone="warn" data-testid="ee-failed">{EE_FAILED_WORDS}</Banner>;
+  if (noAnswer) return <Banner tone="warn" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</Banner>;
   if (loading || (eeAllowed && load)) return <SkeletonRows />;
   return <LicenceNeeded variant="page" />;
 }

@@ -10,7 +10,7 @@ import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential,
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
-import { EE_FAILED_WORDS, EePage, Slot, useEeFailed, useEeLoaded, useEePending } from "../eeSlots";
+import { EE_FAILED_WORDS, EePage, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useLicenceNoAnswer } from "../eeSlots";
 import LicenceNeeded from "../components/LicenceNeeded";
 import { extraEmails, personDraft, type PersonDraft } from "../personDraft";
 import OwnerOnly from "../components/OwnerOnly";
@@ -604,6 +604,7 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
 function AccessTab() {
   const pending = useEePending();
   const eeFailed = useEeFailed();
+  const noAnswer = useLicenceNoAnswer();
   const [me, setMe] = useState<Whoami>();
   const [people, setPeople] = useState<Person[]>();
   const [err, setErr] = useState<string>();
@@ -620,6 +621,7 @@ function AccessTab() {
       <Slot name="settings.people" people={people} admin={admin} err={err} onChanged={loadPeople} me={me}
             fallback={pending ? <div className="panel muted">loading…</div>
                               : eeFailed ? <div className="panel muted" data-testid="ee-failed">{EE_FAILED_WORDS}</div>
+                              : noAnswer ? <div className="panel muted" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</div>
                               : <YouPanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />} />
       <McpToolsPanel />
       <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />

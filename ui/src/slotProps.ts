@@ -6,7 +6,9 @@ import type {
   HomeCrewLimitProps, HomeHiddenRowsProps, HomeProjectLeadProps, HomeProjectsSwitchProps, HomeReposProps,
   HomeSample, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "./editions/factory/home.types";
-import type { ApiKey, Grant, GrantsView, Handover, Person, Whoami } from "./types";
+import type {
+  ApiKey, CrewGroup, CrewStation, DeskAllowed, DeskItem, Grant, GrantsView, Handover, Person, Whoami,
+} from "./types";
 
 /*
  * The props each slot of the console takes (see eeSlots.tsx). Core renders a slot with these props
@@ -52,6 +54,9 @@ export interface SlotProps {
   "home.crewLimit": HomeCrewLimitProps;
   "home.teamCrews": HomeTeamCrewsProps;
   "home.reposYouOwn": HomeReposProps;
+  // crew
+  "crew.groups": { groups: CrewGroup[]; myId: string; now: string; stations: CrewStation[]; selected: string };
+  "desk.groups": { items: DeskItem[]; allowed: Record<string, DeskAllowed>; onAllowed: (a: DeskAllowed) => void; myId: string };
 }
 
 export type SlotName = keyof SlotProps;

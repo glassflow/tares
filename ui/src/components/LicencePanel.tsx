@@ -39,15 +39,16 @@ function Line({ label, value, testid }: { label: string; value: string; testid?:
 /** Settings, Enterprise licence: what the cell's licence says, and for an admin the box to paste a key
  *  into. The key text is write-only: it is never shown, here or anywhere. */
 export default function LicencePanel() {
-  const { state, loading, reload } = useLicence();
-  const [admin, setAdmin] = useState<boolean>();
+  const { state, loading, failed, reload } = useLicence();
+  // true or false from whoami; null when whoami did not answer
+  const [admin, setAdmin] = useState<boolean | null>();
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
   const [note, setNote] = useState<string>();
 
   useEffect(() => {
-    api.whoami().then((w) => setAdmin(w.scopes.includes("admin"))).catch(() => setAdmin(false));
+    api.whoami().then((w) => setAdmin(w.scopes.includes("admin"))).catch(() => setAdmin(null));
   }, []);
 
   const save = async () => {
@@ -82,7 +83,7 @@ export default function LicencePanel() {
         <a href={ENTERPRISE_URL} target="_blank" rel="noreferrer">About the enterprise licence</a>
       </p>
       {!st ? (
-        loading ? <div className="muted">loading…</div> : <div className="alert error">The cell did not answer.</div>
+        loading && !failed ? <div className="muted">loading…</div> : <div className="alert error">The cell did not answer.</div>
       ) : (
         <>
           <div data-testid="licence-state">
@@ -108,6 +109,7 @@ export default function LicencePanel() {
       )}
       {note && <p className="help" role="status" data-testid="licence-note">{note}</p>}
       {admin === false && <p className="help" data-testid="licence-admin-only">Only an admin can change the licence.</p>}
+      {admin === null && <p className="help" data-testid="licence-who-failed">The cell did not say who you are, so the licence box is hidden. Reload to try again.</p>}
       {admin && (
         <>
           <label className="field">

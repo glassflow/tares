@@ -3,6 +3,8 @@ import type { RegisterSamples, RegisterSlot } from "../eeSlots";
 import { ChangeLead, ProjectAccess, ProjectMembers } from "./project/access";
 import { GrantAgreedBy, GrantConsent, GrantRepos, GrantsWaitingElsewhere, GrantWaitingFor } from "./project/grants";
 import { SignOffs, TeamQuestions } from "./project/signoffs";
+import CrewPeople from "./crew/CrewPeople";
+import DeskForPeople from "./crew/DeskGroups";
 import AreasPanel from "./settings/AreasPanel";
 import { PeopleAdd, PersonTeamLines } from "./people/FactoryPeopleTeam";
 import { KeyPersonCell, KeyPersonPick, PeoplePanel } from "./people/SettingsPeople";
@@ -41,5 +43,7 @@ export function register(registerSlot: RegisterSlot, registerSamples: RegisterSa
   registerSlot("home.crewLimit", CrewLimit);
   registerSlot("home.teamCrews", TeamCrews);
   registerSlot("home.reposYouOwn", ReposYouOwn);
+  registerSlot("crew.groups", CrewPeople);
+  registerSlot("desk.groups", DeskForPeople);
   registerSamples("home", HOME_SAMPLES_EE);
 }

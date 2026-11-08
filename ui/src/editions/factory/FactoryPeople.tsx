@@ -3,7 +3,7 @@ import * as React from "react";
 import { api, ApiError } from "../../api";
 import LicenceNeeded from "../../components/LicenceNeeded";
 import { Banner, Button, Initials, Input, ListRow, ListSection, Skeleton, StatusDot } from "../../components/edition";
-import { EE_FAILED_WORDS, Slot, useEeFailed, useEePending } from "../../eeSlots";
+import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useLicenceNoAnswer } from "../../eeSlots";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
 import { usePagePolling } from "../usePagePolling";
@@ -109,9 +109,11 @@ export function FactoryPeopleView({ data, onAdded, note, onPeopleChanged = () =>
 function AddSlot({ data, onAdded }: { data: FactoryPeopleData; onAdded: (words: string) => void }) {
   const pending = useEePending();
   const failed = useEeFailed();
+  const noAnswer = useLicenceNoAnswer();
   return <Slot name="people.add" data={data} onAdded={onAdded}
                fallback={pending ? null
                  : failed ? <Banner tone="warn" data-testid="ee-failed">{EE_FAILED_WORDS}</Banner>
+                 : noAnswer ? <Banner tone="warn" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</Banner>
                  : <LicenceNeeded what="Adding people" />} />;
 }
 
