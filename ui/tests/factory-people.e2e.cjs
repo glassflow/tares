@@ -118,6 +118,9 @@ function waitFor(url, tries = 150) {
     await page.getByTestId("picture-url").fill("https://pictures.example.test/new.png");
     await page.getByTestId("picture-save").click();
     await page.waitForFunction(() => document.querySelector('[data-testid="account-avatar"] img')?.getAttribute("src") === "https://pictures.example.test/new.png");
+    // The button and the row update from two reads that land one after the other, so wait for the row too.
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="person-row"]')].some((r) => r.textContent.includes("bob@example.com")
+      && r.querySelector('[data-testid="person-avatar"] img')?.getAttribute("src") === "https://pictures.example.test/new.png"), null, { timeout: 10000 });
     ck("pictures: you change your own, and the account button follows", (await avatarImg(rowOf(page, "bob@example.com").getByTestId("person-avatar")).getAttribute("src")) === "https://pictures.example.test/new.png");
     ck("pictures: only on your own row", (await rowOf(page, "alice@example.com").getByTestId("picture-open").count()) === 0);
     const names = (await page.getByTestId("person-name").allInnerTexts()).map((t) => t.trim());

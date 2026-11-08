@@ -150,6 +150,9 @@ function cleanEnv(extra) {
       const cards = page.getByTestId("ticket-card");
       const rows = page.getByTestId("ticket-row");
       const openLive = async (search = "", ready = "tickets-count") => {
+        // The page polls every 20 s. Leave the old page first, or its poll can fire while the next
+        // one loads and count as a second call (seen when the load is slow).
+        await page.goto("about:blank");
         const done = expectOneCall(page, ROUTE);
         await page.goto(`${BASE}/tickets${search}`, { waitUntil: "load" });
         await page.getByTestId(ready).waitFor();

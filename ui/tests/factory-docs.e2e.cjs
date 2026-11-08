@@ -86,9 +86,34 @@ async function waitFor(url, tries = 100) {
       await settle(page);
     };
     const addBox = page.getByTestId("doc-add");
+    // Adding a line is a POST, then (when the line is new) a re-read of the document. Wait for both: a fixed pause
+    // is shorter than they take on a loaded machine, and "networkidle" is already reached on this page, so
+    // it returns at once. A late answer would also clear the box after the next line was typed into it.
     const addLine = async (text) => {
       await addBox.locator("input").fill(text);
-      await addBox.getByRole("button", { name: "Add line" }).click();
+      let posted = false;
+      let reread;
+      const rereadDone = new Promise((resolve) => { reread = resolve; });
+      const onResponse = (r) => {
+        if (r.request().method() === "POST" && /\/lines$/.test(r.url())) posted = true;
+        else if (posted && r.request().method() === "GET" && /\/api\/factory\/docs/.test(r.url())) reread();
+      };
+      page.on("response", onResponse);
+      try {
+        const answer = page.waitForResponse((r) => r.request().method() === "POST" && /\/lines$/.test(r.url()));
+        await addBox.getByRole("button", { name: "Add line" }).click();
+        const res = await answer;
+        const body = res.ok() ? await res.json().catch(() => ({})) : {};
+        if (res.ok() && body.added !== false) {
+          // The page polls every 60 s, so without a limit a missing re-read would pass after the poll. It must come at once.
+          let timer;
+          const late = new Promise((_, no) => { timer = setTimeout(() => no(new Error("the page did not re-read the document after the line was added")), 10000); });
+          try { await Promise.race([rereadDone, late]); } finally { clearTimeout(timer); }
+        }
+        else await addBox.getByTestId("doc-add-error").waitFor();
+      } finally {
+        page.off("response", onResponse);
+      }
       await settle(page);
     };
 
