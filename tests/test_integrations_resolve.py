@@ -31,6 +31,8 @@ def ck(l, c, d=""):
 from tares import licence
 from tares.integrations import registry, resolve
 from tares.integrations.resolve import DEFAULTS, Effective, effective
+from tares.integrations.ci import CISource
+from tares.integrations.review import ReviewGate
 from tares.integrations.tickets import TicketBackend
 from tares.integrations.types import Field
 from tares.store import Store
@@ -39,6 +41,18 @@ from tares.store import Store
 class FakeTickets(TicketBackend):
     name = "faketix"
     title = "Fake tickets"
+    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret")]
+
+
+class FakeReview(ReviewGate):
+    name = "fakegate"
+    title = "Fake review gate"
+    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret")]
+
+
+class FakeCI(CISource):
+    name = "fakeci"
+    title = "Fake CI"
     settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret")]
 
 
@@ -52,6 +66,8 @@ class PaidTickets(TicketBackend):
 registry.load()
 registry._loaded[("tickets", "faketix")] = FakeTickets
 registry._loaded[("tickets", "paidtix")] = PaidTickets
+registry._loaded[("review", "fakegate")] = FakeReview
+registry._loaded[("ci", "fakeci")] = FakeCI
 
 licensed = False
 licence.ee_allowed = lambda feature="enterprise": licensed
@@ -96,7 +112,7 @@ ck("the project beats the factory even when names differ",
    (s.set_choice("tickets", "othername", {}, "a"), eff("tickets", "p1").source)[1] == "project")
 s.set_choice("tickets", "faketix", {"url": "factory-url", "token": "factory-secret"}, "a")
 
-# a project slot with no override table row (memory) ignores the project id
+# a slot a project cannot override (memory) ignores the project id
 ck("memory has no project override", eff("memory", "p1") == eff("memory"))
 
 # ── carried ────────────────────────────────────────────────────────────────────
@@ -114,6 +130,21 @@ ck("a carried name that is not installed: default, not installed",
    eff("ci", "p1") == Effective("local", {}, "default", "not installed"), eff("ci", "p1"))
 resolve.carried = real_carried
 del registry._loaded[("review", "faketix")]
+
+# every project slot overrides the same way: review and ci as well as tickets
+for slot, name in (("review", "fakegate"), ("ci", "fakeci")):
+    s.set_choice(slot, name, {"url": f"{slot}-factory-url", "token": f"{slot}-factory-secret"}, "a")
+    ck(f"{slot}: a project without a row follows the factory", eff(slot, "p5").source == "factory")
+    s.set_project_choice("p5", slot, name, {"url": f"{slot}-proj-url"}, "a")
+    e = eff(slot, "p5")
+    ck(f"{slot}: project override", e.integration == name and e.source == "project" and e.reason == "", e)
+    ck(f"{slot}: the settings are only the project's row, no factory value",
+       e.settings == {"url": f"{slot}-proj-url"} and "factory" not in repr(e), e)
+    ck(f"{slot}: another project still follows the factory", eff(slot, "p6").source == "factory")
+    s.clear_project_choice("p5", slot)
+    e = eff(slot, "p5")
+    ck(f"{slot}: after clearing, the factory's choice is back",
+       e.source == "factory" and e.settings == {"url": f"{slot}-factory-url", "token": ""}, e)
 
 # ── not installed ──────────────────────────────────────────────────────────────
 s.set_project_choice("p3", "tickets", "gone", {"url": "x", "token": "y"}, "a")
