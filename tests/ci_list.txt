@@ -27,6 +27,7 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_core_single_person
+test_crew_claude
 test_crew_client
 test_crew_dispatch
 test_crew_fake_claude
@@ -151,6 +152,7 @@ test_session_project
 test_setup_flow
 test_shared_code_context
 test_skills
+test_skills_portable
 test_skipped_write_back
 test_slack
 test_slack_ask

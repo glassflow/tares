@@ -53,8 +53,8 @@
       "what": "find the real claude binary, skipping terminal shims",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:claude_bin",
+      "ported": true,
       "note": "Also skips terminal shims that mention cmux (see cmux_touchpoints)."
     },
     {
@@ -625,8 +625,8 @@
       "what": "list live Claude Code sessions",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:active_json",
+      "ported": true,
       "note": ""
     },
     {
@@ -636,8 +636,8 @@
       "what": "a session's state.json",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:job_state",
+      "ported": true,
       "note": ""
     },
     {
@@ -647,8 +647,8 @@
       "what": "done, working or blocked for a session",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:turn_state",
+      "ported": true,
       "note": ""
     },
     {
@@ -658,8 +658,8 @@
       "what": "read the session id from claude --bg output",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:parse_bg_id",
+      "ported": true,
       "note": ""
     },
     {
@@ -669,8 +669,8 @@
       "what": "newest live session with a name in a folder",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:find_live_job",
+      "ported": true,
       "note": ""
     },
     {
@@ -680,8 +680,8 @@
       "what": "is a station's session running or waiting",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:is_alive",
+      "ported": true,
       "note": ""
     },
     {
@@ -878,8 +878,8 @@
       "what": "a station's transcript file",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:transcript_of",
+      "ported": true,
       "note": "Locates ~/.claude/projects/*/<session>.jsonl for stuck_on_context; process layer owns file layout of Claude Code."
     },
     {
@@ -922,8 +922,8 @@
       "what": "is a station quiet",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:quiet",
+      "ported": true,
       "note": ""
     },
     {
@@ -1197,8 +1197,8 @@
       "what": "is a station between turns",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:between_turns",
+      "ported": true,
       "note": "Wrapper over quiet with the wait set to 0; used by the watch features, owned with the process layer."
     },
     {
@@ -1208,8 +1208,8 @@
       "what": "does someone have the session open",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:attached",
+      "ported": true,
       "note": ""
     },
     {
@@ -1547,11 +1547,11 @@
       "kind": "function",
       "line": 1633,
       "what": "when a session last did anything",
-      "ticket": "TR-961",
+      "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Only the idle wake reads it; kept with that ticket."
+      "python": "tares.crew.claude:station_updated",
+      "ported": true,
+      "note": "Moved from TR-961 to TR-950: TR-950's working doc lists it with the process layer."
     },
     {
       "name": "iw_scan_reviewer",
@@ -1668,22 +1668,22 @@
       "kind": "function",
       "line": 1826,
       "what": "the Claude Code version on PATH",
-      "ticket": "TR-963",
+      "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.claude:claude_version",
+      "ported": true,
+      "note": "Moved from TR-963 to TR-950: TR-950's working doc lists it with the process layer."
     },
     {
       "name": "older_than",
       "kind": "function",
       "line": 1830,
       "what": "compare Claude Code versions",
-      "ticket": "TR-963",
+      "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.claude:older_than",
+      "ported": true,
+      "note": "Moved from TR-963 to TR-950: TR-950's working doc lists it with the process layer."
     },
     {
       "name": "running_version",
@@ -1692,8 +1692,8 @@
       "what": "the Claude Code version a session runs",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:running_version",
+      "ported": true,
       "note": "In TR-950's list; the Claude Code move (TR-963) is its main caller."
     },
     {
