@@ -24,9 +24,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import claude, contract, locks, state
+from . import claude, contract, state
 from .client import TaresClient, TaresHTTPError, cksum, grants_sum
 from .errors import CrewError, SessionListUnreadableError
+from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
 from .paths import ME, CrewPaths
 
 LETTERS = "ABCDEFGH"
@@ -340,17 +341,6 @@ def cc_behind(paths: CrewPaths, target: str, agents: list) -> int:
 
 
 # ---------- the watch and the pace ----------
-
-
-def watch_pid(paths: CrewPaths):
-    """The pid of the background watch when it runs, else None."""
-    try:
-        pid = int(state.read_text(paths.home / "watch.pid").strip())
-    except (OSError, ValueError):
-        return None
-    if not locks.pid_alive(pid) or "crew watch" not in claude._command_line(pid):
-        return None
-    return pid
 
 
 def pace_status_line(client: TaresClient) -> str:

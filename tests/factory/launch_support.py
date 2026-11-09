@@ -13,8 +13,8 @@ The driver runs in a throwaway crew (the environment parity.crew_env gives: the 
 
 Both print what the function prints and exit as it does, so the two can be compared. Functions:
 write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
-level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, and the whole command `spawn` (bash's cmd_spawn, or cmd_spawn of
-tares.crew.stations). The word {TMP} in an
+level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
+tares.crew.stations), `revive` and `restart` (cmd_revive and cmd_restart, or those of tares.crew.lifecycle). The word {TMP} in an
 argument is the temp folder.
 
 Environment: LAUNCH_WORLD is JSON for the fake Tares (settings, projects, grants, token, health,
@@ -193,8 +193,8 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
                   "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note", "spawn"}
-NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn"}
+                  "idle_wake_note", "spawn", "revive", "restart"}
+NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart"}
 
 
 def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
@@ -205,8 +205,8 @@ def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
     script = f'set -euo pipefail; source "$1" x; shift; {prime}{fn} "$@"'
     if fn == "idle_wake_on":
         script = script.replace('idle_wake_on "$@"', 'idle_wake_on')
-    if fn == "spawn":
-        script = script.replace('spawn "$@"', 'cmd_spawn "$@"')
+    if fn in ("spawn", "revive", "restart"):
+        script = script.replace(f'{fn} "$@"', f'cmd_{fn} "$@"')
     p = subprocess.run(["bash", "-c", script, "bash", str(lib), *args], env=env, stdin=None)
     return p.returncode
 
@@ -257,6 +257,9 @@ def run_python(fn: str, args: list) -> int:
         elif fn == "spawn":
             from tares.crew import stations
             return stations.cmd_spawn(["spawn", *args], dict(os.environ))
+        elif fn in ("revive", "restart"):
+            from tares.crew import lifecycle
+            return getattr(lifecycle, f"cmd_{fn}")([fn, *args], dict(os.environ))
         else:
             print(f"launch_support: no function {fn}", file=sys.stderr)
             return 2
