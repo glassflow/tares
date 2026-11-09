@@ -177,7 +177,7 @@ ck("a helper is named after its parent and keeps its parent's place",
    err is None and a[:6] == ("crew-reviewer-probe", "helper", "crew-reviewer", "", "", str(CREW)), f"{err} {a[:6]}")
 ck("its prompt names the parent's manual, the parent and the task",
    len(a) > 8 and a[8] == "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, "
-           "write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook at PR 9", a[8:9])
+           "write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook at PR 9", str(a[8:9]))
 err, ls = run(["releaser-helper", "deploy", "ship it"])
 ck("a releaser-helper belongs to the releaser", err is not None and "crew-releaser is not a recorded station" in err, str(err))
 refused("a parent that is not recorded", ["helper", "nobody", "probe", "x"], "nobody is not a recorded station")
