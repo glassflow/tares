@@ -342,16 +342,16 @@ def job_state(job_id: str) -> dict:
     return data
 
 
-def transcript_of(station: str, claude=None, paths=None) -> str:
+def transcript_of(station: str, claude=None, paths=None, agents=None) -> str:
     """The station's conversation transcript, ~/.claude/projects/*/<session>.jsonl; "" when there is none.
     The session id is the one on the station's row of `claude agents --json`, else the one recorded for
-    the station."""
+    the station. `agents` is that list when the caller already has it (status asks once, not per station)."""
     paths = paths or CrewPaths.from_env()
     sid = stations_get(station, "id", paths=paths)
     s = ""
     if sid:
         try:
-            for row in active_json(claude):
+            for row in (agents if agents is not None else active_json(claude)):
                 if row.get("id") == sid:
                     s = jq_raw(_val(row.get("sessionId"), ""))
                     break

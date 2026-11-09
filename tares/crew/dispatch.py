@@ -36,6 +36,20 @@ def _tidy(argv: list[str], env: dict) -> int:
 PORTED[("tidy",)] = _tidy
 
 
+def _view(name: str):
+    """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
+    def run(argv: list[str], env: dict) -> int:
+        from .views import COMMANDS
+        return COMMANDS[name](argv, env)
+    run.__name__ = name
+    return run
+
+
+for _name in ("status", "desk", "roster", "attach", "logs"):
+    PORTED[(_name,)] = _view(_name)
+    PORTED[("crew", _name)] = _view(_name)
+
+
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
