@@ -907,10 +907,10 @@ scenario(Scenario(
     setup=_multi,
     steps=[Step(["doctor"], drop=DOCTOR_DROP)],
     checks=[("multi doctor: trust per repo",
-             lambda r: re.search(r"ok .*project argus: \S+/core trusted", r.out(0)) is not None
-             and re.search(r"FIX .*project argus: Claude Code has not trusted \S+/ro-charts", r.out(0)) is not None),
+             lambda r: re.search(r"ok .*project argus: .+[/\\]core trusted", r.out(0)) is not None
+             and re.search(r"FIX .*project argus: Claude Code has not trusted .+[/\\]ro-charts", r.out(0)) is not None),
             ("multi doctor: GitHub write access per repo",
-             lambda r: re.search(r"ok .*\S+/core is o/core on GitHub \(WRITE\)", r.out(0)) is not None
+             lambda r: re.search(r"ok .*[/\\]core is o/core on GitHub \(WRITE\)", r.out(0)) is not None
              and "FIX   project argus: gh has READ on o/ro-charts" in r.out(0))],
     covers=["multi doctor: trust per repo", "multi doctor: GitHub write access per repo"],
 ))
