@@ -58,6 +58,18 @@ for _name in ("status", "desk", "roster", "attach", "logs"):
     PORTED[("crew", _name)] = _view(_name)
 
 
+def _person(name: str) -> Callable[[list[str], dict], int]:
+    """A command of person.py (projects, finish, context, plan), imported when it runs."""
+    def run_it(argv: list[str], env: dict) -> int:
+        from . import person
+        return getattr(person, name)(argv, env)
+    return run_it
+
+
+for _word in ("projects", "finish", "context", "plan"):
+    PORTED[(_word,)] = _person(f"cmd_{_word}")
+
+
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
