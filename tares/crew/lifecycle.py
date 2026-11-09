@@ -117,7 +117,7 @@ def _remove_session(job_id: str, binary: str) -> None:
 def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) -> None:
     """factory revive <station> [--fresh] [prompt]: same name, same env; the conversation resumed, or a new one."""
     state.require_crew(paths)
-    if not args:
+    if not args or not args[0]:
         _usage(REVIVE_USAGE)
     station = stations.station_name(args[0], paths)
     rest = list(args[1:])
@@ -173,14 +173,14 @@ def _keep_earlier(paths: CrewPaths, station: str, old_id: str, session: str) -> 
             return
         row["earlier"] = earlier + [{"id": old_id, "sessionId": session, "replacedAt": state.utc_stamp()}]
         state.write_json(paths.stations, data)
-    except CrewError:
+    except (CrewError, OSError):
         pass
 
 
 def restart(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) -> None:
     """factory restart <station> [--fresh]: stop it and start it again with freshly generated settings."""
     state.require_crew(paths)
-    if not args:
+    if not args or not args[0]:
         _usage(RESTART_USAGE)
     station = stations.station_name(args[0], paths)
     job_id = state.stations_get(station, "id", paths=paths)
@@ -209,7 +209,7 @@ def _stop_wait(env) -> int:
     """How many one-second looks `seq "${FACTORY_STOP_WAIT:-10}"` gives; none for a number below 1 or for text."""
     try:
         return max(int(float(_stop_wait_text(env))), 0)
-    except ValueError:
+    except (ValueError, OverflowError):
         return 0
 
 
@@ -219,7 +219,7 @@ def _stop_wait(env) -> int:
 def retire(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) -> None:
     """factory retire <station>: stop it for good (stations.json keeps it, as retired)."""
     state.require_crew(paths)
-    if not args:
+    if not args or not args[0]:
         _usage(RETIRE_USAGE)
     station = stations.station_name(args[0], paths)
     job_id = state.stations_get(station, "id", paths=paths)

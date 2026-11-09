@@ -302,6 +302,8 @@ code, out, err, _ = run("retire", ["nobody"])
 ck("an unknown station is refused", code == 1 and "nobody is not a recorded station" in err, err)
 code, out, err, _ = run("retire", [])
 ck("no station: the usage line", code == 1 and "usage: factory retire <station>" in err, err)
+code, out, err, _ = run("retire", [""])
+ck("an empty station: the usage line", code == 1 and "usage: factory retire <station>" in err, err)
 reset({"crew-reviewer": station(role="reviewer", id="cccc0001")}, [fake_claude.agent_row("working", "cccc0001", "crew-reviewer", str(work))])
 code, out, err, _ = run("retire", ["reviewer"])
 ck("a role word is this crew's station", code == 0 and stations()["crew-reviewer"]["status"] == "retired", err)
@@ -477,6 +479,8 @@ code, out, err, _ = run("revive", ["nobody"])
 ck("an unknown station", code == 1 and said(err) == ["nobody is not a recorded station"], str(said(err)))
 code, out, err, _ = run("revive", [])
 ck("no station: the usage line", code == 1 and said(err) == ["usage: factory revive <station> [--fresh] [prompt]"], str(said(err)))
+code, out, err, _ = run("revive", [""])
+ck("an empty station: the usage line", code == 1 and said(err) == ["usage: factory revive <station> [--fresh] [prompt]"], str(said(err)))
 os.environ["FAKE_CLAUDE_AGENTS_FAIL"] = "1"
 code, out, err, _ = run("revive", ["shop-build-m1"])
 os.environ.pop("FAKE_CLAUDE_AGENTS_FAIL")
@@ -522,6 +526,22 @@ code, out, err, _ = run("restart", ["nobody"])
 ck("an unknown station", code == 1 and said(err) == ["nobody is not a recorded station"], str(said(err)))
 code, out, err, _ = run("restart", [])
 ck("no station: the usage line", code == 1 and said(err) == ["usage: tares factory restart <station>"], str(said(err)))
+code, out, err, _ = run("restart", [""])
+ck("an empty station: the usage line", code == 1 and said(err) == ["usage: tares factory restart <station>"], str(said(err)))
+ck("a wait of inf or text looks zero times, as seq does", LC._stop_wait({"FACTORY_STOP_WAIT": "inf"}) == 0
+   and LC._stop_wait({"FACTORY_STOP_WAIT": "soon"}) == 0 and LC._stop_wait({}) == 10, "stop wait")
+reset({"shop-build-m1": station()}, RUNNING)
+real_write = LC.state.write_json
+def _no_write(*a, **k):
+    raise OSError("disk full")
+LC.state.write_json = _no_write
+try:
+    LC._keep_earlier(CrewPaths.from_env(), "shop-build-m1", "aaaa0001", "sess")
+    kept = True
+except OSError:
+    kept = False
+LC.state.write_json = real_write
+ck("an unwritable stations.json while keeping the earlier session does not crash", kept, "OSError escaped")
 reset({"shop-build-m1": station(status="retired")}, RUNNING)
 code, out, err, _ = run("restart", ["shop-build-m1"])
 ck("a retired station is stopped, then revive refuses it", code == 1 and "was retired; factory spawn starts it again" in err, err)
