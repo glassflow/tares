@@ -31,6 +31,7 @@ test_crew_claude
 test_crew_client
 test_crew_dispatch
 test_crew_fake_claude
+test_crew_hooks
 test_crew_packaging
 test_crew_standup
 test_crew_startup_time
@@ -87,6 +88,8 @@ test_grants_single
 test_handoffs
 test_handover_single
 test_homebrew_formula
+test_hook_start
+test_hooks_json
 test_host
 test_http_poll
 test_import_boundary
