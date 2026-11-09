@@ -766,6 +766,10 @@ def make_app() -> FastAPI:
     # keys sit at the top of the body, not under `detail`, so a client can read `code` directly.
     @app.exception_handler(licence.LicenceRequired)
     async def _licence_required(_request, e: licence.LicenceRequired):
+        if licence.hosted():
+            # a Tares Cloud cell: plain words whatever the reason, and no page to read about it
+            return JSONResponse({"code": "licence_required", "message": licence.CLOUD_WORDS,
+                                 "url": ""}, status_code=402)
         return JSONResponse({"code": "licence_required", "message": e.message,
                              "url": licence.LICENCE_URL}, status_code=402)
 

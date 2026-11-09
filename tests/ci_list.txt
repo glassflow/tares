@@ -95,6 +95,7 @@ test_ingest_key
 test_labels
 test_licence
 test_licence_api
+test_licence_cloud
 test_linear
 test_login
 test_login_keyring

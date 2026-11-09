@@ -15,7 +15,7 @@ import type {
   TimelineEventRow, Trigger, ModelProvider, ModelProviders, Standup,
 } from "./types";
 import type { TimelineThread } from "./components/ProjectActivity";
-import { ENTERPRISE_URL, licenceSentence } from "./components/LicenceNeeded";
+import { ENTERPRISE_URL, licenceSentence, licenceWordsOn } from "./licenceWords";
 
 const TOKEN_KEY = "tares_token";
 export const auth = {
@@ -105,8 +105,9 @@ async function cloudCall<T>(url: string, init?: { method?: string; slug?: string
   if (!res.ok) {
     const b = body as { detail?: unknown; code?: unknown; message?: unknown } | null;
     const d = b?.detail;
-    // a workspace without a licence answers an invite with 402 {code: "licence_required", message, url}
-    const detail = res.status === 402 && b?.code === "licence_required" && typeof b.message === "string" ? b.message
+    // a workspace without a licence answers an invite with 402 {code: "licence_required", message, url};
+    // the cloud calls only happen on a hosted cell, which never says licence, so the words are ours
+    const detail = res.status === 402 && b?.code === "licence_required" ? licenceSentence()
       : typeof d === "string" ? d
       : res.status === 404 ? "Only the workspace owner can do that."
       : `Tares Cloud answered ${res.status}${res.statusText ? ` ${res.statusText}` : ""}.`;
@@ -188,10 +189,13 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = await res.json();
       // the licence answer keeps its keys at the top level of the body, not under `detail`
       if (body && typeof body === "object" && body.code === "licence_required") {
+        // the cell's own words and link only where licence words are allowed; a Tares Cloud cell
+        // (or one not yet known to be self-hosted) gets the plain sentence and no link
+        const on = licenceWordsOn();
         throw new LicenceRequired(
-          typeof body.message === "string" && body.message ? body.message : licenceSentence(),
+          on && typeof body.message === "string" && body.message ? body.message : licenceSentence(),
           402,
-          typeof body.url === "string" && body.url ? body.url : ENTERPRISE_URL,
+          on ? (typeof body.url === "string" && body.url ? body.url : ENTERPRISE_URL) : "",
         );
       }
       detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);

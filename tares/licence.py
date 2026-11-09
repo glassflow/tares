@@ -44,6 +44,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 LICENCE_URL = "https://docs.glassflow.ai/tares/enterprise"
 
+# What a person on a Tares Cloud cell is told when a team action is refused, whatever the reason
+# (no key, a key that ended, no seat left). The cloud needs no licence and shows no licence words.
+CLOUD_WORDS = "This is not available on this workspace right now."
+
+
+def hosted() -> bool:
+    """A Tares Cloud cell: the control plane sets TARES_WORKSPACE_API_URL on it. Only the words
+    follow this; the check itself (`ee_allowed`, `current`) never does."""
+    return bool((os.getenv("TARES_WORKSPACE_API_URL") or "").strip())
+
 # Root kid -> raw 32-byte Ed25519 public key. The private half is kept offline (TR-907).
 ROOT_PUBLIC_KEYS: dict[str, bytes] = {
     "fd683bfc46806063": bytes.fromhex(
@@ -405,8 +415,12 @@ def licence_desk(store, now: datetime | None = None) -> list[dict]:
     than there are people. Each threshold (30 days, 7 days, ended, over seats) is told once per
     licence (its kid); a renewed licence has a new kid and starts fresh. When a licence is first
     seen past several thresholds, only the most urgent is posted and the others count as told.
-    A licence that is not valid says nothing here. Returns the desk items added."""
+    A licence that is not valid says nothing here. A Tares Cloud cell says nothing either: its
+    people never see licence words. The check is refreshed on a cloud cell too (the watch keeps
+    `ee_allowed` and the licence gauges current); only the desk stays quiet. Returns the desk items added."""
     st = current(store, now, force=now is not None)
+    if hosted():
+        return []
     if not st["valid"]:
         return []
     kid = st["kid"]

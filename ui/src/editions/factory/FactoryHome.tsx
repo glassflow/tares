@@ -8,6 +8,7 @@ import {
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
 import { licenceSentence } from "@/components/LicenceNeeded";
+import { useCloud } from "@/cloud";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useEeSamples, useLicenceNoAnswer } from "@/eeSlots";
 import { useEdition } from "../edition";
 import { copyText } from "../copyText";
@@ -626,6 +627,7 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
   // registers a handler here when it is loaded, and `dialogRow` is the row whose dialog it shows.
   const eeFailed = useEeFailed();
   const licenceNoAnswer = useLicenceNoAnswer();
+  useCloud();   // renders again when /health lands: licenceSentence() says "licence" only on a self-hosted cell
   // what a refused team action says: the part did not load, the cell did not say whether it is licensed, or no licence
   const missing = eeFailed ? EE_FAILED_WORDS : licenceNoAnswer ? LICENCE_NO_ANSWER_WORDS : licenceSentence();
   const team = React.useRef<TeamHomeHandler | null>(null);

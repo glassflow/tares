@@ -25,6 +25,7 @@ factory-tickets
 grants-declined
 licence
 licence-needed
+licence-words
 login-handoff
 project-idle
 projects-list
