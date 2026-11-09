@@ -243,10 +243,11 @@ def claude_bin_override_and_errors():
     ck("CLAUDE_BIN wins as typed, even for a file that is not there",
        cc.claude_bin({"CLAUDE_BIN": "/no/such claude", "PATH": ""}, "linux") == "/no/such claude")
     real = script(T / "ov" / "a", "claude", "#!/bin/sh\necho real\n")
-    ck("CLAUDE_BIN beats a good claude on PATH",
-       cc.claude_bin({"CLAUDE_BIN": "/mine/claude", "PATH": str(Path(real).parent)}, "linux") == "/mine/claude")
-    ck("an empty CLAUDE_BIN counts as unset (${CLAUDE_BIN:-})",
-       cc.claude_bin({"CLAUDE_BIN": "", "HOME": str(T / "nohome"), "PATH": str(Path(real).parent)}, "linux") == real)
+    if not WIN:  # the POSIX branch splits PATH on ':', which cuts a drive letter
+        ck("CLAUDE_BIN beats a good claude on PATH",
+           cc.claude_bin({"CLAUDE_BIN": "/mine/claude", "PATH": str(Path(real).parent)}, "linux") == "/mine/claude")
+        ck("an empty CLAUDE_BIN counts as unset (${CLAUDE_BIN:-})",
+           cc.claude_bin({"CLAUDE_BIN": "", "HOME": str(T / "nohome"), "PATH": str(Path(real).parent)}, "linux") == real)
     try:
         cc.claude_bin({"PATH": str(T / "empty-path"), "HOME": str(T / "nohome")}, "win32")
         e = None
@@ -589,7 +590,8 @@ def transcript_of_finds_the_conversation():
         return
     reset()
     proj = HOME / ".claude" / "projects"
-    for p, s in (("-w-a", "sess-list"), ("-w-b", "sess-list"), ("-w-c", "sess-recorded"), ("-w-d", "sess[x]*")):
+    odd = [] if WIN else [("-w-d", "sess[x]*")]  # Windows cannot name a file with a *
+    for p, s in (("-w-a", "sess-list"), ("-w-b", "sess-list"), ("-w-c", "sess-recorded"), *odd):
         (proj / p).mkdir(parents=True, exist_ok=True)
         (proj / p / f"{s}.jsonl").write_text("{}\n", encoding="utf-8")
     station("st", id="0000000a", sessionId="sess-recorded")
@@ -606,8 +608,9 @@ def transcript_of_finds_the_conversation():
     station("st2", id="0000000a", sessionId="nope")
     ck("a session with no transcript file gives ''", cc.transcript_of("st2", paths=PATHS) == "")
     ck("a station nobody recorded gives ''", cc.transcript_of("ghost", paths=PATHS) == "")
-    station("st3", sessionId="sess[x]*")
-    ck("glob characters in a session id are literal", cc.transcript_of("st3", paths=PATHS) == str(proj / "-w-d" / "sess[x]*.jsonl") or WIN)
+    if not WIN:
+        station("st3", sessionId="sess[x]*")
+        ck("glob characters in a session id are literal", cc.transcript_of("st3", paths=PATHS) == str(proj / "-w-d" / "sess[x]*.jsonl"))
     station("st4", sessionId="../-w-c/sess-recorded")
     ck("a session id with a path separator is refused (gives '')", cc.transcript_of("st4", paths=PATHS) == "")
     station("st5", sessionId="*")
@@ -967,7 +970,8 @@ def claude_version_reads_the_first_line():
         ck(f"{label}: ''", got == "", short(got))
     ck("claude that cannot start: ''", cc.claude_version(str(T / "none here" / "claude")) == "")
     f.write_text("print('2.5.6 (Claude Code)')\nraise SystemExit(0)\n", encoding="utf-8")
-    ck("a claude that is given as an argument is the one run", cc.claude_version(make_launcher(T / "bad" / "v2", "claude", f)) == "2.5.6")
+    got = cc.claude_version(make_launcher(T / "bad" / "v2", "claude", f))
+    ck("a claude that is given as an argument is the one run", got == "2.5.6", short(got))
 
 
 # ============================================================ bash as the oracle
