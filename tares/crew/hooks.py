@@ -1,7 +1,9 @@
 """`tares hook <name> [args]`: the one way the Claude Code plugin starts a hook.
 
-A hook command in `claude-plugin/hooks/hooks.json` is `tares hook <name>`, never a bare `python3`
-(missing on Windows, or the Store alias) or `bash`. The name maps to a file under the plugin root.
+A hook command in `claude-plugin/hooks/hooks.json` is meant to be `tares hook <name>`, never a bare
+`python3` (missing on Windows, or the Store alias) or `bash`. hooks.json still runs `python3` and `bash`
+until TR-1103 switches it, after a tares release has this command. The name maps to a file under the
+plugin root.
 A Python script runs in this process with `runpy`, with stdin and stdout passed through and its
 exit code kept. A bash script (the guard and session-start, until TR-971 and TR-972 port them) runs
 through the `bash` found on PATH, which on Windows is Git Bash.
