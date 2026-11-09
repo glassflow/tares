@@ -36,8 +36,13 @@ ENV.update(HOME=str(T / "home"), USERPROFILE=str(T / "home"), PYTHONPATH=str(ROO
            PYTHONIOENCODING="utf-8")
 
 
-def tares(args, stdin="", extra=None):
-    return subprocess.run([sys.executable, "-c", SHIM_PY, *args], input=stdin, capture_output=True, text=True,
+# No real hook is a shell script any more, so the shell kind is tried on a hook added to HOOKS in the child.
+SHIM_SH = ("import sys; sys.argv[0] = 'tares'; from tares.crew import hooks; "
+           "hooks.HOOKS['fake-sh'] = ('sh', 'hooks/fake.sh'); from tares.cli import main; main()")
+
+
+def tares(args, stdin="", extra=None, shim=SHIM_PY):
+    return subprocess.run([sys.executable, "-c", shim, *args], input=stdin, capture_output=True, text=True,
                           encoding="utf-8", env=dict(ENV, **(extra or {})), cwd=str(T))
 
 
@@ -56,7 +61,7 @@ fake = T / "fake plugin"                      # a space in the path, as on a Win
     "if sys.argv[1:2] == ['boom']:\n"
     "    sys.exit('the message of a failing hook')\n"
     "print('challenger argv=' + repr(sys.argv[1:]))\n", encoding="utf-8", newline="\n")
-(fake / "hooks" / "session-start.sh").write_text("#!/usr/bin/env bash\ncat\necho\necho \"args=$*\"\nexit 3\n", encoding="utf-8", newline="\n")
+(fake / "hooks" / "fake.sh").write_text("#!/usr/bin/env bash\ncat\necho\necho \"args=$*\"\nexit 3\n", encoding="utf-8", newline="\n")
 
 print("a Python hook")
 r = tares(["hook", "ship", "--plugin-root", str(fake)], stdin='{"a": 1}')
@@ -103,8 +108,8 @@ ck("...and so does a payload that is not JSON", r.returncode == 0 and r.stdout =
 
 print("a shell hook")
 if shutil.which("bash"):
-    r = tares(["hook", "session-start", "--plugin-root", str(fake), "a", "b"], stdin="payload")
-    ck("session-start runs through bash with stdin and arguments, and its exit code is ours",
+    r = tares(["hook", "fake-sh", "--plugin-root", str(fake), "a", "b"], stdin="payload", shim=SHIM_SH)
+    ck("a shell hook runs through bash with stdin and arguments, and its exit code is ours",
        r.returncode == 3 and r.stdout.splitlines() == ["payload", "args=a b"],
        (r.returncode, r.stdout, r.stderr))
 else:
