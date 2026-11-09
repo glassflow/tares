@@ -78,6 +78,14 @@ def _heavy(argv: list[str], env: dict) -> int:
 PORTED[("heavy",)] = _heavy
 
 
+def _doctor(argv: list[str], env: dict) -> int:
+    from .doctor import cmd_doctor  # imported when used, so other commands start without it
+    return cmd_doctor(argv, env)
+
+
+PORTED[("doctor",)] = _doctor
+
+
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
