@@ -112,6 +112,17 @@ try:
     finally:
         fake.stop()
 
+    fake = FakeTares({"GET /api/crew/projects": (401, {"detail": "bad key"})})
+    try:
+        r = run(env, "projects", "--json", fake=fake)
+        ck("projects --json: a list Tares refuses is an error, not []", r.returncode == 1 and not r.stdout.strip()
+           and "did not give the crew's projects" in r.stderr, r.stdout + r.stderr)
+        r = run(env, "projects", fake=fake)
+        ck("projects: the text view keeps bash's answer when Tares refuses", r.returncode == 0
+           and "no projects handed to the crew yet" in r.stdout, r.stdout + r.stderr)
+    finally:
+        fake.stop()
+
     # --- finish
     fake = FakeTares({"GET /api/crew/projects": (200, {"projects": PROJECTS}),
                       "POST /api/projects/p1/finish": (409, {"detail": "Links App still has open tickets: T1"}),
@@ -120,6 +131,8 @@ try:
         r = run(env, "finish", fake=fake)
         ck("finish: no project is a usage error", r.returncode == 1 and "usage: " in r.stderr
            and "finish <project>" in r.stderr, r.stderr)
+        r = run(env, "finish", "", fake=fake)
+        ck("finish: an empty project is a usage error", r.returncode == 1 and "finish <project>" in r.stderr, r.stderr)
         r = run(env, "finish", "Links App", "all done", fake=fake)
         ck("finish: Tares's refusal is shown, exit 1", r.returncode == 1
            and "Tares did not finish Links App: Links App still has open tickets: T1" in r.stderr, r.stderr)

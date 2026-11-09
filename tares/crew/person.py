@@ -298,7 +298,7 @@ def _finish(args: list, env: dict) -> int:
         if env.get("FACTORY_STATION"):
             raise CrewError("only the person runs this. As a station, ask the person on the desk and call "
                             "finish_project with their answer.")
-        if not args:
+        if not args or not args[0]:
             return _usage('finish <project> ["your words"]')
         name, words = args[0], " ".join(args[1:])
         row = client.project_row(name)
@@ -390,6 +390,9 @@ def cmd_projects(argv: list, env: dict) -> int:
 def _projects(args: list, env: dict) -> int:
     client = prelude(["projects", *args], env)
     with client:
+        if "--json" in args:
+            # a script must tell "no projects" from "Tares refused the list"; the text view keeps bash's answer
+            client.crew_projects_or_die()
         rows = [p for p in client.crew_projects() if isinstance(p, dict)]
         if "--json" in args:
             out = [{**p, "builders": builders_of(p.get("name"), client.paths)} for p in rows]
