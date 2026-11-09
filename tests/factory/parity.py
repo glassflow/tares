@@ -73,6 +73,7 @@ class Step:
     stdin: str = ""
     before: object = None   # fn(tmp) run before the step: change files between two commands
     after: object = None    # fn(tmp) -> anything, run after the step; Run.snap(i) gives it back to a check
+    drop: tuple = ()        # regexes: printed lines that match one are left out of the comparison (not of the checks)
 
 
 @dataclass
@@ -87,6 +88,7 @@ class Scenario:
     tares: dict | None = None   # routes of a fake Tares to run for the scenario (see FakeTares); None: no Tares
     driver: str = ""     # a script of this folder that runs a function of the engine instead of a command
                          # (`<driver> <engine> <argv...>`), for code that has no command yet
+    ignore_calls: tuple = ()  # argument prefixes of calls to Claude Code that are left out of the comparison
 
 
 class Run:
@@ -98,6 +100,7 @@ class Run:
         self.crew = tmp / "crew"
         self.state = tmp / "claude"
         self.results = results
+        self.ignore_calls: tuple = ()
 
     def out(self, i: int = -1) -> str:
         """stdout and stderr of step i together, as the bash suites capture them (`>out 2>&1`)."""
@@ -770,6 +773,274 @@ scenario(Scenario(
     covers=[],
 ))
 
+# doctor: crew_test.sh, tares_test.sh (the lines that read "doctor"), freeze_test.sh, idle_wake_test.sh and
+# claude_update_test.sh each ask doctor a question. Here doctor runs against a fake Tares (fake_tares.py), a
+# fake `gh` and a fake `tares` on PATH. The bash doctor does not make the checks that are new in Python
+# (NEW_LABELS in tares/crew/doctor.py), and TR-970 ports its cmux and language-server checks: those lines
+# are set aside from the comparison, on both sides, with `drop`.
+
+sys.path.insert(0, str(HERE))
+import fake_tares  # noqa: E402
+
+NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows)\b",)
+TR970 = (r"cmux", r"language server")
+DOCTOR_DROP = NEW_CHECKS + TR970
+LSP_CALLS = (["plugin", "list"],)   # the language-server check asks Claude Code for its plugins (TR-970)
+# When Tares refuses the key in the environment, the bash doctor stops silently at the crew settings (its
+# `crew_settings` dies inside a pipe). The Python doctor says the settings are unanswered and goes on to the
+# checks after them. That is the one place the two differ on purpose; a scenario sets those lines aside.
+BASH_STOPS_EARLY = (r"^  warn  crew settings not answered yet", r"^  ok    gh signed in", r"^fix the items marked FIX$")
+
+
+def _fake_tool(tmp: Path, name: str) -> None:
+    make_launcher(tmp / "bin" / name, [name], script=HERE / "fake_tares.py")
+
+
+def _doctor_world(world: "fake_tares.World", repos: list = (), trusted: list = ()):
+    """A setup hook: start the fake Tares, put a fake gh and tares on PATH, hand the crew a key file, and
+    have Claude Code trust the crew home (and the folders named in `trusted`)."""
+    def setup(tmp: Path, env: dict) -> None:
+        _fake_tool(tmp, "gh")
+        _fake_tool(tmp, "tares")
+        for r in repos:
+            (tmp / r).mkdir(parents=True, exist_ok=True)
+        folders = [str(tmp / "crew")] + [str(tmp / t) for t in trusted]
+        (tmp / "home").mkdir(parents=True, exist_ok=True)
+        (tmp / "home" / ".claude.json").write_text(
+            json.dumps({"projects": {f: {"hasTrustDialogAccepted": True} for f in folders}}), encoding="utf-8")
+        _srv, base = fake_tares.serve(world)
+        env["TARESD_URL"] = base
+        env["TARES_FACTORY_MCP_URL"] = base + "/mcp"
+        crew = tmp / "crew"
+        crew.mkdir(parents=True, exist_ok=True)
+        if world.token:
+            f = crew / ".tares-token"
+            f.write_text(world.token, encoding="utf-8")
+            f.chmod(0o600)
+        env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
+    return setup
+
+
+scenario(Scenario(
+    name="doctor_notares",
+    suite="crew",
+    about="doctor without a Tares says how to start one",
+    setup=lambda tmp, env: (_fake_tool(tmp, "gh"), _fake_tool(tmp, "tares"),
+                            env.update(PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring")),
+    steps=[Step(["doctor"], env={"TARESD_URL": "http://127.0.0.1:9"}, drop=DOCTOR_DROP)],
+    checks=[("doctor without Tares says how to start one",
+             lambda r: "FIX   no Tares answers at http://127.0.0.1:9 (from the environment): start one with `tares up`, "
+                       "connect to your Tares Cloud workspace with `tares login`" in r.out(0) and r.code(0) == 1)],
+    covers=["doctor without Tares says how to start one"],
+))
+
+_ok_world = fake_tares.World()
+scenario(Scenario(
+    name="doctor_tares",
+    suite="crew",
+    about="doctor with a Tares: it answers, lets the crew in, and the MCP endpoint answers",
+    setup=_doctor_world(_ok_world),
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("doctor: Tares answers",
+             lambda r: re.search(r"  ok    Tares answers at http://127\.0\.0\.1:\d+", r.out(0)) is not None
+             and "ok    Tares lets this crew in" in r.out(0)),
+            ("doctor: the MCP endpoint answers",
+             lambda r: re.search(r"^  ok    MCP endpoint answers at http://127\.0\.0\.1:\d+/mcp$", r.out(0), re.M) is not None),
+            ("doctor: nothing about tares-mcp on PATH", lambda r: "tares-mcp" not in r.out(0)),
+            ("doctor: no Rius", lambda r: "rius" not in r.out(0).lower())],
+    covers=["doctor: Tares answers", "doctor: the MCP endpoint answers",
+            "doctor: nothing about tares-mcp on PATH", "doctor: no Rius"],
+))
+
+
+def _write(tmp: Path, rel: str, text: str) -> None:
+    f = tmp / rel
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(text, encoding="utf-8", newline="\n")
+
+
+def _crew_json(tmp: Path) -> None:
+    _write(tmp, "crew/crew.json", json.dumps({"stations": {r: {"model": "sonnet"} for r in
+                                                           ("orchestrator", "reviewer", "releaser", "builder")}}))
+
+
+def _kit_version() -> str:
+    return json.loads((ROOT / "claude-plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"]
+
+
+def _installed(tmp: Path, version: str) -> None:
+    _write(tmp, "home/.claude/plugins/installed_plugins.json", json.dumps(
+        {"version": 2, "plugins": {"tares@tares": [{"scope": "project", "projectPath": "/w/main", "version": version}]}}))
+
+
+def _remove_installed(tmp: Path) -> None:
+    (tmp / "home" / ".claude" / "plugins" / "installed_plugins.json").unlink()
+
+
+scenario(Scenario(
+    name="doctor_plugin_clash",
+    suite="crew",
+    about="doctor names an installed tares plugin of another version, and is quiet about the same version",
+    setup=_doctor_world(fake_tares.World()),
+    steps=[Step(["doctor"], before=lambda tmp: _installed(tmp, "0.2.1"), drop=DOCTOR_DROP),
+           Step(["doctor"], before=lambda tmp: _installed(tmp, _kit_version()), drop=DOCTOR_DROP)],
+    checks=[("doctor says the same",
+             lambda r: "warn  another version of the tares plugin is installed from a marketplace "
+                       "(tares@tares 0.2.1 project (/w/main))" in r.out(0)),
+            ("the same version installed is fine", lambda r: "another version of the tares plugin" not in r.out(1))],
+    covers=["doctor says the same", "the same version installed is fine"],
+))
+
+
+def _multi(tmp: Path, env: dict) -> None:
+    core, charts = tmp / "core", tmp / "ro-charts"
+    projects = [{"name": "argus", "repos": [{"path": str(core)}, {"path": str(charts)}]}]
+    _doctor_world(fake_tares.World(projects=projects), repos=["core", "ro-charts"], trusted=["core"])(tmp, env)
+    _crew_json(tmp)
+
+
+scenario(Scenario(
+    name="doctor_projects",
+    suite="crew",
+    ignore_calls=LSP_CALLS,
+    about="doctor checks each repo of a project: Claude Code's trust and GitHub write access",
+    setup=_multi,
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("multi doctor: trust per repo",
+             lambda r: re.search(r"ok .*project argus: .+[/\\]core trusted", r.out(0)) is not None
+             and re.search(r"FIX .*project argus: Claude Code has not trusted .+[/\\]ro-charts", r.out(0)) is not None),
+            ("multi doctor: GitHub write access per repo",
+             lambda r: re.search(r"ok .*[/\\]core is o/core on GitHub \(WRITE\)", r.out(0)) is not None
+             and "FIX   project argus: gh has READ on o/ro-charts" in r.out(0))],
+    covers=["multi doctor: trust per repo", "multi doctor: GitHub write access per repo"],
+))
+
+
+def _no_mcp(tmp: Path, env: dict) -> None:
+    w = fake_tares.World()
+    w.mcp = False
+    _doctor_world(w)(tmp, env)
+
+
+scenario(Scenario(
+    name="doctor_nomcp",
+    suite="crew",
+    about="doctor without an MCP server says how to start one; taresd itself is not an MCP server",
+    setup=_no_mcp,
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("doctor without an MCP server says how to start one",
+             lambda r: re.search(r"FIX   no MCP server answers at http://127\.0\.0\.1:\d+/mcp; start one with "
+                                 r"tares mcp --transport streamable-http", r.out(0)) is not None)],
+    covers=["doctor without an MCP server says how to start one"],
+))
+
+
+def _keys(tmp: Path, env: dict) -> None:
+    _doctor_world(fake_tares.World(token="stub-token"))(tmp, env)
+    _crew_json(tmp)
+    env["TARES_AUTH_TOKEN"] = "nvf_dead0000_revoked"
+
+
+def _drop_key_file(tmp: Path) -> None:
+    f = tmp / "crew" / ".tares-token"
+    f.unlink()
+    f.write_text("", encoding="utf-8")
+
+
+scenario(Scenario(
+    name="doctor_keys",
+    suite="tares",
+    about="doctor: a key Tares refuses never replaces the crew's; a crew without a key is flagged; no key is printed",
+    setup=_keys,
+    steps=[Step(["doctor"], after=lambda tmp: (tmp / "crew" / ".tares-token").read_text(encoding="utf-8"),
+                drop=DOCTOR_DROP + BASH_STOPS_EARLY),
+           Step(["doctor"], before=_drop_key_file, env={"TARES_AUTH_TOKEN": ""}, drop=DOCTOR_DROP + BASH_STOPS_EARLY)],
+    checks=[("doctor names the stations' key and finds it good",
+             lambda r: "ok    stations use a token with no key id from " in r.out(0)
+             and ", and Tares accepts it" in r.out(0)),
+            ("a key Tares refuses never replaces the crew's",
+             lambda r: "refuses key dead0000 from the environment; the crew keeps the key it has" in r.out(0)
+             and r.snap(0) == "stub-token"),
+            ("no key value in doctor's output",
+             lambda r: "nvf_dead0000_revoked" not in r.out(0) and "stub-token" not in r.out(0)),
+            ("doctor flags a crew without a key",
+             lambda r: "FIX   the stations have no key in " in r.out(1) and ": run tares login" in r.out(1))],
+    covers=["doctor names the stations' key and finds it good", "a key Tares refuses never replaces the crew's",
+            "no key value in doctor's output", "doctor flags a crew without a key"],
+))
+
+
+def _frozen(tmp: Path, env: dict) -> None:
+    w = fake_tares.World(settings={"kit": {"frozen": {"at": "2026-01-02T03:04:05Z", "by": "ada", "version": "0.0.1"}}})
+    _doctor_world(w)(tmp, env)
+    _crew_json(tmp)
+
+
+scenario(Scenario(
+    name="doctor_kit",
+    suite="freeze",
+    about="doctor: the kit follows the checkout, or is frozen (copy missing, or older than the checkout)",
+    setup=lambda tmp, env: (_doctor_world(fake_tares.World())(tmp, env), _crew_json(tmp)),
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("doctor says the kit follows the checkout",
+             lambda r: "ok    the kit follows the plugin checkout (not frozen)" in r.out(0))],
+    covers=["doctor says the kit follows the checkout"],
+))
+
+scenario(Scenario(
+    name="doctor_frozen",
+    suite="freeze",
+    about="doctor: a frozen kit whose copy is gone, then one whose copy is older than the checkout",
+    setup=_frozen,
+    steps=[Step(["doctor"], drop=DOCTOR_DROP),
+           Step(["doctor"], before=lambda tmp: (tmp / "crew" / "frozen-kit").mkdir(parents=True), drop=DOCTOR_DROP)],
+    checks=[("the freeze with no copy is a FIX", lambda r: "FIX   the kit is frozen since 2026-01-02T03:04:05Z by ada, but its copy" in r.out(0)),
+            ("doctor warns that a newer kit is not followed",
+             lambda r: "warn  the kit is frozen since 2026-01-02T03:04:05Z by ada, and the checkout has a newer kit "
+                       "that no station moves onto" in r.out(1))],
+    covers=["doctor warns that a newer kit is not followed"],
+))
+
+
+def _settings(**kw):
+    def setup(tmp: Path, env: dict) -> None:
+        _doctor_world(fake_tares.World(settings=kw))(tmp, env)
+        _crew_json(tmp)
+    return setup
+
+
+scenario(Scenario(
+    name="doctor_idle_wake",
+    suite="idle_wake",
+    about="doctor: idle_wake off says nothing, on without a watch warns",
+    setup=_settings(),
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("off: status and doctor have no wake line", lambda r: "idle_wake is on" not in r.out(0))],
+    covers=["off: status and doctor have no wake line"],
+))
+
+scenario(Scenario(
+    name="doctor_idle_wake_on",
+    suite="idle_wake",
+    about="doctor: idle_wake on without a running watch warns",
+    setup=_settings(idle_wake=True),
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("on: doctor warns that no watch is running",
+             lambda r: "warn  idle_wake is on but the watch is not running" in r.out(0)
+             and "ok    idle_wake is on" not in r.out(0))],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="doctor_claude_update",
+    suite="claude_update",
+    about="doctor tells when the watch does not move stations onto a new Claude Code",
+    setup=_settings(claude_update=False),
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("doctor tells the watch is off", lambda r: "claude_update" in r.out(0).lower())],
+    covers=["doctor tells the watch is off"],
+))
+
 
 # ---------------------------------------------------------------------------------------------
 # A fake Tares. `projects`, `finish`, `context` and `plan` talk to Tares, and parity has none: a scenario
@@ -1010,6 +1281,8 @@ ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\
 EPOCH = re.compile(r"(?P<pre>(?<![\w.])(?:at|since|until|epoch|ts|time|\w*_at|\w*_ts|\w*_time|\w*At)[\"']?\s*[=:]?\s*[\"']?)"
                    r"1[5-9]\d{8}(?:\d{3})?(?![\d.])")
 EPOCH_VALUE = re.compile(r"1[5-9]\d{8}(?:\d{3})?")
+# A fake Tares listens on a free port, a different one on each side
+PORT = re.compile(r"127\.0\.0\.1:\d{4,5}\b")
 UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 SESSION = re.compile(r"\bsession-\d+\b")
 # A job id (eight hex digits) is replaced only where a job id is printed: after `backgrounded ·`, or after
@@ -1034,6 +1307,7 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         flags = re.IGNORECASE if is_windows() else 0
         for p in sorted(forms, key=len, reverse=True):
             s = re.sub(re.escape(p), "<TMP>", s, flags=flags)
+    s = PORT.sub("127.0.0.1:<PORT>", s)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
@@ -1093,6 +1367,14 @@ def norm_file(text: str, name: str, tmp: Path | None = None) -> str:
     return norm_text(text, tmp).rstrip("\n")
 
 
+def dropped(text: str, patterns: tuple) -> str:
+    """text without the lines that match one of the regexes (a step's `drop`)."""
+    if not patterns:
+        return text
+    res = [re.compile(p) for p in patterns]
+    return "\n".join(ln for ln in text.split("\n") if not any(r.search(ln) for r in res))
+
+
 def norm_output(text: str, tmp: Path | None = None) -> str:
     """printed output: a whole-output JSON document gets sorted keys, any other text is normalised as is."""
     stripped = text.strip()
@@ -1128,7 +1410,7 @@ def bash_available() -> str:
     return ""
 
 
-def make_launcher(path: Path, extra: list) -> Path:
+def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
     """An executable that runs the Python fake: a shell script, or a .cmd file on Windows (returns its path).
 
     Named `claude`, it is the Claude Code of the scenario: on PATH for a command that runs `claude` by
@@ -1137,10 +1419,10 @@ def make_launcher(path: Path, extra: list) -> Path:
     The paths in it must be ASCII: cmd.exe reads a batch file in the console's code page."""
     if sys.platform == "win32":
         path = path.with_suffix(".cmd")
-        lines = ['@"%s" "%s" %s %%*' % (sys.executable, FAKE_CLAUDE, " ".join(extra)), "@exit /b %ERRORLEVEL%"]
+        lines = ['@"%s" "%s" %s %%*' % (sys.executable, script or FAKE_CLAUDE, " ".join(extra)), "@exit /b %ERRORLEVEL%"]
         path.write_bytes(("\r\n".join(lines) + "\r\n").encode("utf-8"))
     else:
-        path.write_text('#!/bin/sh\nexec "%s" "%s" %s "$@"\n' % (sys.executable, FAKE_CLAUDE, " ".join(extra)), encoding="utf-8")
+        path.write_text('#!/bin/sh\nexec "%s" "%s" %s "$@"\n' % (sys.executable, script or FAKE_CLAUDE, " ".join(extra)), encoding="utf-8")
         path.chmod(0o755)
     return path
 
@@ -1174,6 +1456,19 @@ def crew_env(tmp: Path, engine: str) -> dict:
     return env
 
 
+def _without_calls(text: str, prefixes: tuple) -> str:
+    """calls.jsonl without the calls whose arguments start with one of the prefixes."""
+    keep = []
+    for line in text.splitlines():
+        try:
+            args = json.loads(line).get("args") or []
+        except ValueError:
+            args = []
+        if not any(list(args[:len(pre)]) == list(pre) for pre in prefixes):
+            keep.append(line)
+    return "\n".join(keep) + ("\n" if keep else "")
+
+
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
@@ -1184,7 +1479,10 @@ def snapshot(run: Run) -> dict:
             if p.is_file() and (only is None or p.name in only):
                 rel = prefix + p.relative_to(base).as_posix()
                 try:
-                    files[rel] = norm_file(p.read_text(encoding="utf-8", errors="replace"), p.name, run.tmp)
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                    if p.name == "calls.jsonl" and run.ignore_calls:
+                        text = _without_calls(text, run.ignore_calls)
+                    files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
     return files
@@ -1235,6 +1533,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 side.skip = "not ported"
                 return side
         run = Run(tmp, results, fake)
+        run.ignore_calls = sc.ignore_calls
         for label, fn in sc.checks:
             try:
                 ok = bool(fn(run))
@@ -1247,7 +1546,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
         blocks = []
         for step, r in zip(sc.steps, results):
             blocks.append(f"== step: {' '.join(step.argv)} ==\nexit: {r['code']}\n"
-                          f"-- stdout --\n{norm_output(r['stdout'], tmp)}\n-- stderr --\n{norm_output(r['stderr'], tmp)}")
+                          f"-- stdout --\n{dropped(norm_output(r['stdout'], tmp), step.drop)}\n"
+                          f"-- stderr --\n{dropped(norm_output(r['stderr'], tmp), step.drop)}")
         for rel, content in snapshot(run).items():
             blocks.append(f"== file {rel} ==\n{content}")
         if fake is not None:  # what each engine asked Tares, and whether it sent a key (never the key)

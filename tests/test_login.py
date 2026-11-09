@@ -163,7 +163,9 @@ os.environ.pop("TARESD_URL")
 print("tares factory gets the saved workspace and key")
 import tares.cli as C  # noqa: E402
 got = {}
-C.os.execve = lambda path, argv, env: got.update(env) or (_ for _ in ()).throw(SystemExit(0))
+import tares.crew.dispatch as D  # noqa: E402
+# Take the environment where tares hands it to the engine, so the test holds whichever engine runs doctor.
+D.run = lambda argv, env, script: got.update(env) or (_ for _ in ()).throw(SystemExit(0))
 try:
     C._factory(["doctor"])
 except SystemExit:
