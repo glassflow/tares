@@ -9,7 +9,7 @@ one applies in tares/integrations/resolve.py; this module is the HTTP face of bo
   PUT    /api/factory/integrations/{slot}           admin: choose an integration and its integration settings
   POST   /api/factory/integrations/{slot}/test      admin: try an integration without saving
   GET    /api/factory/integrations/effective        what applies per slot, names only (the get_integrations tool)
-  GET    /api/projects/{uid}/integrations/{slot}    a project's own choice and what applies to it
+  GET    /api/projects/{uid}/integrations/{slot}    admin or the project's lead: its own choice and what applies
   PUT    /api/projects/{uid}/integrations/{slot}    admin or the project's lead
   DELETE /api/projects/{uid}/integrations/{slot}    admin or the project's lead: back to the factory's choice
   POST   /api/projects/{uid}/integrations/{slot}/test   admin or the project's lead
@@ -17,7 +17,9 @@ one applies in tares/integrations/resolve.py; this module is the HTTP face of bo
 A request that carries X-Tares-Station (a crew station) may use only the `effective` read, which
 never holds integration settings. No response holds a secret value: a read shows each secret as ""
 and says in `secrets` whether one is set. A project's settings are never merged with the
-factory's, in a write or in a test, so a project cannot make use of a factory secret.
+factory's, in a write or in a test, so a project cannot make use of a factory secret. A save or a
+test that changes the address and leaves a stored secret blank is 422: the old secret never goes
+to a new address. A test fills any field it does not post from the stored row.
 """
 from __future__ import annotations
 
@@ -102,10 +104,13 @@ def register(app, store, h):
                 "effective": applying(slot, uid)}
 
     # ── validation of a write or a test ──
-    def checked(slot: str, body: dict, uid: str | None, installed: bool = True):
-        """(name, settings to store or test) for a request body, or a 422 naming what is wrong.
-        The settings are the posted ones reconciled with this scope's own stored row of the same
-        integration (a blank secret keeps the stored one)."""
+    def checked(slot: str, body: dict, uid: str | None, test: bool = False):
+        """(class, name, settings, stored, schema) for a request body, or a 422 naming what is
+        wrong. The settings are the posted ones reconciled with this scope's own stored row of the
+        same integration (a blank secret keeps the stored one). A save replaces the non-secret
+        fields; a test (`test=True`) takes the stored ones for any field it does not post, so it
+        tries what is saved. Either way a changed address with a secret left blank is refused: the
+        old secret never goes to a new address."""
         name = str(body.get("name") or "").strip()
         if not name:
             refuse(422, "name is required: the integration to use")
@@ -129,10 +134,20 @@ def register(app, store, h):
             _kind_ok(name, f, v)
         stored = store.stored_settings(slot, name, uid)
         secret = {f.name for f in cls.settings_schema if f.kind == "secret"}
+        moved = [f for f in cls.settings_schema if f.kind == "url"
+                 and (posted.get(f.name) or "") not in ("", stored.get(f.name))]
+        carried = [f for f in cls.settings_schema if f.kind == "secret"
+                   and posted.get(f.name, "") == "" and stored.get(f.name) not in (None, "")]
+        if moved and carried:
+            refuse(422, f"re-enter the secret when changing the address: {carried[0].name} "
+                        f"is stored for the old {moved[0].name}")
         try:
             merged = FactoryStore._merge_integration_settings(secret, posted, stored)
         except ValueError as e:
             refuse(422, str(e))
+        if test:
+            kept = {k: v for k, v in stored.items() if k in schema and k not in secret}
+            merged = {**kept, **merged}
         return cls, name, merged, stored, schema
 
     def _kind_ok(name: str, f, v) -> None:
@@ -200,16 +215,10 @@ def register(app, store, h):
     # ── the connection test ──
     async def run_test(request: Request, slot: str, body: dict, uid: str | None):
         licence.current(store)
-        cls, name, merged, stored, schema = checked(slot, body, uid)
-        posted = body.get("settings") or {}
+        cls, name, merged, _, schema = checked(slot, body, uid, test=True)
+        required_ok(schema, merged)
         urls = [f for f in cls.settings_schema if f.kind == "url"]
         secrets = [f for f in cls.settings_schema if f.kind == "secret"]
-        moved = [f for f in urls if (posted.get(f.name) or "") not in ("", stored.get(f.name))]
-        carried = [f for f in secrets if posted.get(f.name) in (None, "")
-                   and stored.get(f.name) not in (None, "")]
-        if moved and carried:
-            refuse(422, f"re-enter the secret when changing the address: {carried[0].name} "
-                        f"is stored for the old {moved[0].name}")
         for f in urls:
             v = merged.get(f.name)
             if not v:
@@ -250,7 +259,7 @@ def register(app, store, h):
 
     @app.get("/api/projects/{uid}/integrations/{slot}")
     def get_project_integration(uid: str, slot: str, request: Request):
-        p = project_of(uid, request, slot, False)
+        p = project_of(uid, request, slot, True)     # settings are for an admin or the lead
         licence.current(store)
         return entry(slot, p["id"])
 

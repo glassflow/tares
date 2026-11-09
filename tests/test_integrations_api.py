@@ -311,6 +311,40 @@ async def main():
             r = ru(await root.post("/api/factory/integrations/tickets/test", json={
                 "name": "faketix", "settings": {"url": "http://93.184.216.34/api", "token": ""}}))
             ck("the same address with a blank secret is fine", r.status_code == 200 and SEEN[-1]["token"] == SECRETS[0], r.text)
+            SEEN.clear()
+            r = ru(await root.post("/api/factory/integrations/tickets/test", json={"name": "faketix", "settings": {}}))
+            ck("a test with no settings tries what is saved, not only the secret",
+               r.status_code == 200 and SEEN[-1] == {"url": "http://93.184.216.34/api", "project": "FAC", "token": SECRETS[0]},
+               (r.text, SEEN))
+            SEEN.clear()
+            r = ru(await root.post("/api/factory/integrations/tickets/test", json={
+                "name": "faketix", "settings": {"token": "only-a-new-token"}}))
+            ck("a test that posts only a token reaches the stored address and project",
+               r.status_code == 200 and SEEN[-1] == {"url": "http://93.184.216.34/api", "project": "FAC", "token": "only-a-new-token"},
+               (r.text, SEEN))
+            r = ru(await root.post("/api/factory/integrations/tickets/test", json={
+                "name": "faketix", "settings": {"project": ""}}))
+            ck("a test is refused when a required field is left empty",
+               r.status_code == 422 and "project" in r.json()["detail"], r.text)
+            store.set_choice("tickets", "faketix", {"url": "http://169.254.169.254/latest", "project": "FAC",
+                                                    "token": SECRETS[0]}, "t")
+            r = ru(await root.post("/api/factory/integrations/tickets/test", json={"name": "faketix", "settings": {}}))
+            ck("a stored address that is not posted gets the outbound check too",
+               r.status_code == 422 and "internal address" in r.json()["detail"], r.text)
+            store.set_choice("tickets", "faketix", {"url": "http://93.184.216.34/api", "project": "FAC",
+                                                    "token": SECRETS[0]}, "t")
+            SEEN.clear()
+            r = ru(await root.post("/api/factory/integrations/tickets/test", json={
+                "name": "faketix", "settings": {"url": "http://93.184.216.35/api", "token": None}}))
+            ck("a changed address with the secret cleared carries nothing, so it is not refused",
+               r.status_code == 200 and "token" not in SEEN[-1] and SEEN[-1]["project"] == "FAC", (r.text, SEEN))
+            for label, st in (("blank", {"url": "http://93.184.216.35/api", "project": "FAC", "token": ""}),
+                              ("left out", {"url": "http://93.184.216.35/api", "project": "FAC"})):
+                r = ru(await root.put("/api/factory/integrations/tickets", json={"name": "faketix", "settings": st}))
+                ck(f"a save with a changed address and the secret {label} is 422",
+                   r.status_code == 422 and "re-enter the secret when changing the address" in r.json()["detail"], r.text)
+            ck("and the refused save changed nothing", store.stored_settings("tickets", "faketix") ==
+               {"url": "http://93.184.216.34/api", "project": "FAC", "token": SECRETS[0]}, store.stored_settings("tickets", "faketix"))
             r = ru(await root.post("/api/factory/integrations/tickets/test", json={
                 "name": "faketix", "settings": {"url": "http://127.0.0.1:9/x", "token": "t-new-secret"}}))
             ck("an internal address is refused", r.status_code == 422 and "internal address" in r.json()["detail"], r.text)
@@ -354,11 +388,30 @@ async def main():
                     ck(f"{who} may not test for p1", r.status_code == 403, r.status_code)
                     r = ru(await cx.delete("/api/projects/p1/integrations/tickets"))
                     ck(f"{who} may not clear p1's choice", r.status_code == 403, r.status_code)
+                    r = ru(await cx.get("/api/projects/p1/integrations/tickets"))
+                    ck(f"{who} may not read p1's choice", r.status_code == 403 and "http://93" not in r.text, r.status_code)
             async with mk(station="shop-build-x", role="builder") as cx:
                 ck("a station may not read a project's choice", (await cx.get("/api/projects/p1/integrations/tickets")).status_code == 403)
             async with mk(adm_k) as cx:
                 ck("an admin may choose for any project", (await cx.put("/api/projects/p2/integrations/review",
                                                                         json={"name": "fakerev", "settings": {}})).status_code == 200)
+            async with mk(adm_k) as cx:
+                ck("an admin may read a project's choice", (await cx.get("/api/projects/p1/integrations/tickets")).status_code == 200)
+                await cx.put("/api/projects/p1/integrations/tickets", json=pb)
+            async with mk(ann_k) as cx:
+                for label, st in (("blank", {"url": "http://93.184.216.50/api", "project": "PRJ", "token": ""}),
+                                  ("left out", {"url": "http://93.184.216.50/api", "project": "PRJ"})):
+                    r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "faketix", "settings": st}))
+                    ck(f"a lead moving the address of a stored secret ({label}) is 422",
+                       r.status_code == 422 and "re-enter the secret" in r.json()["detail"], r.text)
+                ck("and the project row is unchanged", store.stored_settings("tickets", "faketix", "p1") ==
+                   {"url": "http://93.184.216.40/api", "project": "PRJ", "token": SECRETS[2]},
+                   store.stored_settings("tickets", "faketix", "p1"))
+                SEEN.clear()
+                r = ru(await cx.post("/api/projects/p1/integrations/tickets/test", json={"name": "faketix", "settings": {}}))
+                ck("a project test with no settings tries the project's own saved values",
+                   r.status_code == 200 and SEEN[-1] == {"url": "http://93.184.216.40/api", "project": "PRJ", "token": SECRETS[2]},
+                   (r.text, SEEN))
             ck("the project row is its own, the factory's is untouched",
                store.stored_settings("tickets", "faketix", "p1")["token"] == SECRETS[2]
                and store.stored_settings("tickets", "faketix")["token"] == SECRETS[0])
