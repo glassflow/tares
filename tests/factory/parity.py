@@ -85,6 +85,8 @@ class Scenario:
     about: str = ""
     setup: object = None    # fn(tmp, env) run once before the first step: build files, a repo, a link
     tares: dict | None = None   # routes of a fake Tares to run for the scenario (see FakeTares); None: no Tares
+    driver: str = ""     # a script of this folder that runs a function of the engine instead of a command
+                         # (`<driver> <engine> <argv...>`), for code that has no command yet
 
 
 class Run:
@@ -381,6 +383,292 @@ scenario(Scenario(
          lambda r: r.code(1) == 0 and _gone("crew/tmp/scratch")(r)),
     ],
     covers=[],
+))
+
+# launch_*: building and starting a station (write_settings, launch, boot_prompt, grant_rules,
+# compact_window). Not a command yet, so each runs through tests/factory/launch_support.py, which calls
+# the function of the bash engine (sourced from a copy of the kit) or of tares.crew.launch, on a fake
+# Tares of its own. The assertions are those of crew_test.sh, read off the files the station is given.
+
+LAUNCH_DRIVER = "launch_support.py"
+LAUNCH_GRANT = '- "the releaser may restart the staging database" (2026-01-02)\n'
+
+
+def lstep(op: str, *args: str, world: dict | None = None, setup: dict | None = None, stdin: str = "",
+          env: dict | None = None) -> Step:
+    """One call of the driver: the function, its arguments, the fake Tares and the crew home it runs on."""
+    e = dict(env or {})
+    if world is not None:
+        e["LAUNCH_WORLD"] = json.dumps(world)
+    if setup is not None:
+        e["LAUNCH_SETUP"] = json.dumps(setup)
+    return Step([op, *args], env=e, stdin=stdin)
+
+
+def lworld(autonomy: str = "L4-ship", projects: list | None = None, grants: str = "", project_grants: dict | None = None,
+           **settings) -> dict:
+    return {"settings": {"autonomy": autonomy, "releaser": True, "release_profile": "kind", "challenger": False,
+                         "builders_max": 3, **settings},
+            "projects": projects or [], "grants": {"all": grants, "projects": project_grants or {}}}
+
+
+def station_json(r: "Run", station: str) -> dict:
+    return json.loads((r.crew / "stations" / f"{station}.settings.json").read_text(encoding="utf-8"))
+
+
+def allow_of(r: "Run", station: str) -> list:
+    return station_json(r, station)["autoMode"]["allow"]
+
+
+def tmp_path(r: "Run", *parts: str) -> str:
+    return str(r.tmp.joinpath(*parts))
+
+
+def relayed(allow: list) -> bool:
+    return any(re.search(r"relayed .*yes", a) for a in allow)
+
+
+def per_role(label: str, fn) -> list:
+    """The checks of a crew_test.sh loop over `for r in orchestrator reviewer releaser`: one label (with its
+    literal `$r`), true when fn(run, role) holds for every role."""
+    return [(label, lambda r, fn=fn: all(fn(r, role) for role in ("orchestrator", "reviewer", "releaser")))]
+
+
+_ROLE_STEPS = [lstep("write_settings", f"crew-{role}", role, "", "", "",
+                     world=lworld("L3-review", grants=LAUNCH_GRANT)) for role in ("orchestrator", "reviewer", "releaser")]
+
+scenario(Scenario(
+    name="launch_settings_crew",
+    suite="crew",
+    about="the settings file of the orchestrator, reviewer and releaser (env, plugin, permissions, grants)",
+    driver=LAUNCH_DRIVER,
+    steps=_ROLE_STEPS,
+    checks=[
+        *per_role("crew-$r env FACTORY_STATION", lambda r, role: station_json(r, f"crew-{role}")["env"]["FACTORY_STATION"] == f"crew-{role}"),
+        *per_role("crew-$r env FACTORY_ROLE", lambda r, role: station_json(r, f"crew-{role}")["env"]["FACTORY_ROLE"] == role),
+        *per_role("crew-$r env FACTORY_PARENT empty", lambda r, role: station_json(r, f"crew-{role}")["env"]["FACTORY_PARENT"] == ""),
+        *per_role("crew-$r has no TARES_PROJECT", lambda r, role: not station_json(r, f"crew-{role}")["env"].get("TARES_PROJECT")),
+        *per_role("crew-$r is told the shared MCP endpoint",
+                  lambda r, role: station_json(r, f"crew-{role}")["env"]["TARES_FACTORY_MCP_URL"] == "http://127.0.0.1:8788/mcp"),
+        ("no Rius, no comms", lambda r: not re.search("rius|comms", json.dumps(station_json(r, "crew-reviewer")), re.I)),
+        ("stations turn the plugin on, whatever the person's settings say",
+         lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
+        ("orchestrator may spawn",
+         lambda r: "Bash(factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
+        ("nothing goes to production without the person",
+         lambda r: any("needs" in x and "prod" in x for x in station_json(r, "crew-releaser")["autoMode"]["soft_deny"])
+         and "L5" not in json.dumps(station_json(r, "crew-releaser"))),
+        ("grant quoted in the allow rules",
+         lambda r: any('granted this on 2026-01-02 for all projects, in their own words: '
+                       '"the releaser may restart the staging database". Acting' in x for x in allow_of(r, "crew-releaser"))),
+    ],
+    covers=["crew-$r env FACTORY_STATION", "crew-$r env FACTORY_ROLE", "crew-$r env FACTORY_PARENT empty",
+            "crew-$r has no TARES_PROJECT", "crew-$r is told the shared MCP endpoint", "no Rius, no comms",
+            "stations turn the plugin on, whatever the person's settings say", "orchestrator may spawn",
+            "nothing goes to production without the person", "grant quoted in the allow rules"],
+))
+
+_LINKS = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
+scenario(Scenario(
+    name="launch_settings_builder",
+    suite="crew",
+    about="a builder in a repo of its project, at L3 (settings and the project's id in stations.json)",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("write_settings", "links-app-build-m1", "builder", "crew-orchestrator", "Links App", "{TMP}/links",
+                 world=lworld("L3-review", projects=[_LINKS]))],
+    checks=[
+        ("builder TARES_PROJECT is the project id, the name beside it",
+         lambda r: station_json(r, "links-app-build-m1")["env"]["TARES_PROJECT"] == "uc_links"
+         and station_json(r, "links-app-build-m1")["env"]["TARES_PROJECT_NAME"] == "Links App"),
+        ("builder FACTORY_PARENT", lambda r: station_json(r, "links-app-build-m1")["env"]["FACTORY_PARENT"] == "crew-orchestrator"),
+        ("builder FACTORY_REPO", lambda r: station_json(r, "links-app-build-m1")["env"]["FACTORY_REPO"] == tmp_path(r, "links")),
+        ("builder worktrees in its repo",
+         lambda r: station_json(r, "links-app-build-m1")["env"]["FACTORY_WORKTREES"] == tmp_path(r, "links") + "/.factory/worktrees"),
+        ("L3: builder waits for the relayed yes", lambda r: relayed(allow_of(r, "links-app-build-m1"))),
+        ("L3: the no-CI clause holds at L3 too",
+         lambda r: any(re.search(r"relayed .*yes", a) and "no CI checks configured" in a for a in allow_of(r, "links-app-build-m1"))),
+        ("L3: no pre-authorized merge",
+         lambda r: not any("pre-authorized at level" in a for a in allow_of(r, "links-app-build-m1"))),
+        ("stations leave cmux hooks on, so its permission alerts stay",
+         lambda r: "CMUX_CLAUDE_HOOKS_DISABLED" not in station_json(r, "links-app-build-m1")["env"]),
+    ],
+    covers=["builder TARES_PROJECT is the project id, the name beside it", "builder FACTORY_PARENT", "builder FACTORY_REPO",
+            "builder worktrees in its repo", "L3: builder waits for the relayed yes",
+            "L3: the no-CI clause holds at L3 too", "L3: no pre-authorized merge",
+            "stations leave cmux hooks on, so its permission alerts stay"],
+))
+
+_CORE = {"id": "uc_core", "name": "strict", "repos": [{"path": "{TMP}/core"}]}
+_LOOSE = {"id": "uc_loose", "name": "loose", "repos": [{"path": "{TMP}/core"}]}
+scenario(Scenario(
+    name="launch_settings_levels",
+    suite="crew",
+    about="a project handed over stricter keeps its level, one at the crew's level merges on the gate",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("write_settings", "strict-build-m1", "builder", "crew-orchestrator", "strict", "{TMP}/core",
+                 world=lworld("L4-ship", projects=[_CORE, _LOOSE]),
+                 setup={"stations": {"strict-build-m1": {"autonomy": "L3-review", "project_id": "uc_core"}}}),
+           lstep("write_settings", "loose-build-m1", "builder", "crew-orchestrator", "loose", "{TMP}/core",
+                 world=lworld("L4-ship", projects=[_CORE, _LOOSE]))],
+    checks=[
+        ("a project handed over stricter keeps it", lambda r: relayed(allow_of(r, "strict-build-m1"))),
+        ("L4: the builder merges on the gate",
+         lambda r: any("pre-authorized at level L4-ship" in a for a in allow_of(r, "loose-build-m1"))),
+    ],
+    covers=["a project handed over stricter keeps it", "L4: the builder merges on the gate"],
+))
+
+scenario(Scenario(
+    name="launch_settings_lowered",
+    suite="crew",
+    about="a crew lowered after the hand-over takes the project's builder down with it",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("write_settings", "loose-build-m1", "builder", "crew-orchestrator", "loose", "{TMP}/core",
+                 world=lworld("L3-review", projects=[_LOOSE]),
+                 setup={"stations": {"loose-build-m1": {"autonomy": "L4-ship", "project_id": "uc_loose"}}})],
+    checks=[("a crew lowered later takes the project down with it", lambda r: relayed(allow_of(r, "loose-build-m1")))],
+    covers=["a crew lowered later takes the project down with it"],
+))
+
+_ARGUS = {"id": "uc_argus", "name": "argus", "repos": [{"path": "{TMP}/argus/core"}, {"path": "{TMP}/argus/charts"}]}
+scenario(Scenario(
+    name="launch_settings_multi",
+    suite="crew",
+    about="one project with two repos: each builder is scoped to its repo, the reviewer sees both",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("write_settings", "argus-build-m1-charts", "builder", "crew-orchestrator", "argus", "{TMP}/argus/charts",
+                 world=lworld("L4-ship", projects=[_LINKS, _ARGUS])),
+           lstep("write_settings", "crew-reviewer", "reviewer", "", "", "", world=lworld("L4-ship", projects=[_LINKS, _ARGUS]))],
+    checks=[
+        ("multi: each builder runs in its repo",
+         lambda r: station_json(r, "argus-build-m1-charts")["env"]["FACTORY_REPO"] == tmp_path(r, "argus", "charts")),
+        ("multi: a builder may push and merge only in its own repo",
+         lambda r: (lambda rules: len(rules) == 2 and all(tmp_path(r, "argus", "charts") in x and tmp_path(r, "argus", "core") not in x
+                                                           for x in rules))(
+             [x for x in allow_of(r, "argus-build-m1-charts") if re.match(r"^(Pushing|Merging)", x)])),
+        ("multi: a builder's worktrees stay within its project",
+         lambda r: "repositories of project argus: " in allow_of(r, "argus-build-m1-charts")[1]
+         and tmp_path(r, "argus", "core") in allow_of(r, "argus-build-m1-charts")[1]
+         and tmp_path(r, "links") not in allow_of(r, "argus-build-m1-charts")[1]),
+        ("multi: the reviewer's grant names every repo",
+         lambda r: any(tmp_path(r, "argus", "core") in x and tmp_path(r, "argus", "charts") in x and "factory/review" in x
+                       for x in allow_of(r, "crew-reviewer"))),
+    ],
+    covers=["multi: each builder runs in its repo", "multi: a builder may push and merge only in its own repo",
+            "multi: a builder's worktrees stay within its project", "multi: the reviewer's grant names every repo"],
+))
+
+
+def bg_calls(r: "Run") -> list:
+    return [c for c in r.calls() if c["args"] and c["args"][0] == "--bg"]
+
+
+def arg_after(args: list, flag: str):
+    return args[args.index(flag) + 1] if flag in args else None
+
+
+_UP_WORLD = lworld("L3-review", grants=LAUNCH_GRANT)
+_UP = [lstep("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", model, "high", f"Boot as the {role} station", world=_UP_WORLD)
+       for role, model in (("orchestrator", "opus"), ("reviewer", "sonnet"), ("releaser", "sonnet"))]
+scenario(Scenario(
+    name="launch_argv",
+    suite="crew",
+    about="the claude command line of the three crew stations, and what stations.json records for them",
+    driver=LAUNCH_DRIVER,
+    steps=_UP,
+    checks=[
+        *per_role("crew-$r recorded", lambda r, role: json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))[f"crew-{role}"]["status"] == "active"),
+        *per_role("crew-$r runs in the crew home",
+                  lambda r, role: json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))[f"crew-{role}"]["cwd"] == str(r.crew)),
+        ("orchestrator started first", lambda r: bg_calls(r)[0]["args"][2] == "crew-orchestrator"),
+        ("stations load this plugin",
+         lambda r: {arg_after(c["args"], "--plugin-dir") for c in bg_calls(r)} == {str((r.tmp / "kit").resolve())}),
+        ("stations launch with a 200k autocompact window",
+         lambda r: arg_after(next(c for c in bg_calls(r) if c["args"][2] == "crew-orchestrator")["args"], "--autocompact") == "200000"),
+        ("launched in the folder asked for, prompt last, model and effort given",
+         lambda r: all(c["cwd"] == str(r.crew) and c["args"][-1].startswith("Boot as the ") and arg_after(c["args"], "--effort") == "high"
+                       for c in bg_calls(r)) and arg_after(bg_calls(r)[1]["args"], "--model") == "sonnet"),
+        ("the grants it started with are kept for the watch",
+         lambda r: (r.crew / "stations" / "crew-releaser.grants").is_file()),
+    ],
+    covers=["crew-$r recorded", "crew-$r runs in the crew home", "orchestrator started first", "stations load this plugin",
+            "stations launch with a 200k autocompact window"],
+))
+
+scenario(Scenario(
+    name="launch_resume",
+    suite="crew",
+    about="a station restarted from its session: --resume with the id, the prompt still last",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("launch", "crew-reviewer", "reviewer", "", "", "", "{TMP}/crew", "sonnet", "high", "carry on", "sess-123",
+                 world=lworld("L3-review"))],
+    checks=[("--resume carries the session id and the prompt follows it",
+             lambda r: arg_after(bg_calls(r)[0]["args"], "--resume") == "sess-123" and bg_calls(r)[0]["args"][-1] == "carry on")],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="launch_fail",
+    suite="crew",
+    about="a station is refused (Haiku, an unreadable level) or does not start: said plainly, nothing recorded",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("launch", "crew-reviewer", "reviewer", "", "", "", "{TMP}/crew", "haiku", "high", "x", world=lworld("L3-review")),
+           lstep("launch", "crew-reviewer", "reviewer", "", "", "", "{TMP}/crew", "sonnet", "high", "x", world=lworld("L9-mad")),
+           lstep("launch", "crew-reviewer", "reviewer", "", "", "", "{TMP}/crew", "sonnet", "high", "x", world=lworld("L3-review"),
+                 env={"FAKE_CLAUDE_FAIL_FRESH": "1"})],
+    checks=[("the three refusals each exit 1 and say why",
+             lambda r: [r.code(i) for i in range(3)] == [1, 1, 1] and "Auto mode does not run on Haiku" in r.out(0)
+             and "no valid crew autonomy" in r.out(1) and "could not start crew-reviewer" in r.out(2)),
+            ("nothing is recorded for a station that did not start",
+             lambda r: "crew-reviewer" not in json.loads((r.crew / "stations.json").read_text(encoding="utf-8")))],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="launch_boot",
+    suite="crew",
+    about="the boot prompt of a station, with and without the idle wake note and a task",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("boot_prompt", "orchestrator", world=lworld("L3-review")),
+           lstep("boot_prompt", "reviewer", world=lworld("L3-review", idle_wake=True)),
+           lstep("boot_prompt", "builder", "work T1 and T2", world=lworld("L3-review", idle_wake=False)),
+           lstep("idle_wake_note", world=lworld("L3-review"))],
+    checks=[("the prompts name the role, the READY message and the task",
+             lambda r: "follow the Boot section" in r.out(0) and "send crew-orchestrator READY" in r.out(1)
+             and "Your task:\nwork T1 and T2" in r.out(2))],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="launch_grants_compact",
+    suite="crew",
+    about="grant lines into allow rules (all-project and project, dated, undated, noise), and the autocompact window",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("grant_rules", "Links App", "Pat", stdin=(
+               '- "restart staging" (2026-01-02)\n@project - "push to main on Fridays" (2026-02-03)\n'
+               '* 2026-03-04: deploy the docs\n2026-03-05 - tidy the cache\n- no date at all\nnot a grant\n- ""\n'
+               '- "dropped, the last line has no newline" (2026-04-05)'),
+                 world=lworld()),
+           lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": 100000}}}),
+           lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": "auto"}}}),
+           lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": "oops"}}})],
+    checks=[("grants read as bash reads them", lambda r: r.out(0).count("granted this") == 6 and "(undated)" in r.out(0)
+             and "for project Links App" in r.out(0) and "dropped" not in r.out(0)),
+            ("a window under 150k is raised and said", lambda r: "stations use 150000" in r.out(1) and r.results[1]["stdout"].strip() == "150000"),
+            ("auto stays auto, junk gives 200000", lambda r: r.out(2).strip() == "auto" and r.out(3).strip() == "200000")],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="launch_window",
+    suite="crew",
+    about="a window under 150k in crew.json: the station starts with --autocompact 150000, and it is said",
+    driver=LAUNCH_DRIVER,
+    steps=[lstep("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "go",
+                 world=lworld("L3-review"), setup={"crew": {"limits": {"autocompact_tokens": 100000}}})],
+    checks=[("window under 150k raised",
+             lambda r: arg_after(bg_calls(r)[0]["args"], "--autocompact") == "150000" and "stations use 150000" in r.out(0))],
+    covers=["window under 150k raised"],
 ))
 
 
@@ -724,6 +1012,8 @@ SESSION = re.compile(r"\bsession-\d+\b")
 JOB_ID = re.compile(r"(?P<pre>\bbackgrounded[^0-9a-f\n]+|\b(?:job|session|id|stop|rm)[ =:]+[\"']?)[0-9a-f]{8}\b")
 HEX8 = re.compile(r"[0-9a-f]{8}")
 PID_TEXT = re.compile(r"\b(pid|PID)([ =:]+)\d+")
+# The port of a throwaway fake Tares (an ephemeral port: five digits); 8787, 8788 and the like stay.
+PORT = re.compile(r"(?<=127\.0\.0\.1:)\d{5}\b")
 PID_KEYS = {"pid", "ppid", "watch_pid", "watchPid"}
 ID_KEYS = {"sessionId", "session_id", "id"}
 TIME_KEY = re.compile(r"(^(ts|time|at|since|until)$)|(_at$)|(At$)|(_ts$)|(_time$)", re.I)
@@ -744,6 +1034,7 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
     s = PID_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}<PID>", s)
     s = SESSION.sub("<ID>", s)
+    s = PORT.sub("<PORT>", s)
     s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
     return s
 
@@ -811,7 +1102,9 @@ def norm_output(text: str, tmp: Path | None = None) -> str:
 # ---------------------------------------------------------------------------------------------
 # Running one side
 
-def command_for(engine: str) -> list:
+def command_for(engine: str, sc: "Scenario | None" = None) -> list:
+    if sc is not None and sc.driver:
+        return [sys.executable, str(HERE / sc.driver), engine]
     override = os.environ.get("PARITY_CMD_" + engine.upper())
     return shlex.split(override) if override else [sys.executable, "-m", "tares.crew"]
 
@@ -925,7 +1218,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 step.before(tmp)
             senv = {**env, **{k: here(v) for k, v in step.env.items()}}
             try:
-                p = subprocess.run(command_for(engine) + [here(a) for a in step.argv], cwd=str(ROOT), env=senv,
+                p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv], cwd=str(ROOT), env=senv,
                                    input=step.stdin, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=STEP_TIMEOUT)
                 results.append({"code": p.returncode, "stdout": p.stdout, "stderr": p.stderr})

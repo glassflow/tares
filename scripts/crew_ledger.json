@@ -570,8 +570,8 @@
       "what": "turn grants into auto mode allow rules",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:grant_rules",
+      "ported": true,
       "note": "Pure text transform used only by write_settings, so it goes with settings generation although grants come from TR-949."
     },
     {
@@ -724,8 +724,8 @@
       "what": "refuse a model that cannot run auto mode",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:check_model",
+      "ported": true,
       "note": ""
     },
     {
@@ -735,8 +735,8 @@
       "what": "words describing an autonomy level",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:level_text",
+      "ported": true,
       "note": ""
     },
     {
@@ -746,8 +746,8 @@
       "what": "number for an autonomy level",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:level_rank",
+      "ported": true,
       "note": ""
     },
     {
@@ -757,8 +757,8 @@
       "what": "the role a helper works under",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:parent_role",
+      "ported": true,
       "note": ""
     },
     {
@@ -768,8 +768,8 @@
       "what": "generate a station's settings file",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -779,8 +779,8 @@
       "what": "the --plugin-dir flags for a launch",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:plugin_flags",
+      "ported": true,
       "note": ""
     },
     {
@@ -867,8 +867,8 @@
       "what": "the autocompact value for a launch",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:compact_window",
+      "ported": true,
       "note": "Feeds the --autocompact launch flag and FACTORY_AUTOCOMPACT in the settings; stuck_on_context (TR-959) also calls it."
     },
     {
@@ -933,8 +933,8 @@
       "what": "start a station with its flags and settings",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:launch",
+      "ported": true,
       "note": ""
     },
     {
@@ -944,8 +944,8 @@
       "what": "the first prompt of a station",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:boot_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1230,8 +1230,8 @@
       "what": "is idle wake on",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:idle_wake_on",
+      "ported": true,
       "note": "Moved here from TR-961: launch and boot_prompt call it first. It only reads the idle_wake crew setting; TR-957 and TR-958 call it too."
     },
     {
@@ -1252,8 +1252,8 @@
       "what": "what the watch says about idle wake",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:idle_wake_note",
+      "ported": true,
       "note": "Moved here from TR-961: boot_prompt prints it. TR-958 sends the same text from the watch."
     },
     {
@@ -4543,6 +4543,16 @@
       "note": ""
     },
     {
+      "name": "launch_support.py",
+      "kind": "suite",
+      "what": "a fake Tares, a copy of the kit and a driver that runs one launch function on either engine",
+      "ticket": "TR-953",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the launch_* scenarios of parity.py and by test_crew_launch.py; it goes when the bash engine does."
+    },
+    {
       "name": "lib.sh",
       "kind": "suite",
       "what": "shared test helpers: a real Tares on a free port",
@@ -4760,6 +4770,19 @@
       "python": "",
       "ported": false,
       "note": "The settings check belongs to TR-953: the Python write_settings must not set that variable."
+    },
+    {
+      "name": "parity launch cmux case",
+      "kind": "touchpoint",
+      "file": "tests/factory/parity.py",
+      "match": "(?i)cmux",
+      "line": 244,
+      "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
+      "ticket": "TR-953",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Same words as the crew_test.sh check, so the coverage report can match them."
     }
   ],
   "hook_entries": [
