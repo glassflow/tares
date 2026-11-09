@@ -38,8 +38,14 @@ def _crew_setup(argv: list[str], env: dict) -> int:
     return up.entry_crew_setup(argv, env)
 
 
+def _tidy(argv: list[str], env: dict) -> int:
+    from .tidy import cmd_tidy  # imported when used, so other commands start without it
+    return cmd_tidy(argv, env)
+
+
 PORTED[("crew", "up")] = _crew_up        # TR-956 (runs in Python only with TARES_FACTORY_ENGINE=python)
 PORTED[("crew", "setup")] = _crew_setup  # TR-956 (new: no bash twin)
+PORTED[("tidy",)] = _tidy
 
 
 def is_windows() -> bool:
