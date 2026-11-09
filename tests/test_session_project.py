@@ -159,7 +159,7 @@ def plugin():
     hooks = json.load(open(os.path.join(ROOT, "claude-plugin", "hooks", "hooks.json")))["hooks"]
 
     def ships(entry):
-        return any("scripts/ship.py" in " ".join(h.get("args") or []) for h in entry["hooks"])
+        return any(h.get("command") == "tares hook ship" for h in entry["hooks"])
     ck("the plugin registers PermissionRequest with the shipper",
        any(ships(e) for e in hooks.get("PermissionRequest", [])), hooks.get("PermissionRequest"))
     ck("the plugin registers the AskUserQuestion PreToolUse hook with the shipper",
