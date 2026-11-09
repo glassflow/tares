@@ -363,6 +363,27 @@ else:
     ck("settings: a settings file without its env fails the schema", problems("settings", {"permissions": {"allow": []}}) != [])
     ck("settings: a token in TARES_AUTH_TOKEN fails the schema", problems("settings", dict(doc, env=dict(doc["env"], TARES_AUTH_TOKEN="secret"))) != [])
 
+    # ---------- projects ----------
+
+    print("== projects --json")
+    WORLD["projects"] = [{"id": "p1", "name": "shop", "tickets_total": 4, "tickets_done": 1,
+                          "milestone": {"name": "M1", "done": 1, "total": 3}, "repos": [{"name": "acme/shop", "path": "/w/shop"}]},
+                         {"id": "p2", "name": "docs", "tickets_total": 2, "tickets_done": 2, "milestone": None,
+                          "repos": [{"path": "/w/docs"}]}]
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["projects", "--json"])
+    doc = one_document("projects", code, out, err, "projects")
+    rows = {r["name"]: r for r in doc.get("projects", [])}
+    ck("projects: every project, with its active builders", sorted(rows) == ["docs", "shop"]
+       and (rows["shop"]["builders"], rows["docs"]["builders"]) == (2, 0), rows)
+    ck("projects: Tares's own fields are kept", rows["shop"]["milestone"]["name"] == "M1" and rows["shop"]["repos"][0]["path"] == "/w/shop", rows)
+    fixture("projects.json", stable(out, tmp))
+    WORLD["projects"] = []
+    doc = one_document("projects, none handed to the crew", *tares(env, ["projects", "--json"]), "projects")
+    ck("projects, none: an empty list", doc.get("projects") == [], doc)
+    env, tmp = world(crew_of(), sessions(), url=DOWN)
+    doc = one_document("projects, no Tares", *tares(env, ["projects", "--json"]), "error", want_code=1)
+
     # ---------- the error shape ----------
 
     print("== the error shape")
