@@ -495,7 +495,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Interactive prompt; see ask."
+      "note": "Interactive prompt; see ask. TR-966 keeps its own copy in tares.crew.person (the person's prompts for spec and session), so it is not marked ported here."
     },
     {
       "name": "ask_settings",
@@ -847,7 +847,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Moved here from TR-965: crew up warns about another installed tares plugin first. Spec, session and doctor (TR-966, TR-969) call it too. It reads the plugin install record, so TR-965 keeps the kit freeze but not this check. tares.crew.doctor.installed_tares reads it for doctor (TR-969)."
+      "note": "Moved here from TR-965: crew up warns about another installed tares plugin first. Spec, session and doctor (TR-966, TR-969) call it too. It reads the plugin install record, so TR-965 keeps the kit freeze but not this check. tares.crew.doctor.installed_tares reads it for doctor (TR-969). TR-966 keeps its own copy (installed_tares and clash_text) in tares.crew.person for the spec and session warning; TR-956 owns the shared one."
     },
     {
       "name": "clash_text",
@@ -2178,7 +2178,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by spec and session to check a folder is trusted; the crew home variant is home_trusted (TR-956). tares.crew.doctor.Doctor.trusted reads the trust record for doctor (TR-969)."
+      "note": "Neither spec nor session calls it (TR-966 checked the bash): they only check a repo has a commit. It belongs with the crew home trust check (home_trusted, TR-956). tares.crew.doctor.Doctor.trusted reads the trust record for doctor (TR-969)."
     },
     {
       "name": "has_commit",
@@ -2187,8 +2187,8 @@
       "what": "does a repo have a commit",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:has_commit",
+      "ported": true,
       "note": ""
     },
     {
@@ -2198,8 +2198,8 @@
       "what": "git repos directly under a folder",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:repos_in",
+      "ported": true,
       "note": ""
     },
     {
@@ -2209,8 +2209,8 @@
       "what": "is the caller a contributor to a project",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:spec_contributor",
+      "ported": true,
       "note": ""
     },
     {
@@ -2220,8 +2220,8 @@
       "what": "spec session",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_spec",
+      "ported": true,
       "note": ""
     },
     {
@@ -2231,8 +2231,8 @@
       "what": "run Claude Code for the person with the crew env",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:person_claude",
+      "ported": true,
       "note": ""
     },
     {
@@ -2242,8 +2242,8 @@
       "what": "software factory projects on Tares",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:factory_projects",
+      "ported": true,
       "note": "Used by the session command's project picker."
     },
     {
@@ -2253,8 +2253,8 @@
       "what": "projects the releaser is on",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:releasing_projects",
+      "ported": true,
       "note": "Used by the session command; picked with the session work."
     },
     {
@@ -2264,8 +2264,8 @@
       "what": "find a project by name or id",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:match_project",
+      "ported": true,
       "note": "Used by spec, session and finish; picked with the session work (TR-966), finish (TR-967) reuses it."
     },
     {
@@ -2275,8 +2275,8 @@
       "what": "folder a session opens in",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_dir",
+      "ported": true,
       "note": ""
     },
     {
@@ -2286,8 +2286,8 @@
       "what": "start a session on a project",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_project",
+      "ported": true,
       "note": ""
     },
     {
@@ -2297,8 +2297,8 @@
       "what": "start a session on a new idea",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_idea",
+      "ported": true,
       "note": ""
     },
     {
@@ -2308,8 +2308,8 @@
       "what": "session command",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_session",
+      "ported": true,
       "note": ""
     },
     {
@@ -2863,8 +2863,8 @@
       "what": "plan a project with Claude",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_spec",
+      "ported": true,
       "note": ""
     },
     {
@@ -2877,8 +2877,8 @@
       "what": "work on a project in the person's own session",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_session",
+      "ported": true,
       "note": ""
     },
     {

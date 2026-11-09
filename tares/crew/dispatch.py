@@ -66,7 +66,7 @@ def _person(name: str) -> Callable[[list[str], dict], int]:
     return run_it
 
 
-for _word in ("projects", "finish", "context", "plan"):
+for _word in ("projects", "finish", "context", "plan", "spec", "session"):
     PORTED[(_word,)] = _person(f"cmd_{_word}")
 
 
