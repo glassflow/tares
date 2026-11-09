@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/events.json",
+  "title": "tares factory events --json: one line of the stream",
+  "type": "object",
+  "required": ["schema_version", "cursor", "event"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "cursor": {
+      "description": "Opaque to callers: hand the last one back with --since to read on from the next line.",
+      "type": "string",
+      "pattern": "^[0-9]+:[0-9]+$"
+    },
+    "event": {
+      "description": "One line of events.jsonl. at, station and event are always there; the crew's commands add detail, the guard's guard-deny lines add tool and reason.",
+      "type": "object",
+      "required": ["at", "station", "event"],
+      "properties": {
+        "at": {"description": "UTC, as the crew writes it.", "type": "string"},
+        "station": {"type": "string"},
+        "event": {"type": "string"},
+        "detail": {"type": "string"},
+        "tool": {"type": "string"},
+        "reason": {"type": "string"}
+      }
+    }
+  },
+  "additionalProperties": false
+}

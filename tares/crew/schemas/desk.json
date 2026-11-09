@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/desk.json",
+  "title": "tares factory desk --json: the questions waiting for the person",
+  "type": "object",
+  "required": ["schema_version", "items"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "items": {
+      "description": "The desk items as Tares gives them; this schema names only the fields every item has.",
+      "type": "array",
+      "items": {"type": "object", "required": ["label", "question"], "properties": {
+        "label": {"type": "string"},
+        "question": {"type": "string"},
+        "blocking": {"type": ["boolean", "null"]},
+        "options": {"type": ["array", "null"]},
+        "recommendation": {}
+      }}
+    }
+  },
+  "additionalProperties": false
+}

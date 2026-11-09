@@ -53,6 +53,8 @@ class TaresHTTPError(CrewError):
     for `error: 404`, and crew_projects shows the last line. `status` is the HTTP status, None when no
     answer came at all."""
 
+    code = "tares_error"
+
     def __init__(self, text: str, status=None):
         super().__init__(text)
         self.status = status

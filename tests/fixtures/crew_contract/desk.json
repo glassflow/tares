@@ -1,0 +1,1 @@
+{"schema_version":1,"items":[{"id":"d1","label":"D1","question":"ship it?","options":["yes","no"],"recommendation":"yes","why":"tests pass","blocking":true,"project_name":"shop"}]}

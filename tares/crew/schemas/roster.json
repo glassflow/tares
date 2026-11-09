@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/roster.json",
+  "title": "tares factory roster --json: the running stations",
+  "type": "object",
+  "required": ["schema_version", "crew", "orchestrator", "stations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "crew": {"type": "string"},
+    "orchestrator": {"description": "The station name messages to the orchestrator go to.", "type": "string"},
+    "stations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["station", "role", "project", "turn", "claude_code"],
+        "properties": {
+          "station": {"type": "string"},
+          "role": {"type": ["string", "null"]},
+          "project": {"description": "The project id; empty for a station that serves all projects.", "type": "string"},
+          "turn": {"description": "Whose turn the session is on, as Claude Code says it; `gone` when it has no live session.", "type": "string"},
+          "claude_code": {"description": "The Claude Code version the station runs; says `(older than X)` when it is behind the installed one.", "type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
