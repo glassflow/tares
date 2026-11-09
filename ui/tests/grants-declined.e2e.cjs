@@ -76,7 +76,7 @@ async function cell(port, licence) {
   return { d, key, uid };
 }
 
-const grantBody = (uid) => {
+const grantBody = (uid, extra = false) => {
   const at = new Date().toISOString();
   const grant = (id, words, consents, extra = {}) => ({ id, kind: "project", project: uid, words, state: "waiting", given_at: at,
     given_by: { id: "p-alex", name: "Alex" }, holder: null, areas: ["example-org/docs"], consents, waiting_for: [], in_effect: false, ...extra });
@@ -86,6 +86,8 @@ const grantBody = (uid) => {
     grant("G1", "Builders may change the docs", [{ id: "p-kim", name: "Kim", at }, { id: "p-lee", name: "Lee", at, declined: true, reason: "not ready" }]),
     grant("G2", "Builders may delete old docs", [{ id: "p-lee", name: "Lee", at, declined: true }]),
     mine,
+    // a grant that waits and names nobody (what a cell without a licence sends): it must read "Waiting", never "Waiting for no one"
+    ...(extra ? [grant("G6", "Builders may update the readme", [])] : []),
   ] };
 };
 
@@ -93,14 +95,14 @@ const questions = { questions: [{ id: "Q1", to_person_id: "p-kim", to_person: { 
   text: "May the docs build change?", asked_by: "spec", asked_at: new Date().toISOString(), answer: null, answered_by: null,
   answered_at: null, state: "open" }] };
 
-async function newPage(browser, c, width = 1400) {
+async function newPage(browser, c, width = 1400, extra = false) {
   const ctx = await browser.newContext({ viewport: { width, height: 900 } });
   await ctx.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, c.key);
   const page = await ctx.newPage();
   page.eeRequests = []; page.errors = [];
   page.on("request", (r) => { if (EE_CHUNK.test(r.url())) page.eeRequests.push(r.url()); });
   page.on("pageerror", (e) => page.errors.push(String(e)));
-  await page.route("**/api/grants?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(grantBody(c.uid)) }));
+  await page.route("**/api/grants?*", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(grantBody(c.uid, extra)) }));
   await page.route("**/api/projects/*/questions", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(questions) }));
   // the crew answer of the real daemon, with one early hand-over added
   await page.route("**/api/projects/*/crew", async (route) => {
@@ -137,6 +139,7 @@ async function newPage(browser, c, width = 1400) {
       ck("licensed: a grant only declined has nobody under agreed by", agreed2 === "", JSON.stringify(agreed2));
       ck("licensed: the agreed by header is there", (await page.locator("th", { hasText: "agreed by" }).count()) === 2);   // the list and the other projects
       ck("licensed: Consent is on the grant that waits for the caller", (await row("tag releases").getByRole("button", { name: "Consent" }).count()) === 1);
+      ck("licensed: a waiting grant names who it waits for", /Waiting for alex/i.test(await row("tag releases").innerText()), await row("tag releases").innerText());
       ck("licensed: no Consent on a grant that waits for no one here", (await row("change the docs").getByRole("button", { name: "Consent" }).count()) === 0);
       ck("licensed: grants of other projects that wait for the caller are listed",
         (await page.getByText("Waiting for your yes in other projects").count()) === 1 && (await row("touch the website").count()) === 1);
@@ -161,25 +164,32 @@ async function newPage(browser, c, width = 1400) {
     // ── unlicensed ──
     {
       const c = await cell(PORT + 2, "none"); daemons.push(c.d);
-      const { ctx, page } = await newPage(browser, c);
+      const { ctx, page } = await newPage(browser, c, 1400, true);
       await page.goto(`${c.d.base}/projects/${c.uid}?view=grants`);
       const row = (words) => page.locator("tr", { hasText: words });
       await row("change the docs").waitFor({ timeout: 15000 });
+      // Revoke needs the caller's person id (usePeople), which arrives after the rows: wait for it
+      await row("change the docs").getByRole("button", { name: "Revoke" }).waitFor({ state: "visible", timeout: 15000 });
       ck("unlicensed: the grants are listed", (await row("delete old docs").count()) === 1);
       ck("unlicensed: Revoke is there", (await row("change the docs").getByRole("button", { name: "Revoke" }).count()) === 1);
+      ck("unlicensed: a waiting grant reads just Waiting, not Waiting for no one",
+        (await page.getByText("Waiting for no one").count()) === 0 && (await page.getByText(/^Waiting$/).count()) >= 1,
+        `${await page.getByText("Waiting for no one").count()} / ${await page.getByText(/^Waiting$/).count()}`);
       ck("unlicensed: no agreed by column", (await page.locator("th", { hasText: "agreed by" }).count()) === 0
         && (await row("change the docs").locator("td").count()) === 5);
       ck("unlicensed: no Consent", (await page.getByRole("button", { name: "Consent" }).count()) === 0);
       ck("unlicensed: no list of other projects", (await page.getByText("Waiting for your yes in other projects").count()) === 0
         && (await row("touch the website").count()) === 0);
+      let addBody = "";
       await page.route("**/api/grants", (route) => route.request().method() !== "POST" ? route.fallback()
-        : route.fulfill({ status: 402, contentType: "application/json",
-            body: JSON.stringify({ code: "licence_required", message: "Adding a grant needs an enterprise licence.", url: "https://docs.glassflow.ai/tares/enterprise" }) }));
+        : (addBody = route.request().postData() || "", route.fulfill({ status: 402, contentType: "application/json",
+            body: JSON.stringify({ code: "licence_required", message: "Adding a grant needs an enterprise licence.", url: "https://docs.glassflow.ai/tares/enterprise" }) })));
       await page.getByRole("button", { name: "Add a grant" }).click();
       ck("unlicensed: no repo field", (await page.getByText("repos it names").count()) === 0);
       await page.getByPlaceholder(/what the crew may do/).fill("builders may merge");
       await page.getByRole("button", { name: "Add grant", exact: true }).click();
       await page.getByTestId("licence-needed").waitFor({ timeout: 10000 });
+      ck("unlicensed: adding a grant sends no repos (areas: [])", (() => { try { const b = JSON.parse(addBody); return Array.isArray(b.areas) && b.areas.length === 0; } catch { return false; } })(), addBody);
       ck("unlicensed: a 402 shows the licence line with its link, not a red error",
         (await page.getByTestId("licence-needed").getByRole("link").count()) === 1 && (await page.locator(".alert.error").count()) === 0);
       await shot(page, "grants-unlicensed.png");

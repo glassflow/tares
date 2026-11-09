@@ -9,7 +9,10 @@ import { type Cloud, cloudLink, useCloud } from "../cloud";
 import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
-import { EePage, useEeLoaded } from "../eeSlots";
+import LicencePanel from "../components/LicencePanel";
+import { EE_FAILED_WORDS, EePage, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEeLoaded, useEePending, useLicenceNoAnswer } from "../eeSlots";
+import LicenceNeeded from "../components/LicenceNeeded";
+import { extraEmails, personDraft, type PersonDraft } from "../personDraft";
 import OwnerOnly from "../components/OwnerOnly";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
@@ -26,13 +29,14 @@ import { copyText } from "../editions/copyText";
 // The per-source ingest URL is an address, not a secret — it lives on the source page, not here.
 //   · Workspace  (Tares Cloud only) team, plan, storage, credit and delete, held by the control
 //                  plane (TR-375); shown first, and the default tab, when /health has workspace_api_url
-type SettingsTab = "workspace" | "usage" | "access" | "edition" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability" | "advanced";
+type SettingsTab = "workspace" | "usage" | "access" | "edition" | "licence" | "anthropic" | "agents" | "areas" | "github" | "linear" | "slack" | "observability" | "advanced";
 // The tabs as a second sidebar (TR-521): the workspace itself on top, then one group per concern.
 const TABS: { key: SettingsTab; label: string; group?: string }[] = [
   { key: "workspace", label: "Workspace" },
   { key: "usage", label: "Usage" },
   { key: "access", label: "Access, people and API keys" },
   { key: "edition", label: "Edition" },
+  { key: "licence", label: "Enterprise licence" },
   { key: "anthropic", label: "Model providers", group: "Agents" },
   { key: "agents", label: "Limits", group: "Agents" },
   { key: "observability", label: "Observability", group: "Agents" },
@@ -106,7 +110,10 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   // Workspace exists only on Tares Cloud; asked for elsewhere (an old link), Access shows instead.
   // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
   // so a hard load does not show Access and then jump.
-  const want = picked === "advanced" && !hasAdvanced ? undefined : picked;
+  // The licence tab is for self-hosted cells: Tares Cloud needs no licence, and until /health has
+  // answered we do not know which this is, so an asked-for licence tab waits like the default does.
+  const want = picked === "advanced" && !hasAdvanced ? undefined
+    : picked === "licence" && (cloud.hosted || !cloud.ready) ? undefined : picked;
   const tab: SettingsTab | undefined = workspaceApiUrl ? (want ?? "workspace")
     : want === "workspace" ? (cloud.ready ? "access" : "workspace")
     : want ?? (cloud.ready ? "access" : undefined);
@@ -115,7 +122,8 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   const tabs = TABS.filter((t) => t.key === "workspace" ? !!workspaceApiUrl
     : t.key === "usage" ? !workspaceApiUrl
     : t.key === "advanced" ? hasAdvanced
-    : t.key === "areas" ? eeLoaded : true);
+    : t.key === "areas" ? eeLoaded
+    : t.key === "licence" ? cloud.ready && !cloud.hosted : true);
   const groups = [...new Set(tabs.map((t) => t.group))];
   const link = (t: (typeof TABS)[number]) => (
     <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}
@@ -164,6 +172,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
       {tab === "usage" && <UsagePanels />}
       {tab === "access" && <AccessTab />}
       {tab === "edition" && <EditionPanel />}
+      {tab === "licence" && <LicencePanel />}
       {tab === "anthropic" && <ProvidersPanel />}
       {tab === "agents" && <AgentLimitsPanel agent={new URLSearchParams(loc.search).get("agent") ?? undefined} />}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
@@ -595,6 +604,9 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
 // a person added in People is there to pick when a key is made. Only an admin credential manages
 // people and keys (the daemon enforces it); the page just does not offer what it would refuse.
 function AccessTab() {
+  const pending = useEePending();
+  const eeFailed = useEeFailed();
+  const noAnswer = useLicenceNoAnswer();
   const [me, setMe] = useState<Whoami>();
   const [people, setPeople] = useState<Person[]>();
   const [err, setErr] = useState<string>();
@@ -608,164 +620,89 @@ function AccessTab() {
   return (
     <>
       <AccessPanel me={me} />
-      <PeoplePanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />
+      <Slot name="settings.people" people={people} admin={admin} err={err} onChanged={loadPeople} me={me}
+            fallback={pending ? <div className="panel muted">loading…</div>
+                              : eeFailed ? <div className="panel muted" data-testid="ee-failed">{EE_FAILED_WORDS}</div>
+                              : noAnswer ? <div className="panel muted" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</div>
+                              : <YouPanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />} />
       <McpToolsPanel />
       <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />
     </>
   );
 }
 
-const personLabel = (p: Person) => p.email ? `${p.name} (${p.email})` : p.name;
-
-// `oldEmail` and `extras` are the person's main and extra addresses as loaded: an edit that changes
-// the main email keeps the old one among the extras, so the person is still found by it. `dropped`
-// are the extras the admin removed in this edit.
-type PersonDraft = { id: string; name: string; email: string; github: string; is_admin: boolean;
-                     oldEmail: string; extras: string[]; dropped: string[] };
-
-// The extra addresses this edit leaves the person with: the loaded ones, plus the old main email when
-// the main one changed, minus the new main email and whatever the admin removed.
-function extraEmails(d: PersonDraft): string[] {
-  const email = d.email.trim().toLowerCase();
-  const old = d.oldEmail.toLowerCase();
-  const all = [...d.extras, ...(old && email !== old ? [old] : [])];
-  return all.filter((x, i) => x !== email && !d.dropped.includes(x) && all.indexOf(x) === i);
-}
-
-// Who is on the cell. Everyone who can read sees the list; an admin adds people and edits them.
-// With auth on, the boot person `local` is not whoever is looking: it owns what was made while
-// auth was off and acts for keys that belong to no one. It is called "You" only on an open cell.
-function PeoplePanel({ people, admin, err: loadErr, onChanged, me }: {
+// Without the enterprise licence the cell has one person for you to manage: yourself. The row shows
+// the name, email and GitHub login, and Edit changes them (an admin changes all three, anyone else
+// only the name; the daemon decides). Adding anyone else is the licence's, so the line says so.
+function YouPanel({ people, admin, err: loadErr, onChanged, me }: {
   people?: Person[]; admin: boolean; err?: string; onChanged: () => void; me?: Whoami;
 }) {
-  const authOn = !!me && me.kind !== "open";
-  const shownName = (p: Person) => authOn && p.id === "local" && p.name === "You" ? "Local (no login)" : p.name;
-  const [editing, setEditing] = useState<PersonDraft>();   // id "new": the add form
+  const mine = people?.find((p) => p.id === me?.person?.id);
+  const [editing, setEditing] = useState<PersonDraft>();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<unknown>();
-
-  const start = (p?: Person) => {
-    setErr(undefined);
-    setEditing(p ? { id: p.id, name: p.name, email: p.email ?? "", github: p.github ?? "", is_admin: p.is_admin,
-                     oldEmail: p.email ?? "", extras: p.emails, dropped: [] }
-                 : { id: "new", name: "", email: "", github: "", is_admin: false, oldEmail: "", extras: [],
-                     dropped: [] });
-  };
   const save = async () => {
     if (!editing) return;
     setBusy(true); setErr(undefined);
-    const body = { name: editing.name.trim(), email: editing.email.trim(), github: editing.github.trim(),
-                   is_admin: editing.is_admin };
     try {
-      if (editing.id === "new") {
-        const made = await api.createPerson(body);
-        // an email that is already someone's answers with that person (nothing was added): say so
-        const known = people?.find((p) => p.id === made.id);
-        if (known) {
-          setErr(`${body.email} already belongs to ${known.name}.`);
-          setBusy(false);
-          return;
-        }
-      } else {
-        await api.updatePerson(editing.id, { ...body, emails: extraEmails(editing) });
-      }
+      await api.updatePerson(editing.id, admin
+        ? { name: editing.name.trim(), email: editing.email.trim(), github: editing.github.trim(), emails: extraEmails(editing) }
+        : { name: editing.name.trim() });
       setEditing(undefined);
       onChanged();
     } catch (e) { setErr(e); }
     setBusy(false);
   };
-  const form = (d: PersonDraft) => (
-    <>
-      <div className="row2">
-        <label className="field">
-          <span className="lbl">name</span>
-          <input type="text" value={d.name} autoFocus onChange={(e) => setEditing({ ...d, name: e.target.value })} />
-        </label>
-        <label className="field">
-          <span className="lbl">email</span>
-          <input type="email" value={d.email} onChange={(e) => setEditing({ ...d, email: e.target.value })} />
-        </label>
-      </div>
-      {d.id !== "new" && extraEmails(d).length > 0 && (
-        <div className="field">
-          <span className="lbl">other emails</span>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-            {extraEmails(d).map((x) => (
-              <span key={x} className="mono help" style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-                {x}
-                <button type="button" aria-label={`Remove ${x}`}
-                        onClick={() => setEditing({ ...d, dropped: [...d.dropped, x] })}>Remove</button>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-      <div className="row2">
-        <label className="field">
-          <span className="lbl">GitHub login</span>
-          <input type="text" className="mono" placeholder="e.g. octocat" value={d.github}
-                 onChange={(e) => setEditing({ ...d, github: e.target.value })} />
-        </label>
-        <label className="field" style={{ display: "flex", gap: 10, alignItems: "baseline", cursor: "pointer" }}>
-          <input type="checkbox" checked={d.is_admin} style={{ transform: "translateY(1px)" }}
-                 onChange={(e) => setEditing({ ...d, is_admin: e.target.checked })} />
-          <span>Admin</span>
-        </label>
-      </div>
-      <div className="btnrow">
-        <button className="primary" disabled={busy || !d.name.trim()} onClick={save}>
-          {busy ? "…" : d.id === "new" ? "Add person" : "Save"}</button>
-        <button disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
-      </div>
-    </>
-  );
-
   return (
     <div className="panel">
-      <div className="pagehead" style={{ marginBottom: 6 }}>
-        <h2 style={{ margin: 0 }}>People</h2>
-        {admin && <button className="primary" onClick={() => start()}>Add person</button>}
-      </div>
+      <h2 style={{ marginTop: 0, marginBottom: 6 }}>People</h2>
       <p className="help" style={{ marginTop: 0 }}>
-        Everyone who works on this instance. Each API key belongs to a person, so you can tell whose
+        You are the one person on this instance. Each API key belongs to a person, so you can tell whose
         agent or script is acting.
       </p>
-      {(loadErr || err != null) && <ActionError error={err ?? loadErr}
-                                                 what={editing && editing.id !== "new" ? "Changing other people" : "Adding people"} />}
-
-      {editing?.id === "new" && <div className="panel" style={{ marginBottom: 12 }}>{form(editing)}</div>}
-
-      {!people ? <div className="muted">loading…</div>
-        : people.length === 0 ? <p className="help">No one yet.{admin && <> <strong>Add person</strong> to start.</>}</p>
-        : (
-          <div className="table-scroll">
-          <table>
-            <thead><tr><th>name</th><th>email</th><th>GitHub</th><th>admin</th><th aria-label="actions" /></tr></thead>
-            <tbody>
-              {people.map((p) => editing?.id === p.id ? (
-                <tr key={p.id}><td colSpan={5}>{form(editing)}</td></tr>
-              ) : (
-                <tr key={p.id}>
-                  <td>
-                    <strong>{shownName(p)}</strong>
-                    {authOn && p.id === me?.person?.id && <span className="badge" style={{ marginLeft: 8 }}>you</span>}
-                  </td>
-                  <td className="help">
-                    {authOn && p.id === "local" && !p.email
-                      ? "Owns what was made before login was turned on, and acts for keys with no person."
-                      : p.email ?? ""}
-                  </td>
-                  <td className="mono help">{p.github ?? ""}</td>
-                  <td className="help">{p.is_admin ? "yes" : "no"}</td>
-                  <td style={{ textAlign: "right" }}>
-                    {admin && <button disabled={!!editing} onClick={() => start(p)}>Edit</button>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {(loadErr || err != null) && <ActionError error={err ?? loadErr} what="Changing your details" />}
+      {!people ? <div className="muted">loading…</div> : mine && (editing ? (
+        <>
+          <div className="row2">
+            <label className="field">
+              <span className="lbl">name</span>
+              <input type="text" value={editing.name} autoFocus onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+            </label>
+            {admin && (
+              <label className="field">
+                <span className="lbl">email</span>
+                <input type="email" value={editing.email} onChange={(e) => setEditing({ ...editing, email: e.target.value })} />
+              </label>
+            )}
           </div>
-        )}
+          {admin && (
+            <label className="field">
+              <span className="lbl">GitHub login</span>
+              <input type="text" className="mono" placeholder="e.g. octocat" value={editing.github}
+                     onChange={(e) => setEditing({ ...editing, github: e.target.value })} />
+            </label>
+          )}
+          <div className="btnrow">
+            <button className="primary" disabled={busy || !editing.name.trim()} onClick={save}>{busy ? "…" : "Save"}</button>
+            <button disabled={busy} onClick={() => setEditing(undefined)}>Cancel</button>
+          </div>
+        </>
+      ) : (
+        <div className="table-scroll">
+        <table>
+          <thead><tr><th>name</th><th>email</th><th>GitHub</th><th aria-label="actions" /></tr></thead>
+          <tbody>
+            <tr data-testid="you-row">
+              <td><strong>{mine.id === "local" && mine.name === "You" && me?.kind !== "open" ? "Local (no login)" : mine.name}</strong></td>
+              <td className="help">{mine.email ?? ""}</td>
+              <td className="mono help">{mine.github ?? ""}</td>
+              <td style={{ textAlign: "right" }}><button onClick={() => { setErr(undefined); setEditing(personDraft(mine)); }}>Edit</button></td>
+            </tr>
+          </tbody>
+        </table>
+        </div>
+      ))}
+      <LicenceNeeded what="Adding people" />
     </div>
   );
 }
@@ -1496,21 +1433,6 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
   const [revoking, setRevoking] = useState<ApiKey>();
   const [creating, setCreating] = useState(false);
   const [showRevoked, setShowRevoked] = useState(false);
-  const personNames = Object.fromEntries([["", "No person"], ...people.map((p) => [p.id, personLabel(p)])]);
-  // the key's own person is always a choice, named even before the people have loaded (or when
-  // they failed to), so the picker never shows a raw id
-  const personChoices = (k: ApiKey) => {
-    const ids = people.map((p) => p.id);
-    if (!k.person) return { options: ["", ...ids], labels: personNames };
-    return { options: ids.includes(k.person.id) ? ids : [k.person.id, ...ids],
-             labels: { ...personNames, [k.person.id]: personNames[k.person.id] ?? k.person.name } };
-  };
-  const bind = async (k: ApiKey, personId: string) => {
-    if (!personId || personId === k.person?.id) return;
-    try { await api.setKeyPerson(k.id, personId); } catch (e) { setErr(String((e as Error).message ?? e)); }
-    load();
-  };
-
   const load = () => api.keys().then((r) => { setKeys(r.keys); setEnforced(r.enforced); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => { load(); }, []);
@@ -1566,10 +1488,9 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
             {[...keys.filter((k) => !k.revoked_at), ...(showRevoked ? keys.filter((k) => k.revoked_at) : [])].map((k) => (
               <tr key={k.id} style={k.revoked_at ? { opacity: 0.45 } : undefined}>
                 <td>{keyTitle(k.name) ? <>{keyTitle(k.name)}<InternalName name={k.name} /></> : k.name}</td>
-                <td>{admin && !k.revoked_at
-                  ? <Picker value={k.person?.id ?? ""} ariaLabel={`person for ${k.name}`} style={{ width: 200 }}
-                            {...personChoices(k)} onChange={(v) => bind(k, v)} />
-                  : k.person ? k.person.name : <span className="help">No person</span>}</td>
+                <td><Slot name="settings.keyPerson" k={k} people={people} admin={admin} onChanged={load}
+                          onError={setErr}
+                          fallback={k.person ? k.person.name : <span className="help">No person</span>} /></td>
                 <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
                   {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
                 <td className="mono">{k.prefix}…</td>
@@ -1630,7 +1551,8 @@ function KeyModal({ people, defaultPerson, onClose, onCreated }: {
 }) {
   const [name, setName] = useState("");
   const [scopes, setScopes] = useState<string[]>(["read"]);
-  const [personId, setPersonId] = useState(people.some((p) => p.id === defaultPerson) ? defaultPerson! : "");
+  // the licensed picker may change it (or pick no one); without it the key is made for you
+  const [personId, setPersonId] = useState(defaultPerson ?? "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
 
@@ -1664,14 +1586,7 @@ function KeyModal({ people, defaultPerson, onClose, onCreated }: {
                    onChange={(e) => setName(e.target.value)} />
             <span className="help">who uses it: one key per agent, script or service</span>
           </label>
-          <div className="field">
-            <span className="lbl">person</span>
-            <Picker value={personId} ariaLabel="person" style={{ width: 280 }}
-                    options={["", ...people.map((p) => p.id)]}
-                    labels={Object.fromEntries([["", "No person"], ...people.map((p) => [p.id, personLabel(p)])])}
-                    onChange={setPersonId} />
-            <span className="help">whose agent or script this is</span>
-          </div>
+          <Slot name="settings.keyPersonPick" people={people} value={personId} onChange={setPersonId} />
           <div className="field">
             <span className="lbl">scopes</span>
             {Object.entries(SCOPE_HELP).map(([s, help]) => (

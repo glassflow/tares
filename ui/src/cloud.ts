@@ -55,6 +55,8 @@ export type Cloud = {
   health?: Health;
   /** /health has answered, or failed (then everything behaves as on a self-hosted instance) */
   ready: boolean;
+  /** a Tares Cloud cell (TARES_WORKSPACE_API_URL is set): the cloud needs no licence, so the licence screens stay hidden */
+  hosted: boolean;
   /** the control plane lists this person's workspaces (TARES_WORKSPACES_URL is set) */
   switcher: boolean;
   /** undefined while loading, or when there is no list to load */
@@ -83,7 +85,7 @@ export function useCloud(): Cloud {
   const current = list?.status === "ok"
     ? list.workspaces.find((w) => w.host === window.location.host) : undefined;
   return {
-    health, ready, switcher: !!health?.workspaces_url, list, current,
+    health, ready, hosted: !!health?.workspace_api_url, switcher: !!health?.workspaces_url, list, current,
     isOwner: current ? current.role === "owner" : undefined,
   };
 }

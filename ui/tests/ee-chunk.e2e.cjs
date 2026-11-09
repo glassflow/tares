@@ -9,6 +9,11 @@
  *   - valid licence: the chunk is requested exactly once, however many pages are opened.
  *   - expired licence: the chunk is still requested (the cell's ee_allowed stays true).
  *   - a licensed cell where the chunk fails to load: the console still renders, with a console warning.
+ *   - the chunk failed and a team Waiting row's Agree is pressed: the row says the part did not load, not that a
+ *     licence is needed (#502 F3); a home with only hidden private projects has no empty Projects box (F2), and
+ *     with the chunk loaded it shows the hidden row.
+ *   - a licensed cell whose licence read fails: Agree and Answer say the cell did not answer, never that a licence is
+ *     needed (#507 F1), at 1440 and 390.
  * Every page also loads with no page error.
  * Run:  cd ui && npm run build && TARES_E2E_PORT=9400 node tests/ee-chunk.e2e.cjs
  */
@@ -116,6 +121,92 @@ async function visit(browser, base, { blockChunk = false } = {}) {
     ck("chunk fails to load: the console still renders every page", d.errors.length === 0, d.errors.join(" | "));
     ck("chunk fails to load: it is said in the console, not thrown",
        d.warnings.some((w) => /enterprise part of the console did not load/i.test(w)), d.warnings.join(" | "));
+
+    // A team home read from the cell, with the waiting row and the project rows swapped in by the page.
+    const teamHome = async (page, { waiting = [], projects = [] }) => {
+      await page.route(/\/api\/home(\?|$)/, async (route) => {
+        const res = await route.fetch();
+        const data = await res.json();
+        return route.fulfill({ response: res, json: { ...data, summary: "", counts: { mine: 0, team: projects.length },
+          waiting_for_you: waiting, waiting_total: waiting.length, projects, you_are_waiting_on: [], crews: [], crews_quiet: [], areas: [] } });
+      });
+    };
+    const grant = { id: "grant-1", kind: "grant", label: "Grant", title: "Agree to merge to acme/web", detail: "Kim asks to merge.",
+                    meta: "", project: null, repo: null, from: { name: "Kim" }, since: null, waited: "1 minute",
+                    actions: [{ label: "Agree", primary: true, do: "agree", grant: "g1" }, { label: "Decline", primary: false, do: "decline", grant: "g1" }] };
+    const stub = { hidden: true, lead: { name: "Lee" } };
+    const failedWords = /This part of the console did not load\. Reload the page to try again\./;
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const page = await ctx.newPage();
+      await page.route(EE_CHUNK, (route) => route.abort());
+      await teamHome(page, { waiting: [grant], projects: [stub] });
+      await page.goto(`${valid.base}/`, { waitUntil: "load" });
+      await page.getByTestId("waiting-row").first().waitFor();
+      await page.waitForLoadState("networkidle");
+      ck("chunk fails to load: the core Waiting row still draws", (await page.getByTestId("waiting-row").count()) === 1);
+      await page.getByRole("button", { name: "Agree" }).click();
+      const err = page.getByTestId("row-error");
+      await err.waitFor();
+      const words = (await err.innerText()).trim();
+      ck("chunk fails to load: Agree says the part did not load", failedWords.test(words), words);
+      ck("chunk fails to load: Agree does not say a licence is needed", !/licence/i.test(words), words);
+      ck("chunk fails to load: only hidden projects leave no empty Projects box",
+         (await page.locator('[data-testid="projects"] > div.border').count()) === 0, "an empty box is drawn");
+      await ctx.close();
+    }
+    // The answer to a spec question is the team's part too: with the chunk blocked, Answer says the part did not load (no box opens).
+    const spec = { id: "spec-1", kind: "question", label: "Question", title: "Which database?", detail: "Lee asks which database to use.",
+                   meta: "", project: null, repo: null, from: { name: "Lee" }, since: null, waited: "1 minute",
+                   actions: [{ label: "Answer", primary: true, do: "answer", project: "p1", question: "q1" }] };
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const page = await ctx.newPage();
+      await page.route(EE_CHUNK, (route) => route.abort());
+      await teamHome(page, { waiting: [spec], projects: [stub] });
+      await page.goto(`${valid.base}/`, { waitUntil: "load" });
+      await page.getByTestId("waiting-row").first().waitFor();
+      await page.waitForLoadState("networkidle");
+      await page.getByRole("button", { name: "Answer" }).click();
+      const err = page.getByTestId("row-error");
+      await err.waitFor();
+      const words = (await err.innerText()).trim();
+      ck("chunk fails to load: Answer says the part did not load", failedWords.test(words), words);
+      ck("chunk fails to load: Answer does not say a licence is needed", !/licence/i.test(words), words);
+      ck("chunk fails to load: Answer opens no box", (await page.getByTestId("answer-panel").count()) === 0);
+      await ctx.close();
+    }
+    // The licence read fails on a licensed cell: whether it is licensed is not known, so a refused team action says the
+    // cell did not answer, not that a licence is needed.
+    for (const w of [1440, 390]) {
+      for (const [name, row, button] of [["Agree", grant, "Agree"], ["Answer", spec, "Answer"]]) {
+        const ctx = await browser.newContext({ viewport: { width: w, height: 900 } });
+        const page = await ctx.newPage();
+        await page.route(/\/api\/licence(\?|$)/, (route) => route.abort());
+        await teamHome(page, { waiting: [row], projects: [stub] });
+        await page.goto(`${valid.base}/`, { waitUntil: "load" });
+        await page.getByTestId("waiting-row").first().waitFor();
+        await page.waitForLoadState("networkidle");
+        await page.getByRole("button", { name: button }).click();
+        const err = page.getByTestId("row-error");
+        await err.waitFor();
+        const words = (await err.innerText()).trim();
+        ck(`licence read fails @${w}: ${name} says the cell did not answer`, /The cell did not answer\./.test(words), words);
+        ck(`licence read fails @${w}: ${name} does not say a licence is needed`, !/needs an enterprise licence/i.test(words), words);
+        ck(`licence read fails @${w}: ${name} opens no box`, (await page.getByTestId("answer-panel").count()) === 0);
+        await ctx.close();
+      }
+    }
+    {
+      const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const page = await ctx.newPage();
+      await teamHome(page, { waiting: [], projects: [stub] });
+      await page.goto(`${valid.base}/`, { waitUntil: "load" });
+      await page.getByTestId("hidden-row").first().waitFor();
+      ck("chunk loaded: only hidden projects show the hidden row in the Projects box",
+         (await page.getByTestId("hidden-row").count()) === 1 && (await page.locator('[data-testid="projects"] > div.border').count()) === 1);
+      await ctx.close();
+    }
   } catch (e) {
     ck("script ran to the end", false, String(e && e.stack || e));
   } finally {

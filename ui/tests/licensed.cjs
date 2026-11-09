@@ -4,10 +4,11 @@
  * daemon starts through `python ee/tests/licensed.py serve` (TR-1047).
  *
  *   const { startDaemon } = require("./licensed.cjs");
- *   const d = await startDaemon({ port, dataDir, edition: "factory", licence: "valid", auth: "tok" });
+ *   const d = await startDaemon({ port, dataDir, edition: "factory", licence: "valid", seats: 50, auth: "tok" });
  *   ... d.base, d.stop()
  *
- * licence: "none" | "valid" | "expired" | "over_seats" (default "valid"). The daemon gets a clean
+ * licence: "none" | "valid" | "expired" | "over_seats" | "invalid" (default "valid"; invalid puts text that is not a
+ * licence in TARES_LICENSE). The daemon gets a clean
  * environment (no TARES_* or FACTORY_* of the machine), the console in ui/dist (TARES_UI_DIST overrides)
  * and the code under test on PYTHONPATH. Python: TARES_E2E_PY, else the repo's .venv, else python3.
  */
@@ -37,9 +38,9 @@ function healthy(url) {
   return new Promise((res) => http.get(url, (r) => { r.resume(); res(r.statusCode > 0); }).on("error", () => res(false)));
 }
 
-async function startDaemon({ port, dataDir, edition, licence = "valid", auth } = {}) {
+async function startDaemon({ port, dataDir, edition, licence = "valid", seats, auth, env } = {}) {
   if (!port) throw new Error("startDaemon: port is required");
-  if (!["none", "valid", "expired", "over_seats"].includes(licence)) throw new Error(`startDaemon: unknown licence ${licence}`);
+  if (!["none", "valid", "expired", "over_seats", "invalid"].includes(licence)) throw new Error(`startDaemon: unknown licence ${licence}`);
   const home = dataDir || fs.mkdtempSync(path.join(os.tmpdir(), "tares-licensed-e2e-"));
   const dist = process.env.TARES_UI_DIST || path.join(UI_DIR, "dist");
   const extra = {
@@ -47,7 +48,9 @@ async function startDaemon({ port, dataDir, edition, licence = "valid", auth } =
     TARES_MCP_PORT: String(port + 1), TARES_OTLP_GRPC_PORT: "off", TARES_PR_SYNC_SECONDS: "off",
   };
   if (edition) extra.TARES_EDITION = edition;
+  if (env) Object.assign(extra, env);   // more TARES_* variables for this daemon, e.g. TARES_WORKSPACE_API_URL for a Cloud cell
   const args = [path.join(REPO, "ee/tests/licensed.py"), "serve", "--port", String(port), "--data-dir", home, "--licence", licence];
+  if (seats) args.push("--seats", String(seats));   // default 5 (a suite that adds people needs more)
   if (auth) args.push(`--auth=${auth}`);
   const child = spawn(python(), args, { cwd: REPO, stdio: "ignore", env: cleanEnv(extra), detached: true });
   let exited = false;
