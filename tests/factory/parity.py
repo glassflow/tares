@@ -68,9 +68,11 @@ NOT_PORTED = "not yet ported"
 
 @dataclass
 class Step:
-    argv: list           # everything after `tares factory`; "{tmp}" in an argument or env value is the scenario's folder
+    argv: list           # everything after `tares factory`; "{tmp}" in an argument or env value is the scenario's folder,
+                         # "{tares}" in an env value is the address of the scenario's fake Tares
     env: dict = field(default_factory=dict)
     stdin: str = ""
+    cwd: str = ""        # the folder the command runs in ("{tmp}" works); default the repo root
     before: object = None   # fn(tmp) run before the step: change files between two commands
     after: object = None    # fn(tmp) -> anything, run after the step; Run.snap(i) gives it back to a check
     drop: tuple = ()        # regexes: printed lines that match one are left out of the comparison (not of the checks)
@@ -1091,6 +1093,14 @@ class FakeTares:
         return [r for r in self.requests if r["route"] == route]
 
 
+def routes_in(routes: dict, tmp: Path) -> dict:
+    """The routes with "{tmp}" in an answer replaced by the scenario's folder (a path inside a document)."""
+    folder = json.dumps(str(tmp))[1:-1]  # as it reads inside a JSON string
+    return {k: (st, doc.replace("{tmp}", str(tmp)) if isinstance(doc, str)
+                else json.loads(json.dumps(doc).replace("{tmp}", folder)))
+            for k, (st, doc) in routes.items()}
+
+
 def _crew_files(stations: dict):
     """A setup that gives the crew a crew.json and the stations.json named."""
     def setup(tmp: Path, env: dict) -> None:
@@ -1269,6 +1279,385 @@ _finish_scenario(
     [Step(["finish", "Links App"])],
     [("a refusal without a detail shows the body", lambda r: r.code(0) != 0 and "Tares did not finish Links App: boom" in r.out(0))],
     [])
+
+
+# ---------------------------------------------------------------------------------------------
+# spec_test.sh and session_test.sh: the person's own Claude Code session. `spec` and `session` open Claude in
+# the foreground in the folder they choose, so the scenarios read what the fake Claude Code was called with
+# (its arguments, folder and environment) and what the commands asked of a fake Tares. The suites' checks
+# that need a real Tares (fixtures, the session-start hook, the skill text) stay in the bash suites.
+
+PLUGIN = str((ROOT / "claude-plugin").resolve())
+MCP_ROUTE = {"POST /mcp": (200, {"result": {"serverInfo": {"name": "tares"}}})}
+WITH_MCP = {"TARES_FACTORY_MCP_URL": "{tares}/mcp"}
+SEEN_ENV = ("TARES_PROJECT", "TARES_PROJECT_NAME", "TARES_SESSION_NAME", "TARES_SESSION_TAKEOVER",
+            "TARES_SESSION_KIND", "TARESD_URL", "TARES_FACTORY_URL", "TARES_FACTORY_MCP_URL",
+            "TARES_FACTORY_CRED_FILE", "TARES_FACTORY_TOKEN_FILE", "FACTORY_ROLE", "PWD")
+
+
+def _mkrepo(tmp: Path, rel: str) -> Path:
+    p = tmp / rel
+    p.mkdir(parents=True, exist_ok=True)
+    _git(tmp, "init", "-q", cwd=p)
+    (p / "README.md").write_text("x\n")
+    _git(tmp, "add", ".", cwd=p)
+    _git(tmp, "commit", "-q", "-m", "init", cwd=p)
+    return p
+
+
+def _claude_after(tmp: Path) -> dict:
+    """What the fake Claude Code saw on its last call: how many calls so far, the settings file it was
+    given, and the environment variables the commands set (a token is only noted as present)."""
+    state = tmp / "claude"
+    calls = []
+    try:
+        calls = [json.loads(x) for x in (state / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError:
+        pass
+    seen: dict = {}
+    keys: set = set()
+    try:
+        for line in (state / "last.env").read_text(encoding="utf-8").splitlines():
+            k, _, v = line.partition("=")
+            keys.add(k)
+            if k in SEEN_ENV:
+                seen[k] = v
+    except OSError:
+        pass
+    settings = None
+    if calls:
+        a = calls[-1]["args"]
+        if "--settings" in a:
+            try:
+                settings = json.loads(Path(a[a.index("--settings") + 1]).read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                settings = "<unreadable>"
+    return {"n": len(calls), "env": seen, "has_auth_token": "TARES_AUTH_TOKEN" in keys, "settings": settings}
+
+
+def _the_call(r: Run, i: int = -1) -> dict:
+    calls = r.calls()
+    return calls[i] if calls else {"cwd": "", "args": [""] * 3}
+
+
+def _flag_value(call: dict, flag: str):
+    a = call["args"]
+    return a[a.index(flag) + 1] if flag in a else None
+
+
+def _plain_session(call: dict) -> bool:
+    return "--bg" not in call["args"]
+
+
+def _plugin_on(r: Run, i: int) -> bool:
+    return (_flag_value(_the_call(r, i), "--plugin-dir") == PLUGIN
+            and (r.snap(i) or {}).get("settings") == {"enabledPlugins": {"tares@inline": True}})
+
+
+def _env_of(r: Run, i: int) -> dict:
+    return (r.snap(i) or {}).get("env", {})
+
+
+def _repo_clean(r: Run, rel: str) -> bool:
+    p = subprocess.run(["git", "status", "--porcelain"], cwd=str(r.tmp / rel), capture_output=True, text=True)
+    return p.stdout.strip() == "" and not (r.tmp / rel / ".factory").exists()
+
+
+def _setup_spec(tmp: Path, env: dict) -> None:
+    (_mkrepo(tmp, "shop") / "src").mkdir()
+    (tmp / "plain").mkdir()
+    for name in ("api", "web"):
+        _mkrepo(tmp, f"work/{name}")
+    (tmp / "work" / "notes").mkdir()
+    (tmp / "work" / "zz-not-a-repo").mkdir()
+    (tmp / "empty").mkdir()
+    (tmp / "fresh").mkdir()
+    _git(tmp, "init", "-q", cwd=tmp / "fresh")
+
+
+def _spec_scenario(name: str, about: str, routes: dict, steps: list, checks: list, covers: list) -> None:
+    scenario(Scenario(name=name, suite="spec", about=about, tares={**MCP_ROUTE, **routes}, setup=_setup_spec,
+                      steps=steps, checks=checks, covers=covers))
+
+
+def _sstep(*argv, cwd: str = "{tmp}/shop/src", env: dict | None = None, stdin: str = "") -> Step:
+    return Step(list(argv), env={**WITH_MCP, **(env or {})}, cwd=cwd, stdin=stdin, after=_claude_after)
+
+
+NO_PROJECTS = {"GET /api/projects": (200, {"projects": []}), "GET /api/whoami": (200, {"person": None})}
+
+_spec_scenario(
+    "spec_repo", "`spec` opens the person's own Claude in the repo root, named after the idea, with this plugin",
+    NO_PROJECTS,
+    [_sstep("spec", "an order form for the bakery shop"),
+     _sstep("spec", "--project", "Bakery orders", cwd="{tmp}/shop"),
+     _sstep("spec", "with a token", cwd="{tmp}/shop", env={"TARES_AUTH_TOKEN": "spec-tok"})],
+    [("the spec runs in the repo root", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "shop")),
+     ("the session is named after the idea", lambda r: _the_call(r, 0)["args"][1] == "an-order-form-for-spec"),
+     ("it loads this plugin", lambda r: _flag_value(_the_call(r, 0), "--plugin-dir") == PLUGIN),
+     ("it runs /tares:spec with the idea",
+      lambda r: _the_call(r, 0)["args"][-1] == "/tares:spec an order form for the bakery shop"),
+     ("the spec session turns the plugin on too", lambda r: _plugin_on(r, 0)),
+     ("it is the person's own session, not a background one", lambda r: _plain_session(_the_call(r, 0))),
+     ("it says the plan goes to Tares", lambda r: f"into a project on Tares ({r.tares.url})" in r.out(0)),
+     ("the spec session is told the shared MCP endpoint",
+      lambda r: _env_of(r, 0).get("TARES_FACTORY_MCP_URL") == r.tares.url + "/mcp"),
+     ("without a token there is no token file to name", lambda r: "TARES_FACTORY_CRED_FILE" not in _env_of(r, 0)),
+     ("nothing is written into the repo", lambda r: _repo_clean(r, "shop")),
+     ("a project name names the session and goes to /tares:spec",
+      lambda r: _the_call(r, 1)["args"][1] == "bakery-orders-spec"
+      and _the_call(r, 1)["args"][-1] == "/tares:spec (project name: Bakery orders)"),
+     ("with a token the spec session gets the token file under both names",
+      lambda r: _env_of(r, 2).get("TARES_FACTORY_CRED_FILE") == str(r.crew / ".tares-token")
+      and _env_of(r, 2).get("TARES_FACTORY_TOKEN_FILE") == str(r.crew / ".tares-token"))],
+    ["the spec runs in the repo root", "the session is named after the idea", "it loads this plugin",
+     "it runs /tares:spec with the idea", "the spec session turns the plugin on too",
+     "it is the person's own session, not a background one", "it says the plan goes to Tares",
+     "the spec session is told the shared MCP endpoint", "without a token there is no token file to name",
+     "nothing is written into the repo", "a project name names the session and goes to /tares:spec",
+     "with a token the spec session gets the token file under both names"])
+
+_spec_scenario(
+    "spec_down", "`spec` says how to start Tares, or an MCP server, and opens nothing",
+    NO_PROJECTS,
+    [_sstep("spec", "an order form", env={"TARESD_URL": "http://127.0.0.1:9"}),
+     _sstep("spec", "an order form", env={"TARES_FACTORY_MCP_URL": "http://127.0.0.1:9/mcp"})],
+    [("without Tares the spec says how to start one", lambda r: "no Tares answers" in r.out(0) and not r.calls()),
+     ("without an MCP server the spec says how to start one",
+      lambda r: "no MCP server answers at http://127.0.0.1:9/mcp" in r.out(1)
+      and "tares mcp --transport streamable-http" in r.out(1) and not r.calls())],
+    ["without Tares the spec says how to start one", "without an MCP server the spec says how to start one"])
+
+_spec_scenario(
+    "spec_folder", "`spec` runs in a folder that holds the repos, and refuses a folder with none or a repo with no commit",
+    NO_PROJECTS,
+    [_sstep("spec", "orders across api and web", cwd="{tmp}/work"),
+     _sstep("spec", "nothing here", cwd="{tmp}/empty"),
+     _sstep("spec", "x", cwd="{tmp}/fresh")],
+    [("a folder of repos: the spec runs in the folder", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "work")),
+     ("and names the repos it holds", lambda r: "holds 2 repo(s): api, web" in r.out(0)),
+     ("a folder with no repo is refused plainly",
+      lambda r: r.code(1) != 0 and "inside the git repo the project builds on, or in a folder that holds its repos" in r.out(1)),
+     ("a repo with no commit is refused plainly", lambda r: r.code(2) != 0 and "has no commit yet" in r.out(2))],
+    ["a folder of repos: the spec runs in the folder", "and names the repos it holds",
+     "a folder with no repo is refused plainly", "a repo with no commit is refused plainly"])
+
+ASHISH = {"id": "u_ash", "name": "Ashish"}
+SPEC_PROJECTS = {"projects": [
+    {"id": "p_acme", "name": "Acme web", "kind": "software_factory", "lead": ASHISH},
+    {"id": "p_nobody", "name": "Nobody leads", "kind": "software_factory", "lead": None},
+    {"id": "p_notes", "name": "Plain notes", "lead": ASHISH},
+    {"id": "p_secret", "name": "Secret plan", "hidden": True, "lead": ASHISH},
+    {"id": "p_lead", "name": "Lead case", "kind": "software_factory", "lead": ASHISH}]}
+WANT = "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."
+
+
+def _lead_flow(r: Run, i: int, name: str) -> bool:
+    return (_the_call(r, min(i, len(r.calls()) - 1))["args"][-1] == f"/tares:spec (project name: {name})"
+            and "TARES_PROJECT" not in _env_of(r, i) and "TARES_SESSION_KIND" not in _env_of(r, i)
+            and "as a contributor" not in r.out(i))
+
+
+_spec_scenario(
+    "spec_contributor", "`spec` for a project someone else leads opens a contributor session; nothing else does",
+    {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/whoami": (200, {"person": {"id": "u_kir", "name": "Kiran"}})},
+    [_sstep("spec", "--project", "Acme web", cwd="{tmp}/plain"),
+     _sstep("spec", "acme web"),
+     _sstep("spec", "--project", "No such project"),
+     _sstep("spec", "--project", "Nobody leads"),
+     _sstep("spec", "--project", "Plain notes"),
+     _sstep("spec", "--project", "Secret plan")],
+    [("a contributor gets the contributor prompt, naming the project and its lead",
+      lambda r: r.code(0) == 0 and _the_call(r, 0)["args"][-1] == WANT),
+     ("the contributor session is bound to the project", lambda r: _env_of(r, 0).get("TARES_PROJECT") == "Acme web"),
+     ("a contributor needs no git repo: it opens in the current folder, named for the project",
+      lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "plain") and _the_call(r, 0)["args"][1] == "acme-web-spec"),
+     ("the contributor session carries the contributor marker, so its hook does not say to build",
+      lambda r: _env_of(r, 0).get("TARES_SESSION_KIND") == "contributor" and "FACTORY_ROLE" not in _env_of(r, 0)),
+     ("a contributor is told it is a contributor session",
+      lambda r: "as a contributor to Acme web, which Ashish leads" in r.out(0)),
+     ("a contributor session does not run /tares:spec", lambda r: "/tares:spec" not in _the_call(r, 0)["args"][-1]),
+     ("it loads this plugin and turns it on", lambda r: _plugin_on(r, 0)),
+     ("the idea text finds the project too, and a contributor inside a repo opens at its root",
+      lambda r: _the_call(r, 1)["args"][-1] == WANT and _the_call(r, 1)["cwd"] == str(r.tmp / "shop")),
+     ("a contributor session writes nothing into the repo", lambda r: _repo_clean(r, "shop")),
+     ("an unknown project name stays today's flow", lambda r: _lead_flow(r, 2, "No such project")),
+     ("a project with no lead stays today's flow", lambda r: _lead_flow(r, 3, "Nobody leads")),
+     ("a project that is not a software factory one, led by someone else, keeps the lead's flow",
+      lambda r: _lead_flow(r, 4, "Plain notes")),
+     ("a private project the caller is not on keeps the lead's flow", lambda r: _lead_flow(r, 5, "Secret plan"))],
+    ["a contributor gets the contributor prompt, naming the project and its lead",
+     "the contributor session is bound to the project",
+     "a contributor needs no git repo: it opens in the current folder, named for the project",
+     "the contributor session carries the contributor marker, so its hook does not say to build",
+     "a contributor is told it is a contributor session", "a contributor session does not run /tares:spec",
+     "it loads this plugin and turns it on",
+     "the idea text finds the project too, and a contributor inside a repo opens at its root",
+     "a contributor session writes nothing into the repo", "an unknown project name stays today's flow",
+     "a project with no lead stays today's flow",
+     "a project that is not a software factory one, led by someone else, keeps the lead's flow",
+     "a private project the caller is not on keeps the lead's flow"])
+
+_spec_scenario(
+    "spec_lead", "the lead of the project, and a caller with no person, get the usual flow",
+    {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/whoami": (200, {"person": ASHISH})},
+    [_sstep("spec", "--project", "Acme web"),
+     _sstep("spec", "--project", "Acme web", cwd="{tmp}/plain"),
+     _sstep("spec", "--project", "Lead case")],
+    [("the lead's session has no contributor marker", lambda r: "TARES_SESSION_KIND" not in _env_of(r, 0)),
+     ("the lead keeps today's prompt",
+      lambda r: _lead_flow(r, 0, "Acme web") and _the_call(r, 0)["cwd"] == str(r.tmp / "shop")),
+     ("the lead outside a repo is still refused as today",
+      lambda r: r.code(1) != 0 and "inside the git repo the project builds on" in r.out(1)),
+     ("the lead of an existing project gets the usual prompt",
+      lambda r: _lead_flow(r, 2, "Lead case") and _the_call(r, -1)["cwd"] == str(r.tmp / "shop"))],
+    ["the lead's session has no contributor marker", "the lead keeps today's prompt",
+     "the lead outside a repo is still refused as today", "the lead of an existing project gets the usual prompt"])
+
+_spec_scenario(
+    "spec_no_person", "a caller with no person (the root token) stays today's flow",
+    {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/whoami": (200, {"person": None})},
+    [_sstep("spec", "--project", "Acme web")],
+    [("a caller with no person (the root token) stays today's flow", lambda r: _lead_flow(r, 0, "Acme web"))],
+    ["a caller with no person (the root token) stays today's flow"])
+
+for _route in ("/api/whoami", "/api/projects"):
+    _routes = {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/whoami": (200, {"person": {"id": "u_kir"}})}
+    _routes[f"GET {_route}"] = (500, "boom")
+    _spec_scenario(
+        "spec_failed_" + _route.rsplit("/", 1)[1], f"a failed {_route} lookup stays today's flow",
+        _routes,
+        [_sstep("spec", "--project", "Acme web"), _sstep("spec", "--project", "Acme web", cwd="{tmp}/plain")],
+        [(f"a failed {_route} lookup stays today's flow", lambda r: _lead_flow(r, 0, "Acme web"))]
+        + ([("and a failed lookup outside a repo is refused as today, not opened as a contributor",
+             lambda r: r.code(1) != 0 and "inside the git repo the project builds on" in r.out(1))]
+           if _route == "/api/whoami" else []),
+        ["a failed $route lookup stays today's flow"]
+        + (["and a failed lookup outside a repo is refused as today, not opened as a contributor"]
+           if _route == "/api/whoami" else []))
+
+
+SHOP = {"id": "p_shop", "name": "Shop", "kind": "software_factory", "status": "active"}
+NOTES = {"id": "p_notes", "name": "Notes app", "kind": "software_factory", "status": "active"}
+NOT_FACTORY = {"id": "p_nf", "name": "Not factory"}
+LISTED = {"GET /api/projects": (200, {"projects": [SHOP, NOTES, NOT_FACTORY]})}
+CREW_NONE = {"GET /api/crew/projects": (200, {"projects": [], "releasing": []})}
+SHOP_REPO = {"GET /api/projects/p_shop/crew": (200, {"handover": {"repos": [{"path": "{tmp}/shop", "name": "acme/shop"}]}})}
+HELD = {"GET /api/crew/projects": (200, {"projects": [{"id": "p_shop", "name": "Shop", "tickets_done": 1,
+                                                       "tickets_total": 2, "milestone": None}], "releasing": []})}
+RELEASING = {"GET /api/crew/projects": (200, {"projects": [], "releasing": [{"id": "p_shop", "name": "Shop"}]})}
+
+
+def _setup_session(tmp: Path, env: dict) -> None:
+    _mkrepo(tmp, "shop")
+    (tmp / "elsewhere").mkdir()
+
+
+def _session_scenario(name: str, about: str, routes: dict, steps: list, checks: list, covers: list) -> None:
+    scenario(Scenario(name=name, suite="session", about=about, tares={**MCP_ROUTE, **routes}, setup=_setup_session,
+                      steps=steps, checks=checks, covers=covers))
+
+
+def _ss(*argv, cwd: str = "{tmp}/elsewhere", env: dict | None = None, stdin: str = "") -> Step:
+    return _sstep(*argv, cwd=cwd, env=env, stdin=stdin)
+
+
+def _last_arg(r: Run, i: int) -> str:
+    return _the_call(r, i)["args"][-1]
+
+
+_session_scenario(
+    "session_start", "`session` opens the person's own Claude on a project, or on an idea, and names the choices",
+    {**LISTED, **CREW_NONE},
+    [_ss("session", "Notes app"),
+     _ss("session", "notes-app"),
+     _ss("session", "a tiny url shortener", cwd="{tmp}/shop"),
+     _ss("session", "--new", "Shop", cwd="{tmp}/shop"),
+     _ss("session", "Widgets", stdin="2\n"),
+     _ss("session", "Widgets", stdin="1\n")],
+    [("a planned project: the person's own session",
+      lambda r: (r.snap(0) or {}).get("n") == 1 and _plain_session(_the_call(r, 0))),
+     ("named after the project", lambda r: _the_call(r, 0)["args"][1] == "notes-app-session"),
+     ("it loads this plugin and turns it on", lambda r: _plugin_on(r, 0)),
+     ("it runs /tares:session with the project", lambda r: _last_arg(r, 0) == "/tares:session Notes app"),
+     ("the session is bound to the project",
+      lambda r: _env_of(r, 0).get("TARES_PROJECT") == "p_notes" and _env_of(r, 0).get("TARES_PROJECT_NAME") == "Notes app"
+      and _env_of(r, 0).get("TARES_SESSION_NAME") == "notes-app-session"
+      and _env_of(r, 0).get("TARES_SESSION_TAKEOVER", "") == ""),
+     ("and told the Tares and its MCP endpoint",
+      lambda r: _env_of(r, 0).get("TARESD_URL") == r.tares.url
+      and _env_of(r, 0).get("TARES_FACTORY_MCP_URL") == r.tares.url + "/mcp"),
+     ("with no repo of its own it opens where you are", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "elsewhere")),
+     ("the project's slug finds it too", lambda r: _last_arg(r, 1) == "/tares:session Notes app"),
+     ("an idea: plan lightly and build here",
+      lambda r: _last_arg(r, 2) == "/tares:session new: a tiny url shortener"
+      and _the_call(r, 2)["args"][1] == "a-tiny-url-shortener-session"),
+     ("not bound to a project yet", lambda r: _env_of(r, 2).get("TARES_PROJECT", "") == ""),
+     ("it opens in the repo you are in", lambda r: _the_call(r, 2)["cwd"] == str(r.tmp / "shop")),
+     ("it says the plan goes to Tares and the build happens here", lambda r: "builds it in the same" in r.out(2)),
+     ("--new makes even a project name an idea", lambda r: _last_arg(r, 3) == "/tares:session new: Shop"),
+     ("one unknown word: no, I meant a project, lists the open ones",
+      lambda r: r.code(4) != 0 and "the open projects: " in r.out(4) and "Shop" in r.out(4)
+      and "Not factory" not in r.out(4) and (r.snap(4) or {}).get("n") == (r.snap(3) or {}).get("n")),
+     ("one unknown word: yes, a new project", lambda r: _last_arg(r, -1) == "/tares:session new: Widgets"),
+     ("nothing is written into the repo", lambda r: _repo_clean(r, "shop"))],
+    ["a planned project: the person's own session", "named after the project", "it loads this plugin and turns it on",
+     "it runs /tares:session with the project", "the session is bound to the project",
+     "and told the Tares and its MCP endpoint", "with no repo of its own it opens where you are",
+     "the project's slug finds it too", "an idea: plan lightly and build here", "not bound to a project yet",
+     "it opens in the repo you are in", "it says the plan goes to Tares and the build happens here",
+     "--new makes even a project name an idea", "one unknown word: no, I meant a project, lists the open ones",
+     "one unknown word: yes, a new project", "nothing is written into the repo"])
+
+_session_scenario(
+    "session_refuse", "`session` says how to start Tares, and a station may not open one",
+    {**LISTED, **CREW_NONE},
+    [_ss("session", "Shop", env={"TARESD_URL": "http://127.0.0.1:9"}),
+     _ss("session", "Shop", env={"FACTORY_STATION": "crew-orchestrator"})],
+    [("without Tares it says how to start one", lambda r: "no Tares answers" in r.out(0) and not r.calls()),
+     ("a station may not open one",
+      lambda r: r.code(1) != 0 and "only the person runs this" in r.out(1) and not r.calls())],
+    ["without Tares it says how to start one", "a station may not open one"])
+
+_session_scenario(
+    "session_crew_keep", "a project the crew holds is left with it unless the person says yes",
+    {**LISTED, **HELD, **SHOP_REPO, "POST /api/projects/p_shop/takeover": (200, {"ok": True})},
+    [_ss("session", "Shop", stdin="\n")],
+    [("the crew holds it: Enter leaves it with the crew",
+      lambda r: "Left with the crew" in r.out(0) and "crew attach orchestrator" in r.out(0) and not r.calls()
+      and not r.tares.asked("POST /api/projects/p_shop/takeover"))],
+    ["the crew holds it: Enter leaves it with the crew"])
+
+_session_scenario(
+    "session_crew_take", "yes takes a project over from the crew, in the person's words, and opens its repo",
+    {**LISTED, **HELD, **SHOP_REPO, "POST /api/projects/p_shop/takeover": (200, {"ok": True})},
+    [_ss("session", "Shop", stdin="1\nsmall, I will finish it myself\n")],
+    [("yes: taken over, in the person's words",
+      lambda r: len(r.tares.asked("POST /api/projects/p_shop/takeover")) == 1
+      and json.loads(r.tares.asked("POST /api/projects/p_shop/takeover")[0]["body"]) == {"words": "small, I will finish it myself"}),
+     ("the session knows it took it over",
+      lambda r: _last_arg(r, 0) == "/tares:session Shop (taken over from the crew)"
+      and _env_of(r, 0).get("TARES_SESSION_TAKEOVER") == "1" and _env_of(r, 0).get("TARES_PROJECT") == "p_shop"),
+     ("it opens in the project's repo", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "shop"))],
+    ["yes: taken over, in the person's words", "the session knows it took it over", "it opens in the project's repo"])
+
+_session_scenario(
+    "session_released", "a project being released carries on its takeover, and the menu marks it",
+    {**LISTED, **RELEASING, **SHOP_REPO},
+    [_ss("session", "Shop"),
+     _ss("session", stdin="\n"),
+     _ss("session", stdin="2\n"),
+     _ss("session", stdin="3\na habit tracker\n")],
+    [("while it is being released, a new session carries on the takeover without asking",
+      lambda r: _last_arg(r, 0) == "/tares:session Shop (taken over from the crew)"
+      and "was taken over from the crew" in r.out(0)),
+     ("no argument lists the open factory projects",
+      lambda r: "Shop (taken over, being released)" in r.out(1) and "Notes app" in r.out(1)
+      and "something new" in r.out(1) and "Not factory" not in r.out(1)),
+     ("picking a project opens it", lambda r: _last_arg(r, 2) == "/tares:session Notes app"),
+     ("something new asks what to build", lambda r: _last_arg(r, 3) == "/tares:session new: a habit tracker")],
+    ["while it is being released, a new session carries on the takeover without asking",
+     "no argument lists the open factory projects", "picking a project opens it", "something new asks what to build"])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -1511,17 +1900,19 @@ def run_side(sc: Scenario, engine: str) -> Side:
         env = crew_env(tmp, engine)
         results = []
         if sc.tares is not None:
-            fake = FakeTares(sc.tares)
+            fake = FakeTares(routes_in(sc.tares, tmp))
             env["TARESD_URL"] = fake.url
         if sc.setup:
             sc.setup(tmp, env)
-        here = lambda text: text.replace("{tmp}", str(tmp)) if isinstance(text, str) else text
+        here = lambda text: (text.replace("{tmp}", str(tmp)).replace("{tares}", fake.url if fake else "")
+                             if isinstance(text, str) else text)
         for step in sc.steps:
             if step.before:
                 step.before(tmp)
             senv = {**env, **{k: here(v) for k, v in step.env.items()}}
             try:
-                p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv], cwd=str(ROOT), env=senv,
+                p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv],
+                                   cwd=here(step.cwd) or str(ROOT), env=senv,
                                    input=step.stdin, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=STEP_TIMEOUT)
                 results.append({"code": p.returncode, "stdout": p.stdout, "stderr": p.stderr})
@@ -1548,6 +1939,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
             blocks.append(f"== step: {' '.join(step.argv)} ==\nexit: {r['code']}\n"
                           f"-- stdout --\n{dropped(norm_output(r['stdout'], tmp), step.drop)}\n"
                           f"-- stderr --\n{dropped(norm_output(r['stderr'], tmp), step.drop)}")
+            if r.get("snap") is not None:  # what the step's `after` read (compared too)
+                blocks.append(f"-- after --\n{render_json(norm_json(r['snap'], tmp))}")
         for rel, content in snapshot(run).items():
             blocks.append(f"== file {rel} ==\n{content}")
         if fake is not None:  # what each engine asked Tares, and whether it sent a key (never the key)
@@ -1682,13 +2075,16 @@ def main(argv: list) -> int:
     if "--require-full" in flags:
         print("parity: --require-full goes with --coverage", file=sys.stderr)
         return 2
-    if len(args) != 1:
-        print("usage: parity.py <scenario> | --list | --coverage [--require-full]", file=sys.stderr)
+    if not args:
+        print("usage: parity.py <scenario>... | --list | --coverage [--require-full]", file=sys.stderr)
         return 2
-    names = [n for n in SCENARIOS if fnmatch.fnmatchcase(n, args[0])]  # `tidy_*` runs every tidy scenario
-    if not names:
-        print(f"parity: no scenario {args[0]!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
-        return 2
+    names: list = []
+    for pattern in args:  # `tidy_*` runs every tidy scenario; several patterns run the union, once each
+        found = [n for n in SCENARIOS if fnmatch.fnmatchcase(n, pattern)]
+        if not found:
+            print(f"parity: no scenario {pattern!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
+            return 2
+        names += [n for n in found if n not in names]
     return max(run_scenario(SCENARIOS[n]) for n in names)
 
 
