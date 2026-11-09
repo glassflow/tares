@@ -161,7 +161,7 @@ EE_TOOLS: set[str] = set()
 _LICENCE_TEXT = ("licence_required: This needs an enterprise licence. "
                  "https://docs.glassflow.ai/tares/enterprise")
 # what a Tares Cloud cell says instead (tares.licence.CLOUD_WORDS): no licence words, no link
-_CLOUD_TEXT = "licence_required: This is not available on this workspace right now."
+_CLOUD_TEXT = "This is not available on this workspace right now."
 _OFF = ("This tool is off on this Tares. An admin can turn on the building-block tools under "
         "Settings, Access and API keys, Agent tools.")
 

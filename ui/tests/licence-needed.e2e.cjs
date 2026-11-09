@@ -11,6 +11,10 @@
  *  - TR-1088: a Tares Cloud cell (the workspace address is set) never says licence, key or enterprise and links
  *    nowhere: every place above says "... is not available on this workspace right now." on a cell with no
  *    licence and on one whose licence ended, and a self-hosted cell keeps its words and link exactly.
+ *  - TR-1088 (#509 review): with /health slow no licence line shows until it answers, then a Tares Cloud cell
+ *    shows the plain line and a self-hosted cell its words and link; with /health failing the words stay plain;
+ *    a refusal answered before /health lands never says licence on a Tares Cloud cell. What request() carries out
+ *    of a 402 before /health is checked without a browser in licence-words.e2e.cjs.
  * The control plane is made up too: the cell's workspace address is on its own origin and page.route answers it.
  * The answers are made up with page.route, so the suite does not depend on which routes the daemon
  * has moved out of core.
@@ -324,6 +328,95 @@ async function fakeHome(page) {
         ck(`workspace, licence read ${label}, later: still the form, no line`, (await page.locator("#ws-invite").count()) === 1
            && (await page.getByTestId("licence-needed").count()) === 0);
         await page.context().close();
+      }
+    }
+    // /health slow or failing (#509 F3, F4): until /health has answered the console does not know which kind of cell
+    // it is, so no licence line shows (nothing flashes the wrong words); a Tares Cloud cell never says licence at
+    // any moment; a self-hosted cell gets its words and link once /health lands; a failed /health stays plain
+    {
+      const SAY = /enterprise licence|needs a licence|licence_required|\{"code"/i;
+      const HEALTH = /\/health(\?|$)/;
+      const slowHealth = (page, ms) => page.route(HEALTH, async (route) => { await new Promise((r) => setTimeout(r, ms)); return route.continue(); });
+      // sample the page at the given times after load; every sample must pass `ok`
+      async function samples(page, label, times, ok) {
+        let last = 0;
+        for (const t of times) {
+          await page.waitForTimeout(t - last); last = t;
+          const lines = await page.getByTestId("licence-needed").evaluateAll((els) => els.map((e) => e.textContent));
+          const links = await page.locator('a[href*="docs.glassflow.ai/tares/enterprise"]').count();
+          const body = await page.locator("body").innerText();
+          const bad = ok({ lines, links, body });
+          ck(`${label}, at ${t} ms: ${bad ? "FAILED: " + bad : "as expected"}`, !bad, JSON.stringify({ lines, links }));
+        }
+      }
+      const never = ({ lines, links, body }) => lines.some((l) => BAD.test(l)) ? "a line names a licence" : links ? "a link to the enterprise page"
+        : SAY.test(body) ? "the page says licence" : "";
+      const pendingQuiet = (s) => never(s) || (s.lines.length ? "a line shows before /health answered" : "");
+
+      // Tares Cloud, /health slow: never the licence words, no line while pending, then the plain line
+      for (const [label, base, route, ready] of [
+        ["cloud, slow /health, People add slot", cloudBare.base, "/people", (p) => p.getByTestId("people-list")],
+        ["cloud, slow /health, Settings Access", cloudBare.base, "/settings?tab=access", (p) => p.getByTestId("you-row")],
+        ["cloud, slow /health, Areas page", cloudPlatNone.base, "/settings?tab=areas", null],
+      ]) {
+        const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeCloud(p, { status: 200, body: {} }); await slowHealth(p, 3500);
+        await p.goto(base + route, { waitUntil: "commit" });
+        if (ready) await ready(p).waitFor({ timeout: 15000 });
+        await samples(p, label, [300, 1500, 3000], pendingQuiet);
+        await samples(p, label + ", after it landed", [6500], (s) => never(s)
+          || (s.lines.length ? (s.lines.every((l) => / (is|are) not available on this workspace right now\./.test(l)) ? "" : "a line is not the plain one") : "no line"));
+        await p.context().close();
+      }
+      // a self-hosted cell, /health slow: no line while pending, then the words and the link
+      for (const [label, base, route, ready, want] of [
+        ["self-hosted, slow /health, People add slot", selfFactoryNone.base, "/people", (p) => p.getByTestId("people-list"), "Adding people needs an enterprise licence."],
+        ["self-hosted, slow /health, Settings Access", selfPlatNone.base, "/settings?tab=access", (p) => p.getByTestId("you-row"), "Adding people needs an enterprise licence."],
+      ]) {
+        const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await slowHealth(p, 3500);
+        await p.goto(base + route, { waitUntil: "commit" });
+        await ready(p).waitFor({ timeout: 15000 });
+        await samples(p, label, [300, 1500, 3000], (s) => s.lines.length ? "a line shows before /health answered" : s.links ? "a link before /health answered" : "");
+        await p.getByTestId("licence-needed").first().waitFor({ timeout: 10000 });
+        const text = (await p.getByTestId("licence-needed").first().innerText()).trim();
+        ck(`${label}, after it landed: the words`, text.includes(want), text);
+        ck(`${label}, after it landed: the link`, (await p.locator(`a[href="${URL_ENTERPRISE}"]`).count()) >= 1);
+        await p.context().close();
+      }
+      // /health fails: the cell is not known to be self-hosted, so the words stay plain on either kind of cell
+      for (const [label, base, route, ready, what] of [
+        ["cloud, failing /health, People add slot", cloudBare.base, "/people", (p) => p.getByTestId("people-list"), "Adding people"],
+        ["self-hosted, failing /health, People add slot", selfFactoryNone.base, "/people", (p) => p.getByTestId("people-list"), "Adding people"],
+      ]) {
+        const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeCloud(p, { status: 200, body: {} });
+        await p.route(HEALTH, (route) => route.abort());
+        await p.goto(base + route, { waitUntil: "commit" });
+        await ready(p).waitFor({ timeout: 15000 });
+        await samples(p, label, [500, 3000], never);
+        const lines = await p.getByTestId("licence-needed").evaluateAll((els) => els.map((e) => e.textContent));
+        ck(`${label}: when a line shows it is the plain one`, lines.every((l) => l === `${what} is not available on this workspace right now.`), JSON.stringify(lines));
+        await p.context().close();
+      }
+      // a refusal answered BEFORE /health lands (a licence that ended, Add person at once): nothing says licence at
+      // any moment on a Tares Cloud cell (the same case on a self-hosted cell is in licence-words.e2e.cjs)
+      {
+        const addRefused = async (p, base) => {
+          await refuse(p, "POST", "**/api/people"); await slowHealth(p, 4000);
+          await p.goto(`${base}/settings?tab=access`, { waitUntil: "commit" });
+          await p.getByRole("button", { name: "Add person" }).first().click({ timeout: 15000 });
+          await p.getByRole("textbox", { name: "name", exact: true }).fill("Sam S");
+          await p.getByRole("textbox", { name: "email", exact: true }).fill("sam@example.com");
+          await p.getByRole("button", { name: "Add person" }).last().click();
+        };
+        const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeCloud(p, { status: 200, body: {} });
+        await addRefused(p, cloudPlatExpired.base);
+        await samples(p, "cloud, refusal before /health", [300, 1500, 3000], pendingQuiet);
+        await samples(p, "cloud, refusal before /health, after it landed", [6000], (s) => never(s)
+          || (s.lines.length === 1 && /^Adding people is not available on this workspace right now\.$/.test(s.lines[0].trim()) ? "" : "not the plain line: " + JSON.stringify(s.lines)));
+        await p.context().close();
       }
     }
   } finally {

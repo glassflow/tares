@@ -185,7 +185,7 @@ class HealthCx:
         return HealthCx.reply
 
 
-CLOUD_TEXT = "licence_required: This is not available on this workspace right now."
+CLOUD_TEXT = "This is not available on this workspace right now."
 real_cx_refusal = ms._cx
 ms._cx = lambda *a, **k: HealthCx()
 try:
@@ -201,8 +201,8 @@ try:
     HealthCx.reply = Health({"status": "ok", "workspace_api_url": "https://workspace-api.example.test"})
     t = call("ee_ping")
     ck("a cloud cell: the tool is still refused, with plain words", t == CLOUD_TEXT, t)
-    ck("... naming no licence key, enterprise or link", "enterprise" not in t and "http" not in t
-       and "key" not in t, t)
+    ck("... naming no licence, key, enterprise or link", "licence" not in t.lower() and "license" not in t.lower()
+       and "enterprise" not in t and "http" not in t and "key" not in t, t)
     ck("... and the tool did not run", RAN == [], str(RAN))
     HealthCx.reply = Health(RuntimeError("daemon down"))
     ck("a /health that fails: the plain words, never the licence words", call("ee_ping") == CLOUD_TEXT)

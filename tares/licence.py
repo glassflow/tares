@@ -416,10 +416,11 @@ def licence_desk(store, now: datetime | None = None) -> list[dict]:
     licence (its kid); a renewed licence has a new kid and starts fresh. When a licence is first
     seen past several thresholds, only the most urgent is posted and the others count as told.
     A licence that is not valid says nothing here. A Tares Cloud cell says nothing either: its
-    people never see licence words. Returns the desk items added."""
+    people never see licence words. The check is refreshed on a cloud cell too (the watch keeps
+    `ee_allowed` and the licence gauges current); only the desk stays quiet. Returns the desk items added."""
+    st = current(store, now, force=now is not None)
     if hosted():
         return []
-    st = current(store, now, force=now is not None)
     if not st["valid"]:
         return []
     kid = st["kid"]

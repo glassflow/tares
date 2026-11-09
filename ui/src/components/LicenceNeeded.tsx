@@ -3,7 +3,7 @@ import type { CSSProperties } from "react";
 import { Banner } from "@/components/edition";
 import { useCloud } from "@/cloud";
 import { cn } from "@/lib/utils";
-import { ENTERPRISE_URL, licenceSentence, licenceWordsOn } from "@/licenceWords";
+import { ENTERPRISE_URL, licenceKnown, licenceSentence, licenceWordsOn } from "@/licenceWords";
 
 // the words and the address live in licenceWords.ts (api.ts needs them too); re-exported so
 // existing imports keep working
@@ -13,8 +13,8 @@ const LINK = "text-foreground! underline! decoration-border! underline-offset-[3
 
 /** Shown where a team action would be, when the cell answers it with `licence_required`. `inline`
  *  is one muted line under the control; `page` is a boxed note for a page that is only for teams.
- *  On a Tares Cloud cell, and until /health says the cell is self-hosted, it says "not available on
- *  this workspace right now" and links nowhere: the cloud never names a licence. */
+ *  On a Tares Cloud cell, or when /health failed, it says "not available on this workspace right
+ *  now" and links nowhere: the cloud never names a licence. Until /health has answered it shows nothing. */
 export default function LicenceNeeded({ what, variant = "inline", url = ENTERPRISE_URL, className, style }: {
   what?: string;
   variant?: "inline" | "page";
@@ -23,6 +23,7 @@ export default function LicenceNeeded({ what, variant = "inline", url = ENTERPRI
   style?: CSSProperties;
 }) {
   useCloud();   // renders again when /health lands, which is what switches the words
+  if (!licenceKnown()) return null;   // not yet known to be a cloud or a self-hosted cell: say nothing, never the wrong one
   if (!licenceWordsOn()) {
     if (variant === "page") {
       return (

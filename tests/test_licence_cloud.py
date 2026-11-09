@@ -160,6 +160,24 @@ def main():
         else:
             ck("self-hosted: the refusal is today's words and link", "enterprise licence" in b.get("message", "")
                and b.get("url") == DOCS, r.text)
+
+    print("== the watch still refreshes the check on a cloud cell ==")
+
+    def age_cache():
+        c = L._cache
+        L._cache = (c[0], c[1] - L.CACHE_SECONDS - 1, c[2])
+
+    for label, on in (("cloud", True), ("self-hosted", False)):
+        cloud(on)
+        store.set_setting(L.LICENCE_SETTING, make("Watch Co", 9, "lic_watch_" + label, exp.isoformat()))
+        L.current(store, force=True)
+        ck(f"{label}: a valid key allows ee", L.ee_allowed() is True)
+        store.set_setting(L.LICENCE_SETTING, None)   # cleared behind the check
+        ck(f"{label}: the check still remembers the old key", L.ee_allowed() is True)
+        age_cache()
+        L.licence_desk(store)   # one tick of the watch, the cache older than a minute
+        ck(f"{label}: one tick of the watch noticed the cleared key", L.ee_allowed() is False)
+        ck(f"{label}: ... and left nothing on the desk", len(desk_items(store, "Watch Co")) == 0)
     cloud(False)
 
 

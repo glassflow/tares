@@ -22,10 +22,10 @@ let listP: Promise<CloudWorkspacesResult> | null = null;
 // not first render as self-hosted for a moment
 let healthNow: Health | undefined;
 
-/** True only once /health has answered (or failed, then the cell counts as self-hosted) and has no
- *  workspace_api_url: the only time the console may say licence, key or enterprise. The same rule as
- *  `cloud.ready && !cloud.hosted`, for code outside a component; a component that shows such words
- *  also calls `useCloud()`, so it renders again when /health lands. */
+/** True only once /health has answered and has no workspace_api_url: the only time the console may
+ *  say licence, key or enterprise. A failed /health is not an answer: the cell is then not known to
+ *  be self-hosted. For code outside a component; a component that shows such words also calls
+ *  `useCloud()`, so it renders again when /health lands. */
 export { licenceWordsOn };
 
 function loadHealth(): Promise<Health> {
