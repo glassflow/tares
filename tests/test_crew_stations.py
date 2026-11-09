@@ -75,6 +75,7 @@ CREW = SCRATCH / "crew"
 launched: list = []
 real_launch = L.launch
 L.launch = lambda client, *a, **kw: launched.append(a)  # what spawn hands over, not a session
+claude.is_alive = lambda *a, **k: False  # no session list to read (CI has no claude): nothing runs until a check says so
 
 
 def run(args, **world):

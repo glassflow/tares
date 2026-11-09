@@ -86,6 +86,7 @@ class Scenario:
     about: str = ""
     setup: object = None    # fn(tmp, env) run once before the first step: build files, a repo, a link
     tares: dict | None = None   # routes of a fake Tares to run for the scenario (see FakeTares); None: no Tares
+    not_windows: str = ""   # why the Python side is skipped on Windows (the reason is printed), e.g. a claude.cmd cannot take a prompt of several lines
     driver: str = ""     # a script of this folder that runs a function of the engine instead of a command
                          # (`<driver> <engine> <argv...>`), for code that has no command yet
     ignore_calls: tuple = ()  # argument prefixes of calls to Claude Code that are left out of the comparison
@@ -700,6 +701,9 @@ def spawn_step(*args: str, **kw) -> Step:
     return lstep("spawn", *args, **kw)
 
 
+WIN_NO_MULTILINE = ("a station is started through claude.cmd here, and cmd.exe cannot take the boot prompt of a builder or helper "
+                    "(several lines); the claude.exe form waits for TR-946")
+
 _SP_REPOS = {"gitrepos": ["{TMP}/links", "{TMP}/other"]}
 _SP_WORLD = lworld("L3-review", projects=[_LINKS])
 _B = "links-app-build-m1"
@@ -709,6 +713,7 @@ scenario(Scenario(
     suite="crew",
     about="a builder starts in a repo of its project, with the project in its env; refusals start nothing; a helper keeps its parent's project",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "Links App", "m1", "{TMP}/links", "work T1 and T2", world=_SP_WORLD, setup=_SP_REPOS),
            spawn_step("builder", "Links App", "m1", "{TMP}/links", "again", world=_SP_WORLD),
            spawn_step("builder", "Nobody's", "m1", "{TMP}/links", "x", world=_SP_WORLD),
@@ -771,6 +776,7 @@ scenario(Scenario(
     suite="crew",
     about="builders_max is honoured; a project named like the crew is refused before it takes a place",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "Crew Tools", "m1", "{TMP}/blog", "x", world=_SP_LIMIT_WORLD,
                       setup={"gitrepos": ["{TMP}/shop", "{TMP}/blog"]}),
            spawn_step("builder", "shop", "m1", "{TMP}/shop", "work T1", world=_SP_LIMIT_WORLD),
@@ -800,6 +806,7 @@ scenario(Scenario(
     suite="crew",
     about="a project handed over stricter keeps it; --autonomy may only be stricter than the crew",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "strict", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD, setup={"gitrepos": ["{TMP}/core"]}),
            spawn_step("builder", "--autonomy", "L5-dark", "strict", "m2", "{TMP}/core", "T2", world=_SP_LEVEL_WORLD),
            spawn_step("builder", "loose", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD),
@@ -825,6 +832,7 @@ scenario(Scenario(
     suite="crew",
     about="a helper of a crew station: by its name, by its role word, of the releaser; one already running is not started twice",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
     steps=[*_UP_STEPS,
            spawn_step("helper", "crew-reviewer", "probe", "look at PR 9", world=_UP_WORLD),
            spawn_step("helper", "reviewer", "probe", "look at PR 10", world=_UP_WORLD),
@@ -1691,6 +1699,9 @@ def run_side(sc: Scenario, engine: str) -> Side:
         if why:
             side.skip = why
             return side
+    if engine == "python" and sc.not_windows and is_windows():
+        side.skip = sc.not_windows
+        return side
     tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-{engine}-")).resolve()
     fake = None
     try:

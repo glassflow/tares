@@ -280,11 +280,14 @@ def main(argv: list) -> int:
     kit = make_kit(tmp)
     make_crew(tmp, setup)
     with FakeTares(world) as tares:
-        mcp = tares.url + "/mcp"
-        env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit), "TARES_FACTORY_MCP_URL": mcp}
+        env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit)}
+        if fn == "spawn":  # the spawn command wants the crew's MCP endpoint, which the settings checks leave at its default
+            env["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
         if engine == "bash":
             return run_bash(fn, args, env, kit)
-        os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit), TARES_FACTORY_MCP_URL=mcp)
+        os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
+        if fn == "spawn":
+            os.environ["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
         sys.path.insert(0, str(ROOT))
         return run_python(fn, args)
 
