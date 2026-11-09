@@ -66,13 +66,23 @@ def compat_line(root: str) -> str:
     if not tares:
         return ""
     try:
-        done = subprocess.run([tares, "hook", "compat", "--plugin-root", root], stdin=subprocess.DEVNULL,
-                              stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=COMPAT_SECONDS)
-    except Exception:  # a timeout, a missing file, a refusal to run
+        proc = subprocess.Popen([tares, "hook", "compat", "--plugin-root", root], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except Exception:  # a missing file, a refusal to run
         return ""
-    if done.returncode != 0:  # a failing tares has nothing we can trust to say
+    try:
+        stdout, _ = proc.communicate(timeout=COMPAT_SECONDS)
+    except Exception:  # a timeout: stop it and do not wait for the pipe, a grandchild may hold it open (Windows)
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+        try:
+            proc.kill()
+        except Exception:
+            pass
         return ""
-    lines = done.stdout.decode("utf-8", errors="replace").splitlines()
+    if proc.returncode != 0:  # a failing tares has nothing we can trust to say
+        return ""
+    lines = stdout.decode("utf-8", errors="replace").splitlines()
     return lines[0].strip() if lines else ""
 
 

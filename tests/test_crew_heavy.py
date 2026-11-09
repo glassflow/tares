@@ -132,12 +132,20 @@ holder = start(t, 30, *pycmd("import time; time.sleep(30)"), FACTORY_STATION="th
 ok = wait_for(os.path.join(lockpath(t), "what"))
 what = open(os.path.join(lockpath(t), "what"), encoding="utf-8").read() if ok else ""
 pid = open(os.path.join(lockpath(t), "pid"), encoding="utf-8").read().strip() if ok else ""
-ck("the lock holds the runner's pid", pid == str(holder.pid), f"{pid!r} vs {holder.pid}")
+# on Windows the python.exe a venv hands out can be a launcher whose child is the runner: Popen's pid is not the lock's
+ck("the lock holds the runner's pid", pid.isdigit() if WINDOWS else pid == str(holder.pid), f"{pid!r} vs {holder.pid}")
 ck("the lock says what runs and for which station", "time.sleep(30)" in what and what.rstrip().endswith("(station the-station)"), repr(what))
-holder.terminate()
-holder.communicate(timeout=30)
-ck("SIGTERM to the runner frees the lock", wait_dead(holder.pid) and not os.path.exists(lockpath(t)),
-   os.listdir(t) if os.path.isdir(t) else "")
+if WINDOWS:
+    # no SIGTERM handler there (terminate is a hard kill, and may only reach a launcher): stop the runner by its lock pid
+    if pid.isdigit():
+        subprocess.run(["taskkill", "/F", "/T", "/PID", pid], capture_output=True)
+    holder.kill()
+    holder.communicate(timeout=30)
+else:
+    holder.terminate()
+    holder.communicate(timeout=30)
+    ck("SIGTERM to the runner frees the lock", wait_dead(holder.pid) and not os.path.exists(lockpath(t)),
+       os.listdir(t) if os.path.isdir(t) else "")
 
 # ---------- two commands never overlap ----------
 t = fresh()
@@ -261,7 +269,8 @@ probe = ("import os, sys; from tares.crew.dispatch import find; "
          "bad = [m for m in ('psutil', 'duckdb', 'fastapi', 'tares.daemon', 'tares.store', 'tares.cli') if m in sys.modules]; "
          "print(code, bad)")
 t = fresh()
-r = subprocess.run([PY, "-c", probe], env=env_for(t), capture_output=True, text=True, timeout=60)
+# PYTHONPATH is the repo alone: the postgres suite puts tests/pg_harness first, whose sitecustomize imports the store
+r = subprocess.run([PY, "-c", probe], env=env_for(t, PYTHONPATH=str(ROOT)), capture_output=True, text=True, timeout=60)
 ck("a plain run through the dispatcher imports no psutil, duckdb, fastapi or tares.cli", r.stdout.strip() == "0 []", f"{r.stdout!r} {r.stderr!r}")
 
 # ---------- SIGTERM stops the tree ----------

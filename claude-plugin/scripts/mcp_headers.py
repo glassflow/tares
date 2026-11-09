@@ -90,8 +90,14 @@ def headers_json() -> str:
 
 def main() -> int:
     out = headers_json()
-    sys.stdout.write(out + "\n")
-    sys.stdout.flush()
+    # bytes, so Windows does not turn the newline into CRLF: the helper prints what the bash one printed
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is None:  # a stdout that is not a real file (a test's StringIO)
+        sys.stdout.write(out + "\n")
+        sys.stdout.flush()
+    else:
+        stream.write(out.encode("utf-8") + b"\n")
+        stream.flush()
     return 0
 
 

@@ -312,7 +312,7 @@ names = sorted({a.name.split(".")[0] for n in tops if isinstance(n, ast.Import) 
 ck("it imports only the standard library at the top", set(names) <= {"__future__", "json", "os", "shutil", "subprocess", "sys"}, str(names))
 ck("it does not import tares at the top (the import is inside compat_line, where its failure is caught)",
    "tares" not in names and "from tares.crew.version import check_plugin_compat" in SRC)
-ck("it has LF line ends and no em dash", b"\r" not in SCRIPT.read_bytes() and "\u2014" not in SRC)
+ck("it has no stray CR (a CRLF checkout is fine) and no em dash", b"\r" not in SCRIPT.read_bytes().replace(b"\r\n", b"") and "\u2014" not in SRC)
 
 shutil.rmtree(T, ignore_errors=True)
 print(f"\n{P} passed, {F} failed")
