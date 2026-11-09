@@ -53,8 +53,9 @@ BANNED = [
     ("stat -c/-f", r"(?<![\w-])stat\s+-[cf]"),
     ("/tmp", r"(?<![\w.-])/tmp(/|\b)"),
 ]
-# only the skills: challenger-waive.md still runs a bare python3 until TR-1103 switches the plugin's commands to
-# `tares hook`; ban python3 in commands there, with the same sample below
+# python3 is banned in the skills only. The command file challenger-waive.md still runs a bare python3 until
+# TR-1103 switches the plugin's commands to `tares hook`. When that lands, move python3 into BANNED and flip the
+# "not yet banned in a command" check below.
 BANNED_SKILLS_ONLY = [("python3", r"(?<![\w-])python3(?![\w-])")]
 
 
