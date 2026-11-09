@@ -68,6 +68,8 @@ async def main():
         ck("status is ok", h and h["status"] == "ok", h)
         # the keys AuthGate + the cloud login handoff + the control plane's uptime check depend on
         ck("keeps auth_required/sources", h and "auth_required" in h and "sources" in h, h)
+        # what the crew CLI and the plugin read to refuse clearly when the cell is too old (TR-843)
+        ck("lists the integrations capability", h and h.get("capabilities") == ["integrations"], h)
         # no limit configured: the volume the database sits on is the denominator (TR-290)
         ck("pct_used is measured against the volume with no limit configured",
            h and h.get("pct_used") is not None and h["pct_used"] < 100, h)
@@ -96,6 +98,7 @@ async def main():
         h = await _health(PORT)
         ck("daemon STARTS with an unopenable db (no ERR_CONNECTION_REFUSED)", h is not None)
         ck("status is not ok", h and h["status"] != "ok", h)
+        ck("a daemon that could not start lists no capabilities", h and h.get("capabilities") == [], h)
         ck("names the problem", h and BAD_DB in (h.get("detail") or ""), h)
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{PORT}") as cx:
             r = await cx.get("/api/triggers", timeout=5)

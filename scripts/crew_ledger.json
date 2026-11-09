@@ -267,6 +267,17 @@
       "note": ""
     },
     {
+      "name": "need_capability",
+      "kind": "function",
+      "line": 278,
+      "what": "die with an upgrade message when the cell's /health does not list a capability; /health is read once per command",
+      "ticket": "TR-949",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Sits with require_tares in TaresClient when ported. Only commands that start or change something call it; crew status and crew down never do."
+    },
+    {
       "name": "mcp_on",
       "kind": "function",
       "line": 276,
@@ -4427,6 +4438,16 @@
       "kind": "suite",
       "what": "Claude Code move and crew update",
       "ticket": "TR-964",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": ""
+    },
+    {
+      "name": "compat_test.sh",
+      "kind": "suite",
+      "what": "crew up refuses a cell without the integrations capability; status and down still work",
+      "ticket": "TR-952",
       "dropped": false,
       "python": "",
       "ported": false,
