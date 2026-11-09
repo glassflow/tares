@@ -364,6 +364,11 @@ async def main():
                and store.stored_settings("tickets", "faketix")["token"] == SECRETS[0])
             r = ru(await root.get("/api/projects/nope/integrations/tickets"))
             ck("an unknown project is 404", r.status_code == 404, r.status_code)
+            for slot in ("memory", "bogus"):
+                r = ru(await root.get(f"/api/projects/nope/integrations/{slot}"))
+                ck(f"an unknown project is 404 before the slot {slot} is judged", r.status_code == 404, r.status_code)
+                r = ru(await root.put(f"/api/projects/nope/integrations/{slot}", json={"name": "x"}))
+                ck(f"... on a write too ({slot})", r.status_code == 404, r.status_code)
 
             print("== a project never uses the factory's secret ==")
             async with mk(ann_k) as cx:

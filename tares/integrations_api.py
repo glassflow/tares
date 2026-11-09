@@ -242,8 +242,8 @@ def register(app, store, h):
     # ── a project's own choice ──
     def project_of(uid: str, request: Request, slot: str, write: bool) -> dict:
         no_station(request)
-        slot_of(slot, project=True)
         p = h.project_or_404(h.resolve_project(uid))
+        slot_of(slot, project=True)
         if write:
             may_write_project(request, p)
         return p
