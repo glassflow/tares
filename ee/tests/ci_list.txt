@@ -15,6 +15,7 @@ test_factory_project_controls
 test_factory_team_home
 test_grant_decline_sticks
 test_grants_teams
+test_licence_cloud
 test_mcp_editions_ee
 test_my_work
 test_owner_claims_local_team

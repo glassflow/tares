@@ -5,7 +5,7 @@ import { api, type AgentLimits, type TracingStatus } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { Close } from "../components/icons";
 import { InternalName, Picker, TimeAgo, keyTitle } from "../components/bits";
-import { type Cloud, cloudLink, useCloud } from "../cloud";
+import { type Cloud, cloudLink, licenceWordsOn, useCloud } from "../cloud";
 import type { ApiKey, Edition, EditionSettings, GithubAppTest, GithubCredential, ModelProvider, ModelProviders, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
@@ -115,9 +115,9 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
   // With no tab asked for, the default waits for /health (Workspace on Tares Cloud, else Access),
   // so a hard load does not show Access and then jump.
   // The licence tab is for self-hosted cells: Tares Cloud needs no licence, and until /health has
-  // answered we do not know which this is, so an asked-for licence tab waits like the default does.
+  // answered, or when it fails, the cell is not known to be self-hosted, so an asked-for licence tab falls back to the default.
   const want = picked === "advanced" && !hasAdvanced ? undefined
-    : picked === "licence" && (cloud.hosted || !cloud.ready) ? undefined : picked;
+    : picked === "licence" && !licenceWordsOn() ? undefined : picked;
   const tab: SettingsTab | undefined = workspaceApiUrl ? (want ?? "workspace")
     : want === "workspace" ? (cloud.ready ? "access" : "workspace")
     : want ?? (cloud.ready ? "access" : undefined);
@@ -127,7 +127,7 @@ export default function Security({ initialTab }: { initialTab?: SettingsTab } = 
     : t.key === "usage" ? !workspaceApiUrl
     : t.key === "advanced" ? hasAdvanced
     : t.key === "areas" ? eeLoaded
-    : t.key === "licence" ? cloud.ready && !cloud.hosted : true);
+    : t.key === "licence" ? licenceWordsOn() : true);
   const groups = [...new Set(tabs.map((t) => t.group))];
   const link = (t: (typeof TABS)[number]) => (
     <button key={t.key} type="button" aria-current={tab === t.key ? "page" : undefined}

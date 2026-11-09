@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { useCloud } from "../../cloud";
+import { licenceWordsOn, useCloud } from "../../cloud";
 import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -446,7 +446,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
           )}
         </div>
       )}
-      {cloud.ready && !cloud.hosted && <div className="border-t border-border px-4 py-3 text-[13px] text-muted-foreground md:px-[18px]" data-testid="licence-link-row">
+      {licenceWordsOn() && <div className="border-t border-border px-4 py-3 text-[13px] text-muted-foreground md:px-[18px]" data-testid="licence-link-row">
         <Link to="/settings/advanced?tab=licence" className="text-foreground! underline!" data-testid="licence-link">Enterprise licence</Link>: see it, paste a key or remove one.
       </div>}
     </Sec>

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { licenceWordsOn, noteHealth } from "./licenceWords";
 import {
   api, cloudApi, type CloudResult, type CloudWorkspace, type CloudWorkspaceOverview,
   type CloudWorkspacesResult,
@@ -21,11 +22,17 @@ let listP: Promise<CloudWorkspacesResult> | null = null;
 // not first render as self-hosted for a moment
 let healthNow: Health | undefined;
 
+/** True only once /health has answered and has no workspace_api_url: the only time the console may
+ *  say licence, key or enterprise. A failed /health is not an answer: the cell is then not known to
+ *  be self-hosted. For code outside a component; a component that shows such words also calls
+ *  `useCloud()`, so it renders again when /health lands. */
+export { licenceWordsOn };
+
 function loadHealth(): Promise<Health> {
   if (!healthP) {
     healthP = api.health()
-      .then((h) => { healthNow = h; return h; })
-      .catch((e) => { healthP = null; throw e; });
+      .then((h) => { healthNow = h; noteHealth(h); return h; })
+      .catch((e) => { healthP = null; noteHealth(); throw e; });
   }
   return healthP;
 }

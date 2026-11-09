@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { useCloud } from "../../cloud";
+import { licenceWordsOn, useCloud } from "../../cloud";
 import LicencePanel from "../../components/LicencePanel";
 import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
@@ -440,7 +440,7 @@ function SettingsPage() {
   const workspaceApiUrl = cloud.health?.workspace_api_url || undefined;
   const off = new Set<string>();
   off.add(workspaceApiUrl ? "usage" : "general");
-  if (!cloud.ready || cloud.hosted) off.add("licence");
+  if (!licenceWordsOn()) off.add("licence");
   if (!eeLoaded) off.add("areas");
   const groups = shownGroups(off);
 
