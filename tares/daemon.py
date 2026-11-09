@@ -254,6 +254,11 @@ def _ui_dist() -> Path:
 
 UI_DIST = _ui_dist()
 
+# What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
+# cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
+# launch_spec, recall). A daemon that could not start lists none.
+CAPABILITIES = ["integrations"]
+
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
 DEGRADED_PCT = float(os.getenv("TARES_DEGRADED_PCT", "90"))
@@ -341,7 +346,7 @@ def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
         # HTTP 200 with status "down": a probe that can read the body learns WHAT is wrong, and the
         # console (which only ever reaches this daemon) can render it. Keys AuthGate depends on stay.
         body = {"status": "down", "detail": reason, "auth_required": bool(AUTH_TOKEN),
-                "sources": [], "pct_used": None}
+                "sources": [], "pct_used": None, "capabilities": []}
         if LOGIN_URL:
             body["login_url"] = LOGIN_URL
         return JSONResponse(body, status_code=503) if retry else body
@@ -1152,6 +1157,7 @@ def make_app() -> FastAPI:
         body = {"status": status, "auth_required": bool(AUTH_TOKEN),
                 "sources": [] if AUTH_TOKEN else list(runtime.catalog.sources),
                 "pct_used": pct, "version": _installed_version(),
+                "capabilities": list(CAPABILITIES),
                 "uptime_seconds": int(time.monotonic() - _STARTED_MONO)}
         if detail:
             body["detail"] = detail

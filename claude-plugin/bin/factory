@@ -270,6 +270,19 @@ tares_on() {
 require_tares() {
   tares_on || die "no Tares answers at $TARES. Start one with \`tares up\` in another terminal, connect to your Tares Cloud workspace with \`tares login\` (or set TARESD_URL to where yours runs), then try again."
 }
+# need_capability <name>: stop with an upgrade message when the cell's /health does not list the
+# capability. /health is read once per command and kept. Only commands that start or change something
+# call it. `crew status` and `crew down` never do, and no later ticket may add it to them: a version
+# mismatch must never stop someone seeing or stopping their crew.
+CAPS=""; CAPS_READ=""
+need_capability() {
+  require_tares
+  if [ -z "$CAPS_READ" ]; then
+    CAPS=$(curl -sf --max-time 5 "$TARES/health" 2>/dev/null | jq -r '(.capabilities // [])[]' 2>/dev/null) || CAPS=""
+    CAPS_READ=1
+  fi
+  grep -qxF -- "$1" <<<"$CAPS" || die "This needs a newer Tares on the cell (missing $1). Upgrade Tares, then run this again."
+}
 # Stations reach Tares only through the MCP endpoint, so a station started without one has no Tares
 # tools. Only an MCP server's answer to `initialize` counts: taresd's 404 or a web page does not.
 MCP_STATE=""
@@ -1043,6 +1056,7 @@ cmd_crew_up() {
   while [ $# -gt 0 ]; do
     case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
   done
+  need_capability integrations
   require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
