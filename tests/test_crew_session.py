@@ -128,11 +128,32 @@ try:
         os.chdir(repo / ".git")
         inside_git_dir = person.git_root()
         os.chdir(hold / "a-web" / "inner")
-        ck("git_root: the top of the repo you are in", person.git_root() == os.path.realpath(hold / "a-web"))
+        ck("git_root: the top of the repo you are in, in the system's own form",
+           os.path.normcase(person.git_root()) == os.path.normcase(os.path.realpath(hold / "a-web")))
         os.chdir(T)
         ck("git_root: outside a repo it is empty", person.git_root() == "" and inside_git_dir == "")
     finally:
         os.chdir(cwd)
+
+    # --- git spells a path its own way (C:/dir on Windows): both are read as the same place
+    real_git = person._git
+
+    def odd_git(args, cwd=None):
+        rc, out = real_git(args, cwd)
+        return (rc, out.replace(os.sep, os.sep + "." + os.sep) if "--show-toplevel" in args and rc == 0 else out)
+
+    person._git = odd_git
+    try:
+        ck("repos_in: a top-level path spelled another way is still the folder",
+           [os.path.basename(p) for p in person.repos_in(str(hold))] == ["a-web", "b-api"])
+        try:
+            os.chdir(hold / "a-web")
+            ck("git_root: the path is given in the system's own form", person.git_root() == os.path.normpath(person.git_root())
+               and "." + os.sep not in person.git_root() and person.git_root() != "")
+        finally:
+            os.chdir(cwd)
+    finally:
+        person._git = real_git
 
     # --- the lists Tares gives
     class Fake:

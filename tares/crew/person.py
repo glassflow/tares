@@ -474,7 +474,8 @@ def has_commit(path: str) -> bool:
 def git_root() -> str:
     """The git repo the current folder is in, or ""."""
     rc, out = _git(["rev-parse", "--show-toplevel"])
-    return out if rc == 0 else ""
+    # git prints C:/dir on Windows; the rest of the program uses the system's own form
+    return os.path.normpath(out) if rc == 0 and out else ""
 
 
 def repos_in(folder: str) -> list:
@@ -490,7 +491,7 @@ def repos_in(folder: str) -> list:
         if not os.path.isdir(d):
             continue
         rc, top = _git(["-C", d, "rev-parse", "--show-toplevel"])
-        if rc == 0 and top == os.path.realpath(d) and has_commit(d):
+        if rc == 0 and os.path.normcase(os.path.realpath(top)) == os.path.normcase(os.path.realpath(d)) and has_commit(d):
             found.append(d)
     return found
 

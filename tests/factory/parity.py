@@ -1335,6 +1335,14 @@ def _claude_after(tmp: Path) -> dict:
     return {"n": len(calls), "env": seen, "has_auth_token": "TARES_AUTH_TOKEN" in keys, "settings": settings}
 
 
+def _same(a, b) -> bool:
+    """Two paths that name the same place: the engines write them with / or \\ (the crew's own messages use /,
+    git prints C:/...), and Windows ignores case."""
+    if not a or not b:
+        return False
+    return os.path.normcase(os.path.normpath(str(a))) == os.path.normcase(os.path.normpath(str(b)))
+
+
 def _the_call(r: Run, i: int = -1) -> dict:
     calls = r.calls()
     return calls[i] if calls else {"cwd": "", "args": [""] * 3}
@@ -1392,7 +1400,7 @@ _spec_scenario(
     [_sstep("spec", "an order form for the bakery shop"),
      _sstep("spec", "--project", "Bakery orders", cwd="{tmp}/shop"),
      _sstep("spec", "with a token", cwd="{tmp}/shop", env={"TARES_AUTH_TOKEN": "spec-tok"})],
-    [("the spec runs in the repo root", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "shop")),
+    [("the spec runs in the repo root", lambda r: _same(_the_call(r, 0)["cwd"], r.tmp / "shop")),
      ("the session is named after the idea", lambda r: _the_call(r, 0)["args"][1] == "an-order-form-for-spec"),
      ("it loads this plugin", lambda r: _flag_value(_the_call(r, 0), "--plugin-dir") == PLUGIN),
      ("it runs /tares:spec with the idea",
@@ -1408,8 +1416,8 @@ _spec_scenario(
       lambda r: _the_call(r, 1)["args"][1] == "bakery-orders-spec"
       and _the_call(r, 1)["args"][-1] == "/tares:spec (project name: Bakery orders)"),
      ("with a token the spec session gets the token file under both names",
-      lambda r: _env_of(r, 2).get("TARES_FACTORY_CRED_FILE") == str(r.crew / ".tares-token")
-      and _env_of(r, 2).get("TARES_FACTORY_TOKEN_FILE") == str(r.crew / ".tares-token"))],
+      lambda r: _same(_env_of(r, 2).get("TARES_FACTORY_CRED_FILE"), r.crew / ".tares-token")
+      and _same(_env_of(r, 2).get("TARES_FACTORY_TOKEN_FILE"), r.crew / ".tares-token"))],
     ["the spec runs in the repo root", "the session is named after the idea", "it loads this plugin",
      "it runs /tares:spec with the idea", "the spec session turns the plugin on too",
      "it is the person's own session, not a background one", "it says the plan goes to Tares",
@@ -1434,7 +1442,7 @@ _spec_scenario(
     [_sstep("spec", "orders across api and web", cwd="{tmp}/work"),
      _sstep("spec", "nothing here", cwd="{tmp}/empty"),
      _sstep("spec", "x", cwd="{tmp}/fresh")],
-    [("a folder of repos: the spec runs in the folder", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "work")),
+    [("a folder of repos: the spec runs in the folder", lambda r: _same(_the_call(r, 0)["cwd"], r.tmp / "work")),
      ("and names the repos it holds", lambda r: "holds 2 repo(s): api, web" in r.out(0)),
      ("a folder with no repo is refused plainly",
       lambda r: r.code(1) != 0 and "inside the git repo the project builds on, or in a folder that holds its repos" in r.out(1)),
@@ -1471,7 +1479,7 @@ _spec_scenario(
       lambda r: r.code(0) == 0 and _the_call(r, 0)["args"][-1] == WANT),
      ("the contributor session is bound to the project", lambda r: _env_of(r, 0).get("TARES_PROJECT") == "Acme web"),
      ("a contributor needs no git repo: it opens in the current folder, named for the project",
-      lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "plain") and _the_call(r, 0)["args"][1] == "acme-web-spec"),
+      lambda r: _same(_the_call(r, 0)["cwd"], r.tmp / "plain") and _the_call(r, 0)["args"][1] == "acme-web-spec"),
      ("the contributor session carries the contributor marker, so its hook does not say to build",
       lambda r: _env_of(r, 0).get("TARES_SESSION_KIND") == "contributor" and "FACTORY_ROLE" not in _env_of(r, 0)),
      ("a contributor is told it is a contributor session",
@@ -1479,7 +1487,7 @@ _spec_scenario(
      ("a contributor session does not run /tares:spec", lambda r: "/tares:spec" not in _the_call(r, 0)["args"][-1]),
      ("it loads this plugin and turns it on", lambda r: _plugin_on(r, 0)),
      ("the idea text finds the project too, and a contributor inside a repo opens at its root",
-      lambda r: _the_call(r, 1)["args"][-1] == WANT and _the_call(r, 1)["cwd"] == str(r.tmp / "shop")),
+      lambda r: _the_call(r, 1)["args"][-1] == WANT and _same(_the_call(r, 1)["cwd"], r.tmp / "shop")),
      ("a contributor session writes nothing into the repo", lambda r: _repo_clean(r, "shop")),
      ("an unknown project name stays today's flow", lambda r: _lead_flow(r, 2, "No such project")),
      ("a project with no lead stays today's flow", lambda r: _lead_flow(r, 3, "Nobody leads")),
@@ -1506,11 +1514,11 @@ _spec_scenario(
      _sstep("spec", "--project", "Lead case")],
     [("the lead's session has no contributor marker", lambda r: "TARES_SESSION_KIND" not in _env_of(r, 0)),
      ("the lead keeps today's prompt",
-      lambda r: _lead_flow(r, 0, "Acme web") and _the_call(r, 0)["cwd"] == str(r.tmp / "shop")),
+      lambda r: _lead_flow(r, 0, "Acme web") and _same(_the_call(r, 0)["cwd"], r.tmp / "shop")),
      ("the lead outside a repo is still refused as today",
       lambda r: r.code(1) != 0 and "inside the git repo the project builds on" in r.out(1)),
      ("the lead of an existing project gets the usual prompt",
-      lambda r: _lead_flow(r, 2, "Lead case") and _the_call(r, -1)["cwd"] == str(r.tmp / "shop"))],
+      lambda r: _lead_flow(r, 2, "Lead case") and _same(_the_call(r, -1)["cwd"], r.tmp / "shop"))],
     ["the lead's session has no contributor marker", "the lead keeps today's prompt",
      "the lead outside a repo is still refused as today", "the lead of an existing project gets the usual prompt"])
 
@@ -1587,13 +1595,13 @@ _session_scenario(
      ("and told the Tares and its MCP endpoint",
       lambda r: _env_of(r, 0).get("TARESD_URL") == r.tares.url
       and _env_of(r, 0).get("TARES_FACTORY_MCP_URL") == r.tares.url + "/mcp"),
-     ("with no repo of its own it opens where you are", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "elsewhere")),
+     ("with no repo of its own it opens where you are", lambda r: _same(_the_call(r, 0)["cwd"], r.tmp / "elsewhere")),
      ("the project's slug finds it too", lambda r: _last_arg(r, 1) == "/tares:session Notes app"),
      ("an idea: plan lightly and build here",
       lambda r: _last_arg(r, 2) == "/tares:session new: a tiny url shortener"
       and _the_call(r, 2)["args"][1] == "a-tiny-url-shortener-session"),
      ("not bound to a project yet", lambda r: _env_of(r, 2).get("TARES_PROJECT", "") == ""),
-     ("it opens in the repo you are in", lambda r: _the_call(r, 2)["cwd"] == str(r.tmp / "shop")),
+     ("it opens in the repo you are in", lambda r: _same(_the_call(r, 2)["cwd"], r.tmp / "shop")),
      ("it says the plan goes to Tares and the build happens here", lambda r: "builds it in the same" in r.out(2)),
      ("--new makes even a project name an idea", lambda r: _last_arg(r, 3) == "/tares:session new: Shop"),
      ("one unknown word: no, I meant a project, lists the open ones",
@@ -1638,7 +1646,7 @@ _session_scenario(
      ("the session knows it took it over",
       lambda r: _last_arg(r, 0) == "/tares:session Shop (taken over from the crew)"
       and _env_of(r, 0).get("TARES_SESSION_TAKEOVER") == "1" and _env_of(r, 0).get("TARES_PROJECT") == "p_shop"),
-     ("it opens in the project's repo", lambda r: _the_call(r, 0)["cwd"] == str(r.tmp / "shop"))],
+     ("it opens in the project's repo", lambda r: _same(_the_call(r, 0)["cwd"], r.tmp / "shop"))],
     ["yes: taken over, in the person's words", "the session knows it took it over", "it opens in the project's repo"])
 
 _session_scenario(
