@@ -681,6 +681,192 @@ scenario(Scenario(
 
 
 # ---------------------------------------------------------------------------------------------
+# Spawn (TR-954): `factory spawn builder|helper|releaser-helper` on a fake Tares that answers /health, the
+# crew settings, the projects and an MCP initialize. The repos are made by the driver (setup "gitrepos").
+
+def stations_json(r: "Run") -> dict:
+    return json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))
+
+
+def bg_call_of(r: "Run", station: str) -> dict:
+    return next(c for c in bg_calls(r) if c["args"][2] == station)
+
+
+def same_dir(a, b) -> bool:
+    return os.path.realpath(str(a)) == os.path.realpath(str(b))
+
+
+def spawn_step(*args: str, **kw) -> Step:
+    return lstep("spawn", *args, **kw)
+
+
+_SP_REPOS = {"gitrepos": ["{TMP}/links", "{TMP}/other"]}
+_SP_WORLD = lworld("L3-review", projects=[_LINKS])
+_B = "links-app-build-m1"
+
+scenario(Scenario(
+    name="spawn_builder",
+    suite="crew",
+    about="a builder starts in a repo of its project, with the project in its env; refusals start nothing; a helper keeps its parent's project",
+    driver=LAUNCH_DRIVER,
+    steps=[spawn_step("builder", "Links App", "m1", "{TMP}/links", "work T1 and T2", world=_SP_WORLD, setup=_SP_REPOS),
+           spawn_step("builder", "Links App", "m1", "{TMP}/links", "again", world=_SP_WORLD),
+           spawn_step("builder", "Nobody's", "m1", "{TMP}/links", "x", world=_SP_WORLD),
+           spawn_step("builder", "Links App", "m2", "{TMP}/other", "x", world=_SP_WORLD),
+           spawn_step("builder", "Links App", "m3", "{TMP}/nowhere", "x", world=_SP_WORLD),
+           spawn_step("builder", "Links App", "m4", world=_SP_WORLD),
+           spawn_step("helper", _B, "rebase", "rebase T2", world=_SP_WORLD),
+           spawn_step("helper", "nobody", "probe", "x", world=_SP_WORLD),
+           spawn_step("helper", _B, world=_SP_WORLD),
+           spawn_step("sprite", world=_SP_WORLD)],
+    checks=[
+        ("builder recorded", lambda r: stations_json(r)[_B]["role"] == "builder"),
+        ("builder runs in its repo", lambda r: same_dir(bg_call_of(r, _B)["cwd"], r.tmp / "links")),
+        ("builder TARES_PROJECT is the project id, the name beside it",
+         lambda r: station_json(r, _B)["env"]["TARES_PROJECT"] == "uc_links" and station_json(r, _B)["env"]["TARES_PROJECT_NAME"] == "Links App"),
+        ("builder FACTORY_PARENT", lambda r: station_json(r, _B)["env"]["FACTORY_PARENT"] == "crew-orchestrator"),
+        ("builder FACTORY_REPO", lambda r: same_dir(station_json(r, _B)["env"]["FACTORY_REPO"], r.tmp / "links")),
+        ("builder worktrees in its repo",
+         lambda r: fwd(station_json(r, _B)["env"]["FACTORY_WORKTREES"]).endswith("/links/.factory/worktrees")),
+        ("L3: builder waits for the relayed yes", lambda r: relayed(allow_of(r, _B))),
+        ("L3: no pre-authorized merge", lambda r: not any("pre-authorized at level" in x for x in allow_of(r, _B))),
+        ("no duplicate builder", lambda r: r.code(1) == 1 and f"{_B} is already running; message it instead" in r.out(1)),
+        ("a project not handed over is refused",
+         lambda r: r.code(2) == 1 and "is not handed to the crew on Tares" in r.out(2) and "Nobody's" in r.out(2)),
+        ("a repo the project was not handed over with is refused",
+         lambda r: r.code(3) == 1 and "is not one of Links App's repos on Tares" in r.out(3)),
+        ("a folder that is no repository is refused", lambda r: r.code(4) == 1 and "nowhere is not a git repository" in r.out(4)),
+        ("too few arguments say how to call it",
+         lambda r: r.code(5) == 1 and 'usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"' in r.out(5)
+         and r.code(8) == 1 and 'usage: factory spawn helper <parent-station> <slug> "<task>"' in r.out(8)),
+        ("the repo hides .factory from git and has a worktrees folder",
+         lambda r: ".factory/" in (r.tmp / "links" / ".git" / "info" / "exclude").read_text(encoding="utf-8").split("\n")
+         and (r.tmp / "links" / ".factory" / "worktrees").is_dir()),
+        ("only the first builder started, then the helper", lambda r: r.launches() == 2),
+        ("helper name", lambda r: stations_json(r)[f"{_B}-rebase"]["role"] == "helper"),
+        ("helper parent", lambda r: station_json(r, f"{_B}-rebase")["env"]["FACTORY_PARENT"] == _B),
+        ("helper project",
+         lambda r: station_json(r, f"{_B}-rebase")["env"]["TARES_PROJECT"] == "uc_links"
+         and station_json(r, f"{_B}-rebase")["env"]["TARES_PROJECT_NAME"] == "Links App"),
+        ("the helper's prompt names its parent's manual and its task",
+         lambda r: bg_call_of(r, f"{_B}-rebase")["args"][-1].startswith(
+             f"Boot as a helper of the station {_B}: load the skills factory-protocol and station-builder, do only the task below")
+         and bg_call_of(r, f"{_B}-rebase")["args"][-1].endswith("Your task:\nrebase T2")),
+        ("a helper needs a recorded parent", lambda r: r.code(7) == 1 and "nobody is not a recorded station" in r.out(7)),
+        ("spawn takes builder or helper", lambda r: r.code(9) == 1 and "spawn takes builder or helper" in r.out(9)),
+    ],
+    covers=["builder recorded", "builder runs in its repo", "builder TARES_PROJECT is the project id, the name beside it",
+            "builder FACTORY_PARENT", "builder FACTORY_REPO", "builder worktrees in its repo", "L3: builder waits for the relayed yes",
+            "L3: no pre-authorized merge", "no duplicate builder", "a project not handed over is refused",
+            "a repo the project was not handed over with is refused", "helper name", "helper parent", "helper project"],
+))
+
+_SHOP = {"id": "uc_shop", "name": "shop", "repos": [{"path": "{TMP}/shop"}]}
+_BLOG = {"id": "uc_blog", "name": "blog", "repos": [{"path": "{TMP}/blog"}]}
+_CREWTOOLS = {"id": "uc_ct", "name": "Crew Tools", "repos": [{"path": "{TMP}/blog"}]}
+_SP_LIMIT_WORLD = lworld("L4-ship", projects=[_SHOP, _BLOG, _CREWTOOLS], builders_max=2)
+
+scenario(Scenario(
+    name="spawn_limits",
+    suite="crew",
+    about="builders_max is honoured; a project named like the crew is refused before it takes a place",
+    driver=LAUNCH_DRIVER,
+    steps=[spawn_step("builder", "Crew Tools", "m1", "{TMP}/blog", "x", world=_SP_LIMIT_WORLD,
+                      setup={"gitrepos": ["{TMP}/shop", "{TMP}/blog"]}),
+           spawn_step("builder", "shop", "m1", "{TMP}/shop", "work T1", world=_SP_LIMIT_WORLD),
+           spawn_step("builder", "shop", "m2", "{TMP}/shop", "work T2", world=_SP_LIMIT_WORLD),
+           spawn_step("builder", "blog", "m1", "{TMP}/blog", "work T1", world=_SP_LIMIT_WORLD),
+           spawn_step("builder", "blog", "m1", "{TMP}/blog", "work T1", world=lworld("L4-ship", projects=[_SHOP, _BLOG], builders_max=3))],
+    checks=[
+        ("a project can't be named like the crew",
+         lambda r: r.code(0) == 1 and "can't start with" in r.out(0) and "crew-tools-build-m1" not in stations_json(r)),
+        ("builders_max is honoured",
+         lambda r: r.code(3) == 1 and "already 2 active builders (crew setting builders_max is 2); retire one first" in r.out(3)),
+        ("a higher builders_max lets the next builder in",
+         lambda r: r.code(4) == 0 and stations_json(r)["blog-build-m1"]["role"] == "builder"),
+        ("each builder of the two projects started", lambda r: r.launches() == 3),
+        ("L4: the builder merges on the gate",
+         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "shop-build-m1"))),
+    ],
+    covers=["a project can't be named like the crew", "builders_max is honoured", "L4: the builder merges on the gate"],
+))
+
+_STRICT = {"id": "uc_strict", "name": "strict", "autonomy": "L3-review", "repos": [{"path": "{TMP}/core"}]}
+_LOOSE = {"id": "uc_loose", "name": "loose", "repos": [{"path": "{TMP}/core"}]}
+_SP_LEVEL_WORLD = lworld("L4-ship", projects=[_STRICT, _LOOSE])
+
+scenario(Scenario(
+    name="spawn_autonomy",
+    suite="crew",
+    about="a project handed over stricter keeps it; --autonomy may only be stricter than the crew",
+    driver=LAUNCH_DRIVER,
+    steps=[spawn_step("builder", "strict", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD, setup={"gitrepos": ["{TMP}/core"]}),
+           spawn_step("builder", "--autonomy", "L5-dark", "strict", "m2", "{TMP}/core", "T2", world=_SP_LEVEL_WORLD),
+           spawn_step("builder", "loose", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD),
+           spawn_step("builder", "--autonomy", "L3-review", "loose", "m2", "{TMP}/core", "T2", world=_SP_LEVEL_WORLD),
+           spawn_step("builder", "--autonomy", "L4-ship", "loose", "m3", "{TMP}/core", "T3", world=lworld("L3-review", projects=[_LOOSE]))],
+    checks=[
+        ("a project handed over stricter keeps it", lambda r: relayed(allow_of(r, "strict-build-m1"))),
+        ("L5 is no level any more", lambda r: r.code(1) == 1 and "autonomy must be L3-review or L4-ship" in r.out(1)),
+        ("L4: the builder merges on the gate",
+         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "loose-build-m1"))),
+        ("--autonomy makes a builder stricter than the crew", lambda r: r.code(3) == 0 and relayed(allow_of(r, "loose-build-m2"))),
+        ("--autonomy never makes it looser than the crew",
+         lambda r: r.code(4) == 1 and "a project can only be stricter than the crew (crew autonomy is L3-review)" in r.out(4)
+         and "loose-build-m3" not in stations_json(r)),
+    ],
+    covers=["a project handed over stricter keeps it", "L5 is no level any more", "L4: the builder merges on the gate"],
+))
+
+_UP_STEPS = [lstep("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", model, "high", f"Boot as the {role} station", world=_UP_WORLD)
+             for role, model in (("reviewer", "sonnet"), ("releaser", "sonnet"))]
+scenario(Scenario(
+    name="spawn_helper_crew",
+    suite="crew",
+    about="a helper of a crew station: by its name, by its role word, of the releaser; one already running is not started twice",
+    driver=LAUNCH_DRIVER,
+    steps=[*_UP_STEPS,
+           spawn_step("helper", "crew-reviewer", "probe", "look at PR 9", world=_UP_WORLD),
+           spawn_step("helper", "reviewer", "probe", "look at PR 10", world=_UP_WORLD),
+           spawn_step("helper", "reviewer", "second", "look at PR 11", world=_UP_WORLD),
+           spawn_step("releaser-helper", "deploy", "ship it", world=_UP_WORLD),
+           spawn_step("helper", "releaser", "x", world=_UP_WORLD)],
+    checks=[
+        ("a crew station's helper is recorded", lambda r: stations_json(r)["crew-reviewer-probe"]["role"] == "helper"),
+        ("its parent and its manual",
+         lambda r: station_json(r, "crew-reviewer-probe")["env"]["FACTORY_PARENT"] == "crew-reviewer"
+         and "load the skills factory-protocol and station-reviewer" in bg_call_of(r, "crew-reviewer-probe")["args"][-1]),
+        ("it runs where its parent runs", lambda r: same_dir(bg_call_of(r, "crew-reviewer-probe")["cwd"], r.crew)),
+        ("the role word names this crew's station", lambda r: r.code(3) == 1 and "crew-reviewer-probe is already running; message it instead" in r.out(3)),
+        ("a second helper of the same parent", lambda r: r.code(4) == 0 and "crew-reviewer-second" in stations_json(r)),
+        ("the releaser's helper", lambda r: r.code(5) == 0 and stations_json(r)["crew-releaser-deploy"]["role"] == "helper"
+         and station_json(r, "crew-releaser-deploy")["env"]["FACTORY_PARENT"] == "crew-releaser"),
+        ("a helper call without a task says how to call it", lambda r: r.code(6) == 1 and "usage: factory spawn helper" in r.out(6)),
+        ("only the new helpers started", lambda r: r.launches() == 5),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="spawn_refused",
+    suite="crew",
+    about="no MCP server: nothing starts; a halted crew: nothing starts and the HALT file is said",
+    driver=LAUNCH_DRIVER,
+    steps=[spawn_step("builder", "Links App", "m1", "{TMP}/links", "x", world={**_SP_WORLD, "mcp": False},
+                      setup={**_SP_REPOS, "halt": "testing"}),
+           spawn_step("builder", "Links App", "m1", "{TMP}/links", "x", world=_SP_WORLD)],
+    checks=[
+        ("no MCP server: spawn stops too",
+         lambda r: r.code(0) == 1 and "no MCP server answers at" in r.out(0) and "tares mcp --transport streamable-http" in r.out(0)
+         and r.launches() == 0),
+        ("spawn refused while halted",
+         lambda r: r.code(1) == 1 and 'the crew is halted ({"at":"2026-01-01T00:00:00Z","reason":"testing"}); tares factory crew resume first' in r.out(1)),
+    ],
+    covers=["no MCP server: spawn stops too", "spawn refused while halted"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
 # The views (TR-957): roster, status, attach and logs read the crew's stations and the sessions the fake
 # Claude Code lists. The seeds are written straight into the throwaway crew, so the scenarios run on Windows.
 # crewname_test.sh (the roster names its crew) and crew_test.sh are the bash suites they come from.

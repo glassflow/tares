@@ -13,7 +13,8 @@ The driver runs in a throwaway crew (the environment parity.crew_env gives: the 
 
 Both print what the function prints and exit as it does, so the two can be compared. Functions:
 write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
-level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note. The word {TMP} in an
+level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, and the whole command `spawn` (bash's cmd_spawn, or cmd_spawn of
+tares.crew.stations). The word {TMP} in an
 argument is the temp folder.
 
 Environment: LAUNCH_WORLD is JSON for the fake Tares (settings, projects, grants, token, health,
@@ -48,6 +49,7 @@ DEFAULT_WORLD = {
     "grants": {"all": "", "projects": {}},
     "token": "",             # when set, Tares wants this key as a Bearer token
     "health": True,
+    "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
 }
@@ -74,6 +76,13 @@ class FakeTares:
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
                 self.wfile.write(raw)
+
+            def do_POST(self):
+                outer.log.append({"path": self.path, "auth": self.headers.get("Authorization"), "post": True})
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                if self.path == "/mcp" and outer.world["mcp"]:
+                    return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "fake"}}})
+                return self._send(404, {"detail": "no"})
 
             def do_GET(self):
                 w = outer.world
@@ -161,6 +170,12 @@ def make_crew(tmp: Path, setup: dict) -> None:
         (home / ".tares-token").write_text(setup["token"] + "\n", encoding="utf-8")
     for d in setup.get("mkdirs") or []:
         Path(d).mkdir(parents=True, exist_ok=True)
+    if setup.get("halt"):  # the crew is halted, for this reason (HALT holds {at, reason}, compact)
+        (home / "HALT").write_text(json.dumps({"at": "2026-01-01T00:00:00Z", "reason": setup["halt"]}, separators=(",", ":")) + "\n",
+                                   encoding="utf-8")
+    for d in setup.get("gitrepos") or []:  # a folder that is a git repository
+        Path(d).mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "init", "-q", d], check=True)
 
 
 def _sub(text: str, tmp: Path) -> str:
@@ -178,8 +193,8 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
                   "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note"}
-NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on"}
+                  "idle_wake_note", "spawn"}
+NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn"}
 
 
 def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
@@ -190,6 +205,8 @@ def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
     script = f'set -euo pipefail; source "$1" x; shift; {prime}{fn} "$@"'
     if fn == "idle_wake_on":
         script = script.replace('idle_wake_on "$@"', 'idle_wake_on')
+    if fn == "spawn":
+        script = script.replace('spawn "$@"', 'cmd_spawn "$@"')
     p = subprocess.run(["bash", "-c", script, "bash", str(lib), *args], env=env, stdin=None)
     return p.returncode
 
@@ -237,6 +254,9 @@ def run_python(fn: str, args: list) -> int:
             return 0 if L.idle_wake_on(client) else 1
         elif fn == "idle_wake_note":
             print(L.idle_wake_note())
+        elif fn == "spawn":
+            from tares.crew import stations
+            return stations.cmd_spawn(["spawn", *args], dict(os.environ))
         else:
             print(f"launch_support: no function {fn}", file=sys.stderr)
             return 2
@@ -260,10 +280,11 @@ def main(argv: list) -> int:
     kit = make_kit(tmp)
     make_crew(tmp, setup)
     with FakeTares(world) as tares:
-        env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit)}
+        mcp = tares.url + "/mcp"
+        env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit), "TARES_FACTORY_MCP_URL": mcp}
         if engine == "bash":
             return run_bash(fn, args, env, kit)
-        os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
+        os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit), TARES_FACTORY_MCP_URL=mcp)
         sys.path.insert(0, str(ROOT))
         return run_python(fn, args)
 
