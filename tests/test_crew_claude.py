@@ -443,7 +443,21 @@ def active_json_is_never_empty_when_unreadable():
     finally:
         cc.AGENTS_TIMEOUT = old
     ck("a claude that hangs is cut off by the timeout and counts as unreadable", r == "SessionListUnreadableError" and time.time() - t0 < 20, f"{r} {time.time() - t0:.1f}s")
-    ck("the unreadable message is bash's UNREAD", cc.UNREAD == "could not read Claude Code's session list (claude agents --json)")
+    # A claude that starts a child (a .cmd runs python under cmd.exe) and hangs: the timeout must end the child
+    # too, or it holds our pipe open and the call waits for the child to end on its own.
+    tree = T / "bad" / "tree.py"
+    tree.write_text("import subprocess, sys, time\n"
+                    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], stdin=subprocess.DEVNULL)\n"
+                    "time.sleep(30)\n", encoding="utf-8")
+    launcher = make_launcher(T / "bad" / "treeone", "claude", tree)
+    cc.AGENTS_TIMEOUT = 1
+    t0 = time.time()
+    try:
+        r = attempt(cc.active_json, launcher)
+    finally:
+        cc.AGENTS_TIMEOUT = old
+    ck("a claude that hangs with a child running is cut off at the timeout, child included", r == "SessionListUnreadableError" and time.time() - t0 < 4, f"{r} {time.time() - t0:.1f}s")
+    ck("the unreadable message is bash's UNREAD",cc.UNREAD == "could not read Claude Code's session list (claude agents --json)")
     reset()
     fake_claude.write_agents(STATE, [])
     with env(FAKE_CLAUDE_AGENTS_FAIL="1"):

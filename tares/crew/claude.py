@@ -202,13 +202,42 @@ def _child_env() -> dict:
     return env
 
 
+def _kill_tree(pid: int) -> None:
+    """Kill a process and everything it started. A Windows .cmd runs python (or node) as a child of cmd.exe,
+    and killing cmd.exe alone leaves that child holding our pipe open until it ends."""
+    try:
+        root = psutil.Process(pid)
+        procs = root.children(recursive=True) + [root]
+    except (psutil.Error, OSError):
+        return
+    for p in procs:
+        try:
+            p.kill()
+        except (psutil.Error, OSError):
+            pass
+
+
 def run_claude(args, claude=None, timeout=AGENTS_TIMEOUT, platform=None) -> subprocess.CompletedProcess:
     """Run `claude <args>`: UTF-8 text, undecodable bytes replaced, NO_COLOR=1, no stdin, stderr dropped, a
-    timeout. OSError (claude cannot start) and subprocess.TimeoutExpired reach the caller."""
+    timeout that ends the whole process tree. OSError (claude cannot start) and subprocess.TimeoutExpired
+    reach the caller."""
     cmd = claude_command(claude or claude_bin(), args, platform)
-    return subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    with subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                           text=True, encoding="utf-8", errors="replace", env=_child_env(),
-                          timeout=timeout, creationflags=_creationflags())
+                          creationflags=_creationflags()) as proc:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc.pid)
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            raise subprocess.TimeoutExpired(cmd, timeout) from None
+        except BaseException:
+            _kill_tree(proc.pid)
+            raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, None)
 
 
 # ---------- the session list ----------
