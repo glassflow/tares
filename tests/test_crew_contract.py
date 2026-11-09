@@ -189,7 +189,7 @@ def fixture(name, text):
 
 
 def stable(text, tmp):
-    text = text.replace(str(tmp), "<T>").replace(str(tmp.resolve()), "<T>").replace(f":{PORT}", ":<PORT>")
+    text = text.replace(str(ROOT), "<ROOT>").replace(str(ROOT.resolve()), "<ROOT>").replace(str(tmp), "<T>").replace(str(tmp.resolve()), "<T>").replace(f":{PORT}", ":<PORT>")
     return re.sub(r"/private<T>", "<T>", text)
 
 
@@ -200,11 +200,11 @@ def pretty(doc):
 # ---------- schemas themselves ----------
 
 print("== the schemas")
-ck("a schema for status, roster, desk, events and error",
-   {"status", "roster", "desk", "events", "error"} <= set(VALIDATORS), sorted(VALIDATORS))
+ck("a schema for status, roster, desk, events, settings and error",
+   {"status", "roster", "desk", "events", "settings", "error"} <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
-   all(v.schema["properties"]["schema_version"] == {"const": version} for v in VALIDATORS.values()))
+   all(v.schema["properties"]["schema_version"] == {"const": version} for n, v in VALIDATORS.items() if n != "settings"))
 readme = (SCHEMAS / "README.md").read_text(encoding="utf-8") if (SCHEMAS / "README.md").is_file() else ""
 ck("the README documents the exit codes", all(re.search(rf"^\|\s*{c}\s*\|", readme, re.M) for c in "012"), readme[:200])
 ck("a document that is not the shape fails",
@@ -331,6 +331,31 @@ else:
     doc = one_document("desk, nothing waiting", *tares(env, ["desk", "--json"]), "desk")
     ck("desk, nothing waiting: an empty list", doc.get("items") == [], doc)
     WORLD["projects"] = []
+
+    # ---------- settings ----------
+
+    print("== settings")
+    env, tmp = world(crew_of(), sessions())
+    env["TARES_FACTORY_ENGINE"] = "bash"  # settings is still a bash command; Python's own takes over with TR-953
+    for who, role in (("crew-orchestrator", "orchestrator"), ("shop-build-m1", "builder"), ("crew-reviewer", "reviewer")):
+        p = subprocess.run([sys.executable, "-m", "tares.crew", "settings", who], cwd=str(ROOT), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=120,
+                           env=dict(env, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8"))
+        try:
+            doc = json.loads(p.stdout)
+        except ValueError as e:
+            ck(f"settings {who}: stdout is JSON", False, f"{e}: {p.stdout[:200]!r} {p.stderr[-200:]}")
+            continue
+        bad = problems("settings", doc)
+        ck(f"settings {who}: validates against settings.json", p.returncode == 0 and not bad, (p.returncode, bad, p.stderr[-200:]))
+        ck(f"settings {who}: the station and role are its own",
+           doc.get("env", {}).get("FACTORY_STATION") == who and doc.get("env", {}).get("FACTORY_ROLE") == role, doc.get("env"))
+        ck(f"settings {who}: no schema_version key (Claude Code reads this file)", "schema_version" not in doc)
+        if role == "builder":
+            ck("settings builder: its project is set", doc["env"].get("TARES_PROJECT_NAME") == "shop", doc["env"])
+            fixture("settings.json", stable(pretty(doc), tmp))
+    ck("settings: a settings file without its env fails the schema", problems("settings", {"permissions": {"allow": []}}) != [])
+    ck("settings: a token in TARES_AUTH_TOKEN fails the schema", problems("settings", dict(doc, env=dict(doc["env"], TARES_AUTH_TOKEN="secret"))) != [])
 
     # ---------- the error shape ----------
 
@@ -712,7 +737,7 @@ finally:
 # ---------- the samples ----------
 
 print("== the samples")
-for name in ("status.json", "roster.json", "desk.json", "error.json"):
+for name in ("status.json", "roster.json", "desk.json", "settings.json", "error.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
