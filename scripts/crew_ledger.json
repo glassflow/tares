@@ -889,9 +889,9 @@
       "what": "is a station stuck on its context notice",
       "ticket": "TR-959",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Reads the transcript through TR-950's transcript_of. TR-957 keeps a read-only copy in tares/crew/views.py (stuck_on_context) for status and roster; this ticket's port moves it and keeps views.py calling it."
+      "python": "tares.crew.watch_revive:stuck_on_context",
+      "ported": true,
+      "note": "Moved from tares/crew/views.py (TR-957's read-only copy); views.py imports it back for status and roster. Reads the transcript through TR-950's transcript_of. The watch's revive and stuck-restart branches of the cmd_watch station loop are tares.crew.watch_revive:step, registered as the watch's revive step. Its calls to TR-962's pace functions (pace_revived, pace_closed, pace_hold_down, pace_stopped, pace_tried, pace_resume_prompt, pace_fresh_prompt, pace_mark_tried) go through the inert PaceSeam object there: TR-962 replaces watch_revive.pace, until then nothing is paced."
     },
     {
       "name": "kit_version",
@@ -4671,6 +4671,16 @@
       "python": "",
       "ported": false,
       "note": "Runs on Windows; standard library only."
+    },
+    {
+      "name": "watch_support.py",
+      "kind": "suite",
+      "what": "a fake Tares and a driver that runs one round of the watch (watch --once) on either engine",
+      "ticket": "TR-959",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the watch_* scenarios of parity.py; it goes when the bash engine does."
     }
   ],
   "cmux_touchpoints": [

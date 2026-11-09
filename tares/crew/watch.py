@@ -388,3 +388,7 @@ def cmd_watch(argv: list, env: dict) -> int:
     except KeyboardInterrupt:
         pass
     return 0
+
+
+from . import watch_revive   # noqa: E402  (TR-959: revive a stopped station, restart a stuck one)
+register("revive", watch_revive.step)
