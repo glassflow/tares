@@ -56,7 +56,7 @@ fake = T / "fake plugin"                      # a space in the path, as on a Win
     "if sys.argv[1:2] == ['boom']:\n"
     "    sys.exit('the message of a failing hook')\n"
     "print('challenger argv=' + repr(sys.argv[1:]))\n", encoding="utf-8", newline="\n")
-(fake / "hooks" / "guard.sh").write_text("#!/usr/bin/env bash\ncat\necho\necho \"args=$*\"\nexit 3\n", encoding="utf-8", newline="\n")
+(fake / "hooks" / "session-start.sh").write_text("#!/usr/bin/env bash\ncat\necho\necho \"args=$*\"\nexit 3\n", encoding="utf-8", newline="\n")
 
 print("a Python hook")
 r = tares(["hook", "ship", "--plugin-root", str(fake)], stdin='{"a": 1}')
@@ -103,22 +103,20 @@ ck("...and so does a payload that is not JSON", r.returncode == 0 and r.stdout =
 
 print("a shell hook")
 if shutil.which("bash"):
-    r = tares(["hook", "guard", "--plugin-root", str(fake), "a", "b"], stdin="payload")
-    ck("guard runs through bash with stdin and arguments, and its exit code is ours",
+    r = tares(["hook", "session-start", "--plugin-root", str(fake), "a", "b"], stdin="payload")
+    ck("session-start runs through bash with stdin and arguments, and its exit code is ours",
        r.returncode == 3 and r.stdout.splitlines() == ["payload", "args=a b"],
        (r.returncode, r.stdout, r.stderr))
-    # the real guard: a builder merging is allowed, a reviewer merging is refused, through the entry point
-    for role, want in (("builder", "allow"), ("reviewer", "deny")):
-        if not shutil.which("jq"):
-            print("  skip the real guard: jq is not installed")
-            break
-        msg = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 12 --squash"}})
-        r = tares(["hook", "guard", "--plugin-root", str(ROOT / "claude-plugin")], stdin=msg,
-                  extra={"FACTORY_ROLE": role, "FACTORY_STATION": "test", "FACTORY_HOME": "/nonexistent"})
-        got = "deny" if '"deny"' in r.stdout else "allow"
-        ck(f"the real guard through `tares hook guard`: a {role} merging is {'allowed' if want == 'allow' else 'refused'}", got == want and r.returncode == 0, (r.returncode, r.stdout, r.stderr[-200:]))
 else:
     print("  skip: bash is not on PATH")
+
+print("the guard, a Python hook")
+for role, want in (("builder", "allow"), ("reviewer", "deny")):
+    msg = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 12 --squash"}})
+    r = tares(["hook", "guard", "--plugin-root", str(ROOT / "claude-plugin")], stdin=msg,
+              extra={"FACTORY_ROLE": role, "FACTORY_STATION": "test", "FACTORY_HOME": "/nonexistent"})
+    got = "deny" if '"deny"' in r.stdout else "allow"
+    ck(f"the real guard through `tares hook guard`: a {role} merging is {'allowed' if want == 'allow' else 'refused'}", got == want and r.returncode == 0, (r.returncode, r.stdout, r.stderr[-200:]))
 
 print("compat")
 r = tares(["hook", "compat"], extra={"CLAUDE_PLUGIN_ROOT": str(T / "nowhere")})

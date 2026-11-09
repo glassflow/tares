@@ -2577,9 +2577,9 @@
       "what": "PreToolUse hook: one owner per action type, halt, heavy commands",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Needs jq and perl today. The Python port must keep the owner rules; hooks start through tares hook (TR-1068)."
+      "python": "claude-plugin.hooks.guard:main",
+      "ported": true,
+      "note": "guard.py is the Python twin (TR-971); guard.sh and its hooks.json entry stay until TR-1103 switches them. tares hook guard already runs guard.py."
     },
     {
       "name": "deny",
@@ -2589,9 +2589,9 @@
       "what": "emit a deny decision and log guard-deny",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "claude-plugin.hooks.guard:deny_output",
+      "ported": true,
+      "note": "Python: deny_output builds the JSON, log_deny appends the guard-deny line."
     },
     {
       "name": "owner_only",
@@ -2601,9 +2601,9 @@
       "what": "deny unless the station's role owns the action",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "claude-plugin.hooks.guard:decide",
+      "ported": true,
+      "note": "Python: owner_only is a local function of decide."
     },
     {
       "name": "session-start.sh",
@@ -3377,8 +3377,8 @@
       "what": "shell variable of guard.sh: regex for the factory CLI by name",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "claude-plugin.hooks.guard:FACTORY_CLI",
+      "ported": true,
       "note": ""
     },
     {
@@ -3425,8 +3425,8 @@
       "what": "shell variable of guard.sh: regex closing a verb",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "claude-plugin.hooks.guard:FACTORY_END",
+      "ported": true,
       "note": ""
     },
     {
@@ -4518,9 +4518,9 @@
       "what": "the guard hook",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.test_guard_hook:guard",
+      "ported": true,
+      "note": "tests/test_guard_hook.py runs the same 154 cases (tests/guard_cases.jsonl) against guard.py; guard_test.sh takes TARES_FACTORY_ENGINE=python."
     },
     {
       "name": "heavy_test.sh",
@@ -4789,9 +4789,9 @@
       "what": "hooks.json entry",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Becomes tares hook guard (TR-1068 wiring)."
+      "python": "tares.crew.hooks:HOOKS",
+      "ported": true,
+      "note": "tares hook guard runs guard.py (TR-971); hooks.json still runs guard.sh until TR-1103."
     },
     {
       "name": "PreToolUse: AskUserQuestion: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",

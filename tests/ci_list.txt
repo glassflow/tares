@@ -87,6 +87,7 @@ test_github_credentials
 test_github_tickets
 test_goal_first
 test_grants_single
+test_guard_hook
 test_handoffs
 test_handover_single
 test_homebrew_formula

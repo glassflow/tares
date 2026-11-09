@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Checks the PreToolUse guard: each rule fires for the wrong station and lets the owner through.
 set -uo pipefail
-G="$(cd "$(dirname "$0")/../.." && pwd)/claude-plugin/hooks/guard.sh"
+R="$(cd "$(dirname "$0")/../.." && pwd)"
+G="$R/claude-plugin/hooks/guard.sh"
+# TARES_FACTORY_ENGINE=python runs the Python guard (guard.py) through the same cases.
+guard() { if [ "${TARES_FACTORY_ENGINE:-}" = python ]; then "${PYTHON:-python3}" "$R/claude-plugin/hooks/guard.py"; else bash "$G"; fi; }
 export FACTORY_HOME=/nonexistent FACTORY_STATION=test
 fail=0
 t() { # role tool command expected
   local out got=allow
-  out=$(jq -n --arg t "$2" --arg c "$3" '{tool_name: $t, tool_input: {command: $c}}' | FACTORY_ROLE=$1 bash "$G")
+  out=$(jq -n --arg t "$2" --arg c "$3" '{tool_name: $t, tool_input: {command: $c}}' | FACTORY_ROLE=$1 guard)
   grep -q '"deny"' <<<"$out" && got=deny
   if [ "$got" != "$4" ]; then echo "FAIL $1 | $3 | expected $4, got $got"; fail=1; fi
 }
@@ -154,7 +157,7 @@ t builder Bash '/opt/glass0/tares/.factory/halt crew' allow
 # A halted crew refuses a new session however the CLI is spelled.
 H=$(mktemp -d); echo '{"reason":"test"}' > "$H/HALT"
 for c in 'factory spawn x' '/abs/bin/factory spawn x' '/abs/bin/factory revive x' 'factory spawn;ls' '(factory revive x)'; do
-  out=$(jq -n --arg c "$c" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_HOME=$H FACTORY_ROLE=orchestrator bash "$G")
+  out=$(jq -n --arg c "$c" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_HOME=$H FACTORY_ROLE=orchestrator guard)
   grep -q 'crew is halted' <<<"$out" || { echo "FAIL halted | $c | expected the halt to refuse it"; fail=1; }
 done
 rm -rf "$H"
@@ -181,7 +184,7 @@ t builder Bash 'factory-heavy 900 docker build . && docker build -t y .' deny
 t builder Bash 'cd app && factory-heavy 900 docker build -t app .' allow
 helper() { # parent command expected: a helper works under its parent's role
   local out got=allow
-  out=$(jq -n --arg c "$2" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_ROLE=helper FACTORY_PARENT=$1 bash "$G")
+  out=$(jq -n --arg c "$2" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_ROLE=helper FACTORY_PARENT=$1 guard)
   grep -q '"deny"' <<<"$out" && got=deny
   if [ "$got" != "$3" ]; then echo "FAIL helper of $1 | $2 | expected $3, got $got"; fail=1; fi
 }
@@ -189,7 +192,7 @@ helper crew-releaser 'kubectl --context kind-factory rollout undo deploy/app' al
 helper crew-releaser 'gh pr merge 3' deny
 helper shop-build-m1 'gh pr merge 3 --squash' allow
 helper shop-build-m1 'kubectl apply -k deploy/' deny
-out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 1"}}' | env -u FACTORY_ROLE bash "$G")
+out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 1"}}' | (unset FACTORY_ROLE; guard))
 [ -z "$out" ] || { echo "FAIL a session without FACTORY_ROLE was touched"; fail=1; }
 [ $fail = 0 ] && echo "guard: all cases pass"
 exit $fail

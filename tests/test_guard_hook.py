@@ -1,0 +1,172 @@
+"""The guard hook in Python decides what the bash guard decides (TR-971).
+
+Runs every case of tests/factory/guard_test.sh (kept as tests/guard_cases.jsonl: role, tool,
+command, expected allow or deny) against claude-plugin/hooks/guard.py in a subprocess, the way Claude
+Code starts a hook: the payload on stdin, FACTORY_ROLE in the environment. Then the parts that file
+does not cover: the halted crew, the deny output and the events log, a payload that is not JSON,
+UTF-8 text, commands that make the scan slow, and the start time.
+
+It needs neither bash nor jq, so it runs on Windows too. The same cases run against guard.sh in
+tests/factory/guard_test.sh, which also takes the Python guard (TARES_FACTORY_ENGINE=python).
+
+Run: python tests/test_guard_hook.py
+"""
+import json
+import os
+import statistics
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+GUARD = ROOT / "claude-plugin" / "hooks" / "guard.py"
+CASES = ROOT / "tests" / "guard_cases.jsonl"
+P = F = 0
+
+
+def ck(label, cond, detail=None):
+    global P, F
+    P += 1 if cond else 0
+    F += 0 if cond else 1
+    print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
+
+
+TMP = Path(tempfile.mkdtemp(prefix="guard_hook_"))
+BASE = {k: v for k, v in os.environ.items() if not k.startswith(("FACTORY_", "TARES_", "CLAUDE_"))}
+BASE.update(HOME=str(TMP), USERPROFILE=str(TMP), PYTHONIOENCODING="utf-8")
+
+
+def guard(payload, **env):
+    """Run guard.py with the payload (a dict, or text) on stdin; returns the CompletedProcess."""
+    data = payload if isinstance(payload, (bytes, str)) else json.dumps(payload)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    e = dict(BASE)
+    e.update({k: v for k, v in env.items() if v is not None})
+    return subprocess.run([sys.executable, str(GUARD)], input=data, capture_output=True, env=e, cwd=str(TMP))
+
+
+def decision(r):
+    return "deny" if b'"deny"' in r.stdout else "allow"
+
+
+def bash(cmd):
+    return {"tool_name": "Bash", "tool_input": {"command": cmd}}
+
+
+print("the cases of guard_test.sh")
+cases = [json.loads(line) for line in CASES.read_text(encoding="utf-8").splitlines() if line.strip()]
+ck("the case file has the 154 cases of guard_test.sh", len(cases) == 154, len(cases))
+bad = 0
+for c in cases:
+    env = {"FACTORY_ROLE": c["role"], "FACTORY_HOME": "/nonexistent", "FACTORY_STATION": "test"}
+    if c["role"] == "helper":
+        env["FACTORY_PARENT"] = c["parent"]
+    r = guard({"tool_name": c["tool"], "tool_input": {"command": c["command"]}}, **env)
+    got = decision(r)
+    if got != c["expect"] or r.returncode != 0 or r.stderr:
+        bad += 1
+        print(f"  FAIL {c['role']} | {c['command']!r} | expected {c['expect']}, got {got} (exit {r.returncode}) {r.stderr[-200:]!r}")
+ck(f"all {len(cases)} cases decide as guard.sh does", bad == 0, f"{bad} differ")
+
+print("a session without FACTORY_ROLE is never touched")
+r = guard(bash("gh pr merge 1"))
+ck("no output, exit 0", r.returncode == 0 and r.stdout == b"", (r.returncode, r.stdout))
+r = guard(bash("gh pr merge 1"), FACTORY_ROLE="")
+ck("an empty FACTORY_ROLE counts as none", r.returncode == 0 and r.stdout == b"", (r.returncode, r.stdout))
+
+print("a halted crew refuses a new session however the CLI is spelled")
+halt = TMP / "halted"
+halt.mkdir()
+(halt / "HALT").write_bytes('{"reason":"test"}'.encode("utf-8"))
+for cmd in ("factory spawn x", "/abs/bin/factory spawn x", "/abs/bin/factory revive x", "factory spawn;ls",
+            "(factory revive x)", "tares factory spawn builder x", "gh pr merge 3", "git push origin HEAD",
+            "kubectl apply -f x.yaml", "claude --bg"):
+    r = guard(bash(cmd), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+    ck(f"halted: {cmd!r} is refused with the halt reason", b"crew is halted (test)" in r.stdout, r.stdout[-200:])
+r = guard(bash("ls"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted: a harmless command still passes", r.stdout == b"", r.stdout)
+r = guard(bash("git commit -m 'git push later'"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted: a commit message that mentions a push still passes", r.stdout == b"", r.stdout)
+(halt / "HALT").write_bytes("{}".encode("utf-8"))
+r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted without a reason: says so", b"crew is halted (no reason given)" in r.stdout, r.stdout)
+(halt / "HALT").write_bytes("not json".encode("utf-8"))
+r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted with an unreadable file: still refuses", b"crew is halted (" in r.stdout, r.stdout)
+
+print("the deny output")
+home = TMP / "crewhome"
+home.mkdir()
+r = guard(bash("gh pr merge 12"), FACTORY_ROLE="reviewer", FACTORY_HOME=str(home), FACTORY_STATION="rev-1")
+out = json.loads(r.stdout.decode("utf-8"))
+hso = out["hookSpecificOutput"]
+ck("it is the PreToolUse deny shape Claude Code reads", r.returncode == 0 and hso["hookEventName"] == "PreToolUse"
+   and hso["permissionDecision"] == "deny", out)
+ck("the reason names the owner and the way out", hso["permissionDecisionReason"] ==
+   "In this factory only the builder station may merge pull requests. Send it a message instead (see the factory-protocol skill).",
+   hso["permissionDecisionReason"])
+events = [json.loads(line) for line in (home / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+ck("one guard-deny line is appended to events.jsonl", len(events) == 1 and events[0]["event"] == "guard-deny"
+   and events[0]["station"] == "rev-1" and events[0]["tool"] == "Bash" and events[0]["reason"] == hso["permissionDecisionReason"], events)
+ck("...with a UTC time", len(events[0]["at"]) == 20 and events[0]["at"].endswith("Z") and events[0]["at"][10] == "T", events[0]["at"])
+r = guard(bash("gh pr merge 12"), FACTORY_ROLE="reviewer", FACTORY_HOME=str(home))
+events = [json.loads(line) for line in (home / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+ck("a station without a name logs as ?", events[-1]["station"] == "?" and len(events) == 2, events[-1])
+r = guard(bash("gh pr merge 12"), FACTORY_ROLE="reviewer", FACTORY_HOME=str(TMP / "no such dir"))
+ck("no crew home folder: it still denies and writes nothing", decision(r) == "deny" and not (TMP / "no such dir").exists(), r.stdout)
+r = guard(bash("ls"), FACTORY_ROLE="reviewer", FACTORY_HOME=str(home))
+ck("an allowed command prints nothing and logs nothing", r.stdout == b"" and len((home / "events.jsonl").read_text(encoding="utf-8").splitlines()) == 2, r.stdout)
+r = guard({"tool_name": "mcp__plugin_slack_slack__slack_send_message", "tool_input": {}}, FACTORY_ROLE="builder")
+ck("a Slack send is refused for every role with its own reason", b"Crew stations don't message people" in r.stdout, r.stdout)
+
+print("input that is not a command")
+for label, payload in (("not JSON", "this is not json"), ("an empty payload", ""), ("a JSON list", "[1, 2]"),
+                       ("no tool name", {"tool_input": {"command": "gh pr merge 1"}}),
+                       ("a null tool name", {"tool_name": None, "tool_input": {"command": "gh pr merge 1"}}),
+                       ("a tool_input that is a string", {"tool_name": "Bash", "tool_input": "gh pr merge 1"}),
+                       ("no tool_input", {"tool_name": "Bash"}),
+                       ("a command that is a number", {"tool_name": "Bash", "tool_input": {"command": 7}}),
+                       ("another tool", {"tool_name": "Read", "tool_input": {"command": "gh pr merge 1"}})):
+    r = guard(payload, FACTORY_ROLE="reviewer", FACTORY_HOME="/nonexistent")
+    ck(f"{label}: allowed, exit 0, nothing on stderr", r.returncode == 0 and r.stdout == b"" and r.stderr == b"", (r.returncode, r.stdout, r.stderr[-200:]))
+
+print("text that is not ASCII")
+text = "Behebe den Fehler über gh pr merge in Zeile 3 – 日本語"
+r = guard(bash(f'git commit -m "{text}"'), FACTORY_ROLE="reviewer", FACTORY_HOME="/nonexistent")
+ck("a UTF-8 commit message is prose and passes", r.returncode == 0 and r.stdout == b"", (r.returncode, r.stdout, r.stderr[-200:]))
+r = guard(bash(f"echo 'éè' && gh pr merge 3"), FACTORY_ROLE="reviewer", FACTORY_HOME="/nonexistent")
+ck("a UTF-8 command still has its rules applied, and the reason is valid UTF-8 JSON",
+   decision(r) == "deny" and json.loads(r.stdout.decode("utf-8")), r.stdout)
+raw = b'{"tool_name":"Bash","tool_input":{"command":"echo \xff\xfe && gh pr merge 3"}}'
+r = guard(raw, FACTORY_ROLE="reviewer", FACTORY_HOME="/nonexistent")
+ck("bytes that are not UTF-8 do not crash the guard", r.returncode == 0 and decision(r) == "deny", (r.returncode, r.stdout, r.stderr[-200:]))
+
+print("long commands")
+long_chain = " && ".join(["git status"] * 400)
+long_args = "kubectl " + " ".join(["get"] * 3000) + " pods"
+long_quote = 'git commit -m "' + "x " * 20000 + '"'
+many_quotes = "echo " + " ".join(["'a b'"] * 3000) + " | cat"
+for label, cmd in (("a chain of 400 commands", long_chain), ("a kubectl line of 3000 words", long_args),
+                   ("a 40 KB commit message", long_quote), ("3000 quoted words", many_quotes)):
+    t = time.perf_counter()
+    r = guard(bash(cmd), FACTORY_ROLE="builder", FACTORY_HOME="/nonexistent")
+    ms = (time.perf_counter() - t) * 1000
+    ck(f"{label}: allowed in under 3 s ({ms:.0f} ms)", r.returncode == 0 and r.stdout == b"" and ms < 3000, (r.returncode, r.stdout[-100:], ms))
+
+print("start time")
+times = []
+for _ in range(7):
+    t = time.perf_counter()
+    r = guard(bash("gh pr merge 1"), FACTORY_ROLE="builder", FACTORY_HOME="/nonexistent")
+    times.append((time.perf_counter() - t) * 1000)
+med = statistics.median(times)
+print(f"  guard.py: median {med:.0f} ms over {len(times)} runs (min {min(times):.0f}, max {max(times):.0f})")
+ck("the median run is under 400 ms", med < 400, med)
+src = GUARD.read_text(encoding="utf-8")
+ck("guard.py imports nothing from the tares package", "import tares" not in src and "from tares" not in src and "from ." not in src)
+
+print(f"\n{P} passed, {F} failed")
+sys.exit(1 if F else 0)
