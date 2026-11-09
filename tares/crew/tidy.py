@@ -14,6 +14,7 @@ Standard library only, except for the Tares client the repo roots come from.
 """
 from __future__ import annotations
 
+import ntpath
 import os
 import shutil
 import stat
@@ -23,7 +24,7 @@ import time
 
 from .client import TaresClient
 from .errors import CrewError
-from .paths import ME, CrewPaths
+from .paths import ME, CrewPaths, default_home, home_dir
 
 USAGE = "usage: factory tidy [--force] <worktree or scratch folder>..."
 REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT: a symlink or a junction on Windows
@@ -94,9 +95,9 @@ class Tidy:
 
     def __init__(self, env: dict):
         self.env = env
-        base = env.get("HOME") or env.get("USERPROFILE") or os.path.expanduser("~")
+        base = home_dir(env)
         self.home = base
-        crew = env.get("FACTORY_CREW_HOME") or f"{base}/factory"
+        crew = env.get("FACTORY_CREW_HOME") or default_home(env)  # the same place paths.default_home names
         self.crew_home = crew
         self.paths = CrewPaths(crew)
         self._roots: list | None = None
@@ -228,6 +229,19 @@ def cmd_tidy(argv: list, env: dict) -> int:
         return 1
 
 
+def _strip(p: str) -> str:
+    """Trailing slashes go, so a link given as `link/` is still the link. A drive or share root keeps its
+    slash: `C:\\` stripped to `C:` would mean the current folder on that drive, not the drive's root."""
+    if len(p) <= 1:
+        return p
+    if _windows():
+        drive, tail = ntpath.splitdrive(p)
+        if drive and not tail.strip("/\\"):
+            return p
+        return p.rstrip("/\\") or p[0]
+    return p.rstrip("/") or p[0]
+
+
 def _tidy(args: list, env: dict) -> int:
     force = "--force" in args
     paths = [a for a in args if a != "--force"]
@@ -235,9 +249,7 @@ def _tidy(args: list, env: dict) -> int:
         raise CrewError(USAGE)
     t = Tidy(env)
     for p in paths:
-        if len(p) > 1:  # trailing slashes go, so a link given as `link/` is still the link
-            stripped = p.rstrip("/\\") if _windows() else p.rstrip("/")
-            p = stripped or p[0]
+        p = _strip(p)
         if is_link(p) or os.path.isfile(p):
             folder = os.path.dirname(p) or "."
             if not os.path.isdir(folder):
@@ -279,6 +291,15 @@ def _remove(p: str, resolved: str, common, force: bool) -> None:
                 f"work is done (merged, or a review you've finished), run factory tidy --force {p}")
         r = _git([f"--git-dir={common}", "worktree", "remove", "--force", resolved])
         if r is None or r.returncode != 0:
-            raise CrewError(f"git could not remove the worktree {p}; if it's locked, git worktree list shows why")
+            why = (r.stderr.strip().splitlines() or [""])[-1] if r is not None else "git did not run"
+            raise CrewError(f"git could not remove the worktree {p}{': ' + why if why else ''}; "
+                            "if it's locked, git worktree list shows why")
+        if os.path.lexists(resolved):
+            # git said yes and left the folder (on Windows a junction or a handle can do that): remove
+            # what is left ourselves, never through a link, then drop the registration git still holds
+            remove_tree(resolved)
+            _git([f"--git-dir={common}", "worktree", "prune"])
+            if os.path.lexists(resolved):
+                raise CrewError(f"git removed the worktree {p} from its list but the folder is still there")
     else:
         remove_tree(resolved)

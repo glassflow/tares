@@ -332,6 +332,55 @@ if shutil.which("git"):
         ck("--force removes it through git", code == 0 and not wt.exists()
            and "w" not in [Path(x).name for x in subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=str(base / "repo"),
                                                                 capture_output=True, text=True).stdout.split() if x.startswith(str(base))], err)
+
+        # git says yes and leaves the folder (seen on Windows with a junction inside): tidy removes what is
+        # left, drops the registration, and never says "removed" for a folder that is still there
+        real_git = tidy._git
+
+        def listed(repo):
+            out = subprocess.run(["git", "worktree", "list", "--porcelain"], cwd=str(repo), capture_output=True,
+                                 text=True).stdout
+            return [Path(x).name for x in out.split("\n") if x.startswith("worktree ")]
+
+        def lazy_git(args, **kw):
+            if "remove" in args:
+                return subprocess.CompletedProcess(args, 0, "", "")
+            return real_git(args, **kw)
+
+        w2 = base / "home" / "factory" / "worktrees" / "w2"
+        git("worktree", "add", "-q", "--detach", str(w2), "HEAD", cwd=base / "repo")
+        (w2 / "scratch.txt").write_text("s\n")
+        git("add", "scratch.txt", cwd=w2)
+        git("commit", "-q", "-m", "w2", cwd=w2)
+        git("push", "-q", "origin", "HEAD:refs/heads/w2", cwd=w2)
+        link_dir(base / "outside", w2 / "node_modules")
+        with patched(tidy, "_git", lazy_git):
+            code, err = run(env, "--force", str(w2))
+        ck("a worktree git leaves behind is removed anyway, and the link inside was not followed",
+           code == 0 and not w2.exists() and (base / "outside" / "node_modules" / "keep").exists(), err)
+        ck("...and it is no longer registered", "w2" not in listed(base / "repo"), listed(base / "repo"))
+
+        w3 = base / "home" / "factory" / "worktrees" / "w3"
+        git("worktree", "add", "-q", "--detach", str(w3), "HEAD", cwd=base / "repo")
+        with patched(tidy, "_git", lazy_git), patched(tidy, "remove_tree", lambda p: None):
+            code, err = run(env, "--force", str(w3))
+        ck("break: when nothing can remove the leftover, tidy fails and does not say removed",
+           code == 1 and "still there" in err and "removed " + str(w3) not in err and w3.exists(), err)
+        with patched(tidy, "_git", lambda args, **kw: lazy_git(args, **kw) if "prune" not in args else subprocess.CompletedProcess(args, 0, "", "")):
+            code, err = run(env, "--force", str(w3))
+        ck("break: a prune that does nothing leaves the registration", code == 0 and "w3" in listed(base / "repo"), (code, err, listed(base / "repo")))
+        git("worktree", "prune", cwd=base / "repo")
+
+        def locked_git(args, **kw):
+            if "remove" in args:
+                return subprocess.CompletedProcess(args, 128, "", "fatal: cannot remove a locked working tree\n")
+            return real_git(args, **kw)
+        w4 = base / "home" / "factory" / "worktrees" / "w4"
+        git("worktree", "add", "-q", "--detach", str(w4), "HEAD", cwd=base / "repo")
+        with patched(tidy, "_git", locked_git):
+            code, err = run(env, "--force", str(w4))
+        ck("when git refuses, its reason is shown and the folder stays",
+           code == 1 and "cannot remove a locked working tree" in err and w4.is_dir(), err)
     finally:
         for k, v in old.items():
             if v is None:
@@ -340,6 +389,38 @@ if shutil.which("git"):
                 os.environ[k] = v
 else:
     print("  skip: git is not installed")
+
+# ===================================================================================================
+print("\n== trailing slashes, and a drive root ==")
+ck("a trailing slash goes", tidy._strip("a/b/") == "a/b" and tidy._strip("a//") == "a")
+ck("a lone slash stays", tidy._strip("/") == "/" and tidy._strip("//") == "/")
+with patched(tidy, "_windows", lambda: True):
+    ck("on Windows a backslash goes too", tidy._strip("a\\b\\") == "a\\b")
+    ck("on Windows C:\\ keeps its slash (C: alone means the current folder)", tidy._strip("C:\\") == "C:\\" and tidy._strip("C:/") == "C:/",
+       (tidy._strip("C:\\"), tidy._strip("C:/")))
+    ck("on Windows a share root keeps its slash", tidy._strip("\\\\srv\\share\\") == "\\\\srv\\share\\", tidy._strip("\\\\srv\\share\\"))
+    ck("on Windows C:\\dir\\ still loses its trailing slash", tidy._strip("C:\\dir\\") == "C:\\dir")
+    ck("on Windows a bare C: stays", tidy._strip("C:") == "C:")
+
+# ===================================================================================================
+print("\n== chmod never follows a link ==")
+if not WIN:
+    base, env = fresh("chmodlink")
+    victim = base / "outside" / "ro.txt"
+    victim.write_text("keep\n")
+    victim.chmod(0o444)
+    lk = base / "home" / "factory" / "tmp" / "lk"
+    os.symlink(str(victim), str(lk))
+    tidy._writable(str(lk))
+    ck("making a link writable leaves the file it points at alone", stat.S_IMODE(victim.stat().st_mode) == 0o444,
+       oct(stat.S_IMODE(victim.stat().st_mode)))
+    with patched(tidy, "is_link", lambda p: False):
+        tidy._writable(str(lk))
+    ck("break: without the link guard the target's mode changes", stat.S_IMODE(victim.stat().st_mode) != 0o444,
+       oct(stat.S_IMODE(victim.stat().st_mode)))
+    victim.chmod(0o644)
+else:
+    print("  skip: chmod and symlinks differ on Windows")
 
 # ===================================================================================================
 print("\n== break tests: each guard, switched off, makes its case fail ==")
