@@ -159,11 +159,57 @@ os.environ["FACTORY_ROLE"] = "builder"
 n = names()
 ck("hidden for a crew station while not allowed", "ee_ping" not in n)
 ck("a station still sees the crew tools", "list_tickets" in n)
-RAN.clear()
-ck("call_tool answers the licence text for a station", call("ee_ping") == LICENCE_TEXT)
-del os.environ["FACTORY_ROLE"]
-ck("call_tool answers the licence text for a person", call("ee_ping") == LICENCE_TEXT)
-ck("and does not run the tool", RAN == [], str(RAN))
+
+
+class Health:
+    """The daemon's /health as `_refusal_text` reads it (TR-1088): a body, or an error."""
+    def __init__(self, body):
+        self.body = body
+
+    def raise_for_status(self):
+        if isinstance(self.body, Exception):
+            raise self.body
+
+    def json(self):
+        return self.body
+
+
+class HealthCx:
+    reply = Health({})
+
+    async def __aenter__(self): return self
+    async def __aexit__(self, *a): return False
+
+    async def get(self, url):
+        assert url.endswith("/health"), url
+        return HealthCx.reply
+
+
+CLOUD_TEXT = "licence_required: This is not available on this workspace right now."
+real_cx_refusal = ms._cx
+ms._cx = lambda *a, **k: HealthCx()
+try:
+    RAN.clear()
+    HealthCx.reply = Health({"status": "ok"})
+    os.environ["FACTORY_ROLE"] = "builder"
+    ck("call_tool answers the licence text for a station", call("ee_ping") == LICENCE_TEXT)
+    del os.environ["FACTORY_ROLE"]
+    ck("call_tool answers the licence text for a person", call("ee_ping") == LICENCE_TEXT)
+    ck("and does not run the tool", RAN == [], str(RAN))
+
+    print("== a Tares Cloud cell says it in plain words (TR-1088) ==")
+    HealthCx.reply = Health({"status": "ok", "workspace_api_url": "https://workspace-api.example.test"})
+    t = call("ee_ping")
+    ck("a cloud cell: the tool is still refused, with plain words", t == CLOUD_TEXT, t)
+    ck("... naming no licence key, enterprise or link", "enterprise" not in t and "http" not in t
+       and "key" not in t, t)
+    ck("... and the tool did not run", RAN == [], str(RAN))
+    HealthCx.reply = Health(RuntimeError("daemon down"))
+    ck("a /health that fails: the plain words, never the licence words", call("ee_ping") == CLOUD_TEXT)
+    HealthCx.reply = Health({"workspace_api_url": ""})
+    ck("an empty workspace_api_url is self-hosted: the licence text", call("ee_ping") == LICENCE_TEXT)
+finally:
+    ms._cx = real_cx_refusal
 
 ALLOWED = True
 n = names()

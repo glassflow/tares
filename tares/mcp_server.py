@@ -160,6 +160,8 @@ SRE_TOOLS = frozenset({"what_is_broken", "how_is_service", "what_happened", "mar
 EE_TOOLS: set[str] = set()
 _LICENCE_TEXT = ("licence_required: This needs an enterprise licence. "
                  "https://docs.glassflow.ai/tares/enterprise")
+# what a Tares Cloud cell says instead (tares.licence.CLOUD_WORDS): no licence words, no link
+_CLOUD_TEXT = "licence_required: This is not available on this workspace right now."
 _OFF = ("This tool is off on this Tares. An admin can turn on the building-block tools under "
         "Settings, Access and API keys, Agent tools.")
 
@@ -231,6 +233,21 @@ async def _ee_on() -> bool:
     return out
 
 
+async def _refusal_text() -> str:
+    """What a hidden ee tool answers when called: the licence words on a cell known to be
+    self-hosted, plain words on a Tares Cloud cell (the daemon's /health shows
+    `workspace_api_url` there) and whenever the daemon does not say."""
+    try:
+        async with _cx(5) as cx:
+            r = await cx.get(f"{TARESD}/health")
+        r.raise_for_status()
+        if not r.json().get("workspace_api_url"):
+            return _LICENCE_TEXT
+    except Exception:
+        pass
+    return _CLOUD_TEXT
+
+
 def _visible(name: str, edition: str, object_tools: bool, station: bool, ee_on: bool = True) -> bool:
     """Whether a tool is listed (and runs) for this caller on this edition."""
     if name in EE_TOOLS and not ee_on:
@@ -263,7 +280,7 @@ class TaresMCP(FastMCP):
 
     async def call_tool(self, name, arguments):
         if name in EE_TOOLS and not await _ee_on():
-            return types.CallToolResult(content=[TextContent(type="text", text=_LICENCE_TEXT)])
+            return types.CallToolResult(content=[TextContent(type="text", text=await _refusal_text())])
         if not _caller("role"):
             edition, object_tools = await _surface()
             if not _visible(name, edition, object_tools, False):
