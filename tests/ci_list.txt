@@ -93,6 +93,7 @@ test_include_payload
 test_ingest_bypass_cooldown
 test_ingest_key
 test_integrations_registry
+test_integrations_store
 test_labels
 test_licence
 test_licence_api

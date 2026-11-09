@@ -11,6 +11,7 @@ import re
 import uuid
 
 from .envelope import now_utc
+from .integrations import SLOTS
 
 FACTORY_SCHEMA = [
     # The Codex challenger's reviews and waivers (TR-719), copied from the events as they arrive
@@ -347,7 +348,30 @@ FACTORY_SCHEMA = [
       person_id  TEXT,
       handed_by  TEXT
     )""",
+    # The integration the factory uses for each slot, with its integration settings (TR-839).
+    # One row per slot; no row means the slot's default.
+    """CREATE TABLE IF NOT EXISTS integration_choices (
+      slot        TEXT PRIMARY KEY,
+      name        TEXT,
+      settings    JSON,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
+    # A project's own choice for the tickets, review and ci slots; it replaces the factory's
+    # choice for that project, and never holds a value taken from the factory's row.
+    """CREATE TABLE IF NOT EXISTS project_integrations (
+      project_uid TEXT,
+      slot        TEXT,
+      name        TEXT,
+      settings    JSON,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT,
+      PRIMARY KEY (project_uid, slot)
+    )""",
 ]
+
+# The slots a project may choose for itself; the others are the factory's alone (TR-839).
+PROJECT_SLOTS = ("tickets", "review", "ci")
 
 # Words that say "a session" and not a station: shown without parentheses next to a person's name.
 GENERIC_BY = ("", "a session", "claude code session", "github")
@@ -461,6 +485,7 @@ class FactoryStore:
         self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", [uid])
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
     _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
@@ -1675,3 +1700,142 @@ class FactoryStore:
             if consents is not None:
                 self.sc.execute("UPDATE grants SET consents = ? WHERE id = ?",
                                  [json.dumps(consents), gid])
+
+    # ── integration choices and their settings (TR-839) ───────────────────────
+    # Secrets are stored as they come, in the state database, exactly as connector secrets are
+    # (tares/connectors: redact_config, restore_secrets); there is no new encryption. Every read
+    # hands back "" for a secret value and says only whether one is set.
+
+    @staticmethod
+    def _integration_slot(slot: str, allowed=SLOTS) -> str:
+        if slot not in allowed:
+            raise ValueError(f"slot must be one of {', '.join(allowed)} (got {slot!r})")
+        return slot
+
+    @staticmethod
+    def _secret_fields(slot: str, name: str) -> set | None:
+        """The names of the integration's secret fields, from its `settings_schema`; None when
+        the integration is not installed here, so the code cannot tell which values are secret."""
+        from .integrations import registry
+        cls = registry.get(slot, name)
+        if cls is None:
+            return None
+        return {f.name for f in cls.settings_schema if f.kind == "secret"}
+
+    @classmethod
+    def _redact_integration(cls, slot: str, name: str, values: dict) -> tuple[dict, dict]:
+        """(values with each secret as "", {field: {"has_value": bool}}). An integration that is
+        not installed has no schema, so every value is treated as secret."""
+        secret = cls._secret_fields(slot, name)
+        names = set(values) if secret is None else secret
+        out = {k: ("" if k in names else v) for k, v in values.items()}
+        flags = {k: {"has_value": values.get(k) not in (None, "")} for k in sorted(names)}
+        return out, flags
+
+    @classmethod
+    def _merge_integration_settings(cls, slot: str, name: str, new: dict | None,
+                                    stored: dict | None) -> dict:
+        """The settings to store: `new`, with each secret reconciled against `stored`, the row's
+        own earlier values (and only when it is the same integration). A secret left out or blank
+        keeps the stored value, JSON null clears it, a non-empty value replaces it. An integration
+        that is not installed treats every key as a secret, since a read hid all of them."""
+        new = dict(new or {})
+        if not isinstance(new, dict):
+            raise ValueError("settings must be an object")
+        stored = stored or {}
+        secret = cls._secret_fields(slot, name)
+        names = (set(stored) | set(new)) if secret is None else secret
+        out = dict(new)
+        for k in names:
+            if k in new and new[k] is None:
+                out.pop(k, None)                       # null: clear it
+            elif new.get(k) in (None, ""):             # missing or blank: keep what was stored
+                if stored.get(k) not in (None, ""):
+                    out[k] = stored[k]
+                else:
+                    out.pop(k, None)
+        return out
+
+    @staticmethod
+    def _load_settings(raw) -> dict:
+        v = json.loads(raw) if isinstance(raw, str) else raw
+        return v if isinstance(v, dict) else {}
+
+    def _integration_view(self, slot: str, name: str, raw, at, by, **extra) -> dict:
+        values, secrets = self._redact_integration(slot, name, self._load_settings(raw))
+        return {**extra, "slot": slot, "name": name, "settings": values, "secrets": secrets,
+                "updated_at": at, "updated_by": by}
+
+    def get_choice(self, slot: str) -> dict | None:
+        """The factory's choice for the slot, secrets redacted: {slot, name, settings, secrets,
+        updated_at, updated_by}; None when the slot has none (it uses its default)."""
+        self._integration_slot(slot)
+        with self._sread:
+            r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
+                                "integration_choices WHERE slot = ?", [slot]).fetchone()
+        return self._integration_view(slot, r[0], r[1], r[2], r[3]) if r else None
+
+    def set_choice(self, slot: str, name: str, settings: dict | None, by: str) -> dict:
+        """Save the factory's choice for the slot and return it as get_choice does. Secrets are
+        reconciled with the stored row of the same integration (see _merge_integration_settings);
+        choosing another integration starts from nothing, so no secret travels between them."""
+        self._integration_slot(slot)
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("an integration name is required")
+        with self._swrite:
+            cur = self.sc.execute("SELECT name, settings FROM integration_choices WHERE slot = ?",
+                                  [slot]).fetchone()
+            stored = self._load_settings(cur[1]) if cur and cur[0] == name else {}
+            merged = self._merge_integration_settings(slot, name, settings, stored)
+            at = now_utc()
+            self.sc.execute(
+                "INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (slot) DO UPDATE SET name = excluded.name, "
+                "settings = excluded.settings, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
+        return self._integration_view(slot, name, merged, at, by)
+
+    def get_project_choice(self, uid: str, slot: str) -> dict | None:
+        """The project's own choice for the slot, secrets redacted, as get_choice; None when it
+        has none. It never falls back to the factory's choice: that is the caller's rule."""
+        self._integration_slot(slot, PROJECT_SLOTS)
+        with self._sread:
+            r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
+                                "project_integrations WHERE project_uid = ? AND slot = ?",
+                                [uid, slot]).fetchone()
+        return self._integration_view(slot, r[0], r[1], r[2], r[3], project_uid=uid) if r else None
+
+    def set_project_choice(self, uid: str, slot: str, name: str, settings: dict | None,
+                           by: str) -> dict:
+        """Save the project's own choice for the slot. A blank secret keeps this project's stored
+        value and nothing else: it never reads the factory's row, so a factory secret is never
+        copied into a project. Only tickets, review and ci take one (ValueError otherwise)."""
+        self._integration_slot(slot, PROJECT_SLOTS)
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("an integration name is required")
+        with self._swrite:
+            cur = self.sc.execute("SELECT name, settings FROM project_integrations "
+                                  "WHERE project_uid = ? AND slot = ?", [uid, slot]).fetchone()
+            stored = self._load_settings(cur[1]) if cur and cur[0] == name else {}
+            merged = self._merge_integration_settings(slot, name, settings, stored)
+            at = now_utc()
+            self.sc.execute(
+                "INSERT INTO project_integrations (project_uid, slot, name, settings, updated_at, "
+                "updated_by) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project_uid, slot) DO UPDATE "
+                "SET name = excluded.name, settings = excluded.settings, "
+                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
+                [uid, slot, name, json.dumps(merged), at, by])
+        return self._integration_view(slot, name, merged, at, by, project_uid=uid)
+
+    def clear_project_choice(self, uid: str, slot: str) -> bool:
+        """Drop the project's own choice, so the slot follows the factory's again. False when
+        there was none."""
+        self._integration_slot(slot, PROJECT_SLOTS)
+        with self._swrite:
+            had = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? "
+                                  "AND slot = ?", [uid, slot]).fetchone()
+            self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ? AND slot = ?",
+                            [uid, slot])
+        return bool(had)
