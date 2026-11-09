@@ -208,7 +208,7 @@ async function fakeHome(page) {
         await checkPlain(p, "cloud, no licence, People add slot @390", "Adding people"); await p.context().close(); }
       // Settings, Access on a factory cell with no licence (the one-person panel)
       { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
-        await p.goto(`${cloudBare.base}/settings?tab=access`); await p.getByTestId("you-row").waitFor({ timeout: 15000 });
+        await p.goto(`${cloudBare.base}/settings?tab=people`); await p.getByTestId("you-row").waitFor({ timeout: 15000 });
         await checkPlain(p, "cloud, no licence, Settings Access", "Adding people"); await p.context().close(); }
       // a page for teams only (Areas), on a platform cell with no licence
       { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
@@ -358,7 +358,7 @@ async function fakeHome(page) {
       // Tares Cloud, /health slow: never the licence words, no line while pending, then the plain line
       for (const [label, base, route, ready] of [
         ["cloud, slow /health, People add slot", cloudBare.base, "/people", (p) => p.getByTestId("people-list")],
-        ["cloud, slow /health, Settings Access", cloudBare.base, "/settings?tab=access", (p) => p.getByTestId("you-row")],
+        ["cloud, slow /health, Settings Access", cloudBare.base, "/settings?tab=people", (p) => p.getByTestId("you-row")],
         ["cloud, slow /health, Areas page", cloudPlatNone.base, "/settings?tab=areas", null],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
