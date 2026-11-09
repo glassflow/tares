@@ -1725,25 +1725,36 @@ class FactoryStore:
     @classmethod
     def _redact_integration(cls, slot: str, name: str, values: dict) -> tuple[dict, dict]:
         """(values with each secret as "", {field: {"has_value": bool}}). An integration that is
-        not installed has no schema, so every value is treated as secret."""
-        secret = cls._secret_fields(slot, name)
-        names = set(values) if secret is None else secret
+        not installed has no schema, so every value is treated as secret. On an installed one, a
+        stored key its `settings_schema` does not list (a field a later version dropped, or one
+        written by hand) is treated as secret too: nothing reads it back that the schema did not
+        declare as plain."""
+        from .integrations import registry
+        found = registry.get(slot, name)
+        if found is None:
+            names = set(values)
+        else:
+            names = ({f.name for f in found.settings_schema if f.kind == "secret"}
+                     | (set(values) - {f.name for f in found.settings_schema}))
         out = {k: ("" if k in names else v) for k, v in values.items()}
         flags = {k: {"has_value": values.get(k) not in (None, "")} for k in sorted(names)}
         return out, flags
 
-    @classmethod
-    def _merge_integration_settings(cls, slot: str, name: str, new: dict | None,
+    @staticmethod
+    def _merge_integration_settings(secret: set | None, new: dict | None,
                                     stored: dict | None) -> dict:
         """The settings to store: `new`, with each secret reconciled against `stored`, the row's
-        own earlier values (and only when it is the same integration). A secret left out or blank
-        keeps the stored value, JSON null clears it, a non-empty value replaces it. An integration
-        that is not installed treats every key as a secret, since a read hid all of them."""
-        new = dict(new or {})
+        own earlier values (and only when it is the same integration). `secret` is the
+        integration's secret field names (`_secret_fields`, read before the write lock is taken),
+        None when it is not installed. A secret left out or blank keeps the stored value, JSON null
+        clears it, a non-empty value replaces it. An integration that is not installed treats
+        every key as a secret, since a read hid all of them."""
+        if new is None:
+            new = {}
         if not isinstance(new, dict):
             raise ValueError("settings must be an object")
+        new = dict(new)
         stored = stored or {}
-        secret = cls._secret_fields(slot, name)
         names = (set(stored) | set(new)) if secret is None else secret
         out = dict(new)
         for k in names:
@@ -1783,11 +1794,12 @@ class FactoryStore:
         name = str(name or "").strip()
         if not name:
             raise ValueError("an integration name is required")
+        secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
         with self._swrite:
             cur = self.sc.execute("SELECT name, settings FROM integration_choices WHERE slot = ?",
                                   [slot]).fetchone()
             stored = self._load_settings(cur[1]) if cur and cur[0] == name else {}
-            merged = self._merge_integration_settings(slot, name, settings, stored)
+            merged = self._merge_integration_settings(secret, settings, stored)
             at = now_utc()
             self.sc.execute(
                 "INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) "
@@ -1815,11 +1827,12 @@ class FactoryStore:
         name = str(name or "").strip()
         if not name:
             raise ValueError("an integration name is required")
+        secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
         with self._swrite:
             cur = self.sc.execute("SELECT name, settings FROM project_integrations "
                                   "WHERE project_uid = ? AND slot = ?", [uid, slot]).fetchone()
             stored = self._load_settings(cur[1]) if cur and cur[0] == name else {}
-            merged = self._merge_integration_settings(slot, name, settings, stored)
+            merged = self._merge_integration_settings(secret, settings, stored)
             at = now_utc()
             self.sc.execute(
                 "INSERT INTO project_integrations (project_uid, slot, name, settings, updated_at, "
@@ -1828,6 +1841,22 @@ class FactoryStore:
                 "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
                 [uid, slot, name, json.dumps(merged), at, by])
         return self._integration_view(slot, name, merged, at, by, project_uid=uid)
+
+    def stored_settings(self, slot: str, name: str, uid: str | None = None) -> dict:
+        """The settings stored for integration `name` in the slot, secrets included, as they are
+        saved: the project's own row when `uid` is given (never the factory's), else the factory's.
+        {} when the row holds another integration or there is none. For merging a form or a
+        connection test over what is saved; never return it from a route."""
+        if uid is None:
+            self._integration_slot(slot)
+            sql, args = ("SELECT name, settings FROM integration_choices WHERE slot = ?", [slot])
+        else:
+            self._integration_slot(slot, PROJECT_SLOTS)
+            sql, args = ("SELECT name, settings FROM project_integrations "
+                         "WHERE project_uid = ? AND slot = ?", [uid, slot])
+        with self._sread:
+            r = self.sc.execute(sql, args).fetchone()
+        return self._load_settings(r[1]) if r and r[0] == name else {}
 
     def clear_project_choice(self, uid: str, slot: str) -> bool:
         """Drop the project's own choice, so the slot follows the factory's again. False when
