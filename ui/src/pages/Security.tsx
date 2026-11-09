@@ -477,6 +477,7 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
           !adding && <div className="empty">Nothing connected yet. {!connectUrl ? "Create the GitHub App, or add a personal token."
             : canConnect ? "Connect GitHub, or add a personal token." : "You can add a personal token."}</div>
         ) : (
+          <div className="table-scroll">
           <table>
             <thead><tr><th>name</th><th>connects as</th><th>events</th><th>used by</th><th aria-label="actions" /></tr></thead>
             <tbody>
@@ -580,6 +581,7 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
               })}
             </tbody>
           </table>
+          </div>
         )}
 
       {confirmDelete && (
@@ -686,6 +688,7 @@ function YouPanel({ people, admin, err: loadErr, onChanged, me }: {
           </div>
         </>
       ) : (
+        <div className="table-scroll">
         <table>
           <thead><tr><th>name</th><th>email</th><th>GitHub</th><th aria-label="actions" /></tr></thead>
           <tbody>
@@ -697,6 +700,7 @@ function YouPanel({ people, admin, err: loadErr, onChanged, me }: {
             </tr>
           </tbody>
         </table>
+        </div>
       ))}
       <LicenceNeeded what="Adding people" />
     </div>
@@ -761,7 +765,7 @@ function McpToolsPanel() {
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Agent tools</h2>
       {err && <div className="alert error">{err}</div>}
-      <label className="field" style={{ flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
+      <label className="field" style={{ display: "flex", flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
         <input type="checkbox" checked={!!on} disabled={busy || on === undefined} style={{ marginTop: 3 }}
                onChange={(e) => toggle(e.target.checked)} />
         <span>
@@ -933,6 +937,7 @@ function ProvidersPanel() {
         : data.providers.filter((p) => p.configured || p.stored).length === 0 && !editing ? (
           <div className="empty">no model provider yet. Add one: agents cannot be enabled and Ask cannot answer until then.</div>
         ) : (
+          <div className="table-scroll">
           <table>
             <thead><tr><th>provider</th><th>kind</th><th>endpoint</th><th>status</th><th>models</th><th aria-label="actions" /></tr></thead>
             <tbody>
@@ -966,6 +971,7 @@ function ProvidersPanel() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
 
       {confirmDelete && (
@@ -1111,7 +1117,7 @@ function EditionPanel() {
       {err && <div className="alert error">{err}</div>}
       <div role="radiogroup" aria-label="Edition">
         {st.choices.map((c) => (
-          <label key={c.id} className="field" style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+          <label key={c.id} className="field" style={{ display: "flex", flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
             <input type="radio" name="edition" value={c.id} checked={pick === c.id}
                    disabled={busy} onChange={() => setPick(c.id)} />
             <span><strong>{c.name}</strong><br /><span className="help">{EDITION_BLURBS[c.id]}</span></span>
@@ -1474,7 +1480,8 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
 
       {keys && keys.length > 0 ? (
         <>
-        <table style={{ marginBottom: 14 }}>
+        <div className="table-scroll" style={{ marginBottom: 14 }}>
+        <table>
           <thead><tr><th>name</th><th>person</th><th>scopes</th><th>key</th><th>created</th><th>last used</th><th></th></tr></thead>
           <tbody>
             {/* live keys first; revoked ones only on request, they are history */}
@@ -1498,6 +1505,7 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
             ))}
           </tbody>
         </table>
+        </div>
         {keys.some((k) => k.revoked_at) && (
           <button type="button" className="linklike" onClick={() => setShowRevoked((v) => !v)}>
             {showRevoked ? "Hide revoked keys" : `Show ${keys.filter((k) => k.revoked_at).length} revoked`}

@@ -294,6 +294,31 @@ const until = async (fn, tries = 40) => {
       await n.ctx.close();
     }
 
+    // 12b. All settings on a mid-size window: a wide table scrolls inside its card, not the page;
+    // a focused select keeps one chevron; a checkbox sits apart from its label
+    {
+      const n = await newPage(1000);
+      const p = n.page;
+      for (const tab of ["access", "github", "anthropic", "observability"]) {
+        await p.goto(`${BASE}/settings/advanced?tab=${tab}`, { waitUntil: "load" });
+        await p.locator(".pview .panel").first().waitFor();
+        await settle(p);
+        ck(`1000: All settings ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+      }
+      await p.goto(`${BASE}/settings/advanced?tab=observability`, { waitUntil: "load" });
+      const sel = p.locator(".pview select").first();
+      await sel.waitFor();
+      await sel.focus();
+      const rep = await sel.evaluate((e) => getComputedStyle(e).backgroundRepeat);
+      ck("a focused select draws its chevron once", rep === "no-repeat", rep);
+      await p.goto(`${BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      const box = p.locator(".pview label.field input[type=checkbox]").first();
+      await box.waitFor();
+      const gap = await box.evaluate((e) => Math.round(e.nextElementSibling.getBoundingClientRect().left - e.getBoundingClientRect().right));
+      ck("the Agent tools checkbox sits apart from its label", gap >= 8, `${gap}px`);
+      await n.ctx.close();
+    }
+
     // 13. without the sample flag the sample address changes nothing
     {
       const n = await newPage(1440);

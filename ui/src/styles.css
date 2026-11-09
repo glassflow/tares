@@ -801,7 +801,9 @@ select:disabled {
   background-image: none;
 }
 textarea.code { font-family: var(--mono); font-size: 12.5px; min-height: 110px; }
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; background: var(--input-bg); border-color: var(--accent); box-shadow: none; }
+/* background-color, not the background shorthand: the shorthand resets background-repeat, and the
+   select's chevron then tiles across the whole box on focus. */
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; background-color: var(--input-bg); border-color: var(--accent); box-shadow: none; }
 button:focus-visible, .btn:focus-visible, .navlink:focus-visible, .navbtn:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: none; }
 
 /* ── panels / cards ── */
