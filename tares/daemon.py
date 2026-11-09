@@ -12,9 +12,7 @@ import contextvars
 import hashlib
 import hmac
 import json
-import ipaddress
 import os
-import socket
 import threading
 import time
 import re
@@ -64,7 +62,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, standup as standup_mod
+from . import claude_usage, factory_api, integrations_api, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -793,6 +791,7 @@ def make_app() -> FastAPI:
     _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke|decline))?$")
     _REPLY_WRITE = re.compile(r"^/api/desk/[^/]+/reply$")
+    _PROJECT_INTEGRATION = re.compile(r"^/api/projects/[^/]+/integrations/[^/]+(/test)?$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
 
     def _required_scope(method: str, path: str) -> str | None:
@@ -821,6 +820,10 @@ def make_app() -> FastAPI:
             return "ingest"   # an area owner answering a question addressed to them (TR-636), or
                               # a person answering their own desk item from the console (TR-740):
                               # the handler decides by the credential's person
+        if method != "GET" and _PROJECT_INTEGRATION.match(path):
+            return "ingest"   # a project's own integration choice and its test (TR-842): an
+                              # admin or the project's lead; the handler decides, it needs the
+                              # credential's person. A read key is refused here
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
@@ -5976,6 +5979,7 @@ def make_app() -> FastAPI:
     fx = factory_api.register(app, store, h)
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime))
+    integrations_api.register(app, store, h)
 
     @app.get("/api/home")
     async def home(request: Request):
@@ -6510,21 +6514,16 @@ def make_app() -> FastAPI:
 
     async def _refuse_internal_hook(url: str) -> None:
         """A project key is handed to an outside agent, so its webhook may not point inside the
-        cell's network (loopback, private ranges, link-local such as cloud metadata).
-        TARES_WEBHOOK_ALLOW_PRIVATE=1 allows it, for a cell whose agents live on its network."""
-        if os.environ.get("TARES_WEBHOOK_ALLOW_PRIVATE", "").lower() in ("1", "true", "yes"):
-            return
-        host = urlsplit(url).hostname or ""
+        cell's network (loopback, private ranges, link-local such as cloud metadata); the rule is
+        tares/outbound.py. TARES_WEBHOOK_ALLOW_PRIVATE=1 allows it, for a cell whose agents live
+        on its network."""
         try:
-            infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
-        except OSError:
-            _err(ValueError(f"cannot resolve {host!r}"), 400)
-        for info in infos:
-            ip = ipaddress.ip_address(info[4][0].split("%")[0])
-            if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                    or ip.is_multicast or ip.is_unspecified):
-                _err(ValueError(f"a project key cannot send firings to {host} (an internal "
-                                "address); use a public URL"), 400)
+            await outbound.refuse_internal(url)
+        except outbound.AddressRefused as e:
+            if e.reason == "unresolved":
+                _err(ValueError(f"cannot resolve {e.host!r}"), 400)
+            _err(ValueError(f"a project key cannot send firings to {e.host} (an internal "
+                            "address); use a public URL"), 400)
 
     @app.post("/api/projects/{uid}/subscribe")
     async def subscribe_project(uid: str, request: Request, body: dict = Body(...)):

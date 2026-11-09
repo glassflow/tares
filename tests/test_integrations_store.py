@@ -137,7 +137,7 @@ ck("project read is redacted", g["settings"] == {"url": "proj2", "token": ""}
    and g["secrets"]["token"] == {"has_value": True} and "own" not in json.dumps(g, default=str), g)
 ck("another project has no row", s.get_project_choice("p2", "tickets") is None)
 for slot in ("memory", "monitoring", "guardrails", "runtime", "bogus"):
-    ck(f"project slot {slot} raises in all four methods",
+    ck(f"project slot {slot} raises in all three methods",
        raises(s.set_project_choice, "p1", slot, "x", {}, "a") and raises(s.get_project_choice, "p1", slot)
        and raises(s.clear_project_choice, "p1", slot))
 for slot in ("review", "ci"):
@@ -147,6 +147,69 @@ ck("clear reports a row", s.clear_project_choice("p1", "tickets") is True
    and s.get_project_choice("p1", "tickets") is None)
 ck("clear on none reports False", s.clear_project_choice("p1", "tickets") is False)
 ck("the factory row is still there after clear", s.get_choice("tickets")["name"] == "faketix")
+
+# ── a project row: switching integration, empty name (review of TR-839, F1) ────
+s.set_project_choice("p3", "tickets", "faketix", {"url": "u3", "token": "p3-secret", "key": "p3-key"}, "ashish")
+r = s.set_project_choice("p3", "tickets", "othertix", {"token": ""}, "ashish")
+ck("a project switching integration carries no secret",
+   stored("project_integrations", project_uid="p3", slot="tickets") == {}
+   and r["secrets"] == {"token": {"has_value": False}} and "p3-secret" not in json.dumps(r, default=str), r)
+s.set_project_choice("p3", "tickets", "faketix", {"token": ""}, "ashish")
+ck("switching a project back does not bring the old secret back",
+   stored("project_integrations", project_uid="p3", slot="tickets") == {})
+ck("a project name is required", raises(s.set_project_choice, "p3", "tickets", "", {}, "a")
+   and raises(s.set_project_choice, "p3", "tickets", "  ", {}, "a")
+   and raises(s.set_project_choice, "p3", "tickets", None, {}, "a"))
+ck("a refused empty name leaves the row as it was", s.get_project_choice("p3", "tickets")["name"] == "faketix")
+
+# ── settings that are not an object (F2) ───────────────────────────────────────
+for bad in ([], ["a"], "text", 5, True):
+    ck(f"settings {bad!r} is refused with the intended message",
+       raises(s.set_choice, "tickets", "faketix", bad, "a")
+       and raises(s.set_project_choice, "p3", "tickets", "faketix", bad, "a"))
+try:
+    s.set_choice("tickets", "faketix", ["a"], "a")
+except ValueError as e:
+    ck("the message says settings must be an object", "must be an object" in str(e), str(e))
+s.set_choice("tickets", "othertix", {"token": ""}, "a")   # a row with nothing stored
+ck("None settings means none", s.set_choice("tickets", "othertix", None, "a")["settings"] == {}
+   and stored("integration_choices", slot="tickets") == {})
+
+# ── a stored key the schema does not list reads as a secret (F3) ───────────────
+s.set_choice("tickets", "faketix", {}, "a")
+with s._swrite:
+    s.sc.execute("UPDATE integration_choices SET settings = ? WHERE slot = ?",
+                 [json.dumps({"url": "u", "token": "t", "legacy": "old-secret"}), "tickets"])
+g = s.get_choice("tickets")
+ck("an unlisted stored key reads as a secret: value hidden, flag set",
+   g["settings"] == {"url": "u", "token": "", "legacy": ""}
+   and g["secrets"]["legacy"] == {"has_value": True} and "old-secret" not in json.dumps(g, default=str), g)
+ck("a listed plain field still reads as itself", g["settings"]["url"] == "u")
+
+# ── stored_settings: the raw row, same integration only ────────────────────────
+s.set_choice("tickets", "faketix", {"url": "u9", "token": "t9"}, "ashish")
+ck("stored_settings reads the factory row", s.stored_settings("tickets", "faketix") == {"url": "u9", "token": "t9"})
+ck("stored_settings of another integration is empty", s.stored_settings("tickets", "othertix") == {})
+s.set_project_choice("p3", "tickets", "faketix", {"url": "p3u", "token": "p3t"}, "ashish")
+ck("stored_settings with a project reads the project row, never the factory's",
+   s.stored_settings("tickets", "faketix", "p3") == {"url": "p3u", "token": "p3t"}
+   and s.stored_settings("tickets", "faketix", "p-none") == {})
+ck("stored_settings refuses a slot a project cannot have", raises(s.stored_settings, "memory", "x", "p3")
+   and raises(s.stored_settings, "bogus", "x"))
+
+# ── the registry is read before the write lock (F4) ────────────────────────────
+import threading
+seen = []
+real = s._secret_fields
+def spy(slot, name):
+    seen.append(s._swrite._is_owned() if hasattr(s._swrite, "_is_owned") else None)
+    return real(slot, name)
+s._secret_fields = spy
+s.set_choice("tickets", "faketix", {"url": "f4"}, "ashish")
+s.set_project_choice("p3", "tickets", "faketix", {"url": "f4"}, "ashish")
+s._secret_fields = real
+ck("_secret_fields runs outside the state write lock", seen and not any(seen), seen)
+
 
 # ── survives a reopen ──────────────────────────────────────────────────────────
 path = os.path.join(tmp, "t.duckdb")
