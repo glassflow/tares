@@ -6,7 +6,7 @@ the roster. Bash's roster is timed beside it as the yardstick. Against a throwaw
 
 Five timed runs after one untimed warm-up (the first run reads the scripts from disk); the median must
 be under 300 ms and every run must exit 0. The five timings are printed, with the same five for bash
-alone and for the dispatcher alone (an exec of a script that does nothing), so a slow machine shows
+alone and for the dispatcher alone (an unported command, `settings`, which execs a script that does nothing), so a slow machine shows
 where the time goes.
 
 Run: .venv/bin/python tests/test_crew_startup_time.py
@@ -54,7 +54,7 @@ NOOP.write_text("exit 0\n")
 FACTORY = [sys.executable, "-c", "import sys; sys.argv = ['tares', 'factory'] + sys.argv[1:]; from tares.cli import main; main()", "roster"]
 BASH_ALONE = ["/bin/bash", str(ROOT / "claude-plugin" / "bin" / "factory"), "roster"]
 DISPATCH_ONLY = [sys.executable, "-c",
-                 "import os, sys; from tares.crew.dispatch import run; run(['roster'], dict(os.environ), sys.argv[1])", str(NOOP)]
+                 "import os, sys; from tares.crew.dispatch import run; run(['settings'], dict(os.environ), sys.argv[1])", str(NOOP)]
 
 
 def timed(cmd, n=RUNS):
