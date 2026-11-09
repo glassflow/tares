@@ -581,8 +581,8 @@
       "what": "full station name from a role or name",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:station_name",
+      "ported": true,
       "note": ""
     },
     {
@@ -955,8 +955,8 @@
       "what": "is the crew halted",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:halted",
+      "ported": true,
       "note": "Moved here from TR-955: cmd_spawn refuses to start while the crew is halted. cmd_halt and cmd_resume (TR-955) write the HALT file; halted only checks it."
     },
     {
@@ -1087,8 +1087,8 @@
       "what": "spawn a builder or helper",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:cmd_spawn",
+      "ported": true,
       "note": ""
     },
     {
@@ -1276,7 +1276,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc. Also called by rearm_text (TR-961), which uses the same stub until TR-962."
+      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc. Also called by rearm_text (TR-961), which uses the same stub until TR-962. TR-954: stations.pace_read_stub reads as not paced until then."
     },
     {
       "name": "pace_closed",

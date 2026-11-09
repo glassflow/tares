@@ -44,6 +44,14 @@ def _events(argv: list[str], env: dict) -> int:
 PORTED[("events",)] = _events  # new in Python (TR-1067): bash has no such command
 
 
+def _spawn(argv: list[str], env: dict) -> int:
+    from .stations import cmd_spawn  # imported when used (TR-954)
+    return cmd_spawn(argv, env)
+
+
+PORTED[("spawn",)] = _spawn
+
+
 def _view(name: str):
     """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
     def run(argv: list[str], env: dict) -> int:
