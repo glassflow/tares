@@ -2,7 +2,7 @@
 """The parity harness: a factory scenario runs against the bash engine and against the Python engine,
 and what they print and write must be the same.
 
-    python tests/factory/parity.py <scenario>            run one scenario on both engines
+    python tests/factory/parity.py <scenario>            run one scenario on both engines (a name with * or ?, such as tidy_*, runs every match)
     python tests/factory/parity.py --list                the scenarios defined here
     python tests/factory/parity.py --coverage            every scenario of every bash suite, and how
                                                          many of them pass against Python
@@ -42,6 +42,7 @@ Standard library only.
 from __future__ import annotations
 
 import difflib
+import fnmatch
 import json
 import os
 import re
@@ -67,9 +68,11 @@ NOT_PORTED = "not yet ported"
 
 @dataclass
 class Step:
-    argv: list           # everything after `tares factory`
+    argv: list           # everything after `tares factory`; "{tmp}" in an argument or env value is the scenario's folder
     env: dict = field(default_factory=dict)
     stdin: str = ""
+    before: object = None   # fn(tmp) run before the step: change files between two commands
+    after: object = None    # fn(tmp) -> anything, run after the step; Run.snap(i) gives it back to a check
 
 
 @dataclass
@@ -80,6 +83,7 @@ class Scenario:
     checks: list         # (label, fn(Run) -> bool), the assertions of the bash suite, kept as they are
     covers: list         # labels of the suite's `check` calls this scenario stands for
     about: str = ""
+    setup: object = None    # fn(tmp, env) run once before the first step: build files, a repo, a link
 
 
 class Run:
@@ -98,6 +102,10 @@ class Run:
 
     def code(self, i: int = -1) -> int:
         return self.results[i]["code"]
+
+    def snap(self, i: int = -1):
+        """What step i's `after` function returned (None when it has none)."""
+        return self.results[i].get("snap")
 
     def calls(self) -> list:
         try:
@@ -130,6 +138,247 @@ scenario(Scenario(
              lambda r: "no Tares answers at http://127.0.0.1:9" in r.out(0)
              and "tares up" in r.out(0) and r.launches() == 0)],
     covers=["without Tares crew up stops plainly"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
+# tidy_test.sh: tidy removes inside the crew's own folders and nowhere else. The bash suite hands a
+# project over to a running Tares so its repo's .factory/worktrees is a root; here FACTORY_REPO names the
+# same root, and TARESD_URL points at a closed port so a Tares on the host cannot add roots.
+
+NO_TARES = {"TARESD_URL": "http://127.0.0.1:9"}
+
+
+def _git_env(tmp: Path) -> dict:
+    return {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@t", "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"), "GIT_CONFIG_NOSYSTEM": "1"}
+
+
+def _git(tmp: Path, *args, cwd=None) -> None:
+    subprocess.run(["git", *args], cwd=str(cwd) if cwd else None, env=_git_env(tmp), check=True,
+                   capture_output=True)
+
+
+def _link_dir(target: Path, link: Path) -> None:
+    """A link to a folder: a symlink, or on Windows a junction (no privilege needed)."""
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    else:
+        os.symlink(target, link)
+
+
+def _tidy_base(tmp: Path) -> Path:
+    """The crew's worktrees and tmp, an `outside` folder that must survive, and a repo with a remote."""
+    for d in ("crew/worktrees", "crew/tmp", "outside/node_modules"):
+        (tmp / d).mkdir(parents=True, exist_ok=True)
+    (tmp / "outside" / "node_modules" / "keep").write_text("keep\n")
+    (tmp / "outside" / "file").write_text("keep\n")
+    r = tmp / "repo"
+    _git(tmp, "init", "-q", "--bare", str(tmp / "origin.git"))
+    _git(tmp, "clone", "-q", str(tmp / "origin.git"), str(r))
+    (r / "tracked.txt").write_text("a\n")
+    _git(tmp, "add", ".", cwd=r)
+    _git(tmp, "commit", "-q", "-m", "init", cwd=r)
+    _git(tmp, "push", "-q", "origin", "HEAD", cwd=r)
+    return r
+
+
+def _worktree(tmp: Path, name: str) -> Path:
+    w = tmp / name
+    _git(tmp, "worktree", "add", "-q", "--detach", str(w), "HEAD", cwd=tmp / "repo")
+    return w
+
+
+def _setup_worktrees(tmp: Path, env: dict) -> None:
+    _tidy_base(tmp)
+    w = _worktree(tmp, "crew/worktrees/p-pr1")
+    _link_dir(tmp / "outside" / "node_modules", w / "node_modules")
+    (w / "scratch.txt").write_text("x\n")
+    (_worktree(tmp, "repo/.factory/worktrees/T2") / "tracked.txt").write_text("changed\n")
+    (_worktree(tmp, "repo/.factory/worktrees/T3") / "new-file.txt").write_text("new\n")
+
+
+def _wip_commit(tmp: Path) -> None:
+    b = tmp / "repo" / ".factory" / "worktrees" / "T2"
+    _git(tmp, "checkout", "-q", "--", "tracked.txt", cwd=b)
+    _git(tmp, "commit", "-q", "--allow-empty", "-m", "wip", cwd=b)
+
+
+def _listed(tmp: Path, name: str) -> bool:
+    out = subprocess.run(["git", "worktree", "list"], cwd=str(tmp / "repo"), env=_git_env(tmp),
+                         capture_output=True, text=True).stdout
+    return name in out
+
+
+def _exists(*rel):
+    return lambda tmp: all((tmp.joinpath(*r.split("/"))).exists() for r in rel)
+
+
+_REPO = {"FACTORY_REPO": "{tmp}/repo", **NO_TARES}
+
+scenario(Scenario(
+    name="tidy_worktrees",
+    suite="tidy",
+    about="tidy removes a worktree through git, and refuses one with work in it unless --force",
+    setup=_setup_worktrees,
+    steps=[
+        Step(["tidy", "{tmp}/crew/worktrees/p-pr1"], env=_REPO, after=_exists("crew/worktrees/p-pr1")),
+        Step(["tidy", "--force", "{tmp}/crew/worktrees/p-pr1"], env=_REPO,
+             after=lambda tmp: (_exists("crew/worktrees/p-pr1")(tmp), _listed(tmp, "p-pr1"),
+                                _exists("outside/node_modules/keep")(tmp))),
+        Step(["tidy", "{tmp}/repo/.factory/worktrees/T2"], env=_REPO, after=_exists("repo/.factory/worktrees/T2")),
+        Step(["tidy", "{tmp}/repo/.factory/worktrees/T2"], env=_REPO, before=_wip_commit,
+             after=_exists("repo/.factory/worktrees/T2")),
+        Step(["tidy", "--force", "{tmp}/repo/.factory/worktrees/T2"], env=_REPO,
+             after=_exists("repo/.factory/worktrees/T2")),
+        Step(["tidy", "{tmp}/repo/.factory/worktrees/T3"], env=_REPO,
+             after=_exists("repo/.factory/worktrees/T3/new-file.txt")),
+        Step(["tidy", "--force", "{tmp}/repo/.factory/worktrees/T3"], env=_REPO),
+    ],
+    checks=[
+        ("a review worktree with scratch files needs --force", lambda r: r.code(0) != 0 and r.snap(0)),
+        ("a review worktree is removed with --force",
+         lambda r: r.code(1) == 0 and not r.snap(1)[0] and not r.snap(1)[1]),
+        ("its node_modules link was not followed", lambda r: r.snap(1)[2]),
+        ("a worktree with uncommitted changes is refused",
+         lambda r: r.code(2) != 0 and r.snap(2) and "--force" in r.out(2)),
+        ("a worktree with unpushed commits is refused", lambda r: r.code(3) != 0 and r.snap(3)),
+        ("--force removes it", lambda r: r.code(4) == 0 and not r.snap(4)),
+        ("a worktree with new, never-added files is refused", lambda r: r.code(5) != 0 and r.snap(5)),
+    ],
+    covers=["a review worktree with scratch files needs --force", "a review worktree is removed with --force",
+            "its node_modules link was not followed", "a worktree with uncommitted changes is refused",
+            "a worktree with unpushed commits is refused", "--force removes it",
+            "a worktree with new, never-added files is refused"],
+))
+
+
+def _setup_scratch(tmp: Path, env: dict) -> None:
+    _tidy_base(tmp)
+    crew_tmp = tmp / "crew" / "tmp"
+    _link_dir(tmp / "outside", crew_tmp / "link")
+    (crew_tmp / "inner").mkdir()
+    (crew_tmp / "inner" / "keep").write_text("keep\n")
+    _link_dir(crew_tmp / "inner", crew_tmp / "lg")
+    (crew_tmp / "s" / "deep").mkdir(parents=True)
+    (crew_tmp / "f.txt").write_text("x\n")
+    (tmp / "repo" / ".factory" / "worktrees" / "T1" / "x").mkdir(parents=True)
+    for v in ("v1", "v2"):
+        (tmp / "job" / "tmp" / v).mkdir(parents=True)
+
+
+def _gone(*rel):
+    return lambda r: all(not r.tmp.joinpath(*x.split("/")).exists() for x in rel)
+
+
+def _kept(*rel):
+    return lambda r: all(r.tmp.joinpath(*x.split("/")).exists() for x in rel)
+
+
+scenario(Scenario(
+    name="tidy_links_scratch",
+    suite="tidy",
+    about="tidy removes a link and not what it points at, and scratch folders of the crew, a repo and a job",
+    setup=_setup_scratch,
+    steps=[
+        Step(["tidy", "{tmp}/crew/tmp/link"], env=_REPO),
+        Step(["tidy", "{tmp}/crew/tmp/lg/"], env=_REPO),
+        Step(["tidy", "{tmp}/crew/tmp/s", "{tmp}/crew/tmp/f.txt"], env=_REPO),
+        Step(["tidy", "{tmp}/repo/.factory/worktrees/T1"], env=_REPO),
+        Step(["tidy", "{tmp}/job/tmp/v1"], env={**NO_TARES, "CLAUDE_JOB_DIR": "{tmp}/job"}),
+        Step(["tidy", "{tmp}/job/tmp/v2"], env=NO_TARES),
+    ],
+    checks=[
+        ("a link is removed, not followed",
+         lambda r: not os.path.lexists(r.tmp / "crew" / "tmp" / "link") and _kept("outside/file")(r)),
+        ("a link given with a trailing slash goes, its target stays",
+         lambda r: not os.path.lexists(r.tmp / "crew" / "tmp" / "lg") and _kept("crew/tmp/inner/keep")(r)),
+        ("a scratch folder and a file are removed", _gone("crew/tmp/s", "crew/tmp/f.txt")),
+        ("a project's .factory/worktrees is inside", _gone("repo/.factory/worktrees/T1")),
+        ("the job's own scratch folder is inside", _gone("job/tmp/v1")),
+        ("another job's scratch folder is not", _kept("job/tmp/v2")),
+    ],
+    covers=["a link is removed, not followed", "a link given with a trailing slash goes, its target stays",
+            "a scratch folder and a file are removed", "a project's .factory/worktrees is inside",
+            "the job's own scratch folder is inside", "another job's scratch folder is not"],
+))
+
+
+def _setup_refusals(tmp: Path, env: dict) -> None:
+    _tidy_base(tmp)
+    (tmp / "crew" / "worktrees" / "a").mkdir()
+
+
+def _link_root(tmp: Path) -> None:
+    _link_dir(tmp / "outside", tmp / "linkroot")
+
+
+def _home_x(tmp: Path) -> None:
+    (tmp / "home" / "x").mkdir()
+
+
+_HOME_ROOT = {**NO_TARES, "FACTORY_WORKTREES": "{tmp}/home"}
+
+scenario(Scenario(
+    name="tidy_refusals",
+    suite="tidy",
+    about="tidy refuses what is outside the roots, a root itself, .., the home folder and a root that is a link",
+    setup=_setup_refusals,
+    steps=[
+        Step(["tidy", "{tmp}/outside"], env=NO_TARES),
+        Step(["tidy", "{tmp}/crew/worktrees"], env=NO_TARES),
+        Step(["tidy", "{tmp}/crew/worktrees/a/..", "{tmp}/crew/worktrees/a/../../crew-x"], env=NO_TARES),
+        Step(["tidy", "{tmp}/home"], env=NO_TARES),
+        Step(["tidy", "{tmp}/linkroot/file"], env={**NO_TARES, "FACTORY_WORKTREES": "{tmp}/linkroot"},
+             before=_link_root),
+        Step(["tidy", "{tmp}/home/.claude"], env=_HOME_ROOT),
+        Step(["tidy", "{tmp}/home/x"], env=_HOME_ROOT, before=_home_x),
+        Step(["tidy", "{tmp}/gone"], env=NO_TARES),
+    ],
+    checks=[
+        ("outside the crew's folders is refused",
+         lambda r: r.code(0) != 0 and "outside the crew" in r.out(0) and _kept("outside")(r)),
+        ("a root itself is refused", _kept("crew/worktrees")),
+        ("an escape through .. is refused", _kept("crew/worktrees/a")),
+        ("the home folder is refused", _kept("home")),
+        ("a root that is a link is not a root", _kept("outside/file")),
+        ("the home folder is never a root", _kept("home/x")),
+        ("something already gone is fine", lambda r: r.code(7) == 0 and "already gone" in r.out(7)),
+    ],
+    covers=["outside the crew's folders is refused", "a root itself is refused",
+            "an escape through .. is refused", "the home folder is refused",
+            "a root that is a link is not a root", "the home folder is never a root",
+            "something already gone is fine"],
+))
+
+
+def _setup_escape(tmp: Path, env: dict) -> None:
+    _tidy_base(tmp)
+    _link_dir(tmp / "outside", tmp / "crew" / "tmp" / "door")
+    objects = tmp / "crew" / "tmp" / "scratch" / ".git" / "objects" / "ab"
+    objects.mkdir(parents=True)
+    for n in ("cdef01", "cdef02"):
+        f = objects / n
+        f.write_text("object\n")
+        f.chmod(0o444)  # git writes its objects read-only; Windows will not delete such a file
+
+
+scenario(Scenario(
+    name="tidy_link_escape",
+    suite="tidy",
+    about="a path that reaches outside the roots through a link or junction is refused; read-only git objects go",
+    setup=_setup_escape,
+    steps=[
+        Step(["tidy", "{tmp}/crew/tmp/door/node_modules"], env=NO_TARES),
+        Step(["tidy", "{tmp}/crew/tmp/scratch"], env=NO_TARES),
+    ],
+    checks=[
+        ("a path through a link out of the roots is refused",
+         lambda r: r.code(0) != 0 and "outside the crew" in r.out(0) and _kept("outside/node_modules/keep")(r)),
+        ("a folder of read-only git objects is removed",
+         lambda r: r.code(1) == 0 and _gone("crew/tmp/scratch")(r)),
+    ],
+    covers=[],
 ))
 
 
@@ -328,15 +577,22 @@ def run_side(sc: Scenario, engine: str) -> Side:
     try:
         env = crew_env(tmp, engine)
         results = []
+        if sc.setup:
+            sc.setup(tmp, env)
+        here = lambda text: text.replace("{tmp}", str(tmp)) if isinstance(text, str) else text
         for step in sc.steps:
-            senv = {**env, **step.env}
+            if step.before:
+                step.before(tmp)
+            senv = {**env, **{k: here(v) for k, v in step.env.items()}}
             try:
-                p = subprocess.run(command_for(engine) + list(step.argv), cwd=str(ROOT), env=senv,
+                p = subprocess.run(command_for(engine) + [here(a) for a in step.argv], cwd=str(ROOT), env=senv,
                                    input=step.stdin, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=STEP_TIMEOUT)
                 results.append({"code": p.returncode, "stdout": p.stdout, "stderr": p.stderr})
             except subprocess.TimeoutExpired:
                 results.append({"code": 124, "stdout": "", "stderr": f"parity: step timed out after {STEP_TIMEOUT}s\n"})
+            if step.after:
+                results[-1]["snap"] = step.after(tmp)
             if engine == "python" and results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
                 side.skip = "not ported"
                 return side
@@ -479,10 +735,11 @@ def main(argv: list) -> int:
     if len(args) != 1:
         print("usage: parity.py <scenario> | --list | --coverage [--require-full]", file=sys.stderr)
         return 2
-    if args[0] not in SCENARIOS:
+    names = [n for n in SCENARIOS if fnmatch.fnmatchcase(n, args[0])]  # `tidy_*` runs every tidy scenario
+    if not names:
         print(f"parity: no scenario {args[0]!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
         return 2
-    return run_scenario(SCENARIOS[args[0]])
+    return max(run_scenario(SCENARIOS[n]) for n in names)
 
 
 if __name__ == "__main__":
