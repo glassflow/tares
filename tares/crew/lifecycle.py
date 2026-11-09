@@ -7,15 +7,15 @@ every difference is listed under "Differences from bash" below.
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
-What is not here: the watch itself, start_watch and the pace read (TR-958, TR-962). rearm_text reads the pace
+What is not here: the pace read (TR-962). The watch itself is watch.py (TR-958); watch_pid and stop_watch call it. rearm_text reads the pace
 through stations.pace_read_stub, which says "not paced" until TR-962.
 
 Differences from bash
   * A missing station argument (`factory revive` with nothing after it) is refused with
     "tares factory: usage: factory revive <station> [--fresh] [prompt]". Bash prints the shell's own
     "<script>: line N: 1: usage: ..." and exits 1.
-  * The watch is stopped with psutil (SIGTERM, or TerminateProcess on Windows) and a process that is gone or
-    may not be stopped is left alone, where bash's `kill ... || true` does the same; nothing is awaited.
+  * A Python watch is asked to stop with a stop file and given time to finish its round before it is terminated
+    (watch.stop); a process that is gone or may not be stopped is left alone, as bash's `kill ... || true` does.
   * The pace is not read (a stub), so revive and restart never ask Tares for GET /api/crew/pace yet.
 """
 from __future__ import annotations
@@ -25,9 +25,7 @@ import subprocess
 import sys
 import time
 
-import psutil
-
-from . import claude, launch, locks, stations, state
+from . import claude, launch, locks, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -37,36 +35,17 @@ RESTART_USAGE = f"usage: {ME} restart <station>"
 RETIRE_USAGE = "usage: factory retire <station>"
 
 
-# ---------- the watch (the part cmd_down needs) ----------
+# ---------- the watch (the real one is watch.py, TR-958) ----------
 
 
 def watch_pid(paths: CrewPaths):
     """The pid of the background watch when it runs, else None."""
-    try:
-        pid = int(state.read_text(paths.home / "watch.pid").strip())
-    except (OSError, ValueError):
-        return None
-    if not locks.pid_alive(pid) or "crew watch" not in claude._command_line(pid):
-        return None
-    return pid
+    return watch.running_pid(paths)
 
 
 def stop_watch(paths: CrewPaths, say) -> None:
-    """Stop the background watch and drop its pid file. A pid file that names nothing running is just removed.
-    A process that is already gone, or that may not be stopped, is left as it is (bash: `kill ... || true`)."""
-    pid_file = paths.home / "watch.pid"
-    pid = watch_pid(paths)
-    if pid is None:
-        with contextlib.suppress(FileNotFoundError):
-            pid_file.unlink()
-        return
-    try:
-        psutil.Process(pid).terminate()
-    except (psutil.Error, OSError):
-        pass
-    with contextlib.suppress(FileNotFoundError):
-        pid_file.unlink()
-    say("stopped the watch")
+    """Stop the background watch and drop its pid file; see watch.stop."""
+    watch.stop(paths, say)
 
 
 # ---------- what a restart tells a station ----------

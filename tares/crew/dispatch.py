@@ -75,6 +75,25 @@ for _word in ("down", "halt", "resume"):
     PORTED[("crew", _word)] = _lifecycle(f"cmd_{_word}")
 
 
+def _watch(argv: list[str], env: dict) -> int:
+    from .watch import cmd_watch  # imported when used (TR-958)
+    return cmd_watch(argv, env)
+
+
+PORTED[("watch",)] = _watch
+PORTED[("crew", "watch")] = _watch
+WATCH_VAR = "TARES_FACTORY_WATCH"  # "python" opts the watch in; bash stays the default one
+
+
+def _bash_watch(argv: list[str], env: dict) -> bool:
+    """True for `watch` / `crew watch` that is not opted in: the bash watch stays the default where there is
+    bash. TARES_FACTORY_ENGINE=python (asked for outright) and Windows (no bash) run the Python one."""
+    if argv[:1] == ["crew"]:
+        argv = argv[1:]
+    return (argv[:1] == ["watch"] and (env.get(ENGINE_VAR) or "") == ""
+            and env.get(WATCH_VAR) != "python" and not is_windows())
+
+
 def _view(name: str):
     """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
     def run(argv: list[str], env: dict) -> int:
@@ -148,7 +167,7 @@ def route(argv: list[str], env: dict) -> tuple[str, Callable[[list[str], dict], 
     if engine not in ("", *ENGINES):
         return "error", None, f'{ENGINE_VAR} must be "python" or "bash" (or unset), not "{engine}"'
     fn = find(argv)
-    if engine == "bash" or (fn is None and engine == ""):
+    if engine == "bash" or (fn is None and engine == "") or (fn is not None and _bash_watch(argv, env)):
         return "bash", None, ""
     if fn is None:  # engine == "python"
         return "error", None, (f'"{command_name(argv)}" is not yet ported to the Python engine '
