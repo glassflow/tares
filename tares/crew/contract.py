@@ -51,6 +51,14 @@ def _write(text: str) -> None:
         out.flush()
 
 
+def _write_quiet(text: str) -> None:
+    """_write for a failure: when stdout is gone (the reader left) there is no one to tell."""
+    try:
+        _write(text)
+    except OSError:
+        pass
+
+
 def document(obj: dict) -> dict:
     """obj with `schema_version` first."""
     return {"schema_version": schema_version(), **{k: v for k, v in obj.items() if k != "schema_version"}}
@@ -70,7 +78,7 @@ def error_document(code: str, message: str) -> dict:
 
 def fail(code: str, message: str, exit_code: int = EXIT_FAILED):
     """Print the error shape and leave with exit_code. Does not return."""
-    _write(line(error_document(code, message)) + "\n")
+    _write_quiet(line(error_document(code, message)) + "\n")
     raise SystemExit(exit_code)
 
 
@@ -79,5 +87,5 @@ def refuse(e: CrewError, argv) -> bool:
     argv has no `--json` and the caller prints the text line itself."""
     if not wants_json(argv):
         return False
-    _write(line(error_document(getattr(e, "code", "error"), e.message)) + "\n")
+    _write_quiet(line(error_document(getattr(e, "code", "error"), e.message)) + "\n")
     return True

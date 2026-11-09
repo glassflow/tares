@@ -38,7 +38,7 @@ sys.path.insert(0, str(ROOT / "tests" / "factory"))
 import fake_claude  # noqa: E402
 from _crew_fake import fake_crew_env  # noqa: E402
 
-from tares.crew import contract, events  # noqa: E402
+from tares.crew import contract, dispatch, events  # noqa: E402
 
 try:
     from jsonschema import Draft202012Validator, FormatChecker  # noqa: E402
@@ -234,6 +234,9 @@ else:
     env, tmp = world({}, [])
     doc = one_document("roster, no stations", *tares(env, ["roster", "--json"]), "roster")
     ck("roster, no stations: an empty list", doc.get("stations") == [], doc)
+    env, tmp = world({"odd-station": {"status": "active", "id": "ffff0009"}}, [])
+    doc = one_document("roster, a station with no role", *tares(env, ["roster", "--json"]), "roster")
+    ck("roster, a station with no role: role is null", [r.get("role", "x") for r in doc.get("stations", [])] == [None], doc)
     env, tmp = world(None, [])
     doc = one_document("roster, no stations file", *tares(env, ["roster", "--json"]), "roster")
     ck("roster, no stations file: an empty list", doc.get("stations") == [], doc)
@@ -291,6 +294,27 @@ else:
     doc = one_document("status, no stations file", code, out, err.replace("tares factory: no stations yet; run tares factory crew up\n", ""), "status")
     ck("status, no stations file: the note stays on stderr", "no stations yet" in err, err)
 
+    # a detail longer than the 70 columns of the text: the document carries all of it
+    env, tmp = world(crew_of(), sessions())
+    jd = tmp / "home" / ".claude" / "jobs" / BID
+    jd.mkdir(parents=True)
+    (jd / "state.json").write_text(json.dumps({"tempo": "fast", "detail": "d" * 100}), encoding="utf-8")
+    doc = one_document("status, a long detail", *tares(env, ["status", "--json"]), "status")
+    long_row = {r["station"]: r for r in doc.get("stations", [])}.get("shop-build-m1", {})
+    ck("status, a long detail: whole in the document", long_row.get("detail") == "d" * 100 and long_row.get("tempo") == "fast", long_row)
+    c2, o2, e2 = tares(env, ["status"])
+    ck("status, a long detail: cut at 70 in the text", "d" * 70 in o2 and "d" * 71 not in o2, o2)
+    # the background watch: a live process whose command line says `crew watch`
+    watcher = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "crew", "watch"])
+    try:
+        (Path(env["FACTORY_CREW_HOME"]) / "watch.pid").write_text(f"{watcher.pid}\n", encoding="utf-8")
+        time.sleep(0.3)
+        doc = one_document("status, a running watch", *tares(env, ["status", "--json"]), "status")
+        ck("status, a running watch: its pid as a number", doc.get("watch") == {"running": True, "pid": watcher.pid}, doc.get("watch"))
+    finally:
+        watcher.kill()
+        watcher.wait(10)
+
     # ---------- desk ----------
 
     print("== desk --json")
@@ -299,6 +323,10 @@ else:
     doc = one_document("desk", code, out, err, "desk")
     ck("desk: the item as Tares gives it", [i["label"] for i in doc.get("items", [])] == ["D1"], doc)
     fixture("desk.json", stable(out, tmp))
+    WORLD["desk"] = [{"id": "d1", "label": "D1", "question": "ship it?", "options": ["yes", "no"], "blocking": True},
+                     {"id": "d2", "label": "D2", "question": "which port?", "options": [], "blocking": False}]
+    doc = one_document("desk, two items", *tares(env, ["desk", "--json"]), "desk")
+    ck("desk, two items: in order", [i["label"] for i in doc.get("items", [])] == ["D1", "D2"], doc)
     WORLD["desk"] = []
     doc = one_document("desk, nothing waiting", *tares(env, ["desk", "--json"]), "desk")
     ck("desk, nothing waiting: an empty list", doc.get("items") == [], doc)
@@ -362,6 +390,10 @@ def append(path, *objs, raw=None):
             f.write(raw)
 
 
+GUARD_DENY = {"at": "2026-11-09T10:00:09Z", "station": "shop-build-m1", "event": "guard-deny",
+              "tool": "Bash", "reason": "git push is held"}  # what claude-plugin/hooks/guard.sh writes
+
+
 def names(items):
     return [e["event"] for _c, e in items]
 
@@ -407,9 +439,9 @@ class Script:
         return self.done
 
 
-def run_script(path, steps, since=None):
+def run_script(path, steps, since=None, keep_open=None):
     s = Script(steps)
-    return list(events.follow(path, since, poll=0, stop=s.stop, sleep=s.sleep))
+    return list(events.follow(path, since, poll=0, stop=s.stop, sleep=s.sleep, keep_open=keep_open))
 
 
 # truncation: the file is emptied and written again; the reader starts over, sends the new lines once
@@ -480,6 +512,105 @@ first = run_script(mid, [])
 second = run_script(mid, [lambda: append(mid, ev(3))], since=first[-1][0])
 ck("follow, reconnect with the last cursor: only what is new", names(first) == ["step1", "step2"] and names(second) == ["step3"], (names(first), names(second)))
 
+# a line written just before the rename is not lost when the old file is held open; where it is not held
+# (Windows), it is the documented miss
+tail = TOP / "tail.jsonl"
+append(tail, ev(1))
+
+
+def tail_then_rotate():
+    append(tail, ev(2))
+    os.replace(tail, TOP / "tail.jsonl.1")
+    append(tail, ev(3))
+
+
+if os.name != "nt":  # Windows cannot rename a file that is held open, which is why it does not hold it
+    got = run_script(tail, [tail_then_rotate], keep_open=True)
+    ck("rotated, file held: the old file's last line is sent, then the new file", names(got) == ["step1", "step2", "step3"], names(got))
+tail2 = TOP / "tail2.jsonl"
+append(tail2, ev(1))
+
+
+def tail_then_rotate2():
+    append(tail2, ev(2))
+    os.replace(tail2, TOP / "tail2.jsonl.1")
+    append(tail2, ev(3))
+
+
+got = run_script(tail2, [tail_then_rotate2], keep_open=False)
+ck("rotated, file not held: the new file is read from its start", names(got)[-1] == "step3" and names(got)[0] == "step1", names(got))
+
+# cursors
+for bad in ("\u00b2:1", "1:2:3", "-1:2", " 1:2", "1:", ":1", "a:b", "", "1:" + "9" * 21):
+    try:
+        events.parse_cursor(bad)
+        ck(f"parse_cursor({bad!r}) is refused", False)
+    except events.BadCursorError:
+        ck(f"parse_cursor({bad!r}) is refused", True)
+    except Exception as e:  # noqa: BLE001
+        ck(f"parse_cursor({bad!r}) is refused as BadCursorError", False, repr(e))
+ck("parse_cursor reads a cursor", events.parse_cursor("12:345") == (12, 345))
+
+# a reader that goes away: EPIPE and EINVAL (what a closed pipe says on Windows) end the command quietly
+import errno  # noqa: E402
+import io  # noqa: E402
+import contextlib  # noqa: E402
+
+real_emit = events.contract.emit
+
+
+def emit_raising(exc):
+    def _emit(_obj, _schema=""):
+        raise exc
+    return _emit
+
+
+for label, exc, gone in (("BrokenPipeError", BrokenPipeError(), True), ("EPIPE", OSError(errno.EPIPE, "pipe"), True),
+                         ("EINVAL", OSError(errno.EINVAL, "invalid"), True), ("ENOSPC", OSError(errno.ENOSPC, "full"), False)):
+    events.contract.emit = emit_raising(exc)
+    try:
+        events._send("1:1", {"at": "x", "station": "s", "event": "e"})
+        ck(f"_send, {label}: raised nothing", False)
+    except events._ReaderGone:
+        ck(f"_send, {label}: the reader is gone", gone)
+    except OSError:
+        ck(f"_send, {label}: another error is not swallowed", not gone)
+    finally:
+        events.contract.emit = real_emit
+inproc = TOP / "inproc-crew"
+inproc.mkdir()
+append(inproc / "events.jsonl", ev(1))
+old_env, old_quiet = os.environ.get("FACTORY_CREW_HOME"), events._quiet_stdout
+os.environ["FACTORY_CREW_HOME"] = str(inproc)
+events._quiet_stdout = lambda: None  # it would point this process's stdout at /dev/null
+events.contract.emit = emit_raising(OSError(errno.EINVAL, "invalid"))
+try:
+    rc = events.cmd_events(["events", "--json"], dict(os.environ))
+    ck("events: a reader gone (EINVAL) is exit 0", rc == 0, rc)
+finally:
+    events.contract.emit = real_emit
+    events._quiet_stdout = old_quiet
+    if old_env is None:
+        os.environ.pop("FACTORY_CREW_HOME", None)
+    else:
+        os.environ["FACTORY_CREW_HOME"] = old_env
+
+# the dispatcher: a bug with --json is the error shape, without --json it is left alone
+def boom(_argv, _env):
+    raise ValueError("it broke")
+
+
+buf = io.StringIO()
+with contextlib.redirect_stdout(buf):
+    rc = dispatch._call(boom, ["status", "--json"], {})
+bug = json.loads(buf.getvalue()) if buf.getvalue() else {}
+ck("a bug with --json: exit 1 and the error shape", rc == 1 and not problems("error", bug) and "ValueError" in bug.get("error", {}).get("message", ""), (rc, buf.getvalue()))
+try:
+    dispatch._call(boom, ["status"], {})
+    ck("a bug without --json is not caught", False)
+except ValueError:
+    ck("a bug without --json is not caught", True)
+
 # ---------- the real command, over a pipe ----------
 
 print("== events --follow --json, the real command")
@@ -533,13 +664,15 @@ try:
     docs = [json.loads(x) for x in first]
     ck("the stream: two lines for the two events", [d["event"]["event"] for d in docs] == ["step1", "step2"], first)
     ck("the stream: every line validates against events.json", all(not problems("events", d) for d in docs), [problems("events", d) for d in docs])
-    append(crew_events, ev(3))
-    third = read_lines(p1, 1)
+    append(crew_events, ev(3), GUARD_DENY)
+    third = read_lines(p1, 2)
     ck("the stream: an event written later arrives", third and json.loads(third[0])["event"]["event"] == "step3", third)
+    ck("the stream: a guard-deny line (tool and reason, no detail) arrives and validates",
+       len(third) == 2 and json.loads(third[1])["event"]["event"] == "guard-deny" and not problems("events", json.loads(third[1])), third)
     fixture("events.jsonl", stable("".join(
         json.dumps(dict(json.loads(x), cursor=re.sub(r"^\d+", "1", json.loads(x)["cursor"])), separators=(",", ":"),
                    ensure_ascii=False) + "\n" for x in first + third), tmp))
-    last_cursor = json.loads(third[0])["cursor"] if third else ""
+    last_cursor = json.loads(third[-1])["cursor"] if third else ""
 finally:
     stop(p1)
 append(crew_events, ev(4), ev(5))
@@ -590,7 +723,7 @@ for name in ("status.json", "roster.json", "desk.json", "error.json"):
     ck(f"sample {name} validates against {path.stem}.json", not bad, bad)
 sample_lines = (FIXTURES / "events.jsonl").read_text(encoding="utf-8").splitlines() if (FIXTURES / "events.jsonl").is_file() else []
 ck("sample events.jsonl validates line by line against events.json",
-   len(sample_lines) == 3 and all(not problems("events", json.loads(x)) for x in sample_lines), sample_lines)
+   len(sample_lines) == 4 and all(not problems("events", json.loads(x)) for x in sample_lines), sample_lines)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

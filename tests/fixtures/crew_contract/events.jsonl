@@ -1,3 +1,4 @@
 {"schema_version":1,"cursor":"1:92","event":{"at":"2026-11-09T10:00:01Z","station":"shop-build-m1","event":"step1","detail":"detail 1"}}
 {"schema_version":1,"cursor":"1:184","event":{"at":"2026-11-09T10:00:02Z","station":"shop-build-m1","event":"step2","detail":"detail 2"}}
 {"schema_version":1,"cursor":"1:276","event":{"at":"2026-11-09T10:00:03Z","station":"shop-build-m1","event":"step3","detail":"detail 3"}}
+{"schema_version":1,"cursor":"1:395","event":{"at":"2026-11-09T10:00:09Z","station":"shop-build-m1","event":"guard-deny","tool":"Bash","reason":"git push is held"}}
