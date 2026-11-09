@@ -393,7 +393,8 @@ else:
 # ===================================================================================================
 print("\n== trailing slashes, and a drive root ==")
 ck("a trailing slash goes", tidy._strip("a/b/") == "a/b" and tidy._strip("a//") == "a")
-ck("a lone slash stays", tidy._strip("/") == "/" and tidy._strip("//") == "/")
+# On real Windows ntpath.splitdrive("//") is ("//", ""): a bare UNC prefix, kept as it is. Safe either way.
+ck("a lone slash stays", tidy._strip("/") == "/" and tidy._strip("//") == ("//" if WIN else "/"), tidy._strip("//"))
 with patched(tidy, "_windows", lambda: True):
     ck("on Windows a backslash goes too", tidy._strip("a\\b\\") == "a\\b")
     ck("on Windows C:\\ keeps its slash (C: alone means the current folder)", tidy._strip("C:\\") == "C:\\" and tidy._strip("C:/") == "C:/",
