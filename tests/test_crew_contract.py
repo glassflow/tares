@@ -50,6 +50,7 @@ except ImportError:
 SCHEMAS = ROOT / "tares" / "crew" / "schemas"
 FIXTURES = ROOT / "tests" / "fixtures" / "crew_contract"
 UPDATE = os.environ.get("TARES_UPDATE_FIXTURES") == "1"
+NO_FAKE_CLAUDE = os.name == "nt" or not Path("/bin/bash").exists()  # the fake claude is a bash script
 P = F = 0
 
 
@@ -211,129 +212,132 @@ ck("a document that is not the shape fails",
    and problems("error", {"schema_version": 1, "error": {"code": "Bad Code", "message": "m"}}) != []
    and problems("events", {"schema_version": 1, "cursor": "abc", "event": {}}) != [])
 
-# ---------- roster ----------
+if NO_FAKE_CLAUDE:
+    print("skip: the commands below run a fake Claude Code, a bash script, and bash is not here")
+else:
+    # ---------- roster ----------
 
-print("== roster --json")
-env, tmp = world(crew_of(), sessions())
-code, out, err = tares(env, ["roster", "--json"], {"TARESD_URL": DOWN})
-doc = one_document("roster", code, out, err, "roster")
-rows = {r["station"]: r for r in doc.get("stations", [])}
-ck("roster: the crew and its orchestrator", doc.get("crew") == "crew" and doc.get("orchestrator") == "crew-orchestrator")
-ck("roster: the active stations, not the stopped one", sorted(rows) == ["crew-orchestrator", "crew-reviewer", "shop-build-m1", "shop-build-m2"], sorted(rows))
-ck("roster: a working orchestrator", rows.get("crew-orchestrator") == {
-    "station": "crew-orchestrator", "role": "orchestrator", "project": "", "turn": "working", "claude_code": "2.1.310"}, rows)
-ck("roster: a station without a session is gone", rows.get("shop-build-m2", {}).get("turn") == "gone", rows)
-ck("roster: an older Claude Code is flagged", rows.get("shop-build-m1", {}).get("claude_code") == "2.1.100 (older than 2.1.310)", rows)
-fixture("roster.json", stable(out, tmp))
-c2, o2, e2 = tares(env, ["roster"], {"TARESD_URL": DOWN})
-ck("roster without --json is still the text", c2 == 0 and o2.startswith("crew: crew (orchestrator: crew-orchestrator)\n"), o2[:80])
-env, tmp = world({}, [])
-doc = one_document("roster, no stations", *tares(env, ["roster", "--json"]), "roster")
-ck("roster, no stations: an empty list", doc.get("stations") == [], doc)
-env, tmp = world(None, [])
-doc = one_document("roster, no stations file", *tares(env, ["roster", "--json"]), "roster")
-ck("roster, no stations file: an empty list", doc.get("stations") == [], doc)
-env, tmp = world(crew_of(), sessions())
-c3, o3, e3 = tares(env, ["roster", "--json"], {"FACTORY_CREW_NAME": "ops"})
-ck("roster, a named crew: the warning for a person stays on stderr", "Orchestrator session title is crew-orchestrator" in e3, e3)
-doc = one_document("roster, a named crew", c3, o3, e3.split("\n", 1)[1] if e3 else e3, "roster")
-ck("roster, a named crew: ops", doc.get("crew") == "ops" and doc.get("orchestrator") == "ops-orchestrator", doc)
+    print("== roster --json")
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["roster", "--json"], {"TARESD_URL": DOWN})
+    doc = one_document("roster", code, out, err, "roster")
+    rows = {r["station"]: r for r in doc.get("stations", [])}
+    ck("roster: the crew and its orchestrator", doc.get("crew") == "crew" and doc.get("orchestrator") == "crew-orchestrator")
+    ck("roster: the active stations, not the stopped one", sorted(rows) == ["crew-orchestrator", "crew-reviewer", "shop-build-m1", "shop-build-m2"], sorted(rows))
+    ck("roster: a working orchestrator", rows.get("crew-orchestrator") == {
+        "station": "crew-orchestrator", "role": "orchestrator", "project": "", "turn": "working", "claude_code": "2.1.310"}, rows)
+    ck("roster: a station without a session is gone", rows.get("shop-build-m2", {}).get("turn") == "gone", rows)
+    ck("roster: an older Claude Code is flagged", rows.get("shop-build-m1", {}).get("claude_code") == "2.1.100 (older than 2.1.310)", rows)
+    fixture("roster.json", stable(out, tmp))
+    c2, o2, e2 = tares(env, ["roster"], {"TARESD_URL": DOWN})
+    ck("roster without --json is still the text", c2 == 0 and o2.startswith("crew: crew (orchestrator: crew-orchestrator)\n"), o2[:80])
+    env, tmp = world({}, [])
+    doc = one_document("roster, no stations", *tares(env, ["roster", "--json"]), "roster")
+    ck("roster, no stations: an empty list", doc.get("stations") == [], doc)
+    env, tmp = world(None, [])
+    doc = one_document("roster, no stations file", *tares(env, ["roster", "--json"]), "roster")
+    ck("roster, no stations file: an empty list", doc.get("stations") == [], doc)
+    env, tmp = world(crew_of(), sessions())
+    c3, o3, e3 = tares(env, ["roster", "--json"], {"FACTORY_CREW_NAME": "ops"})
+    ck("roster, a named crew: the warning for a person stays on stderr", "Orchestrator session title is crew-orchestrator" in e3, e3)
+    doc = one_document("roster, a named crew", c3, o3, e3.split("\n", 1)[1] if e3 else e3, "roster")
+    ck("roster, a named crew: ops", doc.get("crew") == "ops" and doc.get("orchestrator") == "ops-orchestrator", doc)
 
-# ---------- status ----------
+    # ---------- status ----------
 
-print("== status --json")
-WORLD["desk"] = [{"id": "d1", "label": "D1", "question": "ship it?", "options": ["yes", "no"], "recommendation": "yes",
-                  "why": "tests pass", "blocking": True, "project_name": "shop"}]
-WORLD["projects"] = [{"id": "p1", "name": "shop", "tickets_total": 4, "tickets_done": 1,
-                      "milestone": {"name": "M1", "done": 1, "total": 3}},
-                     {"id": "p2", "name": "docs", "tickets_total": 2, "tickets_done": 2},
-                     {"id": "p3", "name": "new", "tickets_total": 0, "tickets_done": 0}]
-env, tmp = world(crew_of(), sessions())
-code, out, err = tares(env, ["status", "--json"])
-doc = one_document("status", code, out, err, "status")
-st = {r["station"]: r for r in doc.get("stations", [])}
-ck("status: the running stations", doc.get("running") == 4 and len(st) == 4, doc.get("running"))
-ck("status: a working orchestrator", st.get("crew-orchestrator", {}).get("state") == "working", st)
-ck("status: a gone builder", st.get("shop-build-m2", {}).get("state") == "gone", st)
-ck("status: model and effort apart", (st.get("shop-build-m1", {}).get("model"), st.get("shop-build-m1", {}).get("effort")) == ("opus", "high"), st)
-ck("status: claude code behind", doc.get("claude_code") == {"target": "2.1.310", "older": 1, "retrying": 0}, doc.get("claude_code"))
-ck("status: not halted, not frozen", doc.get("halted") is None and doc.get("frozen") is None, doc)
-ck("status: watch not running", doc.get("watch") == {"running": False, "pid": None}, doc.get("watch"))
-ck("status: one question waiting, in full", doc.get("desk", {}).get("waiting") == 1
-   and doc["desk"]["next"]["question"] == "ship it?", doc.get("desk"))
-ck("status: projects with and without a milestone",
-   [(p["name"], p["milestone"] is not None) for p in doc.get("projects", [])] == [("shop", True), ("docs", False), ("new", False)],
-   doc.get("projects"))
-ck("status: the crew page", doc.get("crew_page") == f"{UP}/crew", doc.get("crew_page"))
-fixture("status.json", stable(out, tmp))
-c2, o2, e2 = tares(env, ["crew", "status", "--json"])
-ck("crew status --json is status --json", c2 == 0 and o2 == out, o2[:100])
-c2, o2, e2 = tares(env, ["status"])
-ck("status without --json is still the text", c2 == 0 and o2.startswith("STATION") and not o2.lstrip().startswith("{"), o2[:80])
+    print("== status --json")
+    WORLD["desk"] = [{"id": "d1", "label": "D1", "question": "ship it?", "options": ["yes", "no"], "recommendation": "yes",
+                      "why": "tests pass", "blocking": True, "project_name": "shop"}]
+    WORLD["projects"] = [{"id": "p1", "name": "shop", "tickets_total": 4, "tickets_done": 1,
+                          "milestone": {"name": "M1", "done": 1, "total": 3}},
+                         {"id": "p2", "name": "docs", "tickets_total": 2, "tickets_done": 2},
+                         {"id": "p3", "name": "new", "tickets_total": 0, "tickets_done": 0}]
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["status", "--json"])
+    doc = one_document("status", code, out, err, "status")
+    st = {r["station"]: r for r in doc.get("stations", [])}
+    ck("status: the running stations", doc.get("running") == 4 and len(st) == 4, doc.get("running"))
+    ck("status: a working orchestrator", st.get("crew-orchestrator", {}).get("state") == "working", st)
+    ck("status: a gone builder", st.get("shop-build-m2", {}).get("state") == "gone", st)
+    ck("status: model and effort apart", (st.get("shop-build-m1", {}).get("model"), st.get("shop-build-m1", {}).get("effort")) == ("opus", "high"), st)
+    ck("status: claude code behind", doc.get("claude_code") == {"target": "2.1.310", "older": 1, "retrying": 0}, doc.get("claude_code"))
+    ck("status: not halted, not frozen", doc.get("halted") is None and doc.get("frozen") is None, doc)
+    ck("status: watch not running", doc.get("watch") == {"running": False, "pid": None}, doc.get("watch"))
+    ck("status: one question waiting, in full", doc.get("desk", {}).get("waiting") == 1
+       and doc["desk"]["next"]["question"] == "ship it?", doc.get("desk"))
+    ck("status: projects with and without a milestone",
+       [(p["name"], p["milestone"] is not None) for p in doc.get("projects", [])] == [("shop", True), ("docs", False), ("new", False)],
+       doc.get("projects"))
+    ck("status: the crew page", doc.get("crew_page") == f"{UP}/crew", doc.get("crew_page"))
+    fixture("status.json", stable(out, tmp))
+    c2, o2, e2 = tares(env, ["crew", "status", "--json"])
+    ck("crew status --json is status --json", c2 == 0 and o2 == out, o2[:100])
+    c2, o2, e2 = tares(env, ["status"])
+    ck("status without --json is still the text", c2 == 0 and o2.startswith("STATION") and not o2.lstrip().startswith("{"), o2[:80])
 
-two = sessions() + [fake_claude.agent_row("working", "ffff0006", "shop-build-m1", "/y", version="2.1.310")]
-env, tmp = world(crew_of(), two)
-doc = one_document("status, two sessions", *tares(env, ["status", "--json"]), "status")
-ck("status, two sessions: named", [t["name"] for t in doc.get("two_sessions", [])] == ["shop-build-m1"], doc.get("two_sessions"))
-env, tmp = world(crew_of(), sessions())
-(Path(env["FACTORY_CREW_HOME"]) / "HALT").write_text('{"at":"2026-11-09T10:00:00Z","reason":"maintenance"}\n', encoding="utf-8")
-doc = one_document("status, halted", *tares(env, ["status", "--json"]), "status")
-ck("status, halted: the reason", doc.get("halted") == "maintenance", doc.get("halted"))
-env, tmp = world({}, [])
-doc = one_document("status, no stations running", *tares(env, ["status", "--json"]), "status")
-ck("status, no stations running: an empty list", doc.get("stations") == [] and doc.get("running") == 0, doc)
-env, tmp = world(None, [])
-code, out, err = tares(env, ["status", "--json"])
-doc = one_document("status, no stations file", code, out, err.replace("tares factory: no stations yet; run tares factory crew up\n", ""), "status")
-ck("status, no stations file: the note stays on stderr", "no stations yet" in err, err)
+    two = sessions() + [fake_claude.agent_row("working", "ffff0006", "shop-build-m1", "/y", version="2.1.310")]
+    env, tmp = world(crew_of(), two)
+    doc = one_document("status, two sessions", *tares(env, ["status", "--json"]), "status")
+    ck("status, two sessions: named", [t["name"] for t in doc.get("two_sessions", [])] == ["shop-build-m1"], doc.get("two_sessions"))
+    env, tmp = world(crew_of(), sessions())
+    (Path(env["FACTORY_CREW_HOME"]) / "HALT").write_text('{"at":"2026-11-09T10:00:00Z","reason":"maintenance"}\n', encoding="utf-8")
+    doc = one_document("status, halted", *tares(env, ["status", "--json"]), "status")
+    ck("status, halted: the reason", doc.get("halted") == "maintenance", doc.get("halted"))
+    env, tmp = world({}, [])
+    doc = one_document("status, no stations running", *tares(env, ["status", "--json"]), "status")
+    ck("status, no stations running: an empty list", doc.get("stations") == [] and doc.get("running") == 0, doc)
+    env, tmp = world(None, [])
+    code, out, err = tares(env, ["status", "--json"])
+    doc = one_document("status, no stations file", code, out, err.replace("tares factory: no stations yet; run tares factory crew up\n", ""), "status")
+    ck("status, no stations file: the note stays on stderr", "no stations yet" in err, err)
 
-# ---------- desk ----------
+    # ---------- desk ----------
 
-print("== desk --json")
-env, tmp = world(crew_of(), sessions())
-code, out, err = tares(env, ["desk", "--json"])
-doc = one_document("desk", code, out, err, "desk")
-ck("desk: the item as Tares gives it", [i["label"] for i in doc.get("items", [])] == ["D1"], doc)
-fixture("desk.json", stable(out, tmp))
-WORLD["desk"] = []
-doc = one_document("desk, nothing waiting", *tares(env, ["desk", "--json"]), "desk")
-ck("desk, nothing waiting: an empty list", doc.get("items") == [], doc)
-WORLD["projects"] = []
+    print("== desk --json")
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["desk", "--json"])
+    doc = one_document("desk", code, out, err, "desk")
+    ck("desk: the item as Tares gives it", [i["label"] for i in doc.get("items", [])] == ["D1"], doc)
+    fixture("desk.json", stable(out, tmp))
+    WORLD["desk"] = []
+    doc = one_document("desk, nothing waiting", *tares(env, ["desk", "--json"]), "desk")
+    ck("desk, nothing waiting: an empty list", doc.get("items") == [], doc)
+    WORLD["projects"] = []
 
-# ---------- the error shape ----------
+    # ---------- the error shape ----------
 
-print("== the error shape")
-env, tmp = world(crew_of(), sessions(), url=DOWN)
-code, out, err = tares(env, ["status", "--json"])
-doc = one_document("status, no Tares", code, out, err, "error", want_code=1)
-ck("status, no Tares: the message", "no Tares answers at http://127.0.0.1:9" in doc.get("error", {}).get("message", ""), doc)
-fixture("error.json", stable(out, tmp))
-c2, o2, e2 = tares(env, ["status"])
-ck("...and without --json it is the text line on stderr, exit 1",
-   c2 == 1 and o2 == "" and e2.startswith("tares factory: no Tares answers at"), (c2, o2, e2))
-for argv, why in ((["desk", "--json"], "desk"), (["crew", "desk", "--json"], "crew desk")):
-    code, out, err = tares(env, argv)
-    doc = one_document(f"{why}, no Tares", code, out, err, "error", want_code=1)
-env, tmp = world(crew_of(), sessions())
-code, out, err = tares(env, ["roster", "--json"], {"FAKE_CLAUDE_AGENTS_FAIL": "1"})
-doc = one_document("roster, sessions unreadable", code, out, err, "error", want_code=1)
-ck("roster, sessions unreadable: its code", doc.get("error", {}).get("code") == "sessions_unreadable", doc)
-code, out, err = tares(env, ["roster", "--json"], {"CLAUDE_BIN": str(TOP / "no such claude")})
-doc = one_document("roster, no claude", code, out, err, "error", want_code=1)
-ck("roster, no claude: some failure code", re.match(r"^[a-z][a-z0-9_]*$", doc.get("error", {}).get("code", "")) is not None, doc)
-code, out, err = tares(env, ["tidy", "--json", str(TOP)])
-doc = one_document("tidy, a refusal", code, out, err, "error", want_code=1)
-ck("tidy, a refusal: outside the crew", "outside the crew" in doc.get("error", {}).get("message", ""), doc)
-c2, o2, e2 = tares(env, ["tidy", str(TOP)])
-ck("...and without --json it is the text line on stderr", c2 == 1 and o2 == "" and "outside the crew" in e2, (c2, o2, e2))
-code, out, err = tares(env, ["events", "--json", "--since", "not-a-cursor"])
-doc = one_document("events, a bad cursor", code, out, err, "error", want_code=2)
-ck("events, a bad cursor: its code", doc.get("error", {}).get("code") == "bad_cursor", doc)
-code, out, err = tares(env, ["events"])
-ck("events without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory events" in err, (code, out, err))
-code, out, err = tares(env, ["events", "--json", "--nope"])
-doc = one_document("events, an unknown argument", code, out, err, "error", want_code=2)
-ck("events, an unknown argument: usage", doc.get("error", {}).get("code") == "usage", doc)
+    print("== the error shape")
+    env, tmp = world(crew_of(), sessions(), url=DOWN)
+    code, out, err = tares(env, ["status", "--json"])
+    doc = one_document("status, no Tares", code, out, err, "error", want_code=1)
+    ck("status, no Tares: the message", "no Tares answers at http://127.0.0.1:9" in doc.get("error", {}).get("message", ""), doc)
+    fixture("error.json", stable(out, tmp))
+    c2, o2, e2 = tares(env, ["status"])
+    ck("...and without --json it is the text line on stderr, exit 1",
+       c2 == 1 and o2 == "" and e2.startswith("tares factory: no Tares answers at"), (c2, o2, e2))
+    for argv, why in ((["desk", "--json"], "desk"), (["crew", "desk", "--json"], "crew desk")):
+        code, out, err = tares(env, argv)
+        doc = one_document(f"{why}, no Tares", code, out, err, "error", want_code=1)
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["roster", "--json"], {"FAKE_CLAUDE_AGENTS_FAIL": "1"})
+    doc = one_document("roster, sessions unreadable", code, out, err, "error", want_code=1)
+    ck("roster, sessions unreadable: its code", doc.get("error", {}).get("code") == "sessions_unreadable", doc)
+    code, out, err = tares(env, ["roster", "--json"], {"CLAUDE_BIN": str(TOP / "no such claude")})
+    doc = one_document("roster, no claude", code, out, err, "error", want_code=1)
+    ck("roster, no claude: some failure code", re.match(r"^[a-z][a-z0-9_]*$", doc.get("error", {}).get("code", "")) is not None, doc)
+    code, out, err = tares(env, ["tidy", "--json", str(TOP)])
+    doc = one_document("tidy, a refusal", code, out, err, "error", want_code=1)
+    ck("tidy, a refusal: outside the crew", "outside the crew" in doc.get("error", {}).get("message", ""), doc)
+    c2, o2, e2 = tares(env, ["tidy", str(TOP)])
+    ck("...and without --json it is the text line on stderr", c2 == 1 and o2 == "" and "outside the crew" in e2, (c2, o2, e2))
+    code, out, err = tares(env, ["events", "--json", "--since", "not-a-cursor"])
+    doc = one_document("events, a bad cursor", code, out, err, "error", want_code=2)
+    ck("events, a bad cursor: its code", doc.get("error", {}).get("code") == "bad_cursor", doc)
+    code, out, err = tares(env, ["events"])
+    ck("events without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory events" in err, (code, out, err))
+    code, out, err = tares(env, ["events", "--json", "--nope"])
+    doc = one_document("events, an unknown argument", code, out, err, "error", want_code=2)
+    ck("events, an unknown argument: usage", doc.get("error", {}).get("code") == "usage", doc)
 try:
     contract.fail("custom_code", "it broke", 7)
     ck("fail() leaves the process", False)
@@ -447,7 +451,9 @@ late = TOP / "late.jsonl"
 got = run_script(late, [lambda: None, lambda: append(late, ev(1)), lambda: None])
 ck("a file that appears later is read", names(got) == ["step1"], names(got))
 gone = TOP / "gone.jsonl"
-append(gone, ev(1))
+# the first file is longer than the new one: a file system may hand the new file the old file id, and only
+# the size then tells the two apart (same id and same size is the case schemas/README.md says is not seen)
+append(gone, dict(ev(1), detail="a longer detail so the first file is the larger one"))
 
 
 def remove_and_recreate():
