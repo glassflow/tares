@@ -1,8 +1,8 @@
 """`tares factory roster` through the dispatcher answers in under 300 ms (TR-951).
 
-roster is not ported, so it goes dispatcher -> bash roster. The whole path is timed from a fresh
-interpreter: start Python, import tares.cli, resolve the address, dispatch, exec bash, bash prints the
-roster. Against a throwaway crew (tests/_crew_fake.py): no stations, a fake Claude Code, no Tares.
+roster is ported (TR-957), so it goes dispatcher -> tares.crew.views. The whole path is timed from a
+fresh interpreter: start Python, import tares.cli, resolve the address, dispatch, read the sessions, print
+the roster. Bash's roster is timed beside it as the yardstick. Against a throwaway crew (tests/_crew_fake.py): no stations, a fake Claude Code, no Tares.
 
 Five timed runs after one untimed warm-up (the first run reads the scripts from disk); the median must
 be under 300 ms and every run must exit 0. The five timings are printed, with the same five for bash
