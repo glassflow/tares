@@ -4782,6 +4782,19 @@
       "note": "The settings check belongs to TR-953: the Python write_settings must not set that variable."
     },
     {
+      "name": "doctor parity sets the cmux and language-server lines aside",
+      "kind": "touchpoint",
+      "file": "tests/factory/parity.py",
+      "match": "TR-970 ports its cmux",
+      "line": 484,
+      "what": "the doctor scenarios drop bash's cmux and language-server lines until the Python doctor makes them",
+      "ticket": "TR-970",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "TR-970 removes TR970 from DOCTOR_DROP in the same PR that adds the checks."
+    },
+    {
       "name": "parity launch cmux case",
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
@@ -4793,19 +4806,6 @@
       "python": "",
       "ported": false,
       "note": "Same words as the crew_test.sh check, so the coverage report can match them."
-    },
-    {
-      "name": "doctor parity sets the cmux and language-server lines aside",
-      "kind": "touchpoint",
-      "file": "tests/factory/parity.py",
-      "match": "(?i)cmux",
-      "line": 484,
-      "what": "the doctor scenarios drop bash's cmux and language-server lines until the Python doctor makes them",
-      "ticket": "TR-970",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-970 removes TR970 from DOCTOR_DROP in the same PR that adds the checks."
     }
   ],
   "hook_entries": [
