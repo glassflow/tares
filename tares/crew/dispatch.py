@@ -28,6 +28,14 @@ ENGINES = ("python", "bash")
 PORTED: dict[tuple[str, ...], Callable[[list[str], dict], int]] = {}
 
 
+def _tidy(argv: list[str], env: dict) -> int:
+    from .tidy import cmd_tidy  # imported when used, so other commands start without it
+    return cmd_tidy(argv, env)
+
+
+PORTED[("tidy",)] = _tidy
+
+
 def _view(name: str):
     """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
     def run(argv: list[str], env: dict) -> int:

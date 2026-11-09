@@ -35,6 +35,7 @@ test_crew_packaging
 test_crew_standup
 test_crew_startup_time
 test_crew_state
+test_crew_tidy_safety
 test_crew_views
 test_crews_single
 test_decision_answers

@@ -9,10 +9,16 @@ CREW_NAME_RULE = ("1 to 31 characters: a-z, 0-9 and hyphens, starting with a let
                   "and not containing the word build between hyphens")
 
 
-def default_home() -> str:
-    """~/factory, with $HOME first as bash has it (expanduser covers Windows, where HOME is often unset)."""
-    base = os.environ.get("HOME") or os.path.expanduser("~")
-    return f"{base}/factory"
+def home_dir(env=None) -> str:
+    """The person's home folder: $HOME first as bash has it, then USERPROFILE, then expanduser (which covers
+    Windows, where HOME is often unset)."""
+    env = os.environ if env is None else env
+    return env.get("HOME") or env.get("USERPROFILE") or os.path.expanduser("~")
+
+
+def default_home(env=None) -> str:
+    """~/factory."""
+    return f"{home_dir(env)}/factory"
 
 
 @dataclass(frozen=True)
