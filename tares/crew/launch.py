@@ -318,7 +318,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     work_role = parent_role(parent, paths) if role == "helper" else role
 
     repos = "the repositories of the projects handed to this crew on Tares (crew_projects)"
-    known = ",".join(client.all_repos()).replace(",", ", ")
+    known = _forward(",".join(client.all_repos())).replace(",", ", ")
     if known:
         repos = f"{repos}, today: {known}"
     where = repos
@@ -337,7 +337,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
 
     wt_repos = repos
     if project:  # a builder and its helpers: the worktree folders of its own project's repos only
-        mine = ",".join(str(p) for n, p in client.project_repo_rows() if n == project).replace(",", ", ")
+        mine = _forward(",".join(str(p) for n, p in client.project_repo_rows() if n == project)).replace(",", ", ")
         wt_repos = f"the repositories of project {project}: {mine}"
     allow = [
         f"Creating and editing files under {home} (the crew's own folder), and git worktrees under the "

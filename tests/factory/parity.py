@@ -420,8 +420,13 @@ def allow_of(r: "Run", station: str) -> list:
     return station_json(r, station)["autoMode"]["allow"]
 
 
+def fwd(path) -> str:
+    """A path with forward slashes: how the Python engine writes it into a settings file on Windows."""
+    return str(path).replace("\\", "/")
+
+
 def tmp_path(r: "Run", *parts: str) -> str:
-    return str(r.tmp.joinpath(*parts))
+    return fwd(r.tmp.joinpath(*parts))
 
 
 def relayed(allow: list) -> bool:
@@ -579,7 +584,7 @@ scenario(Scenario(
     checks=[
         *per_role("crew-$r recorded", lambda r, role: json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))[f"crew-{role}"]["status"] == "active"),
         *per_role("crew-$r runs in the crew home",
-                  lambda r, role: json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))[f"crew-{role}"]["cwd"] == str(r.crew)),
+                  lambda r, role: json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))[f"crew-{role}"]["cwd"].replace("\\", "/") == fwd(r.crew)),
         ("orchestrator started first", lambda r: bg_calls(r)[0]["args"][2] == "crew-orchestrator"),
         ("stations load this plugin",
          lambda r: {arg_after(c["args"], "--plugin-dir") for c in bg_calls(r)} == {str((r.tmp / "kit").resolve())}),

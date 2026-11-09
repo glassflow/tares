@@ -270,6 +270,37 @@ ck("a folder claude does not trust: the error says to run claude there once, not
    err is not None and "has not trusted" in err and "could not start" not in err, str(err))
 err, seen, doc = launch_seen("seam-none", "crew-reviewer", "reviewer", "", "", "x", "some other failure")
 ck("a claude that names no session: 'could not start <station>'", err == "could not start crew-reviewer", str(err))
+# Windows paths in the settings file: backslashes become forward slashes, in the env and in the prose rules
+tmpw = SCRATCH / "win-paths"
+tmpw.mkdir()
+LS.make_crew(tmpw, {"token": FAKE_TOKEN})
+kitw = LS.make_kit(tmpw)
+os.environ["TARES_PLUGIN_DIR"] = str(kitw)
+winrepo = "C:\\Users\\Jane\\links"
+tw = LS.FakeTares({"projects": [{"id": "uc_links", "name": "Links App", "repos": [{"path": winrepo}, {"path": "D:\\other\\api"}]}]})
+tw.__enter__()
+os.environ["TARESD_URL"] = tw.url
+cw = TaresClient(CrewPaths.at(tmpw / "crew"), env=dict(os.environ))
+real_platform = sys.platform
+try:
+    cw.prime()
+    sys.platform = "win32"
+    try:
+        wfile = L.write_settings(cw, "links-app-build-m1", "builder", "crew-orchestrator", "Links App", winrepo)
+    finally:
+        sys.platform = real_platform
+    wdoc = json.loads(Path(wfile).read_text(encoding="utf-8"))
+finally:
+    cw.close()
+    tw.__exit__(None, None, None)
+    os.environ.pop("TARES_PLUGIN_DIR", None)
+wallow = " ".join(wdoc["autoMode"]["allow"])
+ck("Windows: FACTORY_REPO and FACTORY_WORKTREES use forward slashes",
+   wdoc["env"]["FACTORY_REPO"] == "C:/Users/Jane/links" and wdoc["env"]["FACTORY_WORKTREES"] == "C:/Users/Jane/links/.factory/worktrees",
+   str(wdoc["env"]))
+ck("Windows: the worktree rule lists the project's repos with forward slashes",
+   "C:/Users/Jane/links, D:/other/api" in wallow and "\\" not in wallow, wallow[:300])
+
 
 # ---------------------------------------------------------------------------------------------
 # Part 2: bash and Python side by side
