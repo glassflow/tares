@@ -2022,8 +2022,8 @@
       "what": "folders tidy may remove inside",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:Tidy.roots",
+      "ported": true,
       "note": ""
     },
     {
@@ -2033,8 +2033,8 @@
       "what": "is a path inside the tidy roots",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:Tidy.inside_roots",
+      "ported": true,
       "note": ""
     },
     {
@@ -2044,8 +2044,8 @@
       "what": "does a worktree hold unsaved work",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:worktree_has_work",
+      "ported": true,
       "note": ""
     },
     {
@@ -2055,8 +2055,8 @@
       "what": "tidy a worktree or scratch folder",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:cmd_tidy",
+      "ported": true,
       "note": ""
     },
     {
@@ -2972,8 +2972,8 @@
       "what": "remove a worktree or scratch folder",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:cmd_tidy",
+      "ported": true,
       "note": ""
     },
     {
@@ -4649,9 +4649,9 @@
       "what": "tidy",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios tidy_worktrees, tidy_links_scratch, tidy_refusals. The three \"may run factory tidy\" cases need settings (TR-957)."
     },
     {
       "name": "usage_test.sh",
