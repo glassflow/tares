@@ -15,6 +15,7 @@ import { signOut } from "./account";
 import { useEdition } from "./edition";
 import { SETTINGS_ENTRY, visibleEntries, type MenuEntry } from "./menus";
 import { hasPage } from "./routes";
+import { isSettingsPath, rememberPlace } from "./settingsBack";
 
 // The shell of the factory and sre editions: a header, a left menu, and the page in between.
 // The page keeps its own heading; the shell adds no breadcrumbs.
@@ -142,7 +143,10 @@ export default function EditionShell() {
   const narrow = useNarrow();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
-  const here = useLocation().pathname;
+  const { pathname: here, search } = useLocation();
+  // A factory cell's Settings has its own sidebar with a Back link, in place of the main menu.
+  const noMenu = edition === "factory" && isSettingsPath(here);
+  useEffect(() => { rememberPlace(here, search); }, [here, search]);
   const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to));
 
   // Same sources as the platform sidebar: the cloud's workspace link, the control plane's sign-out
@@ -177,7 +181,7 @@ export default function EditionShell() {
       <header data-testid="edition-header"
               className="sticky top-0 z-30 flex items-center justify-between gap-3 border-b border-border bg-card px-3 py-2.5 md:px-6 md:py-3.5">
         <div className="flex min-w-0 items-center gap-2.5">
-          {narrow && (
+          {narrow && !noMenu && (
             <Button ref={menuButton} variant="secondary" data-testid="menu-button" aria-expanded={drawer} aria-controls="edition-drawer"
                     className="mr-1.5 px-3!" onClick={() => setDrawer((d) => !d)}>
               Menu
@@ -227,7 +231,7 @@ export default function EditionShell() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {!narrow && (
+        {!narrow && !noMenu && (
           <nav aria-label="Main" data-testid="edition-menu"
                className="sticky top-[65px] flex h-[calc(100vh-65px)] w-[232px] shrink-0 flex-col gap-0.5 self-start overflow-y-auto border-r border-border px-3 py-5">
             <MenuLinks entries={entries} narrow={false} />

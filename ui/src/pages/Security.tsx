@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
 import { api, type AgentLimits, type TracingStatus } from "../api";
@@ -67,6 +67,10 @@ export const CLOUD_BACK: Record<string, { tab?: SettingsTab; text: string; kind:
   error: { kind: "error", text: "That did not work. Nothing was changed." },
   cancelled: { kind: "", text: "Cancelled. Nothing was changed." },
 };
+
+/** On the factory Settings page the sidebar already says where you are, so these panels drop their
+ *  introductions and take the sidebar's words for their headings. */
+export const TerseSettings = createContext(false);
 
 export default function Security({ initialTab }: { initialTab?: SettingsTab } = {}) {
   // The Advanced tab holds the building blocks on the factory and sre editions; a platform cell has no such tab.
@@ -209,7 +213,7 @@ function RepoNames({ repos, account }: { repos: string[]; account: string }) {
 // Slack on Tares Cloud (TR-364): the control plane runs the Slack install and pushes the bot
 // token, signing secret and team name here, so instead of two paste boxes this is one Connect /
 // Disconnect, both links to the control plane that come back to this tab.
-function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: string }) {
+export function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: string }) {
   const [st, setSt] = useState<Awaited<ReturnType<typeof api.slackTokenStatus>>>();
   const [err, setErr] = useState<string>();
   useEffect(() => {
@@ -259,7 +263,8 @@ function SlackCloudPanel({ cloud, connectUrl }: { cloud: Cloud; connectUrl: stri
 // On Tares Cloud (github_connect_url set) a "GitHub App (Tares Cloud)" row is a link the control
 // plane holds: picking repositories and disconnecting happen on its pages, which push the result
 // back here, so this console links to them instead of changing the local copy (TR-366, TR-372).
-function GithubPanel({ cloud }: { cloud: Cloud }) {
+export function GithubPanel({ cloud }: { cloud: Cloud }) {
+  const terse = useContext(TerseSettings);
   const connectUrl = cloud.health?.github_connect_url || undefined;
   const canConnect = cloud.isOwner !== false;   // unknown: show, the control plane checks
   const [creds, setCreds] = useState<GithubCredential[]>();
@@ -362,7 +367,7 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
   return (
     <div className="panel">
       <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h2 style={{ margin: 0 }}>GitHub</h2>
+        <h2 style={{ margin: 0 }}>{terse ? "Accounts" : "GitHub"}</h2>
         {!adding && (
           <div className="btnrow">
             {connectUrl
@@ -372,13 +377,13 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
           </div>
         )}
       </div>
-      <p className="help">
+      {!terse && (<p className="help">
         With the <strong>GitHub App</strong>, every event of the repositories it is installed on
         reaches Tares as it happens: pull requests, pushes, reviews, comments, issues, releases and
         CI runs. Agents act as the App. A <strong>personal token</strong> polls the repositories
         you add for commits and pull requests opened, merged or closed. Either one is picked by
         name on sources and MCP servers, and no token or key is ever shown again.
-      </p>
+      </p>)}
       {connectUrl && !canConnect && <OwnerOnly cloud={cloud} what="GitHub" />}
 
       {back.error && <div className="alert error">GitHub: {back.error}</div>}
@@ -603,30 +608,42 @@ function GithubPanel({ cloud }: { cloud: Cloud }) {
 // Access, people and keys share one load: who is asking (admin or not) and who is on the cell, so
 // a person added in People is there to pick when a key is made. Only an admin credential manages
 // people and keys (the daemon enforces it); the page just does not offer what it would refuse.
-function AccessTab() {
-  const pending = useEePending();
-  const eeFailed = useEeFailed();
-  const noAnswer = useLicenceNoAnswer();
+/** Who is asking and who is on the cell: what the people and key panels read. */
+export function useAccessData() {
   const [me, setMe] = useState<Whoami>();
   const [people, setPeople] = useState<Person[]>();
   const [err, setErr] = useState<string>();
-  const loadPeople = () => api.people().then((r) => { setPeople(r.people); setErr(undefined); })
+  const reload = () => api.people().then((r) => { setPeople(r.people); setErr(undefined); })
     .catch((e) => setErr(String((e as Error).message ?? e)));
   useEffect(() => {
     api.whoami().then(setMe).catch(() => undefined);
-    loadPeople();
+    reload();
   }, []);
-  const admin = !!me?.scopes.includes("admin");
+  return { me, people, err, reload, admin: !!me?.scopes.includes("admin") };
+}
+
+export function PeopleBlock({ access }: { access: ReturnType<typeof useAccessData> }) {
+  const pending = useEePending();
+  const eeFailed = useEeFailed();
+  const noAnswer = useLicenceNoAnswer();
+  const { me, people, err, reload, admin } = access;
+  return (
+    <Slot name="settings.people" people={people} admin={admin} err={err} onChanged={reload} me={me}
+          fallback={pending ? <div className="panel muted">loading…</div>
+                            : eeFailed ? <div className="panel muted" data-testid="ee-failed">{EE_FAILED_WORDS}</div>
+                            : noAnswer ? <div className="panel muted" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</div>
+                            : <YouPanel people={people} admin={admin} err={err} onChanged={reload} me={me} />} />
+  );
+}
+
+function AccessTab() {
+  const access = useAccessData();
   return (
     <>
-      <AccessPanel me={me} />
-      <Slot name="settings.people" people={people} admin={admin} err={err} onChanged={loadPeople} me={me}
-            fallback={pending ? <div className="panel muted">loading…</div>
-                              : eeFailed ? <div className="panel muted" data-testid="ee-failed">{EE_FAILED_WORDS}</div>
-                              : noAnswer ? <div className="panel muted" data-testid="licence-no-answer">{LICENCE_NO_ANSWER_WORDS}</div>
-                              : <YouPanel people={people} admin={admin} err={err} onChanged={loadPeople} me={me} />} />
+      <AccessPanel me={access.me} />
+      <PeopleBlock access={access} />
       <McpToolsPanel />
-      <ApiKeysPanel people={people ?? []} admin={admin} me={me?.person?.id} />
+      <ApiKeysPanel people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
     </>
   );
 }
@@ -710,12 +727,14 @@ function YouPanel({ people, admin, err: loadErr, onChanged, me }: {
 // Auth is set at launch: `tares up` is open; `tares up --auth` requires a login (a root token
 // printed to the terminal). This box states which mode you're in — there's no runtime toggle, so
 // it's status, not a control.
-function AccessPanel({ me }: { me?: Whoami }) {
+export function AccessPanel({ me }: { me?: Whoami }) {
+  const terse = useContext(TerseSettings);
   const [authRequired, setAuthRequired] = useState<boolean>();
   useEffect(() => {
     api.health().then((h) => setAuthRequired(h.auth_required)).catch(() => setAuthRequired(undefined));
   }, []);
 
+  if (terse && authRequired !== false) return null;   // only an open cell has something to say here
   return (
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Access</h2>
@@ -746,7 +765,7 @@ function AccessPanel({ me }: { me?: Whoami }) {
 
 // Whether agents that connect over MCP see the building-block tools (TR-757). On by default on a
 // platform cell; off on a factory or AI SRE cell until an admin turns it on. Only an admin sees it.
-function McpToolsPanel() {
+export function McpToolsPanel() {
   const [on, setOn] = useState<boolean>();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string>();
@@ -803,7 +822,8 @@ const PRESETS: { id: string; label: string; kind: ProviderKind; name: string; ba
   { id: "other", label: "Other OpenAI-compatible", kind: "openai_compatible", name: "", base_url: "", key: true },
 ];
 
-function ProvidersPanel() {
+export function ProvidersPanel() {
+  const terse = useContext(TerseSettings);
   const [data, setData] = useState<ModelProviders>();
   const [err, setErr] = useState<string>();
   const [msg, setMsg] = useState<string>();
@@ -873,16 +893,16 @@ function ProvidersPanel() {
   return (
     <div className="panel">
       <div className="btnrow" style={{ justifyContent: "space-between", alignItems: "baseline" }}>
-        <h2 style={{ margin: 0 }}>Model providers</h2>
+        <h2 style={{ margin: 0 }}>{terse ? "Providers" : "Model providers"}</h2>
         {!editing && <button className="primary" onClick={startAdd}>Add provider</button>}
       </div>
-      <p className="help">
+      {!terse && (<p className="help">
         What <strong>Tares agents</strong> and Ask run on. Add the providers you hold keys for; each
         agent picks a provider and a model, and the <strong>default</strong> is what Ask and any agent
         without its own choice use. Values saved here win over the daemon's environment
         (<code>ANTHROPIC_API_KEY</code>, <code>OPENAI_API_KEY</code>, <code>TARES_MODEL_PROVIDER</code>);
         credentials are never returned by the API and never included in a catalog export.
-      </p>
+      </p>)}
 
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
@@ -996,7 +1016,8 @@ function ProvidersPanel() {
 // by each agent's budget. Saved here it replaces the deployment's value; cleared, that comes back.
 // `agent` is who the person came for (a project's "Raise the limit", TR-670): the field is scrolled
 // into view and marked, since the one number applies to every agent without its own limit.
-function AgentLimitsPanel({ agent }: { agent?: string }) {
+export function AgentLimitsPanel({ agent }: { agent?: string }) {
+  const terse = useContext(TerseSettings);
   const [st, setSt] = useState<AgentLimits>();
   const field = useRef<HTMLLabelElement>(null);
   const [value, setValue] = useState("");
@@ -1028,12 +1049,12 @@ function AgentLimitsPanel({ agent }: { agent?: string }) {
   return (
     <div className="panel">
       <h2 style={{ marginTop: 0 }}>Agent limits</h2>
-      <p className="help" style={{ marginTop: 0 }}>
+      {!terse && (<p className="help" style={{ marginTop: 0 }}>
         How many times each Tares agent may run in 24 hours. When an agent reaches it, further
         firings are recorded as capped and cost nothing until the window moves on. An agent on a
         schedule every 10 minutes runs 144 times a day. Spend is bounded separately by each
         agent's budget.
-      </p>
+      </p>)}
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
       <div className="row2">
@@ -1137,7 +1158,8 @@ function EditionPanel() {
   );
 }
 
-function TracingPanel() {
+export function TracingPanel() {
+  const terse = useContext(TerseSettings);
   const [st, setSt] = useState<TracingStatus>();
   const [provider, setProvider] = useState<string>();
   const [endpoint, setEndpoint] = useState<string>();
@@ -1167,7 +1189,7 @@ function TracingPanel() {
     source === "console" ? "saved here" : source.startsWith("env:") ? `from ${source}` :
     source === "preset" ? "the provider's default" : source === "default" ? "default" : "";
 
-  if (!st) return <div className="panel"><h2 style={{ marginTop: 0 }}>Agent tracing</h2>
+  if (!st) return <div className="panel"><h2 style={{ marginTop: 0 }}>{terse ? "Observability" : "Agent tracing"}</h2>
     {err ? <div className="alert error">{err}</div> : <div className="muted">loading…</div>}</div>;
 
   const prov = provider ?? st.provider;
@@ -1176,13 +1198,13 @@ function TracingPanel() {
 
   return (
     <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Agent tracing</h2>
-      <p className="help" style={{ marginTop: 0 }}>
+      <h2 style={{ marginTop: 0 }}>{terse ? "Observability" : "Agent tracing"}</h2>
+      {!terse && (<p className="help" style={{ marginTop: 0 }}>
         Every agent run and every Ask turn becomes an OpenTelemetry trace: the run, each model
         call with its prompt, answer, tokens and cost, and each tool call. Traces go to the
         backend below; each agent is its own service, named <code>{st.instance}/&lt;agent&gt;</code>.
         The key and headers are never returned by the API.
-      </p>
+      </p>)}
 
       {err && <div className="alert error">{err}</div>}
       {msg && <p className="help">{msg}</p>}
@@ -1269,7 +1291,7 @@ function TracingPanel() {
 // One bot token per instance, behind every `slack://channel/<id>` trigger subscription. Same
 // contract as the Anthropic key — env wins, the value is never returned — so this panel is a
 // deliberate near-copy rather than a variation the reader has to diff in their head.
-function SlackTokenPanel() {
+export function SlackTokenPanel() {
   const [st, setSt] = useState<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1345,7 +1367,7 @@ function SlackTokenPanel() {
 // The other half of Slack: the signing secret that authenticates requests coming IN. Same
 // write-only contract again, and the same panel shape — but this one is the security boundary for
 // the only route that is public to the auth middleware, so the copy says what happens without it.
-function SlackSigningSecretPanel() {
+export function SlackSigningSecretPanel() {
   const [st, setSt] = useState<{ configured: boolean; source: string; stored: boolean; env_overrides: boolean }>();
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1425,7 +1447,8 @@ const SCOPE_HELP: Record<string, string> = {
   admin: "configure: sources, triggers, projects, credentials, keys (implies the rest)",
 };
 
-function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean; me?: string }) {
+export function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean; me?: string }) {
+  const terse = useContext(TerseSettings);
   const [keys, setKeys] = useState<ApiKey[]>();
   const [enforced, setEnforced] = useState(true);
   const [err, setErr] = useState<string>();
@@ -1446,10 +1469,10 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
   return (
     <div className="panel">
       <div className="pagehead" style={{ marginBottom: 6 }}>
-        <h2 style={{ margin: 0 }}>API keys</h2>
+        <h2 style={{ margin: 0 }}>{terse ? "Access keys" : "API keys"}</h2>
         <button className="primary" onClick={() => setCreating(true)}>Create key</button>
       </div>
-      <p className="help" style={{ marginTop: 0, marginBottom: 6 }}>
+      {!terse && (<><p className="help" style={{ marginTop: 0, marginBottom: 6 }}>
         Give each agent, script or service its own key, so you can revoke one without touching the others.
         What a key can do:
       </p>
@@ -1458,7 +1481,7 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
         <li><strong>ingest</strong>: send events in, for a script or service that pushes logs or webhooks</li>
         <li><strong>read + ingest</strong>: both, for the Claude Code plugin</li>
         <li><strong>admin</strong>: everything, settings included</li>
-      </ul>
+      </ul></>)}
       {!enforced && keys && (
         <div className="alert">
           No <code>TARES_AUTH_TOKEN</code> is set, so this instance is open and keys are not
@@ -1491,7 +1514,7 @@ function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean;
                 <td><Slot name="settings.keyPerson" k={k} people={people} admin={admin} onChanged={load}
                           onError={setErr}
                           fallback={k.person ? k.person.name : <span className="help">No person</span>} /></td>
-                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]}>{s}</span>)}
+                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]} data-words-exempt>{s}</span>)}
                   {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
                 <td className="mono">{k.prefix}…</td>
                 <td className="help"><TimeAgo ts={k.created_at} /></td>
