@@ -42,6 +42,7 @@ const ck = (label, cond, detail = "") => {
 
 // Licensed daemons (tests/licensed.cjs): the add forms are the licence's, so they show only on a cell that has
 // one; the 402 here is the licence running out while the page is open.
+process.setMaxListeners(30);   // one exit listener per cell started
 async function startCell(port, edition, licence = "valid", cloud = false) {
   const env = cloud ? { TARES_WORKSPACE_API_URL: `http://127.0.0.1:${port}/api/ws` } : undefined;
   const d = await startDaemon({ port, edition, licence, env });
@@ -125,7 +126,7 @@ async function fakeHome(page) {
 }
 
 (async () => {
-  let platform, factory, cloudBare, cloudLicensed, selfFactoryNone, selfPlatNone, cloudExpired, cloudPlatNone, cloudPlatExpired;
+  let platform, factory, cloudBare, cloudLicensed, selfFactoryNone, selfPlatNone, cloudExpired, cloudPlatNone, cloudPlatExpired, selfSreNone;
   try {
     platform = await startCell(PORT, "platform");
     factory = await startCell(PORT + 2, "factory");   // each takes its port and the next (MCP)
@@ -136,6 +137,7 @@ async function fakeHome(page) {
     cloudExpired = await startCell(PORT + 12, "factory", "expired", true);
     cloudPlatNone = await startCell(PORT + 14, "platform", "none", true);
     cloudPlatExpired = await startCell(PORT + 16, "platform", "expired", true);
+    selfSreNone = await startCell(PORT + 18, "sre", "none");
   } catch (e) { console.log("FAIL daemons did not start: " + e.message); process.exit(1); }
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
   try {
@@ -384,6 +386,23 @@ async function fakeHome(page) {
         ck(`${label}, after it landed: the link`, (await p.locator(`a[href="${URL_ENTERPRISE}"]`).count()) >= 1);
         await p.context().close();
       }
+      // the Agree row on Home takes its words when /health lands (#509 F8): a self-hosted cell with no licence says
+      // "That needs an enterprise licence." for an Agree clicked right after /health answered, not the plain sentence
+      {
+        const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeHome(p); await slowHealth(p, 3500);
+        // the console asks /health twice on a load, each answer held back 3.5 s: wait for both
+        let answers = 0; p.on("response", (r) => { if (HEALTH.test(r.url())) answers++; });
+        await p.goto(`${selfFactoryNone.base}/`, { waitUntil: "commit" });
+        await p.getByTestId("waiting-row").first().waitFor({ timeout: 15000 });
+        for (let i = 0; i < 200 && answers < 2; i++) await p.waitForTimeout(100);
+        await p.waitForTimeout(800);   // let the page take the answer in
+        await p.getByRole("button", { name: "Agree" }).click();
+        const err = p.getByTestId("row-error"); await err.waitFor({ timeout: 10000 });
+        const words = (await err.innerText()).trim();
+        ck("self-hosted, slow /health, Agree right after it landed: the licence words", words === "That needs an enterprise licence.", words);
+        await p.context().close();
+      }
       // /health fails: the cell is not known to be self-hosted, so the words stay plain on either kind of cell
       for (const [label, base, route, ready, what] of [
         ["cloud, failing /health, People add slot", cloudBare.base, "/people", (p) => p.getByTestId("people-list"), "Adding people"],
@@ -396,7 +415,33 @@ async function fakeHome(page) {
         await ready(p).waitFor({ timeout: 15000 });
         await samples(p, label, [500, 3000], never);
         const lines = await p.getByTestId("licence-needed").evaluateAll((els) => els.map((e) => e.textContent));
-        ck(`${label}: when a line shows it is the plain one`, lines.every((l) => l === `${what} is not available on this workspace right now.`), JSON.stringify(lines));
+        // exactly one line, and it is the plain one: an empty list would pass a vacuous "every"
+        ck(`${label}: the one line is the plain one`, lines.length === 1 && lines[0] === `${what} is not available on this workspace right now.`, JSON.stringify(lines));
+        await p.context().close();
+      }
+      // /health fails (#509 F5): not known to be self-hosted, so no licence tab, row, link or banner shows either
+      // (a licence that ended on a cell /health never described must not put its words on any screen)
+      for (const [label, base, route] of [
+        ["failing /health, ended licence, banner on Home", cloudPlatExpired.base, "/"],
+        ["failing /health, ended licence, Settings licence tab asked for", cloudPlatExpired.base, "/settings?tab=licence"],
+        ["failing /health, self-hosted platform cell, Settings Access", selfPlatNone.base, "/settings?tab=access"],
+        ["failing /health, self-hosted platform cell, licence tab asked for", selfPlatNone.base, "/settings?tab=licence"],
+        ["failing /health, self-hosted factory cell, Settings", selfFactoryNone.base, "/settings"],
+        ["failing /health, self-hosted sre cell, Settings", selfSreNone.base, "/settings"],
+      ]) {
+        const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+        await fakeCloud(p, { status: 200, body: {} });
+        await p.route(HEALTH, (r) => r.abort());
+        await p.goto(base + route, { waitUntil: "commit" });
+        await p.waitForLoadState("load"); await p.waitForTimeout(3500);
+        const hasBody = (await p.locator("body").innerText()).trim().length > 40;
+        const tabs = await p.locator(".pnav .pnav-label", { hasText: "Enterprise licence" }).count();
+        const found = { banner: await p.getByTestId("licence-banner").count(), row: await p.getByTestId("row-licence").count(),
+                        linkRow: await p.getByTestId("licence-link-row").count(), tab: tabs,
+                        docsLinks: await p.locator('a[href*="docs.glassflow.ai/tares/enterprise"]').count() };
+        ck(`${label}: the page rendered`, hasBody);
+        ck(`${label}: no licence banner, row, link or tab`, Object.values(found).every((n) => n === 0), JSON.stringify(found));
+        ck(`${label}: the page names no licence`, !SAY.test(await p.locator("body").innerText()));
         await p.context().close();
       }
       // a refusal answered BEFORE /health lands (a licence that ended, Add person at once): nothing says licence at

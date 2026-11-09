@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, Navigate, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { useCloud } from "../../cloud";
+import { licenceWordsOn, useCloud } from "../../cloud";
 import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
@@ -248,7 +248,7 @@ export function FactorySettingsView({ page, problem, onCrew, onGrant, onSwitch }
           <Row title="People" text="Who is on this cell, and adding a teammate." data-testid="row-team">
             <Button asChild variant="secondary"><Link to="/people">Open People</Link></Button>
           </Row>
-          {cloud.ready && !cloud.hosted && <Row title="Enterprise licence" text="The licence for a team: see it, paste a key or remove one." data-testid="row-licence">
+          {licenceWordsOn() && <Row title="Enterprise licence" text="The licence for a team: see it, paste a key or remove one." data-testid="row-licence">
             <Button asChild variant="secondary"><Link to="/settings/advanced?tab=licence">Open licence</Link></Button>
           </Row>}
         </Card>
