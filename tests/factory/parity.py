@@ -383,6 +383,100 @@ scenario(Scenario(
 
 
 # ---------------------------------------------------------------------------------------------
+# The views (TR-957): roster, status, attach and logs read the crew's stations and the sessions the fake
+# Claude Code lists. The seeds are written straight into the throwaway crew, so the scenarios run on Windows.
+# crewname_test.sh (the roster names its crew) and crew_test.sh are the bash suites they come from.
+
+def _row(state: str, sid: str, name: str, **extra) -> dict:
+    live = state != "stopped"
+    row = {"id": sid, "name": name, "cwd": "/x", "state": {"working": "working", "idle": "working", "waiting": "blocked",
+                                                             "stopped": "stopped"}[state]}
+    if state in ("working", "idle"):
+        row["status"] = "busy" if state == "working" else "idle"
+    if state == "waiting":
+        row["status"] = "waiting"
+    if live:
+        row["pid"] = 40000 + int(sid[-4:], 16)
+    row.update(extra)
+    return row
+
+
+def _setup_views(tmp: Path, env: dict) -> None:
+    crew = tmp / "crew"
+    crew.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", crew / "crew.json")
+    base = {"status": "active", "repo": "", "cwd": "", "model": "opus", "effort": "high"}
+    stations = {
+        "crew-orchestrator": {**base, "role": "orchestrator", "project": "", "id": "aaaa0001"},
+        "crew-reviewer": {**base, "role": "reviewer", "project": "", "id": "bbbb0002"},
+        "shop-build-m1": {**base, "role": "builder", "project": "shop", "id": "cccc0003"},
+        "shop-build-m2": {**base, "role": "builder", "project": "shop", "id": "dddd0004"},
+        "old-helper": {**base, "role": "helper", "project": "", "id": "eeee0005", "status": "stopped"},
+    }
+    (crew / "stations.json").write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    agents = [_row("working", "aaaa0001", "crew-orchestrator", version="2.1.310"),
+              _row("idle", "bbbb0002", "crew-reviewer", version="2.1.310"),
+              _row("waiting", "cccc0003", "shop-build-m1", version="2.1.100")]  # shop-build-m2: no session
+    state = tmp / "claude"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+    (state / "version").write_text("2.1.310\n", encoding="utf-8")
+
+
+def _attach_calls(r: Run) -> list:
+    return [c["args"] for c in r.calls() if c["args"][:1] in (["attach"], ["logs"])]
+
+
+scenario(Scenario(
+    name="views_roster",
+    suite="crewname",
+    about="roster names the crew, lists the active stations with their turn and Claude Code, and flags an older one",
+    setup=_setup_views,
+    steps=[Step(["roster"], env=NO_TARES), Step(["roster"], env={**NO_TARES, "FACTORY_CREW_NAME": "ops"})],
+    checks=[
+        ("default crew: roster names it", lambda r: r.out(0).splitlines()[0] == "crew: crew (orchestrator: crew-orchestrator)"),
+        ("roster lists a working orchestrator", lambda r: "crew-orchestrator\torchestrator\t\tworking\t2.1.310" in r.out(0)),
+        ("a station with no session is gone", lambda r: "shop-build-m2\tbuilder\tshop\tgone\t" in r.out(0)),
+        ("a stopped station is not listed", lambda r: "old-helper" not in r.out(0)),
+        ("an older Claude Code is flagged", lambda r: "blocked\t2.1.100 (older than 2.1.310)" in r.out(0)),
+        ("FACTORY_CREW_NAME=ops: roster names ops-orchestrator",
+         lambda r: r.out(1).splitlines()[0] == "crew: ops (orchestrator: ops-orchestrator)"),
+    ],
+    covers=["default crew: roster names it"],
+))
+
+scenario(Scenario(
+    name="views_status",
+    suite="crew",
+    about="status without a Tares says so plainly; the desk too",
+    setup=_setup_views,
+    steps=[Step(["status"], env=NO_TARES), Step(["desk"], env=NO_TARES), Step(["crew", "status"], env=NO_TARES)],
+    checks=[
+        ("status without Tares stops plainly", lambda r: r.code(0) == 1 and "no Tares answers at http://127.0.0.1:9" in r.out(0)),
+        ("desk without Tares stops plainly", lambda r: r.code(1) == 1 and "no Tares answers at http://127.0.0.1:9" in r.out(1)),
+        ("crew status is status", lambda r: r.code(2) == 1 and r.out(2) == r.out(0)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="views_attach_logs",
+    suite="crew",
+    about="attach and logs open a station's session through Claude Code; an unknown station or none is refused",
+    setup=_setup_views,
+    steps=[Step(["attach", "reviewer"], env=NO_TARES), Step(["logs", "shop-build-m1"], env=NO_TARES),
+           Step(["attach", "nobody"], env=NO_TARES), Step(["crew", "logs", "nobody"], env=NO_TARES)],
+    checks=[
+        ("attach reviewer opens its session", lambda r: ["attach", "bbbb0002"] in _attach_calls(r)),
+        ("logs shop-build-m1 follows its session", lambda r: ["logs", "cccc0003"] in _attach_calls(r)),
+        ("an unknown station is refused", lambda r: r.code(2) == 1 and "unknown station nobody" in r.out(2)),
+        ("crew logs refuses it the same way", lambda r: r.code(3) == 1 and "unknown station nobody" in r.out(3)),
+    ],
+    covers=[],
+))
+
+
+# ---------------------------------------------------------------------------------------------
 # Normalising
 
 ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")

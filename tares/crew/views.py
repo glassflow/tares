@@ -271,10 +271,10 @@ def regranted(paths: CrewPaths, client: TaresClient, station: str) -> bool:
 _THRASH = re.compile(r'"<synthetic>".*Autocompact is thrashing')
 
 
-def stuck_on_context(paths: CrewPaths, binary: str, station: str) -> bool:
+def stuck_on_context(paths: CrewPaths, binary: str, station: str, agents=None) -> bool:
     """True when Claude Code's thrashing notice is the last thing said and nothing new runs."""
     try:
-        transcript = claude.transcript_of(station, binary, paths)
+        transcript = claude.transcript_of(station, binary, paths, agents)
     except (CrewError, OSError):
         return False
     if not transcript:
@@ -395,11 +395,14 @@ def _flag(flags, name: str) -> str:
     return ""
 
 
-def adopt_unrecorded(paths: CrewPaths, client: TaresClient, live) -> None:
+def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> None:
     """Record a live station session stations.json does not list (a spawn whose output could not be
-    read), so status, roster and the duplicate check see it. `live` is the session list, None when it
-    could not be read (then nothing is recorded)."""
-    if not paths.crew_cfg.is_file() or live is None:
+    read), so status, roster and the duplicate check see it. It asks Claude Code for the sessions itself,
+    as bash does (the command asks again afterwards); when they cannot be read nothing is recorded."""
+    if not paths.crew_cfg.is_file():
+        return
+    live = _sessions_or_none(binary)
+    if live is None:
         return
     crew = state.crew_name(paths)
     pattern = re.compile("^" + re.escape(crew) + "-|-build-")
@@ -454,11 +457,11 @@ def cmd_status(argv: list, env: dict) -> int:
     state.require_crew(paths)
     out = sys.stdout
     binary = claude.claude_bin(env)
-    agents = _sessions_or_none(binary)
-    adopt_unrecorded(paths, client, agents)
+    adopt_unrecorded(paths, client, binary)
     if not paths.stations.is_file():
         _say(f"no stations yet; run {ME} crew up")
         return 0
+    agents = _sessions_or_none(binary)
     if agents is None:
         raise CrewError(claude.UNREAD)
     # Stations keep the Tares they were started with. After `tares login` to another workspace,
@@ -492,7 +495,7 @@ def cmd_status(argv: list, env: dict) -> int:
         needs = _field(job, "needs")
         if needs:
             detail = f"NEEDS: {needs}"
-        if stuck_on_context(paths, binary, s):
+        if stuck_on_context(paths, binary, s, agents):
             detail = f"STUCK on autocompact: {ME} crew watch starts it fresh"
         if (st and state.stations_get(s, "sessionId", paths=paths) and not paths.done_file(s).exists()
                 and regranted(paths, client, s)):
@@ -504,7 +507,7 @@ def cmd_status(argv: list, env: dict) -> int:
     # two live sessions under one station name
     pattern = re.compile("^" + re.escape(state.crew_name(paths)) + "-|-build-")
     groups: dict = {}
-    for r in agents:
+    for r in _sessions_or_none(binary) or []:  # bash asks again here
         name = r.get("name")
         name = name if isinstance(name, str) else ""
         if pattern.search(name) and not claude.gone(r):
@@ -589,11 +592,11 @@ def cmd_roster(argv: list, env: dict) -> int:
     sys.stdout.write(f"crew: {state.crew_name(paths)} (orchestrator: {state.crew_orchestrator(paths)})\n")
     state.require_crew(paths)
     binary = claude.claude_bin(env)
-    agents = _sessions_or_none(binary)
-    adopt_unrecorded(paths, client, agents)
+    adopt_unrecorded(paths, client, binary)
     if not paths.stations.is_file():
         print("no stations")
         return 0
+    agents = _sessions_or_none(binary)
     if agents is None:
         raise CrewError(claude.UNREAD)
     stations = state.stations_load(paths)

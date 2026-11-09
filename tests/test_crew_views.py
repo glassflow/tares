@@ -155,6 +155,11 @@ def files(env):
     return out
 
 
+def _claude_calls(env):
+    f = Path(env["FAKE_CLAUDE_STATE"]) / "calls.jsonl"
+    return [json.loads(x)["args"] for x in f.read_text().splitlines() if x.strip()] if f.exists() else []
+
+
 def both(label, argv, setup, merged=False, extra_env=None, want=None, expect_rc=None):
     """The same command in two identical worlds; the engines must agree. `want` is text that must be in the
     output, `expect_rc` the exit code both must give."""
@@ -170,6 +175,8 @@ def both(label, argv, setup, merged=False, extra_env=None, want=None, expect_rc=
     fp = {k: norm(v, tp) for k, v in files(ep).items()}
     ck(f"{label}: leaves the same files", fb == fp, f"\n    only bash: {sorted(set(fb) - set(fp))} only python: {sorted(set(fp) - set(fb))}"
        f" differ: {[k for k in fb if k in fp and fb[k] != fp[k]]}")
+    cb, cp = _claude_calls(eb), _claude_calls(ep)
+    ck(f"{label}: asks Claude Code the same things in the same order", cb == cp, f"\n    bash:   {cb}\n    python: {cp}")
     if want is not None:
         ck(f"{label}: says {want!r}", want in pn[1] + pn[2], pn)
     if expect_rc is not None:
