@@ -1,0 +1,1 @@
+{"schema_version":1,"projects":[{"id":"p1","name":"Links App","tickets_done":1,"tickets_total":2,"milestone":{"name":"Links","done":1,"total":2},"repos":[{"name":"acme/links","path":"/work/links"}],"builders":1},{"id":"p2","name":"shop","tickets_done":0,"tickets_total":0,"milestone":null,"repos":[{"path":"/work/shop"}],"builders":0}]}

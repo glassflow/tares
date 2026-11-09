@@ -200,8 +200,9 @@ def pretty(doc):
 # ---------- schemas themselves ----------
 
 print("== the schemas")
-ck("a schema for status, roster, desk, events, settings and error",
-   {"status", "roster", "desk", "events", "settings", "error"} <= set(VALIDATORS), sorted(VALIDATORS))
+ck("a schema for every --json output and for the error shape",
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "error"}
+   <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
    all(v.schema["properties"]["schema_version"] == {"const": version} for n, v in VALIDATORS.items() if n != "settings"))
@@ -210,7 +211,12 @@ ck("the README documents the exit codes", all(re.search(rf"^\|\s*{c}\s*\|", read
 ck("a document that is not the shape fails",
    problems("roster", {"schema_version": 1, "crew": "x", "orchestrator": "y"}) != []
    and problems("error", {"schema_version": 1, "error": {"code": "Bad Code", "message": "m"}}) != []
-   and problems("events", {"schema_version": 1, "cursor": "abc", "event": {}}) != [])
+   and problems("events", {"schema_version": 1, "cursor": "abc", "event": {}}) != []
+   and problems("doctor", {"schema_version": 1, "ok": True, "checks": [{"id": "x", "ok": True, "level": "bad", "message": "m", "fix": ""}]}) != []
+   and problems("doctor", [{"id": "x", "ok": True, "message": "m", "fix": "", "level": "ok"}]) != []
+   and problems("projects", {"schema_version": 1, "projects": [{"id": "p", "name": "n"}]}) != []
+   and problems("setup_questions", {"schema_version": 1, "questions": [{"id": "q", "kind": "number"}]}) != []
+   and problems("setup_answers", {"schema_version": 1, "saved": "crew_name", "grants": 1}) != [])
 
 if NO_FAKE_CLAUDE:
     print("skip: the commands below run a fake Claude Code, a bash script, and bash is not here")
@@ -737,7 +743,8 @@ finally:
 # ---------- the samples ----------
 
 print("== the samples")
-for name in ("status.json", "roster.json", "desk.json", "settings.json", "error.json"):
+for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
+             "setup_questions.json", "setup_answers.json", "error.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))

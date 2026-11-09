@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/projects.json",
+  "title": "tares factory projects --json: every project handed to the crew",
+  "type": "object",
+  "required": ["schema_version", "projects"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "projects": {
+      "description": "Empty when no project is handed to the crew. A list Tares refuses to give is an error, never an empty list.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "tickets_done", "tickets_total", "milestone", "repos", "builders"],
+        "properties": {
+          "id": {"type": "string"},
+          "name": {"type": "string"},
+          "tickets_done": {"type": "integer", "minimum": 0},
+          "tickets_total": {"type": "integer", "minimum": 0},
+          "milestone": {
+            "description": "The milestone the project is on; null when it has none.",
+            "oneOf": [
+              {"type": "null"},
+              {
+                "type": "object",
+                "required": ["name"],
+                "properties": {"name": {"type": "string"}, "done": {"type": "integer", "minimum": 0}, "total": {"type": "integer", "minimum": 0}},
+                "additionalProperties": true
+              }
+            ]
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path"],
+              "properties": {"path": {"description": "Where the repo is on this machine.", "type": "string"}, "name": {"description": "owner/name on GitHub, when it has one.", "type": "string"}},
+              "additionalProperties": true
+            }
+          },
+          "builders": {"description": "How many active builder stations the crew has on the project.", "type": "integer", "minimum": 0}
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}
