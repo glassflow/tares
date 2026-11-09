@@ -117,15 +117,16 @@ ck("memory has no project override", eff("memory", "p1") == eff("memory"))
 
 # ── carried ────────────────────────────────────────────────────────────────────
 real_carried = resolve.carried
-ck("carried returns None for now", real_carried("tickets", "p1") is None)
+ck("carried finds nothing for a project with no links (tests/test_integrations_carry.py covers the rest)",
+   real_carried("tickets", "p1", s) is None and real_carried("monitoring", None, s) is None)
 s.clear_project_choice("p1", "tickets")
-resolve.carried = lambda slot, uid: ("faketix", {"url": "linked"}) if slot == "review" else None
+resolve.carried = lambda slot, uid, store=None: ("faketix", {"url": "linked"}) if slot == "review" else None
 registry._loaded[("review", "faketix")] = FakeTickets   # the class is only looked up by slot and name
 e = eff("review", "p1")
 ck("carried is used when nothing is chosen", e == Effective("faketix", {"url": "linked"}, "carried", ""), e)
 s.set_choice("review", "faketix", {"url": "chosen"}, "a")
 ck("the factory beats carried", eff("review", "p1").source == "factory")
-resolve.carried = lambda slot, uid: ("gone", {}) if slot == "ci" else None
+resolve.carried = lambda slot, uid, store=None: ("gone", {}) if slot == "ci" else None
 ck("a carried name that is not installed: default, not installed",
    eff("ci", "p1") == Effective("local", {}, "default", "not installed"), eff("ci", "p1"))
 resolve.carried = real_carried
