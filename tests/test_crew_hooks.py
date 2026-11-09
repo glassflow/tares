@@ -51,6 +51,11 @@ fake = T / "fake plugin"                      # a space in the path, as on a Win
     "print(__name__, 'argv=' + repr(sys.argv[1:]), 'stdin=' + data.strip())\n"
     "sys.stderr.write('to stderr\\n')\n"
     "sys.exit(int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else 0)\n", encoding="utf-8", newline="\n")
+(fake / "scripts" / "challenger.py").write_text(
+    "import sys\n"
+    "if sys.argv[1:2] == ['boom']:\n"
+    "    sys.exit('the message of a failing hook')\n"
+    "print('challenger argv=' + repr(sys.argv[1:]))\n", encoding="utf-8", newline="\n")
 (fake / "hooks" / "guard.sh").write_text("#!/usr/bin/env bash\ncat\necho\necho \"args=$*\"\nexit 3\n", encoding="utf-8", newline="\n")
 
 print("a Python hook")
@@ -70,6 +75,22 @@ ck("a plugin folder without the script: exit 1 and a message naming it",
    r.returncode == 1 and "no script" in r.stderr and "nowhere" in r.stderr, (r.returncode, r.stderr))
 r = tares(["hook", "ship", "--plugin-root"])
 ck("--plugin-root without a folder: exit 2", r.returncode == 2 and "needs a folder" in r.stderr, (r.returncode, r.stderr))
+
+other = T / "other plugin"                    # a second plugin folder, to tell the two variables apart
+(other / "scripts").mkdir(parents=True)
+(other / "scripts" / "ship.py").write_text("print('from the other plugin')\n", encoding="utf-8", newline="\n")
+r = tares(["hook", "ship"], extra={"CLAUDE_PLUGIN_ROOT": str(fake), "TARES_PLUGIN_DIR": str(other)})
+ck("CLAUDE_PLUGIN_ROOT wins over TARES_PLUGIN_DIR", r.returncode == 0 and "__main__" in r.stdout and "other plugin" not in r.stdout, (r.returncode, r.stdout))
+r = tares(["hook", "ship"], extra={"TARES_PLUGIN_DIR": str(other)})
+ck("TARES_PLUGIN_DIR is used when CLAUDE_PLUGIN_ROOT is not set", r.returncode == 0 and r.stdout.strip() == "from the other plugin", (r.returncode, r.stdout, r.stderr))
+r = tares(["hook", "ship", "--plugin-root", str(fake)], extra={"CLAUDE_PLUGIN_ROOT": str(other)})
+ck("--plugin-root wins over both variables", r.returncode == 0 and "__main__" in r.stdout, (r.returncode, r.stdout))
+r = tares(["hook", "challenger", "--plugin-root", str(fake), "boom"])
+ck("a script that exits with a message: the message is printed and the exit code is 1, not 0",
+   r.returncode == 1 and "the message of a failing hook" in r.stderr, (r.returncode, r.stdout, r.stderr))
+r = tares(["hook", "challenger", "--plugin-root", str(fake), "waive", "3", "it does not apply here"])
+ck("`tares hook challenger waive <n> <why>` hands all three words to the script, as challenger-waive.md runs it",
+   r.returncode == 0 and "argv=['waive', '3', 'it does not apply here']" in r.stdout, (r.returncode, r.stdout, r.stderr))
 
 print("the real shipper")
 payload = json.dumps({"hook_event_name": "Notification", "session_id": "s-hooks-1", "message": "hello"})
@@ -95,7 +116,7 @@ if shutil.which("bash"):
         r = tares(["hook", "guard", "--plugin-root", str(ROOT / "claude-plugin")], stdin=msg,
                   extra={"FACTORY_ROLE": role, "FACTORY_STATION": "test", "FACTORY_HOME": "/nonexistent"})
         got = "deny" if '"deny"' in r.stdout else "allow"
-        ck(f"the real guard through `tares hook guard`: a {role} merging is {"allowed" if want == "allow" else "refused"}", got == want and r.returncode == 0, (r.returncode, r.stdout, r.stderr[-200:]))
+        ck(f"the real guard through `tares hook guard`: a {role} merging is {'allowed' if want == 'allow' else 'refused'}", got == want and r.returncode == 0, (r.returncode, r.stdout, r.stderr[-200:]))
 else:
     print("  skip: bash is not on PATH")
 
