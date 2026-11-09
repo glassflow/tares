@@ -155,9 +155,6 @@ ck("a new cmux line in the bash exits 1 and is named", code == 1 and "zz_new_cmu
 for section, label in (("env_vars", "env var"), ("state_files", "state file"), ("cmux_touchpoints", "cmux touchpoint"),
                        ("hook_entries", "hook entry")):
     data = load()
-    if not data[section]:           # hook_entries is empty once no hooks.json command runs python3 or bash (TR-1068)
-        print("  skip a deleted %s row: the ledger has none" % label)
-        continue
     # an external state file is only seen through its row, so take a crew_home one; the rest: the last row
     pick = [r for r in data[section] if r.get("scope") != "external"] or data[section]
     gone = pick[-1]["name"]
@@ -176,9 +173,6 @@ for name in ("<repo>/.factory/worktrees", "<repo>/.git/info/exclude"):
 # a row listed twice
 for section in ("functions", "env_vars", "state_files", "hook_entries", "dispatcher_cases"):
     data = load()
-    if not data[section]:
-        print("  skip a duplicate %s row: the ledger has none" % section)
-        continue
     dup = data[section][0]["name"]
     data[section].append(dict(data[section][0]))
     save(led, data)

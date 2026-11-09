@@ -1,9 +1,9 @@
-"""Every hook of the Claude Code plugin starts through `tares hook <name>` (TR-1068).
+"""`tares hook <name>` covers every script hooks.json runs today (TR-1068).
 
-Checks claude-plugin/hooks/hooks.json: every command string starts with `tares hook `, none is a
-bare python3, python or bash, none carries an args list, every hook name is one `tares hook` knows,
-and `tares hook <name> --dry-run` prints the script it would run, which exists. Also that the
-/tares:challenger-waive command no longer calls python3.
+hooks.json itself still runs python3 and bash directly until TR-1103 switches it, after a tares release
+has `tares hook` (A15). This test proves the switch is possible: each script a hooks.json command
+runs is one `tares hook` knows, `tares hook <name> --dry-run` prints that script, and it exists.
+The check that hooks.json uses `tares hook` moves to TR-1103.
 
 Run: python tests/test_hooks_json.py
 """
@@ -44,20 +44,13 @@ hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8")
 entries = [(ev, e.get("matcher", "*"), h) for ev, es in hooks.items() for e in es for h in e["hooks"]]
 
 print("hooks.json")
-cmds = [h["command"] for _, _, h in entries]
-ck("there are 13 hook commands", len(cmds) == 13, len(cmds))
-bad = [c for c in cmds if not c.startswith("tares hook ")]
-ck("every command starts with `tares hook `", not bad, bad)
-ck("no command names python, python3, py or bash first",
-   not [c for c in cmds if re.match(r"(python3?|py|bash|sh)\b", c)], cmds)
-ck("no hook carries an args list (the command is the whole line)", not [h for _, _, h in entries if "args" in h],
-   [h for _, _, h in entries if "args" in h])
-ck("no command needs ${CLAUDE_PLUGIN_ROOT} quoted (the hook finds the plugin itself)",
-   not [c for c in cmds if "CLAUDE_PLUGIN_ROOT" in c], cmds)
+text = json.dumps(hooks)
+ck("there are 13 hook commands", len(entries) == 13, len(entries))
+scripts = sorted(set(re.findall(r"(?:scripts|hooks)/([\w-]+\.(?:py|sh))", text)))
+ck("hooks.json runs ship.py, challenger.py, guard.sh and session-start.sh", scripts == ["challenger.py", "guard.sh", "session-start.sh", "ship.py"], scripts)
 
 print("tares hook --dry-run")
-names = sorted({c.split()[2] for c in cmds})
-ck("the plugin uses ship, challenger, guard and session-start", names == ["challenger", "guard", "session-start", "ship"], names)
+names = [Path(x).stem for x in scripts]
 for name in names:
     r = tares(["hook", name, "--dry-run"])
     path = Path(r.stdout.strip())
@@ -71,10 +64,6 @@ ck("an unknown name exits 2 and lists the known ones", r.returncode == 2 and "un
 r = tares(["hook", "ship", "--dry-run"], {"CLAUDE_PLUGIN_ROOT": HOME + "/elsewhere"})
 ck("CLAUDE_PLUGIN_ROOT picks the plugin (Claude Code sets it for its hooks)",
    r.stdout.strip() == (HOME + "/elsewhere/scripts/ship.py").replace("\\", "/") and r.returncode == 1, (r.returncode, r.stdout))
-
-print("the waive command")
-waive = (plugin / "commands" / "challenger-waive.md").read_text(encoding="utf-8")
-ck("/tares:challenger-waive runs `tares hook challenger waive`", "tares hook challenger waive $ARGUMENTS" in waive and "python3" not in waive)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

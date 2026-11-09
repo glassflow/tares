@@ -3302,12 +3302,12 @@
       "kind": "env",
       "reads": true,
       "writes": false,
-      "what": "set by Claude Code for its hooks; tares hook reads it to find the plugin",
+      "what": "set by Claude Code; hooks.json commands expand it; tares hook reads it to find the plugin",
       "ticket": "TR-1068",
       "dropped": false,
       "python": "tares.crew.hooks:plugin_root",
       "ported": true,
-      "note": "hooks.json no longer expands it: the commands are tares hook <name>."
+      "note": "hooks.json still expands it until TR-1103 switches the commands to tares hook <name>."
     },
     {
       "name": "FACTORY_ASK_POLL",
@@ -4762,5 +4762,136 @@
       "note": "The settings check belongs to TR-953: the Python write_settings must not set that variable."
     }
   ],
-  "hook_entries": []
+  "hook_entries": [
+    {
+      "name": "SessionStart: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "SessionStart: *: bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-972",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Becomes tares hook session-start (TR-1068 wiring)."
+    },
+    {
+      "name": "PreToolUse: Bash|mcp__.*: bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-971",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Becomes tares hook guard (TR-1068 wiring)."
+    },
+    {
+      "name": "PreToolUse: AskUserQuestion: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "UserPromptSubmit: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "PostToolUse: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "PostToolUse: Bash|ExitPlanMode: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "Stop: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "Stop: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "SubagentStop: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "PermissionRequest: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "Notification: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    },
+    {
+      "name": "SessionEnd: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
+      "kind": "hook",
+      "what": "hooks.json entry",
+      "ticket": "TR-1068",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "python3 is not on PATH on Windows; start through tares hook."
+    }
+  ]
 }
