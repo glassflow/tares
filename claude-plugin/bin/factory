@@ -1038,21 +1038,10 @@ setup_crew_name() {
   store_crew_name "$n"
 }
 
-cmd_crew_up() {
-  local roles="" watch=1
-  while [ $# -gt 0 ]; do
-    case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
-  done
-  require_mcp
-  local clash; clash=$(installed_tares)
-  [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
-  ensure_crew_home
-  ensure_home_trusted
-  keep_token
-  setup_crew_name
-  ensure_settings
-  prime
-  lsp_offer
+# The second half of crew up: start each role's station, the orchestrator first. Also the internal command
+# `_start-stations <role...>` the Python crew up calls until launch is ported (TR-953).
+start_stations() {
+  local roles="$*"
   [ -n "${roles// /}" ] || roles=$(crew_roles)
   # Orchestrator first so the others can check in with it.
   local ordered="" r
@@ -1068,6 +1057,25 @@ cmd_crew_up() {
     launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
     [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
   done
+  return 0   # the loop ends on a false test for any role but the orchestrator; as a function that would be a failure under set -e
+}
+
+cmd_crew_up() {
+  local roles="" watch=1
+  while [ $# -gt 0 ]; do
+    case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
+  done
+  require_mcp
+  local clash; clash=$(installed_tares)
+  [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
+  ensure_crew_home
+  ensure_home_trusted
+  keep_token
+  setup_crew_name
+  ensure_settings
+  prime
+  lsp_offer
+  start_stations $roles
   [ $watch = 1 ] && start_watch
   cat >&2 <<NEXT
 
@@ -3111,6 +3119,7 @@ case "$cmd" in
   tidy) cmd_tidy "$@" ;;
   _parse-bg-id) parse_bg_id ;;
   _mcp-url) mcp_url ;;
+  _start-stations) start_stations "$@" ;;
   doctor) cmd_doctor ;;
   *) usage; exit 1 ;;
 esac

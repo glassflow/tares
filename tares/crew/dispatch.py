@@ -28,6 +28,20 @@ ENGINES = ("python", "bash")
 PORTED: dict[tuple[str, ...], Callable[[list[str], dict], int]] = {}
 
 
+def _crew_up(argv: list[str], env: dict) -> int:
+    from . import up  # lazy: the dispatcher stays light for every other command
+    return up.entry_crew_up(argv, env)
+
+
+def _crew_setup(argv: list[str], env: dict) -> int:
+    from . import up
+    return up.entry_crew_setup(argv, env)
+
+
+PORTED[("crew", "up")] = _crew_up        # TR-956 (runs in Python only with TARES_FACTORY_ENGINE=python)
+PORTED[("crew", "setup")] = _crew_setup  # TR-956 (new: no bash twin)
+
+
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
