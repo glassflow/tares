@@ -1,0 +1,154 @@
+{"role":"builder","tool":"Bash","command":"gh pr merge 12 --squash --delete-branch","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"gh pr merge 12 --squash","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"gh pr review 12 --approve","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"gh pr review 12 --comment -b hi","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"gh api repos/o/r/statuses/abc -f state=success -f context=factory/review","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"gh api repos/o/r/statuses/abc -f state=success","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"gh api repos/o/r/commits/abc/status","expect":"allow"}
+{"role":"releaser","tool":"Bash","command":"git tag v1.2.0 && git push origin v1.2.0","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"git tag v1.2.0","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"git push -u origin factory/T1","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"kubectl apply -k deploy/","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"kubectl --context kind-factory -n app apply -f x.yaml","expect":"deny"}
+{"role":"releaser","tool":"Bash","command":"kubectl --context kind-factory rollout undo deploy/app","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"kubectl get pods -n app","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"kubectl logs deploy/app --tail 50","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"helm upgrade --install app ./chart","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"helm template ./chart","expect":"allow"}
+{"role":"releaser","tool":"Bash","command":"helm -n app upgrade app ./chart","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"docker build -t app .","expect":"deny"}
+{"role":"releaser","tool":"Bash","command":"cd app && docker build -t app:1 .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory-heavy 900 docker build -t app .","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"echo \"docker build is heavy\" > notes.md","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory spawn builder x \"y\"","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory spawn builder m1 \"do T1\"","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory roster","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"factory spawn builder shop m1-api glassflow/api \"[TF:TASK] T1. Merge with gh pr merge --squash once factory/review is success\"","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"factory revive shop-build-m1 \"carry on; the gate is gh pr merge after the verdict\"","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"factory spawn builder shop m1-api glassflow/api \"$(gh pr merge 1)\"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory spawn builder shop m1 glassflow/api \"T1\"","expect":"deny"}
+{"role":"reviewer","tool":"mcp__plugin_slack_slack__slack_send_message","command":"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory restart crew-reviewer","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory finish shop","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"cd ~/factory && factory finish shop","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory restart crew-reviewer","expect":"allow"}
+{"role":"builder","tool":"mcp__plugin_slack_slack__slack_send_message","command":"","expect":"deny"}
+{"role":"builder","tool":"mcp__plugin_slack_slack__slack_read_channel","command":"","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"fix the gh pr merge race and the docker build cache\"","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"gh pr create --title \"Speed up docker build\" --body \"Releases: git tag v1.2 later, kubectl apply stays manual\"","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"git commit -m 'gh pr merge was racing'","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"git commit -m \"x\" && gh pr merge 3","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"x\" && gh pr merge 3","expect":"deny"}
+{"role":"orchestrator","tool":"mcp__plugin_slack_slack__slack_read_channel","command":"","expect":"allow"}
+{"role":"orchestrator","tool":"mcp__plugin_tares_tares__desk_add","command":"","expect":"allow"}
+{"role":"orchestrator","tool":"mcp__plugin_slack_slack__slack_send_message","command":"","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory crew down","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"factory crew halt \"x\"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew freeze","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew unfreeze","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory crew freeze","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"factory crew unfreeze","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory crew update","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"tares factory crew update --wait 60","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"factory crew restart","expect":"deny"}
+{"role":"releaser","tool":"Bash","command":"tares factory crew restart","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory crew update","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"tares factory crew restart","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew freeze","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew freeze","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew unfreeze","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew unfreeze","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew up","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew up","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew down","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew down","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew halt","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew halt","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew resume","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew resume","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew update","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew update","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew restart","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory crew restart","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory spawn x","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory spawn x","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory retire x","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory retire x","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory revive x","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory revive x","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory restart x","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory restart x","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory down","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory down","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory halt","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"/opt/glass0/tares/claude-plugin/bin/factory halt","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"./claude-plugin/bin/factory crew freeze","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"cd x && /abs/bin/factory crew halt \"y\"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"$HOME/x/factory crew down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"/abs/bin/factory finish p","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew down; ls","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew down&&ls","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew down|cat","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"(factory crew down)","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"$(/abs/bin/factory crew up)","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"\"/abs/bin/factory\" crew up","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"bash -c \"factory crew down\"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"bash -c 'factory crew halt'","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory halt; true","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory finish p;","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"x=`factory crew down`","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew down>/dev/null","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"{ factory crew down}","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory crew down#x","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"x=`factory crew down`","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"factory crew down>/dev/null","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"ls ~/factory down","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"ls -la ~/factory halt","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"ls \"my dir\" ~/factory down","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"cat 'a b' ~/factory halt","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"X=\"\nls a\" factory down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"X='; ls a' factory down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"X='\nls a' factory down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"FOO=\"x\ncat a\" factory restart crew-reviewer","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"env FOO=\"\ncat a\" /abs/bin/factory crew down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"X=\"$(ls a)\" factory down","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"X=\"\nls a\" factory crew down","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"ls ~/factory; /abs/bin/factory crew down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"ls x;/abs/bin/factory crew down","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"find . -exec /abs/bin/factory crew down {} \\;","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"echo /abs/bin/factory crew down | sh","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"echo factory crew halt | bash","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"printf \"%s\\n\" /abs/bin/factory crew down | sh","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"rg --pre /abs/bin/factory crew down x","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"rg --hostname-bin /abs/bin/factory crew down x","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"factory crew down; ls","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"(factory crew down)","expect":"allow"}
+{"role":"orchestrator","tool":"Bash","command":"\"/abs/bin/factory\" crew up","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory crew updated","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory roster","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory finish p","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"ls /opt/glass0/tares/.factory/worktrees && cat .factory/halt.md","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"/opt/glass0/tares/.factory/halt crew","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"$(gh pr merge 1)\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"notes `gh pr merge 1`\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"git commit --message=\"x $(gh pr merge 1) y\"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"gh pr create --title \"t\" --body \"$(kubectl apply -f prod.yaml)\"","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"gh pr create -b \"$(git tag v9 && git push origin v9)\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"bash -c \"gh pr merge 1\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"sh -c 'gh pr merge 1'","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"eval \"gh pr merge 1\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"bash <<EOF\ngh pr merge 1\nEOF","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"$(cat <<'EOF'\nFix the gh pr merge race\n\nThe \"docker build\" cache too.\nEOF\n)\"","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"$(cat <<'EOF'\nx\nEOF\n) $(gh pr merge 1) $(cat <<'EOF'\ny\nEOF\n)\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"$(cat <<EOF\n$(gh pr merge 1)\nEOF\n)\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"gh api -X PUT repos/o/r/pulls/1/merge","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"git push origin HEAD:refs/tags/v1","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"git push origin HEAD:factory/T1","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory-heavy 10 true; docker build -t x .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory-heavy 10 true\ndocker build -t x .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory-heavy 900 docker build . && docker build -t y .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"cd app && factory-heavy 900 docker build -t app .","expect":"allow"}
+{"role":"helper","parent":"crew-releaser","tool":"Bash","command":"kubectl --context kind-factory rollout undo deploy/app","expect":"allow"}
+{"role":"helper","parent":"crew-releaser","tool":"Bash","command":"gh pr merge 3","expect":"deny"}
+{"role":"helper","parent":"shop-build-m1","tool":"Bash","command":"gh pr merge 3 --squash","expect":"allow"}
+{"role":"helper","parent":"shop-build-m1","tool":"Bash","command":"kubectl apply -k deploy/","expect":"deny"}
