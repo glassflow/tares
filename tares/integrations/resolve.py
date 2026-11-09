@@ -5,8 +5,8 @@ this order, and stops at the first that applies:
 
   1. the project's own choice (slots tickets, review and ci only), source "project";
   2. the factory's choice, source "factory";
-  3. a choice carried over from links the cell already has, source "carried" (`carried` returns
-     None until a later ticket fills it in);
+  3. a choice carried over from links and settings the cell already has (a project's Linear or
+     GitHub issues link, its GitHub repos, the tracing settings), source "carried";
   4. the built-in default of the slot, source "default".
 
 A project's `settings` are only its own stored row, never merged with the factory's, so a
@@ -54,10 +54,43 @@ class Effective:
     reason: str = ""
 
 
-def carried(slot: str, project_uid: str | None) -> tuple[str, dict] | None:
-    """A choice taken from links the cell already has, as (name, settings); None when there is
-    none. Nothing is carried yet: a later ticket fills this in."""
-    return None
+def _has_github_repos(project_uid: str, store) -> bool:
+    """The project works in a repo on GitHub: its issues link names one, or it was handed to the
+    crew with an owner/name repo."""
+    link = store.get_project_github(project_uid)
+    if link and link.get("repo"):
+        return True
+    repos = (store.get_handover(project_uid) or {}).get("repos") or []
+    return any("/" in str(r.get("name") or "") for r in repos)
+
+
+def carried(slot: str, project_uid: str | None, store=None) -> tuple[str, dict] | None:
+    """A choice taken from links and settings the cell already has, as (name, settings); None when
+    there is none, or when it would be the slot's default anyway. Read when asked: nothing is
+    copied, and no secret is carried (the integration reads its own from the cell).
+
+      tickets     the project's Linear link, else its GitHub issues link (the order
+                  `project_ticket_home` uses when a project has both);
+      ci          github for a project with a repo on GitHub;
+      monitoring  the tracing provider (rius or otlp) while tracing is on and has an endpoint.
+
+    The other slots have nothing to carry. A slot's name is only used when that integration is
+    installed; `effective` passes over a name that is not.
+    """
+    if store is None:
+        return None
+    found: str | None = None
+    if slot == "tickets" and project_uid:
+        found = store.project_ticket_home(project_uid)
+    elif slot == "ci" and project_uid:
+        found = "github" if _has_github_repos(project_uid, store) else None
+    elif slot == "monitoring":
+        from .. import tracing
+        cfg = tracing.resolve(store)
+        found = cfg.provider if cfg.active else None
+    if found is None or found == DEFAULTS[slot]:
+        return None
+    return found, {}
 
 
 def _default(slot: str, reason: str = "") -> Effective:
@@ -86,7 +119,7 @@ def effective(slot: str, project_uid: str | None = None, *, store) -> Effective:
     row = store.get_choice(slot)
     if row is not None:
         return _usable(slot, row["name"], row["settings"], "factory")
-    found = carried(slot, project_uid)
+    found = carried(slot, project_uid, store)
     if found is not None:
         return _usable(slot, found[0], found[1], "carried")
     return _default(slot)
