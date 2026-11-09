@@ -63,6 +63,10 @@ HAVE_BASH = os.name != "nt" and Path("/bin/bash").exists()
 SYS_ENV = ({k: os.environ[k] for k in ("SYSTEMROOT", "USERPROFILE", "HOME", "TEMP", "TMP") if k in os.environ}
            if os.name == "nt" else {})
 ENGINE = dispatch.ENGINE_VAR
+# A command that stays on bash, for the checks that need one (roster, status and the other views are
+# ported with TR-957). Whoever ports this one (settings, TR-953) changes this line to another.
+UNPORTED = "settings"
+BASH_RAN = "no Tares answers at http://127.0.0.1:9"  # what bash's `settings` says with no Tares, in the fake crew
 
 calls = []
 
@@ -116,7 +120,7 @@ def call_run(argv, env=None, script="/nonexistent/factory", windows=False):
 print("routing")
 with ported(TABLE):
     ck("a command that is in the table is found", dispatch.find(["zz"]) is fake_a)
-    ck("a command that is not in the table is not found", dispatch.find(["roster"]) is None)
+    ck("a command that is not in the table is not found", dispatch.find([UNPORTED]) is None)
     ck("no arguments is not found (bash prints help)", dispatch.find([]) is None)
     ck("extra arguments after a key still find it", dispatch.find(["zz", "--help"]) is fake_a)
     ck("the two-word key wins over the one-word key", dispatch.find(["zz", "sub", "x"]) is fake_sub)
@@ -129,7 +133,7 @@ with ported({("zz", "sub"): fake_sub}):
     ck("...and another subcommand is not ported", dispatch.find(["zz", "other"]) is None)
 ck("PORTED maps keys to functions", all(isinstance(k, tuple) and callable(v) for k, v in dispatch.PORTED.items()))
 ck("the command name in messages has the subcommand", dispatch.command_name(["crew", "up", "-y"]) == "crew up")
-ck("...but not a flag", dispatch.command_name(["roster", "--json"]) == "roster")
+ck("...but not a flag", dispatch.command_name([UNPORTED, "--json"]) == UNPORTED)
 ck("...and no command is help", dispatch.command_name([]) == "help")
 
 # ---------- the engine switch ----------
@@ -137,17 +141,17 @@ print("engine switch")
 with ported(TABLE):
     cases = [
         # engine, argv, kind
-        ("", ["zz"], "python"), ("", ["roster"], "bash"), ("", [], "bash"), ("", ["zz", "sub"], "python"),
-        ("python", ["zz"], "python"), ("python", ["roster"], "error"), ("python", [], "error"),
-        ("bash", ["zz"], "bash"), ("bash", ["roster"], "bash"),
-        ("Python", ["zz"], "error"), ("BASH", ["roster"], "error"), ("auto", ["zz"], "error"),
-        (" bash", ["roster"], "error"), ("1", ["roster"], "error"),
+        ("", ["zz"], "python"), ("", [UNPORTED], "bash"), ("", [], "bash"), ("", ["zz", "sub"], "python"),
+        ("python", ["zz"], "python"), ("python", [UNPORTED], "error"), ("python", [], "error"),
+        ("bash", ["zz"], "bash"), ("bash", [UNPORTED], "bash"),
+        ("Python", ["zz"], "error"), ("BASH", [UNPORTED], "error"), ("auto", ["zz"], "error"),
+        (" bash", [UNPORTED], "error"), ("1", [UNPORTED], "error"),
     ]
     for engine, argv, want in cases:
         got = dispatch.route(argv, {ENGINE: engine} if engine else {})[0]
         ck(f"engine {engine!r}, {argv}: {want}", got == want, got)
     ck("an unset variable is the same as an empty one",
-       dispatch.route(["roster"], {})[0] == dispatch.route(["roster"], {ENGINE: ""})[0] == "bash")
+       dispatch.route([UNPORTED], {})[0] == dispatch.route([UNPORTED], {ENGINE: ""})[0] == "bash")
 
     calls.clear()
     code, out, err, execs = call_run(["zz", "a"], {ENGINE: "bash"}, "/x/factory")
@@ -157,9 +161,9 @@ with ported(TABLE):
     ck("engine=python: a ported command runs in Python", calls == [("a", ["zz", "a"])] and not execs and code == 0,
        short((calls, execs, code)))
     calls.clear()
-    code, out, err, execs = call_run(["roster"], {ENGINE: "python"})
+    code, out, err, execs = call_run([UNPORTED], {ENGINE: "python"})
     ck("engine=python: an unported command exits 2", code == 2, short(code))
-    ck("...with a clear message on stderr", err == (f'tares factory: "roster" is not yet ported to the Python engine '
+    ck("...with a clear message on stderr", err == (f'tares factory: "{UNPORTED}" is not yet ported to the Python engine '
                                                     f"({ENGINE}=python); unset {ENGINE} to let bash run it\n"), short(err))
     ck("...never falling to bash", not execs and not calls and out == "", short((execs, calls, out)))
     code, out, err, execs = call_run(["crew", "up", "-y"], {ENGINE: "python"})
@@ -168,14 +172,14 @@ with ported(TABLE):
     code, out, err, execs = call_run(["zz"], {})
     ck("unset: a ported command runs in Python", calls == [("a", ["zz"])] and not execs, short((calls, execs)))
     calls.clear()
-    code, out, err, execs = call_run(["roster"], {})
+    code, out, err, execs = call_run([UNPORTED], {})
     ck("unset: an unported command goes to bash", len(execs) == 1 and not calls and code is None, short((execs, calls, code)))
     code, out, err, execs = call_run(["zz"], {ENGINE: "perl"})
     ck("an invalid value exits 2", code == 2, short(code))
     ck("...naming the variable and the value", err == f'tares factory: {ENGINE} must be "python" or "bash" (or unset), not "perl"\n',
        short(err))
     ck("...and runs nothing", not execs and calls == [], short((execs, calls)))
-    ck("an invalid value fails even for a command that would go to bash", call_run(["roster"], {ENGINE: "x"})[0] == 2)
+    ck("an invalid value fails even for a command that would go to bash", call_run([UNPORTED], {ENGINE: "x"})[0] == 2)
 ck("the old fallback variable is not read", "TARES_FACTORY_BASH_FALLBACK" not in
    (ROOT / "tares" / "crew" / "dispatch.py").read_text(encoding="utf-8") + (ROOT / "tares" / "cli.py").read_text(encoding="utf-8"))
 
@@ -233,7 +237,7 @@ log.clear()
 with mock.patch.object(sys, "stdout", Stream(log, "out")), mock.patch.object(sys, "stderr", Stream(log, "err")), \
         mock.patch.object(os, "execve", lambda *a: None):
     try:
-        dispatch.run(["roster"], {}, "/x")
+        dispatch.run([UNPORTED], {}, "/x")
     except SystemExit:  # Windows has no bash route: an unported command exits 2 there
         pass
 ck("the bash route leaves the streams alone", log == [], short(log))
@@ -263,9 +267,9 @@ ck("...and to stderr", r.stderr.decode("utf-8", "replace").replace("\r\n", "\n")
 # ---------- the Windows branch ----------
 print("windows")
 with ported(TABLE):
-    code, out, err, execs = call_run(["roster"], {}, windows=True)
+    code, out, err, execs = call_run([UNPORTED], {}, windows=True)
     ck("an unported command on Windows exits 2", code == 2, short(code))
-    ck("...with the message", err == 'tares factory: "roster" is not yet ported to the Python engine, and bash is not available on Windows\n',
+    ck("...with the message", err == f'tares factory: "{UNPORTED}" is not yet ported to the Python engine, and bash is not available on Windows\n',
        short(err))
     ck("...and execs nothing", execs == [] and out == "", short((execs, out)))
     code, out, err, execs = call_run(["crew", "up"], {}, windows=True)
@@ -277,14 +281,14 @@ with ported(TABLE):
     ck("a ported command still runs on Windows", calls == [("a", ["zz"])] and code == 0 and not execs and err == "", short((calls, code, err)))
     code, out, err, execs = call_run(["zz"], {ENGINE: "python"}, windows=True)
     ck("engine=python on Windows runs a ported command", code == 0 and not execs)
-    code, out, err, execs = call_run(["roster"], {ENGINE: "python"}, windows=True)
+    code, out, err, execs = call_run([UNPORTED], {ENGINE: "python"}, windows=True)
     ck("engine=python on Windows: an unported command fails by the engine's own message", code == 2 and "(TARES_FACTORY_ENGINE=python)" in err and not execs,
        short(err))
     calls.clear()
     code, out, err, execs = call_run(["zz"], {ENGINE: "bash"}, windows=True)
     ck("engine=bash on Windows exits 2 with a message of its own", code == 2 and "needs bash, which is not available on Windows" in err, short((code, err)))
     ck("...and execs nothing, runs nothing", not execs and not calls, short((execs, calls)))
-    code, out, err, execs = call_run(["roster"], {ENGINE: "weird"}, windows=True)
+    code, out, err, execs = call_run([UNPORTED], {ENGINE: "weird"}, windows=True)
     ck("an invalid value is still an invalid value on Windows", code == 2 and "must be" in err and not execs, short(err))
 ck("is_windows is true only for win32", dispatch.is_windows() == (sys.platform == "win32"))
 with mock.patch.object(sys, "platform", "win32"):
@@ -294,11 +298,11 @@ with mock.patch.object(sys, "platform", "linux"):
 
 # ---------- the execve is the one bash has always had, and the env reaches the script ----------
 print("bash route")
-code, out, err, execs = call_run(["roster", "-x", "a b"], {"K": "v", ENGINE: ""}, "/some dir/factory")
+code, out, err, execs = call_run([UNPORTED, "-x", "a b"], {"K": "v", ENGINE: ""}, "/some dir/factory")
 ck("the bash route calls os.execve('/bin/bash', ['bash', script, *argv], env)",
-   execs == [("/bin/bash", ["bash", "/some dir/factory", "roster", "-x", "a b"], {"K": "v", ENGINE: ""})], short(execs))
+   execs == [("/bin/bash", ["bash", "/some dir/factory", UNPORTED, "-x", "a b"], {"K": "v", ENGINE: ""})], short(execs))
 env_obj = {"K": "v"}
-code, out, err, execs = call_run(["roster"], env_obj, Path("/p/factory"))
+code, out, err, execs = call_run([UNPORTED], env_obj, Path("/p/factory"))
 ck("...with the same env object and a script given as a Path turned into text", execs and execs[0][2] is env_obj and execs[0][1][1] == str(Path("/p/factory")), short(execs))
 
 STUB = T / "stub factory"
@@ -335,11 +339,11 @@ if HAVE_BASH:
     ck("...and a variable only the parent process had does not leak in", "ENV PARENT_ONLY=<UNSET>" in r.stdout, short(r.stdout))
     r = run_stub(["fail"], env)
     ck("the script's exit code is the command's", r.returncode == 3, short(r.returncode))
-    r = run_stub(["roster"], dict(env, **{ENGINE: "bash"}))
+    r = run_stub([UNPORTED], dict(env, **{ENGINE: "bash"}))
     ck("engine=bash reaches the script as set", "ENV TARES_FACTORY_ENGINE=<bash>" in r.stdout and r.returncode == 0, short(r.stdout))
     r = run_stub([], env)
     ck("no arguments reach the script as none", r.returncode == 0 and "ARGC=0" in r.stdout and "ARG<" not in r.stdout, short(r.stdout))
-    r = run_stub(["roster"], dict(env, **{ENGINE: "python"}))
+    r = run_stub([UNPORTED], dict(env, **{ENGINE: "python"}))
     ck("engine=python with an unported command runs nothing and exits 2", r.returncode == 2 and r.stdout == "" and "not yet ported" in r.stderr,
        short((r.returncode, r.stdout, r.stderr)))
 else:
@@ -367,7 +371,7 @@ LIGHT_PROBE = (
     "tares.cli.main()\n"
 ) % (str(ROOT), HEAVY)
 env_light = {**SYS_ENV, "PATH": os.environ.get("PATH", ""), "HOME": str(T), "TARES_HOME": str(T / "th"), "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"}
-for mode, args in (("python", ["zz"]), ("bash", ["roster"])):
+for mode, args in (("python", ["zz"]), ("bash", [UNPORTED])):
     if mode == "bash" and os.name == "nt":
         print("  skip  the bash route in a bare interpreter: Windows has no bash route (an unported command exits 2)")
         continue
@@ -409,15 +413,15 @@ def mod(args, extra=None, **kw):
 
 
 if HAVE_BASH and shutil.which("jq"):
-    r = mod(["roster"])
-    ck("`python -m tares.crew roster` runs the plugin's bash roster", r.returncode == 0 and r.stdout.startswith("crew: crew (orchestrator: crew-orchestrator)"),
+    r = mod([UNPORTED])
+    ck(f"`python -m tares.crew {UNPORTED}` runs the plugin's bash script", r.returncode == 1 and BASH_RAN in r.stderr,
        short((r.returncode, r.stdout, r.stderr[-300:])))
-    r = mod(["roster"], {ENGINE: "python"})
+    r = mod([UNPORTED], {ENGINE: "python"})
     ck("...engine=python refuses it, exit 2", r.returncode == 2 and "not yet ported" in r.stderr and r.stdout == "", short((r.returncode, r.stdout, r.stderr)))
-    r = mod(["roster"], {ENGINE: "nope"})
+    r = mod([UNPORTED], {ENGINE: "nope"})
     ck("...an invalid engine exits 2", r.returncode == 2 and "must be" in r.stderr, short(r.stderr))
-    r = mod(["roster"], {ENGINE: "bash"})
-    ck("...engine=bash runs bash", r.returncode == 0 and "crew: crew" in r.stdout, short((r.returncode, r.stdout)))
+    r = mod([UNPORTED], {ENGINE: "bash"})
+    ck("...engine=bash runs bash", r.returncode == 1 and BASH_RAN in r.stderr, short((r.returncode, r.stdout)))
 else:
     print("  skip  no bash or jq: the roster checks")
 MOD_PROBE = (
@@ -437,13 +441,13 @@ ENV_F = fake_crew_env(T / "f")
 recorded = []
 stray_execs = []
 with mock.patch.dict(os.environ, ENV_F, clear=True), mock.patch.object(dispatch, "run", lambda *a: recorded.append(a)), \
-        mock.patch.object(os, "execve", lambda *a: stray_execs.append(a)), mock.patch.object(sys, "argv", ["tares", "factory", "roster"]):
-    tares.cli._factory(["roster", "--x"])
+        mock.patch.object(os, "execve", lambda *a: stray_execs.append(a)), mock.patch.object(sys, "argv", ["tares", "factory", UNPORTED]):
+    tares.cli._factory([UNPORTED, "--x"])
 ck("_factory does not exec bash itself", stray_execs == [], short(stray_execs))
 ck("_factory calls dispatch.run exactly once", len(recorded) == 1, short(recorded))
 if recorded:
     a_argv, a_env, a_script = recorded[0]
-    ck("...with the argv after `factory`", a_argv == ["roster", "--x"], short(a_argv))
+    ck("...with the argv after `factory`", a_argv == [UNPORTED, "--x"], short(a_argv))
     ck("...with the environment _factory built (the address it resolved)", a_env.get("TARESD_URL") == "http://127.0.0.1:9" and a_env.get("TARES_FACTORY_URL") == "http://127.0.0.1:9"
        and a_env.get("TARES_FACTORY_SOURCE") == "environment" and a_env.get("FACTORY_CREW_HOME") == ENV_F["FACTORY_CREW_HOME"], short(a_env.get("TARES_FACTORY_SOURCE")))
     ck("...and the plugin's factory script", Path(a_script) == tares.cli.plugin_dir() / "bin" / "factory" and Path(a_script).is_file(), short(a_script))
@@ -470,12 +474,12 @@ r = factory(["zz", "q"], {ENGINE: "bash"})
 ck("end to end: engine=bash sends even that command to the bash script (which does not know it)",
    r.returncode != 4 and "python ran" not in r.stdout, short((r.returncode, r.stdout)))
 if HAVE_BASH and shutil.which("jq"):
-    r = factory(["roster"])
-    ck("end to end: roster goes to bash and prints the roster, exit 0", r.returncode == 0 and r.stdout.startswith("crew: crew (orchestrator: crew-orchestrator)"),
+    r = factory([UNPORTED])
+    ck(f"end to end: {UNPORTED} goes to bash and gets bash's answer", r.returncode == 1 and BASH_RAN in r.stderr,
        short((r.returncode, r.stdout, r.stderr[-300:])))
-    r = factory(["roster"], {ENGINE: "python"})
-    ck("end to end: engine=python refuses roster with exit 2", r.returncode == 2 and "not yet ported" in r.stderr and r.stdout == "", short((r.returncode, r.stdout, r.stderr)))
-    r = factory(["roster"], {ENGINE: "nope"})
+    r = factory([UNPORTED], {ENGINE: "python"})
+    ck("end to end: engine=python refuses an unported command with exit 2", r.returncode == 2 and "not yet ported" in r.stderr and r.stdout == "", short((r.returncode, r.stdout, r.stderr)))
+    r = factory([UNPORTED], {ENGINE: "nope"})
     ck("end to end: an invalid engine exits 2", r.returncode == 2 and "must be" in r.stderr, short(r.stderr))
 else:
     print("  skip  no bash or jq: the roster checks")
@@ -508,16 +512,16 @@ with mock.patch.dict(os.environ, {}, clear=False):
     ck("...a folder without bin/factory stops with a message naming the variable, it does not fall back", HOOK in msg and "bin/factory" in msg, msg)
 
 if HAVE_BASH:
-    r = mod(["roster", "a b"], {HOOK: str(KIT)})
-    ck("python -m tares.crew hands bash the script of the folder named", r.returncode == 0 and r.stdout == f"KIT {KIT_REAL} v1 roster a b\n", short((r.returncode, r.stdout, r.stderr[-300:])))
+    r = mod([UNPORTED, "a b"], {HOOK: str(KIT)})
+    ck("python -m tares.crew hands bash the script of the folder named", r.returncode == 0 and r.stdout == f"KIT {KIT_REAL} v1 {UNPORTED} a b\n", short((r.returncode, r.stdout, r.stderr[-300:])))
     (KIT / "marker").write_text("v2\n")
-    r = mod(["roster"], {HOOK: str(KIT)})
-    ck("...and reads the folder at call time: an edit between two calls shows", r.stdout == f"KIT {KIT_REAL} v2 roster\n", short(r.stdout))
-    r = factory(["roster"], {HOOK: str(KIT)})
-    ck("tares factory (through tares.cli.main) uses the folder named too", r.returncode == 0 and r.stdout == f"KIT {KIT_REAL} v2 roster\n", short((r.returncode, r.stdout, r.stderr[-300:])))
-    r = mod(["roster"], {HOOK: str(T / "no such kit")})
+    r = mod([UNPORTED], {HOOK: str(KIT)})
+    ck("...and reads the folder at call time: an edit between two calls shows", r.stdout == f"KIT {KIT_REAL} v2 {UNPORTED}\n", short(r.stdout))
+    r = factory([UNPORTED], {HOOK: str(KIT)})
+    ck("tares factory (through tares.cli.main) uses the folder named too", r.returncode == 0 and r.stdout == f"KIT {KIT_REAL} v2 {UNPORTED}\n", short((r.returncode, r.stdout, r.stderr[-300:])))
+    r = mod([UNPORTED], {HOOK: str(T / "no such kit")})
     ck("python -m tares.crew with a folder that has no script exits 1 and says so", r.returncode == 1 and HOOK in r.stderr and r.stdout == "", short((r.returncode, r.stdout, r.stderr[-300:])))
-    r = mod(["roster"], {HOOK: str(KIT), ENGINE: "python"})
+    r = mod([UNPORTED], {HOOK: str(KIT), ENGINE: "python"})
     ck("...the engine switch still rules: engine=python refuses an unported command", r.returncode == 2 and "not yet ported" in r.stderr, short((r.returncode, r.stderr)))
 else:
     print("  skip  no /bin/bash here: the TARES_PLUGIN_DIR runs")

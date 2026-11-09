@@ -53,7 +53,9 @@ BANNED = [
     ("stat -c/-f", r"(?<![\w-])stat\s+-[cf]"),
     ("/tmp", r"(?<![\w.-])/tmp(/|\b)"),
 ]
-# only the skills: a command file is run through `tares hook` since TR-1068, and its own test holds that
+# python3 is banned in the skills only. The command file challenger-waive.md still runs a bare python3 until
+# TR-1103 switches the plugin's commands to `tares hook`. When that lands, move python3 into BANNED and flip the
+# "not yet banned in a command" check below.
 BANNED_SKILLS_ONLY = [("python3", r"(?<![\w-])python3(?![\w-])")]
 
 
@@ -75,9 +77,12 @@ ck("there are commands to scan", len(commands) >= 5, [c.name for c in commands])
 for f in skills:
     hits = scan(f.read_text(encoding="utf-8"), BANNED_SKILLS_ONLY)
     ck(f"{f.parent.name}/{f.name} names no unix-only tool", not hits, hits)
+scanned_commands = []
 for f in commands:
     hits = scan(f.read_text(encoding="utf-8"))
+    scanned_commands.append(f.name)
     ck(f"commands/{f.name} names no unix-only tool", not hits, hits)
+ck("every command file went through the scan", scanned_commands == [c.name for c in commands], scanned_commands)
 
 print("the scan itself")
 samples = {
@@ -101,6 +106,8 @@ samples = {
 }
 for label, line in samples.items():
     ck(f"a line with `{label}` is caught", any(h[1] == label for h in scan(line)), scan(line))
+ck("a command line with a unix-only tool is caught by the command scan", scan("run: jq -r .a f.json") != [])
+ck("a bare python3 is not yet banned in a command (TR-1103)", scan("python3 x.py") == [])
 ck("python3 is caught in a skill", scan("python3 x.py", BANNED_SKILLS_ONLY) != [])
 clean = ["touch \"$FACTORY_HOME/stations/$FACTORY_STATION.done\"", "git log --format=%at origin/main..HEAD | sort -n | head -1",
          "gh issue view 3 --repo R --json id -q .id", "update - the ticket", "the perlman rule", "jqueryish", "a spare-ps note"]

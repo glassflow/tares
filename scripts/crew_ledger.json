@@ -66,7 +66,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Defined at top level near the path constants but only freeze logic uses it."
+      "note": "Defined at top level near the path constants but only freeze logic uses it. TR-957 keeps a read-only copy in tares/crew/views.py (frozen_phys) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "ccfg",
@@ -713,9 +713,9 @@
       "what": "record live crew sessions missing from stations.json",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Reads live sessions and repairs stations.json; status and roster call it, so it ships with them. TR-950 gives the session list it uses."
+      "python": "tares.crew.views:adopt_unrecorded",
+      "ported": true,
+      "note": "Ported with the views (TR-957): status and roster call it first."
     },
     {
       "name": "check_model",
@@ -891,7 +891,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Reads the transcript through TR-950's transcript_of."
+      "note": "Reads the transcript through TR-950's transcript_of. TR-957 keeps a read-only copy in tares/crew/views.py (stuck_on_context) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "kit_version",
@@ -902,7 +902,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Called by launch (TR-953), which stamps each station with the version of the kit it starts on. TR-953 ports it with the rest of launch (the fingerprint of the kit folder it starts on); TR-965 adds the frozen-kit use."
+      "note": "Called by launch (TR-953), which stamps each station with the version of the kit it starts on. TR-953 ports it with the rest of launch (the fingerprint of the kit folder it starts on); TR-965 adds the frozen-kit use. TR-957 keeps a read-only copy in tares/crew/views.py (kit_version) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "kit_clean",
@@ -1001,7 +1001,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Needed first by cmd_down (TR-955, through stop_watch), which ports the pid file read it needs; TR-958 completes it."
+      "note": "Needed first by cmd_down (TR-955, through stop_watch), which ports the pid file read it needs; TR-958 completes it. TR-957 keeps a read-only copy in tares/crew/views.py (watch_pid) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "start_watch",
@@ -1188,7 +1188,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (regranted) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "between_turns",
@@ -1485,7 +1485,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (pace_status_line) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "wake_file",
@@ -1639,7 +1639,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Kit comparison for the watch; kit move is TR-965, not the Claude Code move."
+      "note": "Kit comparison for the watch; kit move is TR-965, not the Claude Code move. TR-957 keeps a read-only copy in tares/crew/views.py (stale_kit) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "movable",
@@ -1705,7 +1705,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Wrapper over running_version used by the move, status and roster; owned by the move ticket."
+      "note": "Wrapper over running_version used by the move, status and roster; owned by the move ticket. TR-957 keeps a read-only copy in tares/crew/views.py (station_cc) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "prune_spares",
@@ -1749,7 +1749,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (cc_behind) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "tell_newer_claude",
@@ -1815,7 +1815,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (cc_retry_in) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "cc_retrying",
@@ -1989,8 +1989,8 @@
       "what": "one desk item as text",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:desk_block",
+      "ported": true,
       "note": ""
     },
     {
@@ -2000,8 +2000,8 @@
       "what": "print the desk",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_desk",
+      "ported": true,
       "note": ""
     },
     {
@@ -2011,8 +2011,8 @@
       "what": "crew status",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_status",
+      "ported": true,
       "note": ""
     },
     {
@@ -2132,8 +2132,8 @@
       "what": "compact station list",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_roster",
+      "ported": true,
       "note": ""
     },
     {
@@ -2143,8 +2143,8 @@
       "what": "attach to a station",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_attach",
+      "ported": true,
       "note": ""
     },
     {
@@ -2154,8 +2154,8 @@
       "what": "show a station's logs",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_logs",
+      "ported": true,
       "note": ""
     },
     {
@@ -2692,9 +2692,9 @@
       "what": "same as crew status",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_status",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "desk",
@@ -2706,9 +2706,9 @@
       "what": "same as crew desk",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_desk",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "watch",
@@ -2762,9 +2762,9 @@
       "what": "same as crew attach",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_attach",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "logs",
@@ -2776,9 +2776,9 @@
       "what": "same as crew logs",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_logs",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "down",
@@ -2804,9 +2804,9 @@
       "what": "compact station list for stations",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_roster",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "spawn",
@@ -2932,7 +2932,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Stays in bash until write_settings is ported (TR-953); the Python views do not register it."
     },
     {
       "name": "context",
@@ -3084,9 +3084,9 @@
       "what": "stations, desk, projects",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_status",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew desk",
@@ -3098,9 +3098,9 @@
       "what": "questions waiting for the person",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_desk",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew attach",
@@ -3112,9 +3112,9 @@
       "what": "open a station in this terminal",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_attach",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew logs",
@@ -3126,9 +3126,9 @@
       "what": "a station's recent output",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_logs",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew watch",
