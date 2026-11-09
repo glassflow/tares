@@ -16,6 +16,7 @@ import subprocess
 import sys
 
 from . import claude
+from .errors import CrewError
 from .paths import ME
 
 MARKETPLACE = "claude-plugins-official"
@@ -100,10 +101,11 @@ def detect(repo: str) -> list:
 
 def read_plugins(claude_path: str = ""):
     """[(id, projectPath)] for each enabled plugin `claude plugin list --json` shows, or None when claude cannot
-    list them (a failing command, a timeout, output that is not a list of plugins): that means unknown."""
+    list them (no claude on PATH, a failing command, a timeout, output that is not a list of plugins): that
+    means unknown. A missing claude must not end the doctor's report, so CrewError is unknown too."""
     try:
         r = claude.run_claude(["plugin", "list", "--json"], claude_path or None, PLUGIN_LIST_TIMEOUT)
-    except (OSError, subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError, ValueError, CrewError):
         return None
     if r.returncode != 0:
         return None
@@ -124,10 +126,8 @@ def read_plugins(claude_path: str = ""):
 
 
 def have_bin(name: str, env: dict) -> bool:
-    """FACTORY_LSP_PATH, when set, is the only place to look (tests); otherwise PATH."""
-    search = env.get("FACTORY_LSP_PATH")
-    if search is None:
-        search = env.get("PATH")
+    """FACTORY_LSP_PATH, when set and not empty, is the only place to look (tests); otherwise PATH."""
+    search = env.get("FACTORY_LSP_PATH") or env.get("PATH")
     return shutil.which(name, path=search) is not None
 
 
@@ -165,7 +165,7 @@ def why(st: str, plugin: str, binary: str) -> str:
 
 
 def doctor_rows(rows, plugins, env: dict) -> list:
-    """[(level, project, lang, repo, message, fix commands)] in bash's order, for each (project, repo)."""
+    """[(level, project, lang, message, fix commands)] in bash's order, for each (project, repo)."""
     out = []
     for project, repo in rows:
         if not os.path.isdir(repo):
@@ -312,7 +312,7 @@ def _run_install(command: str) -> bool:
     bash = shutil.which("bash")
     cmd = [bash, "-c", command] if bash else command
     try:
-        return subprocess.run(cmd, shell=not bash, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL).returncode == 0
+        return subprocess.run(cmd, shell=not bash, stdin=subprocess.DEVNULL, stdout=2).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
 

@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 
 from tares.crew import claude, doctor, doctor_lsp as L  # noqa: E402
-from tares.crew.errors import CrewError  # noqa: E402
+from tares.crew.errors import ClaudeNotFoundError, CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -128,6 +128,7 @@ ck("a plugin enabled for one project path does not count (stations run elsewhere
 ck("another plugin does not count", L.state([plug("gopls-lsp")], *py, env) == "no-plugin")
 ck("FACTORY_LSP_PATH, when set, is the only place to look", L.have_bin("pyright-langserver", {**env, "PATH": os.environ.get("PATH", "")})
    and not L.have_bin("pyright-langserver", {**bins("b-other"), "PATH": str(Path(env["FACTORY_LSP_PATH"]))}))
+ck("an empty FACTORY_LSP_PATH falls back to PATH, as bash does", L.have_bin("pyright-langserver", {"FACTORY_LSP_PATH": "", "PATH": env["FACTORY_LSP_PATH"]}))
 ck("without FACTORY_LSP_PATH, PATH is searched", L.have_bin("pyright-langserver", {"PATH": env["FACTORY_LSP_PATH"]}))
 inst = "npm install -g pyright"
 pl = "claude plugin install pyright-lsp@claude-plugins-official"
@@ -174,6 +175,8 @@ ck("output that is not JSON is unknown", with_claude(run_res(0, "not json"))[0] 
 ck("JSON that is not a list is unknown", with_claude(run_res(0, '{"id": "a"}'))[0] is None)
 ck("a row that is not an object is unknown", with_claude(run_res(0, '["a@m"]'))[0] is None)
 ck("claude that cannot start is unknown", with_claude(FileNotFoundError("claude"))[0] is None)
+ck("no claude on PATH (a CrewError) is unknown, not a crash", with_claude(ClaudeNotFoundError())[0] is None)
+ck("enabled must be true, not just truthy", with_claude(run_res(0, json.dumps([{"id": "a@m", "enabled": "yes"}, {"id": "b@m", "enabled": 1}])))[0] == [])
 ck("a timeout is unknown", with_claude(__import__("subprocess").TimeoutExpired("claude", 1))[0] is None)
 
 # ---------- the rows doctor and crew up use ----------
@@ -293,6 +296,59 @@ try:
     ck("plugins that cannot be listed: a warn that says it cannot tell", len(d.checks) == 1 and "cannot tell" in d.checks[0].message and not d.checks[0].fix, d.checks)
 finally:
     L.read_plugins = real_read
+
+# a doctor with no claude installed still reports: the real read_plugins, no claude path, one repo
+d, _ = make("doc-noclaude", {"PATH": str(fresh("doc-emptypath")), "FACTORY_LSP_PATH": str(fresh("doc-nobins"))})
+real_bin = claude.claude_bin
+try:
+    claude.claude_bin = lambda *a, **k: (_ for _ in ()).throw(ClaudeNotFoundError())   # whatever this machine has
+    d.check_lsp(fake_client([("Shop", str(repo))]))
+    ck("no claude on PATH: the language-server line says it cannot tell, and the report goes on",
+       len(d.checks) == 1 and d.checks[0].level == "warn" and "cannot tell" in d.checks[0].message, d.checks)
+except CrewError as e:
+    ck("no claude on PATH: the language-server check must not raise", False, repr(e))
+finally:
+    claude.claude_bin = real_bin
+
+# collect() runs the language-server check only when Tares is on
+class FakeClient:
+    def __init__(self, *a, **k):
+        self.say = lambda _m: None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def tares_on(self):
+        return None
+
+    def keep_token(self):
+        return None
+
+
+def collect_with(tares_on: bool) -> list:
+    d, _ = make(f"doc-collect-{tares_on}")
+    seen = []
+    for name in ("check_basics", "check_key_files", "check_sessions", "check_trust_and_plugin", "check_mcp",
+                 "check_crew_offline", "check_git", "check_gh", "check_stations", "check_cmux"):
+        setattr(d, name, lambda *a: None)
+    d.check_tares = lambda c: tares_on
+    d.check_crew = lambda c: None
+    d.check_lsp = lambda c: seen.append("lsp")
+    real_client, real_merge = doctor.TaresClient, doctor.state.merge_crew_defaults
+    try:
+        doctor.TaresClient = FakeClient
+        doctor.state.merge_crew_defaults = lambda paths: None
+        d.collect()
+    finally:
+        doctor.TaresClient, doctor.state.merge_crew_defaults = real_client, real_merge
+    return seen
+
+
+ck("Tares on: collect runs the language-server check", collect_with(True) == ["lsp"])
+ck("Tares off: collect skips the language-server check (bash: tares_on && doctor_lsp)", collect_with(False) == [])
 
 # ---------- the offer crew up makes ----------
 
