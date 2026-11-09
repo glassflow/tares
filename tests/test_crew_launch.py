@@ -137,9 +137,9 @@ kd = SCRATCH / "kitdir"
 (kd / "bin").mkdir(parents=True)
 (kd / "scripts").mkdir()
 (kd / "__pycache__").mkdir()
-(kd / "bin" / "factory").write_text("echo hi\n")
-(kd / "scripts" / "b.py").write_text("print(2)\n")
-(kd / "scripts" / "a.py").write_text("print(1)\n")
+(kd / "bin" / "factory").write_bytes(b"echo hi\n")
+(kd / "scripts" / "b.py").write_bytes(b"print(2)\n")
+(kd / "scripts" / "a.py").write_bytes(b"print(1)\n")
 for name in (".hidden", "x.pyc", "y.swp", "z~", "4913", "q.orig", "q.rej"):
     (kd / name).write_text("noise")
 (kd / "__pycache__" / "m.pyc").write_bytes(b"\0")
@@ -198,6 +198,78 @@ finally:
     c.close()
     tares.__exit__(None, None, None)
 
+
+# ---------------------------------------------------------------------------------------------
+# Part 1b: what launch hands to claude, and when it refuses (no bash; claude is a stand-in)
+
+print("launch: the seams (what it hands to claude, and its refusals)")
+
+
+def launch_seen(name, station, role, parent, project, repo_name, out, world_=None):
+    """Run launch with a claude that prints `out`; returns (CrewError text or None, the args and keywords it
+    gave run_claude, the settings file as a dict)."""
+    tmp = SCRATCH / name
+    tmp.mkdir()
+    LS.make_crew(tmp, {"token": FAKE_TOKEN})
+    kit = LS.make_kit(tmp)
+    seen = {}
+
+    def fake(args, claude=None, timeout=None, platform=None, **kw):
+        seen["args"], seen["kw"] = [str(a) for a in args], kw
+        return subprocess.CompletedProcess(args, 0, out, None)
+
+    old = L.cl.run_claude
+    L.cl.run_claude = fake
+    os.environ["TARES_PLUGIN_DIR"] = str(kit)
+    tares = LS.FakeTares(world_ or {"projects": []})
+    tares.__enter__()
+    os.environ["TARESD_URL"] = tares.url
+    c = TaresClient(CrewPaths.at(tmp / "crew"), env=dict(os.environ))
+    try:
+        c.prime()
+        err = raises(L.launch, c, station, role, parent, project, str(tmp / repo_name), str(tmp / "crew"), "sonnet", "high",
+                     "go", claude="claude-stand-in", sleep=lambda _s: None)
+    finally:
+        L.cl.run_claude = old
+        os.environ.pop("TARES_PLUGIN_DIR", None)
+        c.close()
+        tares.__exit__(None, None, None)
+    doc = {}
+    if "args" in seen and "--settings" in seen["args"]:
+        doc = json.loads(Path(seen["args"][seen["args"].index("--settings") + 1]).read_text(encoding="utf-8"))
+    return err, seen, doc
+
+
+started = "backgrounded \u00b7 abcd1234 \u00b7 links-app-build-m1"
+err, seen, doc = launch_seen("seam-ok", "links-app-build-m1", "builder", "crew-orchestrator", "Links App", "links", started)
+ck("launch with a stand-in claude that names a session starts it", err is None, str(err))
+kw = seen.get("kw", {})
+ck("claude is run with stdout and stderr as one text (the session id may be on either)", kw.get("merge_stderr") is True, str(kw))
+ck("claude is run in the station's folder", kw.get("cwd") == str(SCRATCH / "seam-ok" / "crew"), str(kw.get("cwd")))
+ck("claude is run without the person's key and key sources", tuple(kw.get("drop_env", ())) == tuple(L.KEPT_FROM_CHILDREN)
+   and "TARES_AUTH_TOKEN" in L.KEPT_FROM_CHILDREN, str(kw.get("drop_env")))
+ck("claude is run with FORCE_COLOR=0", kw.get("env_extra", {}).get("FORCE_COLOR") == "0", str(kw.get("env_extra")))
+env = doc.get("env", {})
+ck("the settings file names the key file twice: TARES_FACTORY_TOKEN_FILE and TARES_FACTORY_CRED_FILE, the same file",
+   env.get("TARES_FACTORY_CRED_FILE") and env.get("TARES_FACTORY_CRED_FILE") == env.get("TARES_FACTORY_TOKEN_FILE"), str(env))
+ck("a project Tares does not list, with a plain name: the name is the default project", env.get("TARES_PROJECT") == "Links App",
+   str(env.get("TARES_PROJECT")))
+
+err, seen, doc = launch_seen("seam-utf", "caf-build-m1", "builder", "crew-orchestrator", "Caf\u00e9", "cafe", started.replace("links-app", "caf"))
+ck("a project Tares does not list, with a non-ASCII name: no default project (the header takes no non-ASCII)",
+   err is None and doc.get("env", {}).get("TARES_PROJECT") == "" and doc["env"].get("TARES_PROJECT_NAME") == "Caf\u00e9", str((err, doc.get("env"))))
+
+err, seen, doc = launch_seen("seam-helper", "links-app-build-m1-h1", "helper", "links-app-build-m1", "Links App", "links", started)
+a = seen.get("args", [])
+ident = a[a.index("--append-system-prompt") + 1] if "--append-system-prompt" in a else ""
+ck("a helper is told to load its parent's skill (station-builder), not station-helper",
+   "station-builder from the tares plugin" in ident and "station-helper" not in ident, ident[:200])
+
+err, seen, doc = launch_seen("seam-trust", "crew-reviewer", "reviewer", "", "", "x", "Error: this folder is not trusted")
+ck("a folder claude does not trust: the error says to run claude there once, not 'could not start'",
+   err is not None and "has not trusted" in err and "could not start" not in err, str(err))
+err, seen, doc = launch_seen("seam-none", "crew-reviewer", "reviewer", "", "", "x", "some other failure")
+ck("a claude that names no session: 'could not start <station>'", err == "could not start crew-reviewer", str(err))
 
 # ---------------------------------------------------------------------------------------------
 # Part 2: bash and Python side by side

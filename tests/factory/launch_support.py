@@ -164,6 +164,12 @@ def make_crew(tmp: Path, setup: dict) -> None:
 
 
 def _sub(text: str, tmp: Path) -> str:
+    """{TMP} as the plain path, for an argument."""
+    return text.replace("{TMP}", str(tmp))
+
+
+def _sub_json(text: str, tmp: Path) -> str:
+    """{TMP} as the path escaped for the inside of a JSON string (a Windows path has backslashes)."""
     return text.replace("{TMP}", json.dumps(str(tmp))[1:-1])
 
 
@@ -249,8 +255,8 @@ def main(argv: list) -> int:
     engine, fn, args = argv[0], argv[1], argv[2:]
     tmp = Path(os.environ["FACTORY_CREW_HOME"]).parent
     args = [_sub(a, tmp) for a in args]
-    setup = json.loads(_sub(os.environ.get("LAUNCH_SETUP") or "{}", tmp))
-    world = json.loads(_sub(os.environ.get("LAUNCH_WORLD") or "{}", tmp))
+    setup = json.loads(_sub_json(os.environ.get("LAUNCH_SETUP") or "{}", tmp))
+    world = json.loads(_sub_json(os.environ.get("LAUNCH_WORLD") or "{}", tmp))
     kit = make_kit(tmp)
     make_crew(tmp, setup)
     with FakeTares(world) as tares:
