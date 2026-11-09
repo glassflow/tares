@@ -182,13 +182,15 @@ function waitFor(url, tries = 150) {
          && (await page.getByTestId("people-email").count()) === 0 && (await page.getByTestId("people-add").count()) === 0);
       await checkWords(page, ck, "no licence");
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "factory-people-nolicence-1440.png"), fullPage: true });
-      await page.goto(`${BASE}/settings?tab=access`);
+      await page.goto(`${BASE}/settings?tab=people`);
       await page.getByRole("heading", { name: "People" }).waitFor({ timeout: 15000 });
       await page.getByTestId("you-row").waitFor({ timeout: 15000 });
-      ck("no licence: Settings, Access shows you and the licence line", (await page.getByTestId("you-row").count()) === 1
+      ck("no licence: Settings, People shows you and the licence line", (await page.getByTestId("you-row").count()) === 1
          && await page.getByTestId("licence-needed").first().isVisible());
       ck("no licence: no Add person button", (await page.getByRole("button", { name: "Add person" }).count()) === 0);
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "settings-access-nolicence-1440.png"), fullPage: true });
+      await page.goto(`${BASE}/settings?tab=keys`);
+      await page.getByRole("button", { name: "Create key" }).first().waitFor({ timeout: 15000 });
       await page.getByRole("button", { name: "Create key" }).first().click();
       await page.getByRole("dialog", { name: "Create API key" }).waitFor({ timeout: 10000 });
       ck("no licence: the key dialog has no person picker", (await page.getByRole("dialog").getByText("whose agent or script this is").count()) === 0);
