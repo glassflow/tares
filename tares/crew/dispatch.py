@@ -28,6 +28,14 @@ ENGINES = ("python", "bash")
 PORTED: dict[tuple[str, ...], Callable[[list[str], dict], int]] = {}
 
 
+def _tidy(argv: list[str], env: dict) -> int:
+    from .tidy import cmd_tidy  # imported when used, so other commands start without it
+    return cmd_tidy(argv, env)
+
+
+PORTED[("tidy",)] = _tidy
+
+
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
