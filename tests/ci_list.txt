@@ -29,6 +29,7 @@ test_cloud_connect
 test_core_single_person
 test_crew_claude
 test_crew_client
+test_crew_contract
 test_crew_dispatch
 test_crew_fake_claude
 test_crew_hooks

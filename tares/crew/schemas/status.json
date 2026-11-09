@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/status.json",
+  "title": "tares factory status --json: the crew at a glance",
+  "type": "object",
+  "required": ["schema_version", "crew", "orchestrator", "stations", "running"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "crew": {"type": "string"},
+    "orchestrator": {"type": "string"},
+    "running": {"description": "How many stations are running (the length of `stations`).", "type": "integer", "minimum": 0},
+    "stations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["station", "role", "model", "effort", "state", "tempo", "detail"],
+        "properties": {
+          "station": {"type": "string"},
+          "role": {"type": "string"},
+          "model": {"type": "string"},
+          "effort": {"type": "string"},
+          "state": {"description": "Whose turn the session is on; `gone` when it has no live session.", "type": "string"},
+          "tempo": {"description": "Empty when the station has not said.", "type": "string"},
+          "detail": {"description": "What it is doing or needs, in full (the text view cuts it at 70 characters).", "type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "two_sessions": {
+      "description": "Station names with more than one live session. Absent when the crew has no stations yet.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "ids"],
+        "properties": {"name": {"type": "string"}, "ids": {"type": "array", "items": {"type": "string"}}},
+        "additionalProperties": false
+      }
+    },
+    "plugin": {
+      "type": "object",
+      "required": ["older"],
+      "properties": {"older": {"description": "Stations running an older plugin than the checkout's.", "type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    },
+    "claude_code": {
+      "type": "object",
+      "required": ["target", "older", "retrying"],
+      "properties": {
+        "target": {"description": "The installed Claude Code version.", "type": "string"},
+        "older": {"description": "Stations running an older one.", "type": "integer", "minimum": 0},
+        "retrying": {"description": "Of those, how many are retrying after coming back on an old spare.", "type": "integer", "minimum": 0}
+      },
+      "additionalProperties": false
+    },
+    "halted": {"description": "The reason when the crew is halted, else null.", "type": ["string", "null"]},
+    "frozen": {
+      "description": "Null when the kit is not frozen.",
+      "type": ["object", "null"],
+      "required": ["kit", "newer_kit"],
+      "properties": {"kit": {"type": "string"}, "newer_kit": {"type": "boolean"}},
+      "additionalProperties": false
+    },
+    "idle_wake": {"type": "boolean"},
+    "pace": {"description": "The pace line the text view prints; null when pacing is off or Tares cannot say.", "type": ["string", "null"]},
+    "watch": {
+      "type": "object",
+      "required": ["running", "pid"],
+      "properties": {"running": {"type": "boolean"}, "pid": {"type": ["integer", "null"]}},
+      "additionalProperties": false
+    },
+    "desk": {
+      "type": "object",
+      "required": ["waiting", "next"],
+      "properties": {
+        "waiting": {"type": "integer", "minimum": 0},
+        "next": {"description": "The first item as `desk --json` gives it; null when none waits.", "type": ["object", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "projects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "tickets_done", "tickets_total", "milestone"],
+        "properties": {
+          "name": {"type": ["string", "null"]},
+          "tickets_done": {"type": ["integer", "null"]},
+          "tickets_total": {"type": ["integer", "null"]},
+          "milestone": {
+            "type": ["object", "null"],
+            "required": ["name", "done", "total"],
+            "properties": {
+              "name": {"type": ["string", "null"]},
+              "done": {"type": ["integer", "null"]},
+              "total": {"type": ["integer", "null"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "crew_page": {"type": "string"}
+  },
+  "additionalProperties": false
+}

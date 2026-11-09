@@ -36,6 +36,14 @@ def _tidy(argv: list[str], env: dict) -> int:
 PORTED[("tidy",)] = _tidy
 
 
+def _events(argv: list[str], env: dict) -> int:
+    from .events import cmd_events  # imported when used: it is the only command that tails a file
+    return cmd_events(argv, env)
+
+
+PORTED[("events",)] = _events  # new in Python (TR-1067): bash has no such command
+
+
 def _view(name: str):
     """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
     def run(argv: list[str], env: dict) -> int:
@@ -106,6 +114,25 @@ def _fail(message: str) -> None:
     raise SystemExit(2)
 
 
+def _call(fn: Callable[[list[str], dict], int], argv: list[str], env: dict) -> int:
+    """fn(argv, env). With --json, a failure nobody caught prints the error shape (contract.py) and exits 1
+    instead of a traceback or a text line. Without --json it is left alone, as it was."""
+    if "--json" not in argv:
+        return fn(argv, env)
+    from . import contract
+    from .errors import CrewError
+    try:
+        return fn(argv, env)
+    except CrewError as e:
+        contract.refuse(e, argv)
+        return contract.EXIT_FAILED
+    except (SystemExit, KeyboardInterrupt):
+        raise
+    except Exception as e:  # a bug: still one shape for the caller, the exception named
+        contract.refuse(CrewError(f"{type(e).__name__}: {e}"), argv)
+        return contract.EXIT_FAILED
+
+
 def run(argv: list[str], env: dict, script: str | Path) -> None:
     """Run `tares factory <argv>`: call the Python command and exit with its code, or replace this
     process with `bash <script> <argv>` under env. Does not return."""
@@ -114,7 +141,7 @@ def run(argv: list[str], env: dict, script: str | Path) -> None:
         _fail(message)
     if kind == "python":
         force_utf8()
-        code = fn(list(argv), env)
+        code = _call(fn, list(argv), env)
         for stream in (sys.stdout, sys.stderr):
             try:
                 stream.flush()
