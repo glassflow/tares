@@ -1648,6 +1648,13 @@ pre.payload {
 .res-filters input[type="search"] { flex: 1 1 260px; max-width: 420px; }
 .res-name { overflow-wrap: anywhere; max-width: 280px; }
 .table-scroll { overflow-x: auto; }
+/* Factory Settings: a console panel that is the whole page lifts its heading row above its card. */
+.settings-headed > .panel:last-child { position: relative; margin-top: 44px; }
+.settings-headed > .panel:last-child > h2:first-child,
+.settings-headed > .panel:last-child > div:first-child:has(> h2) { position: absolute; top: -49px; left: -1px; right: -1px; margin: 0 !important; min-height: 36px; align-items: center; }
+.settings-tool > .panel:first-child > h2:first-child { display: none; }
+.settings-headed > .panel:last-child > h2:first-child,
+.settings-headed > .panel:last-child > div:first-child > h2 { font-size: 20px; line-height: 36px; }
 .pv-head { margin-bottom: 12px; }
 .pv-facts td:first-child { width: 150px; white-space: nowrap; vertical-align: top; }
 .pv-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 12px; margin-bottom: 18px; max-width: 960px; }

@@ -100,8 +100,11 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
   const text = (page, id) => page.getByTestId(id).innerText().then((s) => s.trim());
   const until = async (fn, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 200)); } return false; };
   // The Settings tabs a person can pick: the side list from 600 px up, the select below it.
-  const tabNames = (page, w) => page.evaluate((narrow) => [...document.querySelectorAll(narrow ? ".pnav-select option" : ".pnav .pnav-label")]
-    .map((e) => e.textContent.trim()), w < 600);
+  const tabNames = (page, w) => page.evaluate((narrow) => {
+    // a factory cell's Settings lists every item in its select, whichever group is open
+    const factory = document.querySelectorAll('[data-testid="settings-select"] option');
+    return [...(factory.length ? factory : document.querySelectorAll(narrow ? ".pnav-select option" : ".pnav .pnav-label"))].map((e) => e.textContent.trim());
+  }, w < 600);
   const KEY = testKey();
   const bits = [KEY.slice(0, 40), KEY.slice(-40), KEY.slice(Math.floor(KEY.length / 2), Math.floor(KEY.length / 2) + 40)];
   const keyOnPage = async (page) => {   // what a person can see or select: text, markup, field values
@@ -236,7 +239,8 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
         (pg) => pg.route(/\/api\/whoami(\?|$)/, (route) => (failing ? route.abort() : route.continue())));
       await page.waitForLoadState("networkidle");
       failing = true;
-      await page.locator(".pnav .pnav-label", { hasText: "Enterprise licence" }).click();
+      await page.getByTestId("group-open-workspace").click();
+      await page.getByTestId("nav-licence").click();
       await page.getByTestId("licence-panel").waitFor({ timeout: 15000 });
       const said = await page.getByTestId("licence-who-failed").waitFor({ timeout: 10000 }).then(() => true, () => false);
       ck(t("the panel says it did not learn who you are"), said && /did not say who you are/.test(await text(page, "licence-who-failed")));
@@ -403,7 +407,7 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
           await page.waitForLoadState("networkidle"); await page.waitForTimeout(1500);
           ck(t(`${p} @${w}: no banner`), (await page.getByTestId("licence-banner").count()) === 0);
           ck(t(`${p} @${w}: no licence panel, no Enterprise licence tab, no row`), (await page.getByTestId("licence-panel").count()) === 0
-             && !(await hasTab(page, w)) && (await page.getByTestId("row-licence").count()) === 0);
+             && !(await hasTab(page, w)));
           ck(t(`${p} @${w}: no page error, no crash screen, no sideways scroll`), errors.length === 0 && (await page.getByText("Unexpected Application Error").count()) === 0 && (await overflow(page)) <= 0, `${errors.join(" ")} ${await overflow(page)}px over`);
           if (p === "/settings/advanced?tab=licence") await shot(page, "licence-cloud", w);
           await ctx.close();
@@ -423,9 +427,10 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
       ck(t("control: and the link opens the panel"), (await page.getByTestId("licence-panel").count()) === 1, page.url());
       await ctx.close();
       const selfF = await open(expired, "/settings", 1440);
-      await selfF.page.getByTestId("row-licence").waitFor({ timeout: 15000 }).catch(() => {});
-      ck(t("control: a self-hosted factory cell shows the row, and its button opens the panel"), (await selfF.page.getByTestId("row-licence").count()) === 1);
-      await selfF.page.getByTestId("row-licence").getByRole("link", { name: "Open licence" }).click();
+      await selfF.page.getByTestId("group-open-workspace").click();
+      await selfF.page.getByTestId("nav-licence").waitFor({ timeout: 15000 }).catch(() => {});
+      ck(t("control: a self-hosted factory cell lists the licence, and it opens the panel"), (await selfF.page.getByTestId("nav-licence").count()) === 1);
+      await selfF.page.getByTestId("nav-licence").click();
       await selfF.page.getByTestId("licence-panel").waitFor({ timeout: 15000 }).catch(() => {});
       ck(t("control: the row's button opens the panel"), (await selfF.page.getByTestId("licence-panel").count()) === 1, selfF.page.url());
       await selfF.ctx.close();
@@ -461,7 +466,7 @@ const gone = async (base) => { for (let i = 0; i < 50; i++) { try { await fetch(
         return page.route(/\/health(\?|$)/, async (route) => { await gate; await route.continue(); });
       };
       const screens = async (page, w) => ({
-        banner: await page.getByTestId("licence-banner").count(), row: await page.getByTestId("row-licence").count(),
+        banner: await page.getByTestId("licence-banner").count(), row: await page.locator('[data-testid="settings-select"] option[value="licence"]').count(),
         link: await page.getByTestId("licence-link").count(), panel: await page.getByTestId("licence-panel").count(),
         tab: (await hasTab(page, w)) ? 1 : 0,
       });

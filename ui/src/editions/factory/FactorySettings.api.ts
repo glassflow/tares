@@ -55,7 +55,6 @@ export interface SettingsPage {
   models: { default_provider: string; chosen: boolean; budget_text: string };
   people: { keys: { count: number; text: string }; cloud_team_href: string | null };
   edition: SettingsEdition;
-  advanced: { label: string; text: string; href: string }[];
 }
 
 export const factorySettings = () => request<SettingsPage>("/api/factory/settings");

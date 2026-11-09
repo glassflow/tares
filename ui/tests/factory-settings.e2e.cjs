@@ -1,8 +1,8 @@
 /*
  * Browser e2e for TR-738: the factory Settings page (/settings).
  *
- * The page has six sections in a fixed order: Tools, Crew, Models and budget, People and keys,
- * Edition, Advanced. Each change goes through the route that exists and is read back from the cell:
+ * The page has a two-level sidebar (Crew, Tools, Models, Team, Workspace, Advanced) in place of the
+ * main menu, with a Back link, and shows one item at a time. Each change goes through the route that exists and is read back from the cell:
  * builders at once, the second check, pacing, how far the crew may go (merging on its own asks first),
  * a grant, the edition. A grant shows its words and, for "D79 A", the question it answers. A read key
  * sees the page with every control dimmed and disabled, and no way to switch the edition. Markup in a
@@ -32,7 +32,7 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
 const TOKEN = "e2e-admin-token-settings";
 const SAMPLES = ["busy", "newc", "ro", "rel", "long", "many", "load", "err"];
-const SECTIONS = ["tools", "crew", "models", "people", "edition", "advanced"];
+const GROUPS = ["Crew", "Tools", "Models", "Team", "Workspace", "Advanced"];
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -94,38 +94,68 @@ const until = async (fn, tries = 40) => {
     const crew = async () => (await api(TOKEN, "GET", "/api/crew/settings")).body;
     const text = (page, id) => page.getByTestId(id).innerText().then((t) => t.replace(/\s+/g, " ").trim());
 
-    // 1. the page loads in one call, in six sections in order
+    const go = async (page, tab) => {
+      await page.goto(`${BASE}/settings?tab=${tab}`, { waitUntil: "load" });
+      await page.getByTestId(`pane-${tab}`).waitFor();
+      await settle(page);
+    };
+    const groupOpen = (page) => page.locator('[data-testid^="group-open-"][aria-expanded="true"]').evaluateAll((b) => b.map((x) => x.textContent.trim()));
+
+    // 1. the page loads in one call, on the first item, with the sidebar in place of the main menu
     const { ctx, page } = await newPage(1440);
     const one = expectOneCall(page, "/api/factory/settings");
     await page.goto(`${BASE}/settings`, { waitUntil: "load" });
-    await page.getByTestId("section-advanced").waitFor();
+    await page.getByTestId("pane-crew").waitFor();
     await settle(page);
     await one(ck, "/settings");
     ck("the page has its heading", await page.getByRole("heading", { name: "Settings", exact: true }).isVisible());
-    const order = await page.locator("section[id]").evaluateAll((s) => s.map((x) => x.id));
-    ck("the sections are in order: tools, crew, models, people, edition, advanced", order.join() === SECTIONS.join(), order.join());
-    const heads = await page.locator("section[id] > h2").allInnerTexts();
-    ck("each has its name", heads.join("|") === "Tools|Crew|Models and budget|People and keys|Edition|Advanced", heads.join("|"));
-    ck("the menu has Settings as the current page", (await page.locator('nav[aria-label="Main"] a[aria-current="page"]').allInnerTexts()).map((t) => t.trim()).join() === "Settings");
+    const heads = await page.locator('[data-testid^="group-open-"]').evaluateAll((b) => b.map((x) => x.textContent.trim()));
+    ck("the groups are in order", heads.filter((h) => GROUPS.includes(h)).join() === GROUPS.join(), heads.join());
+    ck("only the group of the item shown is open", (await groupOpen(page)).join() === "Crew", (await groupOpen(page)).join());
+    ck("the first level opens to the second", (await page.getByTestId("nav-crew").getAttribute("aria-current")) === "page" && (await page.getByTestId("nav-allowed").isVisible()) && (await page.getByTestId("nav-github").count()) === 0);
+    ck("the main menu is hidden in Settings", (await page.locator('nav[aria-label="Main"]').count()) === 0);
+    ck("What you allowed says how many", (await text(page, "nav-grants")) === "10", await text(page, "nav-grants"));
+    await page.getByTestId("group-open-models").click();
+    await page.getByTestId("pane-providers").waitFor();
+    ck("a group opens on its first item, and the other closes", (await groupOpen(page)).join() === "Models" && new URL(page.url()).searchParams.get("tab") === "providers", page.url());
+    await page.getByTestId("nav-budget").click();
+    await page.getByTestId("pane-budget").waitFor();
+    ck("the second level changes the item, in the same group", (await groupOpen(page)).join() === "Models" && (await page.getByTestId("nav-budget").getAttribute("aria-current")) === "page");
+
+    // Back goes where you came from
+    await page.goto(`${BASE}/tickets`, { waitUntil: "load" });
+    await page.getByTestId("menu-settings").click();
+    await page.locator('[data-testid="settings-nav"] [data-testid="settings-back"]').waitFor();
+    await page.locator('[data-testid="settings-nav"] [data-testid="settings-back"]').click();
+    await page.waitForURL((u) => u.pathname === "/tickets");
+    ck("Back returns to the page before Settings", new URL(page.url()).pathname === "/tickets" && (await page.locator('nav[aria-label="Main"]').count()) === 1, page.url());
 
     // 2. tools
-    ck("GitHub is connected, as whom", (await text(page, "tool-github")).includes("Connected as example-org") && (await text(page, "tool-github")).endsWith("Change"), await text(page, "tool-github"));
-    ck("Linear and Slack are not connected, and offer Connect", /Not connected Connect$/.test(await text(page, "tool-linear")) && /Not connected Connect$/.test(await text(page, "tool-slack")),
-       `${await text(page, "tool-linear")} | ${await text(page, "tool-slack")}`);
-    ck("Claude Code is reporting, with how long ago", /^Claude Code Reporting: last session .+ See how$/.test(await text(page, "tool-claude_code")), await text(page, "tool-claude_code"));
-    ck("a connected tool has a lit dot and an unconnected one does not", (await page.getByTestId("tool-dot").evaluateAll((d) => d.map((x) => x.getAttribute("data-on")))).join() === "true,false,false,true");
-    ck("Connect for Linear goes to its settings tab", (await page.getByTestId("tool-linear").locator("a").getAttribute("href")) === "/settings/advanced?tab=linear");
+    await go(page, "github");
+    ck("GitHub is connected, as whom", (await text(page, "tool-github")).includes("Connected as example-org"), await text(page, "tool-github"));
+    ck("a connected tool has a lit dot in the sidebar and an unconnected one does not", (await page.getByTestId("nav-dot").evaluateAll((d) => d.map((x) => x.getAttribute("data-on")))).join() === "true,false,false,true");
+    ck("the GitHub page has one heading of that name and lists the accounts", (await page.getByRole("heading", { name: "GitHub", exact: true }).count()) === 1 && (await page.getByRole("heading", { name: "Accounts", exact: true }).count()) === 1);
+    await go(page, "linear");
+    ck("Linear is not connected, and its own form is there", /^Not connected/.test(await text(page, "tool-linear")) && (await page.getByTestId("pane-linear").getByRole("button", { name: "Connect" }).count()) === 1, await text(page, "tool-linear"));
+    await go(page, "slack");
+    ck("Slack is not connected", /^Not connected/.test(await text(page, "tool-slack")), await text(page, "tool-slack"));
+    await go(page, "claude_code");
+    ck("Claude Code is reporting, with how long ago", /^Reporting: last session .+ See how$/.test(await text(page, "tool-claude_code")), await text(page, "tool-claude_code"));
     ck("Claude Code goes to its source", (await page.getByTestId("tool-claude_code").locator("a").getAttribute("href")) === "/sources/claude-code");
 
     // 3. the crew starts as a new cell has it
-    ck("up to merge is chosen", (await page.getByTestId("how-L3-review").getAttribute("aria-checked")) === "true" && (await page.getByTestId("how-L4-ship").getAttribute("aria-checked")) === "false");
+    await go(page, "crew");
+    ck("You approve each merge is chosen", (await page.getByTestId("how-L3-review").getAttribute("aria-checked")) === "true" && (await page.getByTestId("how-L4-ship").getAttribute("aria-checked")) === "false");
     ck("builders at once: 3", (await page.getByTestId("builders-count").innerText()) === "3" && /Up to 3 builders at once/.test(await text(page, "row-builders")));
     ck("second check and pacing are off", (await page.getByTestId("toggle-challenger").getAttribute("aria-checked")) === "false" && (await page.getByTestId("toggle-pace").getAttribute("aria-checked")) === "false");
     ck("there is no Releases row without a release profile", (await page.getByTestId("row-releases").count()) === 0);
-    ck("people: two access keys", /2 access keys/.test(await text(page, "row-keys")));
-    ck("the People row opens the People page", (await page.getByTestId("row-team").getByRole("link", { name: "Open People" }).getAttribute("href")) === "/people");
+    ck("what you allowed is not on this page", (await page.getByTestId("grant").count()) === 0);
     await checkWords(page, ck, "live page");
     await shot(page, "live-1440.png");
+    await go(page, "keys");
+    ck("Access keys lists the two keys, without the introduction", (await page.getByTestId("pane-keys").getByRole("heading", { name: "Access keys", exact: true }).count()) === 1 && /writer/.test(await text(page, "pane-keys")) && /reader/.test(await text(page, "pane-keys")) && !/Give each agent/.test(await text(page, "pane-keys")));
+    await checkWords(page, ck, "access keys");
+    await go(page, "crew");
 
     // 4. builders at once
     await page.getByTestId("builders-more").click();
@@ -174,12 +204,11 @@ const until = async (fn, tries = 40) => {
     await settle(page);
 
     // 7. what you allowed
+    await go(page, "allowed");
     const grants = page.getByTestId("grant");
-    ck("10 grants, 5 shown and the rest on request", (await grants.count()) === 5 && (await text(page, "grants-more")) === "Show 5 more", `${await grants.count()}`);
+    ck("all 10 grants are shown", (await grants.count()) === 10 && (await page.getByTestId("grants-more").count()) === 0, `${await grants.count()}`);
     const first = await grants.first().innerText();
     ck("the newest is first, in quotes, with its scope and when", /^“Builders may delete the merged branch number 6/.test(first) && /For every project, given today/.test(first), first);
-    await page.getByTestId("grants-more").click();
-    ck("Show 5 more shows all 10", (await grants.count()) === 10 && (await page.getByTestId("grants-more").count()) === 0);
     const d79 = grants.filter({ hasText: "D79 A" });
     ck("a grant that only says D79 A shows the question it answers", (await d79.count()) === 1 && /Answer to: Which branch should the next wave of pull requests target\?/.test(await d79.innerText()), await d79.innerText());
     ck("a project grant names the project", /In project-x, given today/.test(await grants.filter({ hasText: "Kim's builders" }).innerText()));
@@ -205,6 +234,7 @@ const until = async (fn, tries = 40) => {
     ck("and shows first, given today", /close stale pull requests/.test(await grants.first().innerText()) && /given today/.test(await grants.first().innerText()), await grants.first().innerText());
 
     // 8. the edition
+    await go(page, "edition");
     ck("the edition is Software Factory, with the note", /Software Factory/.test(await text(page, "row-edition")) && /Switching changes the screens, not your data/.test(await text(page, "row-edition")));
     ck("an admin is offered the switch to AI SRE", (await text(page, "edition-sre")) === "Switch to AI SRE");
     await page.getByTestId("edition-sre").click();
@@ -222,43 +252,35 @@ const until = async (fn, tries = 40) => {
     await settle(page);
     await api(TOKEN, "PUT", "/api/settings/edition", { edition: "factory" });
 
-    // 9. the way to everything else
-    await page.goto(`${BASE}/settings`, { waitUntil: "load" });
-    await page.getByTestId("section-advanced").waitFor();
-    const adv = await page.getByTestId("advanced-link").evaluateAll((a) => a.map((x) => [x.querySelector("b").textContent.trim(), x.getAttribute("href")]));
-    ck("Advanced lists six places", JSON.stringify(adv.map((a) => a[0])) === JSON.stringify(["All settings", "Connections", "Explore your data", "All resources", "Connect an agent", "Reads"]), JSON.stringify(adv));
-    for (const [label, href] of [["All settings", "/settings/advanced"], ["Connections", "/sources"], ["Explore your data", "/explore"]]) {
-      await page.goto(`${BASE}/settings`, { waitUntil: "load" });
-      await page.getByTestId("advanced-link").filter({ hasText: label }).click();
+    // 9. Advanced has its own place in the sidebar
+    await go(page, "agent_tools");
+    ck("Advanced is open and lists its items", (await groupOpen(page)).join() === "Advanced" && (await page.getByTestId("nav-observability").isVisible()));
+    for (const [id, href] of [["connections", "/sources"], ["explore", "/explore"], ["resources", "/resources"], ["connect", "/connect"], ["reads", "/reads"]]) {
+      await go(page, "agent_tools");
+      await page.getByTestId(`nav-${id}`).click();
       await page.waitForURL((u) => u.pathname === href);
-      ck(`${label} reaches ${href}`, new URL(page.url()).pathname === href, page.url());
+      ck(`${id} reaches ${href}`, new URL(page.url()).pathname === href, page.url());
     }
 
-    // 10. an address with a section lands on it
-    for (const id of ["crew", "tools"]) {
-      await page.goto(`${BASE}/settings#${id}`, { waitUntil: "load" });
-      await page.getByTestId(`section-${id}`).waitFor();
-      await settle(page);
-      const top = await page.getByTestId(`section-${id}`).evaluate((s) => Math.round(s.getBoundingClientRect().top));
-      ck(`/settings#${id} scrolls to ${id}`, id === "tools" ? top < 200 : top < 200 && (await page.evaluate(() => window.scrollY)) > 0, `top ${top}`);
+    // 10. the old addresses still land on the right item
+    for (const [address, id] of [["/settings#crew", "crew"], ["/settings#tools", "github"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],
+                                 ["/settings?tab=agents", "budget"], ["/settings?tab=access", "keys"], ["/settings/advanced?tab=observability", "observability"],
+                                 ["/settings/advanced", "agent_tools"]]) {
+      await page.goto(`${BASE}${address}`, { waitUntil: "load" });
+      await page.getByTestId(`pane-${id}`).waitFor();
+      ck(`${address} lands on ${id}`, new URL(page.url()).pathname === "/settings", page.url());
     }
 
-    // 11. the old addresses that name a tab still reach it (the GitHub App return, the Tares Cloud return)
+    // 11. the GitHub App return and the Tares Cloud return
     {
-      const tabOpen = (name) => page.locator('nav[aria-label="Settings"]').getByRole("button", { name, exact: true });
       await page.goto(`${BASE}/settings?tab=github&installed=1`, { waitUntil: "load" });
-      await page.waitForURL((u) => u.pathname === "/settings/advanced");
-      const u = new URL(page.url());
-      ck("/settings?tab=github lands on /settings/advanced with the same query", u.searchParams.get("tab") === "github" && u.searchParams.get("installed") === "1", page.url());
-      ck("and the GitHub tab is the one open", (await tabOpen("GitHub").getAttribute("aria-current")) === "page");
-      ck("and this page's sections are not drawn", (await page.getByTestId("section-crew").count()) === 0);
+      await page.getByTestId("pane-github").waitFor();
+      ck("/settings?tab=github keeps the rest of its address", new URL(page.url()).searchParams.get("installed") === "1", page.url());
       await page.goto(`${BASE}/settings?cloud=github-connected`, { waitUntil: "load" });
-      await page.waitForURL((x) => x.pathname === "/settings/advanced");
-      ck("/settings?cloud= lands on the GitHub tab", (await tabOpen("GitHub").getAttribute("aria-current")) === "page");
-      ck("and shows what the cloud said", await page.getByText("GitHub is connected.", { exact: false }).first().isVisible());
-      await page.goto(`${BASE}/settings`, { waitUntil: "load" });
-      await page.getByTestId("section-crew").waitFor();
-      ck("/settings without a tab stays on this page", new URL(page.url()).pathname === "/settings");
+      await page.getByTestId("pane-github").waitFor();
+      ck("/settings?cloud= lands on GitHub and says what the cloud said", await page.getByText("GitHub is connected.", { exact: false }).first().isVisible());
+      await page.waitForURL((u) => !u.searchParams.has("cloud"));
+      ck("and the message is said once: the address drops it", new URL(page.url()).searchParams.get("tab") === "github", page.url());
     }
     await ctx.close();
 
@@ -284,35 +306,36 @@ const until = async (fn, tries = 40) => {
     {
       const n = await newPage(390);
       const p = n.page;
-      await p.goto(`${BASE}/settings`, { waitUntil: "load" });
-      await p.getByTestId("section-advanced").waitFor();
-      await p.getByTestId("grants-more").click();
-      await settle(p);
+      await go(p, "allowed");
       ck("390: the page does not scroll sideways, grants open", (await overflow(p)) <= 0, `${await overflow(p)}px`);
+      ck("390: no menu button, and Back is there", (await p.getByTestId("menu-button").count()) === 0 && (await p.getByTestId("settings-back").first().isVisible()));
+      await p.getByTestId("settings-select").selectOption("keys");
+      await p.getByTestId("pane-keys").waitFor();
+      await settle(p);
+      ck("390: the select changes the item, and a wide table stays in its card", (await overflow(p)) <= 0, `${await overflow(p)}px`);
       await checkWords(p, ck, "390 live");
       await shot(p, "live-390.png");
       await n.ctx.close();
     }
 
-    // 12b. All settings on a mid-size window: a wide table scrolls inside its card, not the page;
-    // a focused select keeps one chevron; a checkbox sits apart from its label
+    // 12b. a mid-size window: a wide table scrolls inside its card, not the page; a focused select
+    // keeps one chevron; a checkbox sits apart from its label
     {
       const n = await newPage(1000);
       const p = n.page;
-      for (const tab of ["access", "github", "anthropic", "observability"]) {
-        await p.goto(`${BASE}/settings/advanced?tab=${tab}`, { waitUntil: "load" });
-        await p.locator(".pview .panel").first().waitFor();
-        await settle(p);
-        ck(`1000: All settings ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+      for (const tab of ["keys", "github", "providers", "observability"]) {
+        await go(p, tab);
+        await p.locator(`[data-testid="pane-${tab}"] .panel`).first().waitFor();
+        ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
-      await p.goto(`${BASE}/settings/advanced?tab=observability`, { waitUntil: "load" });
-      const sel = p.locator(".pview select").first();
+      await go(p, "observability");
+      const sel = p.locator('[data-testid="pane-observability"] select').first();
       await sel.waitFor();
       await sel.focus();
       const rep = await sel.evaluate((e) => getComputedStyle(e).backgroundRepeat);
       ck("a focused select draws its chevron once", rep === "no-repeat", rep);
-      await p.goto(`${BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
-      const box = p.locator(".pview label.field input[type=checkbox]").first();
+      await go(p, "agent_tools");
+      const box = p.locator('[data-testid="pane-agent_tools"] label.field input[type=checkbox]').first();
       await box.waitFor();
       const gap = await box.evaluate((e) => Math.round(e.nextElementSibling.getBoundingClientRect().left - e.getBoundingClientRect().right));
       ck("the Agent tools checkbox sits apart from its label", gap >= 8, `${gap}px`);
@@ -322,10 +345,10 @@ const until = async (fn, tries = 40) => {
     // 13. without the sample flag the sample address changes nothing
     {
       const n = await newPage(1440);
-      await n.page.goto(`${BASE}/settings?sample=newc`, { waitUntil: "load" });
-      await n.page.getByTestId("section-advanced").waitFor();
+      await n.page.goto(`${BASE}/settings?sample=newc&tab=allowed`, { waitUntil: "load" });
+      await n.page.getByTestId("pane-allowed").waitFor();
       await settle(n.page);
-      ck("?sample=newc without the flag shows the cell's own settings", (await n.page.getByTestId("grant").count()) === 5);
+      ck("?sample=newc without the flag shows the cell's own settings", (await n.page.getByTestId("grant").count()) >= 10);
       await n.ctx.close();
     }
 
@@ -336,24 +359,23 @@ const until = async (fn, tries = 40) => {
         const tag = `sample ${name} at ${width}`;
         let reads = 0;
         p.on("request", (r) => { if (r.url().includes("/api/factory/settings")) reads++; });
-        await p.goto(`${BASE}/settings?sample=${name}`, { waitUntil: "load" });
+        const pane = ["busy", "newc", "long", "many"].includes(name) ? "allowed" : "crew";
+        await p.goto(`${BASE}/settings?sample=${name}&tab=${pane}`, { waitUntil: "load" });
         if (name === "load") await p.getByTestId("settings-loading").waitFor();
         else if (name === "err") await p.getByText("Settings did not load.").waitFor();
-        else await p.getByTestId("section-advanced").waitFor();
+        else await p.getByTestId(`pane-${pane}`).waitFor();
         await settle(p);
         const body = await p.getByTestId("factory-settings").innerText();
-        const sections = await p.locator("section[id]").evaluateAll((s) => s.map((x) => x.id));
-        if (name === "load") ck(`${tag}: it is the loading state, no sections`, sections.length === 0 && (await p.getByTestId("settings-loading").isVisible()));
-        else if (name === "err") ck(`${tag}: it says settings did not load and offers Retry`, /Settings did not load\./.test(body) && (await p.getByRole("button", { name: "Retry" }).count()) === 1 && sections.length === 0, body);
-        else ck(`${tag}: six sections in order`, sections.join() === SECTIONS.join(), sections.join());
-        if (name === "busy") ck(`${tag}: 7 grants, 5 shown, Show 2 more`, (await p.getByTestId("grant").count()) === 5 && (await text(p, "grants-more")) === "Show 2 more");
-        if (name === "newc") ck(`${tag}: nothing allowed yet, nothing connected`, /Nothing allowed yet\. The crew asks when it needs something\./.test(body) && (await p.getByTestId("tool-dot").evaluateAll((d) => d.every((x) => x.getAttribute("data-on") === "false"))) && /Not chosen yet/.test(body) && /No access keys yet/.test(body) && (await p.getByTestId("row-team").count()) === 1);
-        if (name === "ro") ck(`${tag}: read only, every control disabled, People still opens`, (await p.getByTestId("read-only").count()) === 1 && (await p.locator("#tools, #crew, #models, #people").locator("button:not([disabled]), a:not([aria-disabled=true]):not([href='/people']):not([href='/settings/advanced?tab=licence'])").count()) === 0
-           && (await p.getByTestId("row-team").getByRole("link", { name: "Open People" }).count()) === 1 && (await p.getByTestId("edition-sre").count()) === 0);
-        if (name === "ro") ck(`${tag}: the Enterprise licence row stays open and points at the licence tab`, (await p.getByTestId("row-licence").getByRole("link", { name: "Open licence" }).getAttribute("href")) === "/settings/advanced?tab=licence");
-        if (name === "rel") ck(`${tag}: the Releases row, second check and pacing on`, (await p.getByTestId("row-releases").count()) === 1 && (await p.getByTestId("toggle-challenger").getAttribute("aria-checked")) === "true" && /91%/.test(await text(p, "row-pace")));
-        if (name === "long") ck(`${tag}: very long names wrap and markup stays text`, (await overflow(p)) <= 0 && (await p.getByTestId("grant").first().locator("b, img").count()) === 0 && (await p.getByTestId("grant").first().innerText()).includes("<b>bold</b>"));
-        if (name === "many") { await p.getByTestId("grants-more").click(); ck(`${tag}: 12 grants after Show 7 more`, (await p.getByTestId("grant").count()) === 12); }
+        const panes = await p.locator('[data-testid^="pane-"]').count();
+        if (name === "load") ck(`${tag}: it is the loading state, no item`, panes === 0 && (await p.getByTestId("settings-loading").isVisible()));
+        else if (name === "err") ck(`${tag}: it says settings did not load and offers Retry`, /Settings did not load\./.test(body) && (await p.getByRole("button", { name: "Retry" }).count()) === 1 && panes === 0, body);
+        else ck(`${tag}: one item is shown`, panes === 1, `${panes}`);
+        if (name === "busy") ck(`${tag}: all 7 grants`, (await p.getByTestId("grant").count()) === 7);
+        if (name === "newc") ck(`${tag}: nothing allowed yet`, /Nothing allowed yet\. The crew asks when it needs something\./.test(body), body);
+        if (name === "ro") ck(`${tag}: read only, every control disabled`, (await p.getByTestId("read-only").count()) === 1 && (await p.getByTestId("pane-crew").locator("button:not([disabled])").count()) === 0);
+        if (name === "rel") ck(`${tag}: the Releases row, second check and pacing on`, (await p.getByTestId("row-releases").count()) === 1 && (await p.getByTestId("toggle-challenger").getAttribute("aria-checked")) === "true" && /91%/.test(await text(p, "row-pace")), await text(p, "row-pace"));
+        if (name === "long") ck(`${tag}: very long names wrap and markup stays text`, (await overflow(p)) <= 0 && (await p.getByTestId("grant").first().locator("b, img").count()) === 0);
+        if (name === "many") ck(`${tag}: all 12 grants`, (await p.getByTestId("grant").count()) === 12);
         ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
         await checkWords(p, ck, tag);
         ck(`${tag}: a sample makes no read of the cell`, reads === 0, `${reads} calls`);

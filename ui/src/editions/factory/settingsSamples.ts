@@ -54,14 +54,6 @@ const BASE: SettingsPage = {
   people: { keys: { count: 2, text: "2 access keys" }, cloud_team_href: "https://example-org.example.com/team" },
   edition: { value: "factory", label: "Software Factory", can_switch: true,
              options: [{ value: "sre", label: "AI SRE" }], other: { value: "sre", label: "AI SRE" }, note: NOTE },
-  advanced: [
-    { label: "All settings", text: "Model providers, agent limits, tracing and the rest.", href: ADV },
-    { label: "Connections", text: "The services this cell reads from and how each is set up.", href: "/sources" },
-    { label: "Explore your data", text: "Search what the cell has stored.", href: "/explore" },
-    { label: "All resources", text: "Every part of the cell in one list.", href: "/resources" },
-    { label: "Connect an agent", text: "Let an outside agent read from this cell.", href: "/connect" },
-    { label: "Reads", text: "What outside agents have read.", href: "/reads" },
-  ],
 };
 
 const LONG = "customer-connectors-for-the-enterprise-edition-2026-organisation";
