@@ -115,10 +115,6 @@ async def main():
                and [o["value"] for o in e["options"]] == ["sre", "platform"]
                and e["other"] == {"value": "sre", "label": "AI SRE"}
                and e["note"].startswith("Switching changes the screens, not your data."), e)
-            ck("six Advanced links, in order",
-               [x["href"] for x in a["advanced"]]
-               == ["/settings/advanced", "/sources", "/explore", "/resources", "/connect", "/reads"]
-               and a["advanced"][1]["label"] == "Connections", a["advanced"])
 
             print("== changes go through the routes that exist ==")
             r = await cx.put("/api/crew/settings", json={"builders_max": 4})

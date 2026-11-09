@@ -239,6 +239,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   field to add one line.
 
 ### Changed
+- Settings on a factory cell is one page with a two-level sidebar: Crew, Tools, Models, Team, Workspace and Advanced, one group open at a time. The main menu gives way to a Back link. What you allowed has its own page, Advanced has its own place in the sidebar, and the long introductions are gone. The separate All settings page is gone on factory cells; old links land on the right item.
 - Ticket assignees (naming an assignee on a ticket, and Linear and GitHub setting one on sync) are part of the enterprise code (TR-920). Without an enterprise licence, naming an assignee answers 402 `licence_required`, clearing one still works, and a sync never changes who a ticket is assigned to; an assignee already stored still shows. With a licence nothing changes.
 - Repo owners (the `/api/areas` routes and the MCP tools `list_areas` and `set_area`) are part of the enterprise code (TR-919). Without an enterprise licence those routes answer 402 `licence_required` and the tools are not listed; with one nothing changes.
 - A project's lead, privacy and members (`PATCH /api/projects/{uid}`, the `/members` routes and the MCP tool `set_project_access`) are part of the enterprise code (TR-921). Without an enterprise licence those routes answer 402 `licence_required` and the tool is not listed; the person who makes a project still leads it, and a private project stays private. With a licence nothing changes.

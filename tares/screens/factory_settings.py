@@ -33,18 +33,6 @@ GRANT_LINE = re.compile(r'^\s*-\s+"(.*)"\s+\((\d{4}-\d{2}-\d{2})\)\s*$')
 DESK_ANSWER = re.compile(r"^(D\d+)(?:\s+\S{1,20})?$")
 MAX_GRANTS = 200
 REPORTING_DAYS = 7
-ADV = "/settings/advanced"
-ADVANCED = [
-    {"label": "All settings", "text": "Model providers, agent limits, tracing and the rest.",
-     "href": ADV},
-    {"label": "Connections", "text": "The services this cell reads from and how each is set up.",
-     "href": "/sources"},
-    {"label": "Explore your data", "text": "Search what the cell has stored.", "href": "/explore"},
-    {"label": "All resources", "text": "Every part of the cell in one list.", "href": "/resources"},
-    {"label": "Connect an agent", "text": "Let an outside agent read from this cell.",
-     "href": "/connect"},
-    {"label": "Reads", "text": "What outside agents have read.", "href": "/reads"},
-]
 OTHER = {"factory": "sre", "sre": "factory", "platform": "factory"}
 
 
@@ -182,5 +170,4 @@ def register(app, store, h, ctx):
                                   "label": edition_mod.NAMES[OTHER[value]]},
                         "note": ("Switching changes the screens, not your data. What only the "
                                  "other edition shows stays reachable under Settings, Advanced.")},
-            "advanced": ADVANCED,
         }

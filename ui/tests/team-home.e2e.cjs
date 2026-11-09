@@ -323,10 +323,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && /acme\/web/.test(owned[0]) && !/acme\/docs/.test(owned.join()), JSON.stringify([alexHome.areas, owned]));
       await shot(page, "live-side", width);
       await page.getByRole("link", { name: "All owners" }).click();
-      await page.waitForURL(/\/settings\/advanced/, { timeout: 10000 }).catch(() => {});
-      const areasTab = page.locator('button.pnav-link[aria-current="page"]');
-      await areasTab.first().waitFor({ timeout: 10000 }).catch(() => {});
-      ck(t("All owners opens Settings with the Areas tab selected"), (await areasTab.allInnerTexts()).join("|").trim() === "Areas", (await areasTab.allInnerTexts()).join("|"));
+      await page.getByTestId("pane-areas").waitFor({ timeout: 10000 }).catch(() => {});
+      ck(t("All owners opens Settings with the Areas tab selected"), (await page.getByTestId("pane-areas").count()) === 1, page.url());
       await ctx.close();
     }
     {

@@ -1,6 +1,6 @@
 import React, { lazy, Suspense } from "react";
 import ReactDOM from "react-dom/client";
-import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
+import { createBrowserRouter, Navigate, RouterProvider, useLocation } from "react-router-dom";
 
 import App from "./App";
 import AuthGate from "./components/AuthGate";
@@ -54,7 +54,10 @@ function UsecasesRedirect() {
  *  A platform cell has no such tab, so the address lands on Settings. */
 function AdvancedSettings() {
   const { edition } = useEdition();
+  const { search, hash } = useLocation();
   if (edition === "platform") return <Navigate to="/settings" replace />;
+  // a factory cell has one Settings page; this address names one of its items
+  if (edition === "factory") return <Navigate to={`/settings${search || "?tab=advanced"}${hash}`} replace />;
   return <Security initialTab="advanced" />;
 }
 
