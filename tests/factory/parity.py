@@ -59,7 +59,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
 sys.path.insert(0, str(HERE))
-from fake_tares import FakeTares  # noqa: E402  (a stand-in Tares for the scenarios that need one)
+from fake_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
 CI_LIST = HERE / "ci_list.txt"
 ENGINES = ("bash", "python")
 STEP_TIMEOUT = 180
@@ -87,24 +87,26 @@ class Scenario:
     checks: list         # (label, fn(Run) -> bool), the assertions of the bash suite, kept as they are
     covers: list         # labels of the suite's `check` calls this scenario stands for
     about: str = ""
-    tares: object = None     # None: no Tares. A dict (settings, people, grants): a stand-in Tares (fake_tares.py)
+    stand_in: object = None  # None: no stand-in. A dict (settings, people, grants): a stand-in Tares (fake_tares.py)
                              # on a free port, TARESD_URL and TARES_FACTORY_MCP_URL point at it
     prepare: object = None   # fn(Run) run once before the first step: ~/.claude.json, crew.json, ...
     skip_calls: tuple = ()   # leading `claude` arguments of calls left out of the compared record: what bash
                              # asks Claude Code for a part the Python engine has not ported yet (see crew up)
     setup: object = None    # fn(tmp, env) run once before the first step: build files, a repo, a link
+    tares: dict | None = None   # routes of a fake Tares to run for the scenario (see FakeTares); None: no Tares
 
 
 class Run:
     """What a scenario's checks can look at: the steps' output and the crew's state on disk."""
 
-    def __init__(self, tmp: Path, results: list, tares=None):
+    def __init__(self, tmp: Path, results: list, tares=None, stand_in=None):
         self.tmp = tmp
+        self.tares = tares      # the route table (FakeTares) of the read commands, or None
         self.crew = tmp / "crew"
         self.state = tmp / "claude"
         self.home = tmp / "home"
         self.results = results
-        self.tares = tares      # the stand-in Tares (FakeTares) or None
+        self.stand_in = stand_in    # the stand-in Tares (fake_tares.py) of `crew up`, or None
         self.marks: dict = {}   # what a step's `before` kept for the checks (see mark())
 
     def station(self, name: str, key: str, home=None):
@@ -258,9 +260,9 @@ def role_checks():
              lambda r, s=s: r.station_settings(s).get("env", {}).get("FACTORY_PARENT") == ""),
             ("crew-$r has no TARES_PROJECT (%s)" % role, lambda r, s=s: env_of(r, s, "TARES_PROJECT") == ""),
             ("crew-$r reaches the same Tares (%s)" % role,
-             lambda r, s=s: env_of(r, s, "TARES_FACTORY_URL") == r.tares.url),
+             lambda r, s=s: env_of(r, s, "TARES_FACTORY_URL") == r.stand_in.url),
             ("crew-$r is told the shared MCP endpoint (%s)" % role,
-             lambda r, s=s: env_of(r, s, "TARES_FACTORY_MCP_URL") == r.tares.mcp_url),
+             lambda r, s=s: env_of(r, s, "TARES_FACTORY_MCP_URL") == r.stand_in.mcp_url),
         ]
     return out
 
@@ -270,7 +272,7 @@ scenario(Scenario(
     skip_calls=LSP_PROBE,
     suite="crew",
     about="crew up stops plainly in an untrusted crew home, and warns of another installed tares plugin",
-    tares={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
+    stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
     steps=[
         Step(["crew", "up", "--yes"], stdin=""),
         Step(["crew", "up", "--yes"], stdin="",
@@ -294,7 +296,7 @@ scenario(Scenario(
     skip_calls=LSP_PROBE,
     suite="crew",
     about="crew up --yes uses the answers saved on Tares and asks nothing; a second run starts nothing",
-    tares={"settings": dict(SAVED), "grants": ['- "%s" (%s)' % (GRANT, TODAY)]},
+    stand_in={"settings": dict(SAVED), "grants": ['- "%s" (%s)' % (GRANT, TODAY)]},
     prepare=trust_crew,
     steps=[Step(["crew", "up", "--yes"], stdin=""), Step(["crew", "up"], stdin="")],
     checks=[
@@ -324,7 +326,7 @@ scenario(Scenario(
          and "L5" not in (r.crew / "stations" / "crew-releaser.settings.json").read_text(encoding="utf-8")),
         ("second crew up asks nothing", lambda r: "Choice [" not in r.out(1) and r.code(1) == 0),
         ("second crew up starts nothing", lambda r: r.launches() == 3),
-        ("nothing is written to Tares: every answer was already there", lambda r: r.tares.written() == []),
+        ("nothing is written to Tares: every answer was already there", lambda r: r.stand_in.written() == []),
     ],
     covers=["three crew stations started (a releaser was asked for)", "no Rius, no comms",
             "orchestrator started first", "stations turn the plugin on, whatever the person's settings say",
@@ -339,7 +341,7 @@ scenario(Scenario(
     skip_calls=LSP_PROBE,
     suite="crew",
     about="the first crew up asks the settings one at a time and keeps the answers and one grant on Tares",
-    tares={},
+    stand_in={},
     prepare=trust_crew,
     steps=[Step(["crew", "up"], stdin="L3-review\nyes\n\nno\n3\n%s\n\n" % GRANT)],
     checks=[
@@ -348,11 +350,11 @@ scenario(Scenario(
          lambda r: all(q in r.out(0) for q in ("Who merges pull requests?", "Should the crew release and deploy finished work?",
                                                "How does the releaser ship?", "Should a second AI (Codex) check every commit before review?",
                                                "How many builders may work at the same time?"))),
-        ("settings saved on Tares", lambda r: [r.tares.settings.get(k) for k in
+        ("settings saved on Tares", lambda r: [r.stand_in.settings.get(k) for k in
                                                ("autonomy", "releaser", "release_profile", "challenger", "builders_max")]
          == ["L3-review", True, "kind", False, 3]),
-        ("grant saved on Tares as the person said it", lambda r: r.tares.grants == ['- "%s" (%s)' % (GRANT, TODAY)]),
-        ("crew up points at the Crew page", lambda r: "<TARES>/crew" in r.out(0).replace(r.tares.url, "<TARES>")),
+        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, TODAY)]),
+        ("crew up points at the Crew page", lambda r: "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
         ("three stations started, a releaser among them",
          lambda r: r.launches() == 3 and r.station("crew-releaser", "status") == "active"),
     ],
@@ -388,7 +390,7 @@ def home_of(r, name):
 
 
 def second_person(r):
-    r.tares.people.extend([{"id": "p2", "name": "Two"}, {"id": "p3", "name": "Three"}])   # bash asks for a name above one
+    r.stand_in.people.extend([{"id": "p2", "name": "Two"}, {"id": "p3", "name": "Three"}])   # bash asks for a name above one
 
 
 def agent_names(r):
@@ -443,7 +445,7 @@ scenario(Scenario(
     name="crewname_two_crews",
     suite="crewname",
     about="two named crews and the default crew side by side; the name comes from FACTORY_CREW_NAME, then crew.json",
-    tares={"settings": {**SAVED, "releaser": False}},
+    stand_in={"settings": {**SAVED, "releaser": False}},
     prepare=trust_all,
     skip_calls=LSP_PROBE,
     steps=[
@@ -457,7 +459,7 @@ scenario(Scenario(
         Step(["crew", "up", "--yes"], env={"FACTORY_CREW_NAME": "zzz"}, stdin=""), # 6 refused, nothing stored
     ],
     checks=[
-        ("default crew: up exits 0", lambda r: r.code(0) == 0 and "<TARES>/crew" in r.out(0).replace(r.tares.url, "<TARES>")),
+        ("default crew: up exits 0", lambda r: r.code(0) == 0 and "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
         *two_crew_checks(),
         ("default crew: no crew_name is stored, one person", lambda r: "crew_name" not in r.crew_json()),
         ("default crew: orchestrator started first, under today's name", lambda r: started(r)[:1] == ["crew-orchestrator"]),
@@ -509,7 +511,7 @@ scenario(Scenario(
     name="crewname_roster_title",
     suite="crewname",
     about="the roster warns when the orchestrator's session title is not the name messages go to",
-    tares={"settings": {**SAVED, "releaser": False}},
+    stand_in={"settings": {**SAVED, "releaser": False}},
     prepare=trust_all,
     skip_calls=LSP_PROBE,
     steps=[
@@ -863,6 +865,235 @@ scenario(Scenario(
 
 
 # ---------------------------------------------------------------------------------------------
+# A fake Tares. `projects`, `finish`, `context` and `plan` talk to Tares, and parity has none: a scenario
+# with `tares=` gets a small local server that answers the few routes these commands use, with the
+# answers the scenario names, and writes down what it was asked (the route and whether a key came with it,
+# never the key). TARESD_URL names it for both engines.
+
+class FakeTares:
+    """routes: {"GET /api/crew/projects": (status, json document or text)}; unnamed routes answer 404."""
+
+    def __init__(self, routes: dict):
+        import http.server
+        import threading
+        self.routes = {"GET /health": (200, {"ok": True}), "GET /api/crew/settings": (200, {"settings": {}})}
+        self.routes.update(routes)
+        self.requests: list = []
+        fake = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _answer(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
+                key = f"{self.command} {self.path}"
+                fake.requests.append({"route": key, "auth": bool(self.headers.get("Authorization")), "body": body})
+                status, doc = fake.routes.get(key, (404, {"detail": "not found"}))
+                data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            do_GET = do_POST = do_PUT = _answer
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+
+    def asked(self, route: str) -> list:
+        return [r for r in self.requests if r["route"] == route]
+
+
+def _crew_files(stations: dict):
+    """A setup that gives the crew a crew.json and the stations.json named."""
+    def setup(tmp: Path, env: dict) -> None:
+        crew = tmp / "crew"
+        crew.mkdir(parents=True, exist_ok=True)
+        (crew / "crew.json").write_text('{"name": "crew"}\n', encoding="utf-8")
+        (crew / "stations.json").write_text(json.dumps(stations), encoding="utf-8")
+        (tmp / "work").mkdir(exist_ok=True)
+    return setup
+
+
+# ---------------------------------------------------------------------------------------------
+# usage_test.sh: what the crew's machine reports. `factory context` reads a station's /context through
+# a copy of its session that is never saved, `factory plan` reads /usage; both send the reading to Tares.
+# The station and its session come from stations.json; Claude Code is the Python fake.
+
+def _usage_stations(tmp: Path) -> dict:
+    return {"crew-orchestrator": {"role": "orchestrator", "id": "deadbeef", "sessionId": "sess-orch-1",
+                                  "cwd": str(tmp / "work")}}
+
+
+def _setup_usage(tmp: Path, env: dict) -> None:
+    _crew_files(_usage_stations(tmp))(tmp, env)
+
+
+def _only_call(r: Run, needle: str) -> dict:
+    calls = [c for c in r.calls() if needle in c["args"]]
+    return calls[-1] if calls else {}
+
+
+scenario(Scenario(
+    name="usage_context",
+    suite="usage",
+    about="`context` reads a station through an unsaved copy of its session and sends the reading to Tares",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    steps=[Step(["context", "orchestrator"]), Step(["context", "nobody"])],
+    checks=[
+        ("factory context reads the station",
+         lambda r: r.code(0) == 0 and "crew-orchestrator: 95300 of 200000 tokens (48%), sent to Tares" in r.out(0)),
+        ("through a copy that is never saved",
+         lambda r: (lambda a: a[a.index("--resume") + 1] == "sess-orch-1" and "--fork-session" in a
+                    and "--no-session-persistence" in a and "-p" in a)(_only_call(r, "/context").get("args", ["--resume", ""]))),
+        ("in the station's folder, with its plugin",
+         lambda r: _only_call(r, "/context").get("cwd") == str(r.tmp / "work")
+         and "--plugin-dir" in _only_call(r, "/context").get("args", [])),
+        ("with its settings, hooks and the status line off",
+         lambda r: json.loads((r.state / "p-settings.json").read_text(encoding="utf-8")).get("disableAllHooks") is True),
+        ("Tares has the reading",
+         lambda r: len(r.tares.asked("POST /ingest/claude_code")) == 1
+         and json.loads(r.tares.asked("POST /ingest/claude_code")[0]["body"]).get("type") == "session_context"),
+        ("an unknown station: said plainly", lambda r: r.code(1) != 0 and "unknown station nobody" in r.out(1)),
+    ],
+    covers=["factory context reads the station", "through a copy that is never saved",
+            "in the station's folder, with its plugin", "with its settings, hooks and the status line off",
+            "Tares has the reading", "an unknown station: said plainly"],
+))
+
+scenario(Scenario(
+    name="usage_plan",
+    suite="usage",
+    about="`plan` reads /usage with hooks off and nothing saved, sends the limits, and says plainly when there is no plan",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    steps=[Step(["plan"]), Step(["plan"], env={"FAKE_CLAUDE_NO_PLAN": "1"})],
+    checks=[
+        ("factory plan reads and sends the limits", lambda r: r.code(0) == 0 and "session: 27% used" in r.out(0)),
+        ("with hooks off, nothing saved",
+         lambda r: "--no-session-persistence" in _only_call(r, "/usage").get("args", [])
+         and json.loads((r.state / "p-settings.json").read_text(encoding="utf-8")).get("disableAllHooks") is True),
+        ("Tares has /usage's limits",
+         lambda r: json.loads(r.tares.asked("POST /ingest/claude_code")[0]["body"]).get("type") == "claude_plan"),
+        ("no plan to read (an API key): said plainly", lambda r: r.code(1) != 0 and "Pro or Max" in r.out(1)),
+    ],
+    covers=["factory plan reads and sends the limits", "with hooks off, nothing saved",
+            "Tares has /usage's limits", "no plan to read (an API key): said plainly"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
+# crew_test.sh and tares_test.sh: `projects` lists what was handed to the crew, `finish` is the person's.
+
+PROJECTS = [
+    {"id": "p1", "name": "Links App", "tickets_done": 1, "tickets_total": 2,
+     "milestone": {"name": "Links", "done": 1, "total": 2},
+     "repos": [{"name": "acme/links", "path": "/work/links"}]},
+    {"id": "p2", "name": "shop", "tickets_done": 0, "tickets_total": 0, "milestone": None,
+     "repos": [{"path": "/work/shop"}, {"name": "acme/shop-api", "path": "/work/shop-api"}]},
+    {"id": "p3", "name": "A very long project name that is cut", "tickets_done": 3, "tickets_total": 3,
+     "milestone": None, "repos": []},
+]
+BUILDERS = {
+    "links-app-build-m1": {"role": "builder", "project": "Links App", "status": "active"},
+    "links-app-build-m2": {"role": "builder", "project": "Links App", "status": "retired"},
+    "shop-build-m1": {"role": "builder", "project": "shop", "status": "active"},
+    "shop-build-m2": {"role": "builder", "project": "shop", "status": "active"},
+    "crew-reviewer": {"role": "reviewer", "status": "active"},
+}
+
+
+def _setup_projects(tmp: Path, env: dict) -> None:
+    _crew_files(BUILDERS)(tmp, env)
+
+
+scenario(Scenario(
+    name="projects_list",
+    suite="crew",
+    about="`projects` lists each handed-over project with its progress, builders and repos",
+    tares={"GET /api/crew/projects": (200, {"projects": PROJECTS})},
+    setup=_setup_projects,
+    steps=[Step(["projects"])],
+    checks=[
+        ("projects lists each handed-over project with its builders and repos",
+         lambda r: r.code(0) == 0
+         and re.search(r"^Links App +1/2 +Links 1/2 +1 +acme/links$", r.out(0), re.M) is not None
+         and re.search(r"^shop +0/0 +- +2 +/work/shop, acme/shop-api$", r.out(0), re.M) is not None
+         and re.search(r"^A very long project name tha 3/3 +all done +0 *$", r.out(0), re.M) is not None),
+    ],
+    covers=["projects lists each handed-over project with its builders and repos"],
+))
+
+scenario(Scenario(
+    name="projects_none",
+    suite="tares",
+    about="`projects` with none handed over says how to start one",
+    tares={"GET /api/crew/projects": (200, {"projects": []})},
+    setup=_setup_projects,
+    steps=[Step(["projects"])],
+    checks=[("no project: said plainly", lambda r: r.code(0) == 0 and "no projects handed to the crew yet" in r.out(0))],
+    covers=[],
+))
+
+FINISH_OPEN = {"detail": "Links App still has open tickets: T1"}
+
+
+def _finish_scenario(name: str, about: str, routes: dict, steps: list, checks: list, covers: list) -> None:
+    scenario(Scenario(name=name, suite="crew", about=about, tares=routes, setup=_setup_projects,
+                      steps=steps, checks=checks, covers=covers))
+
+
+_finish_scenario(
+    "projects_finish_open", "`finish` refuses a project with an open ticket and says which",
+    {"GET /api/crew/projects": (200, {"projects": PROJECTS}), "POST /api/projects/p1/finish": (409, FINISH_OPEN)},
+    [Step(["finish", "Links App", "all shipped"])],
+    [("finish refuses a project with an open ticket",
+      lambda r: r.code(0) != 0 and "still has open tickets: T1" in r.out(0)
+      and json.loads(r.tares.asked("POST /api/projects/p1/finish")[0]["body"]) == {"words": "all shipped"})],
+    ["finish refuses a project with an open ticket"])
+
+_finish_scenario(
+    "projects_finish_station", "a station cannot run `finish`",
+    {"GET /api/crew/projects": (200, {"projects": PROJECTS})},
+    [Step(["finish", "Links App"], env={"FACTORY_STATION": "crew-orchestrator"})],
+    [("a station can't run finish",
+      lambda r: r.code(0) != 0 and "only the person runs this" in r.out(0)
+      and not r.tares.asked("POST /api/projects/p1/finish"))],
+    ["a station can't run finish"])
+
+_finish_scenario(
+    "projects_finish_done", "the person finishes a project; the last one tells how to stop the crew",
+    {"GET /api/crew/projects": (200, {"projects": PROJECTS}),
+     "POST /api/projects/p1/finish": (200, {"open_projects": 0}),
+     "POST /api/projects/p2/finish": (200, {"open_projects": 1})},
+    [Step(["finish", "Links App", "all", "shipped"]), Step(["finish", "shop"]), Step(["finish", "nothing"])],
+    [("the person finishes it",
+      lambda r: r.code(0) == 0 and "✓ Links App is done." in r.out(0) and "crew down" in r.out(0)
+      and r.code(1) == 0 and "crew down" not in r.out(1)),
+     ("an unknown project lists the open ones",
+      lambda r: r.code(2) != 0 and "nothing is not a project the crew holds (open projects: Links App, shop" in r.out(2)),
+     ],
+    ["the person finishes it"])
+
+_finish_scenario(
+    "projects_finish_down", "`finish` says plainly when Tares cannot be reached for the request",
+    {"GET /api/crew/projects": (200, {"projects": PROJECTS}), "POST /api/projects/p1/finish": (500, "boom")},
+    [Step(["finish", "Links App"])],
+    [("a refusal without a detail shows the body", lambda r: r.code(0) != 0 and "Tares did not finish Links App: boom" in r.out(0))],
+    [])
+
+
+# ---------------------------------------------------------------------------------------------
 # Normalising
 
 ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")
@@ -929,6 +1160,17 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
     return v
 
 
+def _settings_arg(row):
+    """A call's `--settings <file>`: the file is a temp name each engine makes its own way, so it is replaced.
+    A value that is JSON text, not a file, is kept."""
+    args = row.get("args") if isinstance(row, dict) else None
+    if isinstance(args, list):
+        for i, a in enumerate(args[:-1]):
+            if a == "--settings" and isinstance(args[i + 1], str) and not args[i + 1].lstrip().startswith("{"):
+                args[i + 1] = "<SETTINGS-FILE>"
+    return row
+
+
 def render_json(v) -> str:
     return json.dumps(v, indent=2, sort_keys=True, ensure_ascii=False)
 
@@ -937,7 +1179,7 @@ def norm_file(text: str, name: str, tmp: Path | None = None) -> str:
     """A file's content, normalised: a .json file or .jsonl file as sorted-key JSON, anything else as text."""
     try:
         if name.endswith(".jsonl"):
-            rows = [norm_json(json.loads(x), tmp) for x in text.splitlines() if x.strip()]
+            rows = [_settings_arg(norm_json(json.loads(x), tmp)) for x in text.splitlines() if x.strip()]
             return "\n".join(json.dumps(r, sort_keys=True, ensure_ascii=False) for r in rows)
         if name.endswith(".json"):
             return render_json(norm_json(json.loads(text), tmp))
@@ -1076,15 +1318,19 @@ def run_side(sc: Scenario, engine: str) -> Side:
             side.skip = why
             return side
     tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-{engine}-")).resolve()
-    tares = None
+    stand_in = None
+    fake = None
     try:
         env = crew_env(tmp, engine)
-        if sc.tares is not None:
-            tares = FakeTares(tmp / "tares", **sc.tares).start()
-            env.update(TARESD_URL=tares.url, TARES_FACTORY_MCP_URL=tares.mcp_url)
-            TARES_ADDR[:] = [f"127.0.0.1:{tares.port}"]
+        if sc.stand_in is not None:
+            stand_in = StandInTares(tmp / "tares", **sc.stand_in).start()
+            env.update(TARESD_URL=stand_in.url, TARES_FACTORY_MCP_URL=stand_in.mcp_url)
+            TARES_ADDR[:] = [f"127.0.0.1:{stand_in.port}"]
         results = []
-        run = Run(tmp, results, tares)
+        if sc.tares is not None:
+            fake = FakeTares(sc.tares)
+            env["TARESD_URL"] = fake.url
+        run = Run(tmp, results, fake, stand_in)
         if sc.prepare:
             sc.prepare(run)
         if sc.setup:
@@ -1124,14 +1370,26 @@ def run_side(sc: Scenario, engine: str) -> Side:
                           f"-- stdout --\n{norm_output(r['stdout'], tmp)}\n-- stderr --\n{norm_output(r['stderr'], tmp)}")
         for rel, content in snapshot(run, sc.skip_calls).items():
             blocks.append(f"== file {rel} ==\n{content}")
+        if fake is not None:  # what each engine asked Tares, and whether it sent a key (never the key)
+            # A read asked twice in a row counts once: bash asks again from a subshell that lost its cache.
+            asked = []
+            for q in fake.requests:
+                line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
+                if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
+                    asked.append(line)
+            blocks.append("== asked of Tares ==\n" + "\n".join(asked))
         side.text = "\n".join(blocks) + "\n"
+        if fake is not None:  # the fake's port is different on each side
+            side.text = side.text.replace(fake.url, "<TARES>")
         side.raw = "\n".join(f"$ tares factory {' '.join(s.argv)}  (exit {r['code']})\n{r['stdout']}{r['stderr']}"
                              for s, r in zip(sc.steps, results))
         return side
     finally:
         TARES_ADDR[:] = []
-        if tares is not None:
-            tares.stop()
+        if stand_in is not None:
+            stand_in.stop()
+        if fake is not None:
+            fake.stop()
         shutil.rmtree(tmp, ignore_errors=True)
 
 

@@ -2066,8 +2066,8 @@
       "what": "run a session copy and read its output",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:read_quiet",
+      "ported": true,
       "note": ""
     },
     {
@@ -2077,8 +2077,8 @@
       "what": "send a reading to Tares",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:send_meter",
+      "ported": true,
       "note": ""
     },
     {
@@ -2088,8 +2088,8 @@
       "what": "read a station's /context",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_context",
+      "ported": true,
       "note": ""
     },
     {
@@ -2099,8 +2099,8 @@
       "what": "read the plan limits",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -2330,8 +2330,8 @@
       "what": "mark a project done",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_finish",
+      "ported": true,
       "note": ""
     },
     {
@@ -2341,8 +2341,8 @@
       "what": "list projects handed to the crew",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_projects",
+      "ported": true,
       "note": ""
     },
     {
@@ -2550,8 +2550,8 @@
       "what": "commands that work while Tares is down",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:local_only",
+      "ported": true,
       "note": "Decides which commands work while Tares is down; part of the dispatcher."
     }
   ],
@@ -2902,8 +2902,8 @@
       "what": "list projects handed to the crew",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_projects",
+      "ported": true,
       "note": ""
     },
     {
@@ -2916,8 +2916,8 @@
       "what": "mark a project done",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_finish",
+      "ported": true,
       "note": ""
     },
     {
@@ -2944,8 +2944,8 @@
       "what": "read a station's /context",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_context",
+      "ported": true,
       "note": ""
     },
     {
@@ -2958,8 +2958,8 @@
       "what": "read the plan's limits",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_plan",
+      "ported": true,
       "note": ""
     },
     {

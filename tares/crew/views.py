@@ -16,6 +16,7 @@ Untested on real Windows: the views read process command lines through psutil (w
 """
 from __future__ import annotations
 
+import io
 import os
 import re
 import subprocess
@@ -23,7 +24,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import claude, locks, state
+from . import claude, contract, locks, state
 from .client import TaresClient, TaresHTTPError, cksum, grants_sum
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -82,13 +83,15 @@ def _start(env: dict, *, local_only: bool):
 
 
 def _guarded(fn):
-    """Run fn(argv, env); a refusal prints its line to stderr and exits 1, as bash's `die` does."""
+    """Run fn(argv, env); a refusal prints its line to stderr and exits 1, as bash's `die` does. With --json
+    it prints the error shape on stdout instead (contract.py)."""
     def run(argv: list, env: dict) -> int:
         try:
             return fn(argv, env)
         except CrewError as e:
             sys.stdout.flush()
-            print(e.line, file=sys.stderr)
+            if not contract.refuse(e, argv):
+                print(e.line, file=sys.stderr)
             return 1
     run.__name__ = fn.__name__
     run.__doc__ = fn.__doc__
@@ -148,6 +151,9 @@ def cmd_desk(argv: list, env: dict) -> int:
     paths, client = _start(env, local_only=False)
     state.require_crew(paths)
     items = client.desk_json()
+    if contract.wants_json(argv):
+        contract.emit({"items": items}, "desk")
+        return 0
     if not items:
         print("Nothing waits for you on the desk.")
         return 0
@@ -455,15 +461,20 @@ def cmd_status(argv: list, env: dict) -> int:
     """`status` and `crew status`."""
     paths, client = _start(env, local_only=False)
     state.require_crew(paths)
-    out = sys.stdout
+    js = contract.wants_json(argv)
+    out = io.StringIO() if js else sys.stdout  # --json builds the document below; the text goes nowhere
+    doc = {"crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "stations": [],
+           "running": 0}
     binary = claude.claude_bin(env)
     adopt_unrecorded(paths, client, binary)
     if not paths.stations.is_file():
         _say(f"no stations yet; run {ME} crew up")
+        if js:
+            contract.emit(doc, "status")
         return 0
     agents = _sessions_or_none(binary)
     if agents is None:
-        raise CrewError(claude.UNREAD)
+        raise SessionListUnreadableError(claude.UNREAD)
     # Stations keep the Tares they were started with. After `tares login` to another workspace,
     # say so instead of letting the person think the crew moved.
     ran = state.jq_get(state.read_json(paths.station_file(state.crew_orchestrator(paths), "settings.json"), None),
@@ -475,6 +486,7 @@ def cmd_status(argv: list, env: dict) -> int:
     kit = kit_version(plugin_root(paths, env))
     active = _active(paths)
     running = len(active)
+    doc["running"] = running
     old = 0
     if running > 0:
         out.write(ROW % ("STATION", "ROLE", "MODEL", "STATE", "TEMPO", "DOING / NEEDS"))
@@ -504,6 +516,8 @@ def cmd_status(argv: list, env: dict) -> int:
             else:
                 detail = "NEW PERMISSIONS: the watch restarts it with them between turns"
         out.write(ROW % (s, role, f"{model}/{effort}", st or "gone", tempo, detail[:70]))
+        doc["stations"].append({"station": s, "role": role, "model": model, "effort": effort,
+                                "state": st or "gone", "tempo": "" if tempo == "-" else tempo, "detail": detail})
     # two live sessions under one station name
     pattern = re.compile("^" + re.escape(state.crew_name(paths)) + "-|-build-")
     groups: dict = {}
@@ -512,11 +526,13 @@ def cmd_status(argv: list, env: dict) -> int:
         name = name if isinstance(name, str) else ""
         if pattern.search(name) and not claude.gone(r):
             groups.setdefault(name, []).append(_tsv(r.get("id")))
+    doc["two_sessions"] = [{"name": n, "ids": groups[n]} for n in sorted(groups) if len(groups[n]) > 1]
     for name in sorted(groups):
         if len(groups[name]) > 1:
             out.write(f"TWO SESSIONS named {name}: {', '.join(groups[name])}; "
                       "stop the one stations.json does not list (factory roster)\n")
     is_frozen = frozen.on
+    doc["plugin"] = {"older": old}
     if old == 0:
         pass
     elif is_frozen:
@@ -530,6 +546,7 @@ def cmd_status(argv: list, env: dict) -> int:
     cc_retry = sum(1 for s in active
                    if state.stations_get(s, "cc_failed", paths=paths) == target
                    and claude.older_than(station_cc(paths, s, agents), target))
+    doc["claude_code"] = {"target": target, "older": cc_old, "retrying": cc_retry}
     if cc_old == 0:
         pass
     elif is_frozen:
@@ -541,19 +558,25 @@ def cmd_status(argv: list, env: dict) -> int:
         out.write(f"claude code: {cc_old} station(s) run an older Claude Code than {target}; {ME} crew watch "
                   f"moves each onto it when it's idle ({ME} crew update does it now; {ME} roster shows each "
                   f"version){retry}\n")
+    doc["halted"] = state.halt_reason(paths) if state.halted(paths) else None
     if state.halted(paths):
         out.write(f"HALTED: {state.halt_reason(paths)}\n")
+    doc["frozen"] = None
     if is_frozen:
         newer = "" if kit == frozen.field("version") else " (a newer kit is available)"
+        doc["frozen"] = {"kit": frozen.text(), "newer_kit": bool(newer)}
         out.write(f"FROZEN: the kit {frozen.text()}; stations that start or revive use it, running ones keep "
                   f"reading the checkout until they restart; the watch moves no station onto a newer kit{newer}\n")
+    doc["idle_wake"] = bool(frozen.idle_wake)
     if frozen.idle_wake:
         out.write("idle_wake: on, the watch wakes a station when it has work and holds its tick (a liveness "
                   "wake after 15, 20 or 30 minutes of quiet, then 30, then every 45)\n")
     line = pace_status_line(client)
+    doc["pace"] = line or None
     if line:
         out.write(line + "\n")
     pid = watch_pid(paths)
+    doc["watch"] = {"running": bool(pid), "pid": int(pid) if str(pid).isdigit() else None}
     if pid:
         out.write(f"watch: running (pid {pid}), it revives any station that stops and gives one a permission "
                   f"you allowed in Tares; log in {paths.shown('watch.log')}\n")
@@ -563,12 +586,14 @@ def cmd_status(argv: list, env: dict) -> int:
     # a finished project's questions only matter to a crew that is still running (TR-559)
     if running <= 0:
         items = [i for i in items if not _truthy(i.get("project_finished"))]
+    doc["desk"] = {"waiting": len(items), "next": items[0] if items else None}
     if items:
         out.write(f"desk: {len(items)} waiting for you; the next one ({ME} crew desk shows all; answer in the "
                   "orchestrator's session):\n")
         out.write("".join("  " + ln + "\n" for ln in desk_block(items[0]).split("\n")))
     else:
         out.write("desk: nothing waits for you\n")
+    doc["projects"] = []
     for p in client.crew_projects():
         total = p.get("tickets_total")
         ms = p.get("milestone")
@@ -579,7 +604,13 @@ def cmd_status(argv: list, env: dict) -> int:
         else:
             tail = ", no tickets yet"
         out.write(f"project {_text(p.get('name'))}: {_text(p.get('tickets_done'))}/{_text(total)} tickets done{tail}\n")
+        doc["projects"].append({"name": p.get("name"), "tickets_done": p.get("tickets_done"), "tickets_total": total,
+                                "milestone": ({"name": ms.get("name"), "done": ms.get("done"), "total": ms.get("total")}
+                                              if _truthy(ms) and isinstance(ms, dict) else None)})
     out.write(f"Crew page: {client.tares}/crew\n")
+    doc["crew_page"] = f"{client.tares}/crew"
+    if js:
+        contract.emit(doc, "status")
     return 0
 
 
@@ -589,16 +620,22 @@ def cmd_status(argv: list, env: dict) -> int:
 def cmd_roster(argv: list, env: dict) -> int:
     """`roster`: compact, for stations. One line per running station: name, role, project, turn, Claude Code."""
     paths, client = _start(env, local_only=True)
-    sys.stdout.write(f"crew: {state.crew_name(paths)} (orchestrator: {state.crew_orchestrator(paths)})\n")
+    js = contract.wants_json(argv)
+    if not js:
+        sys.stdout.write(f"crew: {state.crew_name(paths)} (orchestrator: {state.crew_orchestrator(paths)})\n")
     state.require_crew(paths)
     binary = claude.claude_bin(env)
     adopt_unrecorded(paths, client, binary)
+    doc = {"crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "stations": []}
     if not paths.stations.is_file():
-        print("no stations")
+        if js:
+            contract.emit(doc, "roster")
+        else:
+            print("no stations")
         return 0
     agents = _sessions_or_none(binary)
     if agents is None:
-        raise CrewError(claude.UNREAD)
+        raise SessionListUnreadableError(claude.UNREAD)
     stations = state.stations_load(paths)
     # Messages go to a station by its session title. An orchestrator that runs under another title
     # (the crew was renamed since it started) gets none of them.
@@ -630,7 +667,12 @@ def cmd_roster(argv: list, env: dict) -> int:
             v += ")"
         project = _field(row, "project")
         lines.append(f"{s}\t{_field(row, 'role', 'null')}\t{project}\t{st}\t{v}\n")
-    sys.stdout.write("".join(lines))  # in one write, so a reader that stops early never breaks a pipe
+        doc["stations"].append({"station": s, "role": row.get("role") if isinstance(row.get("role"), str) else None,
+                                "project": project, "turn": st, "claude_code": v})
+    if js:
+        contract.emit(doc, "roster")
+    else:
+        sys.stdout.write("".join(lines))  # in one write, so a reader that stops early never breaks a pipe
     return 0
 
 

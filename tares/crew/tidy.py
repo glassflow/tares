@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 
+from . import contract
 from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths, default_home, home_dir
@@ -223,9 +224,10 @@ def remove_tree(path: str) -> None:
 def cmd_tidy(argv: list, env: dict) -> int:
     """`tidy [--force] path...`. argv starts with the word tidy."""
     try:
-        return _tidy(argv[1:], env)
+        return _tidy([a for a in argv[1:] if a != "--json"], env)  # --json only changes how a refusal is shown
     except CrewError as e:
-        print(e.line, file=sys.stderr)
+        if not contract.refuse(e, argv):
+            print(e.line, file=sys.stderr)
         return 1
 
 
