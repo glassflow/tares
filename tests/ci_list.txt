@@ -150,6 +150,7 @@ test_session_project
 test_setup_flow
 test_shared_code_context
 test_skills
+test_skills_portable
 test_skipped_write_back
 test_slack
 test_slack_ask
