@@ -3302,12 +3302,12 @@
       "kind": "env",
       "reads": true,
       "writes": false,
-      "what": "set by Claude Code; hooks.json commands expand it",
+      "what": "set by Claude Code; hooks.json commands expand it; tares hook reads it to find the plugin",
       "ticket": "TR-1068",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.hooks:plugin_root",
+      "ported": true,
+      "note": "hooks.json still expands it until TR-1103 switches the commands to tares hook <name>."
     },
     {
       "name": "FACTORY_ASK_POLL",
