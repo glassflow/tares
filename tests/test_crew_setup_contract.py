@@ -250,7 +250,11 @@ r = c.run(["crew", "up", "--yes"], env=env_watch)
 out = r.stdout + r.stderr
 ck("asks nothing: no prompt, no question in the output", "Choice [" not in out and "recommended:" not in out and "> " not in out.replace("-> ", ""), out[-300:])
 ck("writes nothing to Tares: every answer was saved already", c.tares.written() == [], c.tares.written())
-ck("prints `watch: not ported yet`", "watch: not ported yet" in out, out[-400:])
+if HAVE_BASH:
+    ck("prints `watch: not ported yet`", "watch: not ported yet" in out, out[-400:])
+else:   # no bash (Windows): the stations cannot be started yet (TR-953), so it stops before the watch line
+    ck("without bash it says the stations cannot be started here and exits 2",
+       r.returncode == 2 and "cannot start the stations here" in out and "watch: not ported yet" not in out, (r.returncode, out[-400:]))
 ck("does not start a watch", not (c.crew / "watch.pid").exists() and not (c.crew / "watch.log").exists())
 ck("never asks Claude Code for the language server list", ["plugin", "list", "--json"] not in c.calls(), c.calls())
 if HAVE_BASH:
