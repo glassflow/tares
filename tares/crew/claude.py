@@ -46,7 +46,7 @@ Differences from bash
   * attached and running_version read process command lines with psutil, not pgrep and ps: a process
     this user may not inspect is skipped, as it would be invisible to those too.
   * station_updated (iso_epoch) takes updatedAt as jq's fromdateiso8601 does for a UTC time, with a day 1..31
-    rolled over by the month (Feb 30 is Mar 2) and a leap second; a time before 1970 is unknown. A libc that
+    rolled over by the month (Feb 30 is Mar 2) and a leap second (second 61 too off macOS, as glibc does); a time before 1970 is unknown. A libc that
     accepts a day 0, as macOS's does, is not copied.
   * running_version also accepts a Windows path (`\\versions\\<v>`) in a command line.
 
@@ -382,9 +382,11 @@ def iso_epoch(text: str):
     if not m:
         return None
     year, month, day, hour, minute, second = map(int, m.groups())
-    # strptime takes a day 1..31 whatever the month and a leap second (60); timegm then rolls Feb 30 over to
-    # Mar 2. Anything else it refuses, and so does jq's `?`. Times before 1970 give a negative number jq refuses.
-    if not (1970 <= year and 1 <= month <= 12 and 1 <= day <= 31 and hour < 24 and minute < 60 and second < 61):
+    # strptime takes a day 1..31 whatever the month and a leap second (60; glibc also takes 61, macOS does not);
+    # timegm then rolls Feb 30 over to Mar 2. Anything else it refuses, and so does jq's `?`. Times before 1970
+    # give a negative number jq refuses.
+    if not (1970 <= year and 1 <= month <= 12 and 1 <= day <= 31 and hour < 24 and minute < 60
+            and second < (61 if sys.platform == "darwin" else 62)):
         return None
     return calendar.timegm((year, month, 1, hour, minute, second)) + (day - 1) * 86400
 

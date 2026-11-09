@@ -753,8 +753,9 @@ def station_updated_reads_updatedAt():
     ck("a station with no id or no job file: None", cc.station_updated("ghost", paths=PATHS) is None)
     ck("iso_epoch of a leap day", cc.iso_epoch("2024-02-29T23:59:59Z") == 1709251199)
     ck("iso_epoch rolls Feb 30 over to Mar 2, as jq does", cc.iso_epoch("2026-02-30T00:00:00Z") == cc.iso_epoch("2026-03-02T00:00:00Z"))
-    ck("iso_epoch refuses day 32, hour 24, minute 60, second 61 and a year before 1970",
-       all(cc.iso_epoch(x) is None for x in ("2026-01-32T00:00:00Z", "2026-01-01T24:00:00Z", "2026-01-01T00:60:00Z", "2026-01-01T00:00:61Z", "1969-12-31T23:59:59Z")))
+    ck("iso_epoch refuses day 32, hour 24, minute 60, second 62 and a year before 1970",
+       all(cc.iso_epoch(x) is None for x in ("2026-01-32T00:00:00Z", "2026-01-01T24:00:00Z", "2026-01-01T00:60:00Z", "2026-01-01T00:00:62Z", "1969-12-31T23:59:59Z")))
+    ck("iso_epoch takes second 61 as glibc does and macOS does not", (cc.iso_epoch("2026-01-01T00:00:61Z") is None) == (sys.platform == "darwin"))
     ck("iso_epoch takes a leap second as jq does", cc.iso_epoch("2026-01-01T00:00:60Z") == cc.iso_epoch("2026-01-01T00:01:00Z"))
     if not shutil.which("jq") or WIN:
         skip("station_updated against jq", "jq is missing")
