@@ -4,7 +4,7 @@ helpers that read the machine.
 The parity harness (tests/factory/parity.py 'doctor_*') compares the checks both engines share. This file
 covers what only the Python doctor does:
 
-  - `--json` is a list of {id, ok, message, fix}; an unknown argument prints the usage and exits 2;
+  - `--json` is one contract document {schema_version, ok, checks: [{id, ok, message, fix, level}]}; an unknown argument prints the usage and exits 2;
   - the exit code is 1 when any check is FIX, 0 when none is;
   - the tares version against the plugin's min_tares (TR-1064) and `tares` on PATH with `tares hook` (TR-1068);
   - the login key: in the keychain, in a file only the owner can read, or readable by others (TR-949);
@@ -119,6 +119,17 @@ with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
     code = doctor.cmd_doctor(["doctor", "--wat"], {})
 ck("an unknown argument exits 2 with the usage", code == 2 and "usage: tares factory doctor [--json]" in err.getvalue() and not out.getvalue(), (code, err.getvalue()))
 
+out, err = io.StringIO(), io.StringIO()
+try:
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        doctor.cmd_doctor(["doctor", "--wat", "--json"], {})
+    exit_code = None
+except SystemExit as e:
+    exit_code = e.code
+ck("an unknown argument with --json is the usage error shape, exit 2", exit_code == 2 and not err.getvalue()
+   and json.loads(out.getvalue()) == {"schema_version": 1, "error": {"code": "usage", "message": doctor.USAGE}},
+   (exit_code, out.getvalue(), err.getvalue()))
+
 base = fresh("run")
 env_run = {"HOME": str(base / "h"), "USERPROFILE": str(base / "h"), "TARES_HOME": str(base / "th"),
            "FACTORY_CREW_HOME": str(base / "crew"), "PATH": os.environ.get("PATH", ""),
@@ -131,10 +142,14 @@ for argv in (["doctor", "--json"], ["doctor"]):
         code = doctor.cmd_doctor(argv, dict(env_run))
     if argv[-1] == "--json":
         try:
-            rows = json.loads(out.getvalue())
-        except ValueError:
-            rows = None
-        ck("--json prints a JSON list of checks", isinstance(rows, list) and rows, out.getvalue()[:200])
+            jdoc = json.loads(out.getvalue())
+            rows = jdoc["checks"]
+        except (ValueError, KeyError, TypeError):
+            jdoc, rows = None, None
+        ck("--json prints one contract document with the checks", isinstance(rows, list) and rows
+           and jdoc.get("schema_version") == 1 and next(iter(jdoc)) == "schema_version"
+           and len(out.getvalue().strip().splitlines()) == 1, out.getvalue()[:200])
+        ck("--json: ok is false when a check is FIX", jdoc and jdoc["ok"] == (not any(not r["ok"] for r in rows)), jdoc and jdoc["ok"])
         ck("each check has id, ok, message and fix", all(isinstance(r.get("id"), str) and isinstance(r.get("ok"), bool)
                                                          and isinstance(r.get("message"), str) and isinstance(r.get("fix"), str)
                                                          for r in rows or []))
@@ -143,7 +158,7 @@ for argv in (["doctor", "--json"], ["doctor"]):
         ck("--json holds the Python-only checks", {"engine", "min_tares", "tares_path", "git"} <= set(ids), ids)
         ck("no Tares answers, so the doctor says so and exits 1", code == 1 and any(r["id"] == "tares" and not r["ok"] for r in rows or []), code)
         ck("a failing check carries a fix", all(r["fix"] for r in rows or [] if not r["ok"]), [r for r in rows or [] if not r["ok"] and not r["fix"]])
-        ck("--json prints nothing but the JSON", out.getvalue().lstrip().startswith("["), out.getvalue()[:60])
+        ck("--json prints nothing but the JSON", out.getvalue().startswith('{"schema_version":1,'), out.getvalue()[:60])
         ck("no cmux file and no project repo: no line for cmux or a language server", not any(re.search(r"cmux|language server", r["message"], re.I) for r in rows or []))
     else:
         text = out.getvalue()

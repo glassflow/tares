@@ -384,6 +384,29 @@ else:
     env, tmp = world(crew_of(), sessions(), url=DOWN)
     doc = one_document("projects, no Tares", *tares(env, ["projects", "--json"]), "error", want_code=1)
 
+    # ---------- doctor ----------
+
+    print("== doctor --json")
+    env, tmp = world(crew_of(), sessions(), url=DOWN)
+    code, out, err = tares(env, ["doctor", "--json"], {"PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"})
+    ck("doctor: one line on stdout, LF ended", len(out.splitlines()) == 1 and out.endswith("\n") and "\r" not in out, repr(out[:200]))
+    try:
+        doc = json.loads(out)
+    except ValueError as e:
+        doc = {}
+        ck("doctor: stdout is JSON", False, f"{e}: {out[:200]!r} {err[-200:]}")
+    bad = problems("doctor", doc)
+    ck("doctor: validates against doctor.json", not bad, bad)
+    ck("doctor: schema_version 1 first", doc.get("schema_version") == 1 and next(iter(doc), "") == "schema_version")
+    ck("doctor: no Tares answers, so a FIX and exit 1, the document still on stdout",
+       code == 1 and doc.get("ok") is False and any(c.get("id") == "tares" and c.get("level") == "fix" for c in doc.get("checks", [])),
+       (code, [c for c in doc.get("checks", []) if c.get("level") == "fix"]))
+    ck("doctor: ok is false exactly when a check is FIX", doc.get("ok") == (not any(c.get("level") == "fix" for c in doc.get("checks", []))))
+    doc = one_document("doctor, an unknown argument", *tares(env, ["doctor", "--json", "--nope"]), "error", want_code=2)
+    ck("doctor, an unknown argument: usage", doc.get("error", {}).get("code") == "usage", doc)
+    code, out, err = tares(env, ["doctor", "--nope"])
+    ck("doctor without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory doctor" in err, (code, out, err))
+
     # ---------- the error shape ----------
 
     print("== the error shape")
