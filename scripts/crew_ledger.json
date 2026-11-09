@@ -2341,8 +2341,8 @@
       "what": "language server table",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:LANGS",
+      "ported": true,
       "note": ""
     },
     {
@@ -2352,8 +2352,8 @@
       "what": "languages a repo uses",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:detect",
+      "ported": true,
       "note": ""
     },
     {
@@ -2363,8 +2363,8 @@
       "what": "installed Claude Code plugins",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:read_plugins",
+      "ported": true,
       "note": ""
     },
     {
@@ -2374,8 +2374,8 @@
       "what": "is a language server binary installed",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:have_bin",
+      "ported": true,
       "note": ""
     },
     {
@@ -2385,8 +2385,8 @@
       "what": "state of a language server for a repo",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:state",
+      "ported": true,
       "note": ""
     },
     {
@@ -2396,8 +2396,8 @@
       "what": "commands that fix a language server",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:fix",
+      "ported": true,
       "note": ""
     },
     {
@@ -2407,8 +2407,8 @@
       "what": "repo languages with no working server",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:missing",
+      "ported": true,
       "note": ""
     },
     {
@@ -2418,8 +2418,8 @@
       "what": "path of cmux's config file",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_config",
+      "ported": true,
       "note": ""
     },
     {
@@ -2429,8 +2429,8 @@
       "what": "read cmux's idle reminder setting",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_idle_reminder",
+      "ported": true,
       "note": ""
     },
     {
@@ -2440,9 +2440,9 @@
       "what": "doctor check for cmux's idle reminder",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by cmd_doctor (TR-969): TR-969 ports doctor without this check (no line printed). TR-970 adds it to tares.crew.doctor."
+      "python": "tares.crew.doctor:Doctor.check_cmux",
+      "ported": true,
+      "note": "Called by cmd_doctor (TR-969), which now calls the Python check. Line text in tares.crew.doctor_lsp (CMUX_ON, CMUX_OFF, CMUX_UNREADABLE); parity scenario doctor_cmux."
     },
     {
       "name": "doctor_lsp",
@@ -2451,9 +2451,9 @@
       "what": "doctor check for language servers",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by cmd_doctor (TR-969): TR-969 ports doctor without this check (no line printed). TR-970 adds it to tares.crew.doctor."
+      "python": "tares.crew.doctor:Doctor.check_lsp",
+      "ported": true,
+      "note": "Called by cmd_doctor (TR-969), which now calls the Python check. Parity scenarios lsp_missing and lsp_servers; a line is only added while Tares answers, as in bash."
     },
     {
       "name": "lsp_offer",
@@ -2462,9 +2462,9 @@
       "what": "offer to install language servers at crew up",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called from crew up; belongs with the language server work, crew up (TR-956) only calls it."
+      "python": "tares.crew.doctor_lsp:offer",
+      "ported": true,
+      "note": "Ported as an injectable function; crew up (TR-956) only calls it. Unit-tested in tests/test_crew_doctor_lsp.py (--yes, a closed input, no, yes, once per plugin, unknown); the bash lsp_test.sh crew up cases need crew up in Python."
     },
     {
       "name": "doctor_keys",
@@ -4568,9 +4568,9 @@
       "what": "language server checks in doctor and crew up",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py until crew up is ported (TR-956); lsp_test.sh itself still passes them only through bash crew up."
     },
     {
       "name": "pace_test.sh",
@@ -4712,8 +4712,8 @@
       "what": "find and read ~/.config/cmux/cmux.json (JSONC)",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_idle_reminder",
+      "ported": true,
       "note": ""
     },
     {
@@ -4725,8 +4725,8 @@
       "what": "the doctor check",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.check_cmux",
+      "ported": true,
       "note": ""
     },
     {
@@ -4738,8 +4738,8 @@
       "what": "what doctor says about cmux",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_check",
+      "ported": true,
       "note": "Tests grep these exact words."
     },
     {
@@ -4751,8 +4751,8 @@
       "what": "called from cmd_doctor",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.collect",
+      "ported": true,
       "note": ""
     },
     {
@@ -4780,19 +4780,6 @@
       "python": "",
       "ported": false,
       "note": "The settings check belongs to TR-953: the Python write_settings must not set that variable."
-    },
-    {
-      "name": "doctor parity sets the cmux and language-server lines aside",
-      "kind": "touchpoint",
-      "file": "tests/factory/parity.py",
-      "match": "TR-970 ports its cmux",
-      "line": 781,
-      "what": "the doctor scenarios drop bash's cmux and language-server lines until the Python doctor makes them",
-      "ticket": "TR-970",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-970 removes TR970 from DOCTOR_DROP in the same PR that adds the checks."
     },
     {
       "name": "parity launch cmux case",

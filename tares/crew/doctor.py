@@ -36,7 +36,7 @@ from pathlib import Path
 
 import psutil
 
-from . import claude, state, version
+from . import claude, doctor_lsp, state, version
 from .client import TaresClient, _say as client_say, cksum, key_name, settings_missing
 from .errors import ClaudeNotFoundError, CrewError, JobStateUnreadableError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -592,6 +592,22 @@ class Doctor:
                 self.no(f"project_{p}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
                         "push and merge", "ask for write access to the repo")
 
+    def check_cmux(self) -> None:
+        found = doctor_lsp.cmux_check(self.env)
+        if found:
+            self.add(found[0], "cmux", found[1])
+
+    def check_lsp(self, c: TaresClient) -> None:
+        try:
+            rows = c.project_repo_rows()
+        except CrewError:
+            return
+        if not rows:
+            return
+        plugins = doctor_lsp.read_plugins(self.claude_path)
+        for level, project, lang, msg, cmds in doctor_lsp.doctor_rows(rows, plugins, self.env):
+            self.add(level, f"lsp_{project}_{lang.lower()}", msg, " && ".join(cmds))
+
     def check_git(self) -> None:
         r = self.run(["git", "--version"], timeout=30)
         if r is None or r.returncode != 0:
@@ -683,6 +699,9 @@ class Doctor:
             self.check_trust_and_plugin()
             self.check_mcp(c)
             self.check_crew(c) if on else self.check_crew_offline()
+            self.check_cmux()
+            if on:
+                self.check_lsp(c)
         self.check_git()
         self.check_gh()
         self.check_stations()
