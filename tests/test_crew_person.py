@@ -136,9 +136,10 @@ try:
     # --- context and plan
     fake = FakeTares({"POST /ingest/claude_code": (500, {"detail": "no"})})
     try:
-        r = run(env, "plan", fake=fake)
-        ck("plan: a reading Tares does not take is said plainly", r.returncode == 1
-           and "could not send the plan's limits to Tares" in r.stderr, r.stdout + r.stderr)
+        if sys.platform != "win32":  # the fake claude is a shell script, which Windows cannot run
+            r = run(env, "plan", fake=fake)
+            ck("plan: a reading Tares does not take is said plainly", r.returncode == 1
+               and "could not send the plan's limits to Tares" in r.stderr, r.stdout + r.stderr)
         r = run(env, "context", fake=fake)
         ck("context: no station is a usage error", r.returncode == 1 and "usage: " in r.stderr
            and "context <role|station>" in r.stderr, r.stderr)
