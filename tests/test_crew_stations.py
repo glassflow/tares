@@ -116,7 +116,7 @@ a = ls[0] if ls else ()
 ck("launch gets the station, role, parent, project, repo and cwd",
    a[:6] == ("links-app-build-m1", "builder", "crew-orchestrator", "Links App", LINKS, LINKS), str(a[:6]))
 ck("...the crew's builder model and effort", len(a) > 7 and bool(a[6]) and bool(a[7]), str(a[6:8]))
-ck("...the boot prompt carries the task", "work T1 and T2" in a[8] and a[8].startswith("Boot as the builder station"), a[8][:80])
+ck("...the boot prompt carries the task", len(a) > 8 and "work T1 and T2" in a[8] and a[8].startswith("Boot as the builder station"), str(a[8:9])[:80])
 rec = stations().get("links-app-build-m1", {})
 ck("it is recorded with the project id and its autonomy", rec.get("project_id") == "uc_links" and "autonomy" in rec, str(rec))
 exclude = Path(subprocess.run(["git", "-C", LINKS, "rev-parse", "--path-format=absolute", "--git-common-dir"], check=True,
@@ -176,7 +176,7 @@ a = ls[0] if ls else ()
 ck("a helper is named after its parent and keeps its parent's place",
    err is None and a[:6] == ("crew-reviewer-probe", "helper", "crew-reviewer", "", "", str(CREW)), f"{err} {a[:6]}")
 ck("its prompt names the parent's manual, the parent and the task",
-   a[8] == "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, "
+   len(a) > 8 and a[8] == "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, "
            "write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook at PR 9", a[8:9])
 err, ls = run(["releaser-helper", "deploy", "ship it"])
 ck("a releaser-helper belongs to the releaser", err is not None and "crew-releaser is not a recorded station" in err, str(err))
