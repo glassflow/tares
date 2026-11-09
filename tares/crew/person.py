@@ -252,7 +252,21 @@ def _plan(env: dict) -> int:
     client = prelude(["plan"], env)
     with client:
         home = client.paths.raw
-        lines = read_quiet(home if os.path.isdir(home) else os.getcwd(), '{"disableAllHooks": true}', ["/usage"])
+        cwd = home if os.path.isdir(home) else os.getcwd()
+        if sys.platform != "win32":
+            lines = read_quiet(cwd, '{"disableAllHooks": true}', ["/usage"])
+        else:
+            # cmd.exe refuses JSON with quotes in a claude.cmd command line: pass the same settings as a file
+            fd, tmp = tempfile.mkstemp(suffix=".json")
+            os.close(fd)
+            try:
+                state.atomic_write_text(tmp, state.dumps_pretty(_reading_settings("")) + "\n")
+                lines = read_quiet(cwd, tmp, ["/usage"])
+            finally:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
         report = last_field(lines, "usage_report")
         if report is None:
             raise CrewError("Claude Code gave no /usage report (it reads one for a Pro or Max login only)")

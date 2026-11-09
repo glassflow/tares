@@ -150,6 +150,40 @@ try:
     finally:
         fake.stop()
 
+    # --- plan on Windows hands claude its settings as a file (cmd.exe refuses JSON with quotes), elsewhere as text
+    fake = FakeTares({})
+    seen = []
+    real_read = person.read_quiet
+
+    def spy(cwd, settings, args):
+        seen.append((settings, os.path.isfile(settings) and json.loads(Path(settings).read_text(encoding="utf-8"))))
+        return []
+
+    try:
+        saved = {k: os.environ.get(k) for k in [*env, "TARESD_URL"]}
+        os.environ.update(env)
+        os.environ["TARESD_URL"] = fake.url
+        person.read_quiet = spy
+        for plat in ("linux", "win32"):
+            seen.clear()
+            real_plat = person.sys.platform
+            person.sys.platform = plat
+            try:
+                person.cmd_plan(["plan"], dict(os.environ))
+            finally:
+                person.sys.platform = real_plat
+            ck(f"plan on {plat}: settings as " + ("a file" if plat == "win32" else "JSON text"),
+               len(seen) == 1 and (seen[0][1] == {"disableAllHooks": True} if plat == "win32"
+                                   else seen[0][0] == '{"disableAllHooks": true}'), str(seen))
+    finally:
+        person.read_quiet = real_read
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        fake.stop()
+
     # --- the dispatcher loads the module only when it is needed
     probe = ("import sys; from tares.crew import dispatch; print('person' in ' '.join(m for m in sys.modules "
              "if m.startswith('tares.crew')))")
