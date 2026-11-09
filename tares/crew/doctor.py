@@ -47,7 +47,7 @@ LABELS = {"ok": "ok   ", "warn": "warn ", "fix": "FIX  "}
 NEW_LABELS = ("engine", "tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows")
 TEMP_FLAGS = re.compile(r"/var/folders/|/tmp/cmux|cmux-claude-settings")
 RUN_TIMEOUT = 60
-WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS")
+WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "OWNER RIGHTS", "CREATOR OWNER")
 
 
 @dataclass
@@ -189,8 +189,12 @@ def acl_extras(path, user: str, run=None) -> list | None:
     extras = []
     for i, line in enumerate(r.stdout.splitlines()):
         text = line.strip()
-        if i == 0 and text.startswith(os.fspath(path)):
-            text = text[len(os.fspath(path)):].strip()
+        p = os.fspath(path)
+        if i == 0 and text.startswith(p):
+            text = text[len(p):].strip()
+        elif i == 0 and len(text) > len(p) and text[len(p)] == " ":
+            # icacls writes the path in the console code page, so a name with accents reads back changed
+            text = text[len(p):].strip()
         m = re.match(r"^(.+?):\((.*)$", text)
         if not m or "(DENY" in text.upper() or text.startswith("Successfully"):
             continue
@@ -570,9 +574,10 @@ class Doctor:
             else:
                 self.no(f"project_{p}_trust", f"project {p}: Claude Code has not trusted {repo} (its git root must be "
                         "trusted itself); run `claude` there once", f"cd {repo} && claude, accept the trust prompt")
-            if not shutil.which("gh", path=self.env.get("PATH")):
+            gh = shutil.which("gh", path=self.env.get("PATH"))
+            if not gh:
                 continue
-            r = self.run(["gh", "repo", "view", "--json", "nameWithOwner,viewerPermission", "-q",
+            r = self.run([gh, "repo", "view", "--json", "nameWithOwner,viewerPermission", "-q",
                           '.nameWithOwner + " " + .viewerPermission'], cwd=repo)
             line = r.stdout.rstrip("\n") if r is not None and r.returncode == 0 else ""
             name, _, perm = line.rpartition(" ")
@@ -607,8 +612,9 @@ class Doctor:
                         "through Git Bash", "winget install Git.Git", True)
 
     def check_gh(self) -> None:
-        if shutil.which("gh", path=self.env.get("PATH")):
-            r = self.run(["gh", "auth", "status"])
+        gh = shutil.which("gh", path=self.env.get("PATH"))
+        if gh:
+            r = self.run([gh, "auth", "status"])
             if r is not None and r.returncode == 0:
                 self.ok("gh", "gh signed in")
             else:

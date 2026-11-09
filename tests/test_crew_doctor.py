@@ -35,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 
 from tares import login  # noqa: E402
-from tares.crew import doctor  # noqa: E402
+from tares.crew import doctor, perms  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -199,7 +199,7 @@ ck("a tares without hook is a warn with the version and the upgrade", r and r.le
 d, *_ = make("path-noversion", env={"PATH": str(bindir)}, run=fake_run({}))
 d.check_tares_path()
 r = one(d, "tares_path")
-ck("a tares that will not run is still reported, not a crash", r and r.level == "warn" and str(exe) in r.message, r)
+ck("a tares that will not run is still reported, not a crash", r and r.level == "warn" and str(exe).lower() in r.message.lower(), r)
 
 print("the engine line")
 d, *_ = make("eng", env={"TARES_FACTORY_ENGINE": "python"})
@@ -220,6 +220,8 @@ d.check_login_key()
 ck("no saved login but a token in the environment: no line", not by_id(d, "login_key"))
 d, home, th, _p = make("lk-0600")
 p = write_login(th, 0o600, cell_url="http://x", key="K1")
+if WIN:
+    perms.owner_only(p)
 d.check_login_key()
 r = one(d, "login_key")
 ck("a key in a file only the owner reads is ok", r and r.level == "ok" and "readable by you only" in r.message, r)
@@ -270,7 +272,9 @@ print("the crew key file")
 d, home, th, paths = make("kf-ok")
 paths.token_file.parent.mkdir(parents=True, exist_ok=True)
 paths.token_file.write_text("tok", encoding="utf-8")
-if not WIN:
+if WIN:
+    perms.owner_only(paths.token_file)
+else:
     os.chmod(paths.token_file, 0o600)
 d.check_key_files()
 r = one(d, "crew_key_file")
@@ -298,7 +302,6 @@ ck("TARES_FACTORY_TOKEN_FILE moves the file that is checked", r is not None and 
 print("who can read a file, from icacls (Windows rules, run against a fake icacls on any OS)")
 real_win = doctor._windows
 real_user = None
-from tares.crew import perms  # noqa: E402
 real_user = perms.windows_user
 perms.windows_user = lambda: "HOST\\kiran"
 doctor._windows = lambda: True
@@ -315,6 +318,11 @@ try:
     everyone = icacls(f"{target} HOST\\kiran:(F)", "        Everyone:(R)", "        BUILTIN\\Users:(RX)")
     ck("Everyone and Users on the list are named", doctor.acl_extras(target, "HOST\\kiran", everyone) == ["Everyone", "BUILTIN\\Users"],
        doctor.acl_extras(target, "HOST\\kiran", everyone))
+    ck("OWNER RIGHTS is the owner, not another reader", doctor.acl_extras(
+        target, "HOST\\kiran", icacls(f"{target} NT AUTHORITY\\SYSTEM:(F)", "        OWNER RIGHTS:(F)", "        HOST\\kiran:(F)")) == [])
+    odd = str(target)[:-1] + "\ufffd"  # the path as icacls printed it, one letter unreadable
+    ck("a path read back changed still leaves the names after it", doctor.acl_extras(
+        target, "HOST\\kiran", icacls(f"{odd} NT AUTHORITY\\SYSTEM:(F)", "        Everyone:(R)")) == ["Everyone"])
     deny = icacls(f"{target} HOST\\kiran:(F)", "        Everyone:(DENY)(R)")
     ck("a deny entry is not a grant", doctor.acl_extras(target, "HOST\\kiran", deny) == [])
     ck("icacls failing gives None, not an empty list", doctor.acl_extras(target, "HOST\\kiran", icacls("Access is denied.", code=5)) is None)
@@ -348,10 +356,12 @@ try:
     d, *_ = make("gfw-env", env={"CLAUDE_CODE_GIT_BASH_PATH": str(gitbin / "bash.exe"), "PATH": str(fresh("nopath2"))}, run=fake_run({("--version",): res(0, "git version 2.50\n")}))
     d.check_git()
     ck("CLAUDE_CODE_GIT_BASH_PATH is honoured", (one(d, "git_windows") or doctor.Check("", "", "")).level == "ok")
+    real_git = os.path.isfile(r"C:\Program Files\Git\bin\bash.exe")  # the default install is always looked at
     d, *_ = make("gfw-none", env={"ProgramFiles": str(T / "nowhere"), "ProgramFiles(x86)": str(T / "nowhere"), "PATH": str(fresh("nopath3"))}, run=fake_run({("--version",): res(0, "git version 2.50\n")}))
     d.check_git()
     r = one(d, "git_windows")
-    ck("no Git Bash is a FIX that names winget", r and r.level == "fix" and "winget" in r.fix, r)
+    if not real_git:
+        ck("no Git Bash is a FIX that names winget", r and r.level == "fix" and "winget" in r.fix, r)
 finally:
     doctor._windows = real_win
     perms.windows_user = real_user
