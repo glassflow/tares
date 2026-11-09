@@ -2,14 +2,15 @@
 
 Runs every case of tests/factory/guard_test.sh (kept as tests/guard_cases.jsonl: role, tool,
 command, expected allow or deny) against claude-plugin/hooks/guard.py in a subprocess, the way Claude
-Code starts a hook: the payload on stdin, FACTORY_ROLE in the environment. Then the parts that file
-does not cover: the halted crew, the deny output and the events log, a payload that is not JSON,
+Code starts a hook: the payload on stdin, FACTORY_ROLE in the environment. Then 15 more cases
+(tests/guard_extra_cases.jsonl, decided by guard.sh) that each pin a branch of guard.py, and the parts
+that file does not cover: the halted crew, the deny output and the events log, a payload that is not JSON,
 UTF-8 text, commands that make the scan slow, and the start time.
 
 It needs neither bash nor jq, so it runs on Windows too. The same cases run against guard.sh in
 tests/factory/guard_test.sh, which also takes the Python guard (TARES_FACTORY_ENGINE=python).
 
-Run: python tests/test_guard_hook.py
+Run: python tests/test_crew_guard_hook.py
 """
 import json
 import os
@@ -23,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 GUARD = ROOT / "claude-plugin" / "hooks" / "guard.py"
 CASES = ROOT / "tests" / "guard_cases.jsonl"
+EXTRA = ROOT / "tests" / "guard_extra_cases.jsonl"
 P = F = 0
 
 
@@ -71,6 +73,26 @@ for c in cases:
         print(f"  FAIL {c['role']} | {c['command']!r} | expected {c['expect']}, got {got} (exit {r.returncode}) {r.stderr[-200:]!r}")
 ck(f"all {len(cases)} cases decide as guard.sh does", bad == 0, f"{bad} differ")
 
+print("the cases that pin a branch of guard.py (tests/guard_extra_cases.jsonl)")
+# Each one fails against a guard.py with the branch broken (the heredoc delimiter backreference, the
+# reader lookahead, the factory-heavy anchor, the helper's crew-owner prefix, `-` ending a factory verb,
+# `git tag -x`, the per-line grep, the trailing newline of the tool name, the Slack full match, the
+# claude anchor, the `.factory` folder) and two pin ASCII-only \w and \s. The expected decision is
+# guard.sh's: they were taken from it.
+extra = [json.loads(line) for line in EXTRA.read_text(encoding="utf-8").splitlines() if line.strip()]
+ck("the extra case file has 15 cases", len(extra) == 15, len(extra))
+bad = 0
+for c in extra:
+    env = {"FACTORY_ROLE": c["role"], "FACTORY_HOME": "/nonexistent", "FACTORY_STATION": "test"}
+    if c.get("parent"):
+        env["FACTORY_PARENT"] = c["parent"]
+    r = guard({"tool_name": c["tool"], "tool_input": {"command": c["command"]}}, **env)
+    got = decision(r)
+    if got != c["expect"] or r.returncode != 0 or r.stderr:
+        bad += 1
+        print(f"  FAIL {c['role']} | {c['command']!r} | expected {c['expect']}, got {got} (exit {r.returncode}) {r.stderr[-200:]!r}")
+ck(f"all {len(extra)} extra cases decide as guard.sh does", bad == 0, f"{bad} differ")
+
 print("a session without FACTORY_ROLE is never touched")
 r = guard(bash("gh pr merge 1"))
 ck("no output, exit 0", r.returncode == 0 and r.stdout == b"", (r.returncode, r.stdout))
@@ -93,6 +115,14 @@ ck("halted: a commit message that mentions a push still passes", r.stdout == b""
 (halt / "HALT").write_bytes("{}".encode("utf-8"))
 r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
 ck("halted without a reason: says so", b"crew is halted (no reason given)" in r.stdout, r.stdout)
+(halt / "HALT").write_bytes('{"reason":""}'.encode("utf-8"))
+r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted with an empty reason: prints it empty, as jq does", b"crew is halted (). Finish" in r.stdout, r.stdout)
+(halt / "HALT").write_bytes('{"reason":{"a":[1,2]}}'.encode("utf-8"))
+r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
+ck("halted with a reason that is an object: jq's indented JSON",
+   json.loads(r.stdout.decode("utf-8"))["hookSpecificOutput"]["permissionDecisionReason"].startswith(
+       'The crew is halted ({\n  "a": [\n    1,\n    2\n  ]\n}).'), r.stdout)
 (halt / "HALT").write_bytes("not json".encode("utf-8"))
 r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
 ck("halted with an unreadable file: still refuses", b"crew is halted (" in r.stdout, r.stdout)
@@ -149,8 +179,12 @@ long_chain = " && ".join(["git status"] * 400)
 long_args = "kubectl " + " ".join(["get"] * 3000) + " pods"
 long_quote = 'git commit -m "' + "x " * 20000 + '"'
 many_quotes = "echo " + " ".join(["'a b'"] * 3000) + " | cat"
+# the quoted-string scans rescan at every quote (6 s for 15000 escaped quotes before the cap)
+escaped_quotes = "echo " + '\\"' * 15000 + "; gh pr merge 1"
+message_quotes = 'git commit -m "' + 'x\\"' * 15000
 for label, cmd in (("a chain of 400 commands", long_chain), ("a kubectl line of 3000 words", long_args),
-                   ("a 40 KB commit message", long_quote), ("3000 quoted words", many_quotes)):
+                   ("a 40 KB commit message", long_quote), ("3000 quoted words", many_quotes),
+                   ("15000 escaped quotes", escaped_quotes), ("a message of 15000 escaped quotes", message_quotes)):
     t = time.perf_counter()
     r = guard(bash(cmd), FACTORY_ROLE="builder", FACTORY_HOME="/nonexistent")
     ms = (time.perf_counter() - t) * 1000

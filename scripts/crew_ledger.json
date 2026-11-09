@@ -4518,9 +4518,9 @@
       "what": "the guard hook",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "tests.test_guard_hook:guard",
+      "python": "tests.test_crew_guard_hook:guard",
       "ported": true,
-      "note": "tests/test_guard_hook.py runs the same 154 cases (tests/guard_cases.jsonl) against guard.py; guard_test.sh takes TARES_FACTORY_ENGINE=python."
+      "note": "tests/test_crew_guard_hook.py runs the same 154 cases (tests/guard_cases.jsonl) and 15 more that pin branches (tests/guard_extra_cases.jsonl) against guard.py; guard_test.sh takes TARES_FACTORY_ENGINE=python."
     },
     {
       "name": "heavy_test.sh",

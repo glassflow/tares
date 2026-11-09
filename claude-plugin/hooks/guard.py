@@ -18,20 +18,32 @@ import re
 import sys
 import time
 
+
+def _re(pattern: str, flags: int = 0):
+    """A pattern with \\w, \\s, \\d and \\b read as ASCII, as perl and grep -E read them in guard.sh
+    (Python's default is Unicode: an accented letter would count as a word character here)."""
+    return re.compile(pattern, flags | re.ASCII)
+
+
 # A quoted string, to be skipped as a unit (the scoped s flag lets a backslash escape a newline in it).
 QUOTED = r"""(?s:"(?:[^"\\]|\\.)*"|'[^']*')"""
 # An option that carries prose: -m, --message, -b, --body, -t, --title, -n, --notes.
 FLAG = r"(^|\s)(-m|--message|-b|--body|-t|--title|-n|--notes)(\s+|=)"
-HEREDOC_MESSAGE = re.compile(
+HEREDOC_MESSAGE = _re(
     FLAG + r"""\"\$\(cat\s*<<-?\s*(['"])(\w+)\4[ \t]*\n(?:(?!\n\t*\5\n).)*?\n\t*\5\n\s*\)\"""", re.S)
-QUOTED_MESSAGE = re.compile(FLAG + r"""("(?:[^"\\]|\\.)*"|'[^']*')""")
-SPAWN_TASK = re.compile(r"""(\bfactory\s+(?:spawn|revive|restart)\b)((?:[^\n;&|"']|"(?:[^"\\]|\\.)*"|'[^']*')*)""")
-SPAWN_QUOTED = re.compile(r"""("(?:[^"\\]|\\.)*"|'[^']*')""")
-READER_FOLDER = re.compile(
+QUOTED_MESSAGE = _re(FLAG + r"""("(?:[^"\\]|\\.)*"|'[^']*')""")
+SPAWN_TASK = _re(r"""(\bfactory\s+(?:spawn|revive|restart)\b)((?:[^\n;&|"']|"(?:[^"\\]|\\.)*"|'[^']*')*)""")
+SPAWN_QUOTED = _re(r"""("(?:[^"\\]|\\.)*"|'[^']*')""")
+READER_FOLDER = _re(
     "(" + QUOTED + r")|((?:^|[;&|(`\n])[ \t]*(?:ls|cd|pushd|cat|head|tail|less|more|wc|stat|file|du|tree|grep|test|realpath)"
     r"""(?:[ \t]+(?:[^\s;&|()`"'\\]|\\.|""" + QUOTED + r""")+)*?[ \t]+)(?:[^\s;&|()`"']*/)?factory(?=[ \t])""",
     re.M)
-COMMAND_SPLIT = re.compile(r"\|\||&&|[;&|]")
+COMMAND_SPLIT = _re(r"\|\||&&|[;&|]")
+# The quoted-string scans rescan the rest of the command at every quote, so a command with thousands of
+# quotes takes seconds (a hook gets 5 s, and a timeout lets the command through). Above this many
+# characters they are skipped: nothing is blanked, so the guard sees more of the text and refuses more,
+# never less. guard.sh has no such limit.
+MAX_QUOTE_SCAN = 10000
 
 # The factory CLI by its name, whatever its path or quoting: `factory x`, `/abs/bin/factory x`,
 # `tares factory x`, `(factory x)`, `$(factory x)`, `"factory" x`, `bash -c "factory x"`. A leading dot
@@ -43,28 +55,28 @@ FACTORY_END = r"([^\w-]|$)"
 KUBECTL = r"kubectl(\s+[^\s;&|]+)*\s+(apply|rollout|delete|scale|set|patch|replace|create)(\s|$)"
 HELM = r"helm(\s+[^\s;&|]+)*\s+(install|upgrade|uninstall|rollback)(\s|$)"
 
-HALTED = re.compile(
+HALTED = _re(
     r"(gh\s+pr\s+merge|git\s+push|git\s+tag\s+[^-]|gh\s+release\s+create|" + KUBECTL + "|" + HELM
     + r"|claude\s+(--bg|--background))")
-HALTED_SESSION = re.compile(FACTORY_CLI + "(spawn|revive)" + FACTORY_END)
-HEAVY = re.compile(
+HALTED_SESSION = _re(FACTORY_CLI + "(spawn|revive)" + FACTORY_END)
+HEAVY = _re(
     r"(^|\s)(docker\s+(build|buildx)|govulncheck|kind\s+create\s+cluster|trivy|snyk\s+test)(\s|$)")
-HEAVY_WRAPPER = re.compile(r"^\s*factory-heavy(\s|$)")
-FINISH = re.compile(FACTORY_CLI + "finish" + FACTORY_END)
-PR_REVIEW = re.compile(r"gh\s+pr\s+review")
-PR_MERGE = re.compile(r"gh\s+pr\s+merge|gh\s+api[^;&|]*pulls/[0-9]+/merge")
-STATUSES = re.compile(r"statuses/")
-GH_API = re.compile(r"gh\s+api")
-TAGS = re.compile(
+HEAVY_WRAPPER = _re(r"^\s*factory-heavy(\s|$)")
+FINISH = _re(FACTORY_CLI + "finish" + FACTORY_END)
+PR_REVIEW = _re(r"gh\s+pr\s+review")
+PR_MERGE = _re(r"gh\s+pr\s+merge|gh\s+api[^;&|]*pulls/[0-9]+/merge")
+STATUSES = _re(r"statuses/")
+GH_API = _re(r"gh\s+api")
+TAGS = _re(
     r"(git\s+tag\s+[^-]|git\s+push[^;&|]*[\s:](--tags|refs/tags|v[0-9]))|gh\s+release\s+(create|edit|delete)")
-DEPLOY = re.compile("(" + KUBECTL + "|" + HELM + ")")
-CLAUDE_STATIONS = re.compile(r"(^|[;&|\s])claude\s+(--bg|--background|stop|kill|rm|respawn)(\s|$)")
-STATION_VERBS = re.compile(
+DEPLOY = _re("(" + KUBECTL + "|" + HELM + ")")
+CLAUDE_STATIONS = _re(r"(^|[;&|\s])claude\s+(--bg|--background|stop|kill|rm|respawn)(\s|$)")
+STATION_VERBS = _re(
     FACTORY_CLI + r"((spawn|retire|revive|restart|down|halt)|crew\s+(up|down|halt|resume|freeze|unfreeze|update|restart))"
     + FACTORY_END)
 
 # Posting to people only; reading Slack, and every other tool, stays open to all stations.
-SLACK_SEND = re.compile(
+SLACK_SEND = _re(
     r"mcp__.*slack.*send.*|mcp__.*slack.*schedule.*|mcp__.*slack.*post.*|mcp__.*slack.*update.*message.*", re.S)
 
 MESSAGE_PEOPLE = ("Crew stations don't message people. The person reads the crew in the orchestrator's session "
@@ -81,11 +93,12 @@ class Deny(Exception):
     """A rule fired: the reason goes to the model and the event log."""
 
 
-def jq_text(value) -> str:
-    """What `jq -r '.x // ""'` prints: empty for null or false, a string as is, anything else as JSON."""
+def jq_text(value, default: str = "") -> str:
+    """What `jq -r '.x // "default"'` prints: the default for null or false, a string as is (an empty
+    one too), anything else as jq's indented JSON."""
     if value is None or value is False:
-        return ""
-    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        return default
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=2)
 
 
 def parse(raw: str):
@@ -149,9 +162,12 @@ def blank_prose(cmd: str) -> str:
         return m.group(1) if m.group(1) is not None else m.group(2) + "_"
 
     text = HEREDOC_MESSAGE.sub(message, text)
-    text = QUOTED_MESSAGE.sub(quoted_message, text)
+    scan_quotes = len(text) <= MAX_QUOTE_SCAN
+    if scan_quotes:
+        text = QUOTED_MESSAGE.sub(quoted_message, text)
     text = SPAWN_TASK.sub(spawn_task, text)
-    text = READER_FOLDER.sub(reader, text)
+    if scan_quotes:
+        text = READER_FOLDER.sub(reader, text)
     return text.rstrip("\n")
 
 
@@ -169,7 +185,7 @@ def halt_reason(path: str) -> str:
         return ""
     if not isinstance(data, dict):
         return ""
-    return jq_text(data.get("reason")) or "no reason given"
+    return jq_text(data.get("reason"), "no reason given")
 
 
 def decide(env, tool: str, cmd: str) -> None:

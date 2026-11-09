@@ -32,6 +32,7 @@ test_crew_client
 test_crew_contract
 test_crew_dispatch
 test_crew_fake_claude
+test_crew_guard_hook
 test_crew_hooks
 test_crew_packaging
 test_crew_person
@@ -87,7 +88,6 @@ test_github_credentials
 test_github_tickets
 test_goal_first
 test_grants_single
-test_guard_hook
 test_handoffs
 test_handover_single
 test_homebrew_formula
