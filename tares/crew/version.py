@@ -43,14 +43,34 @@ def parse_version(text: str) -> tuple | None:
     return (tuple(nums), 1, 0)
 
 
-def installed_version() -> str:
-    """The installed tares version: the package metadata, else `tares.__version__`."""
+def _editable_version(dist, pyproject) -> str:
+    """The version in a checkout's pyproject.toml when `dist` is an editable install of it, else "".
+    An editable install's metadata keeps the version it was installed at, so after the checkout moves
+    to a newer release the metadata is older than the code that runs."""
     try:
-        from importlib.metadata import PackageNotFoundError, version
+        info = json.loads(dist.read_text("direct_url.json") or "{}")
+        if not (isinstance(info, dict) and (info.get("dir_info") or {}).get("editable")):
+            return ""
+        import tomllib
+        with open(pyproject, "rb") as f:
+            value = tomllib.load(f).get("project", {}).get("version")
+        return value.strip() if isinstance(value, str) else ""
+    except Exception:
+        return ""
+
+
+def installed_version() -> str:
+    """The installed tares version: for an editable install the checkout's pyproject.toml, else the
+    package metadata, else `tares.__version__`."""
+    try:
+        from importlib.metadata import PackageNotFoundError, distribution
         try:
-            return version("tares")
+            dist = distribution("tares")
         except PackageNotFoundError:
-            pass
+            dist = None
+        if dist is not None:
+            source = _editable_version(dist, Path(__file__).resolve().parents[2] / "pyproject.toml")
+            return source or dist.version
     except Exception:
         pass
     try:

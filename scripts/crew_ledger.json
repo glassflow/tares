@@ -2553,9 +2553,9 @@
       "what": "run a heavy command under a machine-wide lock with a timeout",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Uses mkdir lock, perl alarm and kill -0; all three need a portable Python equivalent."
+      "python": "tares.crew.heavy:cmd_heavy",
+      "ported": true,
+      "note": "tares.crew.heavy is the Python port (mkdir lock shared with bash, psutil tree-kill, exit 142 on timeout); tares factory heavy reaches it through the dispatcher. bin/factory-heavy stays until TR-1103."
     },
     {
       "name": "mcp-headers",
@@ -2565,9 +2565,9 @@
       "what": "print the MCP Authorization header from the crew token file or the saved login",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Embeds a python3 -I snippet for login.json. The key may move to the OS keychain (TR-949)."
+      "python": "claude-plugin.scripts.mcp_headers:main",
+      "ported": true,
+      "note": "mcp_headers.py is the Python twin (TR-972) and also reads the key from the OS keychain; tares hook mcp-headers runs it. bin/mcp-headers and .mcp.json stay until TR-1103 points them at it."
     },
     {
       "name": "guard.sh",
@@ -2613,9 +2613,9 @@
       "what": "SessionStart hook: tell a station or bound session who it is",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Needs jq today."
+      "python": "claude-plugin.hooks.session_start:main",
+      "ported": true,
+      "note": "session_start.py is the Python twin (TR-972); tares hook session-start runs it. session-start.sh and its hooks.json entry stay until TR-1103."
     },
     {
       "name": "_factory",
@@ -3281,9 +3281,9 @@
       "what": "set by Claude Code for the MCP header helper (mcp-headers)",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "claude-plugin.scripts.mcp_headers:saved_key",
+      "ported": true,
+      "note": "read by mcp_headers.py"
     },
     {
       "name": "CLAUDE_JOB_DIR",
@@ -3917,9 +3917,9 @@
       "what": "folder of the factory-heavy lock",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.heavy:lock_dir",
+      "ported": true,
+      "note": "heavy.py puts the lock folder there"
     }
   ],
   "state_files": [
@@ -4406,9 +4406,9 @@
       "what": "machine-wide lock folder of factory-heavy (pid, what)",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.heavy:cmd_heavy",
+      "ported": true,
+      "note": "same folder and files as the bash lock, so a bash and a Python holder wait for each other"
     }
   ],
   "test_suites": [
@@ -4528,9 +4528,9 @@
       "what": "factory-heavy",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.test_crew_heavy:run",
+      "ported": true,
+      "note": "tests/test_crew_heavy.py checks the Python port (including the lock shared with bash); heavy_test.sh stays for the bash helper."
     },
     {
       "name": "idle_wake_test.sh",
@@ -4802,9 +4802,9 @@
       "what": "hooks.json entry",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Becomes tares hook session-start (TR-1068 wiring)."
+      "python": "tares.crew.hooks:HOOKS",
+      "ported": true,
+      "note": "tares hook session-start runs session_start.py (TR-972); hooks.json still runs session-start.sh until TR-1103."
     },
     {
       "name": "PreToolUse: Bash|mcp__.*: bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"",

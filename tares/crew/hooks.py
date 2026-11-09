@@ -5,7 +5,7 @@ A hook command in `claude-plugin/hooks/hooks.json` is meant to be `tares hook <n
 until TR-1103 switches it, after a tares release has this command. The name maps to a file under the
 plugin root.
 A Python script runs in this process with `runpy`, with stdin and stdout passed through and its
-exit code kept. A bash script (session-start, until TR-972 ports it) runs
+exit code kept. A bash script (none is left; the kind stays for a later hook) runs
 through the `bash` found on PATH, which on Windows is Git Bash.
 
 Standard library only, and nothing from the rest of the package: a hook starts at every tool call,
@@ -30,7 +30,8 @@ HOOKS = {
     "challenger": ("py", "scripts/challenger.py"),
     "statusline": ("py", "scripts/statusline.py"),
     "guard": ("py", "hooks/guard.py"),
-    "session-start": ("sh", "hooks/session-start.sh"),
+    "session-start": ("py", "hooks/session_start.py"),
+    "mcp-headers": ("py", "scripts/mcp_headers.py"),
     "compat": ("compat", ""),
 }
 

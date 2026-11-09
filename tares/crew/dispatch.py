@@ -70,6 +70,14 @@ for _word in ("projects", "finish", "context", "plan"):
     PORTED[(_word,)] = _person(f"cmd_{_word}")
 
 
+def _heavy(argv: list[str], env: dict) -> int:
+    from .heavy import cmd_heavy
+    return cmd_heavy(argv, env)
+
+
+PORTED[("heavy",)] = _heavy
+
+
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
