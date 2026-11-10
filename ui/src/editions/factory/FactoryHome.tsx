@@ -97,7 +97,9 @@ function ActionButton({ action, item, onAction, state }: {
 }) {
   // Row actions are outlined; the main one gets the dark outline, as in the approved mock.
   const variant = "secondary";
-  const cls = "h-8 text-[13px]!" + (action.primary ? " border-foreground!" : "");
+  // An option of a question holds the crew's own words, so it wraps inside the card (TR-1125).
+  const fit = action.do === "choose" ? "h-auto min-h-8 max-w-full whitespace-normal py-1! text-left [overflow-wrap:anywhere]" : "h-8";
+  const cls = fit + " text-[13px]!" + (action.primary ? " border-foreground!" : "");
   const href = action.href;
   if (href) {
     const internal = href.startsWith("/");

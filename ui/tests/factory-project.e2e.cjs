@@ -381,6 +381,39 @@ async function waitFor(url, tries = 100) {
       await c.close();
     }
 
+    // TR-1125: an option of a desk question stays inside its card and wraps, however long it is
+    for (const width of [1440, 390]) {
+      const t = (l) => `long option @${width}: ${l}`;
+      const { ctx: c, page: p } = await newPage(width);
+      const sentence = "Keep the current upload path and add a second step that retries each failed part on its own before the whole upload is marked as failed and handed back to the person who started it";
+      const unbroken = "keep-the-current-upload-path-and-add-a-second-step-that-retries-each-failed-part-on-its-own-before-the-whole-upload-is-marked-as-failed";
+      await p.route(`**/api/factory/projects/${y}`, async (route) => {
+        const res = await route.fetch();
+        const data = await res.json();
+        data.waiting = [{ id: "desk:long-option", kind: "question", label: "Question", title: "How should a failed upload behave?", detail: "The crew needs one choice.",
+                          meta: "Waiting less than a minute", project: null, repo: null, from: null, since: new Date().toISOString(), waited: "just now", blocking: true,
+                          question: { desk: "D9", options: [sentence, unbroken, "Stop"], recommendation: null, blocks: null }, actions: [] }, ...data.waiting];
+        await route.fulfill({ response: res, json: data });
+      });
+      await open(p, y);
+      await settle(p);
+      const card = p.getByTestId("waiting-row").filter({ hasText: "How should a failed upload behave?" });
+      await card.getByTestId("question-choices").waitFor();
+      const m = await card.evaluate((row) => {
+        const box = row.getBoundingClientRect();
+        return [...row.querySelectorAll("[data-testid=question-choices] a")].map((a) => {
+          const r = a.getBoundingClientRect();
+          return { inside: r.left >= box.left - 1 && r.right <= box.right + 1, clipped: a.scrollWidth - a.clientWidth };
+        });
+      });
+      ck(t("three options"), m.length === 3, JSON.stringify(m));
+      ck(t("every option stays inside its card"), m.every((a) => a.inside), JSON.stringify(m));
+      ck(t("no option's text runs past its box"), m.every((a) => a.clipped <= 1), JSON.stringify(m));
+      ck(t("no sideways scroll"), (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `long-option-${width}.png`);
+      await c.close();
+    }
+
     // ── 5. the sample states ────────────────────────────────────────────────────────────────────
     for (const name of SAMPLES) {
       for (const width of [1440, 390]) {
