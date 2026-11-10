@@ -256,6 +256,7 @@ def fake_restart(client, paths, args, claude_bin=None):
 
 
 lifecycle.restart = fake_restart
+real_restart_self = watch.restart_self
 watch.restart_self = lambda paths, interval, env=None: upgrades.append(interval)
 
 
@@ -614,6 +615,28 @@ with patched(kit, "upgrade_station", froze_since):
     res, _, _ = round_()
 ck("a crew that froze since the round began restarts no one", restarts == [], str(restarts))
 
+# a station that is not in the session list is down: no move this round, whatever the revive step saw (bash: the
+# round's own down check)
+world({"shop-build-m1": station(), "shop-build-m2": station(id="bbbb0002", sessionId="sess-2")}, IDLE)
+watch_revive.last = watch_revive.Round()
+res, _, _ = round_()
+ck("a station down that the revive step did not see holds the move back", res is False and restarts == [], str((res, restarts)))
+world({"shop-build-m1": station(), "shop-build-m2": station(id="bbbb0002", sessionId="sess-2")}, IDLE + [row("idle", "bbbb0002", "shop-build-m2")])
+res, _, _ = round_()
+ck("(control) both up: one moves", res is True and len(restarts) == 1, str((res, restarts)))
+
+# upgrade_station asks again before it restarts
+world({"shop-build-m1": station()}, [row("working", "aaaa0001", "shop-build-m1")])
+with FakeTares() as ft:
+    with TaresClient(CP, os.environ, lambda m: None) as c:
+        rc = kit.upgrade_station(CP, c, "shop-build-m1", kit.kit_version(KITDIR), claude_bin=BIN)
+ck("a station that turned busy since the pick is not restarted: rc 4, no event", rc == 4 and restarts == [] and kinds("upgraded") == [], str((rc, restarts, kinds())))
+world({"shop-build-m1": station()}, IDLE)
+with FakeTares() as ft:
+    with TaresClient(CP, os.environ, lambda m: None) as c:
+        rc = kit.upgrade_station(CP, c, "shop-build-m1", kit.kit_version(KITDIR), claude_bin=BIN)
+ck("(control) an idle one is: rc 0, restarted, upgraded recorded", rc == 0 and len(restarts) == 1 and len(kinds("upgraded")) == 1, str((rc, restarts, kinds())))
+
 # the watch restarts itself, once the kit has held for a round
 world({"shop-build-m1": station(kit=kit.kit_version(KITDIR))}, IDLE)
 watch.LOOP.once = False
@@ -676,6 +699,23 @@ def boom(paths):
 with patched(kit, "step", boom), patched(cc_update, "step", lambda paths, kit_upgraded=False: calls_.append(kit_upgraded)):
     _, said = says(lambda: watch._updates_step(CP))
 ck("a kit part that fails does not stop the Claude Code part", calls_ == [False] and any("the kit step failed: RuntimeError: kaput" in m for m in said), str((calls_, said)))
+# a round whose kit part moved a station makes no Claude Code move
+(STATE / "stamp-version").write_text("1\n", encoding="utf-8")
+cc_rows = [row("idle", "aaaa0001", "shop-build-m1", version="1.0.0")]
+
+
+def cc_round(kit_upgraded):
+    world({"shop-build-m1": station(kit=kit.kit_version(KITDIR))}, cc_rows)
+    (STATE / "version").write_text("1.1.0\n", encoding="utf-8")
+    cc_update._cc_seen = None
+    with FakeTares() as ft:
+        return says(lambda: cc_update.step(CP, claude_bin=BIN, kit_upgraded=kit_upgraded))[1]
+
+
+said = cc_round(True)
+ck("a round that moved a station onto a new kit makes no Claude Code move", not any("older Claude Code" in m for m in said), str((said, restarts)))
+said = cc_round(False)
+ck("(control) the same world without a kit move: the idle station moves onto the new Claude Code", any("runs an older Claude Code than 1.1.0" in m for m in said), str(said))
 world()
 with FakeTares(settings=frozen_settings("1")):
     with TaresClient(CP, os.environ, lambda m: None) as c:
@@ -683,6 +723,50 @@ with FakeTares(settings=frozen_settings("1")):
 with FakeTares():
     with TaresClient(CP, os.environ, lambda m: None) as c:
         ck("...and false when not frozen", cc_update.upgrades_frozen(CP, c) is False)
+
+# ---------------------------------------------------------------------------------------------
+print("watch.restart_self")
+
+
+class _OS:
+    """The os module, except for its name (a Windows run on any platform) and execve."""
+
+    def __init__(self, name, execve=None):
+        self.name = name
+        self.execve = execve
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+execs: list = []
+world()
+env_ = {"PATH": os.environ.get("PATH", ""), "TARES_FACTORY_ENGINE": "python"}
+with patched(watch, "os", _OS("posix", lambda path, argv, env: execs.append((path, argv, env)))):
+    real_restart_self(CP, 7, env_)
+ck("on a platform with exec the process becomes the new watch", len(execs) == 1 and execs[0][0] == execs[0][1][0], str(execs))
+ck("...an absolute program, the watch command and the interval it ran with", os.path.isabs(execs[0][1][0])
+   and execs[0][1][1:] == ["-m", "tares.crew", "crew", "watch", "--interval", "7"], str(execs))
+ck("...with the environment it was given", execs[0][2] == env_, str(execs[0][2]))
+
+spawned: list = []
+world()
+
+
+def fake_spawn(paths, argv, env):
+    spawned.append(argv)
+    return 4242, 1234.5
+
+
+try:
+    with patched(watch, "os", _OS("nt")), patched(watch, "_spawn", fake_spawn):
+        real_restart_self(CP, 3, env_)
+    left = None
+except SystemExit as e:
+    left = e.code
+ck("with no exec (Windows) a new watch is started with the interval and this one leaves", spawned and spawned[0][-2:] == ["--interval", "3"] and left == 0, str((spawned, left)))
+pf = watch.read_pidfile(CP)
+ck("...and the pid file names the new watch, so this one's exit leaves it alone", pf is not None and pf[0] == 4242, str(pf))
 
 # ---------------------------------------------------------------------------------------------
 print("the commands")
