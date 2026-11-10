@@ -795,18 +795,20 @@ cases = [
     ("Retry-After 0 is raised to the 1 second floor", {"Retry-After": "0"}, 1.0),
     ("a negative Retry-After is raised to 1", {"Retry-After": "-5"}, 1.0),
     ("a huge Retry-After is cut to MAX_WAIT", {"Retry-After": "3600"}, 60.0),
-    ("a reset an hour away is cut to MAX_WAIT", {"X-RateLimit-Requests-Reset": reset_ms(3600)}, 60.0),
-    ("a reset in the past is raised to 1", {"X-RateLimit-Requests-Reset": reset_ms(-5000)}, 1.0),
+    ("a reset an hour away is cut to MAX_WAIT", lambda: {"X-RateLimit-Requests-Reset": reset_ms(3600)}, 60.0),
+    ("a reset in the past is raised to 1", lambda: {"X-RateLimit-Requests-Reset": reset_ms(-5000)}, 1.0),
     ("Retry-After is not a number: no header, 10", {"Retry-After": "soon"}, 10.0),
     ("Retry-After is nan: no header, 10", {"Retry-After": "nan"}, 10.0),
     ("a reset that is not a number: 10", {"X-RateLimit-Requests-Reset": "tomorrow"}, 10.0),
-    ("Retry-After wins over the reset", {"Retry-After": "3", "X-RateLimit-Requests-Reset": reset_ms(30)}, 3.0),
-    ("a bad Retry-After falls to the reset", {"Retry-After": "soon",
-                                              "X-RateLimit-Requests-Reset": reset_ms(30)}, "reset"),
+    ("Retry-After wins over the reset", lambda: {"Retry-After": "3", "X-RateLimit-Requests-Reset": reset_ms(30)}, 3.0),
+    ("a bad Retry-After falls to the reset", lambda: {"Retry-After": "soon",
+                                                          "X-RateLimit-Requests-Reset": reset_ms(30)}, "reset"),
 ]
 for label, hdr, want in cases:
     s, b = quiet_world()
-    limited(headers=hdr)
+    # A header that holds a clock time is built here, after the world, so the slow world build
+    # cannot eat into the 30 seconds the case waits for.
+    limited(headers=hdr() if callable(hdr) else hdr)
     viewer(s)
     got = SLEEPS[0] if SLEEPS else None
     right = (28 <= got <= 30.5) if want == "reset" else got == want
