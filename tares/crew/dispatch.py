@@ -80,11 +80,24 @@ def _lifecycle(name: str) -> Callable[[list[str], dict], int]:
     return run_it
 
 
-# `crew restart` is not here: bash runs it as `crew update --force`
+# The top-level `restart <station>` is here; `crew restart` is below with `crew update`: bash runs it as
+# `crew update --force`
 for _word in ("revive", "restart", "retire", "down", "halt", "resume"):
     PORTED[(_word,)] = _lifecycle(f"cmd_{_word}")
 for _word in ("down", "halt", "resume"):
     PORTED[("crew", _word)] = _lifecycle(f"cmd_{_word}")
+
+
+def _cc_update(name: str) -> Callable[[list[str], dict], int]:
+    """crew update and crew restart (TR-964), imported when they run."""
+    def run_it(argv: list[str], env: dict) -> int:
+        from . import cc_update
+        return getattr(cc_update, name)(argv, env)
+    return run_it
+
+
+PORTED[("crew", "update")] = _cc_update("cmd_crew_update")
+PORTED[("crew", "restart")] = _cc_update("cmd_crew_restart")
 
 
 def _watch(argv: list[str], env: dict) -> int:

@@ -21,11 +21,10 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from . import claude, contract, state
-from .cc_update import cc_behind, station_cc  # moved there by TR-963; status and roster read them
+from .cc_update import cc_behind, cc_retry_in, station_cc  # moved there by TR-963, TR-964; status and roster read them
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, SessionListUnreadableError
 from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
@@ -263,16 +262,6 @@ def stale_kit(paths: CrewPaths, station: str, kit: str, frozen: Frozen) -> bool:
 
 
 # ---------- grants, context, Claude Code versions ----------
-
-
-def cc_retry_in(paths: CrewPaths, station: str) -> str:
-    """How long until the watch tries a station's move again: "10 min", "3 h"."""
-    at = state.stations_get(station, "cc_retry_at", paths=paths)
-    at = int(at) if at.isdigit() else 0
-    n = (at - int(time.time()) + 59) // 60
-    if n < 1:
-        n = 1
-    return f"{(n + 59) // 60} h" if n >= 120 else f"{n} min"
 
 
 def _active(paths: CrewPaths) -> list:

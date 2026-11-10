@@ -103,6 +103,7 @@ class Scenario:
     ignore_asked: tuple = ()  # routes left out of the "asked of Tares" comparison: "PUT /api/x" itself, or every route
                               # that starts with an entry ending in a space ("GET ": the reads, which the engines make
                               # in a different number and order)
+    ignore_routes: tuple = ()  # routes asked of the fake Tares that are left out of the list of what was asked
 
 
 class Run:
@@ -4703,6 +4704,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
             for q in fake.requests:
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
                     continue
+                if q["route"] in sc.ignore_routes:
+                    continue
                 line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
                 if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
                     asked.append(line)
@@ -4860,6 +4863,472 @@ scenario(Scenario(
     checks=[("$s may run factory tidy",
              lambda r: all(r.code(i) == 0 and "Bash(factory tidy *)" in _printed(r, i)["permissions"]["allow"] for i in range(3)))],
     covers=["$s may run factory tidy"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
+# crew_update_* and cc_retry_* (TR-964): `crew update` and `crew restart` as commands, and the retry back-off of a
+# Claude Code move that lands on an old spare. The source is claude_update_test.sh. The stations are in stations.json
+# and the sessions in the fake Claude Code's agents.json; a session the command starts gets its version from a one-shot
+# hook of the fake (on-bg), which sets it in agents.json and arms itself again, since the Python engine reads the
+# version from the session list and has no process list to look at. The versions come in turn from spawn-seq (the last
+# one stays). Tares is a fake with the routes a launch reads, and the PUT of the retry list.
+
+CU_OLD, CU_NEW = "2.1.100", "2.1.200"
+CU_RETRY = "PUT /api/crew/claude-retry?crew=crew"
+CU_SETTINGS = {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind", "challenger": False, "builders_max": 3}
+CU_TARES = {"GET /api/crew/settings": (200, {"settings": CU_SETTINGS}), "GET /api/crew/projects": (200, {"projects": []}),
+            "GET /api/grants": (200, {"all": ""}), CU_RETRY: (200, {"ok": True})}
+CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2"}
+# bash reads GET /api/crew/pace before it starts a session; the Python pace is a stub until TR-962, so the
+# read is left out of the list of what was asked (the pace itself is not what these scenarios test).
+CU_NO_PACE = ("GET /api/crew/pace",)
+CU_NO_HOOK = "the new session's version is set by the fake Claude Code's on-bg hook, which runs through bash"
+
+CU_HOOK = '''import json, os
+S = os.environ["FAKE_CLAUDE_STATE"]
+me = os.environ["FAKE_ID"]
+seq = open(S + "/spawn-seq").read().split()
+v = seq.pop(0) if len(seq) > 1 else seq[0]
+if seq:
+    open(S + "/spawn-seq", "w").write(" ".join(seq) + "\\n")
+rows = json.load(open(S + "/agents.json"))
+for r in rows:
+    if r["id"] == me:
+        r["version"] = v
+        r["status"] = "idle"
+json.dump(rows, open(S + "/agents.json", "w"), indent=2)
+if os.path.exists(S + "/halt-after-first"):
+    os.unlink(S + "/halt-after-first")
+    open(os.environ["FACTORY_CREW_HOME"] + "/HALT", "w").write('{"reason": "mid"}')
+open(S + "/on-bg", "w").write(open(S + "/on-bg-cmd").read())
+'''
+
+CU_STATIONS = {
+    "crew-orchestrator": {"role": "orchestrator", "id": "aaaa0001", "sessionId": "sess-o"},
+    "crew-reviewer": {"role": "reviewer", "id": "bbbb0002", "sessionId": "sess-r"},
+}
+
+
+def _cu_station(tmp: Path, **over) -> dict:
+    row = {"status": "active", "parent": "", "project": "", "repo": "", "cwd": str(tmp / "work"), "model": "opus", "effort": "high"}
+    row.update(over)
+    return row
+
+
+def _cu_world(stations=None, installed: str = CU_NEW, runs: str = CU_OLD, spawn: str = CU_NEW, states=None):
+    """A setup hook: the crew's stations (each with its session `runs`, idle unless `states` says otherwise), the
+    installed Claude Code, and the versions the sessions it starts get (spawn: words in turn)."""
+    def setup(tmp: Path, env: dict) -> None:
+        crew, state = tmp / "crew", tmp / "claude"
+        (crew / "stations").mkdir(parents=True, exist_ok=True)
+        state.mkdir(parents=True, exist_ok=True)
+        (tmp / "work").mkdir(exist_ok=True)
+        (crew / "crew.json").write_text('{"name": "crew"}\n', encoding="utf-8")
+        recorded = {n: _cu_station(tmp, **over) for n, over in (stations or CU_STATIONS).items()}
+        (crew / "stations.json").write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
+        rows = []
+        for n, s in recorded.items():
+            if s["status"] == "active":
+                rows.append(_row((states or {}).get(n, "idle"), s["id"], n, version=runs, cwd=str(tmp / "work")))
+        (state / "agents.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        (state / "version").write_text(installed + "\n", encoding="utf-8")
+        (state / "spawn-seq").write_text(spawn + "\n", encoding="utf-8")
+        hook = state / "hook.py"
+        hook.write_text(CU_HOOK, encoding="utf-8")
+        cmd = f'"{sys.executable}" "{hook}"'
+        (state / "on-bg-cmd").write_text(cmd, encoding="utf-8")
+        (state / "on-bg").write_text(cmd, encoding="utf-8")
+    return setup
+
+
+def _cu_seq(*versions: str):
+    """A `before` hook: the sessions started from now on get these versions in turn."""
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / "spawn-seq").write_text(" ".join(versions) + "\n", encoding="utf-8")
+    return before
+
+
+def _cu_names(r: Run) -> list:
+    return [c["args"][2] for c in bg_calls(r)]
+
+
+def _cu_marks(r: Run, station: str) -> list:
+    s = stations_json(r)[station]
+    return [s.get("cc_failed"), s.get("cc_fails"), s.get("cc_fresh")]
+
+
+def _cu_unmarked(r: Run, station: str) -> bool:
+    s = stations_json(r)[station]
+    return all(s.get(k) is None for k in ("cc_failed", "cc_fails", "cc_retry_at", "cc_fresh"))
+
+
+def _cu_puts(r: Run) -> list:
+    return [json.loads(q["body"]) for q in r.tares.asked(CU_RETRY)]
+
+
+def _cu_resumed(r: Run, station: str) -> list:
+    return ["--resume" in c["args"] for c in bg_calls(r) if c["args"][2] == station]
+
+
+def _cu_with_key(setup):
+    """The same world with the crew's key in its token file, which is what a Tares call sends."""
+    def keyed(tmp: Path, env: dict) -> None:
+        setup(tmp, env)
+        (tmp / "crew" / ".tares-token").write_text("cu-secret\n", encoding="utf-8")
+    return keyed
+
+
+def _cu_is(got, want) -> bool:
+    """got == want; when it is not, the check fails with both in its message."""
+    if got != want:
+        raise AssertionError(f"got {got}, wanted {want}")
+    return True
+
+
+def _cu_wait():
+    """An `after` hook: seconds from now to the station's retry time, to the nearest ten (the two engines run a moment
+    apart), and its failed moves."""
+    def after(tmp: Path):
+        import time
+        s = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["crew-reviewer"]
+        at = s.get("cc_retry_at")
+        return {"in": int(round(int(at) - time.time(), -1)) if at else None, "fails": s.get("cc_fails")}
+    return after
+
+
+def _cu_halt_file(tmp: Path) -> None:
+    (tmp / "claude" / "halt-after-first").write_text("", encoding="utf-8")
+
+
+def _cu_busy_reviewer(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if row["name"] == "crew-reviewer":
+            row["status"] = "busy"
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cu_orchestrator_current(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if row["name"] == "crew-orchestrator":
+            row["version"] = CU_NEW
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cu_drop_stations(tmp: Path) -> None:
+    (tmp / "crew" / "stations.json").unlink()
+
+
+def _cu_no_claude(tmp: Path) -> None:
+    f = tmp / "noclaude"
+    f.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    f.chmod(0o755)
+
+
+scenario(Scenario(
+    name="crew_update_args",
+    suite="claude_update",
+    about="a --wait that is not a number of seconds, or an argument it does not know, is refused with nothing restarted",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    steps=[Step(["crew", "update", "--wait", "abc"], env=CU_ENV), Step(["crew", "update", "--wait", "1e3"], env=CU_ENV),
+           Step(["crew", "update", "--wait", "-5"], env=CU_ENV), Step(["crew", "update", "--wait", ""], env=CU_ENV),
+           Step(["crew", "update", "--wait", "99999999999999999999"], env=CU_ENV), Step(["crew", "update", "--wait"], env=CU_ENV),
+           Step(["crew", "update", "--bogus"], env=CU_ENV), Step(["crew", "restart", "--now"], env=CU_ENV)],
+    checks=[
+        ("--wait with a word, 1e3, a minus, nothing or 20 digits is refused",
+         lambda r: all(r.code(i) != 0 and "takes a number of seconds" in r.out(i) for i in range(5))),
+        ("--wait with no value is refused with the usage line, nothing restarted",
+         lambda r: r.code(5) != 0 and "takes a number of seconds" in r.out(5) and r.launches() == 0),
+        ("an argument it does not know gets the usage line",
+         lambda r: r.code(6) != 0 and "usage: " in r.out(6) and "crew update [--force] [--wait <seconds>]" in r.out(6)
+         and r.code(7) != 0 and "crew update [--force] [--wait <seconds>]" in r.out(7)),
+    ],
+    covers=["--wait with no value is refused with the usage line, nothing restarted"],
+))
+
+scenario(Scenario(
+    name="crew_update_gates",
+    suite="claude_update",
+    about="halted, no readable Claude Code version and no stations recorded each stop the command, restarting nothing",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    steps=[Step(["crew", "halt", "maintenance"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV),
+           Step(["crew", "restart"], env=CU_ENV), Step(["crew", "resume"], env=CU_ENV),
+           Step(["crew", "update"], env={**CU_ENV, "CLAUDE_BIN": "{tmp}/noclaude"}, before=_cu_no_claude),
+           Step(["crew", "update"], env=CU_ENV, before=_cu_drop_stations)],
+    checks=[
+        ("halted: the command stops and says why, nothing moves",
+         lambda r: r.code(1) != 0 and "the crew is halted (maintenance)" in r.out(1) and r.code(2) != 0
+         and "the crew is halted (maintenance)" in r.out(2) and r.launches() == 0),
+        ("no readable version: crew update stops plainly",
+         lambda r: r.code(4) != 0 and "could not read the Claude Code version" in r.out(4) and r.launches() == 0),
+        ("no stations recorded: it says so and succeeds", lambda r: r.code(5) == 0 and "no stations recorded" in r.out(5)),
+    ],
+    covers=["no readable version: crew update stops plainly"],
+))
+
+scenario(Scenario(
+    name="crew_update_current",
+    suite="claude_update",
+    about="stations already on the installed Claude Code are left; crew restart and --force restart them anyway, the orchestrator last",
+    setup=_cu_world(runs=CU_NEW),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "restart"], env=CU_ENV), Step(["crew", "update", "--force"], env=CU_ENV)],
+    checks=[
+        ("already current: nothing restarted",
+         lambda r: r.code(0) == 0 and f"crew-reviewer already runs Claude Code {CU_NEW}" in r.out(0)
+         and f"every station runs Claude Code {CU_NEW}, one session each" in r.out(0)),
+        ("crew restart restarts every station anyway, the orchestrator last",
+         lambda r: r.code(1) == 0 and _cu_names(r)[:2] == ["crew-reviewer", "crew-orchestrator"]
+         and f"restarting crew-reviewer on Claude Code {CU_NEW}, in the same conversation" in r.out(1)),
+        ("--force is crew restart", lambda r: r.code(2) == 0 and _cu_names(r) == ["crew-reviewer", "crew-orchestrator"] * 2),
+    ],
+    covers=["already current: nothing restarted"],
+))
+
+scenario(Scenario(
+    name="crew_update_moves",
+    suite="claude_update",
+    about="stations behind move in the same conversation, the others first and the orchestrator last; a second run finds none behind",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV)],
+    checks=[
+        ("every station runs the new version, the orchestrator last",
+         lambda r: r.code(0) == 0 and _cu_names(r) == ["crew-reviewer", "crew-orchestrator"]
+         and f"every station runs Claude Code {CU_NEW}, one session each" in r.out(0)),
+        ("each is resumed in its own conversation",
+         lambda r: [c["args"][c["args"].index("--resume") + 1] for c in bg_calls(r)] == ["sess-r", "sess-o"]),
+        ("no mark is left on a station that got there", lambda r: _cu_unmarked(r, "crew-reviewer") and _cu_unmarked(r, "crew-orchestrator")),
+        ("a second run finds every station on it", lambda r: r.code(1) == 0 and len(_cu_names(r)) == 2),
+        ("Tares is told the retry list, empty", lambda r: _cu_puts(r)[0] == {"stations": {}}),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_classify",
+    suite="claude_update",
+    about="a stopped station and one with no conversation are named, not restarted; the one that has no conversation fails the run",
+    setup=_cu_world(stations={**CU_STATIONS, "crew-releaser": {"role": "releaser", "id": "cccc0003"},
+                              "crew-builder": {"role": "builder", "id": "dddd0004", "sessionId": "sess-b", "project": "shop"}},
+                    states={"crew-builder": "stopped"}),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV)],
+    checks=[
+        ("a stopped station waits for the watch",
+         lambda r: "crew-builder is stopped; it starts on Claude Code" in r.out(0) and "crew-builder" not in _cu_names(r)),
+        ("a station with no conversation is named and fails the run",
+         lambda r: r.code(0) != 0 and "crew-releaser has no conversation to resume" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: crew-releaser" in r.out(0)),
+        ("the others still move, the orchestrator last", lambda r: _cu_names(r) == ["crew-reviewer", "crew-orchestrator"]),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_wait",
+    suite="claude_update",
+    about="a busy station is waited for, then given up on at --wait; the others still move and the run fails naming it",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
+    checks=[
+        ("it says it waits, once", lambda r: r.out(0).count("waiting for crew-reviewer to be idle (it is working)") == 1),
+        ("past --wait it gives up and fails naming the station",
+         lambda r: r.code(0) != 0 and "gave up waiting for crew-reviewer to be idle" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)),
+        ("the busy station is not restarted, the orchestrator is", lambda r: _cu_names(r) == ["crew-orchestrator"]),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_self",
+    suite="claude_update",
+    about="run from the orchestrator it leaves that station out and says how it moves; --force says it needs another session",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}),
+           Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}, before=_cu_orchestrator_current),
+           Step(["crew", "update", "--force"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"})],
+    checks=[
+        ("from the orchestrator: the others move, the orchestrator is left, and the way it moves is said",
+         lambda r: r.code(0) == 0 and _cu_names(r)[:1] == ["crew-reviewer"] and "crew-orchestrator" not in _cu_names(r)[:1]
+         and "crew-orchestrator, which ran this command, moves when" in r.out(0)),
+        ("a caller that is already on the version is not restarted and not told anything about its move",
+         lambda r: r.code(1) == 0 and "crew-orchestrator already runs Claude Code" in r.out(1)
+         and "every station runs Claude Code" in r.out(1) and "which ran this command" not in r.out(1)
+         and "restarting" not in r.out(1)),
+        ("--force restarts the others, leaves the caller and says it needs another session",
+         lambda r: r.code(2) == 0 and _cu_names(r) == ["crew-reviewer", "crew-reviewer"]
+         and "can only be restarted from another session" in r.out(2)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_dup",
+    suite="claude_update",
+    about="two sessions under one station name are reported and fail the run",
+    setup=_cu_world(runs=CU_NEW),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    steps=[Step(["crew", "update"], env=CU_ENV, before=lambda tmp: _cu_add_dup(tmp)), Step(["crew", "update"], env=CU_ENV, before=lambda tmp: _cu_drop_dup(tmp))],
+    checks=[
+        ("two sessions under one name: reported, the update fails",
+         lambda r: r.code(0) != 0 and "TWO SESSIONS named crew-reviewer" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: two-sessions" in r.out(0)),
+        ("one session each: it passes", lambda r: r.code(1) == 0 and "one session each" in r.out(1)),
+    ],
+    covers=["two sessions under one name: reported, the update fails", "one session each: it passes"],
+))
+
+
+def _cu_add_dup(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    rows.append({"id": "dup00001", "name": "crew-reviewer", "state": "working", "status": "idle", "sessionId": "other", "pid": 49999,
+                 "cwd": "/", "version": CU_NEW})
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cu_drop_dup(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = [x for x in json.loads(p.read_text(encoding="utf-8")) if x["id"] != "dup00001"]
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crew_update_halt_mid",
+    suite="claude_update",
+    about="a halt that comes after the first restart stops the run before the orchestrator, and says so",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_routes=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV, before=_cu_halt_file)],
+    checks=[("halted in the middle: crew update stops and says so",
+             lambda r: r.code(0) != 0 and "the crew was halted; nothing more was restarted" in r.out(0)
+             and _cu_names(r) == ["crew-reviewer"])],
+    covers=[],
+))
+
+# cc_retry_*: a station whose restarts come back on an old spare is marked, retried after a back-off that doubles up to a
+# cap, and the list of them goes to Tares (PUT /api/crew/claude-retry). crew update tries at once whatever the back-off says.
+
+# A start in bash reads the grants and the projects again on every try; the Python side reads them once for the
+# run. Neither read changes what is done, so the retry scenarios leave them out of the list of what was asked.
+CU_QUIET = CU_NO_PACE + ("GET /api/grants", "GET /api/crew/projects")
+CU_RETRY_ENV = CU_ENV
+
+scenario(Scenario(
+    name="cc_retry_marks",
+    suite="claude_update",
+    about="every restart on an old spare: three tries in the conversation, one new conversation, then the station is marked and "
+          "Tares gets the list; a second run tries at once and doubles the wait; a run that gets there clears the marks",
+    setup=_cu_with_key(_cu_world(spawn=CU_OLD)),
+    tares=CU_TARES,
+    ignore_routes=CU_QUIET,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()),
+           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait())],
+    checks=[
+        ("old spares every time: three resumed tries then a new conversation, for each station",
+         lambda r: _cu_names(r)[:8] == ["crew-reviewer"] * 4 + ["crew-orchestrator"] * 4
+         and _cu_resumed(r, "crew-reviewer")[:4] == [True, True, True, False]),
+        ("the run says the watch tries again, and fails naming both",
+         lambda r: r.code(0) != 0 and "the watch tries again in 10 min" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: crew-reviewer crew-orchestrator" in r.out(0)),
+        ("it is marked: the version, one failed move, the new conversation done, a retry time ten minutes on",
+         lambda r: r.snap(0)["fails"] == 1 and 540 < r.snap(0)["in"] <= 600),
+        ("Tares has the list, with a key",
+         lambda r: any(sorted(p["stations"]) == ["crew-orchestrator", "crew-reviewer"] for p in _cu_puts(r))
+         and _cu_is(_cu_puts(r)[0]["stations"]["crew-reviewer"], {"target": CU_NEW, "fails": 1, "next_at": _cu_puts(r)[0]["stations"]["crew-reviewer"]["next_at"]})
+         and _cu_is([q["auth"] for q in r.tares.asked(CU_RETRY)], [True] * len(r.tares.asked(CU_RETRY)))),
+        ("crew update ignores the back-off: it tries again at once and fails again",
+         lambda r: r.code(1) != 0 and "the watch tries again in 20 min" in r.out(1)),
+        ("no second new conversation: three more tries in the old one",
+         lambda r: _cu_is(_cu_resumed(r, "crew-reviewer"), [True, True, True, False, True, True, True, True])),
+        ("the wait doubles: two failed moves, a retry time twenty minutes on",
+         lambda r: r.snap(1)["fails"] == 2 and 1140 < r.snap(1)["in"] <= 1200),
+        ("the second list says two failures",
+         lambda r: any(p["stations"].get("crew-reviewer", {}).get("fails") == 2 for p in _cu_puts(r))),
+        ("once a spare is not in the way every mark is cleared, here and on Tares",
+         lambda r: r.code(2) == 0 and _cu_unmarked(r, "crew-reviewer") and _cu_unmarked(r, "crew-orchestrator")
+         and _cu_is(_cu_puts(r)[-1], {"stations": {}})),
+    ],
+    covers=["crew update ignores the backoff, tries the orchestrator again and says the watch retries",
+            "the failure marks are cleared, here and on Tares"],
+))
+
+scenario(Scenario(
+    name="cc_retry_cap",
+    suite="claude_update",
+    about="FACTORY_CC_BACKOFF sets the first wait and FACTORY_CC_BACKOFF_MAX the cap it doubles up to",
+    setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
+    tares=CU_TARES,
+    ignore_routes=CU_QUIET,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
+           for _ in range(3)],
+    checks=[
+        ("the first wait is FACTORY_CC_BACKOFF", lambda r: r.snap(0)["fails"] == 1 and 90 < r.snap(0)["in"] <= 100),
+        ("the second doubles, up to the cap", lambda r: r.snap(1)["fails"] == 2 and 140 < r.snap(1)["in"] <= 150),
+        ("the third stays at the cap", lambda r: r.snap(2)["fails"] == 3 and 140 < r.snap(2)["in"] <= 150),
+        ("the Tares list follows", lambda r: [p["stations"]["crew-reviewer"]["fails"] for p in _cu_puts(r)] == [1, 2, 3]),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="cc_retry_tries",
+    suite="claude_update",
+    about="FACTORY_CC_TRIES is the number of tries in the conversation before the new one",
+    setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
+    tares=CU_TARES,
+    ignore_routes=CU_QUIET,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "1"}),
+           Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "5"})],
+    checks=[
+        ("one try, then the new conversation", lambda r: _cu_resumed(r, "crew-reviewer")[:2] == [True, False]),
+        ("five tries in the conversation, and the new conversation is not made again",
+         lambda r: _cu_resumed(r, "crew-reviewer")[2:] == [True] * 5),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="cc_retry_put_fails",
+    suite="claude_update",
+    about="a Tares that refuses the retry list does not change what the command says or does",
+    setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
+    tares={**CU_TARES, CU_RETRY: (500, "boom")},
+    ignore_routes=CU_QUIET,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV)],
+    checks=[("the run fails as it would, naming the station and the retry",
+             lambda r: r.code(0) != 0 and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)
+             and "the watch tries again in 10 min" in r.out(0) and len(r.tares.asked(CU_RETRY)) == 1)],
+    covers=[],
 ))
 
 

@@ -1,4 +1,4 @@
-"""Moving the stations onto a newer Claude Code in Python (tares/crew/cc_update.py, TR-963).
+"""Moving the stations onto a newer Claude Code in Python (tares/crew/cc_update.py, TR-963, TR-964).
 
 Each check runs against the Python fake Claude Code (tests/factory/fake_claude.py) in a throwaway crew home, with a
 small fake Tares. The call to launch is replaced by a recorder that registers a new session (and gives it the Claude
@@ -104,6 +104,7 @@ class FakeTares:
     def __init__(self, settings=None, health=True):
         self.routes = {"GET /api/crew/settings": (200, {"settings": settings or {}})}
         self.health = health
+        self.requests: list = []   # (method, path, body text, whether a key came with it)
         outer = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -112,6 +113,9 @@ class FakeTares:
 
             def do_GET(self):
                 key = f"{self.command} {self.path}"
+                size = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(size).decode("utf-8") if size else ""
+                outer.requests.append((self.command, self.path, body, self.headers.get("Authorization") or ""))
                 if key == "GET /health":
                     status, doc = (200 if outer.health else 503), {"ok": True}
                 else:
@@ -123,7 +127,7 @@ class FakeTares:
                 self.end_headers()
                 self.wfile.write(data)
 
-            do_POST = do_GET
+            do_POST = do_PUT = do_GET
 
         self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -395,9 +399,6 @@ with patched(claude, "attached", lambda s, paths=None: True):
     ck("one somebody has open cannot", not CU.cc_movable(CP, "shop-build-m1", NEW, BIN))
 with patched(CU, "cc_backoff", lambda *a: True):
     ck("one backing off cannot", not CU.cc_movable(CP, "shop-build-m1", NEW, BIN))
-ck("the backoff stub never waits", CU.cc_backoff(CP, "shop-build-m1", NEW) is False)
-ck("the delay stub is FACTORY_CC_BACKOFF, 600 without it, with no doubling",
-   CU.cc_delay(1, {}) == 600 and CU.cc_delay(5, {"FACTORY_CC_BACKOFF": "45"}) == 45 and CU.cc_delay(2, {"FACTORY_CC_BACKOFF": "x"}) == 600)
 
 # ---------------------------------------------------------------------------------------------
 print("cc_pick")
@@ -596,9 +597,9 @@ del launched[:]
 os.environ["FACTORY_CC_BACKOFF"] = "30"
 rc, msgs, _ = move()
 st = stations_now()["shop-build-m1"]
-ck("the next round for the same version: no new conversation again, the count goes up, FACTORY_CC_BACKOFF is the delay",
+ck("the next round for the same version: no new conversation again, the count goes up, the delay doubles",
    rc == 5 and len(launched) == 2 and all(x["resume"] != "" for x in launched) and st["cc_fails"] == 2
-   and abs(st["cc_retry_at"] - (time.time() + 30)) < 30, str((rc, launched, st)))
+   and abs(st["cc_retry_at"] - (time.time() + 60)) < 30, str((rc, launched, st)))
 os.environ.pop("FACTORY_CC_BACKOFF")
 
 world({"crew-reviewer": station(role="reviewer", id="aaaa0003"),
@@ -797,7 +798,7 @@ ck("an unreadable session list moves nothing", moved == [])
 
 # the Crew page's retry flags follow the marks every settled round with every station up
 synced = []
-with patched(CU, "cc_retry_sync", lambda p, c: synced.append(1)):
+with patched(CU, "cc_retry_sync", lambda p, c, b=None: synced.append(1)):
     world(TWO, TWO_ROWS)
     step()
     ck("a settled round with every station up syncs the retry flags", len(synced) == 1, str(synced))
@@ -971,8 +972,432 @@ ran = []
 with patched(CU, "step", lambda paths: ran.append(paths)):
     watch._STEPS["updates"](CP)
 ck("the updates step of the watch runs cc_update.step", ran == [CP] and watch._STEPS["updates"] is watch._updates_step)
-ck("the stubs are small and named", all(callable(getattr(CU, n)) for n in ("cc_backoff", "cc_delay", "cc_retry_sync", "_pace_closed",
-                                                                          "upgrades_frozen")))
+ck("the stubs are small and named", all(callable(getattr(CU, n)) for n in ("_pace_closed", "_pace_until", "upgrades_frozen")))
+
+# ---------------------------------------------------------------------------------------------
+print("cc_backoff, cc_retrying and cc_retry_in")
+NOW = int(time.time())
+world({"a": station(cc_failed=NEW, cc_retry_at=NOW + 300), "b": station(cc_failed=NEW, cc_retry_at=NOW - 5),
+       "c": station(cc_failed=OLD, cc_retry_at=NOW + 300), "d": station(), "e": station(cc_failed=NEW, cc_retry_at="soon"),
+       "f": station(cc_failed=NEW)}, [])
+ck("a station before its retry time waits", CU.cc_backoff(CP, "a", NEW) is True)
+ck("...after its retry time it does not", CU.cc_backoff(CP, "b", NEW) is False)
+ck("...a failure for another version is no wait", CU.cc_backoff(CP, "c", NEW) is False)
+ck("...no marks, no wait", CU.cc_backoff(CP, "d", NEW) is False and CU.cc_backoff(CP, "nobody", NEW) is False)
+ck("...a retry time that is no number, or missing, is no wait", CU.cc_backoff(CP, "e", NEW) is False
+   and CU.cc_backoff(CP, "f", NEW) is False)
+ck("cc_retrying: a failed move onto the version", CU.cc_retrying(CP, "a", NEW) and CU.cc_retrying(CP, "b", NEW)
+   and not CU.cc_retrying(CP, "c", NEW) and not CU.cc_retrying(CP, "d", NEW))
+ck("views read the one cc_retry_in", views.cc_retry_in is CU.cc_retry_in)
+world({"a": station(cc_retry_at=NOW + 3000), "b": station(cc_retry_at=NOW - 50), "c": station(cc_retry_at=NOW + 9000),
+       "d": station(), "e": station(cc_retry_at=NOW + 7140), "f": station(cc_retry_at=NOW + 7260)}, [])
+ck("cc_retry_in: minutes rounded up, an hour count from 120 minutes, never under a minute",
+   [CU.cc_retry_in(CP, x) for x in "abcdef"] == ["50 min", "1 min", "3 h", "1 min", "119 min", "3 h"],
+   str([CU.cc_retry_in(CP, x) for x in "abcdef"]))
+
+print("cc_delay")
+D = CU.cc_delay
+ck("the first failure waits FACTORY_CC_BACKOFF, 600 without it", D(1, {}) == 600 and D(1, {"FACTORY_CC_BACKOFF": "45"}) == 45
+   and D(0, {}) == 600)
+ck("...then it doubles for each failure", [D(n, {}) for n in (1, 2, 3, 4, 5)] == [600, 1200, 2400, 4800, 9600])
+ck("...and stops at FACTORY_CC_BACKOFF_MAX, 14400 without it", D(6, {}) == 14400 and D(40, {}) == 14400
+   and D(3, {"FACTORY_CC_BACKOFF_MAX": "1000"}) == 1000 and D(2, {"FACTORY_CC_BACKOFF_MAX": "1000"}) == 1000)
+ck("...a delay over the cap from the start is cut to it", D(1, {"FACTORY_CC_BACKOFF": "50000"}) == 14400
+   and D(1, {"FACTORY_CC_BACKOFF": "500", "FACTORY_CC_BACKOFF_MAX": "100"}) == 100)
+ck("...45 doubles to 720 by the fifth failure", D(5, {"FACTORY_CC_BACKOFF": "45"}) == 720)
+ck("...an empty setting is the default; text in FACTORY_CC_BACKOFF is the cap, in the cap is the default cap",
+   D(2, {"FACTORY_CC_BACKOFF": ""}) == 1200 and D(2, {"FACTORY_CC_BACKOFF": "x"}) == 14400
+   and D(2, {"FACTORY_CC_BACKOFF_MAX": "x"}) == 1200 and D(2, {"FACTORY_CC_BACKOFF": "x", "FACTORY_CC_BACKOFF_MAX": "90"}) == 90)
+
+print("a failed move records its retry state")
+world(one, old_row)
+os.environ["FACTORY_CC_TRIES"] = "1"
+SPAWN[:] = [OLD]
+os.environ["FACTORY_CC_BACKOFF"] = "100"
+os.environ["FACTORY_CC_BACKOFF_MAX"] = "350"
+seen = []
+for n in range(1, 5):
+    rc, _, _ = move()
+    st = stations_now()["shop-build-m1"]
+    seen.append((rc, st["cc_fails"], round(st["cc_retry_at"] - time.time(), -1)))
+ck("each failed move counts up and waits twice as long, to the cap", seen == [(5, 1, 100.0), (5, 2, 200.0), (5, 3, 350.0), (5, 4, 350.0)],
+   str(seen))
+ck("...and the station is then in backoff for the version, not for a newer one", CU.cc_backoff(CP, "shop-build-m1", NEW)
+   and not CU.cc_backoff(CP, "shop-build-m1", "2.1.300"))
+state.stations_put("shop-build-m1", {"cc_retry_at": int(time.time()) - 1}, CP)
+ck("...and the wait is over once the retry time has come", not CU.cc_backoff(CP, "shop-build-m1", NEW))
+rc, _, _ = move(target="2.1.300")
+st = stations_now()["shop-build-m1"]
+ck("a failure for another version starts counting again", rc == 5 and st["cc_failed"] == "2.1.300" and st["cc_fails"] == 1,
+   str(st))
+for k in ("FACTORY_CC_TRIES", "FACTORY_CC_BACKOFF", "FACTORY_CC_BACKOFF_MAX"):
+    os.environ.pop(k, None)
+
+print("a station waiting out its backoff is not picked")
+world({"shop-build-m1": station(cc_failed=NEW, cc_retry_at=int(time.time()) + 600),
+       "shop-build-m2": station(id="aaaa0002", sessionId="s2"),
+       "crew-orchestrator": station(role="orchestrator", id="aaaa0003", parent="")},
+      [row("idle", "aaaa0001", "shop-build-m1"), row("idle", "aaaa0002", "shop-build-m2"),
+       row("idle", "aaaa0003", "crew-orchestrator")])
+ck("the other builder goes first", CU.cc_pick(CP, NEW, BIN) == "shop-build-m2")
+state.stations_put("shop-build-m2", {"cc_failed": NEW, "cc_retry_at": int(time.time()) + 600}, CP)
+ck("...with both backing off, the orchestrator goes (a builder in backoff does not hold it back)",
+   CU.cc_pick(CP, NEW, BIN) == "crew-orchestrator")
+state.stations_put("shop-build-m1", {"cc_retry_at": int(time.time()) - 1}, CP)
+ck("...and a builder whose wait is over is picked again", CU.cc_pick(CP, NEW, BIN) == "shop-build-m1")
+
+# ---------------------------------------------------------------------------------------------
+print("cc_retry_sync")
+
+
+def sync(token="", client_env=None):
+    """cc_retry_sync with a Tares that records what it is sent: the requests it saw."""
+    with FakeTares() as ft:
+        env = dict(os.environ)
+        if token:
+            env["TARES_AUTH_TOKEN"] = token
+        env.update(client_env or {})
+        with TaresClient(CP, env, lambda _m: None) as c:
+            CU.cc_retry_sync(CP, c, BIN)
+        return [r for r in ft.requests if r[0] == "PUT"]
+
+
+RETRY_AT = NOW + 900
+world({"crew-orchestrator": station(role="orchestrator", id="aaaa0001", parent="", cc_failed=NEW, cc_fails=3, cc_retry_at=RETRY_AT),
+       "shop-build-m1": station(id="aaaa0002", cc_failed=NEW, cc_fails="x", cc_retry_at="soon"),
+       "shop-build-m2": station(id="aaaa0003", cc_failed=NEW, cc_fails=2, cc_retry_at=RETRY_AT),
+       "shop-build-m3": station(id="aaaa0004", cc_failed="2.1.150", cc_fails=2, cc_retry_at=RETRY_AT),
+       "shop-build-m4": station(id="aaaa0005", cc_failed=NEW, cc_fails=2, cc_retry_at=RETRY_AT),
+       "shop-build-m5": station(id="aaaa0006", cc_failed=NEW, cc_fails=2, cc_retry_at=RETRY_AT, status="retired"),
+       "shop-build-m6": station(id="aaaa0007"),
+       "shop-build-m7": station(id="aaaa0008", cc_failed=NEW, cc_fails=2, cc_retry_at=RETRY_AT)},
+      [row("idle", "aaaa0001", "crew-orchestrator", OLD), row("idle", "aaaa0002", "shop-build-m1", OLD),
+       row("idle", "aaaa0003", "shop-build-m2", OLD), row("idle", "aaaa0004", "shop-build-m3", OLD),
+       row("idle", "aaaa0005", "shop-build-m4", NEW), row("idle", "aaaa0006", "shop-build-m5", OLD),
+       row("idle", "aaaa0007", "shop-build-m6", OLD), row("idle", "aaaa0008", "shop-build-m7", OLD)])
+(CREW / "stations" / "shop-build-m7.done").write_text("", encoding="utf-8")
+puts = sync()
+want = {"stations": {"crew-orchestrator": {"target": NEW, "fails": 3, "next_at": RETRY_AT},
+                     "shop-build-m1": {"target": NEW, "fails": 1, "next_at": 0},
+                     "shop-build-m2": {"target": NEW, "fails": 2, "next_at": RETRY_AT}}}
+ck("one PUT to the claude-retry route with the crew's name", len(puts) == 1 and puts[0][1] == "/api/crew/claude-retry?crew=crew",
+   str(puts))
+ck("...listing the stations still behind that failed for the installed version, in stations.json order",
+   puts and json.loads(puts[0][2]) == want and list(json.loads(puts[0][2])["stations"]) == list(want["stations"]), str(puts))
+ck("...a mark for an older version, a station already on it, a retired one and a finished one are left out; a fails or "
+   "retry time that is no number is 1 and 0", puts and puts[0][2] == state.dumps_compact(want), str(puts))
+ck("...no key, no Authorization header", puts and puts[0][3] == "", str(puts))
+puts = sync(token="secret-token-1")
+ck("with a key the PUT carries it as a bearer token", puts and puts[0][3] == "Bearer secret-token-1", str(puts))
+world({"shop-build-m1": station(cc_failed=NEW)}, [row("idle", "aaaa0001", "shop-build-m1", NEW)])
+puts = sync()
+ck("with nothing retrying an empty list is sent, so the page's flags clear", len(puts) == 1
+   and json.loads(puts[0][2]) == {"stations": {}}, str(puts))
+os.environ["FAKE_CLAUDE_AGENTS_FAIL"] = "1"
+puts = sync()
+os.environ.pop("FAKE_CLAUDE_AGENTS_FAIL")
+ck("an unreadable session list sends nothing", puts == [], str(puts))
+with Said() as sd:   # no Tares answering
+    os.environ["TARESD_URL"] = "http://127.0.0.1:9"
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        CU.cc_retry_sync(CP, sd.client, BIN)
+    os.environ.pop("TARESD_URL")
+ck("Tares not answering sends nothing and says nothing", err.getvalue() == "" and sd.msgs == [], err.getvalue())
+with FakeTares() as ft:
+    os.environ["TARESD_URL"] = ft.url
+    with TaresClient(CP, dict(os.environ), lambda _m: None) as c:
+        c.tares_on()
+        c.tares = "http://127.0.0.1:9"   # up for /health, gone for the PUT
+        try:
+            CU.cc_retry_sync(CP, c, BIN)
+            raised = False
+        except Exception:
+            raised = True
+ck("...and a PUT that fails is ignored", not raised)
+
+world(one, old_row)
+os.environ["FACTORY_CC_TRIES"] = "1"
+SPAWN[:] = [OLD]
+with FakeTares() as ft, Said() as sd:
+    rc = CU.claude_move(CP, sd.client, "shop-build-m1", NEW, claude_bin=BIN)
+    puts = [r for r in ft.requests if r[0] == "PUT"]
+ck("a failed move sends the retry flags with the mark it just recorded", rc == 5 and len(puts) == 1
+   and json.loads(puts[0][2])["stations"]["shop-build-m1"]["fails"] == 1, str(puts))
+world(one, old_row)
+SPAWN[:] = [NEW]
+state.stations_put("shop-build-m1", {"cc_failed": NEW, "cc_fails": 1, "cc_retry_at": int(time.time()) + 5}, CP)
+with FakeTares() as ft, Said() as sd:
+    rc = CU.claude_move(CP, sd.client, "shop-build-m1", NEW, claude_bin=BIN)
+    puts = [r for r in ft.requests if r[0] == "PUT"]
+ck("a move that works clears the marks and sends the list without the station", rc == 0 and len(puts) == 1
+   and json.loads(puts[0][2]) == {"stations": {}} and stations_now()["shop-build-m1"].get("cc_failed") is None, str((puts, stations_now())))
+
+# ---------------------------------------------------------------------------------------------
+print("crew update and crew restart")
+USAGE = "usage: tares factory crew update [--force] [--wait <seconds>]"
+
+
+def cu(*args, word="update", settings=None):
+    """`crew update` / `crew restart` through its command: (exit code, what it said, the fake Tares)."""
+    with FakeTares(settings) as ft:
+        res, said = round_says(lambda: CU_RUN[word](["crew", word, *args], dict(os.environ)))
+    return res, said, ft
+
+
+CU_RUN = {"update": CU.cmd_crew_update, "restart": CU.cmd_crew_restart}
+world(one, old_row)
+for args, want in [(["--bogus"], USAGE), (["now"], USAGE), (["--force", "--bogus"], USAGE),
+                   (["--wait"], "--wait takes a number of seconds"),
+                   (["--wait", "abc"], "--wait takes a number of seconds, not 'abc'"),
+                   (["--wait", ""], "--wait takes a number of seconds, not ''"),
+                   (["--wait", "-5"], "--wait takes a number of seconds, not '-5'"),
+                   (["--wait", "1.5"], "--wait takes a number of seconds, not '1.5'"),
+                   (["--wait", "1234567890"], "--wait takes a number of seconds, at most 9 digits, not '1234567890'"),
+                   (["--wait", "0001234567890"], "--wait takes a number of seconds, at most 9 digits, not '1234567890'")]:
+    rc, said, _ = cu(*args)
+    ck(f"crew update {' '.join(args)!r} is refused: {want}", rc == 1 and said == [want] and launched == [], str((rc, said)))
+rc, said, _ = cu("now", word="restart")
+ck("crew restart takes the same arguments (a station name is refused with the usage)", rc == 1 and said == [USAGE], str(said))
+
+world(one, old_row)
+(CREW / "crew.json").unlink()
+rc, said, _ = cu()
+ck("no crew yet is refused", rc == 1 and len(said) == 1 and said[0].startswith("no crew yet in "), str(said))
+
+world(one, old_row)
+state.halt_write("lunch", paths=CP)
+rc, said, _ = cu()
+ck("a halted crew is refused, with the reason", rc == 1 and said == ["the crew is halted (lunch); tares factory crew resume first"]
+   and launched == [], str(said))
+world(one, old_row)
+(STATE / "version").write_text("no version here\n", encoding="utf-8")
+rc, said, _ = cu()
+ck("a Claude Code version that cannot be read is refused", rc == 1 and len(said) == 1
+   and said[0].startswith("could not read the Claude Code version (") and said[0].endswith(" --version)"), str(said))
+world({}, [])
+(CREW / "stations.json").unlink()
+rc, said, _ = cu()
+ck("no stations.json: nothing recorded, exit 0", rc == 0 and said == ["no stations recorded"], str((rc, said)))
+world(one, old_row)
+os.environ["FAKE_CLAUDE_AGENTS_FAIL"] = "1"
+rc, said, _ = cu()
+os.environ.pop("FAKE_CLAUDE_AGENTS_FAIL")
+ck("an unreadable session list is refused", rc == 1 and said == [claude.UNREAD], str(said))
+with patched(CU, "_pace_closed", lambda c: True):
+    world(one, old_row)
+    rc, said, _ = cu()
+ck("a full plan limit is refused", rc == 1 and said == ["the plan's limit is full, and a restart is a model turn into it; "
+                                                          "tares factory crew update again after it resets"] and launched == [], str(said))
+
+TREE = {"crew-orchestrator": station(role="orchestrator", id="aaaa0001", parent="", sessionId="so"),
+        "shop-build-m1": station(id="aaaa0002", sessionId="s2"),
+        "shop-build-m2": station(id="aaaa0003", sessionId="s3")}
+TREE_ROWS = [row("idle", "aaaa0001", "crew-orchestrator", OLD), row("idle", "aaaa0002", "shop-build-m1", OLD),
+             row("idle", "aaaa0003", "shop-build-m2", OLD)]
+world(TREE, TREE_ROWS)
+rc, said, ft = cu()
+ck("every station is restarted, the orchestrator last", rc == 0 and [x["station"] for x in launched] == [
+    "shop-build-m1", "shop-build-m2", "crew-orchestrator"], str((rc, said, [x["station"] for x in launched])))
+ck("...with what is said, and a closing line", said == [
+    f"restarting shop-build-m1 on Claude Code {NEW}, in the same conversation", f"shop-build-m1 runs Claude Code {NEW}",
+    f"restarting shop-build-m2 on Claude Code {NEW}, in the same conversation", f"shop-build-m2 runs Claude Code {NEW}",
+    f"restarting crew-orchestrator on Claude Code {NEW}, in the same conversation", f"crew-orchestrator runs Claude Code {NEW}",
+    f"every station runs Claude Code {NEW}, one session each"], str(said))
+ck("...and the retry flags are sent after each move", len([r for r in ft.requests if r[0] == "PUT"]) == 3)
+rc, said, _ = cu()
+ck("a second run finds every station on it and restarts none", rc == 0 and len(launched) == 3
+   and sorted(said[:-1]) == sorted([f"{x} already runs Claude Code {NEW}" for x in TREE])
+   and said[-1] == f"every station runs Claude Code {NEW}, one session each", str(said))
+n_before = len(launched)
+rc, said, _ = cu("--force")
+ck("--force restarts stations that already run it", rc == 0 and len(launched) - n_before == 3
+   and not any("already runs" in x for x in said), str((rc, said, len(launched))))
+n_before = len(launched)
+rc, said, _ = cu(word="restart")
+ck("crew restart is crew update --force", rc == 0 and len(launched) - n_before == 3 and not any("already runs" in x for x in said),
+   str((rc, said, len(launched))))
+
+print("crew update: stopped, no conversation, finished, helpers")
+world({"shop-build-m1": station(sessionId=""), "shop-build-m2": station(id="aaaa0003", sessionId="s3"),
+       "shop-build-m3": station(id="aaaa0004", sessionId="s4"), "shop-build-m4": station(id="aaaa0005", sessionId="s5"),
+       "shop-build-m5": station(id="aaaa0006", status="retired")},
+      [row("idle", "aaaa0001", "shop-build-m1", OLD), row("idle", "aaaa0003", "shop-build-m2", OLD),
+       row("idle", "aaaa0004", "shop-build-m3", OLD)] + [])
+(CREW / "stations" / "shop-build-m2.done").write_text("", encoding="utf-8")
+rc, said, _ = cu()
+ck("a finished station, one nothing runs and one with no conversation are not restarted; the last is a failure",
+   rc == 1 and launched[0]["station"] == "shop-build-m3" and len(launched) == 1 and said == [
+       "shop-build-m1 has no conversation to resume; tares factory restart shop-build-m1 --fresh starts it again",
+       f"shop-build-m2 is stopped; it starts on Claude Code {NEW} when the watch revives it",
+       f"shop-build-m4 is stopped; it starts on Claude Code {NEW} when the watch revives it",
+       f"restarting shop-build-m3 on Claude Code {NEW}, in the same conversation", f"shop-build-m3 runs Claude Code {NEW}",
+       f"not every station runs Claude Code {NEW}: shop-build-m1"], str(said))
+
+print("crew update: a move that fails")
+world(one, old_row)
+os.environ["FACTORY_CC_TRIES"] = "1"
+SPAWN[:] = [OLD]
+rc, said, _ = cu()
+ck("an old spare every time: the station's line with the retry time, then the refusal naming it", any(x.startswith("shop-build-m1 came back on an older Claude Code each time, "
+   "even in a new conversation (an old pre-warmed spare in Claude Code's pool); the watch tries again in 10 min, or run "
+   "tares factory crew update again") for x in said) and said[-1] == f"not every station runs Claude Code {NEW}: shop-build-m1"
+   and rc == 1, str(said))
+ck("...and the marks are there for the watch", stations_now()["shop-build-m1"]["cc_failed"] == NEW)
+world({"crew-reviewer": station(role="reviewer", id="aaaa0003"),
+       "crew-reviewer-h1": station(role="helper", id="aaaa0001", parent="crew-reviewer")},
+      [row("idle", "aaaa0001", "crew-reviewer-h1", OLD), row("idle", "aaaa0003", "crew-reviewer", NEW)])
+SPAWN[:] = [OLD]
+rc, said, _ = cu()
+ck("a helper that keeps coming back keeps its conversation", rc == 1 and any(
+    x.startswith("crew-reviewer-h1 came back on an older Claude Code each time (an old pre-warmed spare in Claude Code's pool); "
+                 "a helper keeps its conversation, since its task is only there; the watch tries again in 10 min, or run "
+                 "tares factory crew update again") for x in said), str(said))
+os.environ.pop("FACTORY_CC_TRIES", None)
+world(one, old_row)
+state.stations_put("shop-build-m1", {"cc_failed": NEW, "cc_fails": 2, "cc_retry_at": int(time.time()) + 5000}, CP)
+rc, said, _ = cu()
+ck("a station backing off is restarted by crew update at once, and its marks are cleared", rc == 0 and len(launched) == 1
+   and stations_now()["shop-build-m1"].get("cc_failed") is None, str((rc, said, stations_now())))
+
+world(one, old_row)
+ON_LAUNCH.append(lambda n: (_ for _ in ()).throw(CrewError("launch failed (fake)")))
+rc, said, _ = cu()
+ck("a restart that fails otherwise is said and fails the run", rc == 1 and said == [
+    f"restarting shop-build-m1 on Claude Code {NEW}, in the same conversation", "launch failed (fake)",
+    f"could not restart shop-build-m1 on Claude Code {NEW}", f"not every station runs Claude Code {NEW}: shop-build-m1"], str(said))
+world({"crew-reviewer": station(role="reviewer", id="aaaa0003"),
+       "crew-reviewer-h1": station(role="helper", id="aaaa0001", parent="crew-reviewer")},
+      [row("idle", "aaaa0001", "crew-reviewer-h1", OLD), row("idle", "aaaa0003", "crew-reviewer", NEW)])
+ON_LAUNCH.append(lambda n: (_ for _ in ()).throw(CrewError("launch failed (fake)")))
+rc, said, _ = cu()
+ck("...a helper is told to be asked for again from its parent", f"could not restart crew-reviewer-h1 on Claude Code {NEW}; "
+   "the watch does not revive helpers, so ask crew-reviewer to spawn it again if it is down" in said, str(said))
+world(one, old_row)
+with patched(CU, "claude_move", lambda *a, **k: 3):
+    rc, said, _ = cu()
+ck("Tares not answering during a move ends the run", rc == 1 and said[-1] == "Tares doesn't answer; nothing more was restarted", str(said))
+with patched(CU, "claude_move", lambda *a, **k: 6):
+    world(one, old_row)
+    rc, said, _ = cu()
+ck("a limit that fills during a move ends the run", rc == 1 and said[-1] == "the plan's limit is full, and a restart is a model turn "
+   "into it; nothing more was restarted (tares factory crew update again after it resets)", str(said))
+
+print("crew update: waiting for a busy station")
+BUSY = {"shop-build-m1": station(), "shop-build-m2": station(id="aaaa0003", sessionId="s3")}
+BUSY_ROWS = [row("working", "aaaa0001", "shop-build-m1", OLD), row("idle", "aaaa0003", "shop-build-m2", OLD)]
+os.environ["FACTORY_UPDATE_POLL"] = "7"
+sleeps = []
+
+
+def fake_sleep(secs):
+    """The update's poll: note it, and after the second one the busy station goes idle."""
+    sleeps.append(secs)
+    if len(sleeps) == 2:
+        rows = json.loads((STATE / "agents.json").read_text(encoding="utf-8"))
+        for r in rows:
+            if r["id"] == "aaaa0001":
+                r["status"] = "idle"
+        fake_claude.write_agents(STATE, rows)
+
+
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+real_sleep = time.sleep
+with patched(time, "sleep", lambda s: fake_sleep(s) if s == 7.0 else real_sleep(s)):
+    rc, said, _ = cu("--wait", "600")
+ck("a busy station is waited for, told once, and restarted when it is idle; the poll is FACTORY_UPDATE_POLL",
+   rc == 0 and sleeps == [7.0, 7.0] and said.count("waiting for shop-build-m1 to be idle (it is working)") == 1
+   and [x["station"] for x in launched] == ["shop-build-m2", "shop-build-m1"], str((rc, sleeps, said, launched)))
+ck("...the other station was not held up by it", said[:2] == [f"restarting shop-build-m2 on Claude Code {NEW}, in the same conversation",
+                                                             f"shop-build-m2 runs Claude Code {NEW}"], str(said))
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+
+
+def short_clock():
+    """A clock that jumps ahead 2 s a look, so a 1 s wait is over by the next."""
+    t = [time.time()]
+
+    def now():
+        t[0] += 2
+        return t[0]
+    return now
+
+
+with patched(time, "time", short_clock()), patched(time, "sleep", lambda s: sleeps.append(s) if s == 7.0 else real_sleep(s)):
+    rc, said, _ = cu("--wait", "1")
+ck("past --wait the busy station is given up on, and the run fails naming it", rc == 1
+   and "gave up waiting for shop-build-m1 to be idle" in said and said[-1] == f"not every station runs Claude Code {NEW}: shop-build-m1"
+   and [x["station"] for x in launched] == ["shop-build-m2"], str((rc, said, launched)))
+ck("...it did not sleep on a station past its deadline", sleeps == [], str(sleeps))
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+with patched(time, "time", short_clock()), patched(time, "sleep", lambda s: fake_sleep(s) if s == 7.0 else real_sleep(s)):
+    rc, said, _ = cu("--wait", "0")
+ck("--wait 0 waits for ever: no deadline however long it takes", rc == 0 and sleeps == [7.0, 7.0], str((rc, sleeps, said)))
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+with patched(time, "time", short_clock()), patched(time, "sleep", lambda s: fake_sleep(s) if s == 7.0 else real_sleep(s)):
+    rc, said, _ = cu("--wait", "000")
+ck("...00 is 0 as well", rc == 0 and sleeps == [7.0, 7.0], str((rc, sleeps)))
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+
+
+def halt_on_sleep(secs):
+    sleeps.append(secs)
+    state.halt_write("stop it", paths=CP)
+
+
+with patched(time, "sleep", lambda s: halt_on_sleep(s) if s == 7.0 else real_sleep(s)):
+    rc, said, _ = cu("--wait", "600")
+ck("a halt while it waits ends the run", rc == 1 and said[-1] == "the crew was halted; nothing more was restarted "
+   "(tares factory crew resume, then crew update again)", str(said))
+world(BUSY, BUSY_ROWS)
+with patched(claude, "attached", lambda s, paths=None: s == "shop-build-m1"):
+    del sleeps[:]
+    with patched(time, "time", short_clock()), patched(time, "sleep", lambda s: sleeps.append(s) if s == 7.0 else real_sleep(s)):
+        rc, said, _ = cu("--wait", "1")
+ck("a station someone has open is waited for with that reason", "waiting for shop-build-m1 to be idle (someone has it open)" in said
+   or "gave up waiting for shop-build-m1 to be idle" in said, str(said))
+os.environ.pop("FACTORY_UPDATE_POLL")
+
+print("crew update: the station running it, and two sessions")
+os.environ["FACTORY_STATION"] = "shop-build-m1"
+world(TREE, TREE_ROWS)
+rc, said, _ = cu()
+ck("the station running the command is left for the watch, with a note", rc == 0 and "shop-build-m1" not in [x["station"] for x in launched]
+   and said[-1] == (f"every other station runs Claude Code {NEW}, one session each; shop-build-m1, which ran this command, "
+                    "moves when tares factory crew watch finds it idle, or run tares factory restart shop-build-m1 from another session"),
+   str(said))
+world(TREE, TREE_ROWS)
+rc, said, _ = cu(settings={"claude_update": False})
+ck("...with the setting off the watch will not move it: another session must", rc == 0 and said[-1] == (
+    f"every other station runs Claude Code {NEW}, one session each; shop-build-m1, which ran this command, can only be "
+    "restarted from another session: run tares factory restart shop-build-m1 there"), str(said))
+world(TREE, [row("idle", "aaaa0001", "crew-orchestrator", OLD), row("idle", "aaaa0002", "shop-build-m1", NEW),
+             row("idle", "aaaa0003", "shop-build-m2", OLD)])
+rc, said, _ = cu()
+ck("...already on it, it is told so and not mentioned again", rc == 0 and "shop-build-m1 already runs Claude Code " + NEW in said
+   and said[-1] == f"every station runs Claude Code {NEW}, one session each", str(said))
+rc, said, _ = cu("--force")
+ck("...--force still restarts it from another session's point of view: the note", rc == 0 and said[-1].startswith(
+    f"every other station runs Claude Code {NEW}, one session each; shop-build-m1, which ran this command"), str(said))
+world(TREE, TREE_ROWS)
+with patched(CU, "claude_move", lambda *a, **k: 5):
+    rc, said, _ = cu()
+ck("a failure with the station running it: its note first, then the refusal", rc == 1
+   and said[-1] == f"not every station runs Claude Code {NEW}: shop-build-m2 crew-orchestrator"
+   and said[-2].startswith("shop-build-m1, which ran this command"), str(said))
+os.environ.pop("FACTORY_STATION")
+
+world(TREE, [row("idle", "aaaa0001", "crew-orchestrator", NEW), row("idle", "aaaa0002", "shop-build-m1", NEW),
+             row("idle", "aaaa0003", "shop-build-m2", NEW), row("idle", "aaaa0009", "shop-build-m2", NEW)])
+rc, said, _ = cu()
+ck("two sessions under one station name are said, and fail the run", rc == 1 and said[-2:] == [
+    "TWO SESSIONS named shop-build-m2: aaaa0003, aaaa0009; stop the one stations.json does not list (factory roster)",
+    f"not every station runs Claude Code {NEW}: two-sessions"], str(said))
 
 shutil.rmtree(SCRATCH, ignore_errors=True)
 print(f"{P} passed, {F} failed")
