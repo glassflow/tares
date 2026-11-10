@@ -137,7 +137,7 @@ def is_the_watch(pid: int, created) -> bool:
         if "crew watch" not in " ".join(proc.cmdline()):
             return False
         return created is None or abs(proc.create_time() - created) <= IDENTITY_SLACK
-    except (psutil.Error, OSError):
+    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
         return False
 
 
@@ -159,7 +159,7 @@ def claim_pidfile(paths: CrewPaths) -> None:
         if me.ppid() != row[0]:
             return
         write_pidfile(paths, me.pid, me.create_time(), row[2] or "python")
-    except (psutil.Error, OSError):
+    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
         return
 
 
@@ -207,7 +207,7 @@ def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:
                                 env=env, **kwargs)
     try:
         created = psutil.Process(proc.pid).create_time()
-    except (psutil.Error, OSError):
+    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
         raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
     write_pidfile(paths, proc.pid, created, engine)
     note(f"  ✓ started the watch, which revives any station that stops (log: {paths.shown(LOG_FILE)})")
@@ -254,7 +254,7 @@ def stop(paths: CrewPaths, say, timeout: float | None = None) -> None:
             if not _wait_gone(pid, created, TERMINATE_WAIT):
                 proc.kill()
                 _wait_gone(pid, created, TERMINATE_WAIT)
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
             pass
     _unlink(paths.home / STOP_FILE)
     _unlink(pid_file)

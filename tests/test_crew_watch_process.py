@@ -148,6 +148,14 @@ try:
        (CREW / "watch.pid").read_text(encoding="utf-8").split() == [str(proc.pid), f"{created:.3f}", "python"])
     ck("...a live process with `crew watch` and that create time is the watch", watch.running_pid(paths) == proc.pid)
     ck("...LC.watch_pid says the same", LC.watch_pid(paths) == proc.pid)
+    real_cmdline = psutil.Process.cmdline
+    def leak(self):
+        raise SystemError("returned a result with an exception set")   # what psutil can leak on macOS
+    psutil.Process.cmdline = leak
+    try:
+        ck("psutil leaking SystemError from cmdline() means not the watch, not a crash", not watch.is_the_watch(proc.pid, created))
+    finally:
+        psutil.Process.cmdline = real_cmdline
     watch.write_pidfile(paths, proc.pid, created - 3600, "python")
     ck("a stale pid file (a pid a reboot gave to another process: the create time differs) names nothing",
        watch.running_pid(paths) is None and LC.watch_pid(paths) is None)
