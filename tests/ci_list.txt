@@ -150,6 +150,7 @@ test_person_attribution
 test_personal_docs
 test_pickup
 test_plugin_challenger
+test_plugin_resume_ship
 test_port_drift
 test_postgres
 test_pricing

@@ -136,10 +136,11 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         ctl.reads++;
         if (ctl.hold) await ctl.hold;
         if (ctl.fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
-        if (ctl.more) {   // a sign-off over more tickets than the daemon lists by title
+        if (ctl.more || ctl.planTitle) {   // a sign-off over more tickets than the daemon lists by title, or a plan of a long name
           const res = await route.fetch();
           const data = await res.json();
           for (const it of data.waiting_for_you || []) for (const a of it.actions || []) if (a.do === "sign_off") a.more_tickets = ctl.more;
+          if (ctl.planTitle) data.plan.title = ctl.planTitle;
           return route.fulfill({ response: res, json: data });
         }
         return route.continue();
@@ -846,7 +847,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 question open/.test((await texts("repo-you-own"))[0])
          && /nothing waiting/.test((await texts("repo-you-own"))[1]), JSON.stringify(await texts("repo-you-own")));
       ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced?tab=areas");
-      ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1
+      ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Kim\'s Claude plan"]').count()) === 1
          && (await page.locator('section[aria-label="Connected"]').count()) === 1);
       ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
       await shot(page, "side-three-people", width);
@@ -889,6 +890,56 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a cell of one still has Autonomy and the plan"), (await page.getByRole("link", { name: "Autonomy" }).count()) === 1
          && (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1);
       await ctx.close();
+    }
+    // ── the Claude plan says whose it is (TR-1020): the reading the seed sent is Kim's ──
+    {
+      const openHome = async (who, width) => {
+        const o = await open(who, width);
+        await o.page.goto(`${BASE}/`, { waitUntil: "load" });
+        await o.page.getByTestId("factory-home").waitFor();
+        await settle(o.page);
+        return o;
+      };
+      const planSection = (page) => page.locator('section[aria-label$="Claude plan"]');
+      const heading = async (page) => (await planSection(page).locator("h2").innerText()).trim();
+      const label = (page) => planSection(page).getAttribute("aria-label");
+      for (const width of [390, 1440]) {
+        const t = (s) => `@${width}: ${s}`;
+        for (const [who, want] of [["kim", "Your Claude plan"], ["alex", "Kim's Claude plan"], ["lee", "Kim's Claude plan"]]) {
+          const { ctx, page } = await openHome(who, width);
+          ck(t(`${who} reads "${want}"`), (await heading(page)) === want, await heading(page));
+          ck(t(`${who}: the section's label says the same`), (await label(page)) === want, await label(page));
+          ck(t(`${who}: the limits show`), /27% used/.test(await planSection(page).innerText()));
+          ck(t(`${who}: no horizontal scroll`), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+          await shot(page, `plan-${who}`, width);
+          await checkWords(page, ck, t(`the plan, read by ${who}`));
+          await ctx.close();
+        }
+        const { ctx, page, ctl } = await openHome("alex", width);
+        ctl.planTitle = "Alexandria Featherstonehaugh-Montgomery-Smythe's Claude plan";
+        await page.reload({ waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await settle(page);
+        ck(t("a long name wraps and never pushes the page wider"), (await heading(page)) === ctl.planTitle && (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+        await shot(page, "plan-long-name", width);
+        await ctx.close();
+      }
+      // a reading sent with the cell's own token names nobody: nobody is told it is theirs
+      const unclaimed = await fetch(`${BASE}/ingest/claude_code`, { method: "POST", headers: { "content-type": "application/x-ndjson", authorization: `Bearer ${ROOT}` },
+        body: JSON.stringify({ type: "claude_plan", timestamp: new Date().toISOString(), usage_report: { rate_limits: { limits: [
+          { kind: "session", percent: 40, severity: "normal", is_active: true }, { kind: "weekly_all", percent: 9, severity: "normal", is_active: false }] } } }) + "\n" });
+      ck("a plan reading with no person arrives", unclaimed.status === 202, String(unclaimed.status));
+      await new Promise((r) => setTimeout(r, 5500));   // past the home's five seconds of keeping
+      for (const width of [390, 1440]) {
+        for (const who of ["kim", "alex"]) {
+          const { ctx, page } = await openHome(who, width);
+          ck(`@${width}: ${who} reads "Claude plan" when the cell cannot tell whose it is`, (await heading(page)) === "Claude plan" && (await label(page)) === "Claude plan", await heading(page));
+          ck(`@${width}: ${who}: the limits still show`, /40% used/.test(await planSection(page).innerText()));
+          await shot(page, `plan-unknown-${who}`, width);
+          await checkWords(page, ck, `@${width}: the plan nobody claims, read by ${who}`);
+          await ctx.close();
+        }
+      }
     }
     // a cell of one person on its own daemon has none of the side column's team parts
     {
@@ -967,6 +1018,52 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     const unlicHome = await fetch(`http://127.0.0.1:${UNLIC}/api/home`).then((r) => r.json());
     ck("three people, no licence: no team keys in /api/home",
        !["summary", "crews", "crews_quiet", "areas", "counts", "you_are_waiting_on"].some((k) => k in unlicHome), Object.keys(unlicHome).join());
+
+    // ── TR-1074: Allow on a project page is done there, and the page stays ──
+    for (const width of [1440, 390]) {
+      const t = (s) => `allow on the project page @${width}: ${s}`;
+      const file = async (to, command) => (await api("POST", "/api/desk", { question: "A station was refused. Allow it?", recommendation: "yes", why: "it needs it",
+                                                                           project: ids.project, station: "shop-build-m1", command, to })).body.label;
+      const firstCmd = `gh pr merge ${width}1`, secondCmd = `gh pr merge ${width}2`, kimCmd = `gh pr merge ${width}3`;
+      const first = await file(ids.people.alex, firstCmd), second = await file(ids.people.alex, secondCmd), kims = await file(ids.people.kim, kimCmd);
+      const { ctx, page, ctl } = await open("alex", width);
+      const here = `${BASE}/projects/${ids.project}`;
+      await page.goto(here, { waitUntil: "load" });
+      await page.getByTestId("factory-project").waitFor();
+      await row(page, firstCmd).waitFor({ timeout: 20000 });
+      await page.evaluate(() => { window.__sameDocument = true; });   // gone if the page loads again
+      const ad = page.getByTestId("allow-dialog");
+      const allow = async (cmd) => {
+        await row(page, cmd).getByTestId("waiting-allow").click();
+        await ad.waitFor();
+        await ad.getByRole("button", { name: "Allow", exact: true }).click();
+      };
+      ck(t("Allow is a button with no arrow to Home"), (await row(page, firstCmd).getByTestId("waiting-allow").count()) === 1
+         && !(await row(page, firstCmd).getByTestId("waiting-allow").innerText()).includes("↗"));
+      await allow(firstCmd);
+      await row(page, firstCmd).waitFor({ state: "detached" });
+      await checkWords(page, ck, t("the first one allowed"));
+      ck(t("the page stayed on the project"), page.url() === here, page.url());
+      ck(t("the first request reached the cell"), ctl.posts.some((x) => x.path === `/api/desk/${first}/allow`), JSON.stringify(ctl.posts));
+      await allow(secondCmd);
+      await row(page, secondCmd).waitFor({ state: "detached" });
+      ck(t("a second one in a row, with no trip back"), page.url() === here && ctl.posts.some((x) => x.path === `/api/desk/${second}/allow`), page.url());
+      const answered = (await api("GET", "/api/desk?state=answered")).body.desk.map((d) => d.label);
+      ck(t("both are answered on the cell"), answered.includes(first) && answered.includes(second), answered.join());
+      const grants = await api("GET", `/api/grants?project=${ids.project}`);
+      ck(t("both grants are kept"), [firstCmd, secondCmd].every((c) => JSON.stringify(grants.body).includes(c)), JSON.stringify(grants.body).slice(0, 300));
+      await allow(kimCmd);
+      await ad.getByTestId("dialog-error").waitFor();
+      ck(t("a refusal says why in the dialog"), (await ad.getByTestId("dialog-error").innerText()) === `${kims} is for Kim: only they allow it`, await ad.getByTestId("dialog-error").innerText());
+      await checkWords(page, ck, t("a refusal in the dialog"));
+      ck(t("and the page did not move"), page.url() === here && await page.evaluate(() => !!localStorage.getItem("tares_token")), page.url());
+      ck(t("the page never loaded again"), await page.evaluate(() => window.__sameDocument === true));
+      await ad.getByRole("button", { name: "Cancel" }).click();
+      ck(t("the refused row stays, still open on the cell"), (await row(page, kimCmd).count()) === 1
+         && (await api("GET", "/api/desk?state=open")).body.desk.some((d) => d.label === kims));
+      ck(t("no horizontal scroll"), (await overflow(page)) <= 0, String(await overflow(page)));
+      await ctx.close();
+    }
   } finally {
     if (browser) await browser.close();
     for (const { daemon, home } of started) {

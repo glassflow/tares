@@ -28,6 +28,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
+const esbuild = require(path.join(UI_DIR, "node_modules", "esbuild"));
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8330);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -116,12 +117,14 @@ async function waitFor(url, tries = 100) {
        && (await T("waiting-row").first().getAttribute("data-kind")) !== "milestone_to_check", await T("waiting-row").first().getAttribute("data-kind"));
     ck("all four show: nothing that waits is behind a button here", (await T("waiting-row").count()) === 4 && (await T("waiting-more").count()) === 0,
        String(await T("waiting-row").count()));
-    ck("the note says what an arrow does", (await txt(T("waiting"))).includes("Buttons with an arrow open Home, where they are done."));
+    ck("nothing here opens Home, so there is no note about arrows", !(await txt(T("waiting"))).includes("Buttons with an arrow"));
     const row = (kind) => T("waiting-row").and(page.locator(`[data-kind=${kind}]`));
     ck("a question: Answer opens the desk of this project", (await row("question").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/projects/${y}#desk-D1`);
     ck("a permission: Answer opens the request, and the command is code",
        (await row("permission").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/projects/${y}#desk-D2`
        && (await row("permission").locator("code[data-words-exempt]").innerText()) === "gh pr merge 13 --squash");
+    ck("a permission: Allow is done here, a button with no arrow (TR-1074)", (await row("permission").getByTestId("waiting-allow").count()) === 1
+       && !(await txt(row("permission").getByTestId("waiting-allow"))).includes("↗"));
     ck("calls to confirm: Read them opens the project's calls page",
        (await row("calls_to_confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${y}/calls`);
     ck("calls to confirm: each call on its own line", (await row("calls_to_confirm").getByTestId("detail-lines").locator("li").count()) === 2);
@@ -274,6 +277,41 @@ async function waitFor(url, tries = 100) {
       await shot(page, "live-milestone-checks-1440.png");
     }
 
+    // ── 1c. a check that is a command is set as one, a sentence stays as it is (TR-1082) ─────────
+    {
+      const built = esbuild.buildSync({ entryPoints: [path.join(UI_DIR, "src/editions/factory/checkText.ts")], bundle: true, platform: "node", format: "cjs", write: false });
+      const mod = { exports: {} };
+      new Function("module", "exports", built.outputFiles[0].text)(mod, mod.exports);
+      const { looksLikeCommand } = mod.exports;
+      const commands = ["pytest tests/test_reviews.py", "python tests/ci_run.py --suite ee", "npm run build", "git status", "./scripts/check.sh", "scripts/check.sh", "$ npm test",
+                        "TARES_E2E_PORT=10200 node tests/x.e2e.cjs", "T=$(mktemp -d); env -u TARES_LICENSE tares up & P=$!; kill $P", "cat a.log | wc -l", "go test ./... -count=1",
+                        "git commit -m \"fix the bug\"", "find . -name x"];
+      const sentences = ["Open Reviews", "Open the docs home page", "Search for a title", "Reviews shows three lists.", "Run `npm test` and read the result", "make sure it works", "go to settings",
+                         "run the tests", "python is installed", "open /projects and look", "/projects loads", "Tares shows the list", "", "It costs $5 and is done!"];
+      const wrongC = commands.filter((c) => !looksLikeCommand(c)), wrongS = sentences.filter((c) => looksLikeCommand(c));
+      ck("these checks are read as commands", wrongC.length === 0, JSON.stringify(wrongC));
+      ck("these checks are read as sentences", wrongS.length === 0, JSON.stringify(wrongS));
+
+      for (const width of [1440, 390]) {
+        const { ctx: c, page: p } = await newPage(width);
+        await open(p, ids["project-k"]);
+        await settle(p);
+        const row = p.locator('[data-testid="milestone-row"][data-ms="M3"]');
+        await row.getByTestId("milestone-checks").evaluate((e) => { e.open = true; });
+        const texts = row.getByTestId("milestone-check").locator(":scope > [data-user-text]");
+        const fonts = await texts.evaluateAll((els) => els.map((e) => ({ font: getComputedStyle(e).fontFamily, wrap: getComputedStyle(e).overflowWrap, inner: e.scrollWidth - e.clientWidth })));
+        ck(`${width}: three checks, each still marked as the person's text`, fonts.length === 3, JSON.stringify(fonts));
+        ck(`${width}: the short command is in the console's mono font`, /Geist Mono/.test(fonts[0]?.font || ""), fonts[0]?.font);
+        ck(`${width}: the long command is in the console's mono font`, /Geist Mono/.test(fonts[1]?.font || ""), fonts[1]?.font);
+        ck(`${width}: the sentence is not`, !!fonts[2] && !/Mono/.test(fonts[2].font), fonts[2]?.font);
+        ck(`${width}: the long command wraps inside its row`, fonts[1]?.wrap === "anywhere" && (await row.evaluate((e) => e.scrollWidth - e.clientWidth)) <= 0, JSON.stringify(fonts[1]));
+        ck(`${width}: no sideways scroll with the long command`, (await overflow(p)) <= 0, String(await overflow(p)));
+        await checkWords(p, ck, `${width}: commands in checks`);
+        await shot(p, `live-milestone-commands-${width}.png`);
+        await c.close();
+      }
+    }
+
     // ── 2. project-z: ready to close ────────────────────────────────────────────────────────────
     const z = ids["project-z"];
     await open(page, z);
@@ -376,6 +414,39 @@ async function waitFor(url, tries = 100) {
         await checkWords(p, ck, `390 ${name}`);
         await shot(p, `${file}-390.png`);
       }
+      await c.close();
+    }
+
+    // TR-1125: an option of a desk question stays inside its card and wraps, however long it is
+    for (const width of [1440, 390]) {
+      const t = (l) => `long option @${width}: ${l}`;
+      const { ctx: c, page: p } = await newPage(width);
+      const sentence = "Keep the current upload path and add a second step that retries each failed part on its own before the whole upload is marked as failed and handed back to the person who started it";
+      const unbroken = "keep-the-current-upload-path-and-add-a-second-step-that-retries-each-failed-part-on-its-own-before-the-whole-upload-is-marked-as-failed";
+      await p.route(`**/api/factory/projects/${y}`, async (route) => {
+        const res = await route.fetch();
+        const data = await res.json();
+        data.waiting = [{ id: "desk:long-option", kind: "question", label: "Question", title: "How should a failed upload behave?", detail: "The crew needs one choice.",
+                          meta: "Waiting less than a minute", project: null, repo: null, from: null, since: new Date().toISOString(), waited: "just now", blocking: true,
+                          question: { desk: "D9", options: [sentence, unbroken, "Stop"], recommendation: null, blocks: null }, actions: [] }, ...data.waiting];
+        await route.fulfill({ response: res, json: data });
+      });
+      await open(p, y);
+      await settle(p);
+      const card = p.getByTestId("waiting-row").filter({ hasText: "How should a failed upload behave?" });
+      await card.getByTestId("question-choices").waitFor();
+      const m = await card.evaluate((row) => {
+        const box = row.getBoundingClientRect();
+        return [...row.querySelectorAll("[data-testid=question-choices] a")].map((a) => {
+          const r = a.getBoundingClientRect();
+          return { inside: r.left >= box.left - 1 && r.right <= box.right + 1, clipped: a.scrollWidth - a.clientWidth };
+        });
+      });
+      ck(t("three options"), m.length === 3, JSON.stringify(m));
+      ck(t("every option stays inside its card"), m.every((a) => a.inside), JSON.stringify(m));
+      ck(t("no option's text runs past its box"), m.every((a) => a.clipped <= 1), JSON.stringify(m));
+      ck(t("no sideways scroll"), (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `long-option-${width}.png`);
       await c.close();
     }
 
