@@ -13,7 +13,8 @@ State lives in $FAKE_CLAUDE_STATE: calls.jsonl (every call: cwd and arguments), 
 `claude agents --json` lists), n (sessions started), ps/ (the process listing of each session),
 plugins.json, and the one-shot hooks and switches the bash fake documents (version, version-flip,
 stale-left, spawn-version, on-agents, on-bg, ...). A session started with --bg also gets
-$HOME/.claude/jobs/<id>/state.json.
+$HOME/.claude/jobs/<id>/state.json. The fake only: a file `stamp-version` makes each new session's row
+in the list carry `version` (what the installed or spare version is), for a run with no fake `ps` on the PATH.
 
 Session states, as `claude agents --json` shows them (see AGENT_STATES): working (busy in a turn),
 waiting (blocked on a person), idle (between turns) and stopped (no process). `agent_row` builds a row
@@ -273,12 +274,7 @@ def _bg(S: Path, args: list[str], set_agents) -> int:
     job.mkdir(parents=True, exist_ok=True)
     _write_json(job / "state.json", {"sessionId": f"session-{n}"})
     cwd = _cwd()
-    set_agents(lambda rows: rows + [{"id": id, "name": name, "cwd": cwd, "state": "working",
-                                     "sessionId": f"session-{n}", "startedAt": n, "pid": 40000 + n}])
-    # The process listing of the session, as `ps` shows it (see the bash fake for the shape).
-    pid = 40000 + n
-    ps = S / "ps"
-    ps.mkdir(parents=True, exist_ok=True)
+    # The version the session's process runs: the installed one, or an old spare's (see stale-left).
     v = _read(S / "version", "0.0.0")
     stale = _read(S / "stale-left", "0")
     left = int(stale) if stale.lstrip("-").isdigit() else 0
@@ -286,6 +282,15 @@ def _bg(S: Path, args: list[str], set_agents) -> int:
         v = _read(S / "spawn-version")
         if stale != "all":
             (S / "stale-left").write_text(f"{left - 1}\n", encoding="utf-8")
+    row = {"id": id, "name": name, "cwd": cwd, "state": "working",
+           "sessionId": f"session-{n}", "startedAt": n, "pid": 40000 + n}
+    if (S / "stamp-version").is_file():   # opt in: the list gives the version, where the fake `ps` is not on the PATH
+        row["version"] = v
+    set_agents(lambda rows: rows + [row])
+    # The process listing of the session, as `ps` shows it (see the bash fake for the shape).
+    pid = 40000 + n
+    ps = S / "ps"
+    ps.mkdir(parents=True, exist_ok=True)
     (ps / f"{pid}.ppid").write_text(f"{pid + 1000}\n", encoding="utf-8")
     (ps / f"{pid + 1000}.command").write_text(
         f"claude bg-pty-host --bg-pty-host /tmp/cc/spare/{id}.pty.sock 200 50 -- "

@@ -25,6 +25,7 @@ import time
 from pathlib import Path
 
 from . import claude, contract, state
+from .cc_update import cc_behind, station_cc  # moved there by TR-963; status and roster read them
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, SessionListUnreadableError
 from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
@@ -277,21 +278,6 @@ def cc_retry_in(paths: CrewPaths, station: str) -> str:
 def _active(paths: CrewPaths) -> list:
     return [s for s, row in state.stations_load(paths).items()
             if isinstance(row, dict) and row.get("status") == "active"]
-
-
-def station_cc(paths: CrewPaths, station: str, agents: list) -> str:
-    return claude.running_version(state.stations_get(station, "id", paths=paths), agents)
-
-
-def cc_behind(paths: CrewPaths, target: str, agents: list) -> int:
-    """How many stations that matter run an older Claude Code than target."""
-    n = 0
-    for s in _active(paths):
-        if paths.done_file(s).exists():
-            continue
-        if claude.older_than(station_cc(paths, s, agents), target):
-            n += 1
-    return n
 
 
 # ---------- the watch and the pace ----------
