@@ -349,13 +349,13 @@ check "roster works while Tares is down" 'grep -q "^crew-orchestrator	orchestrat
 check "halt file" '[ -f "$FACTORY_CREW_HOME/HALT" ]'
 "$F" spawn builder blog m1 "$repo3" "x" >"$T/halt.out" 2>&1
 check "spawn refused while halted" 'grep -q "halted" "$T/halt.out"'
-out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" bash "$here/../../claude-plugin/hooks/guard.sh")
+out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" tares hook guard --plugin-root "$here/../../claude-plugin")
 check "guard denies merge while halted" 'grep -q "halted" <<<"$out"'
 "$F" crew resume >/dev/null 2>&1
-out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" bash "$here/../../claude-plugin/hooks/guard.sh")
+out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 3 --squash"}}' | FACTORY_ROLE=builder FACTORY_HOME="$FACTORY_CREW_HOME" tares hook guard --plugin-root "$here/../../claude-plugin")
 check "guard allows merge after resume" '[ -z "$out" ]'
 
-ctx=$(echo '{"source": "resume"}' | env $(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$FACTORY_CREW_HOME/stations/$b.settings.json" | tr ' ' '_') bash "$here/../../claude-plugin/hooks/session-start.sh")
+ctx=$(echo '{"source": "resume"}' | env $(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$FACTORY_CREW_HOME/stations/$b.settings.json" | tr ' ' '_') tares hook session-start --plugin-root "$here/../../claude-plugin")
 check "session start names the station and project" 'grep -q "links-app-build-m1" <<<"$ctx" && grep -q "Links_App" <<<"$ctx" && grep -q "resumed" <<<"$ctx"'
 
 # A station Claude Code stopped for thrashing on autocompact is started fresh, not resumed; one whose

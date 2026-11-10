@@ -1,36 +1,36 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "timeout": 10 }] },
-      { "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "tares hook session-start || echo 'This Tares plugin needs tares 1.56.0 or newer on PATH (this one has no `tares hook`). Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.'", "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"", "timeout": 5 }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+      { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "tares hook guard", "timeout": 5 }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] },
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] },
       { "matcher": "Bash|ExitPlanMode",
-        "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"], "timeout": 900 }] }
+        "hooks": [{ "type": "command", "command": "tares hook challenger", "timeout": 900 }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"], "timeout": 10 }] },
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook challenger", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
     ],
     "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
     ],
     "PermissionRequest": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"], "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "python3", "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"] }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship" }] }
     ]
   }
 }

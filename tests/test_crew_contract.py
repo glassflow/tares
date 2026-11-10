@@ -391,7 +391,7 @@ def append(path, *objs, raw=None):
 
 
 GUARD_DENY = {"at": "2026-11-09T10:00:09Z", "station": "shop-build-m1", "event": "guard-deny",
-              "tool": "Bash", "reason": "git push is held"}  # what claude-plugin/hooks/guard.sh writes
+              "tool": "Bash", "reason": "git push is held"}  # what claude-plugin/hooks/guard.py writes
 
 
 def names(items):

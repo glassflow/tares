@@ -1,7 +1,7 @@
 """SessionStart hook: tells a tares-factory crew station who it is on start, resume and after compaction,
 and a person's own session bound to a project (`tares factory session`, TARES_PROJECT set) which project
 it works on (or, with TARES_SESSION_KIND=contributor, that it only contributes to it).
-Silent in every other session. The Python twin of session-start.sh: the same words, no jq.
+Silent in every other session. It replaced session-start.sh (TR-1103): the same words, no jq.
 
 Started by `tares hook session-start` (it runs this file in process), or by hand with python3.
 Standard library only, and 3.9-safe: it runs on a person's machine, not in the repo's venv.
