@@ -24,8 +24,21 @@ deny() {
   exit 0
 }
 
+# The person allowed exactly this command for this station in the console (TR-644): a line of the grants
+# the station started with holds the whole command in backticks and names the station, or its role as the
+# console's sentence does ("The releaser may run ..."). Lifts only the one-owner rules; a command over
+# several lines never matches.
+granted() {
+  local file="${FACTORY_HOME:-}/stations/${FACTORY_STATION:-}.grants" want
+  [ -n "${FACTORY_HOME:-}" ] && [ -n "${FACTORY_STATION:-}" ] && [ -f "$file" ] || return 1
+  case "$cmd" in *$'\n'*) return 1 ;; esac
+  want=$(printf '%s' "$cmd" | tr -s '[:space:]' ' ' | sed -e 's/^ //' -e 's/ $//')
+  [ -n "$want" ] || return 1
+  grep -F -- "\`$want\`" "$file" | grep -qiF -e "$FACTORY_STATION" -e "the $role"
+}
+
 owner_only() { # $1 = owning role, $2 = action description
-  [ "$role" = "$1" ] || deny "In this factory only the $1 station may $2. Send it a message instead (see the factory-protocol skill)."
+  [ "$role" = "$1" ] || granted || deny "In this factory only the $1 station may $2. Send it a message instead (see the factory-protocol skill), or ask the person to allow this exact command in the console."
 }
 
 case "$tool" in

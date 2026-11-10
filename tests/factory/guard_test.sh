@@ -192,6 +192,26 @@ helper crew-releaser 'kubectl --context kind-factory rollout undo deploy/app' al
 helper crew-releaser 'gh pr merge 3' deny
 helper shop-build-m1 'gh pr merge 3 --squash' allow
 helper shop-build-m1 'kubectl apply -k deploy/' deny
+# A console grant for the exact command lifts a one-owner rule (TR-644)
+GH=$(mktemp -d); mkdir -p "$GH/stations"
+cat > "$GH/stations/crew-releaser.grants" <<'GRANTS'
+- "The releaser may run `gh pr merge 426 -R o/r --squash` in every project" (2026-10-21)
+- "The reviewer may run `gh pr merge 7` in every project" (2026-10-21)
+- "Builders may merge anything once CI is green" (2026-10-21)
+GRANTS
+g() { # command expected
+  local out got=allow
+  out=$(jq -n --arg c "$1" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_HOME=$GH FACTORY_STATION=crew-releaser FACTORY_ROLE=releaser guard)
+  grep -q '"deny"' <<<"$out" && got=deny
+  if [ "$got" != "$2" ]; then echo "FAIL grant | $1 | expected $2, got $got"; fail=1; fi
+}
+g 'gh pr merge 426 -R o/r --squash' allow
+g 'gh pr merge  426 -R o/r   --squash' allow
+g 'gh pr merge 427 -R o/r --squash' deny
+g 'gh pr merge 426 -R o/r --squash && git push' deny
+g 'gh pr merge 7' deny
+g 'gh pr merge 9' deny
+rm -rf "$GH"
 out=$(jq -n '{tool_name: "Bash", tool_input: {command: "gh pr merge 1"}}' | (unset FACTORY_ROLE; guard))
 [ -z "$out" ] || { echo "FAIL a session without FACTORY_ROLE was touched"; fail=1; }
 [ $fail = 0 ] && echo "guard: all cases pass"

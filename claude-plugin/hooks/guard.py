@@ -188,14 +188,35 @@ def halt_reason(path: str) -> str:
     return jq_text(data.get("reason"), "no reason given")
 
 
+def granted(env, role: str, cmd: str) -> bool:
+    """The person allowed exactly this command for this station in the console (TR-644): a line of the
+    grants the station started with holds the whole command in backticks and names the station, or
+    its role as the console's sentence does ("The releaser may run ..."). Lifts only the one-owner
+    rules. A command over several lines never matches."""
+    home, station = env.get("FACTORY_HOME", ""), env.get("FACTORY_STATION", "")
+    if not home or not station or "\n" in cmd:
+        return False
+    # the console keeps a grant's words with runs of white space closed up
+    want = "`" + " ".join(cmd.split()) + "`"
+    if want == "``":
+        return False
+    try:
+        with open(os.path.join(home, "stations", station + ".grants"), encoding="utf-8", errors="replace") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return False
+    return any(want in line and (station in line or f"the {role}" in line.lower()) for line in lines)
+
+
 def decide(env, tool: str, cmd: str) -> None:
     """Raise Deny with the reason when the station may not run this tool call; return when it may."""
     role = station_role(env)
 
     def owner_only(owner: str, action: str) -> None:
-        if role != owner:
+        if role != owner and not granted(env, role, cmd):
             raise Deny(f"In this factory only the {owner} station may {action}. "
-                       "Send it a message instead (see the factory-protocol skill).")
+                       "Send it a message instead (see the factory-protocol skill), "
+                       "or ask the person to allow this exact command in the console.")
 
     if SLACK_SEND.fullmatch(tool):
         raise Deny(MESSAGE_PEOPLE)
