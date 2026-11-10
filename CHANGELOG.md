@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Plugin 0.6.7: a station restarted in the same conversation keeps showing up on the Crew page. The restart gives it a new transcript that starts with the whole conversation, and when the first request for that was too big to be accepted or answered in time, every later hook retried it and nothing else from the station was recorded, so it looked quiet for hours while it worked (TR-1102).
+
 ## [1.56.0] - 2026-11-10
 
 A cell now opens as a Software Factory or an AI SRE, each with its own screens, and working as a team
