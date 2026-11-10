@@ -329,6 +329,22 @@ async def main():
             ck("and then it leaves the page", [p["id"] for p in (await page(cx))["rule_proposals"]]
                == [p["id"] for p in props if p["id"] != first])
 
+            print("== the order in a group ==")
+            await ingest(cx, [
+                st_line("b6", "project-y-build-a-old", "builder", "crew-orchestrator", project=py),
+                state("b6", "ended", 3600),
+                st_line("b7", "project-y-build-z", "builder", "crew-orchestrator", project=py),
+                state("b7", "working", 20),
+            ])
+            a = await page(cx)
+            ys = next(g for g in a["builders"] if g["project"]["name"] == "project-y")["members"]
+            ck("running builders come first, a quiet one with them, then the finished ones, even when a "
+               "finished name sorts first",
+               [b["station"] for b in ys] == ["project-y-build-m1", "project-y-build-z", "project-y-build-a-old"]
+               and [b["state"] for b in ys] == ["not heard", "working", "ended"], [b["station"] for b in ys])
+            ck("a quiet builder keeps its own words",
+               ys[0]["state_text"].startswith("Not heard from in "), ys[0])
+
             print("== a crew that ended ==")
             await ingest(cx, [state("o1", "ended", 1)])
             a = await page(cx)

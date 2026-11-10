@@ -199,6 +199,33 @@ function NotStarted() {
   );
 }
 
+/** One project's builders: the running ones (a quiet one counts), then a fold with the finished ones. */
+function BuilderGroup({ g, actions }: { g: CrewBuilders; actions: CrewActions }) {
+  const [open, setOpen] = React.useState(false);
+  const running = g.members.filter((m) => m.state !== "ended");
+  const finished = g.members.filter((m) => m.state === "ended");
+  return (
+    <div data-testid="crew-group">
+      <div className="flex items-baseline justify-between gap-3 border-b border-border bg-[var(--wash-2)] px-4 py-2.5 text-[13px] font-semibold">
+        <span data-user-text>{g.project.name}</span>
+        <span className="shrink-0 whitespace-nowrap font-mono text-xs font-normal text-muted-foreground">{running.length} running · {g.members.length}</span>
+      </div>
+      {running.map((m) => <Member key={m.station} m={m} actions={actions} />)}
+      {finished.length > 0 && (
+        <div className="border-b border-border last:border-b-0">
+          <button
+            type="button" className={cn(FOLD_BTN, "block! w-full px-4! py-2.5! text-left")}
+            aria-expanded={open} onClick={() => setOpen(!open)} data-testid="crew-finished-fold"
+          >
+            {open ? "Hide" : "Show"} {finished.length} finished
+          </button>
+        </div>
+      )}
+      {open && finished.map((m) => <Member key={m.station} m={m} actions={actions} />)}
+    </div>
+  );
+}
+
 function Builders({ groups, actions }: { groups: CrewBuilders[]; actions: CrewActions }) {
   const live = groups.reduce((n, g) => n + g.members.filter((m) => m.state !== "ended").length, 0);
   return (
@@ -206,15 +233,7 @@ function Builders({ groups, actions }: { groups: CrewBuilders[]; actions: CrewAc
       <SectionHead title="Builders" aside={<Count>{live} on the crew now</Count>} />
       <div className={CARD}>
         {groups.length === 0 && <div className="px-4 py-5 text-muted-foreground">No builder is on the crew.</div>}
-        {groups.map((g) => (
-          <div key={g.project.id ?? "none"}>
-            <div className="flex items-baseline justify-between gap-3 border-b border-border bg-[var(--wash-2)] px-4 py-2.5 text-[13px] font-semibold">
-              <span data-user-text>{g.project.name}</span>
-              <span className="font-mono text-xs font-normal text-muted-foreground">{g.members.length}</span>
-            </div>
-            {g.members.map((m) => <Member key={m.station} m={m} actions={actions} />)}
-          </div>
-        ))}
+        {groups.map((g) => <BuilderGroup key={g.project.id ?? "none"} g={g} actions={actions} />)}
       </div>
     </section>
   );

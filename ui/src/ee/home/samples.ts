@@ -162,6 +162,7 @@ const TEAM_KEYS = {
   crews_quiet: ["Lee's crew"],
   crew_limit: CREW_LIMIT,
   areas: AREAS,
+  plan: { ...busy.plan, title: "Kim's Claude plan" },
 };
 
 function team(items: HomeItem[], headline: string, over: Partial<HomeData> = {}): HomeData {

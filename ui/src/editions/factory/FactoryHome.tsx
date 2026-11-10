@@ -97,7 +97,9 @@ function ActionButton({ action, item, onAction, state }: {
 }) {
   // Row actions are outlined; the main one gets the dark outline, as in the approved mock.
   const variant = "secondary";
-  const cls = "h-8 text-[13px]!" + (action.primary ? " border-foreground!" : "");
+  // An option of a question holds the crew's own words, so it wraps inside the card (TR-1125).
+  const fit = action.do === "choose" ? "h-auto min-h-8 max-w-full whitespace-normal py-1! text-left [overflow-wrap:anywhere]" : "h-8";
+  const cls = fit + " text-[13px]!" + (action.primary ? " border-foreground!" : "");
   const href = action.href;
   if (href) {
     const internal = href.startsWith("/");
@@ -330,8 +332,8 @@ function CrewCard({ data }: { data: HomeData }) {
 function PlanCard({ data }: { data: HomeData }) {
   const { plan } = data;
   return (
-    <section aria-label="Your Claude plan" className="min-w-0">
-      <SectionHead title="Your Claude plan" />
+    <section aria-label={plan.title} className="min-w-0">
+      <SectionHead title={plan.title} />
       {plan.known ? (
         <Panel>
           {plan.limits.map((l) => (
@@ -476,7 +478,7 @@ export function FactoryHomeLoading() {
         </div>
         <aside className={RIGHT}>
           <section className="min-w-0"><SectionHead title="Your crew" /><LoadingBox rows={3} /></section>
-          <section className="min-w-0"><SectionHead title="Your Claude plan" /><LoadingBox rows={2} /></section>
+          <section className="min-w-0"><SectionHead title="Claude plan" /><LoadingBox rows={2} /></section>
         </aside>
       </div>
     </div>
@@ -524,7 +526,7 @@ function grantWords(who: string, command: string, where: string): string {
 
 interface Done { item?: string; project?: string; later?: string }
 
-function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
+export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
   item: HomeItem; desk: string; mayLimit: boolean; onClose: () => void; onDone: (r: AllowedGrant) => void;
 }) {
   const { who, command } = permissionParts(item);

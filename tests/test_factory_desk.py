@@ -542,6 +542,57 @@ async def main():
             await cx.post(f"/api/desk/{r1.json()['label']}/withdraw", json={"reason": "test"})
         as_station()
 
+        print("== Allow from the hosted console: a key bound to a person (TR-1074) ==")
+        # last in this file: a second person ends the cell of one the checks above run on
+        store = app.state.store
+        ann = store.create_person("Ann", email="ann@example.com")
+        ben = store.create_person("Ben", email="ben@example.com")
+        as_station()
+        async with mk() as cx:
+            key = (await cx.post("/api/keys", json={"name": "user:ann", "scopes": ["admin"],
+                                                    "person_id": ann["id"]})).json()["secret"]
+
+        async def filed(to, command):
+            as_station("crew-orchestrator", "orchestrator")
+            out = await mf.desk_add("A station was refused. Allow it?", "yes", "it needs it",
+                                    project="Shop", station="shop-build-m1", command=command)
+            as_station()
+            label = json.loads(out)["label"]
+            # the store directly: addressing an item to someone else over HTTP needs a licence
+            store.sc.execute("UPDATE desk_items SET to_person_id = ? WHERE id = ?",
+                             [to, store.get_desk_item(label)["id"]])
+            return label
+
+        async def ann_allows(label, token=key, words="The builder may merge pull request 7"):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
+                                         headers={"Authorization": f"Bearer {token}"}) as cx:
+                return await cx.post(f"/api/desk/{label}/allow", json={"words": words, "scope": "project"})
+
+        async def desk_state(label):
+            async with mk() as cx:
+                rows = (await cx.get("/api/desk", params={"state": "open"})).json()["desk"]
+            return "open" if any(x["label"] == label for x in rows) else "closed"
+
+        async def shop_grants():
+            async with mk() as cx:
+                return (await cx.get("/api/grants", params={"project": shop})).json()["project"]
+
+        mine = await filed(ann["id"], "gh pr merge 7")
+        theirs = await filed(ben["id"], "gh pr merge 8")
+        r = await ann_allows(theirs)
+        ck("an item for someone else is refused with the sentence the dialog shows",
+           r.status_code == 403 and r.json()["detail"] == f"{theirs} is for Ben: only they allow it", r.text)
+        ck("and it stays open", await desk_state(theirs) == "open")
+        r = await ann_allows(mine, token="a-key-the-cell-does-not-know")
+        ck("only an unknown key answers 401", r.status_code == 401 and r.json()["detail"] == "authentication required", r.text)
+        ck("and that allows nothing", await desk_state(mine) == "open"
+           and "merge pull request 7" not in await shop_grants())
+        r = await ann_allows(mine)
+        ck("the person it is addressed to allows it with their own key", r.status_code == 200 and r.json()["added"], r.text)
+        ck("the item is answered and the grant is kept", await desk_state(mine) == "closed"
+           and "merge pull request 7" in await shop_grants(), await shop_grants())
+
+
 
 unit()
 asyncio.run(main())

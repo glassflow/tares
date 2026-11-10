@@ -2685,7 +2685,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
     fx = SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
                          team_home=team_home, team_projects=team_projects, own_stations=own_stations,
                          own_desk=own_desk, own_tickets=own_tickets,
-                         hidden_ids=lambda: h.hidden_ids())
+                         hidden_ids=lambda: h.hidden_ids(),
+                         caller_person=lambda request: h.current_person(request))
 
     def for_request(request):
         """This fx with `settings` and `pace` read for the caller: a person's own over the cell's

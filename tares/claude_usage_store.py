@@ -46,6 +46,8 @@ CLAUDE_USAGE_SCHEMA = [
       context_at       TIMESTAMPTZ,
       context_asked_at TIMESTAMPTZ
     )""",
+    # the person of the credential that sent the status line, so the plan it carries has an owner
+    "ALTER TABLE session_meters ADD COLUMN IF NOT EXISTS status_person TEXT",
 ]
 
 PLAN_SETTING = "claude_plan"          # the plan's limits as /usage last reported them
@@ -167,15 +169,17 @@ class ClaudeUsageStore:
                 [session, message, at, model or None, project or None, subagent or None,
                  i, o, cw, cr, hour, cost])
 
-    def set_session_status(self, session: str, status: dict, at) -> None:
-        """The status line's report; an older one than the one stored does not win."""
+    def set_session_status(self, session: str, status: dict, at, person_id: str | None = None) -> None:
+        """The status line's report and the person of the credential that sent it; an older one
+        than the one stored does not win."""
         with self._swrite:
             self.sc.execute(
-                "INSERT INTO session_meters (session, status, status_at) VALUES (?, ?, ?) "
+                "INSERT INTO session_meters (session, status, status_at, status_person) VALUES (?, ?, ?, ?) "
                 "ON CONFLICT (session) DO UPDATE SET status = excluded.status, "
-                "status_at = excluded.status_at WHERE session_meters.status_at IS NULL "
+                "status_at = excluded.status_at, status_person = excluded.status_person "
+                "WHERE session_meters.status_at IS NULL "
                 "OR excluded.status_at >= session_meters.status_at",
-                [session, json.dumps(status), at])
+                [session, json.dumps(status), at, person_id])
 
     def set_session_context(self, session: str, context: dict, at) -> None:
         with self._swrite:
@@ -216,14 +220,15 @@ class ClaudeUsageStore:
                        "context_at": r[4], "context_asked_at": r[5]} for r in rows}
 
     def latest_rate_limits(self) -> tuple | None:
-        """(when, rate_limits) from the newest status line report that carried the plan's limits."""
+        """(when, rate_limits, person id or None) from the newest status line report that carried
+        the plan's limits."""
         with self._sread:
             row = self.sc.execute(
-                "SELECT status_at, json_extract(status, '$.rate_limits') FROM session_meters "
+                "SELECT status_at, json_extract(status, '$.rate_limits'), status_person FROM session_meters "
                 "WHERE json_extract(status, '$.rate_limits') IS NOT NULL "
                 "AND json_type(json_extract(status, '$.rate_limits')) = 'OBJECT' "
                 "ORDER BY status_at DESC LIMIT 1").fetchone()
-        return (row[0], _json(row[1])) if row else None
+        return (row[0], _json(row[1]), row[2]) if row else None
 
     _TOTALS = ("count(*), sum(input_tokens), sum(output_tokens), sum(cache_write_tokens), "
                "sum(cache_read_tokens), sum(cost_usd), count(*) FILTER (WHERE cost_usd IS NULL)")

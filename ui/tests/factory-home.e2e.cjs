@@ -255,7 +255,7 @@ function cleanEnv(extra) {
         Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t) => { window.__copied.push(t); return Promise.resolve(); } } });
       });
       const page = await ctx.newPage();
-      const ctl = { fail: false, hold: null, reads: 0, finishes: [], keeps: [], allows: [] };
+      const ctl = { fail: false, hold: null, reads: 0, finishes: [], keeps: [], allows: [], extra: [] };
       await page.route("**/api/home", async (route) => {
         ctl.reads++;
         if (ctl.hold) await ctl.hold;
@@ -271,7 +271,7 @@ function cleanEnv(extra) {
                        actions: [{ label: "Open project", primary: false, href: `/projects/${p.id}` },
                                  { label: "Close project", primary: true, do: "close", project: p.id }] });
         }
-        data.waiting_for_you = [...close, ...data.waiting_for_you];
+        data.waiting_for_you = [...close, ...ctl.extra, ...data.waiting_for_you];
         await route.fulfill({ response: res, json: data });
       });
       page.on("request", (req) => {
@@ -505,6 +505,39 @@ function cleanEnv(extra) {
         ck("live: Retry reads again and shows the page", (await page.getByTestId("waiting-row").count()) >= 3);
         await ctx.close();
       }
+    }
+
+    // TR-1125: an option of a desk question stays inside its card and wraps, however long it is
+    for (const width of [1440, 390]) {
+      const t = (l) => `long option @${width}: ${l}`;
+      const { ctx, page, ctl } = await liveContext(width);
+      const sentence = "Keep the current upload path and add a second step that retries each failed part on its own before the whole upload is marked as failed and handed back to the person who started it";
+      const unbroken = "keep-the-current-upload-path-and-add-a-second-step-that-retries-each-failed-part-on-its-own-before-the-whole-upload-is-marked-as-failed";
+      ctl.extra = [{ id: "desk:long-option", kind: "question", label: "Question", title: "How should a failed upload behave?", detail: "The crew needs one choice.",
+                     meta: "Waiting less than a minute", project: null, repo: null, from: null, since: new Date().toISOString(), waited: "just now", blocking: true,
+                     question: { desk: "D9", options: [sentence, unbroken, "Stop"], recommendation: null, blocks: null },
+                     actions: [{ label: "Answer", primary: true, href: "/" }] }];
+      await page.goto(`${BASE}/`, { waitUntil: "load" });
+      await page.getByTestId("factory-home").waitFor();
+      await page.waitForLoadState("networkidle");
+      const card = page.getByTestId("waiting-row").filter({ hasText: "How should a failed upload behave?" });
+      await card.getByTestId("question-choices").waitFor();
+      const m = await card.evaluate((row) => {
+        const box = row.getBoundingClientRect();
+        return [...row.querySelectorAll("[data-testid=question-choices] button")].map((b) => {
+          const r = b.getBoundingClientRect();
+          return { inside: r.left >= box.left - 1 && r.right <= box.right + 1, clipped: b.scrollWidth - b.clientWidth, height: r.height };
+        });
+      });
+      ck(t("three option buttons"), m.length === 3, JSON.stringify(m));
+      ck(t("every option stays inside its card"), m.every((b) => b.inside), JSON.stringify(m));
+      ck(t("no option's text runs past its button"), m.every((b) => b.clipped <= 1), JSON.stringify(m));
+      ck(t("the long options wrap onto more lines"), m[0].height > 40 && m[1].height > 40, JSON.stringify(m));
+      ck(t("a short option keeps the one-line height"), m[2].height === 32, JSON.stringify(m));
+      const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      ck(t("no sideways scroll"), over <= 0, String(over));
+      await liveShot(page, "long-option", width);
+      await ctx.close();
     }
 
     // without the flag the address alone shows no sample, but the cell's own page

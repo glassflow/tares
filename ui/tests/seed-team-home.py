@@ -13,6 +13,7 @@ thing of every kind waiting for Alex, written through the running daemon's API o
               acme/docs. Kim leads Billing, Lee leads Search, Mobile and Vault; Vault is private and Alex is not on
               it. Alex sees Shop, Portal and Notes under Mine and six under Team, plus one hidden stub.
   Crews:      Alex's crew (an orchestrator and a builder on Notes) and Kim's were heard a few minutes ago, Lee's two days ago (so it is "not seen in a day").
+  Plan:       the Claude plan's limits, read on Kim's machine and sent with Kim's key.
 usage: python seed-team-home.py <port> <root-token>
 Prints a JSON map on the last line: keys and people by first name, project, question, grants and desk labels."""
 import json, sys, urllib.error, urllib.request
@@ -130,6 +131,11 @@ crew("alex", "a", "alex-mbp", 4, "idle")
 crew("alex", "a", "alex-mbp", 4, "working", "builder", notes)
 crew("kim", "k", "kim-mbp", 6, "idle")
 crew("lee", "l", "lee-mbp", 2 * 24 * 60, "idle")
+
+# the Claude plan is Kim's: her crew's machine read /usage and sent it with her key (TR-1020)
+push("kim", [{"type": "claude_plan", "timestamp": stamp(1), "usage_report": {"rate_limits": {"limits": [
+    {"kind": "session", "percent": 27, "scope": None, "severity": "normal", "is_active": True},
+    {"kind": "weekly_all", "percent": 5, "scope": None, "severity": "normal", "is_active": False}]}}}])
 
 print(json.dumps({"keys": keys, "people": people, "project": shop, "question": question, "grants": grants, "desk": desk,
                   "projects": {"shop": shop, "portal": portal, "notes": notes, "billing": billing, "search": search,
