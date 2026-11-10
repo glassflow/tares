@@ -1001,7 +1001,7 @@
       "dropped": false,
       "python": "tares.crew.watch:running_pid",
       "ported": true,
-      "note": "TR-955 ported the read in tares.crew.lifecycle:watch_pid, which now calls this; TR-958 adds the create time and engine lines of the pid file and the identity check (alive, `crew watch` in the command line, create time). A pid file with the pid alone (bash's) still counts. doctor (TR-969) keeps its own copy: tares.crew.doctor.watch_running reads the pid file for doctor; tares.crew.views imports watch_pid for status and roster."
+      "note": "TR-955 ported the read in tares.crew.lifecycle:watch_pid, which now calls this; TR-958 adds the identity check (alive, not a zombie, `crew watch` in the command line, and the create time from the watch.pid.meta file beside the pid file). watch.pid stays the pid alone, as bash writes it. A pid file with no meta (bash's) still counts. doctor.watch_running (TR-969) now calls this; tares.crew.views imports watch_pid for status and roster."
     },
     {
       "name": "start_watch",

@@ -13,11 +13,14 @@ How the watch runs
   * start() launches it detached, so closing the terminal or quitting the app does not end it: a new session on
     Mac and Linux (`start_new_session`), `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` with `pythonw.exe` (no
     console window) on Windows. It gets the environment, and so the PATH, of the process that started it.
-  * The pid file `watch.pid` holds three lines: the pid, the process's create time (seconds since the epoch) and
-    the engine that runs it (`python` or `bash`). A pid file written by bash holds the pid alone.
+  * The pid file `watch.pid` holds the pid alone, as bash's does, so the bash `watch_pid`, `crew down` and
+    doctor read it. A second file, `watch.pid.meta`, holds `<pid> <create time> <engine>` on one line: the
+    process's create time (seconds since the epoch) and the engine that runs it (`python` or `bash`). The meta
+    file is used only while its pid is the pid file's; a pid file with no meta (bash's) has no create time and
+    no engine.
   * A process is the watch only when its pid is alive, its command line has `crew watch`, and its create time is
-    the one in the pid file. After a reboot a pid is reused by some other process: the create time differs, and
-    the pid file is ignored.
+    the one in the meta file (when there is one). After a reboot a pid is reused by some other process: the
+    create time differs, and the pid file is ignored.
   * stop() asks the loop to stop with a stop file (`watch.stop`) instead of a signal, which means the same on
     every platform. The loop looks for the file at the start of each round and on every tick of its nap. Only when
     the process is still there after a timeout is it terminated, and killed if it ignores that. A watch that does
@@ -25,13 +28,14 @@ How the watch runs
 
 Differences from bash
   * The bash watch is stopped with `kill`; this one first gets a chance to finish its round and clean up.
-  * The pid file has the create time and the engine as well as the pid.
+  * A meta file next to the pid file has the create time and the engine.
   * The loop leaves on a stop file, and on SIGTERM where the platform has it, removing its pid file and stop file.
   * Steps do not exist yet; see above.
 
 Untested on real Windows (TR-946 is deferred): the creation flags, `pythonw.exe` and the launcher case below.
 On Windows a venv's `python.exe` starts the real interpreter as a child, so `Popen.pid` is the launcher's; the
-loop then writes its own pid over the launcher's in the pid file (`claim_pidfile`).
+loop then writes its own pid over the launcher's in the pid file (`claim_pidfile`, tried at the start of every
+round, in case it ran before start() had written the file).
 """
 from __future__ import annotations
 
@@ -49,6 +53,7 @@ from .errors import CrewError
 from .paths import ME, CrewPaths
 
 PID_FILE = "watch.pid"
+META_FILE = "watch.pid.meta"
 LOG_FILE = "watch.log"
 STOP_FILE = "watch.stop"
 
@@ -100,7 +105,8 @@ def _num(text: str):
 
 
 def read_pidfile(paths: CrewPaths):
-    """(pid, create_time or None, engine or "") from the pid file; None when there is no usable one."""
+    """(pid, create_time or None, engine or "") from the pid file and its meta file; None when there is no
+    usable pid file. A meta file that names another pid (bash rewrote the pid file) is ignored."""
     try:
         lines = state.read_text(paths.home / PID_FILE).split()
     except OSError:
@@ -111,13 +117,24 @@ def read_pidfile(paths: CrewPaths):
         pid = int(lines[0])
     except ValueError:
         return None
-    created = _num(lines[1]) if len(lines) > 1 else None
-    engine = lines[2] if len(lines) > 2 else ""
-    return pid, created, engine
+    try:
+        meta = state.read_text(paths.home / META_FILE).split()
+    except OSError:
+        meta = []
+    if len(meta) >= 3 and meta[0] == str(pid):
+        return pid, _num(meta[1]), meta[2]
+    return pid, None, ""
 
 
 def write_pidfile(paths: CrewPaths, pid: int, created: float, engine: str) -> None:
-    state.atomic_write_text(paths.home / PID_FILE, f"{pid}\n{created:.3f}\n{engine}\n")
+    """The meta file first, so a reader that sees the new pid also finds what goes with it."""
+    state.atomic_write_text(paths.home / META_FILE, f"{pid} {created:.3f} {engine}\n")
+    state.atomic_write_text(paths.home / PID_FILE, f"{pid}\n")
+
+
+def remove_pidfile(paths: CrewPaths) -> None:
+    _unlink(paths.home / PID_FILE)
+    _unlink(paths.home / META_FILE)
 
 
 def _unlink(path) -> None:
@@ -172,7 +189,8 @@ def stop_requested(paths: CrewPaths) -> bool:
 
 def _watch_command(env: dict) -> tuple:
     """(argv, engine): the command that runs the watch. Python when opted in, and always on Windows (no bash)."""
-    if env.get("TARES_FACTORY_WATCH") == "python" or os.name == "nt":
+    from . import dispatch   # the one rule for which engine runs `crew watch`; imported late, dispatch imports us
+    if dispatch.route(["crew", "watch"], env)[0] == "python":
         exe = sys.executable
         if os.name == "nt":
             gui = os.path.join(os.path.dirname(exe), "pythonw.exe")
@@ -227,20 +245,20 @@ def _wait_gone(pid: int, created, seconds: float) -> bool:
         time.sleep(0.05)
 
 
-def stop(paths: CrewPaths, say, timeout: float | None = None) -> None:
+def stop(paths: CrewPaths, say, timeout: float | None = None, env: dict | None = None) -> None:
     """Stop the background watch and drop its pid file. A pid file that names nothing running is just removed.
     A Python watch is asked with the stop file and given `timeout` seconds (FACTORY_WATCH_STOP_TIMEOUT, else 30)
     to finish its round; then it is terminated, and killed if it is still there. Any other watch is terminated at
-    once. A process that is already gone, or that may not be stopped, is left as it is."""
+    once. `env` is where FACTORY_WATCH_STOP_TIMEOUT is read (default os.environ). A process that is already gone,
+    or that may not be stopped, is left as it is."""
     row = read_pidfile(paths)
-    pid_file = paths.home / PID_FILE
     if row is None or not is_the_watch(row[0], row[1]):
-        _unlink(pid_file)
+        remove_pidfile(paths)
         return
     pid, created, engine = row
     if timeout is None:
         try:
-            timeout = float(os.environ.get("FACTORY_WATCH_STOP_TIMEOUT", DEFAULT_STOP_TIMEOUT))
+            timeout = float((os.environ if env is None else env).get("FACTORY_WATCH_STOP_TIMEOUT", DEFAULT_STOP_TIMEOUT))
         except ValueError:
             timeout = DEFAULT_STOP_TIMEOUT
     stopped = False
@@ -250,14 +268,20 @@ def stop(paths: CrewPaths, say, timeout: float | None = None) -> None:
     if not stopped:
         try:
             proc = psutil.Process(pid)
-            proc.terminate()
+            # On Windows the pid may be a venv launcher whose child is the real loop: end both.
+            kids = proc.children(recursive=True) if os.name == "nt" else []
+            for p in [proc, *kids]:
+                with contextlib.suppress(psutil.Error, OSError):
+                    p.terminate()
             if not _wait_gone(pid, created, TERMINATE_WAIT):
-                proc.kill()
+                for p in [proc, *kids]:
+                    with contextlib.suppress(psutil.Error, OSError):
+                        p.kill()
                 _wait_gone(pid, created, TERMINATE_WAIT)
         except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
             pass
     _unlink(paths.home / STOP_FILE)
-    _unlink(pid_file)
+    remove_pidfile(paths)
     say("stopped the watch")
 
 
@@ -299,18 +323,19 @@ def watch(paths: CrewPaths, interval: float, once: bool = False, poll: float = D
     if once:
         run_steps(paths)
         return
-    claim_pidfile(paths)
     try:
         while not stop_requested(paths):
+            claim_pidfile(paths)   # every round: the first try may have run before start() wrote the file
             run_steps(paths)
             if nap(paths, interval, poll):
                 break
         _say("the watch was asked to stop; leaving")
     finally:
-        _unlink(paths.home / STOP_FILE)
         row = read_pidfile(paths)
+        if row is None or row[0] == os.getpid():   # a stop file or pid file that is another watch's stays
+            _unlink(paths.home / STOP_FILE)
         if row is not None and row[0] == os.getpid():
-            _unlink(paths.home / PID_FILE)
+            remove_pidfile(paths)
 
 
 def _on_term(signum, frame):
@@ -348,11 +373,12 @@ def cmd_watch(argv: list, env: dict) -> int:
     except ValueError:
         poll = DEFAULT_POLL
     if not once:
-        _say(f"watching the crew every {interval:g}s (it revives stations that stop, and gives one a "
-             "permission you allowed in Tares); Ctrl-C to stop")
+        what = ("it revives stations that stop, and gives one a permission you allowed in Tares" if _STEPS
+                else "it has no steps yet, so it does nothing but run")
         if hasattr(signal, "SIGTERM"):
             with contextlib.suppress(ValueError):   # not the main thread
                 signal.signal(signal.SIGTERM, _on_term)
+        _say(f"watching the crew every {interval:g}s ({what}); Ctrl-C to stop")   # after the handler: the banner means it
     try:
         watch(paths, interval, once, poll)
     except KeyboardInterrupt:

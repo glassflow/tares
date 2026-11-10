@@ -35,7 +35,7 @@ os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"),
 sys.path.insert(0, str(ROOT))
 
 import psutil  # noqa: E402
-from tares.crew import dispatch, lifecycle as LC, watch  # noqa: E402
+from tares.crew import dispatch, doctor, lifecycle as LC, watch  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
@@ -90,7 +90,7 @@ def reap():
         if proc.poll() is None:
             proc.kill()
         proc.wait()
-    for name in ("watch.pid", "watch.stop"):
+    for name in ("watch.pid", "watch.pid.meta", "watch.stop"):
         (CREW / name).unlink(missing_ok=True)
 
 
@@ -144,8 +144,21 @@ try:
     proc = sleeper()
     created = psutil.Process(proc.pid).create_time()
     watch.write_pidfile(paths, proc.pid, created, "python")
-    ck("the pid file is the pid, the create time and the engine, one per line",
-       (CREW / "watch.pid").read_text(encoding="utf-8").split() == [str(proc.pid), f"{created:.3f}", "python"])
+    ck("the pid file is the pid alone, as bash writes it",
+       (CREW / "watch.pid").read_text(encoding="utf-8") == f"{proc.pid}\n")
+    ck("...and the meta file has the pid, the create time and the engine",
+       (CREW / "watch.pid.meta").read_text(encoding="utf-8").split() == [str(proc.pid), f"{created:.3f}", "python"])
+    if not WINDOWS:
+        r = subprocess.run(["bash", "-c", f'pid=$(cat "{CREW}/watch.pid"); kill -0 "$pid" && echo ok'],
+                           capture_output=True, text=True)
+        ck("...bash's watch_pid reads it: `kill -0 $(cat watch.pid)` works", r.stdout.strip() == "ok", r.stderr)
+    ck("...doctor's watch_running reads it", doctor.watch_running(paths) is True)
+    ck("...read_pidfile gives the pid, create time and engine", watch.read_pidfile(paths) == (proc.pid, float(f"{created:.3f}"), "python"))
+    (CREW / "watch.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
+    (CREW / "watch.pid.meta").write_text(f"{proc.pid + 1} 1.000 python\n", encoding="utf-8")
+    ck("a meta file that names another pid is ignored (bash rewrote the pid file)",
+       watch.read_pidfile(paths) == (proc.pid, None, "") and watch.running_pid(paths) == proc.pid)
+    watch.write_pidfile(paths, proc.pid, created, "python")
     ck("...a live process with `crew watch` and that create time is the watch", watch.running_pid(paths) == proc.pid)
     ck("...LC.watch_pid says the same", LC.watch_pid(paths) == proc.pid)
     real_cmdline = psutil.Process.cmdline
@@ -205,12 +218,61 @@ try:
         ck("a watch that ignores the terminate is killed", victim.wait(15) is not None and lines == ["stopped the watch"],
            str(lines))
 
+    if not WINDOWS:
+        print("a zombie is not the watch")
+        zcode = "import sys; sys.exit(0)"
+        z = subprocess.Popen([sys.executable, "-c", zcode, "crew watch"])
+        SPAWNED.append(z)
+        zp = psutil.Process(z.pid)
+        wait_for(lambda: zp.status() == psutil.STATUS_ZOMBIE, 10)   # exited, not yet reaped by us
+        ck("the child is a zombie whose command line still says `crew watch`",
+           zp.status() == psutil.STATUS_ZOMBIE, zp.status())
+        ck("...is_the_watch says no", watch.is_the_watch(z.pid, zp.create_time()) is False)
+        # A zombie has no command line on most systems, so that alone would reject it; hand it one to test the status check.
+        real_cmdline = psutil.Process.cmdline
+        psutil.Process.cmdline = lambda self: ["python", "crew watch"] if self.pid == z.pid else real_cmdline(self)
+        try:
+            ck("...even when its command line is still readable", watch.is_the_watch(z.pid, zp.create_time()) is False)
+        finally:
+            psutil.Process.cmdline = real_cmdline
+        watch.write_pidfile(paths, z.pid, zp.create_time(), "python")
+        ck("...and running_pid and doctor say no", watch.running_pid(paths) is None and doctor.watch_running(paths) is False)
+        remove = watch.remove_pidfile
+        remove(paths)
+        ck("remove_pidfile takes both files", not (CREW / "watch.pid").exists() and not (CREW / "watch.pid.meta").exists())
+        z.wait()
+
+    print("the stop timeout comes from the env given to stop")
+    victim = sleeper(ignore_term=True) if not WINDOWS else sleeper()
+    watch.write_pidfile(paths, victim.pid, psutil.Process(victim.pid).create_time(), "python")
+    started = time.monotonic()
+    watch.stop(paths, lambda m: None, env={"FACTORY_WATCH_STOP_TIMEOUT": "0.5"})
+    ck("FACTORY_WATCH_STOP_TIMEOUT in the given env ends the wait", victim.wait(15) is not None
+       and time.monotonic() - started < 12, f"{time.monotonic() - started:.1f}")
+
+    print("the loop leaves another watch's files alone")
+    other = sleeper()
+    watch.write_pidfile(paths, other.pid, psutil.Process(other.pid).create_time(), "python")
+    (CREW / "watch.stop").write_text("x\n", encoding="utf-8")
+    code = ("import sys; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
+            "from tares.crew.paths import CrewPaths; watch.watch(CrewPaths.at(sys.argv[2]), 0.1, poll=0.05)")
+    subprocess.run([sys.executable, "-c", code, str(ROOT), str(CREW)], env=child_env(), capture_output=True, text=True, timeout=60)
+    ck("a loop that is not the one in the pid file leaves its pid file, meta file and stop file",
+       watch.read_pidfile(paths)[0] == other.pid and (CREW / "watch.stop").exists() and (CREW / "watch.pid.meta").exists())
+    other.kill()
+    other.wait()
+    for name in ("watch.pid", "watch.pid.meta", "watch.stop"):
+        (CREW / name).unlink(missing_ok=True)
+
     print("which command starts the watch, and which engine runs `watch`")
     argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python"})
     ck("opted in: the Python module, no shell", engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
     if not WINDOWS:
         argv, engine = watch._watch_command({})
         ck("not opted in: the bash watch stays the default", engine == "bash" and argv[0] == "bash" and argv[-2:] == ["crew", "watch"], str(argv))
+    argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python", "TARES_FACTORY_ENGINE": "bash"})
+    ck("TARES_FACTORY_ENGINE=bash wins over TARES_FACTORY_WATCH=python (on POSIX)",
+       engine == ("python" if WINDOWS else "bash"), str(argv))
     for words in (["watch"], ["crew", "watch"]):
         kind = dispatch.route(words, {})[0]
         ck(f"`{' '.join(words)}` goes to bash unless opted in" if not WINDOWS else f"`{' '.join(words)}` runs in Python on Windows",
@@ -279,6 +341,17 @@ try:
         ck("...it left on its own (the log says so), and the files are gone",
            "asked to stop; leaving" in log_text() and not (CREW / "watch.pid").exists() and not (CREW / "watch.stop").exists(),
            log_text()[-300:])
+
+        print("a SIGTERM straight to the watch")
+        (CREW / "watch.log").write_text("", encoding="utf-8")   # so the banner we wait for is this watch's own
+        watch.start(paths, env, note=lambda m: None)
+        pid = watch.read_pidfile(paths)[0]
+        wait_for(lambda: "watching the crew every 1s" in log_text())
+        os.kill(pid, 15)
+        gone = wait_for(lambda: not alive(pid))
+        ck("the watch leaves and removes its pid file and meta file",
+           gone and not (CREW / "watch.pid").exists() and not (CREW / "watch.pid.meta").exists(),
+           f"gone={gone} pid={(CREW / 'watch.pid').exists()} meta={(CREW / 'watch.pid.meta').exists()} {log_text()[-300:]}")
 
         print("it outlives the process that started it")
         helper = ("import sys; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
