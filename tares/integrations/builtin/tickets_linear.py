@@ -73,16 +73,22 @@ def pick_state(states: list[dict], status: Status) -> dict | None:
     return None
 
 
-def _shows(now: dict, wanted: dict, status: Status) -> bool:
-    """True when the issue's state `now` already is what `status` means. The state `pick_state`
-    chose is the match; for to do, in progress and done, so is any state of its type (a team's
-    own "Doing" is in progress). In review is only the state picked, since its type is started."""
+def _shows(now: dict, wanted: dict, status: Status, states: list[dict], retry: bool) -> bool:
+    """True when the issue's state `now` already is what `status` means, so nothing is written.
+    A first write moves the issue unless it sits in the very state picked. A retry (the person may
+    have moved the issue by hand since) also accepts another state of the same type, a team's own
+    "Doing" for in progress; but never a state that means a different status here: In Review is
+    not in progress, though Linear files both as started."""
     if not now:
         return False
     if now.get("id") and now.get("id") == wanted.get("id"):
         return True
-    return (status != Status.in_review and bool(now.get("type"))
-            and str(now["type"]).lower() == str(wanted.get("type") or "").lower())
+    if not retry or status == Status.in_review or not now.get("type"):
+        return False
+    if str(now["type"]).lower() != str(wanted.get("type") or "").lower():
+        return False
+    others = (pick_state(states, o) for o in Status if o != status)
+    return not any(o and o.get("id") == now.get("id") for o in others)
 
 
 class TicketsLinear(tickets.TicketBackend):
@@ -138,7 +144,7 @@ class TicketsLinear(tickets.TicketBackend):
             raise ValueError(f"unknown status {status!r}; one of: "
                              + ", ".join(s.value for s in Status)) from None
         t = await asyncio.to_thread(self._ticket, ticket)
-        await self._write(t, status)
+        await self._write(t, status, retry=False)
 
     async def retry_pending(self, project) -> int:
         """Tries each waiting status change of the project's tickets once more. Returns how many
@@ -152,7 +158,7 @@ class TicketsLinear(tickets.TicketBackend):
                 await asyncio.to_thread(self.store.pending_writeback_clear, row["ticket"],
                                         self.name)
                 continue
-            if await self._write(t, Status(row["status"])):
+            if await self._write(t, Status(row["status"]), retry=True):
                 landed += 1
         return landed
 
@@ -166,11 +172,11 @@ class TicketsLinear(tickets.TicketBackend):
         raise NotImplementedError("linking a project to Linear is done from the project page")
 
     # ── the write ─────────────────────────────────────────────────────────────
-    async def _write(self, t: dict, status: Status) -> bool:
+    async def _write(self, t: dict, status: Status, retry: bool) -> bool:
         """One try. True when it landed (the ticket's row is gone), False when it did not (the row
         holds the status wanted and the error)."""
         try:
-            await self._move(t, status)
+            await self._move(t, status, retry)
         except linear.LinearError as e:
             await asyncio.to_thread(self._failed, t, status, str(e))
             return False
@@ -181,7 +187,7 @@ class TicketsLinear(tickets.TicketBackend):
         await asyncio.to_thread(self.store.pending_writeback_clear, t["id"], self.name)
         return True
 
-    async def _move(self, t: dict, status: Status) -> None:
+    async def _move(self, t: dict, status: Status, retry: bool) -> None:
         data = await linear.query(self.store, _STATES, {"id": t["external_id"]})
         issue = data.get("issue")
         if not issue:
@@ -192,8 +198,8 @@ class TicketsLinear(tickets.TicketBackend):
         if state is None:
             team = (issue.get("team") or {}).get("name") or "its team"
             raise linear.LinearError(f"{team} in Linear has no state for {_WORDS[status]}")
-        if _shows(issue.get("state") or {}, state, status):
-            return          # the issue is there already (moved by hand): nothing to write
+        if _shows(issue.get("state") or {}, state, status, states, retry):
+            return          # the issue is there already (on a retry: moved by hand): nothing to write
         data = await linear.query(self.store, _MOVE, {"id": t["external_id"], "state": state["id"]})
         if not (data.get("issueUpdate") or {}).get("success"):
             raise linear.LinearError(f"Linear did not move {factory_mod.label(t)} to "

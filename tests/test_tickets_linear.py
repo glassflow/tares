@@ -369,6 +369,44 @@ item = s.list_desk(project="p1")[0]
 ck("a team with no state for done keeps its row, and the desk says to add the state",
    row and row["attempts"] == 5 and "add the missing state" in item["recommendation"], (row, item))
 
+print("== a move is never skipped for the wrong state (F12) ==")
+s, b = world()
+t1 = tk(s, "FAC-1")
+STATE["issues"][0]["state"] = {"name": "In Review", "type": "started"}
+STATE["calls"].clear()
+r = run(b.set_status(t1, Status.in_progress))
+ck("changes requested: an issue in In Review is moved to In Progress", STATE["calls"] == [("i1", "s-prog")]
+   and r is None, STATE["calls"])
+ck("and the write landed: no row", s.get_pending_writeback(t1["id"], "linear") is None)
+s2, b2 = world("team_plain")
+STATE["issues"][1]["state"] = {"name": "Testing", "type": "started"}
+STATE["calls"].clear()
+run(b2.set_status(tk(s2, "FAC-2"), Status.in_progress))
+ck("a first write moves an issue sitting in another state of the same type",
+   STATE["calls"] == [("i2", "p-doing")], STATE["calls"])
+# a retry: the person moved the issue by hand while the write was failing
+s2, b2 = world("team_plain")
+t2 = tk(s2, "FAC-2")
+STATE["mode"] = "down"
+run(b2.set_status(t2, Status.in_progress))
+STATE["mode"] = "ok"
+STATE["issues"][1]["state"] = {"name": "Testing", "type": "started"}
+STATE["calls"].clear()
+run(b2.sync("p1"))
+ck("a retry accepts another state of the same type: nothing is written, the row is gone",
+   STATE["calls"] == [] and s2.get_pending_writeback(t2["id"], "linear") is None, STATE["calls"])
+s, b = world()
+t1 = tk(s, "FAC-1")
+STATE["mode"] = "down"
+run(b.set_status(t1, Status.in_progress))
+STATE["mode"] = "ok"
+STATE["issues"][0]["state"] = {"name": "In Review", "type": "started"}
+STATE["calls"].clear()
+run(b.sync("p1"))
+ck("a retry never counts In Review as in progress: the write is made",
+   STATE["calls"] == [("i1", "s-prog")] and s.get_pending_writeback(t1["id"], "linear") is None,
+   STATE["calls"])
+
 print("== a pick that is not a started state ==")
 odd = [{"id": "x1", "name": "In Progress", "type": "backlog", "position": 1},
        {"id": "x2", "name": "Doing", "type": "started", "position": 2}]
