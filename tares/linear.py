@@ -21,7 +21,9 @@ The writes themselves are tares/integrations/builtin/tickets_linear.py.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import math
 import time
 from datetime import datetime, timezone
 
@@ -38,6 +40,13 @@ SOURCE_NAME = "linear"
 MAX_ISSUES = 1000             # per project per sync; a factory project is far smaller
 
 RECONNECT = "connect Linear again in Settings"
+
+# Linear's rate limit is waited out here, for every call: at most MAX_WAIT seconds each time (and
+# at least 1), RATE_DEFAULT_WAIT when Linear names no wait, and RATE_RETRIES tries again at most.
+MAX_WAIT = 60
+RATE_DEFAULT_WAIT = 10
+RATE_RETRIES = 3
+MAX_PAGES = 100               # per list `pages` reads; far past what a factory project holds
 
 # tests swap in an httpx.MockTransport with recorded responses
 _transport: httpx.AsyncBaseTransport | None = None
@@ -112,9 +121,51 @@ def _auth_header(conn: dict) -> str:
     return conn["token"] if conn.get("kind") == "api_key" else f"Bearer {conn['token']}"
 
 
+async def _sleep(seconds: float) -> None:
+    """The wait before a rate limited request is sent again. Tests replace it."""
+    await asyncio.sleep(seconds)
+
+
+def _rate_limited(r: httpx.Response) -> bool:
+    """True when Linear refused the request for its rate limit before running it: HTTP 429, or
+    (Linear answers 400 or 200 as well) a GraphQL error whose extensions.code is RATELIMITED."""
+    if r.status_code == 429:
+        return True
+    try:
+        body = r.json()
+    except ValueError:
+        return False
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, list):
+        return False
+    return any(isinstance(e, dict) and isinstance(e.get("extensions"), dict)
+               and str(e["extensions"].get("code") or "").upper() == "RATELIMITED"
+               for e in errors)
+
+
+def _wait_of(headers) -> float:
+    """Seconds to wait after a rate limit answer: `Retry-After`, else until
+    `X-RateLimit-Requests-Reset` (epoch milliseconds), else RATE_DEFAULT_WAIT; at least 1 and at
+    most MAX_WAIT. A header that is not a number is the same as no header."""
+    def number(raw) -> float | None:
+        try:
+            v = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return None if math.isnan(v) else v
+
+    wait = number(headers.get("retry-after"))
+    if wait is None:
+        reset = number(headers.get("x-ratelimit-requests-reset"))
+        wait = RATE_DEFAULT_WAIT if reset is None else reset / 1000 - time.time()
+    return min(float(MAX_WAIT), max(1.0, wait))
+
+
 async def query(store, gql: str, variables: dict | None = None, conn: dict | None = None) -> dict:
     """Run a GraphQL query with the cell's connection (or `conn`, to test one before saving).
-    Raises LinearError."""
+    A rate limited request (HTTP 429, or a RATELIMITED error) is waited out and sent again, alone,
+    at most RATE_RETRIES times: Linear refuses it before it runs, so even a mutation is not made
+    twice. Anything else that goes wrong is not retried. Raises LinearError."""
     conn = conn or get_connection(store)
     if not conn:
         raise LinearError("Linear is not connected; connect it in Settings")
@@ -123,13 +174,19 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
     if conn.get("kind") == "cloud" and int(conn.get("expires_at") or 0) < time.time():
         # Tares Cloud renews it hours ahead; an expired one means the renewal did not reach us
         raise LinearError(f"the Linear sign-in expired and was not renewed; {RECONNECT}")
-    try:
-        async with _client() as cx:
-            r = await cx.post(API_URL, json={"query": gql, "variables": variables or {}},
-                              headers={"Authorization": _auth_header(conn),
-                                       "Content-Type": "application/json"})
-    except httpx.HTTPError as e:
-        raise LinearError(f"cannot reach Linear: {type(e).__name__}") from e
+    for attempt in range(RATE_RETRIES + 1):
+        try:
+            async with _client() as cx:
+                r = await cx.post(API_URL, json={"query": gql, "variables": variables or {}},
+                                  headers={"Authorization": _auth_header(conn),
+                                           "Content-Type": "application/json"})
+        except httpx.HTTPError as e:
+            raise LinearError(f"cannot reach Linear: {type(e).__name__}") from e
+        if not _rate_limited(r):
+            break
+        if attempt == RATE_RETRIES:
+            raise LinearError("Linear is rate limiting this connection; try again in a few minutes")
+        await _sleep(_wait_of(r.headers))
     if r.status_code in (400, 401, 403) and "authentication" in r.text.lower():
         raise LinearError("Linear did not accept the credential; check the key or connect "
                           "again in Settings")
@@ -142,12 +199,38 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
     if not isinstance(body, dict):
         raise LinearError(f"Linear answered {r.status_code} with something Tares cannot read")
     if body.get("errors"):
-        msg = "; ".join(str(e.get("message")) for e in body["errors"])
+        errors = body["errors"] if isinstance(body["errors"], list) else [body["errors"]]
+        msg = "; ".join(str(e.get("message") if isinstance(e, dict) else e) for e in errors)
         if "authentication" in msg.lower():
             raise LinearError("Linear did not accept the credential; check the key or connect "
                               "again in Settings")
         raise LinearError(f"Linear: {msg}")
     return body.get("data") or {}
+
+
+async def pages(store, gql: str, variables: dict, path: tuple, missing: str | None = None):
+    """The nodes of a paged Linear list, page by page, until Linear says there is no next page.
+    `gql` takes `$after`; `path` names the connection inside the answer, for example
+    ("project", "issues"). When the answer has no such connection nothing is yielded, or
+    LinearError(`missing`) is raised when a message is given. Raises LinearError too when Linear
+    promises another page and gives no cursor, or when the list runs past MAX_PAGES pages."""
+    after = None
+    for _ in range(MAX_PAGES):
+        conn = await query(store, gql, {**variables, "after": after})
+        for key in path:
+            conn = conn.get(key) if isinstance(conn, dict) else None
+        if not isinstance(conn, dict):
+            if missing:
+                raise LinearError(missing)
+            return
+        yield list(conn.get("nodes") or [])
+        info = conn.get("pageInfo") or {}
+        if not info.get("hasNextPage"):
+            return
+        after = info.get("endCursor")
+        if not after:
+            raise LinearError("Linear says there is another page but gave no way to read it")
+    raise LinearError(f"Linear has more than {MAX_PAGES} pages of this list; nothing was changed")
 
 
 _VIEWER = "query { viewer { id name email organization { name urlKey } } }"
@@ -231,9 +314,12 @@ _ISSUES = """query($id: String!, $after: String) {
 }"""
 
 # a Linear project's milestones, in Linear's order (TR-411)
-_MILESTONES = """query($id: String!) {
+_MILESTONES = """query($id: String!, $after: String) {
   project(id: $id) {
-    projectMilestones(first: 100) { nodes { id name description sortOrder } }
+    projectMilestones(first: 100, after: $after) {
+      nodes { id name description sortOrder }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }"""
 
@@ -246,9 +332,12 @@ def blockers_of(issue: dict) -> list[str]:
 
 
 async def fetch_milestones(store, linear_project_id: str) -> list[dict]:
-    data = await query(store, _MILESTONES, {"id": linear_project_id})
-    proj = data.get("project") or {}
-    return list(((proj.get("projectMilestones") or {}).get("nodes")) or [])
+    """Every milestone of the Linear project, in Linear's order, all pages."""
+    out: list[dict] = []
+    async for nodes in pages(store, _MILESTONES, {"id": linear_project_id},
+                             ("project", "projectMilestones")):
+        out.extend(nodes)
+    return out
 
 # Linear's workflow state types -> a ticket's status
 _STATUS = {"backlog": "todo", "unstarted": "todo", "triage": "todo", "started": "in_progress",
