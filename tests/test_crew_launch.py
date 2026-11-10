@@ -167,8 +167,7 @@ ck("kit_dir: a TARES_PLUGIN_DIR without bin/factory is an error, not a guess", m
 os.environ.pop("TARES_PLUGIN_DIR")
 ck("kit_dir: with no override it is the claude-plugin of this tree", L.kit_dir() == os.path.realpath(ROOT / "claude-plugin"), L.kit_dir())
 
-print("the notes not ported yet, and the idle wake")
-ck("iw_launch_note is a stub (TR-961) that adds nothing", L.iw_launch_note("crew-reviewer") == "")
+print("the idle wake note")
 note = L.idle_wake_note()
 ck("idle_wake_note says the tick is released and how to delete one", "idle_wake is on" in note and "CronDelete" in note)
 

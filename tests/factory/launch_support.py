@@ -14,7 +14,8 @@ The driver runs in a throwaway crew (the environment parity.crew_env gives: the 
 Both print what the function prints and exit as it does, so the two can be compared. Functions:
 write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
 level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
-watch round), pace_down (what the revive step asks of the pace for stations that are down or up), and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
+watch round), pace_down (what the revive step asks of the pace for stations that are down or up), idle_wake_round (the
+idle-wake pass of one watch round), and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
 tares.crew.stations), `revive` and `restart` (cmd_revive and cmd_restart, or those of tares.crew.lifecycle). `watch_regrant` is one round of
 the watch's regrant step (TR-960): bash's per-station loop of cmd_watch cut down to its regrant branches, or regrant.step of tares.crew. The
 word {TMP} in an argument is the temp folder.
@@ -116,7 +117,8 @@ class FakeTares:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
-        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        # a short poll interval: shutdown() waits for one, which was half a second per step
+        self.thread = threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.02), daemon=True)
 
     def __enter__(self):
         self.thread.start()
@@ -199,9 +201,10 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
                   "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note", "spawn", "revive", "restart", "pace_round", "pace_down", "watch_regrant"}
+                  "idle_wake_note", "spawn", "revive", "restart", "pace_round", "pace_down", "watch_regrant",
+                  "idle_wake_round"}
 NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "pace_round",
-               "pace_down"}
+               "pace_down", "idle_wake_round"}
 
 # The pace pass of one watch round, as the bash watch loop runs it: the reading and the tidy at the top of the
 # round, then for each active station that is up the plan and the send (the revive and the regrant before it
@@ -257,6 +260,20 @@ for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STA
 done
 '''
 
+# The idle-wake pass of one watch round, as the bash watch loop runs it for each active station (helpers and
+# finished builders skipped, a station whose session is not alive skipped): plan, then send.
+BASH_IDLE_WAKE_ROUND = '''
+for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+  case "$(stations_get "$s" '.role')" in
+    helper) continue ;;
+    builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
+  esac
+  up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; continue; }
+  [ "$up" = yes ] || continue
+  if idle_wake_plan "$s"; then idle_wake_send; fi
+done
+'''
+
 
 def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
     """Source the cut factory script from the kit and call the bash function."""
@@ -274,6 +291,8 @@ def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
         script = script.replace('pace_down "$@"', BASH_PACE_DOWN)
     if fn == "watch_regrant":
         script = f'set -euo pipefail; source "$1" x; shift; {WATCH_REGRANT_BASH}'
+    if fn == "idle_wake_round":
+        script = script.replace('idle_wake_round "$@"', BASH_IDLE_WAKE_ROUND)
     p = subprocess.run(["bash", "-c", script, "bash", str(lib), *args], env=env, stdin=None)
     return p.returncode
 
@@ -346,6 +365,9 @@ def run_python(fn: str, args: list) -> int:
                     seam.revived(paths, s)
                 elif pprompt and not fresh:
                     seam.mark_tried(paths, s)
+        elif fn == "idle_wake_round":
+            from tares.crew import idle_wake
+            idle_wake.step(paths)
         elif fn == "spawn":
             from tares.crew import stations
             return stations.cmd_spawn(["spawn", *args], dict(os.environ))

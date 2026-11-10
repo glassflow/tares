@@ -3162,6 +3162,430 @@ scenario(Scenario(
 
 
 # ---------------------------------------------------------------------------------------------
+# The idle wake (TR-961): `crew watch --once` is one round of the watch, and with the crew setting idle_wake
+# on it wakes a station only when Tares has work for it. idle_wake_test.sh is the bash suite these come from;
+# it runs a real Tares, here a fake one answers with the same documents, and the rounds are stepped with
+# FACTORY_NOW. A station that was woken is restarted by the fake Claude Code, and `_idle_all` makes every
+# session idle again before a round, as a woken one is when its turn ends.
+
+IW_N0 = 2_000_000_000
+IW_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "bbbb0003",
+          "links-app-build-m1": "cccc0004"}
+IW_PROJECTS = {"projects": [{"id": "p1", "name": "links-app", "repos": []}]}
+
+
+def _setup_wake(tmp: Path, env: dict) -> None:
+    crew = tmp / "crew"
+    crew.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", crew / "crew.json")
+    base = {"status": "active", "repo": "", "cwd": str(tmp), "model": "opus", "effort": "high"}
+    roles = {"crew-orchestrator": ("orchestrator", ""), "crew-reviewer": ("reviewer", ""),
+             "crew-releaser": ("releaser", ""), "links-app-build-m1": ("builder", "links-app")}
+    stations = {n: {**base, "role": r, "project": pr, "id": IW_IDS[n], "sessionId": f"sess-{IW_IDS[n]}",
+                    "parent": "crew-orchestrator" if n != "crew-orchestrator" else ""} for n, (r, pr) in roles.items()}
+    (crew / "stations.json").write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    agents = [{"id": IW_IDS[n], "name": n, "cwd": str(tmp), "state": "done", "pid": 40000 + int(IW_IDS[n][-4:], 16)}
+              for n in stations]
+    state = tmp / "claude"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+    (state / "version").write_text("2.1.310\n", encoding="utf-8")
+    for n, sid in IW_IDS.items():
+        job = tmp / "home" / ".claude" / "jobs" / sid
+        job.mkdir(parents=True, exist_ok=True)
+        (job / "state.json").write_text(json.dumps({"sessionId": f"sess-{sid}"}) + "\n", encoding="utf-8")
+
+
+def _idle_all(tmp: Path) -> None:
+    f = tmp / "claude" / "agents.json"
+    rows = json.loads(f.read_text(encoding="utf-8"))
+    for row in rows:
+        row["state"] = "done"
+    f.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _wakes(tmp: Path) -> dict:
+    """After a round: the wake files of the stations (by name) and the idle_wake events so far, as (station, detail)."""
+    files, events = {}, []
+    stations = tmp / "crew" / "stations"
+    for p in sorted(stations.glob("*.wake")) if stations.is_dir() else []:
+        files[p.name[:-len(".wake")]] = json.loads(p.read_text(encoding="utf-8"))
+    ev = tmp / "crew" / "events.jsonl"
+    for line in (ev.read_text(encoding="utf-8").splitlines() if ev.is_file() else []):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") == "idle_wake":
+            events.append((e.get("station"), str(e.get("detail", ""))))
+    return {"files": files, "events": events}
+
+
+def _n(r: Run, i: int = -1, station: str = "", word: str = "") -> int:
+    """idle_wake events up to the end of round i for a station (any when empty) whose reason starts with word."""
+    return sum(1 for s, d in r.snap(i)["events"] if (not station or s == station) and d.startswith(word))
+
+
+def _wf(r: Run, i: int, station: str, key: str):
+    return r.snap(i)["files"].get(station, {}).get(key)
+
+
+def _station_id(tmp: Path, station: str) -> str:
+    """The session id the crew has for a station now (a wake restarts it, and the fake Claude Code names the new session)."""
+    return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[station]["id"]
+
+
+def _agent_state(tmp: Path, station: str, state: str) -> None:
+    f = tmp / "claude" / "agents.json"
+    rows = json.loads(f.read_text(encoding="utf-8"))
+    for row in rows:
+        if row["id"] == _station_id(tmp, station):
+            row["state"] = state
+    f.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _touch(station: str, sec: int):
+    """The session did something at IW_N0 + sec (its job file's updatedAt)."""
+    def fn(tmp: Path) -> None:
+        f = tmp / "home" / ".claude" / "jobs" / _station_id(tmp, station) / "state.json"
+        doc = json.loads(f.read_text(encoding="utf-8"))
+        doc["updatedAt"] = _iso(IW_N0 + sec)
+        f.write_text(json.dumps(doc) + "\n", encoding="utf-8")
+    return fn
+
+
+def _iso(epoch: int) -> str:
+    import datetime
+    return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _pre(*fns):
+    """Before a round: every session idle again, then these."""
+    def fn(tmp: Path) -> None:
+        _idle_all(tmp)
+        for f in fns:
+            f(tmp)
+    return fn
+
+
+def _report(text: str):
+    def fn(tmp: Path) -> None:
+        d = tmp / "crew" / "reports"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "crew-orchestrator.md").write_text(text, encoding="utf-8")
+    return fn
+
+
+def _world(setting=True, queue=None, tickets=None, desk=None, projects=None) -> dict:
+    """A Tares for one round: the setting, the reviewer's queue, the builder's tickets, the answered desk."""
+    return {"settings": {} if setting is None else {"idle_wake": setting},
+            "projects": projects if projects is not None else IW_PROJECTS["projects"],
+            "routes": {"/api/review-queue?mine=1": [200, {"queue": queue or []}],
+                       "/api/projects/p1/tickets": [200, {"tickets": tickets or []}],
+                       "/api/desk?state=answered&mine=1": [200, {"desk": desk or []}]}}
+
+
+def _round(sec: int, world: dict, *pre, env: dict | None = None) -> Step:
+    """One idle-wake pass of the watch at `sec` seconds, on a Tares that answers with `world`."""
+    e = {"FACTORY_NOW": str(IW_N0 + sec), "LAUNCH_WORLD": json.dumps(world), **(env or {})}
+    return Step(["idle_wake_round"], env=e, before=_pre(*pre), after=_wakes)
+
+
+def _quiet_world(setting) -> dict:
+    return _world(setting)
+
+
+def _head(h: str, verdict=None) -> list:
+    return [{"project": "p1", "project_name": "links-app", "ticket": "T1", "head": h, "verdict": verdict}]
+
+
+B1 = "links-app-build-m1"
+
+
+def _times(r: Run, first: int, last: int, station: str) -> list:
+    """The seconds (since IW_N0) at which a station's last_wake changed, over rounds first..last."""
+    out, seen = [], _wf(r, first - 1, station, "last_wake") if first else None
+    for i in range(first, last + 1):
+        lw = _wf(r, i, station, "last_wake")
+        if lw is not None and lw != seen:
+            out.append(lw - IW_N0)
+            seen = lw
+    return out
+
+
+scenario(Scenario(
+    name="idle_wake_off",
+    suite="idle_wake",
+    about="with the setting unset, and then false, rounds hours apart wake no one and write no wake state",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(t, _quiet_world(None)) for t in (600, 1800, 3600, 7200, 14400)] + [_round(21600, _quiet_world(False))],
+    checks=[
+        ("unset: five rounds, hours apart, with an unreviewed PR: no wake",
+         lambda r: all(r.code(i) == 0 for i in range(6)) and _n(r) == 0 and r.launches() == 0),
+        ("unset: no wake state is written", lambda r: all(r.snap(i)["files"] == {} for i in range(5))),
+        ("false: the same", lambda r: r.snap(5)["files"] == {} and _n(r) == 0 and r.launches() == 0),
+    ],
+    covers=["unset: five rounds, hours apart, with an unreviewed PR: no wake", "unset: no wake state is written", "false: the same"],
+))
+
+_LIVE_AT = [0, 840, 900, 1260, 1800, 2700, 3060, 3600, 5400, 5760, 6300]
+scenario(Scenario(
+    name="idle_wake_liveness",
+    suite="idle_wake",
+    about="with the setting on and nothing to do: a release wake, then liveness wakes backing off 15/30/45 minutes",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(t, _world()) for t in _LIVE_AT],
+    checks=[
+        ("switched on under running stations: the first round tells each one that holds a tick to drop it, once (the builder has no ticket in review, so no tick)",
+         lambda r: _n(r, 0) == 3 and all(_n(r, 0, s, "release") == 1 for s in ("crew-reviewer", "crew-orchestrator", "crew-releaser"))
+         and _n(r, 0, B1) == 0 and B1 in r.snap(0)["files"]),
+        ("reviewer: woken at 15, then 30 later, then 45 later (minutes 15, 45, 90)",
+         lambda r: _times(r, 1, 10, "crew-reviewer") == [900, 2700, 5400]),
+        ("orchestrator: 20, then 30, then 45 later", lambda r: _times(r, 1, 10, "crew-orchestrator") == [1260, 3060, 5760]),
+        ("releaser: 30, then 30, then 45 later", lambda r: _times(r, 1, 10, "crew-releaser") == [1800, 3600, 6300]),
+        ("a builder with no ticket in review is not woken", lambda r: _n(r, -1, B1) == 0 and _times(r, 1, 10, B1) == []),
+        ("every one of them is a liveness wake",
+         lambda r: _n(r, -1, "crew-reviewer", "liveness") == 3 and _n(r) == 12),
+        ("each wake is a restart in the same conversation",
+         lambda r: any("--resume" in c["args"] for c in r.calls()) and r.launches() >= 12),
+    ],
+    covers=["switched on under running stations: the first round tells each one that holds a tick to drop it, once (the builder has no ticket in review, so no tick)",
+            "reviewer: woken at 15, then 30 later, then 45 later (minutes 15, 45, 90)", "orchestrator: 20, then 30, then 45 later",
+            "releaser: 30, then 30, then 45 later", "a builder with no ticket in review is not woken",
+            "every one of them is a liveness wake", "each wake is a restart in the same conversation"],
+))
+
+scenario(Scenario(
+    name="idle_wake_activity",
+    suite="idle_wake",
+    about="activity after a wake and its settle time pushes the liveness clock back; the session's own turn does not",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(0, _world()), _round(600, _world()), _round(840, _world()), _round(900, _world()),
+           _round(1700, _world(), _touch("crew-reviewer", 1600)), _round(2400, _world()), _round(2500, _world()),
+           _round(2600, _world(), _touch("crew-reviewer", 2550))],
+    checks=[
+        ("before 15 minutes: no liveness wake", lambda r: _n(r, 2, "crew-reviewer", "liveness") == 0),
+        ("at 15 minutes: the first", lambda r: _n(r, 3, "crew-reviewer", "liveness") == 1 and _wf(r, 3, "crew-reviewer", "n") == 1),
+        ("activity later than the wake and the settle time resets the count and the clock to it",
+         lambda r: _wf(r, 4, "crew-reviewer", "n") == 0 and _wf(r, 4, "crew-reviewer", "clock") == IW_N0 + 1600
+         and _n(r, 4, "crew-reviewer", "liveness") == 1),
+        ("so the next wake is not at 45 minutes", lambda r: _n(r, 5, "crew-reviewer", "liveness") == 1),
+        ("but 15 minutes after the activity, at the base again",
+         lambda r: _n(r, 6, "crew-reviewer", "liveness") == 2 and _wf(r, 6, "crew-reviewer", "n") == 1),
+        ("a session's own turn after a wake does not reset it", lambda r: _wf(r, 7, "crew-reviewer", "n") == 1),
+    ],
+    covers=["before 15 minutes: no liveness wake", "at 15 minutes: the first",
+            "activity later than the wake and the settle time resets the count and the clock to it",
+            "so the next wake is not at 45 minutes", "but 15 minutes after the activity, at the base again",
+            "a session's own turn after a wake does not reset it"],
+))
+
+_H1, _H2, _H3 = "1111111aaaaaaaa", "2222222bbbbbbbb", "3333333cccccccc"
+scenario(Scenario(
+    name="idle_wake_reviewer",
+    suite="idle_wake",
+    about="a PR without a current verdict wakes the reviewer once per head, and not in the middle of a turn",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(0, _world()),
+           _round(60, _world(queue=_head(_H1))), _round(120, _world(queue=_head(_H1))), _round(180, _world(queue=_head(_H1))),
+           _round(240, _world(queue=_head(_H2))),
+           _round(300, _world(queue=_head(_H3)), lambda tmp: _agent_state(tmp, "crew-reviewer", "working")),
+           _round(360, _world(queue=_head(_H3))),
+           _round(420, _world(queue=_head(_H3, {"current": True, "verdict": "changes"})))],
+    checks=[
+        ("an unreviewed PR wakes the reviewer", lambda r: _n(r, 1, "crew-reviewer", "work") == 1),
+        ("and only the reviewer", lambda r: _n(r, 1) == 4),
+        ("the same head wakes it once, not every round", lambda r: _n(r, 3, "crew-reviewer", "work") == 1),
+        ("a new head wakes it again", lambda r: _n(r, 4, "crew-reviewer", "work") == 2 and _n(r, 4) == 5),
+        ("a reviewer in the middle of a turn is not woken", lambda r: _n(r, 5, "crew-reviewer", "work") == 2),
+        ("the next round, once it is idle, wakes it", lambda r: _n(r, 6, "crew-reviewer", "work") == 3),
+        ("the wake marks that head as told", lambda r: len(_wf(r, 6, "crew-reviewer", "seen")) == 1),
+        ("a PR with a current verdict is no work for the reviewer", lambda r: _n(r, 7, "crew-reviewer", "work") == 3),
+    ],
+    covers=["an unreviewed PR wakes the reviewer", "and only the reviewer", "the same head wakes it once, not every round",
+            "a new head wakes it again", "a reviewer in the middle of a turn is not woken",
+            "the next round, once it is idle, wakes it", "the wake marks that head as told",
+            "a PR with a current verdict is no work for the reviewer"],
+))
+
+
+def _ticket(label: str, stage: str, head: str = "", ci: str = "", verdict: str = "", holder: str = B1) -> dict:
+    t = {"label": label, "holder": holder, "stage": stage, "pr": {"head": head, "ci": ci}}
+    if verdict:
+        t["verdict"] = {"current": True, "verdict": verdict}
+    return t
+
+
+scenario(Scenario(
+    name="idle_wake_builder",
+    suite="idle_wake",
+    about="a builder is woken once for a verdict, changes asked for or failed CI on a ticket it holds",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(0, _world()),
+           _round(60, _world(tickets=[_ticket("T1", "review", _H3, "success", "changes")])),
+           _round(120, _world(tickets=[_ticket("T1", "review", _H3, "success", "changes")])),
+           _round(180, _world(tickets=[_ticket("T1", "changes", _H3, "success", "changes")])),
+           _round(240, _world(tickets=[_ticket("T1", "changes", _H3, "success", "changes"),
+                                       _ticket("T2", "changes", holder="someone-else-build-m1")])),
+           _round(300, _world(tickets=[_ticket("T1", "changes", _H3, "success", "changes"), _ticket("T2", "changes")])),
+           _round(360, _world(tickets=[_ticket("T1", "changes", _H3, "success", "changes"), _ticket("T2", "changes")])),
+           _round(420, _world(tickets=[_ticket("T1", "review", "5555555eeeeeeee", "failure"), _ticket("T2", "doing")])),
+           _round(480, _world(tickets=[_ticket("T1", "review", "5555555eeeeeeee", "failure"), _ticket("T2", "doing")]))],
+    checks=[
+        ("the builder was woken for the verdict on its ticket", lambda r: _n(r, 1, B1, "work") == 1),
+        ("once per verdict", lambda r: _n(r, 2, B1, "work") == 1),
+        ("changes asked for on the head the verdict is about is the same thing: still once", lambda r: _n(r, 3, B1, "work") == 1),
+        ("a ticket held by another builder wakes this one not at all", lambda r: _n(r, 4, B1, "work") == 1),
+        ("changes asked for on its own ticket wakes the holder", lambda r: _n(r, 5, B1, "work") == 2),
+        ("once", lambda r: _n(r, 6, B1, "work") == 2),
+        ("failed CI on the head wakes the holder", lambda r: _n(r, 7, B1, "work") == 3),
+        ("and only once", lambda r: _n(r, 8, B1, "work") == 3),
+    ],
+    covers=["the builder was woken for the verdict on its ticket", "once per verdict",
+            "changes asked for on the head the verdict is about is the same thing: still once",
+            "a ticket held by another builder wakes this one not at all", "changes asked for on its own ticket wakes the holder",
+            "once", "failed CI on the head wakes the holder (and the reviewer for the new head)", "and only once"],
+))
+
+_RL1 = "- RELEASE Links App milestone M1 (T1, T2)"
+_RL2 = "- RELEASE Links App milestone M2 (T3)"
+
+
+def _answer(i: str, closed: str, **kw) -> dict:
+    return {"id": i, "label": i, "closed_at": closed, **kw}
+
+
+scenario(Scenario(
+    name="idle_wake_orchestrator",
+    suite="idle_wake",
+    about="a desk answer or a new project wakes the orchestrator once, a RELEASE line under Undelivered wakes the releaser once",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(0, _world()),
+           _round(60, _world(), _report("# crew-orchestrator\n\n## Undelivered\n- T4 done, waiting on nothing\n\n## Notes\n- RELEASE later maybe\n")),
+           _round(120, _world(desk=[_answer("D1", _iso(IW_N0 + 90))]), _touch("crew-orchestrator", -9 * 365 * 86400)),
+           _round(180, _world(desk=[_answer("D1", _iso(IW_N0 + 90))])),
+           _round(240, _world(desk=[_answer("D1", _iso(IW_N0 + 90)), _answer("D2", _iso(IW_N0 + 200))]),
+                  _touch("crew-orchestrator", 100000)),
+           _round(300, _world(desk=[_answer("D1", _iso(IW_N0 + 90)), _answer("D2", _iso(IW_N0 + 200)),
+                                    _answer("D3", _iso(IW_N0 + 250), command="gh pr view 1")]),
+                  _touch("crew-orchestrator", 100000)),
+           _round(360, _world(desk=[_answer("D1", _iso(IW_N0 + 90))],
+                              projects=IW_PROJECTS["projects"] + [{"id": "p2", "name": "Blog", "repos": []}])),
+           _round(420, _world(projects=IW_PROJECTS["projects"] + [{"id": "p2", "name": "Blog", "repos": []}]),
+                  _report("# crew-orchestrator\n\n## Undelivered\n" + _RL1 + "\n- RELEASED M0 last week\n\n## Notes\n")),
+           _round(480, _world(projects=IW_PROJECTS["projects"] + [{"id": "p2", "name": "Blog", "repos": []}])),
+           _round(540, _world(projects=IW_PROJECTS["projects"] + [{"id": "p2", "name": "Blog", "repos": []}]),
+                  _report("# crew-orchestrator\n\n## Undelivered\n" + _RL1 + "\n" + _RL2 + "\n"))],
+    checks=[
+        ("the first look only sets the baseline",
+         lambda r: _n(r, 0, "crew-orchestrator", "work") == 0 and bool(_wf(r, 0, "crew-orchestrator", "baseline"))),
+        ("a RELEASE line outside Undelivered, or none inside it, wakes nobody", lambda r: _n(r, 1, "crew-releaser", "work") == 0),
+        ("a desk answer wakes the orchestrator, and only it",
+         lambda r: _n(r, 2, "crew-orchestrator", "work") == 1 and _n(r, 2) == _n(r, 1) + 1),
+        ("once", lambda r: _n(r, 3, "crew-orchestrator", "work") == 1),
+        ("an answer the orchestrator recorded itself is no news to it", lambda r: _n(r, 4, "crew-orchestrator", "work") == 1),
+        ("an allowed permission request is the watch's to act on, not a wake for the orchestrator",
+         lambda r: _n(r, 5, "crew-orchestrator", "work") == 1),
+        ("a project handed over wakes the orchestrator", lambda r: _n(r, 6, "crew-orchestrator", "work") == 2),
+        ("a RELEASE line under Undelivered wakes the releaser, and only it",
+         lambda r: _n(r, 7, "crew-releaser", "work") == 1 and _n(r, 7) == _n(r, 6) + 1),
+        ("once per line", lambda r: _n(r, 8, "crew-releaser", "work") == 1),
+        ("a second line is a second wake", lambda r: _n(r, 9, "crew-releaser", "work") == 2),
+    ],
+    covers=["the first look only sets the baseline", "a RELEASE line outside Undelivered, or none inside it, wakes nobody",
+            "a desk answer wakes the orchestrator, and only it", "once",
+            "an answer the orchestrator recorded itself is no news to it",
+            "an allowed permission request is the watch's to act on, not a wake for the orchestrator",
+            "a project handed over wakes the orchestrator", "a RELEASE line under Undelivered wakes the releaser, and only it",
+            "once per line", "a second line is a second wake"],
+))
+
+
+def _halt(tmp: Path) -> None:
+    (tmp / "crew" / "HALT").write_text('{"at":"2026-01-01T00:00:00Z","reason":"testing the wake"}\n', encoding="utf-8")
+
+
+def _resume(tmp: Path) -> None:
+    (tmp / "crew" / "HALT").unlink()
+
+
+def _done_mark(tmp: Path) -> None:
+    (tmp / "crew" / "stations" / f"{B1}.done").write_text("", encoding="utf-8")
+
+
+def _undone(tmp: Path) -> None:
+    (tmp / "crew" / "stations" / f"{B1}.done").unlink()
+
+
+def _add_helper(tmp: Path) -> None:
+    f = tmp / "crew" / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc[f"{B1}-probe"] = {**doc[B1], "role": "helper", "parent": B1, "id": "dddd0005", "sessionId": "sess-dddd0005"}
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    ag = tmp / "claude" / "agents.json"
+    rows = json.loads(ag.read_text(encoding="utf-8"))
+    rows.append({"id": "dddd0005", "name": f"{B1}-probe", "cwd": str(tmp), "state": "done", "pid": 40005})
+    ag.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    job = tmp / "home" / ".claude" / "jobs" / "dddd0005"
+    job.mkdir(parents=True, exist_ok=True)
+    (job / "state.json").write_text('{"sessionId":"sess-dddd0005"}\n', encoding="utf-8")
+
+
+_V6 = "6666666ffffffff"
+scenario(Scenario(
+    name="idle_wake_guards",
+    suite="idle_wake",
+    about="a halted crew, a finished builder and a helper are never woken; a head with a current verdict is no work",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(0, _world()),
+           _round(3600, _world(), _halt), _round(7200, _world()),
+           _round(10800, _world(), _resume),
+           _round(11400, _world(), _done_mark),
+           _round(12000, _world(queue=_head(_V6, {"current": True, "verdict": "changes"}),
+                                tickets=[_ticket("T1", "review", _V6, "success", "changes")]), _done_mark),
+           _round(12060, _world(tickets=[_ticket("T1", "review", _V6, "success", "changes")]), _undone),
+           _round(40000, _world(), _add_helper)],
+    checks=[
+        ("a halted crew is not woken", lambda r: _n(r, 2) == _n(r, 0) and _n(r, 1) == _n(r, 0)),
+        ("a crew that is not halted any more is woken", lambda r: _n(r, 3, "crew-reviewer", "liveness") == 1),
+        ("a builder that is done is not woken, whatever its ticket says", lambda r: _n(r, 5, B1) == _n(r, 4, B1)),
+        ("a head that already has a current verdict is no work for the reviewer, even though it was never seen",
+         lambda r: _n(r, 5, "crew-reviewer", "work") == 0),
+        ("(the ticket was real work: once it is not done, the builder is woken for it)", lambda r: _n(r, 6, B1) == _n(r, 4, B1) + 1),
+        ("a helper is never woken", lambda r: _n(r, 7, B1 + "-probe") == 0),
+    ],
+    covers=["a halted crew is not woken", "a builder that is done is not woken, whatever its ticket says",
+            "a head that already has a current verdict is no work for the reviewer, even though it was never seen",
+            "(the ticket was real work: once it is not done, the builder is woken for it)", "a helper is never woken"],
+))
+
+scenario(Scenario(
+    name="idle_wake_rearm",
+    suite="idle_wake",
+    about="switched off again, each station that gave up its tick is woken once to take it back",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_wake,
+    steps=[_round(0, _world()), _round(100, _world(False)), _round(200, _world(False)), _round(90000, _world(False)),
+           _round(130000, _world(False))],
+    checks=[
+        ("off again: every station that gave up its tick is woken to re-arm it",
+         lambda r: all(_n(r, 1, s, "rearm") == 1 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))),
+        ("and once: nothing more is sent",
+         lambda r: _n(r, 3) == _n(r, 1) and _wf(r, 3, "crew-reviewer", "released") is False),
+        ("off: the watch is back to doing nothing", lambda r: _n(r, 4) == _n(r, 1)),
+    ],
+    covers=["and once: nothing more is sent", "off: the watch is back to doing nothing"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
 # Normalising
 
 ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")

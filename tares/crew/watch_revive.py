@@ -43,6 +43,7 @@ class Round:
         self.down = False        # a station was down, or could not be told apart from down
         self.unread = False      # the session list could not be read: nothing was done
         self.started: set = set()   # stations this step revived or restarted
+        self.handled: set = set()   # stations this step dealt with, however it went (a skip, a stuck restart, a revive, a regrant restart)
 
     def __repr__(self):
         return f"Round(down={self.down}, unread={self.unread}, started={sorted(self.started)})"
@@ -169,6 +170,7 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
             print(e.line, file=sys.stderr, flush=True)
             _say(f"skipping {s} this round")
             this.down = True
+            this.handled.add(s)
             continue
         if up:
             if paths.pace_file.exists():
@@ -176,12 +178,14 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
             if stuck_on_context(paths, binary, s):
                 _say(f"{s} is stuck: Claude Code stopped it for thrashing on autocompact; starting it fresh under the same name")
                 state.event("thrashing", s, paths=paths)
+                this.handled.add(s)
                 if _run(lifecycle.cmd_restart, ["restart", s, "--fresh"], env) == 0:
                     this.started.add(s)
                 else:
                     _say(f"could not restart {s}; will try again next round")
             continue
         this.down = True
+        this.handled.add(s)
         if pace.closed(paths):   # the plan's limit is full: no reviving into a closed door
             pace.hold_down(paths, s)
             continue

@@ -530,11 +530,16 @@ def attached(station: str, paths=None) -> bool:
         return False
     pattern = re.compile("attach " + re.escape(sid) + "( |$)")
     me = os.getpid()
-    for p in psutil.process_iter(["pid", "cmdline"]):
+    # One pid at a time: process_iter reads each command line itself and can raise a PermissionError that ends
+    # the whole loop (a process it may not read), where this skips just that process. psutil on macOS can also
+    # leak a SystemError ("returned a result with an exception set") for such a process.
+    for pid in psutil.pids():
+        if pid == me:
+            continue
         try:
-            if p.info["pid"] != me and pattern.search(" ".join(p.info["cmdline"] or [])):
+            if pattern.search(" ".join(psutil.Process(pid).cmdline() or [])):
                 return True
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):
             continue
     return False
 

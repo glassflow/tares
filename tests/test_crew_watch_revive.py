@@ -289,6 +289,8 @@ err = go(FAKE_CLAUDE_AGENTS_FAIL_AFTER="1")
 ck("a list that fails while one station is checked skips it and goes on",
    launched == [] and "skipping shop-build-m1 this round" in said(err) and "skipping shop-build-m2 this round" in said(err)
    and any("not guessing whether shop-build-m1 runs" in x for x in said(err)) and WR.last.down, str(said(err)))
+ck("...last.handled names both, so a later step leaves them alone",
+   WR.last.handled == {"shop-build-m1", "shop-build-m2"} and WR.last.started == set(), repr(WR.last))
 
 print("a revive that fails")
 reset({"shop-build-m1": station(), "shop-build-m2": station(id="aaaa0002", sessionId="sess-2")},
@@ -300,6 +302,7 @@ ck("it is reported, and the next station is still revived",
    and [x["station"] for x in launched] == ["shop-build-m2"], str(said(err)))
 ck("...the refusal itself is printed too", "could not start shop-build-m1 (fake)" in said(err), str(said(err)))
 ck("...it is not counted as started", WR.last.started == {"shop-build-m2"}, repr(WR.last))
+ck("...but it is handled, like the one that came back", WR.last.handled == {"shop-build-m1", "shop-build-m2"}, repr(WR.last))
 fail_on.clear()
 go()
 ck("the next round revives it", [x["station"] for x in launched] == ["shop-build-m2", "shop-build-m1"], str(launched))
@@ -322,6 +325,7 @@ if True:
     ck("...thrashing is recorded, then restarted-fresh", [e["event"] for e in events()] == ["thrashing", "restarted-fresh"], str(events()))
     ck("...a station whose last reply is ordinary is left alone", all(x["station"] != "crew-reviewer" for x in launched))
     ck("...it counts as started and nothing was down", WR.last.started == {"crew-orchestrator"} and not WR.last.down, repr(WR.last))
+    ck("...it is handled, and the one left alone is not", WR.last.handled == {"crew-orchestrator"}, repr(WR.last))
     go()
     ck("the new conversation is not restarted again", len(launched) == 1, str(launched))
 
@@ -366,6 +370,8 @@ fail_on.add("crew-orchestrator")
 err = go()
 ck("is reported and tried again next round", "could not restart crew-orchestrator; will try again next round" in said(err)
    and WR.last.started == set(), str(said(err)))
+ck("...and it is handled all the same: a later step does not restart it a second time",
+   WR.last.handled == {"crew-orchestrator"}, repr(WR.last))
 
 # ---------------------------------------------------------------------------------------------
 print("the pace seam")

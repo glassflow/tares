@@ -432,6 +432,14 @@ def wake_write(station: str, state: dict, paths=None) -> None:
     write_json(f, state, compact=True)
 
 
+def wake_update(station: str, fields: dict, paths=None) -> None:
+    """Set these fields of the wake state and write it whole (bash's wake_update with a filter that sets them)."""
+    state = wake_read(station, paths)
+    state["seen"] = list(state["seen"]) if isinstance(state["seen"], list) else state["seen"]
+    state.update(fields)
+    wake_write(station, state, paths)
+
+
 def crew_key(paths=None, env=None) -> str:
     """The crew's key: TARES_FACTORY_TOKEN_FILE, else the crew home's .tares-token, with all whitespace
     removed; "" when it can't be read."""

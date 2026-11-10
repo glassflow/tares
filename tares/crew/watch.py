@@ -3,9 +3,9 @@
 Ports these functions of `claude-plugin/bin/factory`: cmd_watch (the loop skeleton), nap, watch_pid, start_watch
 and stop_watch. What the loop does each round (revive a stopped station, regrant, wake an idle one, pace, move onto
 an updated plugin) is not here: those steps are separate tickets, and each registers itself with `register` when it
-lands. Until then every step falls back to nothing, so the Python watch keeps nothing alive yet and the bash watch
-stays the default. `TARES_FACTORY_WATCH=python` opts the `watch` command in (on Windows there is no bash, so it
-is always Python there).
+lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`). Every step not
+yet registered falls back to nothing, so the Python watch does less than the bash one and the bash watch stays
+the default. `TARES_FACTORY_WATCH=python` opts the `watch` command in (on Windows there is no bash, so it is always Python there).
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
@@ -30,7 +30,7 @@ Differences from bash
   * The bash watch is stopped with `kill`; this one first gets a chance to finish its round and clean up.
   * A meta file next to the pid file has the create time and the engine.
   * The loop leaves on a stop file, and on SIGTERM where the platform has it, removing its pid file and stop file.
-  * Steps do not exist yet; see above.
+  * Only the steps registered so far run; see above.
 
 Untested on real Windows (TR-946 is deferred): the creation flags, `pythonw.exe` and the launcher case below.
 On Windows a venv's `python.exe` starts the real interpreter as a child, so `Popen.pid` is the launcher's; the
@@ -84,6 +84,14 @@ def register(name: str, fn) -> None:
 
 def unregister(name: str) -> None:
     _STEPS.pop(name, None)
+
+
+def _idle_wake_step(paths: CrewPaths) -> None:
+    from . import idle_wake   # here, not at the top: lifecycle imports this module and idle_wake imports lifecycle
+    idle_wake.step(paths)
+
+
+register("idle_wake", _idle_wake_step)   # TR-961
 
 
 def _say(msg: str) -> None:
