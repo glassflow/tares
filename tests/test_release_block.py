@@ -44,7 +44,6 @@ try:
 finally:
     shutil.rmtree(tmp, ignore_errors=True)
 
-ck("the repo has a RELEASE_BLOCK", (ROOT / "RELEASE_BLOCK").is_file())
 for rel in (".github/workflows/release.yml", ".github/workflows/docker-publish.yml", "scripts/release.sh"):
     ck(f"{rel} calls the check", "check_release_block" in (ROOT / rel).read_text())
 

@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { licenceWordsOn, useCloud } from "../../cloud";
+import { licenceWordsOn, slugFromHost, useCloud, useWorkspaceOverview } from "../../cloud";
 import LicencePanel from "../../components/LicencePanel";
 import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
@@ -11,7 +11,7 @@ import {
   AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, GithubPanel, McpToolsPanel, PeopleBlock, ProvidersPanel,
   SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings, TracingPanel, useAccessData,
 } from "../../pages/Security";
-import WorkspaceSettings from "../../pages/WorkspaceSettings";
+import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
@@ -158,8 +158,29 @@ const HEADED = "settings-headed min-w-0";
 
 const TOOL_ITEMS = new Set<string>(["github", "linear", "slack", "claude_code"]);
 
-function PeoplePane() {
+function CellPeople() {
   return <PeopleBlock access={useAccessData()} />;
+}
+
+/** On Tares Cloud the workspace says who is on the team; this cell adds each person's GitHub login
+ *  and admin flag. One list, with the workspace's invite and remove. */
+function CloudPeople({ apiUrl }: { apiUrl: string }) {
+  const cloud = useCloud();
+  const ov = useWorkspaceOverview(apiUrl);
+  const access = useAccessData();
+  const r = ov.result;
+  if (!r) return <div className="panel"><div className="muted">loading…</div></div>;
+  if (r.status !== "ok") return <WorkspaceSettings cloud={cloud} apiUrl={apiUrl} onOpenTab={() => undefined} />;
+  return (
+    <TeamPanel apiUrl={apiUrl} slug={r.data.slug || slugFromHost()} loginUrl={cloud.health?.login_url}
+               isOwner={r.data.role === "owner"} you={r.data.you?.email}
+               cell={{ people: access.people, admin: access.admin, reload: access.reload }} />
+  );
+}
+
+function PeoplePane() {
+  const apiUrl = useCloud().health?.workspace_api_url || undefined;
+  return apiUrl ? <CloudPeople apiUrl={apiUrl} /> : <CellPeople />;
 }
 
 function KeysPane() {
@@ -284,7 +305,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 
       {tab === "people" && <div className={HEADED}><PeoplePane /></div>}
       {tab === "keys" && <div className={HEADED}><KeysPane /></div>}
-      {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={() => undefined} />}
+      {tab === "general" && workspaceApiUrl && <WorkspaceSettings cloud={cloud} apiUrl={workspaceApiUrl} onOpenTab={() => undefined} noTeam />}
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
       {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}

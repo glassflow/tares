@@ -102,6 +102,43 @@ have = V.installed_version()
 ck("the installed version is read and parses", V.parse_version(have) is not None, have)
 
 
+class FakeDist:
+    def __init__(self, direct_url, version="1.0.0"):
+        self.direct_url, self.version = direct_url, version
+
+    def read_text(self, name):
+        return self.direct_url if name == "direct_url.json" else None
+
+
+print("installed_version: an editable install reads the checkout's pyproject.toml (F4)")
+pp = T / "pyproject.toml"
+pp.write_text('[build-system]\nrequires = ["x"]\n\n[project]\nname = "tares"\nversion = "9.8.7"\n', encoding="utf-8")
+editable = '{"url":"file:///x","dir_info":{"editable":true}}'
+ck("editable: the pyproject version, not the metadata's", V._editable_version(FakeDist(editable), pp) == "9.8.7")
+ck("not editable: nothing, so the metadata stands",
+   V._editable_version(FakeDist('{"url":"file:///x","dir_info":{}}'), pp) == "")
+ck("a wheel from an index (no direct_url.json): nothing", V._editable_version(FakeDist(None), pp) == "")
+ck("direct_url.json that is not JSON: nothing", V._editable_version(FakeDist("{oops"), pp) == "")
+ck("editable but no pyproject.toml there: nothing", V._editable_version(FakeDist(editable), T / "nope.toml") == "")
+pp.write_text('[tool.x]\nversion = "2.0.0"\n', encoding="utf-8")
+ck("a pyproject.toml with no [project] version: nothing (a version under another table is not it)",
+   V._editable_version(FakeDist(editable), pp) == "")
+pp.write_text("this is = not [toml", encoding="utf-8")
+ck("a pyproject.toml that does not parse: nothing", V._editable_version(FakeDist(editable), pp) == "")
+import importlib.metadata as _md
+real_dist = _md.distribution
+_md.distribution = lambda name: FakeDist(editable, "0.0.1")
+real_editable = V._editable_version
+try:
+    V._editable_version = lambda dist, path: "9.8.7"
+    ck("installed_version() uses the editable source version", V.installed_version() == "9.8.7", V.installed_version())
+    V._editable_version = lambda dist, path: ""
+    ck("...and the metadata's when the install is not editable", V.installed_version() == "0.0.1", V.installed_version())
+finally:
+    _md.distribution = real_dist
+    V._editable_version = real_editable
+
+
 def plugin(name, min_txt=None, manifest=None):
     root = T / name
     (root / ".claude-plugin").mkdir(parents=True)

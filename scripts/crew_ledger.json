@@ -66,7 +66,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Defined at top level near the path constants but only freeze logic uses it."
+      "note": "Defined at top level near the path constants but only freeze logic uses it. TR-957 keeps a read-only copy in tares/crew/views.py (frozen_phys) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "ccfg",
@@ -506,7 +506,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Interactive prompt; see ask."
+      "note": "Interactive prompt; see ask. TR-966 keeps its own copy in tares.crew.person (the person's prompts for spec and session), so it is not marked ported here."
     },
     {
       "name": "ask_settings",
@@ -581,8 +581,8 @@
       "what": "turn grants into auto mode allow rules",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:grant_rules",
+      "ported": true,
       "note": "Pure text transform used only by write_settings, so it goes with settings generation although grants come from TR-949."
     },
     {
@@ -592,8 +592,8 @@
       "what": "full station name from a role or name",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:station_name",
+      "ported": true,
       "note": ""
     },
     {
@@ -724,9 +724,9 @@
       "what": "record live crew sessions missing from stations.json",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Reads live sessions and repairs stations.json; status and roster call it, so it ships with them. TR-950 gives the session list it uses."
+      "python": "tares.crew.views:adopt_unrecorded",
+      "ported": true,
+      "note": "Ported with the views (TR-957): status and roster call it first."
     },
     {
       "name": "check_model",
@@ -735,8 +735,8 @@
       "what": "refuse a model that cannot run auto mode",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:check_model",
+      "ported": true,
       "note": ""
     },
     {
@@ -746,8 +746,8 @@
       "what": "words describing an autonomy level",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:level_text",
+      "ported": true,
       "note": ""
     },
     {
@@ -757,8 +757,8 @@
       "what": "number for an autonomy level",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:level_rank",
+      "ported": true,
       "note": ""
     },
     {
@@ -768,8 +768,8 @@
       "what": "the role a helper works under",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:parent_role",
+      "ported": true,
       "note": ""
     },
     {
@@ -779,8 +779,8 @@
       "what": "generate a station's settings file",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -790,8 +790,8 @@
       "what": "the --plugin-dir flags for a launch",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:plugin_flags",
+      "ported": true,
       "note": ""
     },
     {
@@ -858,7 +858,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Moved here from TR-965: crew up warns about another installed tares plugin first. Spec, session and doctor (TR-966, TR-969) call it too. It reads the plugin install record, so TR-965 keeps the kit freeze but not this check."
+      "note": "Moved here from TR-965: crew up warns about another installed tares plugin first. Spec, session and doctor (TR-966, TR-969) call it too. It reads the plugin install record, so TR-965 keeps the kit freeze but not this check. tares.crew.doctor.installed_tares reads it for doctor (TR-969). TR-966 keeps its own copy (installed_tares and clash_text) in tares.crew.person for the spec and session warning; TR-956 owns the shared one."
     },
     {
       "name": "clash_text",
@@ -869,7 +869,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Moved here from TR-965, with installed_tares: it words the warning that crew up prints."
+      "note": "Moved here from TR-965, with installed_tares: it words the warning that crew up prints. tares.crew.doctor.clash_text words it for doctor (TR-969)."
     },
     {
       "name": "compact_window",
@@ -878,8 +878,8 @@
       "what": "the autocompact value for a launch",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:compact_window",
+      "ported": true,
       "note": "Feeds the --autocompact launch flag and FACTORY_AUTOCOMPACT in the settings; stuck_on_context (TR-959) also calls it."
     },
     {
@@ -900,9 +900,9 @@
       "what": "is a station stuck on its context notice",
       "ticket": "TR-959",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Reads the transcript through TR-950's transcript_of."
+      "python": "tares.crew.watch_revive:stuck_on_context",
+      "ported": true,
+      "note": "Moved from tares/crew/views.py (TR-957's read-only copy); views.py imports it back for status and roster. Reads the transcript through TR-950's transcript_of. The watch's revive and stuck-restart branches of the cmd_watch station loop are tares.crew.watch_revive:step, registered as the watch's revive step. Its calls to TR-962's pace functions (pace_revived, pace_closed, pace_hold_down, pace_stopped, pace_tried, pace_resume_prompt, pace_fresh_prompt, pace_mark_tried) go through the inert PaceSeam object there: TR-962 replaces watch_revive.pace, until then nothing is paced."
     },
     {
       "name": "kit_version",
@@ -913,7 +913,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Called by launch (TR-953), which stamps each station with the version of the kit it starts on. TR-953 ports it with the rest of launch (the fingerprint of the kit folder it starts on); TR-965 adds the frozen-kit use."
+      "note": "Called by launch (TR-953), which stamps each station with the version of the kit it starts on. TR-953 ports it with the rest of launch (the fingerprint of the kit folder it starts on); TR-965 adds the frozen-kit use. TR-957 keeps a read-only copy in tares/crew/views.py (kit_version) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) keeps its own copy too: tares.crew.doctor.kit_version reads it for doctor (TR-969)."
     },
     {
       "name": "kit_clean",
@@ -944,8 +944,8 @@
       "what": "start a station with its flags and settings",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:launch",
+      "ported": true,
       "note": ""
     },
     {
@@ -955,8 +955,8 @@
       "what": "the first prompt of a station",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:boot_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -966,8 +966,8 @@
       "what": "is the crew halted",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:halted",
+      "ported": true,
       "note": "Moved here from TR-955: cmd_spawn refuses to start while the crew is halted. cmd_halt and cmd_resume (TR-955) write the HALT file; halted only checks it."
     },
     {
@@ -990,7 +990,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "tares.crew.doctor.Doctor.accepted reads the trust record for doctor (TR-969)."
     },
     {
       "name": "ensure_home_trusted",
@@ -1010,9 +1010,9 @@
       "what": "pid of the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Needed first by cmd_down (TR-955, through stop_watch), which ports the pid file read it needs; TR-958 completes it."
+      "python": "tares.crew.watch:running_pid",
+      "ported": true,
+      "note": "TR-955 ported the read in tares.crew.lifecycle:watch_pid, which now calls this; TR-958 adds the identity check (alive, not a zombie, `crew watch` in the command line, and the create time from the watch.pid.meta file beside the pid file). watch.pid stays the pid alone, as bash writes it. A pid file with no meta (bash's) still counts. doctor.watch_running (TR-969) now calls this; tares.crew.views imports watch_pid for status and roster."
     },
     {
       "name": "start_watch",
@@ -1021,9 +1021,9 @@
       "what": "start the watch in the background",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called first by cmd_crew_up (TR-956), which stubs it: crew up on Python skips the watch and prints \"watch: not ported yet\" (TR-956 step 4). TR-958 ports start_watch with the watch it starts."
+      "python": "tares.crew.watch:start",
+      "ported": true,
+      "note": "Detached (new session; DETACHED_PROCESS and pythonw.exe on Windows), env and PATH captured, pid file with pid, create time and engine. Not wired into cmd_crew_up here: TR-956 (PR 532, held for 522 under D65) stubs it and prints `watch: not ported yet`; whichever of 532 and this merges second swaps the stub for tares.crew.watch:start."
     },
     {
       "name": "stop_watch",
@@ -1032,9 +1032,9 @@
       "what": "stop the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called first by cmd_down (TR-955), which needs a partial port: read the pid file, stop that process and remove the file. TR-958 completes it with the watch itself."
+      "python": "tares.crew.watch:stop",
+      "ported": true,
+      "note": "TR-955's tares.crew.lifecycle:stop_watch calls this: a Python watch is asked to stop with the stop file and terminated (then killed) only after FACTORY_WATCH_STOP_TIMEOUT seconds; a bash watch or a plain pid file is terminated at once, as before."
     },
     {
       "name": "store_crew_name",
@@ -1098,8 +1098,8 @@
       "what": "spawn a builder or helper",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:cmd_spawn",
+      "ported": true,
       "note": ""
     },
     {
@@ -1109,8 +1109,8 @@
       "what": "revive a stopped station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_revive",
+      "ported": true,
       "note": ""
     },
     {
@@ -1120,8 +1120,8 @@
       "what": "restart a station with fresh settings",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_restart",
+      "ported": true,
       "note": ""
     },
     {
@@ -1131,8 +1131,8 @@
       "what": "retire a station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_retire",
+      "ported": true,
       "note": ""
     },
     {
@@ -1142,8 +1142,8 @@
       "what": "tell Tares a station ended",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:tell_tares_ended",
+      "ported": true,
       "note": ""
     },
     {
@@ -1153,8 +1153,8 @@
       "what": "stop the watch and every station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_down",
+      "ported": true,
       "note": ""
     },
     {
@@ -1164,9 +1164,9 @@
       "what": "the watch loop",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
+      "note": "The loop skeleton. Its steps (revive, regrant, idle wake, pace, updates) and the readings tick are registered by later tickets; with none registered a round does nothing, so the bash watch stays the default and TARES_FACTORY_WATCH=python opts in (always on Windows)."
     },
     {
       "name": "grants_now",
@@ -1175,8 +1175,8 @@
       "what": "a station's grants fingerprint on Tares now",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:grants_now",
+      "ported": true,
       "note": ""
     },
     {
@@ -1186,9 +1186,9 @@
       "what": "did a station's grants change",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.regrant:regranted",
+      "ported": true,
+      "note": "Moved from tares.crew.views (the read-only copy of TR-957); views imports it from here for status and roster."
     },
     {
       "name": "between_turns",
@@ -1219,8 +1219,8 @@
       "what": "is a regrant restart due",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:regrant_due",
+      "ported": true,
       "note": ""
     },
     {
@@ -1230,8 +1230,8 @@
       "what": "restart a station with new grants",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:regrant_station",
+      "ported": true,
       "note": ""
     },
     {
@@ -1241,9 +1241,9 @@
       "what": "is idle wake on",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Moved here from TR-961: launch and boot_prompt call it first. It only reads the idle_wake crew setting; TR-957 and TR-958 call it too."
+      "python": "tares.crew.launch:idle_wake_on",
+      "ported": true,
+      "note": "Moved here from TR-961: launch and boot_prompt call it first. It only reads the idle_wake crew setting; TR-957 and TR-958 call it too. doctor (TR-969) reads the idle_wake setting itself."
     },
     {
       "name": "idle_wake_state",
@@ -1252,8 +1252,8 @@
       "what": "on, off or unknown",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:idle_wake_state",
+      "ported": true,
       "note": ""
     },
     {
@@ -1263,8 +1263,8 @@
       "what": "what the watch says about idle wake",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:idle_wake_note",
+      "ported": true,
       "note": "Moved here from TR-961: boot_prompt prints it. TR-958 sends the same text from the watch."
     },
     {
@@ -1276,7 +1276,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which port it with a stub for pace_read until TR-962; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the TR-955 stub for pace_read; TR-961 completes it."
+      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which ported it in tares.crew.lifecycle:rearm_text and TR-962 replaced its stub for pace_read with pace.read; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the pace.read of TR-962; TR-961 completes it."
     },
     {
       "name": "pace_read",
@@ -1285,9 +1285,9 @@
       "what": "read the plan pace from Tares",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc. Also called by rearm_text (TR-961), which uses the same stub until TR-962."
+      "python": "tares.crew.pace:read",
+      "ported": true,
+      "note": "Called first by cmd_spawn (TR-954), by rearm_text (TR-955, TR-961) and by the watch round. Python: pace.read reads once and remembers the reading; the watch has no hook at the start of a round, so pace.current serves the steps that run before the pace step (see the module's Differences from bash)."
     },
     {
       "name": "pace_closed",
@@ -1296,8 +1296,8 @@
       "what": "is a plan limit full",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:Reading.closed",
+      "ported": true,
       "note": ""
     },
     {
@@ -1307,8 +1307,8 @@
       "what": "the crew pace file with defaults",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:json_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -1318,8 +1318,8 @@
       "what": "rewrite the pace file",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:json_update",
+      "ported": true,
       "note": ""
     },
     {
@@ -1329,8 +1329,8 @@
       "what": "did a station stop at a full limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:stopped",
+      "ported": true,
       "note": ""
     },
     {
@@ -1340,8 +1340,8 @@
       "what": "did its resume fail twice",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:tried",
+      "ported": true,
       "note": ""
     },
     {
@@ -1351,8 +1351,8 @@
       "what": "record a failed resume",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:mark_tried",
+      "ported": true,
       "note": ""
     },
     {
@@ -1362,8 +1362,8 @@
       "what": "remember a station down at a full limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:hold_down",
+      "ported": true,
       "note": ""
     },
     {
@@ -1373,8 +1373,8 @@
       "what": "forget a station that runs again",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:revived",
+      "ported": true,
       "note": ""
     },
     {
@@ -1384,8 +1384,8 @@
       "what": "forget stations that will not be revived",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:tidy",
+      "ported": true,
       "note": ""
     },
     {
@@ -1395,8 +1395,8 @@
       "what": "prompt for a resume after the limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:resume_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1406,8 +1406,8 @@
       "what": "prompt for a fresh start after the limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:fresh_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1417,8 +1417,8 @@
       "what": "path of a station's pace file",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.pace_station_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -1428,8 +1428,8 @@
       "what": "read a station's pace state",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:pace_station_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -1439,8 +1439,8 @@
       "what": "write a station's pace state",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:pace_station_put",
+      "ported": true,
       "note": ""
     },
     {
@@ -1450,9 +1450,9 @@
       "what": "pace note added to a start",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by launch (TR-953), which needs a stub that does nothing until TR-962 ports the real note (the pace station put). TR-953 must say so in its working doc."
+      "python": "tares.crew.pace:launch_note",
+      "ported": true,
+      "note": "Called by launch (TR-953). Python: launch calls pace.launch_note(client, paths, station); it uses the reading this process took last, as bash's PACE_STATE is."
     },
     {
       "name": "pace_plan",
@@ -1461,8 +1461,8 @@
       "what": "decide whether to restart a station with a pace note",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -1472,8 +1472,8 @@
       "what": "restart a station with the pace note",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:send",
+      "ported": true,
       "note": ""
     },
     {
@@ -1483,9 +1483,9 @@
       "what": "pace in one line for status",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:pace_status_line",
+      "ported": true,
+      "note": "TR-957 kept the read-only copy in tares/crew/views.py (pace_status_line) for status and roster; it is the port, and this ticket checks it against pace_test."
     },
     {
       "name": "wake_file",
@@ -1494,8 +1494,8 @@
       "what": "path of a station's wake file",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.wake_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -1505,8 +1505,8 @@
       "what": "read a station's wake state",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:wake_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -1516,8 +1516,8 @@
       "what": "rewrite a station's wake state",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:wake_update",
+      "ported": true,
       "note": ""
     },
     {
@@ -1527,9 +1527,9 @@
       "what": "idle wake note added to a start",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by launch (TR-953), which needs a stub that does nothing until TR-961 ports the real note (the wake file update). TR-953 must say so in its working doc."
+      "python": "tares.crew.launch:iw_launch_note",
+      "ported": true,
+      "note": "Called by launch (TR-953). Writes the wake file when a station starts: released on with the setting on, released off when it is switched off."
     },
     {
       "name": "wake_base_min",
@@ -1538,8 +1538,8 @@
       "what": "base wake interval by role",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:wake_base_min",
+      "ported": true,
       "note": ""
     },
     {
@@ -1560,8 +1560,8 @@
       "what": "reviewer work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_reviewer",
+      "ported": true,
       "note": ""
     },
     {
@@ -1571,8 +1571,8 @@
       "what": "builder work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_builder",
+      "ported": true,
       "note": ""
     },
     {
@@ -1582,8 +1582,8 @@
       "what": "releaser work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_releaser",
+      "ported": true,
       "note": ""
     },
     {
@@ -1593,8 +1593,8 @@
       "what": "orchestrator work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_orchestrator",
+      "ported": true,
       "note": ""
     },
     {
@@ -1604,8 +1604,8 @@
       "what": "prompt telling a woken station its work",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:work_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1615,8 +1615,8 @@
       "what": "decide whether to wake a station now",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -1626,8 +1626,8 @@
       "what": "wake a station by restarting it",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:send",
+      "ported": true,
       "note": ""
     },
     {
@@ -1639,7 +1639,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Kit comparison for the watch; kit move is TR-965, not the Claude Code move."
+      "note": "Kit comparison for the watch; kit move is TR-965, not the Claude Code move. TR-957 keeps a read-only copy in tares/crew/views.py (stale_kit) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "movable",
@@ -1705,7 +1705,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Wrapper over running_version used by the move, status and roster; owned by the move ticket."
+      "note": "Wrapper over running_version used by the move, status and roster; owned by the move ticket. TR-957 keeps a read-only copy in tares/crew/views.py (station_cc) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) reads it through tares.crew.doctor.Doctor.check_stations."
     },
     {
       "name": "prune_spares",
@@ -1749,7 +1749,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (cc_behind) for status and roster; this ticket's port moves it and keeps views.py calling it."
     },
     {
       "name": "tell_newer_claude",
@@ -1815,7 +1815,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (cc_retry_in) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) keeps its own copy too: tares.crew.doctor.cc_retry_in reads it for doctor (TR-969)."
     },
     {
       "name": "cc_retrying",
@@ -1879,8 +1879,8 @@
       "what": "halt the crew",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_halt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1890,8 +1890,8 @@
       "what": "lift a halt",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_resume",
+      "ported": true,
       "note": ""
     },
     {
@@ -1903,7 +1903,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "tares.crew.doctor.frozen_text words it for doctor (TR-969)."
     },
     {
       "name": "tell_newer_kit",
@@ -1989,8 +1989,8 @@
       "what": "one desk item as text",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:desk_block",
+      "ported": true,
       "note": ""
     },
     {
@@ -2000,8 +2000,8 @@
       "what": "print the desk",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_desk",
+      "ported": true,
       "note": ""
     },
     {
@@ -2011,8 +2011,8 @@
       "what": "crew status",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_status",
+      "ported": true,
       "note": ""
     },
     {
@@ -2066,8 +2066,8 @@
       "what": "run a session copy and read its output",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:read_quiet",
+      "ported": true,
       "note": ""
     },
     {
@@ -2077,8 +2077,8 @@
       "what": "send a reading to Tares",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:send_meter",
+      "ported": true,
       "note": ""
     },
     {
@@ -2088,8 +2088,8 @@
       "what": "read a station's /context",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_context",
+      "ported": true,
       "note": ""
     },
     {
@@ -2099,8 +2099,8 @@
       "what": "read the plan limits",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -2121,9 +2121,9 @@
       "what": "wait between watch rounds, serving readings",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Watch sleep between rounds; calls serve_readings."
+      "python": "tares.crew.watch:nap",
+      "ported": true,
+      "note": "Looks for the stop file on every tick (FACTORY_ASK_POLL, at least 0.05s) and calls the readings step (serve_readings, TR-967) once registered."
     },
     {
       "name": "cmd_roster",
@@ -2132,8 +2132,8 @@
       "what": "compact station list",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_roster",
+      "ported": true,
       "note": ""
     },
     {
@@ -2143,8 +2143,8 @@
       "what": "attach to a station",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_attach",
+      "ported": true,
       "note": ""
     },
     {
@@ -2154,8 +2154,8 @@
       "what": "show a station's logs",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.views:cmd_logs",
+      "ported": true,
       "note": ""
     },
     {
@@ -2165,9 +2165,9 @@
       "what": "print a station's settings",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Prints what write_settings builds; the writing is TR-953."
+      "python": "tares.crew.stations:cmd_settings",
+      "ported": true,
+      "note": "Prints what write_settings builds (tares.crew.launch:write_settings, TR-953). Left out of TR-957; ported by TR-1122."
     },
     {
       "name": "cmd_crew",
@@ -2189,7 +2189,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by spec and session to check a folder is trusted; the crew home variant is home_trusted (TR-956)."
+      "note": "Neither spec nor session calls it (TR-966 checked the bash): they only check a repo has a commit. It belongs with the crew home trust check (home_trusted, TR-956). tares.crew.doctor.Doctor.trusted reads the trust record for doctor (TR-969)."
     },
     {
       "name": "has_commit",
@@ -2198,8 +2198,8 @@
       "what": "does a repo have a commit",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:has_commit",
+      "ported": true,
       "note": ""
     },
     {
@@ -2209,8 +2209,8 @@
       "what": "git repos directly under a folder",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:repos_in",
+      "ported": true,
       "note": ""
     },
     {
@@ -2220,8 +2220,8 @@
       "what": "is the caller a contributor to a project",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:spec_contributor",
+      "ported": true,
       "note": ""
     },
     {
@@ -2231,8 +2231,8 @@
       "what": "spec session",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_spec",
+      "ported": true,
       "note": ""
     },
     {
@@ -2242,8 +2242,8 @@
       "what": "run Claude Code for the person with the crew env",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:person_claude",
+      "ported": true,
       "note": ""
     },
     {
@@ -2253,8 +2253,8 @@
       "what": "software factory projects on Tares",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:factory_projects",
+      "ported": true,
       "note": "Used by the session command's project picker."
     },
     {
@@ -2264,8 +2264,8 @@
       "what": "projects the releaser is on",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:releasing_projects",
+      "ported": true,
       "note": "Used by the session command; picked with the session work."
     },
     {
@@ -2275,8 +2275,8 @@
       "what": "find a project by name or id",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:match_project",
+      "ported": true,
       "note": "Used by spec, session and finish; picked with the session work (TR-966), finish (TR-967) reuses it."
     },
     {
@@ -2286,8 +2286,8 @@
       "what": "folder a session opens in",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_dir",
+      "ported": true,
       "note": ""
     },
     {
@@ -2297,8 +2297,8 @@
       "what": "start a session on a project",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_project",
+      "ported": true,
       "note": ""
     },
     {
@@ -2308,8 +2308,8 @@
       "what": "start a session on a new idea",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_idea",
+      "ported": true,
       "note": ""
     },
     {
@@ -2319,8 +2319,8 @@
       "what": "session command",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_session",
+      "ported": true,
       "note": ""
     },
     {
@@ -2330,8 +2330,8 @@
       "what": "mark a project done",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_finish",
+      "ported": true,
       "note": ""
     },
     {
@@ -2341,8 +2341,8 @@
       "what": "list projects handed to the crew",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_projects",
+      "ported": true,
       "note": ""
     },
     {
@@ -2352,8 +2352,8 @@
       "what": "language server table",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:LANGS",
+      "ported": true,
       "note": ""
     },
     {
@@ -2363,8 +2363,8 @@
       "what": "languages a repo uses",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:detect",
+      "ported": true,
       "note": ""
     },
     {
@@ -2374,8 +2374,8 @@
       "what": "installed Claude Code plugins",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:read_plugins",
+      "ported": true,
       "note": ""
     },
     {
@@ -2385,8 +2385,8 @@
       "what": "is a language server binary installed",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:have_bin",
+      "ported": true,
       "note": ""
     },
     {
@@ -2396,8 +2396,8 @@
       "what": "state of a language server for a repo",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:state",
+      "ported": true,
       "note": ""
     },
     {
@@ -2407,8 +2407,8 @@
       "what": "commands that fix a language server",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:fix",
+      "ported": true,
       "note": ""
     },
     {
@@ -2418,8 +2418,8 @@
       "what": "repo languages with no working server",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:missing",
+      "ported": true,
       "note": ""
     },
     {
@@ -2429,8 +2429,8 @@
       "what": "path of cmux's config file",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_config",
+      "ported": true,
       "note": ""
     },
     {
@@ -2440,8 +2440,8 @@
       "what": "read cmux's idle reminder setting",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_idle_reminder",
+      "ported": true,
       "note": ""
     },
     {
@@ -2451,9 +2451,9 @@
       "what": "doctor check for cmux's idle reminder",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by cmd_doctor (TR-969): TR-969 ports doctor without this check (no line printed) until TR-970 adds it."
+      "python": "tares.crew.doctor:Doctor.check_cmux",
+      "ported": true,
+      "note": "Called by cmd_doctor (TR-969), which now calls the Python check. Line text in tares.crew.doctor_lsp (CMUX_ON, CMUX_OFF, CMUX_UNREADABLE); parity scenario doctor_cmux."
     },
     {
       "name": "doctor_lsp",
@@ -2462,9 +2462,9 @@
       "what": "doctor check for language servers",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by cmd_doctor (TR-969): TR-969 ports doctor without this check (no line printed) until TR-970 adds it."
+      "python": "tares.crew.doctor:Doctor.check_lsp",
+      "ported": true,
+      "note": "Called by cmd_doctor (TR-969), which now calls the Python check. Parity scenarios lsp_missing and lsp_servers; a line is only added while Tares answers, as in bash."
     },
     {
       "name": "lsp_offer",
@@ -2473,9 +2473,9 @@
       "what": "offer to install language servers at crew up",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called from crew up; belongs with the language server work, crew up (TR-956) only calls it."
+      "python": "tares.crew.doctor_lsp:offer",
+      "ported": true,
+      "note": "Ported as an injectable function; crew up (TR-956) only calls it. Unit-tested in tests/test_crew_doctor_lsp.py (--yes, a closed input, no, yes, once per plugin, unknown); the bash lsp_test.sh crew up cases need crew up in Python."
     },
     {
       "name": "doctor_keys",
@@ -2484,8 +2484,8 @@
       "what": "doctor check of the keys",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.check_keys",
+      "ported": true,
       "note": ""
     },
     {
@@ -2495,8 +2495,8 @@
       "what": "doctor check of the kit and freeze",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.check_kit",
+      "ported": true,
       "note": ""
     },
     {
@@ -2506,8 +2506,8 @@
       "what": "doctor",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:cmd_doctor",
+      "ported": true,
       "note": ""
     },
     {
@@ -2519,7 +2519,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Nested inside cmd_doctor."
+      "note": "Nested inside cmd_doctor, so the drift check cannot see it. tares.crew.doctor.Doctor.ok is its port, ported with cmd_doctor (TR-969)."
     },
     {
       "name": "no",
@@ -2530,7 +2530,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Nested inside cmd_doctor."
+      "note": "Nested inside cmd_doctor, so the drift check cannot see it. tares.crew.doctor.Doctor.no is its port, ported with cmd_doctor (TR-969)."
     },
     {
       "name": "warn",
@@ -2541,7 +2541,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Nested inside cmd_doctor."
+      "note": "Nested inside cmd_doctor, so the drift check cannot see it. tares.crew.doctor.Doctor.warn is its port, ported with cmd_doctor (TR-969)."
     },
     {
       "name": "local_only",
@@ -2550,8 +2550,8 @@
       "what": "commands that work while Tares is down",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:local_only",
+      "ported": true,
       "note": "Decides which commands work while Tares is down; part of the dispatcher."
     }
   ],
@@ -2564,9 +2564,9 @@
       "what": "run a heavy command under a machine-wide lock with a timeout",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Uses mkdir lock, perl alarm and kill -0; all three need a portable Python equivalent."
+      "python": "tares.crew.heavy:cmd_heavy",
+      "ported": true,
+      "note": "tares.crew.heavy is the Python port (mkdir lock shared with bash, psutil tree-kill, exit 142 on timeout); tares factory heavy reaches it through the dispatcher. bin/factory-heavy stays until TR-1103."
     },
     {
       "name": "mcp-headers",
@@ -2576,9 +2576,9 @@
       "what": "print the MCP Authorization header from the crew token file or the saved login",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Embeds a python3 -I snippet for login.json. The key may move to the OS keychain (TR-949)."
+      "python": "claude-plugin.scripts.mcp_headers:main",
+      "ported": true,
+      "note": "mcp_headers.py is the Python twin (TR-972) and also reads the key from the OS keychain; tares hook mcp-headers runs it. bin/mcp-headers and .mcp.json stay until TR-1103 points them at it."
     },
     {
       "name": "guard.sh",
@@ -2588,9 +2588,9 @@
       "what": "PreToolUse hook: one owner per action type, halt, heavy commands",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Needs jq and perl today. The Python port must keep the owner rules; hooks start through tares hook (TR-1068)."
+      "python": "claude-plugin.hooks.guard:main",
+      "ported": true,
+      "note": "guard.py is the Python twin (TR-971); guard.sh and its hooks.json entry stay until TR-1103 switches them. tares hook guard already runs guard.py."
     },
     {
       "name": "deny",
@@ -2600,9 +2600,9 @@
       "what": "emit a deny decision and log guard-deny",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "claude-plugin.hooks.guard:deny_output",
+      "ported": true,
+      "note": "Python: deny_output builds the JSON, log_deny appends the guard-deny line."
     },
     {
       "name": "owner_only",
@@ -2612,9 +2612,9 @@
       "what": "deny unless the station's role owns the action",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "claude-plugin.hooks.guard:decide",
+      "ported": true,
+      "note": "Python: owner_only is a local function of decide."
     },
     {
       "name": "session-start.sh",
@@ -2624,9 +2624,9 @@
       "what": "SessionStart hook: tell a station or bound session who it is",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Needs jq today."
+      "python": "claude-plugin.hooks.session_start:main",
+      "ported": true,
+      "note": "session_start.py is the Python twin (TR-972); tares hook session-start runs it. session-start.sh and its hooks.json entry stay until TR-1103."
     },
     {
       "name": "_factory",
@@ -2692,9 +2692,9 @@
       "what": "same as crew status",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_status",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "desk",
@@ -2706,9 +2706,9 @@
       "what": "same as crew desk",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_desk",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "watch",
@@ -2720,9 +2720,9 @@
       "what": "same as crew watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
     },
     {
       "name": "halt",
@@ -2734,9 +2734,9 @@
       "what": "same as crew halt",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_halt",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "resume",
@@ -2748,9 +2748,9 @@
       "what": "same as crew resume",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_resume",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "attach",
@@ -2762,9 +2762,9 @@
       "what": "same as crew attach",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_attach",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "logs",
@@ -2776,9 +2776,9 @@
       "what": "same as crew logs",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_logs",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "down",
@@ -2790,9 +2790,9 @@
       "what": "same as crew down",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_down",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "roster",
@@ -2804,9 +2804,9 @@
       "what": "compact station list for stations",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_roster",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "spawn",
@@ -2832,9 +2832,9 @@
       "what": "start a stopped station again",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_revive",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "restart",
@@ -2846,9 +2846,9 @@
       "what": "restart a station with fresh settings",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_restart",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "retire",
@@ -2860,9 +2860,9 @@
       "what": "stop a station for good",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_retire",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "spec",
@@ -2874,8 +2874,8 @@
       "what": "plan a project with Claude",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_spec",
+      "ported": true,
       "note": ""
     },
     {
@@ -2888,8 +2888,8 @@
       "what": "work on a project in the person's own session",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_session",
+      "ported": true,
       "note": ""
     },
     {
@@ -2902,8 +2902,8 @@
       "what": "list projects handed to the crew",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_projects",
+      "ported": true,
       "note": ""
     },
     {
@@ -2916,8 +2916,8 @@
       "what": "mark a project done",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_finish",
+      "ported": true,
       "note": ""
     },
     {
@@ -2932,7 +2932,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Stays in bash until write_settings is ported (TR-953); the Python views do not register it."
     },
     {
       "name": "context",
@@ -2944,8 +2944,8 @@
       "what": "read a station's /context",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_context",
+      "ported": true,
       "note": ""
     },
     {
@@ -2958,8 +2958,8 @@
       "what": "read the plan's limits",
       "ticket": "TR-967",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:cmd_plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -3014,8 +3014,8 @@
       "what": "check everything the crew needs",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:cmd_doctor",
+      "ported": true,
       "note": ""
     },
     {
@@ -3056,9 +3056,9 @@
       "what": "stop the watch and every station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_down",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "crew status",
@@ -3070,9 +3070,9 @@
       "what": "stations, desk, projects",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_status",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew desk",
@@ -3084,9 +3084,9 @@
       "what": "questions waiting for the person",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_desk",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew attach",
@@ -3098,9 +3098,9 @@
       "what": "open a station in this terminal",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_attach",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew logs",
@@ -3112,9 +3112,9 @@
       "what": "a station's recent output",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.views:cmd_logs",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-957)."
     },
     {
       "name": "crew watch",
@@ -3126,9 +3126,9 @@
       "what": "the watch loop",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
     },
     {
       "name": "crew halt",
@@ -3140,9 +3140,9 @@
       "what": "halt the crew",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_halt",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "crew resume",
@@ -3154,9 +3154,9 @@
       "what": "lift a halt",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_resume",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "crew freeze",
@@ -3292,9 +3292,9 @@
       "what": "set by Claude Code for the MCP header helper (mcp-headers)",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "claude-plugin.scripts.mcp_headers:saved_key",
+      "ported": true,
+      "note": "read by mcp_headers.py"
     },
     {
       "name": "CLAUDE_JOB_DIR",
@@ -3313,12 +3313,12 @@
       "kind": "env",
       "reads": true,
       "writes": false,
-      "what": "set by Claude Code; hooks.json commands expand it",
+      "what": "set by Claude Code; hooks.json commands expand it; tares hook reads it to find the plugin",
       "ticket": "TR-1068",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.hooks:plugin_root",
+      "ported": true,
+      "note": "hooks.json still expands it until TR-1103 switches the commands to tares hook <name>."
     },
     {
       "name": "FACTORY_ASK_POLL",
@@ -3388,8 +3388,8 @@
       "what": "shell variable of guard.sh: regex for the factory CLI by name",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "claude-plugin.hooks.guard:FACTORY_CLI",
+      "ported": true,
       "note": ""
     },
     {
@@ -3436,8 +3436,8 @@
       "what": "shell variable of guard.sh: regex closing a verb",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "claude-plugin.hooks.guard:FACTORY_END",
+      "ported": true,
       "note": ""
     },
     {
@@ -3604,9 +3604,9 @@
       "what": "seconds to wait for a retired station to stop",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:restart",
+      "ported": true,
+      "note": "Read by restart (seconds to wait for the stop; default 10)."
     },
     {
       "name": "FACTORY_UPDATE_POLL",
@@ -3928,9 +3928,9 @@
       "what": "folder of the factory-heavy lock",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.heavy:lock_dir",
+      "ported": true,
+      "note": "heavy.py puts the lock folder there"
     }
   ],
   "state_files": [
@@ -3986,9 +3986,9 @@
       "what": "present while the crew is halted; holds the reason",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "guard.sh and session-start.sh read it (TR-971, TR-972)."
+      "python": "tares.crew.lifecycle:halt",
+      "ported": true,
+      "note": "guard.sh and session-start.sh read it (TR-971, TR-972). Written by halt and removed by resume in tares.crew.lifecycle (TR-955)."
     },
     {
       "name": "frozen-kit",
@@ -4084,8 +4084,8 @@
       "what": "crew-wide pace state: stopped, tried, limit_since, said",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:json_update",
+      "ported": true,
       "note": "Written whole through a temp file."
     },
     {
@@ -4182,8 +4182,8 @@
       "what": "what the pace told a station: stretched, held",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:pace_station_put",
+      "ported": true,
       "note": ""
     },
     {
@@ -4417,9 +4417,9 @@
       "what": "machine-wide lock folder of factory-heavy (pid, what)",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.heavy:cmd_heavy",
+      "ported": true,
+      "note": "same folder and files as the bash lock, so a bash and a Python holder wait for each other"
     }
   ],
   "test_suites": [
@@ -4461,7 +4461,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Umbrella suite: run against both engines by the parity harness; its doctor and cmux parts ride with TR-969 and TR-970."
+      "note": "Umbrella suite: run against both engines by the parity harness; its doctor part is ported by TR-969 (the cmux part rides with TR-970)."
     },
     {
       "name": "crew_view_seed.sh",
@@ -4539,9 +4539,9 @@
       "what": "the guard hook",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.test_crew_guard_hook:guard",
+      "ported": true,
+      "note": "tests/test_crew_guard_hook.py runs the same 154 cases (tests/guard_cases.jsonl) and 15 more that pin branches (tests/guard_extra_cases.jsonl) against guard.py; guard_test.sh takes TARES_FACTORY_ENGINE=python."
     },
     {
       "name": "heavy_test.sh",
@@ -4549,9 +4549,9 @@
       "what": "factory-heavy",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.test_crew_heavy:run",
+      "ported": true,
+      "note": "tests/test_crew_heavy.py checks the Python port (including the lock shared with bash); heavy_test.sh stays for the bash helper."
     },
     {
       "name": "idle_wake_test.sh",
@@ -4559,9 +4559,29 @@
       "what": "idle wake",
       "ticket": "TR-961",
       "dropped": false,
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases and the curl URL checks (the Python client is httpx); the bash suite stays for them."
+    },
+    {
+      "name": "route_proxy.py",
+      "kind": "suite",
+      "what": "a pass-through proxy in front of a test Tares that fails one route on purpose, so both engines see the failed lookup",
+      "ticket": "TR-1123",
+      "dropped": false,
       "python": "",
       "ported": false,
-      "note": ""
+      "note": "Used by spec_test.sh through start_failing_route in lib.sh; standard library only."
+    },
+    {
+      "name": "launch_support.py",
+      "kind": "suite",
+      "what": "a fake Tares, a copy of the kit and a driver that runs one launch function on either engine",
+      "ticket": "TR-953",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the launch_* scenarios of parity.py and by test_crew_launch.py; it goes when the bash engine does."
     },
     {
       "name": "lib.sh",
@@ -4579,9 +4599,9 @@
       "what": "language server checks in doctor and crew up",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py until crew up is ported (TR-956); lsp_test.sh itself still passes them only through bash crew up."
     },
     {
       "name": "pace_test.sh",
@@ -4589,9 +4609,9 @@
       "what": "the pace",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios pace_off, pace_levels, pace_idle_wake, pace_unknown, pace_turn_off, pace_restart_fails, pace_limit, pace_tried and pace_tidy cover the pace step and what revive asks of it (33 of the 101 checks), through the drivers pace_round and pace_down in tests/factory/launch_support.py. Not in the harness yet: the status line (views, TR-957), the builder spawn gate (stations, TR-961 and spawn), the idle_wake wake timings under pace (TR-961), retiring a station, and the revive launches themselves (TR-959); pace_test.sh still checks those through bash and through TARES_FACTORY_ENGINE=python. Unit checks: tests/test_crew_pace.py."
     },
     {
       "name": "parity.py",
@@ -4662,6 +4682,26 @@
       "python": "",
       "ported": false,
       "note": ""
+    },
+    {
+      "name": "fake_tares.py",
+      "kind": "suite",
+      "what": "the Python stand-in for a Tares, gh and tares, for the doctor scenarios",
+      "ticket": "TR-969",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Runs on Windows; standard library only."
+    },
+    {
+      "name": "watch_support.py",
+      "kind": "suite",
+      "what": "a fake Tares and a driver that runs one round of the watch (watch --once) on either engine",
+      "ticket": "TR-959",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the watch_* scenarios of parity.py; it goes when the bash engine does."
     }
   ],
   "cmux_touchpoints": [
@@ -4713,8 +4753,8 @@
       "what": "find and read ~/.config/cmux/cmux.json (JSONC)",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_idle_reminder",
+      "ported": true,
       "note": ""
     },
     {
@@ -4726,8 +4766,8 @@
       "what": "the doctor check",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.check_cmux",
+      "ported": true,
       "note": ""
     },
     {
@@ -4739,8 +4779,8 @@
       "what": "what doctor says about cmux",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_check",
+      "ported": true,
       "note": "Tests grep these exact words."
     },
     {
@@ -4752,8 +4792,8 @@
       "what": "called from cmd_doctor",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.collect",
+      "ported": true,
       "note": ""
     },
     {
@@ -4781,6 +4821,19 @@
       "python": "",
       "ported": false,
       "note": "The settings check belongs to TR-953: the Python write_settings must not set that variable."
+    },
+    {
+      "name": "parity launch cmux case",
+      "kind": "touchpoint",
+      "file": "tests/factory/parity.py",
+      "match": "(?i)cmux",
+      "line": 504,
+      "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
+      "ticket": "TR-953",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Same words as the crew_test.sh check, so the coverage report can match them."
     }
   ],
   "hook_entries": [
@@ -4800,9 +4853,9 @@
       "what": "hooks.json entry",
       "ticket": "TR-972",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Becomes tares hook session-start (TR-1068 wiring)."
+      "python": "tares.crew.hooks:HOOKS",
+      "ported": true,
+      "note": "tares hook session-start runs session_start.py (TR-972); hooks.json still runs session-start.sh until TR-1103."
     },
     {
       "name": "PreToolUse: Bash|mcp__.*: bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"",
@@ -4810,9 +4863,9 @@
       "what": "hooks.json entry",
       "ticket": "TR-971",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Becomes tares hook guard (TR-1068 wiring)."
+      "python": "tares.crew.hooks:HOOKS",
+      "ported": true,
+      "note": "tares hook guard runs guard.py (TR-971); hooks.json still runs guard.sh until TR-1103."
     },
     {
       "name": "PreToolUse: AskUserQuestion: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",

@@ -1,0 +1,15 @@
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"$(cat <<'EOF'\nnote\nOTHER\ngh pr merge 4\nEOF\n)\"","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"echo factory-heavy 9 docker build .","expect":"deny"}
+{"role":"helper","parent":"abcd-orchestrator","tool":"Bash","command":"factory spawn x","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"factory spawn-helper y","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"git tag -l","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"gh pr\nreview 3","expect":"allow"}
+{"role":"reviewer","tool":"Bash\n","command":"gh pr merge 3","expect":"deny"}
+{"role":"builder","tool":"x_mcp__slack__send_message","command":"hi","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"echoclaude stop","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"echo .factory spawn x","expect":"allow"}
+{"role":"reviewer","tool":"Bash","command":"git commit -m \"$(cat <<'ÉOF'\nx\ngh pr merge 4\nÉOF\n)\"","expect":"deny"}
+{"role":"reviewer","tool":"Bash","command":"gh\u001cpr merge 3","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory finish\u001c","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"ls x/factory\rspawn y","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"ls x/factory\fspawn y","expect":"deny"}

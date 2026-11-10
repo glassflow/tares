@@ -606,16 +606,18 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          await foot.getByTestId("row-error").innerText());
       await foot.getByTestId("answer-panel").getByRole("button", { name: "Cancel" }).click();
 
-      // An item with an open assumption: the daemon wants each one kept or overturned, and says so under the row
+      // A batch of calls on the desk: no free answer, it keeps them all in one step or opens the calls page
       const pay = row(page, "Is provider-x fine");
-      await pay.getByRole("button", { name: "Answer" }).click();
-      await pay.getByTestId("answer-panel").getByTestId("answer-text").fill("Yes.");
-      await pay.getByTestId("answer-panel").getByRole("button", { name: "Send" }).click();
-      await pay.getByTestId("row-error").waitFor();
-      const why = (await pay.getByTestId("row-error").innerText()).trim();
-      ck(t("an answer on an item with an open assumption shows the daemon's sentence and the row stays"), /assumption/i.test(why) && (await pay.count()) === 1, why);
+      ck(t("a batch of calls has no Answer box"), (await pay.getByRole("button", { name: "Answer" }).count()) === 0);
+      ck(t("Change some opens the project's calls page"), (await pay.getByRole("link", { name: "Change some" }).getAttribute("href")) === `/projects/${ids.project}/calls`);
+      await checkWords(page, ck, t("a batch of calls"));
+      await pay.getByRole("button", { name: "Keep it" }).click();
+      await pay.waitFor({ state: "detached", timeout: 15000 });
       const still = (await api("GET", "/api/desk?state=open")).body.desk;
-      ck(t("the item is still open on the daemon"), still.some((d) => /provider-x/.test(d.question || JSON.stringify(d))), JSON.stringify(still).slice(0, 200));
+      ck(t("Keep closes the desk item"), !still.some((d) => /provider-x/.test(JSON.stringify(d))), JSON.stringify(still).slice(0, 200));
+      const kept = (await api("GET", `/api/projects/${ids.project}/assumptions`)).body;
+      const asmNow = (kept.assumptions || kept).find((x) => x.label === asm.label);
+      ck(t("and the call reads kept"), asmNow && asmNow.state === "kept", JSON.stringify(asmNow));
       await checkWords(page, ck, t("a refusal under a row"));
       await ctx.close();
     }
@@ -681,7 +683,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a long list shows eight rows and Show all"), (await rows.count()) === 8 && (await page.getByRole("button", { name: /Show all/ }).count()) === 1,
          JSON.stringify({ rows: await rows.count(), head: await page.getByTestId("home-headline").innerText(), titles: (await rows.allInnerTexts()).map((x) => x.slice(0, 40)) }));
       await page.getByRole("button", { name: /Show all/ }).click();
-      ck(t("Show all lists every item"), (await rows.count()) === 14, JSON.stringify((await rows.allInnerTexts()).map((x) => x.replace(/\s+/g, " ").slice(0, 70))));
+      ck(t("Show all lists every item"), (await rows.count()) === 13, JSON.stringify((await rows.allInnerTexts()).map((x) => x.replace(/\s+/g, " ").slice(0, 70))));
       ck(t("no horizontal scroll with all of them"), (await overflow(page)) <= 0);
       await shot(page, "many-items", width);
       await checkWords(page, ck, t("many items"));

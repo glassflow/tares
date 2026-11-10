@@ -213,6 +213,22 @@ async def main():
            str([r.status_code for r in rs]))
         eq("six people, never more than the seats", len(await people()), 6)
 
+        print("== someone leaves ==")
+        gone = next(p for p in await people() if p["email"] == "ann@example.com")
+        r = await cx.delete(f"/api/people/{gone['id']}", headers=H(ann_key))
+        eq("nobody removes themselves", r.status_code, 400)
+        r = await cx.delete("/api/people/local")
+        eq("the person who owns what has no owner stays", r.status_code, 400)
+        r = await cx.delete(f"/api/people/{gone['id']}")
+        ck("the control plane's credential removes them", r.status_code == 200 and r.json() == {"removed": True}, r.text[:200])
+        ck("they are off the list", all(p["id"] != gone["id"] for p in await people()))
+        eq("and off the seat count", (await cx.get("/api/licence")).json()["used"], 5)
+        ck("their key stops working", (await cx.get("/api/whoami", headers=H(ann_key))).status_code in (401, 403))
+        eq("their row stays, so their work keeps their name", store.get_person(gone["id"])["name"], gone["name"])
+        eq("removing them again is a 404", (await cx.delete(f"/api/people/{gone['id']}")).status_code, 404)
+        r = await add("ann@example.com", "Ann again")
+        ck("coming back is a new person, not a refusal", r.status_code == 201 and r.json()["id"] != gone["id"], r.text[:200])
+
         await cx.aclose()
 
 

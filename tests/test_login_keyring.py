@@ -46,6 +46,7 @@ class Stub(keyring.backend.KeyringBackend):
         self.refuse = False
         self.forget = False     # says yes to a write and keeps nothing
         self.broken_get = False  # a locked keychain: every read raises
+        self.fail_first_get = False  # one read raises, then the keychain answers again
 
     def set_password(self, service, username, password):
         self.calls.append(("set", service, username))
@@ -57,6 +58,9 @@ class Stub(keyring.backend.KeyringBackend):
 
     def get_password(self, service, username):
         self.calls.append(("get", service, username))
+        if self.fail_first_get:
+            self.fail_first_get = False
+            raise keyring.errors.KeyringLocked("locked once")
         if self.broken_get:
             raise keyring.errors.KeyringLocked("locked")
         return self.items.get((service, username))
@@ -95,6 +99,10 @@ def reset(backend=None):
     STUB.refuse = False
     STUB.forget = False
     STUB.broken_get = False
+    STUB.fail_first_get = False
+    WORLD["revoke_fails"] = False
+    WORLD["version"] = "1.44.0"
+    WORLD["seen"].clear()
     keyring.set_keyring(backend or STUB)
     assert keyring.get_keyring() is (backend or STUB), "the test keychain did not install"
     L._told.clear()
@@ -113,7 +121,7 @@ def mode(path):
 
 
 # ── a fake control plane that is also the workspace ────────────────────────────────────────────
-WORLD = {"n": 0, "challenge": "", "logouts": []}
+WORLD = {"n": 0, "challenge": "", "logouts": [], "revoke_fails": False, "version": "1.44.0", "seen": []}
 
 
 def _s256(v):
@@ -132,7 +140,7 @@ class Fake(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):  # noqa: N802
-        self._json(200, {"status": "ok", "version": "1.44.0"} if self.path == "/health" else {})
+        self._json(200, {"status": "ok", "version": WORLD["version"]} if self.path == "/health" else {})
 
     def do_POST(self):  # noqa: N802
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -144,6 +152,9 @@ class Fake(BaseHTTPRequestHandler):
                                     "cell": "factory", "cell_url": BASE})
         if self.path == "/api/cli/logout":
             WORLD["logouts"].append(self.headers.get("Authorization"))
+            WORLD["seen"].append((self.headers.get("Authorization"), dict(STUB.items)))   # what the keychain held at that moment
+            if WORLD["revoke_fails"]:
+                return self._json(500, {"detail": "try later"})
             return self._json(200, {"revoked": True})
         self._json(404, {})
 
@@ -311,6 +322,9 @@ browser()
 rc, out, err = captured(L.login, BASE, wait=10)
 ck("the new workspace has its key", STUB.items.get(("tares", BASE)) == key_now(), STUB.items)
 ck("the old one's entry is gone", ("tares", "http://other.example") not in STUB.items, STUB.items)
+old_seen = [held for who, held in WORLD["seen"] if who == "Bearer nvf_x_other"]
+ck("the old key was revoked before its keychain entry was removed (F11)",
+   len(old_seen) == 1 and ("tares", "http://other.example") in old_seen[0], WORLD["seen"])
 
 print("logout removes the keychain entry and the file")
 reset()
@@ -370,6 +384,8 @@ n_before = len(WORLD["logouts"])
 rc, out, err = captured(L.logout)
 refused("keychain off", rc, out, err, key, before, "the OS keychain is off here (TARES_KEYRING is not on)")
 ck("keychain off: it says what to do", "TARES_KEYRING=on" in out, out)
+ck("keychain off: it also says how to give up on the key (F12)",
+   f"Or, to start over, delete {L.login_file()} and remove that key yourself under Security > API keys." in out, out)
 os.environ["TARES_KEYRING"] = "on"
 STUB.broken_get = True                                    # (a) a locked or denied keychain
 rc, out, err = captured(L.logout)
@@ -444,6 +460,66 @@ try:
     ck("login with no keychain: the same, and nothing is saved",
        rc == 1 and "could not save the login" in out and not L.login_file().exists()
        and WORLD["logouts"][n_before:] == [f"Bearer {key_now()}"], (rc, out, WORLD["logouts"][n_before:]))
+finally:
+    perms.owner_only = real_owner_only
+reset()
+
+print("a login that cannot be saved, and a new key that cannot be removed again: it says where to remove it (F9)")
+real_owner_only = perms.owner_only
+reset()
+perms.owner_only = lambda *a, **k: False
+try:
+    WORLD["revoke_fails"] = True
+    browser()
+    rc, out, err = captured(L.login, BASE, wait=10)
+    ck("save failure and failed revoke: exit 1", rc == 1 and "could not save the login" in out, (rc, out, err))
+    ck("it does not claim the key was removed", "was removed" not in out, out)
+    ck("it names the key and where to remove it",
+       f"(key kc{WORLD['n']})" in out and f"Security > API keys on {BASE}" not in out and "Security > API keys on factory" in out, out)
+    ck("the key is in no output", key_now() not in out + err)
+    reset()
+    browser()
+    rc, out, err = captured(L.login, BASE, wait=10)
+    ck("save failure and revoke fine: it still says the key was removed", rc == 1 and "was removed" in out and "Security > API keys" not in out, out)
+finally:
+    perms.owner_only = real_owner_only
+reset()
+print("a workspace too old for tares login, and a new key that cannot be removed again: it says where to remove it (F9)")
+WORLD["version"] = "1.0.0"
+WORLD["revoke_fails"] = True
+browser()
+rc, out, err = captured(L.login, BASE, wait=10)
+ck("version gate and failed revoke: Nothing was saved, and where to remove the key",
+   rc == 1 and "Nothing was saved." in out and "could not be removed" in out and f"(key kc{WORLD['n']})" in out, (rc, out))
+reset()
+WORLD["version"] = "1.0.0"
+browser()
+rc, out, err = captured(L.login, BASE, wait=10)
+ck("version gate and revoke fine: the old words, nothing about removing", rc == 1 and "Nothing was saved." in out and "could not be removed" not in out, out)
+reset()
+
+print("a keychain read that failed once is not an empty entry: a failed file write does not delete it (F10)")
+perms.owner_only = lambda *a, **k: False
+try:
+    STUB.items[("tares", BASE)] = "nvf_prev_inkeychain"
+    STUB.fail_first_get = True
+    STUB.calls.clear()
+    try:
+        L._save({"cell_url": BASE, "cloud": BASE, "cell": "factory", "key": "nvf_new_1", "key_id": "new1"})
+        raised = False
+    except CrewError:
+        raised = True
+    except OSError:
+        raised = True
+    ck("the failed write was raised", raised)
+    ck("the keychain entry was not deleted", not [c for c in STUB.calls if c[0] == "delete"], STUB.calls)
+    reset()
+    # a read that works and finds nothing: the rollback still removes the entry it made
+    try:
+        L._save({"cell_url": BASE, "cloud": BASE, "cell": "factory", "key": "nvf_new_2", "key_id": "new2"})
+    except (CrewError, OSError):
+        pass
+    ck("an empty entry that was written then rolled back is removed again", STUB.items == {}, STUB.items)
 finally:
     perms.owner_only = real_owner_only
 reset()

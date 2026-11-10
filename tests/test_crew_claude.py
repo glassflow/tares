@@ -110,7 +110,11 @@ def make_launcher(folder, name, script):
     folder.mkdir(parents=True, exist_ok=True)
     if WIN:
         f = folder / (name + ".cmd")
-        f.write_bytes(f'@"{sys.executable}" "{script}" %*\r\n'.encode("utf-8"))
+        # cmd.exe reads a batch file in the OEM code page, not UTF-8: a script path with a letter outside ASCII
+        # (the CI profile folder is "Jane Do" + e-acute) must be written in that page or python cannot find it.
+        import ctypes
+        page = f"cp{ctypes.windll.kernel32.GetOEMCP()}"  # type: ignore[attr-defined]
+        f.write_bytes(f'@"{sys.executable}" "{script}" %*\r\n'.encode(page))
     else:
         f = folder / name
         f.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
@@ -439,7 +443,21 @@ def active_json_is_never_empty_when_unreadable():
     finally:
         cc.AGENTS_TIMEOUT = old
     ck("a claude that hangs is cut off by the timeout and counts as unreadable", r == "SessionListUnreadableError" and time.time() - t0 < 20, f"{r} {time.time() - t0:.1f}s")
-    ck("the unreadable message is bash's UNREAD", cc.UNREAD == "could not read Claude Code's session list (claude agents --json)")
+    # A claude that starts a child (a .cmd runs python under cmd.exe) and hangs: the timeout must end the child
+    # too, or it holds our pipe open and the call waits for the child to end on its own.
+    tree = T / "bad" / "tree.py"
+    tree.write_text("import subprocess, sys, time\n"
+                    "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], stdin=subprocess.DEVNULL)\n"
+                    "time.sleep(30)\n", encoding="utf-8")
+    launcher = make_launcher(T / "bad" / "treeone", "claude", tree)
+    cc.AGENTS_TIMEOUT = 1
+    t0 = time.time()
+    try:
+        r = attempt(cc.active_json, launcher)
+    finally:
+        cc.AGENTS_TIMEOUT = old
+    ck("a claude that hangs with a child running is cut off at the timeout, child included", r == "SessionListUnreadableError" and time.time() - t0 < 4, f"{r} {time.time() - t0:.1f}s")
+    ck("the unreadable message is bash's UNREAD",cc.UNREAD == "could not read Claude Code's session list (claude agents --json)")
     reset()
     fake_claude.write_agents(STATE, [])
     with env(FAKE_CLAUDE_AGENTS_FAIL="1"):
@@ -823,6 +841,46 @@ def settle(pid):
 
 
 @test
+def attached_skips_a_process_it_may_not_read():
+    reset()
+    station("st", id="0000000a")
+    real = cc.psutil.Process
+    bad = os.getpid() + 1_000_000
+    odd = os.getpid() + 1_000_001
+
+    class Denied:
+        def __init__(self, pid):
+            if pid == bad:
+                raise PermissionError(13, "force permission denied")
+            self._pid = pid
+            self._p = None if pid == odd else real(pid)
+
+        def cmdline(self):
+            if self._pid == odd:   # psutil on macOS can leak this instead of an AccessDenied
+                raise SystemError("<built-in function proc_cmdline> returned a result with an exception set")
+            return self._p.cmdline()
+
+    def iterate(*_a, **_k):   # what psutil's process_iter does on a process it may not read
+        raise PermissionError(13, "force permission denied")
+        yield
+
+    pids, process_iter = cc.psutil.pids, cc.psutil.process_iter
+    cc.psutil.Process = Denied
+    cc.psutil.pids = lambda: [bad, odd] + list(pids())
+    cc.psutil.process_iter = iterate
+    try:
+        ck("a process whose command line cannot be read does not end the search", cc.attached("st", paths=PATHS) is False)
+        pid = spawn(["attach", "0000000a"])
+        settle(pid)
+        ck("...and a session opened behind it is still found", cc.attached("st", paths=PATHS) is True)
+    finally:
+        cc.psutil.Process = real
+        cc.psutil.pids = pids
+        cc.psutil.process_iter = process_iter
+        stop_procs()
+
+
+@test
 def attached_sees_a_terminal_session():
     reset()
     station("st", id="0000000a")
@@ -971,8 +1029,16 @@ def claude_version_reads_the_first_line():
         ck(f"{label}: ''", got == "", short(got))
     ck("claude that cannot start: ''", cc.claude_version(str(T / "none here" / "claude")) == "")
     f.write_text("print('2.5.6 (Claude Code)')\nraise SystemExit(0)\n", encoding="utf-8")
-    got = cc.claude_version(make_launcher(T / "bad" / "v2", "claude", f))
-    ck("a claude that is given as an argument is the one run", got == "2.5.6", short(got))
+    launcher = make_launcher(T / "bad" / "v2", "claude", f)
+    got = cc.claude_version(launcher)
+    why = short(got)
+    if got != "2.5.6":  # say what the launcher did, so a failure on a machine we cannot reach can be read from the log
+        try:
+            r = cc.run_claude(["--version"], launcher)
+            why += f" (exit {r.returncode}, stdout {short(r.stdout)}, launcher {launcher!r})"
+        except Exception as e:  # noqa: BLE001
+            why += f" ({type(e).__name__}: {e}, launcher {launcher!r})"
+    ck("a claude that is given as an argument is the one run", got == "2.5.6", why)
 
 
 # ============================================================ bash as the oracle

@@ -1840,6 +1840,23 @@ def make_app() -> FastAPI:
             _err(e, 409 if "already belongs" in str(e) else 400)
         return JSONResponse(_person_out(p), status_code=201)
 
+    @app.delete("/api/people/{pid}")
+    def remove_person(pid: str, request: Request):
+        """Someone left: an admin, or the control plane when a workspace member is removed. They
+        go off the list and the seat count and their keys are revoked; their work keeps their name."""
+        if not _is_admin(request):
+            raise HTTPException(status_code=403, detail="only an admin can remove a person")
+        ident = getattr(request.state, "credential", None) or {}
+        if ident.get("kind") != "system" and (_current_person(request) or {}).get("id") == pid:
+            raise HTTPException(status_code=400, detail="you cannot remove yourself")
+        try:
+            removed = store.remove_person(pid)
+        except ValueError as e:
+            _err(e, 400)
+        if not removed:
+            raise HTTPException(status_code=404, detail="no such person")
+        return {"removed": True}
+
     @app.patch("/api/people/{pid}")
     def update_person(pid: str, request: Request, body: dict = Body(...)):
         """An admin (or the system credential) changes anything; a person changes only their own
