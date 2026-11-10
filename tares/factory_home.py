@@ -31,7 +31,7 @@ CACHE_SECONDS = 5
 KINDS = ("prs_to_review", "ready_to_start", "calls_to_confirm", "question", "permission",
          "milestone_to_check", "signoff", "grant", "desk")
 # what a button does on the page when it is not a link
-ACTIONS = ("copy", "keep_assumptions", "allow", "answer", "agree", "decline", "close", "later")
+ACTIONS = ("copy", "keep_assumptions", "keep_batch", "allow", "answer", "agree", "decline", "close", "later")
 
 STATE_LABEL = {"building": "Building", "waiting_on_you": "Waiting on you",
                "not_started": "Not started", "ready_to_close": "Ready to close"}

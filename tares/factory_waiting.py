@@ -252,10 +252,20 @@ def ready_to_start(store, fx, now) -> list[dict]:
 
 # ── calls the crew made without the person ────────────────────────────────────
 
-def calls_to_confirm(store, fx, now) -> list[dict]:
+def call_lines(calls: list[dict]) -> list[str]:
+    """The choices a row shows of its calls, and how many more there are."""
+    n = len(calls)
+    shown = [_trim(a["choice"]) for a in calls[:_SHOWN_CHOICES]]
+    if n > _SHOWN_CHOICES:
+        shown.append(f"{n - _SHOWN_CHOICES} more")
+    return shown
+
+
+def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
     """Per project, its open assumptions. A desk item that batches the same assumptions stays on
-    the desk and makes no second item here (desk_items leaves it out)."""
-    rows = store.open_assumptions()
+    the desk and makes no second item here (desk_items leaves it out). `skip` holds (project,
+    label) pairs a team home already shows on the person's desk."""
+    rows = [a for a in store.open_assumptions() if (a["project"], a["label"]) not in (skip or ())]
     if not rows:
         return []
     names = {p["id"]: p["name"] for p in _open_projects(store)}
@@ -266,9 +276,7 @@ def calls_to_confirm(store, fx, now) -> list[dict]:
     out = []
     for pid, items in by.items():
         n = len(items)
-        shown = [_trim(a["choice"]) for a in items[:_SHOWN_CHOICES]]
-        if n > _SHOWN_CHOICES:
-            shown.append(f"{n - _SHOWN_CHOICES} more")
+        shown = call_lines(items)
         keep = "both" if n == 2 else "it" if n == 1 else "them"
         roles = list(dict.fromkeys(_ROLE_WORD.get(a["made_role"] or "", "the crew") for a in items))
         since = min((a["made_at"] for a in items), key=lambda t: fh._dt(t) or now)
