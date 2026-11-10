@@ -138,6 +138,38 @@ t = tree({"test_crew_standup.py": "open(%r, 'w').close()\nimport sys\nsys.exit(1
 code, out = runner(t)
 ck("test_crew_standup.py is not run, and the output says why", code == 0 and not marker.exists() and "skip  test_crew_standup.py" in out and "DuckDB" in out, out)
 
+print("a test that exits 0 and prints no summary line")
+code, out = runner(tree({"test_crew_state.py": "print('all fine')\n"}, parity()))
+ck("it fails the run: a test that cannot say what it checked is not a pass",
+   code == 1 and "FAIL  tests/test_crew_state.py" in out and "printed no" in out, out)
+
+print("the floors")
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity()), "--floor", "test_crew_state.py=3")
+ck("a test below its floor fails the run, and the note says so",
+   code == 1 and "FAIL  tests/test_crew_state.py" in out and "fewer than the floor of 3" in out, out)
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity()), "--floor", "test_crew_state.py=2")
+ck("a test exactly at its floor passes", code == 0, out)
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity()))
+ck("without --floors nothing is checked against a floor (the fake trees pass 2 checks)", code == 0, out)
+code, out = runner(tree({"test_crew_packaging.py": PASSING}, parity()), "--floors")
+ck("--floors applies the built-in table: the fake packaging test passes fewer checks than its floor",
+   code == 1 and "tests/test_crew_packaging.py" in out and "fewer than the floor of" in out, out)
+fl = Path(RUNNER).read_text(encoding="utf-8")
+names = sorted(p.name for p in (ROOT / "tests").glob("test_crew_*.py"))
+import re as _re
+table = set(_re.findall(r'^\s+"(test_crew_\w+\.py)": \d+,', fl, _re.M))
+ck("every floor names a test that exists", table <= set(names), sorted(table - set(names)))
+
+print("the extra tests")
+marker = BASE / "extra ran"
+code, out = runner(tree({}, parity(), extra={"test_ci_windows.py": "open(%r, 'w').close()\nprint('2 passed, 0 failed')\n" % str(marker)}))
+ck("test_ci_windows.py runs after the crew tests when it exists", code == 0 and marker.exists() and "tests/test_ci_windows.py" in out, out)
+marker.unlink()
+code, out = runner(tree({}, parity(), extra={"test_parity.py": "open(%r, 'w').close()\n" % str(marker)}))
+ck("test_parity.py is not run", code == 0 and not marker.exists(), out)
+code, out = runner(tree({}, parity(), extra={"test_ci_windows.py": FAILING}))
+ck("a failing extra test fails the run", code == 1 and "FAIL  tests/test_ci_windows.py" in out, out)
+
 print("--list runs nothing")
 marker = BASE / "list ran"
 t = tree({"test_crew_state.py": "open(%r, 'w').close()\n" % str(marker)}, parity())

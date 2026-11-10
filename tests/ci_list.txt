@@ -56,6 +56,7 @@ test_crew_startup_time
 test_crew_state
 test_crew_stations
 test_crew_tidy_safety
+test_crew_unicode_home
 test_crew_views
 test_crew_watch_process
 test_crew_watch_revive
