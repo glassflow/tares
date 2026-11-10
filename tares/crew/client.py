@@ -396,14 +396,14 @@ class TaresClient:
         return None
 
     def project_repo_rows(self) -> list:
-        """(project name, repo path) for every repo that has a path."""
+        """(project name, repo path) for every repo that has a path (a repo that is not an object has none)."""
         return [(p.get("name"), r["path"]) for p in self.crew_projects()
-                for r in (p.get("repos") or []) if r.get("path") is not None]
+                for r in (p.get("repos") or []) if isinstance(r, dict) and r.get("path") is not None]
 
     def all_repos(self) -> list:
         """Every repo path of every project, sorted, once each."""
         return sorted({r["path"] for p in self.crew_projects()
-                       for r in (p.get("repos") or []) if r.get("path") is not None})
+                       for r in (p.get("repos") or []) if isinstance(r, dict) and r.get("path") is not None})
 
     # -- crew settings and grants --
 
