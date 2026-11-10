@@ -71,15 +71,19 @@ class Check:
 
 def repo_ids(rows: list) -> list:
     """One id part per (project, repo) row, unique within its project: the repo's folder name, with -2, -3
-    after the first when two repos of a project share a folder name or the same repo is listed twice. The
-    desktop app tells checks apart by id, so a project with several repos needs one per repo."""
-    seen: dict = {}
+    after the first when two repos of a project share a folder name or the same repo is listed twice (and
+    on to the next free number when that name is a folder name too). The desktop app tells checks apart
+    by id, so a project with several repos needs one per repo."""
+    used: set = set()
     out = []
     for project, repo in rows:
         base = re.split(r"[\\/]", str(repo).rstrip("/\\"))[-1] or "repo"
-        n = seen.get((project, base), 0) + 1
-        seen[(project, base)] = n
-        out.append(base if n == 1 else f"{base}-{n}")
+        part, n = base, 1
+        while (project, part) in used:
+            n += 1
+            part = f"{base}-{n}"
+        used.add((project, part))
+        out.append(part)
     return out
 
 

@@ -439,6 +439,9 @@ rows = [("Shop", str(ids_home / "a" / "api")), ("Shop", str(ids_home / "b" / "ap
         ("Shop", str(ids_home / "web")), ("Shop", str(ids_home / "gone")), ("Other", str(ids_home / "web"))]
 ck("repo_ids: the folder name, then -2 for a repeat inside the project, restarting for another project",
    doctor.repo_ids(rows) == ["api", "api-2", "web", "web-2", "gone", "web"], doctor.repo_ids(rows))
+ck("repo_ids: a folder that is already named like a suffixed repeat still gets its own part (api, api, api-2)",
+   doctor.repo_ids([("P", "/a/api"), ("P", "/b/api"), ("P", "/c/api-2")]) == ["api", "api-2", "api-2-2"],
+   doctor.repo_ids([("P", "/a/api"), ("P", "/b/api"), ("P", "/c/api-2")]))
 ck("repo_ids: a trailing slash or backslash does not make an empty part",
    doctor.repo_ids([("P", "/x/y/"), ("P", "C:\\x\\z\\")]) == ["y", "z"], doctor.repo_ids([("P", "/x/y/"), ("P", "C:\\x\\z\\")]))
 d, *_ = make("ids-doc", {"FACTORY_LSP_PATH": str(fresh("ids-nobins"))},
