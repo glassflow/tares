@@ -967,6 +967,52 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     const unlicHome = await fetch(`http://127.0.0.1:${UNLIC}/api/home`).then((r) => r.json());
     ck("three people, no licence: no team keys in /api/home",
        !["summary", "crews", "crews_quiet", "areas", "counts", "you_are_waiting_on"].some((k) => k in unlicHome), Object.keys(unlicHome).join());
+
+    // ── TR-1074: Allow on a project page is done there, and the page stays ──
+    for (const width of [1440, 390]) {
+      const t = (s) => `allow on the project page @${width}: ${s}`;
+      const file = async (to, command) => (await api("POST", "/api/desk", { question: "A station was refused. Allow it?", recommendation: "yes", why: "it needs it",
+                                                                           project: ids.project, station: "shop-build-m1", command, to })).body.label;
+      const firstCmd = `gh pr merge ${width}1`, secondCmd = `gh pr merge ${width}2`, kimCmd = `gh pr merge ${width}3`;
+      const first = await file(ids.people.alex, firstCmd), second = await file(ids.people.alex, secondCmd), kims = await file(ids.people.kim, kimCmd);
+      const { ctx, page, ctl } = await open("alex", width);
+      const here = `${BASE}/projects/${ids.project}`;
+      await page.goto(here, { waitUntil: "load" });
+      await page.getByTestId("factory-project").waitFor();
+      await row(page, firstCmd).waitFor({ timeout: 20000 });
+      await page.evaluate(() => { window.__sameDocument = true; });   // gone if the page loads again
+      const ad = page.getByTestId("allow-dialog");
+      const allow = async (cmd) => {
+        await row(page, cmd).getByTestId("waiting-allow").click();
+        await ad.waitFor();
+        await ad.getByRole("button", { name: "Allow", exact: true }).click();
+      };
+      ck(t("Allow is a button with no arrow to Home"), (await row(page, firstCmd).getByTestId("waiting-allow").count()) === 1
+         && !(await row(page, firstCmd).getByTestId("waiting-allow").innerText()).includes("↗"));
+      await allow(firstCmd);
+      await row(page, firstCmd).waitFor({ state: "detached" });
+      await checkWords(page, ck, t("the first one allowed"));
+      ck(t("the page stayed on the project"), page.url() === here, page.url());
+      ck(t("the first request reached the cell"), ctl.posts.some((x) => x.path === `/api/desk/${first}/allow`), JSON.stringify(ctl.posts));
+      await allow(secondCmd);
+      await row(page, secondCmd).waitFor({ state: "detached" });
+      ck(t("a second one in a row, with no trip back"), page.url() === here && ctl.posts.some((x) => x.path === `/api/desk/${second}/allow`), page.url());
+      const answered = (await api("GET", "/api/desk?state=answered")).body.desk.map((d) => d.label);
+      ck(t("both are answered on the cell"), answered.includes(first) && answered.includes(second), answered.join());
+      const grants = await api("GET", `/api/grants?project=${ids.project}`);
+      ck(t("both grants are kept"), [firstCmd, secondCmd].every((c) => JSON.stringify(grants.body).includes(c)), JSON.stringify(grants.body).slice(0, 300));
+      await allow(kimCmd);
+      await ad.getByTestId("dialog-error").waitFor();
+      ck(t("a refusal says why in the dialog"), (await ad.getByTestId("dialog-error").innerText()) === `${kims} is for Kim: only they allow it`, await ad.getByTestId("dialog-error").innerText());
+      await checkWords(page, ck, t("a refusal in the dialog"));
+      ck(t("and the page did not move"), page.url() === here && await page.evaluate(() => !!localStorage.getItem("tares_token")), page.url());
+      ck(t("the page never loaded again"), await page.evaluate(() => window.__sameDocument === true));
+      await ad.getByRole("button", { name: "Cancel" }).click();
+      ck(t("the refused row stays, still open on the cell"), (await row(page, kimCmd).count()) === 1
+         && (await api("GET", "/api/desk?state=open")).body.desk.some((d) => d.label === kims));
+      ck(t("no horizontal scroll"), (await overflow(page)) <= 0, String(await overflow(page)));
+      await ctx.close();
+    }
   } finally {
     if (browser) await browser.close();
     for (const { daemon, home } of started) {

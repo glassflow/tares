@@ -524,7 +524,7 @@ function grantWords(who: string, command: string, where: string): string {
 
 interface Done { item?: string; project?: string; later?: string }
 
-function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
+export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
   item: HomeItem; desk: string; mayLimit: boolean; onClose: () => void; onDone: (r: AllowedGrant) => void;
 }) {
   const { who, command } = permissionParts(item);
