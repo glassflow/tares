@@ -50,9 +50,9 @@ ck("there are 13 hook commands", len(entries) == 13, len(entries))
 ck("every command starts with `tares hook `", all(h["command"].startswith("tares hook ") for _, _, h in entries),
    [h["command"] for _, _, h in entries if not h["command"].startswith("tares hook ")])
 ck("none runs python3 or bash itself", not re.search(r"\b(python3?|bash|sh)\b ", json.dumps(hooks).replace("tares hook ", "")), json.dumps(hooks)[:200])
-names = sorted({h["command"].split()[2] for _, _, h in entries})
+names = sorted({h["command"].split()[2].rstrip(";") for _, _, h in entries})
 ck("the names are ship, challenger, guard and session-start", names == ["challenger", "guard", "session-start", "ship"], names)
-shape = [(ev, m, h["command"].split(" ||")[0], h.get("timeout"), bool(h.get("async"))) for ev, m, h in entries]
+shape = [(ev, m, re.split(r" \|\||;", h["command"])[0], h.get("timeout"), bool(h.get("async"))) for ev, m, h in entries]
 want = [
     ("SessionStart", "*", "tares hook ship", 10, False), ("SessionStart", "*", "tares hook session-start", 5, False),
     ("PreToolUse", "Bash|mcp__.*", "tares hook guard", 5, False), ("PreToolUse", "AskUserQuestion", "tares hook ship", None, True),
@@ -101,22 +101,52 @@ ck("`tares hook compat` for a plugin whose minimum is met prints nothing", r.ret
 print("an install older than 1.56.0 (no `tares hook`)")
 fallback = next(h["command"] for _, _, h in entries if "session-start" in h["command"])
 ck("the session start entry falls back to an upgrade line naming min_tares.txt's version",
-   " || echo " in fallback and f"tares {min_tares} or newer" in fallback and "uv tool upgrade tares" in fallback, fallback)
-ck("the fallback has no em dash", "—" not in fallback)
-# An old tares answers `tares hook` with a usage error (exit 2) and no hook output: stand one in on PATH.
-bindir = Path(HOME) / "oldbin"
-bindir.mkdir()
-shim = bindir / "tares"
-shim.write_text("#!/bin/sh\necho \"usage: tares [-h] {up,mcp,...}\" >&2\nexit 2\n", encoding="utf-8")
-shim.chmod(0o755)
+   "echo" in fallback and f"tares {min_tares} or newer" in fallback and "uv tool upgrade tares" in fallback, fallback)
+ck("the fallback has no em dash", "\u2014" not in fallback)
+ck("every other entry swallows exit 2 (an old tares) with `|| [ $? -ne 2 ]`",
+   all(h["command"].endswith("|| [ $? -ne 2 ]") for _, _, h in entries if "session-start" not in h["command"]),
+   [h["command"] for _, _, h in entries if not h["command"].endswith("|| [ $? -ne 2 ]")])
+
+
+def stub(name, body):
+    d = Path(HOME) / name
+    d.mkdir()
+    t = d / "tares"
+    t.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    t.chmod(0o755)
+    return d
+
+
+def run_cmd(command, d):
+    return subprocess.run(["sh", "-c", command], capture_output=True, text=True, cwd=HOME,
+                          env=dict(ENV, PATH=f"{d}{os.pathsep}{ENV['PATH']}"))
+
+
+# An old tares answers `tares hook` with an argparse usage error (exit 2) and no hook output.
 if sys.platform == "win32":
-    print("  skip  the old-tares shim runs through sh (not on Windows)")
+    print("  skip  the old-tares stub runs through sh (not on Windows)")
 else:
-    r = subprocess.run(["sh", "-c", fallback], capture_output=True, text=True, env=dict(ENV, PATH=f"{bindir}{os.pathsep}{ENV['PATH']}"), cwd=HOME)
-    ck("with an old tares on PATH the entry prints the upgrade line on stdout (Claude Code shows it as context)",
+    old_dir = stub("oldbin", "echo \"usage: tares [-h] {up,mcp}\" >&2\necho \"tares: error: argument cmd: invalid choice: 'hook'\" >&2\nexit 2\n")
+    r = run_cmd(fallback, old_dir)
+    ck("with an old tares on PATH the session start prints the upgrade line on stdout (Claude Code shows it as context)",
        r.returncode == 0 and f"tares {min_tares} or newer" in r.stdout, (r.returncode, r.stdout, r.stderr[-200:]))
-    ok = subprocess.run(["sh", "-c", "exit 0 || echo SHOULD-NOT-PRINT"], capture_output=True, text=True)
-    ck("with a working tares the fallback does not print", ok.stdout == "")
+    for _, _, h in entries:
+        if "session-start" in h["command"]:
+            continue
+        name = h["command"].split()[2]
+        r = run_cmd(h["command"], old_dir)
+        ck(f"with an old tares on PATH `tares hook {name}` entry does not block (exit is not 2)", r.returncode != 2, r.returncode)
+    r = run_cmd("tares hook guard || [ $? -ne 2 ]", old_dir)
+    ck("an old tares leaves the guard entry non-blocking", r.returncode == 1 and r.stdout == "", (r.returncode, r.stdout))
+    new_dir = stub("newbin", "echo '{\"hookSpecificOutput\":{\"permissionDecision\":\"deny\"}}'\nexit 0\n")
+    guard_cmd = next(h["command"] for _, _, h in entries if " guard" in h["command"])
+    r = run_cmd(guard_cmd, new_dir)
+    ck("a working tares keeps the guard's deny output and exit 0", r.returncode == 0 and "deny" in r.stdout, (r.returncode, r.stdout))
+    r = run_cmd(fallback, new_dir)
+    ck("with a working tares the session start prints no upgrade line", r.returncode == 0 and "needs tares" not in r.stdout, (r.returncode, r.stdout))
+    fail_dir = stub("failbin", "echo boom >&2\nexit 1\n")
+    r = run_cmd(fallback, fail_dir)
+    ck("a session start that fails for another reason does not claim tares is old", "needs tares" not in r.stdout, r.stdout)
 
 print("the shell helpers are gone, and .mcp.json uses `tares hook`")
 for rel in ("hooks/guard.sh", "hooks/session-start.sh", "bin/mcp-headers"):

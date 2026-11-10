@@ -1,36 +1,36 @@
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "timeout": 10 }] },
-      { "hooks": [{ "type": "command", "command": "tares hook session-start || echo 'This Tares plugin needs tares 1.56.0 or newer on PATH (this one has no `tares hook`). Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.'", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "tares hook session-start; r=$?; if [ $r -eq 2 ] || [ $r -eq 127 ]; then echo 'This Tares plugin needs tares 1.56.0 or newer on PATH (this one has no `tares hook`). Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.'; fi", "timeout": 5 }] }
     ],
     "PreToolUse": [
-      { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "tares hook guard", "timeout": 5 }] },
-      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
+      { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "tares hook guard || [ $? -ne 2 ]", "timeout": 5 }] },
+      { "matcher": "AskUserQuestion", "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] }
     ],
     "UserPromptSubmit": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] }
     ],
     "PostToolUse": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] },
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] },
       { "matcher": "Bash|ExitPlanMode",
-        "hooks": [{ "type": "command", "command": "tares hook challenger", "timeout": 900 }] }
+        "hooks": [{ "type": "command", "command": "tares hook challenger || [ $? -ne 2 ]", "timeout": 900 }] }
     ],
     "Stop": [
-      { "hooks": [{ "type": "command", "command": "tares hook challenger", "timeout": 10 }] },
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook challenger || [ $? -ne 2 ]", "timeout": 10 }] },
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] }
     ],
     "SubagentStop": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] }
     ],
     "PermissionRequest": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship", "async": true }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "async": true }] }
     ],
     "SessionEnd": [
-      { "hooks": [{ "type": "command", "command": "tares hook ship" }] }
+      { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]" }] }
     ]
   }
 }
