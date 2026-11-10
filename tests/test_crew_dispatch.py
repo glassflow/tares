@@ -132,6 +132,7 @@ with ported({("zz", "sub"): fake_sub}):
     ck("with only the two-word key, the command word alone is not ported", dispatch.find(["zz"]) is None)
     ck("...and another subcommand is not ported", dispatch.find(["zz", "other"]) is None)
 ck("PORTED maps keys to functions", all(isinstance(k, tuple) and callable(v) for k, v in dispatch.PORTED.items()))
+ck("the hidden _mcp-url is ported (TR-1155): the python engine answers it, no bash", dispatch.route(["_mcp-url"], {"TARES_FACTORY_ENGINE": "python"})[0] == "python")
 ck("the command name in messages has the subcommand", dispatch.command_name(["crew", "up", "-y"]) == "crew up")
 ck("...but not a flag", dispatch.command_name([UNPORTED, "--json"]) == UNPORTED)
 ck("...and no command is help", dispatch.command_name([]) == "help")

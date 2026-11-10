@@ -2951,8 +2951,8 @@
       "what": "hidden: print the MCP address",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:cmd_mcp_url",
+      "ported": true,
       "note": "Hidden helper for tests and scripts. Keep it, or move it into the machine interface (TR-973)."
     },
     {
@@ -4379,6 +4379,16 @@
       "python": "",
       "ported": false,
       "note": "Umbrella suite: run against both engines by the parity harness; its doctor part is ported by TR-969 (the cmux part rides with TR-970)."
+    },
+    {
+      "name": "crew_python_test.sh",
+      "kind": "suite",
+      "what": "crew_test.sh on the Python engine; only the 3 kit-update scenarios (TR-965) may fail until that port merges",
+      "ticket": "TR-1155",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "CI wrapper: sets FACTORY_BIN and TARES_FACTORY_ENGINE=python. Empty KNOWN_FAIL once TR-965 merges."
     },
     {
       "name": "crew_view_seed.sh",

@@ -10,8 +10,8 @@ the crew's name first when a second person has joined); that the contract path a
 the same settings, the same grant and the same requests, in the same order; that bad answers (an unknown
 id, a value that is not a choice, an invalid crew name, a release profile with no releaser, text that is
 not JSON) save nothing and say why; that `crew up --yes` with saved answers asks nothing and writes
-nothing; that the Python crew up says `watch: not ported yet` and never asks Claude Code for the language
-server list or starts the watch; that crew up on the default engine is still bash.
+nothing; that the Python crew up starts the watch (TR-1155) and never asks Claude Code for the language
+server list; that crew up on the default engine is still bash.
 
 Run: python tests/test_crew_setup_contract.py
 """
@@ -32,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "factory"))
 import parity  # noqa: E402  (the harness: crew_env and the stand-in Tares)
 from fake_up_tares import FakeTares  # noqa: E402
 
-from tares.crew import dispatch, up  # noqa: E402
+from tares.crew import dispatch, up, watch  # noqa: E402
+from tares.crew.paths import CrewPaths  # noqa: E402
 
 try:
     from jsonschema import Draft202012Validator, FormatChecker  # noqa: E402  (a test-only dependency, as in test_crew_contract)
@@ -307,11 +308,17 @@ out = r.stdout + r.stderr
 ck("asks nothing: no prompt, no question in the output", "Choice [" not in out and "recommended:" not in out and "> " not in out.replace("-> ", ""), out[-300:])
 ck("writes nothing to Tares: every answer was saved already", c.tares.written() == [], c.tares.written())
 if HAVE_BASH:
-    ck("prints `watch: not ported yet`", "watch: not ported yet" in out, out[-400:])
+    ck("says it started the watch", "started the watch, which revives any station that stops" in out, out[-400:])
+    ck("starts the Python watch: the pid file names it and the log is there",
+       (c.crew / "watch.pid").exists() and (c.crew / "watch.log").exists() and watch.running_pid(CrewPaths(str(c.crew))) is not None,
+       out[-300:])
+    meta = (c.crew / watch.META_FILE).read_text(encoding="utf-8").split()
+    ck("...and it is the Python watch (TARES_FACTORY_ENGINE=python)", meta[-1:] == ["python"], meta)
+    watch.stop(CrewPaths(str(c.crew)), lambda m: None, 20, c.env)   # a watch left running would outlive the test
+    ck("the test stopped it", watch.running_pid(CrewPaths(str(c.crew))) is None)
 else:   # no bash (Windows): the stations cannot be started yet (TR-953), so it stops before the watch line
     ck("without bash it says the stations cannot be started here and exits 2",
-       r.returncode == 2 and "cannot start the stations here" in out and "watch: not ported yet" not in out, (r.returncode, out[-400:]))
-ck("does not start a watch", not (c.crew / "watch.pid").exists() and not (c.crew / "watch.log").exists())
+       r.returncode == 2 and "cannot start the stations here" in out and "started the watch" not in out, (r.returncode, out[-400:]))
 ck("never asks Claude Code for the language server list", ["plugin", "list", "--json"] not in c.calls(), c.calls())
 if HAVE_BASH:
     ck("exits 0 and starts the three stations", r.returncode == 0 and sum(1 for a in c.calls() if a[:1] == ["--bg"]) == 3,
@@ -320,9 +327,9 @@ else:
     ck("no bash here: says plainly that starting the stations is not yet ported, exit 2",
        r.returncode == 2 and "not yet ported" in r.stderr, (r.returncode, r.stderr[-300:]))
 r = c.run(["crew", "up", "--yes", "--no-watch"], env=env_watch)
-ck("--no-watch: no watch line", "watch: not ported yet" not in r.stdout + r.stderr)
+ck("--no-watch: no watch started", "started the watch" not in r.stdout + r.stderr and not (c.crew / "watch.pid").exists())
 r = c.run(["crew", "up", "--yes"])           # FACTORY_NO_WATCH=1 as the harness sets it
-ck("FACTORY_NO_WATCH set: no watch line", "watch: not ported yet" not in r.stdout + r.stderr)
+ck("FACTORY_NO_WATCH set: no watch started", "started the watch" not in r.stdout + r.stderr and not (c.crew / "watch.pid").exists())
 c.close()
 
 c = Case()

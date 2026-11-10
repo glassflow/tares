@@ -94,6 +94,14 @@ def _watch(argv: list[str], env: dict) -> int:
 
 PORTED[("watch",)] = _watch
 PORTED[("crew", "watch")] = _watch
+
+
+def _mcp_url(argv: list[str], env: dict) -> int:
+    from .client import cmd_mcp_url  # imported when used (TR-1155)
+    return cmd_mcp_url(argv, env)
+
+
+PORTED[("_mcp-url",)] = _mcp_url
 WATCH_VAR = "TARES_FACTORY_WATCH"  # "python" opts the watch in; bash stays the default one
 
 

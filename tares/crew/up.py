@@ -28,9 +28,9 @@ Differences from bash (each one a decision, none an accident):
 
  1. `crew setup` is new: bash has no such command (it answers "crew takes up, down, ..."). It runs on
     Python whatever TARES_FACTORY_ENGINE says unless that is "bash" (then bash's own error answers).
- 2. The watch is not ported (TR-958): when crew up would start it, Python prints
-    "tares factory: watch: not ported yet" and starts none. The language server offer (lsp_offer,
-    TR-970) is skipped without a word. Neither one shells out to bash.
+ 2. The watch is started here (watch.start, TR-958, wired in TR-1155): the Python watch with
+    TARES_FACTORY_ENGINE=python, as `crew watch` is routed. The language server offer (lsp_offer,
+    TR-970) is not wired into crew up yet: it is skipped without a word.
  3. Starting the stations (launch, boot_prompt, write_settings, is_alive: TR-950 and TR-953, not ported
     yet) is the one step that still runs bash: `start_stations` hands the roles to the bash internal
     command `_start-stations`, which is the second half of bash's own cmd_crew_up, cut out unchanged
@@ -61,6 +61,7 @@ import time
 from pathlib import Path
 
 from . import contract, state
+from . import watch as watch_mod
 from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
 from .errors import CrewError
 from .paths import CREW_NAME_RULE, ME, CrewPaths
@@ -672,8 +673,8 @@ def _crew_up(argv: list, env: dict) -> int:
     code = start_stations(env, roles)
     if code:
         return code
-    if watch and not env.get("FACTORY_NO_WATCH"):
-        up.say("watch: not ported yet")
+    if watch:
+        watch_mod.start(up.paths, env)   # FACTORY_NO_WATCH is read there, as in bash
     _err(f"\nThe crew takes a few minutes to check in. Next:\n"
          f"  Watch it              {c.tares}/crew\n"
          f"  Answer its questions  {ME} crew attach orchestrator   (← to leave it running)\n"

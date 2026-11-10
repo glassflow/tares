@@ -517,3 +517,15 @@ class TaresClient:
                 self.crew_settings()
             except CrewError as e:
                 self.say(e.message)
+
+
+def cmd_mcp_url(argv: list, env: dict) -> int:
+    """The hidden `_mcp-url`: print where stations reach Tares's MCP server (bash's `mcp_url`, which
+    tests and scripts call). Like bash it checks no crew name, merges the crew.json defaults and prints one
+    line. Bash also asks whether Tares answers, and reads the key; neither changes the line, so
+    this does not: it works with Tares down and sends no request."""
+    from .paths import default_home
+    paths = CrewPaths(env.get("FACTORY_CREW_HOME") or default_home(env))
+    state.merge_crew_defaults(paths)
+    print(TaresClient(paths, env).mcp_url())
+    return 0
