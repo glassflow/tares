@@ -3,7 +3,7 @@
 
 import type { CrewBuilders, CrewMember, CrewPage, CrewPlan, CrewProposal, MemberDetail, MemberState } from "./FactoryCrew.api";
 
-export const SAMPLES = ["busy", "fold", "l3", "pace", "quiet", "none", "many", "long", "load", "err"] as const;
+export const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "load", "err"] as const;
 export const isSample = (s: string | null): s is string => !!s && (SAMPLES as readonly string[]).includes(s);
 
 const NOW = "2026-11-02T10:00:00+00:00";
@@ -79,6 +79,18 @@ const MANY = ["project-a", "project-b", "project-c", "project-d"].map((p, i) => 
   member({ state: "working", doing: `Ticket title number ${i * 2 + 2}`, heard: "1 minute ago", mem: 50 + i * 10 }),
 ]));
 
+const done = (hours: number): CrewMember => member({ state: "ended", since: `${hours} hours`, doing: "Finished its work.", heard: `${hours} hours ago`, mem: null });
+// A group that has had many builders, the live ones in the middle; one with only finished ones; one with none finished.
+const FINISHED = () => [
+  group("project-x", Array.from({ length: 19 }, (_, i) => {
+    if (i === 6) return member({ state: "working", doing: "Building the shell for the second edition", heard: "just now", mem: 34 });
+    if (i === 11) return member({ state: "not heard", since: "14 hours", doing: "Waiting for the review of Edition routes and Settings", heard: "14 hours ago", mem: 77 });
+    return done(i + 1);
+  })),
+  group("project-y", [done(3), done(5)]),
+  group("project-z", [member({ state: "working", doing: "Drawing the mocks for Reviews", heard: "1 minute ago", mem: 50 })]),
+];
+
 const NONE = page({
   summary: "Not started", talk_to: null, reviewer: null, builders: [], plan: { known: false, limits: [], share_text: null, by_project: [] },
   rule_proposals: [], standup: null,
@@ -110,6 +122,7 @@ export function sampleLoad(name: string): Promise<CrewPage> {
         summary: "Not heard from in 2 hours", talk_to: quiet(LEAD()), reviewer: quiet(REVIEWER()),
         builders: [group("project-x", X().slice(0, 2).map(quiet))], rule_proposals: [], standup: null,
       }));
+    case "finished": return Promise.resolve(page({ builders: FINISHED() }));
     case "many": return Promise.resolve(page({ builders: MANY }));
     case "long":
       return Promise.resolve(page({

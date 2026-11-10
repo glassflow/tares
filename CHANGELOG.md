@@ -9,6 +9,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Allow on a crew permission request on a project page now opens the Allow dialog and keeps the grant there, instead of sending you to Home with nothing allowed. If the cell refuses, the dialog says why, and you stay on the list to allow the next one.
 - On the factory Home page, a long answer option on a question in "Waiting for you" now wraps inside its card instead of running past the right edge.
 - On a factory project page, a milestone check that is a shell command now shows in the console's monospace font and wraps inside its row, so long commands are easy to read. Checks written as sentences look the same as before (TR-1082).
+- On the factory Crew page, each project now lists its running workers first, hides finished ones behind "Show N finished", and its count reads running and total, for example "2 running · 19".
 
 ## [1.56.0] - 2026-11-10
 

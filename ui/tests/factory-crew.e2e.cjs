@@ -6,6 +6,8 @@
  * crew may go, the Claude plan, the rules the reviewer proposes (accept or reject from here) and the
  * standup. "Show what it did" opens a member's lines, its terminal command and a way to ask for a new
  * memory reading; those are read only when the fold is opened. No station name shows outside the fold.
+ * Each project lists its running builders first and hides the finished ones behind "Show N finished";
+ * its header reads running and total.
  * Raw HTML in a line or a rule is shown as text. Pacing shows as a sentence. At 390 px nothing scrolls
  * sideways. Every state shows only words from words.json (the crew's own words are exempt).
  *
@@ -30,7 +32,7 @@ const { checkWords, expectOneCall } = require("./words.cjs");
 const PORT = Number(process.env.TARES_E2E_PORT || 8851);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
-const SAMPLES = ["busy", "fold", "l3", "pace", "quiet", "none", "many", "long", "load", "err"];
+const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "load", "err"];
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -104,16 +106,25 @@ async function waitFor(url, tries = 100) {
     ck("the releaser is idle for two hours", /Releaser · Idle for 2 hours/.test(await member(page, "Releaser").first().innerText()));
     const groups = await page.getByTestId("crew-builders").evaluate((s) => [...s.querySelectorAll("[data-user-text]")].filter((e) => e.parentElement.className.includes("wash-2"))
       .map((e) => [e.textContent, e.nextElementSibling.textContent]));
-    ck("builders sit in their projects: project-x (3), project-y (1); the finished project's builder is left out",
-       JSON.stringify(groups) === JSON.stringify([["project-x", "3"], ["project-y", "1"]]), JSON.stringify(groups));
+    ck("builders sit in their projects, each with running and total; the finished project's builder is left out",
+       JSON.stringify(groups) === JSON.stringify([["project-x", "2 running · 3"], ["project-y", "1 running · 1"]]), JSON.stringify(groups));
     ck("the count says how many are on the crew now", /3 on the crew now/.test(await page.getByTestId("crew-builders").innerText()));
     const m1 = member(page, "Working on Footer");
     ck("a working builder with a helper", (await m1.count()) === 1 && /1 helper/.test(await m1.innerText()) && (await m1.getAttribute("data-state")) === "working", await m1.innerText());
     const m2 = member(page, "Waiting for the review of Search box");
     ck("an idle builder says what it waits for", (await m2.count()) === 1 && /Idle for 8 minutes/.test(await m2.innerText()));
     const mold = page.getByTestId("crew-member").and(page.locator("[data-state=ended]"));
+    const finishedFold = page.getByTestId("crew-finished-fold");
+    ck("an ended builder is hidden behind Show 1 finished", (await mold.count()) === 0 && (await finishedFold.count()) === 1
+       && (await finishedFold.innerText()) === "Show 1 finished" && (await finishedFold.getAttribute("aria-expanded")) === "false", await finishedFold.innerText());
+    await finishedFold.click();
+    ck("the toggle opens it and says Hide 1 finished", (await finishedFold.innerText()) === "Hide 1 finished" && (await finishedFold.getAttribute("aria-expanded")) === "true");
     ck("an ended builder: finished, no memory, no fold", (await mold.count()) === 1 && /Finished its work\./.test(await mold.innerText())
        && (await mold.getByTestId("member-fold").count()) === 0 && (await mold.getByTestId("memory-bar").count()) === 0 && /Ended 1 day ago/.test(await mold.innerText()));
+    const xStates = await page.getByTestId("crew-group").first().getByTestId("crew-member").evaluateAll((r) => r.map((x) => x.dataset.state));
+    ck("the finished builder comes after the running ones", JSON.stringify(xStates) === JSON.stringify(["working", "idle", "ended"]), JSON.stringify(xStates));
+    await finishedFold.click();
+    ck("the toggle hides it again", (await mold.count()) === 0 && (await finishedFold.innerText()) === "Show 1 finished");
     const y = member(page, "Not heard from in 2 hours");
     ck("a builder not heard from for two hours says so", (await y.count()) === 1 && (await y.getAttribute("data-state")) === "not heard" && /Memory 88% full/.test(await y.innerText()));
     const bars = await page.getByTestId("memory-bar").evaluateAll((b) => b.map((x) => [x.getAttribute("aria-valuenow"), x.className.includes("--warn") ? "warn" : x.className.includes("bg-foreground") ? "ink" : "?"]));
@@ -259,7 +270,27 @@ async function waitFor(url, tries = 100) {
         const text = await p.getByTestId("factory-crew").innerText();
         if (name === "load") ck(`${tag}: it is the loading state, no crew`, (await p.getByTestId("crew-member").count()) === 0 && (await p.getByTestId("crew-loading").isVisible()));
         if (name === "err") ck(`${tag}: it says the crew did not load and offers Retry`, /The crew did not load\./.test(text) && (await p.getByRole("button", { name: "Retry" }).count()) === 1 && (await p.getByTestId("crew-member").count()) === 0, text);
-        if (name === "busy") ck(`${tag}: 2 groups, 8 members, no Releaser`, (await p.getByTestId("crew-member").count()) === 8 && !/Releaser/.test(text), `${await p.getByTestId("crew-member").count()}`);
+        if (name === "busy") ck(`${tag}: 6 members shown, the 2 finished ones folded, no Releaser`, (await p.getByTestId("crew-member").count()) === 6 && !/Releaser/.test(text), `${await p.getByTestId("crew-member").count()}`);
+        if (name === "finished") {
+          const g = p.getByTestId("crew-group");
+          const heads2 = await g.evaluateAll((a) => a.map((e) => e.firstElementChild.lastElementChild.textContent));
+          ck(`${tag}: the headers read running and total`, JSON.stringify(heads2) === JSON.stringify(["2 running · 19", "0 running · 2", "1 running · 1"]), JSON.stringify(heads2));
+          const states = () => g.first().getByTestId("crew-member").evaluateAll((r) => r.map((x) => x.dataset.state));
+          ck(`${tag}: the two running ones are the only rows, the quiet one among them`, JSON.stringify(await states()) === JSON.stringify(["working", "not heard"]), JSON.stringify(await states()));
+          const folds = p.getByTestId("crew-finished-fold");
+          ck(`${tag}: a toggle where something finished, and none where nothing did`, JSON.stringify(await folds.allInnerTexts()) === JSON.stringify(["Show 17 finished", "Show 2 finished"]), JSON.stringify(await folds.allInnerTexts()));
+          await checkWords(p, ck, `${tag} closed`);
+          await shot(p, `crew-finished-closed-${width}.png`);
+          await folds.first().click();
+          const open = await states();
+          ck(`${tag}: open, every finished one is reachable under the running ones`, open.length === 19 && open[0] === "working" && open[1] === "not heard" && open.slice(2).every((s) => s === "ended"), JSON.stringify(open));
+          ck(`${tag}: open, the toggle says Hide and the other group stays closed`, JSON.stringify(await folds.allInnerTexts()) === JSON.stringify(["Hide 17 finished", "Show 2 finished"]), JSON.stringify(await folds.allInnerTexts()));
+          ck(`${tag}: open, no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+          if (width === 390) {
+            const box = await folds.first().boundingBox();
+            ck(`${tag}: the toggle is a row wide and easy to tap`, box.height >= 36 && box.width > 300, JSON.stringify(box));
+          }
+        }
         if (name === "fold") {
           await p.getByTestId("member-fold").nth(3).click();
           await p.getByTestId("member-detail").locator("pre").waitFor();
