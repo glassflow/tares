@@ -205,3 +205,43 @@ def cmd_spawn(argv: list, env: dict) -> int:
         print(e.line, file=sys.stderr)
         return 1
     return 0
+
+
+SETTINGS_USAGE = "usage: settings <station> [role]"
+
+
+def settings(client: TaresClient, paths: CrewPaths, argv: list) -> str:
+    """bash's cmd_settings: write the settings a station launches with and return the text of the file.
+    The role is the second word, else the station's role in stations.json, else the station's name without
+    the crew's prefix. A missing station word is refused with the usage line."""
+    state.require_crew(paths)
+    if not argv or not argv[0]:
+        raise CrewError(SETTINGS_USAGE)
+    station = station_name(argv[0], paths)
+    role = argv[1] if len(argv) > 1 and argv[1] else state.stations_get(station, "role", paths=paths)
+    if not role:
+        prefix = state.crew_name(paths) + "-"
+        role = station[len(prefix):] if station.startswith(prefix) else station
+    launch.write_settings(client, station, role, state.stations_get(station, "parent", paths=paths),
+                          state.stations_get(station, "project", paths=paths),
+                          state.stations_get(station, "repo", paths=paths))
+    return paths.station_file(station, "settings.json").read_text(encoding="utf-8")
+
+
+def cmd_settings(argv: list, env: dict) -> int:
+    """`tares factory settings <station> [role]`: print the settings file a station launches with."""
+    paths = CrewPaths.from_env()
+    try:
+        state.crew_name(paths)
+        client = TaresClient(paths, env)
+        try:
+            client.prime()
+            text = settings(client, paths, list(argv[1:]))
+        finally:
+            client.close()
+    except CrewError as e:
+        sys.stdout.flush()
+        print(e.line, file=sys.stderr)
+        return 1
+    sys.stdout.write(text)
+    return 0

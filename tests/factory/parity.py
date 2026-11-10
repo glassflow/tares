@@ -2705,6 +2705,56 @@ def coverage(require_full: bool, out=print) -> int:
     return bad
 
 
+# settings_*: `settings <station> [role]` prints the settings file a station launches with (cmd_settings, TR-1122).
+# The file itself is checked by launch_settings_*; here the command: which role it takes and what it prints.
+
+SETTINGS_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind",
+                                                                 "challenger": False, "builders_max": 3}}),
+                  "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+
+
+SETTINGS_ENV = {"TARESD_URL": "{tares}"}
+
+
+def _printed(r: "Run", i: int) -> dict:
+    return json.loads(r.results[i]["stdout"])
+
+
+scenario(Scenario(
+    name="settings_station",
+    suite="tidy",
+    about="settings prints the file a station launches with: the role of a role word, of stations.json, or the one given",
+    setup=_setup_views,
+    tares=SETTINGS_TARES,
+    steps=[Step(["settings", "crew-reviewer"], env=SETTINGS_ENV), Step(["settings", "orchestrator"], env=SETTINGS_ENV),
+           Step(["settings", "crew-reviewer", "releaser"], env=SETTINGS_ENV), Step(["settings", "crew-releaser"], env=SETTINGS_ENV),
+           Step(["settings", "old-helper"], env=SETTINGS_ENV)],
+    checks=[
+        ("settings prints the file a station launches with",
+         lambda r: r.code(0) == 0 and _printed(r, 0)["env"]["FACTORY_STATION"] == "crew-reviewer"
+         and _printed(r, 0)["env"]["FACTORY_ROLE"] == "reviewer"
+         and _printed(r, 3) == station_json(r, "crew-releaser")),
+        ("a role word names this crew's station", lambda r: r.code(1) == 0 and _printed(r, 1)["env"]["FACTORY_STATION"] == "crew-orchestrator"),
+        ("a second word is the role", lambda r: r.code(2) == 0 and _printed(r, 2)["env"]["FACTORY_ROLE"] == "releaser"),
+        ("a station with no record takes its role from its name", lambda r: r.code(3) == 0 and _printed(r, 3)["env"]["FACTORY_ROLE"] == "releaser"),
+        ("a recorded station takes the role stations.json holds", lambda r: r.code(4) == 0 and _printed(r, 4)["env"]["FACTORY_ROLE"] == "helper"),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="settings_tidy",
+    suite="tidy",
+    about="every crew station may run factory tidy: the orchestrator, reviewer and releaser settings allow it",
+    setup=_setup_views,
+    tares=SETTINGS_TARES,
+    steps=[Step(["settings", role], env=SETTINGS_ENV) for role in ("orchestrator", "reviewer", "releaser")],
+    checks=[("$s may run factory tidy",
+             lambda r: all(r.code(i) == 0 and "Bash(factory tidy *)" in _printed(r, i)["permissions"]["allow"] for i in range(3)))],
+    covers=["$s may run factory tidy"],
+))
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
