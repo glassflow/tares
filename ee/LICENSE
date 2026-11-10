@@ -1,28 +1,100 @@
-DRAFT, pending legal review
+Tares Enterprise Licence
 
-Tares Enterprise Edition licence
+Copyright (c) 2026 GlassFlow GmbH, Berlin, Germany, registered at Amtsgericht Berlin
+(Charlottenburg) under HRB 252594 B (the "Licensor")
 
-Copyright (c) 2026 GlassFlow (the "Licensor")
+This licence covers the files in this `ee` directory and everything below it, and the `tares_ee`
+package built from them, in any form (the "Software"). The rest of the repository is under the
+MIT licence in the top-level LICENSE file.
 
-This licence covers the files in this `ee` directory and everything below it (the "Software").
-The rest of the repository is under the MIT licence in the top-level LICENSE file.
+If you and the Licensor have signed an agreement or order for the Software, that agreement wins
+wherever it differs from this licence.
 
-1. You may copy and modify the Software for development and testing. Modified copies stay
-   under this licence.
+1. Definitions
 
-2. You may run the Software in production only with a valid Tares licence key issued by the
-   Licensor, and only for as many seats as that key allows.
+   "Licence Key" means a Tares licence key issued by the Licensor. It names an organisation, a
+   number of Seats and an expiry date.
 
-3. You may not copy, sublicense, sell or redistribute the Software, or any part of it, except
-   as this licence allows. You may not remove or change a licence key check or the licensing
-   notices.
+   "Seat" means one person listed on a Tares instance.
 
-4. The Licensor and its licensors keep all rights in the Software that this licence does not
-   give you. Contributions to this directory are licensed to the Licensor under these terms.
+   "Production" means any use other than development and testing. Use by people for their real
+   work is Production.
 
-5. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
-   INCLUDING THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
-   NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+2. Running Tares without a Licence Key
 
-To get a licence key, write to help@glassflow.ai.
+   The Software ships inside Tares. You may install and run Tares with the Software present and
+   no Licence Key. Without a Licence Key its enterprise features stay off and Tares runs for one
+   person.
+
+3. Development and testing
+
+   You may copy and modify the Software for development and testing. Modified copies stay under
+   this licence.
+
+4. Production use
+
+   You may use the enterprise features of the Software, including your own modifications, in
+   Production only with a valid Licence Key issued to your organisation, for your organisation's
+   own use, and for no more Seats than that Licence Key allows. Contractors working for you count
+   as Seats. You may not share or transfer a Licence Key.
+
+5. Expiry
+
+   Your right to Production use under section 4 ends on the expiry date of your Licence Key
+   unless you renew it. Tares may keep working after that date so that a lapsed key does not
+   interrupt your work. That does not extend this licence.
+
+6. Distribution
+
+   You may distribute unmodified copies of the Software only as part of a distribution of Tares
+   that includes this licence, such as a fork, mirror, package or container image. You may share
+   modified copies only for development and testing, and under this licence.
+
+   You may not otherwise copy, sublicense or sell the Software, or any part of it. You may not
+   offer the enterprise features of the Software to third parties as a hosted or managed service.
+
+7. Licence checks and notices
+
+   You may not use the Software in Production with a licence key check removed, changed or
+   bypassed. This includes a check in the MIT-licensed part of Tares. You may not remove or change
+   the licensing notices in the Software.
+
+8. Contributions
+
+   If you contribute to this directory, you grant the Licensor a non-exclusive, perpetual,
+   irrevocable, worldwide, royalty-free, transferable and sublicensable right to use, modify and
+   distribute your contribution under any terms. You confirm that you have the right to grant it.
+
+9. Ownership
+
+   The Licensor and its licensors keep all rights in the Software that this licence does not give
+   you. This licence gives you no right to use the Licensor's names or trademarks.
+
+10. Warranty and liability
+
+   To the extent the law allows, the Software is provided "as is", without warranty of any kind,
+   express or implied, including the warranties of merchantability, fitness for a particular
+   purpose and noninfringement.
+
+   The Licensor is liable without limit for intent and gross negligence, for injury to life, body
+   or health, under the German Product Liability Act (Produkthaftungsgesetz), and for defects it
+   fraudulently concealed or expressly guaranteed.
+
+   Beyond that, if you received the Software free of charge, the Licensor is not liable. If you
+   paid for a Licence Key, the Licensor is liable for slight negligence only where it breaches an
+   obligation essential to the purpose of this licence, and only for the foreseeable damage
+   typical for this kind of licence.
+
+11. Termination
+
+   If you breach this licence and do not fix the breach within 30 days of written notice from the
+   Licensor, your rights under this licence end. You must then stop using the Software.
+
+12. Governing law
+
+   This licence is governed by German law, excluding the UN Convention on Contracts for the
+   International Sale of Goods. If you are a merchant or a legal entity under public law, the
+   courts of Berlin, Germany have exclusive jurisdiction. Mandatory consumer protection rights are
+   not affected. If a part of this licence is invalid, the rest stays in force.
+
+To get a Licence Key, write to help@glassflow.ai or see https://docs.glassflow.ai/tares/enterprise.
