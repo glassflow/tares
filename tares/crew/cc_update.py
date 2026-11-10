@@ -69,7 +69,7 @@ DEFAULT_TRIES = 3          # restarts of one version before the last, new-conver
 DEFAULT_BACKOFF = 600      # seconds a station waits after a failed move (FACTORY_CC_BACKOFF)
 VERSION_POLLS = 6          # looks at a restarted station's version before it counts as unknowable
 _SPARE = re.compile(r"bg-pty-host.*--bg-spare.*\.claim\.sock")
-_SPARE_SOCKET = re.compile(r"--bg-spare ([^ ]+\.claim\.sock)")
+_SPARE_SOCKET = re.compile(r"--bg-spare (.+?\.claim\.sock)")   # the path may hold a space (a Windows profile name)
 
 _cc_seen = None            # the version the last round saw; None until the first round (bash: cc_seen)
 

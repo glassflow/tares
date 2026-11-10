@@ -3075,7 +3075,7 @@ _cc("cc_move_stale_spare", "a restart that lands on an older spare is tried agai
     setup=_cc_setup(installed="1.2.0", files={"spawn-version": "1.1.0\n", "stale-left": "1\n"}), not_windows=_WIN_NO_EXEC_A)
 
 
-def _resumed(r: Run, name: str) -> int:
+def _cc_resumed(r: Run, name: str) -> int:
     return sum(1 for a in _bg_of(r, name) if "--resume" in a)
 
 
@@ -3087,7 +3087,7 @@ def _cc_marks(r: Run, name: str) -> list:
 _cc("cc_move_fresh", "three resumed tries land on old spares: the fourth starts the station again in a new conversation on the new version",
     [_round()],
     [("three resumed tries land on old spares, the fourth is a new conversation on 1.2.1",
-      lambda r: len(_bg_of(r, _R)) == 4 and _resumed(r, _R) == 3 and "--resume" not in _bg_of(r, _R)[-1] and _runs(r, _R) == "1.2.1"),
+      lambda r: len(_bg_of(r, _R)) == 4 and _cc_resumed(r, _R) == 3 and "--resume" not in _bg_of(r, _R)[-1] and _runs(r, _R) == "1.2.1"),
      ("it is told it was started again, and the event is recorded",
       lambda r: "started you again under the same name, in a new conversation" in _bg_of(r, _R)[-1][-1]
       and "starting it again in a new conversation on 1.2.1" in r.out(0) and '"event":"restarted-fresh"' in _events(r).replace(" ", "")),
@@ -3100,7 +3100,7 @@ _cc("cc_move_fresh", "three resumed tries land on old spares: the fourth starts 
 _cc("cc_move_old_spares", "old spares every time: three tries and the new conversation, then the station is marked with a retry time ten minutes on",
     [_round()],
     [("old spares every time: three tries, the new conversation, then it stops and says it will retry",
-      lambda r: len(_bg_of(r, _R)) == 4 and _resumed(r, _R) == 3 and "keeps coming back on an older Claude Code than 1.2.1" in r.out(0)
+      lambda r: len(_bg_of(r, _R)) == 4 and _cc_resumed(r, _R) == 3 and "keeps coming back on an older Claude Code than 1.2.1" in r.out(0)
       and "the watch tries again in 10 min" in r.out(0) and _runs(r, _R) == "1.1.0"),
      ("it is marked: the version, one failed move, a retry time ten minutes on, the new conversation done",
       lambda r: _cc_marks(r, _R)[:2] == ["1.2.1", 1] and _cc_marks(r, _R)[3] == "1.2.1"
