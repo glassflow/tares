@@ -3,9 +3,10 @@
 Ports these functions of `claude-plugin/bin/factory`: cmd_watch (the loop skeleton), nap, watch_pid, start_watch
 and stop_watch. What the loop does each round (revive a stopped station, regrant, wake an idle one, pace, move onto
 an updated plugin) is not here: those steps are separate tickets, and each registers itself with `register` when it
-lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`). Every step not
-yet registered falls back to nothing, so the Python watch does less than the bash one and the bash watch stays
-the default. `TARES_FACTORY_WATCH=python` opts the `watch` command in (on Windows there is no bash, so it is always Python there).
+lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`; the Claude Code
+move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing, so the Python watch
+does less than the bash one and the bash watch stays the default. `TARES_FACTORY_WATCH=python` opts the `watch` command
+in (on Windows there is no bash, so it is always Python there).
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
@@ -92,6 +93,14 @@ def _idle_wake_step(paths: CrewPaths) -> None:
 
 
 register("idle_wake", _idle_wake_step)   # TR-961
+
+
+def _updates_step(paths: CrewPaths) -> None:
+    from . import cc_update   # here, not at the top: cc_update imports crew modules that import this one
+    cc_update.step(paths)
+
+
+register("updates", _updates_step)  # TR-963
 
 
 def _say(msg: str) -> None:
