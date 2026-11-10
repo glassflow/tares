@@ -972,16 +972,13 @@ scenario(Scenario(
 # doctor: crew_test.sh, tares_test.sh (the lines that read "doctor"), freeze_test.sh, idle_wake_test.sh and
 # claude_update_test.sh each ask doctor a question. Here doctor runs against a fake Tares (fake_tares.py), a
 # fake `gh` and a fake `tares` on PATH. The bash doctor does not make the checks that are new in Python
-# (NEW_LABELS in tares/crew/doctor.py), and TR-970 ports its cmux and language-server checks: those lines
-# are set aside from the comparison, on both sides, with `drop`.
+# (NEW_LABELS in tares/crew/doctor.py): those lines are set aside from the comparison, on both sides, with `drop`.
 
 sys.path.insert(0, str(HERE))
 import fake_tares  # noqa: E402
 
 NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows)\b",)
-TR970 = (r"cmux", r"language server")
-DOCTOR_DROP = NEW_CHECKS + TR970
-LSP_CALLS = (["plugin", "list"],)   # the language-server check asks Claude Code for its plugins (TR-970)
+DOCTOR_DROP = NEW_CHECKS
 # When Tares refuses the key in the environment, the bash doctor stops silently at the crew settings (its
 # `crew_settings` dies inside a pipe). The Python doctor says the settings are unanswered and goes on to the
 # checks after them. That is the one place the two differ on purpose; a scenario sets those lines aside.
@@ -1098,7 +1095,6 @@ def _multi(tmp: Path, env: dict) -> None:
 scenario(Scenario(
     name="doctor_projects",
     suite="crew",
-    ignore_calls=LSP_CALLS,
     about="doctor checks each repo of a project: Claude Code's trust and GitHub write access",
     setup=_multi,
     steps=[Step(["doctor"], drop=DOCTOR_DROP)],
@@ -1128,6 +1124,225 @@ scenario(Scenario(
              lambda r: re.search(r"FIX   no MCP server answers at http://127\.0\.0\.1:\d+/mcp; start one with "
                                  r"tares mcp --transport streamable-http", r.out(0)) is not None)],
     covers=["doctor without an MCP server says how to start one"],
+))
+
+
+# lsp_test.sh, its doctor part (TR-682, ported by TR-970): the languages of each handed-over repo, whether
+# Claude Code has a language server for each, and the commands doctor prints for a missing one. The crew up
+# cases of that suite (the offer and the install on a yes) wait for `crew up` to move over; tests/test_crew_doctor_lsp.py
+# holds the offer's cases until then.
+
+def _lsp_repos(tmp: Path) -> dict:
+    """Python at the root with a console one folder down, Go, Rust one folder down, one whose only manifests are
+    in places that do not count, a JavaScript-only repo, and a second Go repo."""
+    r = {n: tmp / n for n in ("api", "gw", "docs", "engine", "site", "gw2")}
+    for rel in ("api/pyproject.toml", "api/ui/package.json", "api/ui/tsconfig.json", "gw/go.mod",
+                "docs/node_modules/package.json", "docs/.factory/Cargo.toml", "docs/.venv/requirements.txt",
+                "docs/a/b/c/go.mod", "docs/README.md", "engine/native/Cargo.toml", "site/package.json", "gw2/go.mod"):
+        _write(tmp, rel, "")
+    return r
+
+
+def _lsp_bins(tmp: Path, *names: str) -> None:
+    """Exactly these server binaries are in the one folder the doctor looks in (FACTORY_LSP_PATH)."""
+    folder = tmp / "lspbin"
+    folder.mkdir(parents=True, exist_ok=True)
+    for old in folder.iterdir():
+        old.unlink()
+    for n in names:
+        f = folder / (n + (".exe" if os.name == "nt" else ""))
+        f.write_text("", encoding="utf-8")
+        f.chmod(0o755)
+
+
+def _lsp_plugins(tmp: Path, rows: list) -> None:
+    _write(tmp, "claude/plugins.json", json.dumps(rows))
+
+
+def _plugin(name: str, enabled: bool = True, scope: str = "user", path: str = "") -> dict:
+    row = {"id": f"{name}@claude-plugins-official", "enabled": enabled, "scope": scope}
+    if path:
+        row["projectPath"] = path
+    return row
+
+
+def _lsp_world(tmp: Path, env: dict) -> None:
+    repos = _lsp_repos(tmp)
+    projects = [{"name": "Mix", "repos": [{"path": str(repos[n])} for n in ("api", "gw", "docs", "engine", "gw2", "site")]}]
+    _doctor_world(fake_tares.World(projects=projects), trusted=list(repos))(tmp, env)
+    _crew_json(tmp)
+    env["FACTORY_LSP_PATH"] = str(tmp / "lspbin")
+    _lsp_bins(tmp)
+    _lsp_plugins(tmp, [])
+
+
+def _in(r: "Run", i: int, text: str) -> bool:
+    return text in r.out(i)
+
+
+def _lsp_missing_checks() -> list:
+    def path(r, n):
+        return str(r.tmp / n)
+
+    def out(r):
+        return r.out(0)
+    return [
+        ("doctor names Python and TypeScript for the repo and says neither has a server",
+         lambda r: f"Python in {path(r, 'api')} has no language server" in out(r)
+         and f"TypeScript in {path(r, 'api')} has no language server" in out(r)),
+        ("a package.json alone is JavaScript, and a repo with a tsconfig.json is not also listed as JavaScript",
+         lambda r: f"JavaScript in {path(r, 'site')} has no language server" in out(r)
+         and f"TypeScript in {path(r, 'site')}" not in out(r) and f"JavaScript in {path(r, 'api')}" not in out(r)),
+        ("doctor names Go and Rust for the other repos",
+         lambda r: f"Go in {path(r, 'gw')} has no language server" in out(r)
+         and f"Rust in {path(r, 'engine')} has no language server" in out(r)),
+        ("doctor prints the install command and the plugin that wires it in",
+         lambda r: "`npm install -g pyright` then `claude plugin install pyright-lsp@claude-plugins-official`" in out(r)
+         and "npm install -g typescript-language-server typescript" in out(r)
+         and "go install golang.org/x/tools/gopls@latest" in out(r)
+         and "rustup component add rust-analyzer" in out(r)),
+        ("doctor leaves out manifests under node_modules, .factory and three folders down",
+         lambda r: f"in {path(r, 'docs')} " not in out(r)),
+        ("a missing language server is advice, not a FIX",
+         lambda r: re.search(r"FIX.*language server", out(r)) is None),
+    ]
+
+
+scenario(Scenario(
+    name="lsp_missing",
+    suite="lsp",
+    about="doctor names each language of each repo and the commands for a missing language server",
+    setup=_lsp_world,
+    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=_lsp_missing_checks(),
+    covers=["doctor names Python and TypeScript for the repo and says neither has a server",
+            "a package.json alone is JavaScript, and a repo with a tsconfig.json is not also listed as JavaScript",
+            "doctor names Go and Rust for the other repos",
+            "doctor prints the install command and the plugin that wires it in",
+            "doctor leaves out manifests under node_modules, .factory and three folders down",
+            "a missing language server is advice, not a FIX"],
+))
+
+
+def _ts_ready(tmp: Path) -> None:
+    _lsp_bins(tmp, "pyright-langserver", "typescript-language-server")
+    _lsp_plugins(tmp, [_plugin("typescript-lsp"), _plugin("pyright-lsp", enabled=False)])
+
+
+def _elsewhere(tmp: Path) -> None:
+    _lsp_plugins(tmp, [_plugin("pyright-lsp", scope="local", path="/somewhere/else")])
+
+
+def _repo_only(tmp: Path) -> None:
+    _lsp_plugins(tmp, [_plugin("pyright-lsp", scope="local", path=str(tmp / "api"))])
+
+
+def _ts_no_binary(tmp: Path) -> None:
+    _lsp_bins(tmp, "pyright-langserver")
+    _lsp_plugins(tmp, [_plugin("typescript-lsp")])
+
+
+scenario(Scenario(
+    name="lsp_servers",
+    suite="lsp",
+    about="ready needs an enabled user-scope plugin and its binary; claude failing to list plugins is unknown",
+    setup=_lsp_world,
+    steps=[Step(["doctor"], before=_ts_ready, drop=DOCTOR_DROP),
+           Step(["doctor"], before=_elsewhere, drop=DOCTOR_DROP),
+           Step(["doctor"], before=_repo_only, drop=DOCTOR_DROP),
+           Step(["doctor"], before=_ts_no_binary, drop=DOCTOR_DROP),
+           Step(["doctor"], env={"FAKE_CLAUDE_PLUGIN_FAIL": "1"}, drop=DOCTOR_DROP)],
+    checks=[
+        ("an enabled plugin with its binary is ready",
+         lambda r: re.search(r"ok .*TypeScript in " + re.escape(str(r.tmp / "api")) + r" has a language server for "
+                             r"Claude Code \(typescript-lsp plugin, typescript-language-server on PATH\)", r.out(0)) is not None),
+        ("a disabled plugin is not a server, and doctor says the binary is the part that is there",
+         lambda r: re.search(r"Python in " + re.escape(str(r.tmp / "api")) + r" has no language server.*"
+                             r"pyright-langserver is installed, the pyright-lsp plugin is not on", r.out(0)) is not None
+         and "claude plugin install pyright-lsp@claude-plugins-official" in r.out(0)
+         and "npm install -g pyright" not in r.out(0)),
+        ("a plugin enabled for another project is not a server here",
+         lambda r: f"Python in {r.tmp / 'api'} has no language server" in r.out(1)),
+        ("a plugin enabled for the repo path only is not a server for the crew, whose stations run elsewhere",
+         lambda r: f"Python in {r.tmp / 'api'} has no language server" in r.out(2)
+         and "claude plugin install pyright-lsp@claude-plugins-official" in r.out(2)),
+        ("an enabled plugin without its binary says the binary is missing, and prints only its install",
+         lambda r: re.search(r"TypeScript in " + re.escape(str(r.tmp / "api")) + r" has no language server.*"
+                             r"the typescript-lsp plugin is on, typescript-language-server is not on PATH", r.out(3)) is not None
+         and "claude plugin install typescript-lsp" not in r.out(3)),
+        ("when claude cannot list its plugins doctor says it cannot tell, and recommends no install",
+         lambda r: f"TypeScript in {r.tmp / 'api'}: cannot tell whether Claude Code has a language server, "
+                   "because claude plugin list --json failed" in r.out(4)
+         and "has no language server" not in r.out(4) and "claude plugin install" not in r.out(4)),
+    ],
+    covers=["an enabled plugin with its binary is ready",
+            "a disabled plugin is not a server, and doctor says the binary is the part that is there",
+            "a plugin enabled for another project is not a server here",
+            "a plugin enabled for the repo path only is not a server for the crew, whose stations run elsewhere",
+            "an enabled plugin without its binary says the binary is missing, and prints only its install",
+            "when claude cannot list its plugins doctor says it cannot tell, and recommends no install"],
+))
+
+
+# crew_test.sh: cmux says "Waiting for you" about a minute after any station's turn ends (its agentIdleReminder,
+# on by default); doctor reads the person's cmux file, says what to set, and never edits it.
+
+def _cmux_path(tmp: Path) -> Path:
+    return tmp / "home" / ".config" / "cmux" / "cmux.json"
+
+
+def _cmux_file(extra: str):
+    def write(tmp: Path) -> None:
+        text = ('{\n  "$schema": "https://raw.githubusercontent.com/manaflow-ai/cmux/main/web/data/cmux.schema.json",\n'
+                '  "schemaVersion": 1,\n' + extra + '\n  // This file uses JSON with comments (JSONC).\n  //   "app" : {\n'
+                '  //     "language" : "system"\n  //   },\n}\n')
+        _write(tmp, "home/.config/cmux/cmux.json", text)
+    return write
+
+
+def _cmux_text(text: str):
+    return lambda tmp: _write(tmp, "home/.config/cmux/cmux.json", text)
+
+
+def _cmux_slashed(r: "Run", i: int) -> str:
+    return r.out(i).replace("\\", "/")
+
+
+scenario(Scenario(
+    name="doctor_cmux",
+    suite="crew",
+    about="doctor reads cmux's idle reminder setting from the person's own file and never edits it",
+    setup=_doctor_world(fake_tares.World()),
+    steps=[Step(["doctor"], drop=DOCTOR_DROP),
+           Step(["doctor"], before=_cmux_file(""), drop=DOCTOR_DROP),
+           Step(["doctor"], before=_cmux_file('  "notifications": {"agentIdleReminder": false},'), drop=DOCTOR_DROP),
+           Step(["doctor"], before=_cmux_file('  "notifications": {"agentIdleReminder": true},'), drop=DOCTOR_DROP),
+           Step(["doctor"], before=_cmux_text('{"notifications": {"agentIdleReminder": false}}\n'), drop=DOCTOR_DROP),
+           Step(["doctor"], before=_cmux_text("{not json"), drop=DOCTOR_DROP)],
+    checks=[
+        ("no cmux, nothing said about it", lambda r: "cmux" not in r.out(0).replace(str(r.tmp), "").lower()),
+        ("cmux with its default file (trailing comma): doctor says what to set",
+         lambda r: re.search(r"warn  cmux shows \"Waiting for you\" about a minute after every station.s turn ends",
+                             r.out(1)) is not None
+         and f"agentIdleReminder\": false}} in {_cmux_path(r.tmp).as_posix()}" in _cmux_slashed(r, 1)
+         and "could not parse" not in r.out(1)),
+        ("cmux idle reminder off in cmux's file shape: doctor is content",
+         lambda r: re.search(r"ok    cmux.s idle reminder is off", r.out(2)) is not None
+         and "Waiting for you" not in r.out(2)),
+        ("cmux idle reminder on: doctor warns", lambda r: re.search(r"warn  cmux shows", r.out(3)) is not None),
+        ("cmux file without a trailing comma still reads",
+         lambda r: re.search(r"ok    cmux.s idle reminder is off", r.out(4)) is not None),
+        ("an unparseable cmux file is said, not guessed",
+         lambda r: f"warn  could not parse {_cmux_path(r.tmp).as_posix()}" in _cmux_slashed(r, 5)),
+        ("doctor never edits the cmux file", lambda r: _cmux_path(r.tmp).read_text(encoding="utf-8") == "{not json"),
+    ],
+    covers=["no cmux, nothing said about it",
+            "cmux with its default file (trailing comma): doctor says what to set",
+            "cmux idle reminder off in cmux's file shape: doctor is content",
+            "cmux idle reminder on: doctor warns",
+            "cmux file without a trailing comma still reads",
+            "an unparseable cmux file is said, not guessed",
+            "doctor never edits the cmux file"],
 ))
 
 

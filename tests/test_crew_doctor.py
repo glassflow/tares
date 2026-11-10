@@ -9,7 +9,7 @@ covers what only the Python doctor does:
   - the tares version against the plugin's min_tares (TR-1064) and `tares` on PATH with `tares hook` (TR-1068);
   - the login key: in the keychain, in a file only the owner can read, or readable by others (TR-949);
   - the crew key file's permissions; on Windows the access list, read from a fake icacls;
-  - the engine line, Git for Windows, and that no line is printed for cmux or the language server (TR-970);
+  - the engine line, Git for Windows, and that no cmux or language server line appears without a cmux file or a project repo (TR-970 has its own test);
   - the watch's pid file, and that the checks stay in step with the parity harness's list of new lines;
   - the module stays light: no DuckDB, FastAPI or daemon import.
 
@@ -143,7 +143,7 @@ for argv in (["doctor", "--json"], ["doctor"]):
         ck("no Tares answers, so the doctor says so and exits 1", code == 1 and any(r["id"] == "tares" and not r["ok"] for r in rows or []), code)
         ck("a failing check carries a fix", all(r["fix"] for r in rows or [] if not r["ok"]), [r for r in rows or [] if not r["ok"] and not r["fix"]])
         ck("--json prints nothing but the JSON", out.getvalue().lstrip().startswith("["), out.getvalue()[:60])
-        ck("no check for cmux or the language server (TR-970)", not any(re.search(r"cmux|language server", r["message"], re.I) for r in rows or []))
+        ck("no cmux file and no project repo: no line for cmux or a language server", not any(re.search(r"cmux|language server", r["message"], re.I) for r in rows or []))
     else:
         text = out.getvalue()
         ck("the text form starts with the title and ends with the verdict", text.startswith("tares factory doctor\n")
