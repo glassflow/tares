@@ -312,10 +312,14 @@ try:
 
     print("which command starts the watch, and which engine runs `watch`")
     argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python"})
-    ck("opted in: the Python module, no shell", engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
+    ck("TARES_FACTORY_WATCH=python still works: the Python module, no shell", engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
+    argv, engine = watch._watch_command({})
+    ck("by default the watch is Python (TR-1069)", engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
     if not WINDOWS:
-        argv, engine = watch._watch_command({})
-        ck("not opted in: the bash watch stays the default", engine == "bash" and argv[0] == "bash" and argv[-2:] == ["crew", "watch"], str(argv))
+        argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "bash"})
+        ck("TARES_FACTORY_WATCH=bash keeps the bash watch", engine == "bash" and argv[0] == "bash" and argv[-2:] == ["crew", "watch"], str(argv))
+        argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "bash", "TARES_FACTORY_ENGINE": "python"})
+        ck("TARES_FACTORY_ENGINE=python wins over TARES_FACTORY_WATCH=bash", engine == "python", str(argv))
     argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python", "TARES_FACTORY_ENGINE": "bash"})
     ck("TARES_FACTORY_ENGINE=bash wins over TARES_FACTORY_WATCH=python (on POSIX; Windows has no bash and runs Python)",
        engine == ("python" if WINDOWS else "bash"), str(argv))
@@ -323,9 +327,9 @@ try:
     ck("TARES_FACTORY_ENGINE=bash alone: bash on POSIX, Python on Windows",
        engine == ("python" if WINDOWS else "bash") and (WINDOWS or argv[0] == "bash"), str(argv))
     for words in (["watch"], ["crew", "watch"]):
-        kind = dispatch.route(words, {})[0]
-        ck(f"`{' '.join(words)}` goes to bash unless opted in" if not WINDOWS else f"`{' '.join(words)}` runs in Python on Windows",
-           kind == ("python" if WINDOWS else "bash"), kind)
+        ck(f"`{' '.join(words)}` goes to Python by default", dispatch.route(words, {})[0] == "python")
+        ck(f"`{' '.join(words)}` goes to bash with TARES_FACTORY_WATCH=bash" if not WINDOWS else f"`{' '.join(words)}` runs in Python on Windows",
+           dispatch.route(words, {"TARES_FACTORY_WATCH": "bash"})[0] == ("python" if WINDOWS else "bash"))
         ck(f"`{' '.join(words)}` goes to Python with TARES_FACTORY_WATCH=python",
            dispatch.route(words, {"TARES_FACTORY_WATCH": "python"})[0] == "python")
         ck(f"`{' '.join(words)}` goes to Python with TARES_FACTORY_ENGINE=python",

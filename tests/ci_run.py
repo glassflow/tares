@@ -6,6 +6,7 @@
     python tests/ci_run.py --suite mit ...       # the core tests that need no ee/ (CI deletes it first)
     python tests/ci_run.py --suite ee ...        # the tests of the enterprise code, ee/tests
     python tests/ci_run.py --suite ee-postgres   # the same, with the state in Postgres
+    python tests/ci_run.py --suite factory       # only the factory CLI suites (the engine job sets FACTORY_BIN)
 
 The tests are the ones named in tests/ci_list.txt (tests/<name>.py) and tests/factory/ci_list.txt
 (tests/factory/<name>_test.sh, the factory CLI against a real Tares). The ee suites read
@@ -33,7 +34,7 @@ EE_DIR = os.path.join(os.path.dirname(HERE), "ee", "tests")
 EE_PY_LIST = os.path.join(EE_DIR, "ci_list.txt")
 EE_SH_LIST = os.path.join(EE_DIR, "factory", "ci_list.txt")
 
-SUITES = ["duckdb", "postgres", "mit", "ee", "ee-postgres"]
+SUITES = ["duckdb", "postgres", "mit", "ee", "ee-postgres", "factory"]
 
 # Not in the Postgres run: they are about the DuckDB file itself.
 DUCKDB_ONLY = {"test_duckdb_memory", "test_state_postgres"}
@@ -60,6 +61,8 @@ def items(suite):
     if suite in ("ee", "ee-postgres"):
         py = [t for t in names(EE_PY_LIST) if suite == "ee" or t not in DUCKDB_ONLY]
         return py + [f"ee-factory:{t}" for t in names(EE_SH_LIST)]
+    if suite == "factory":  # only the factory CLI suites, for the engine job (FACTORY_BIN set, TR-1069)
+        return [f"factory:{t}" for t in names(SH_LIST)]
     py = [t for t in names(PY_LIST) if suite in ("duckdb", "mit") or t not in DUCKDB_ONLY]
     if suite == "mit":
         py = [t for t in py if t not in NEEDS_EE]

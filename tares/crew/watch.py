@@ -4,9 +4,9 @@ Ports these functions of `claude-plugin/bin/factory`: cmd_watch (the loop skelet
 and stop_watch. What the loop does each round (revive a stopped station, regrant, wake an idle one, pace, move onto
 an updated plugin) is not here: those steps are separate tickets, and each registers itself with `register` when it
 lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`; the Claude Code
-move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing, so the Python watch
-does less than the bash one and the bash watch stays the default. `TARES_FACTORY_WATCH=python` opts the `watch` command
-in (on Windows there is no bash, so it is always Python there).
+move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing. The Python watch is
+the default (TR-1069); `TARES_FACTORY_WATCH=bash` or the bash engine (`TARES_FACTORY_ENGINE=bash`, `"engine": "bash"` in
+crew.json) keeps the bash one (on Windows there is no bash, so it is always Python there).
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
@@ -216,8 +216,8 @@ def stop_requested(paths: CrewPaths) -> bool:
 
 
 def _watch_command(env: dict) -> tuple:
-    """(argv, engine): the command that runs the watch. Python when opted in, and always on Windows (no bash),
-    whatever TARES_FACTORY_ENGINE says."""
+    """(argv, engine): the command that runs the watch. Python unless the bash engine or TARES_FACTORY_WATCH=bash
+    asks for bash, and always Python on Windows (no bash), whatever the engine setting says."""
     from . import dispatch   # the one rule for which engine runs `crew watch`; imported late, dispatch imports us
     if os.name == "nt" or dispatch.route(["crew", "watch"], env)[0] == "python":
         exe = sys.executable

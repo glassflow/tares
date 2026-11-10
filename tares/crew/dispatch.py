@@ -3,10 +3,15 @@
 Commands move from `claude-plugin/bin/factory` to Python one ticket at a time. A ported command adds
 itself to PORTED; every other command still goes to bash, exactly as before.
 
-  TARES_FACTORY_ENGINE   unset or empty  each command on its own engine (Python if ported, else bash)
+  TARES_FACTORY_ENGINE   unset or empty  the engine crew.json names, else the default: each command on its own
+                                         engine (Python if ported, else bash)
                          python          Python only: a command that is not ported fails with exit 2
                          bash            bash only, even for a ported command
                          anything else   an error, exit 2
+  "engine": "bash"       in crew.json (FACTORY_CREW_HOME, default ~/factory) is the same as
+                         TARES_FACTORY_ENGINE=bash when the variable is not set; "python" there is the
+                         default. Python is the default engine (TR-1069); this is the one setting that brings
+                         bash back. Running stations pick it up when they are restarted.
 
 Standard library only (no duckdb, fastapi, tares.daemon or tares.store), so `tares factory roster`
 stays quick: nothing here is imported that bash does not need.
@@ -136,16 +141,15 @@ def _parse_bg_id(argv: list[str], env: dict) -> int:
 
 
 PORTED[("_parse-bg-id",)] = _parse_bg_id
-WATCH_VAR = "TARES_FACTORY_WATCH"  # "python" opts the watch in; bash stays the default one
+WATCH_VAR = "TARES_FACTORY_WATCH"  # "bash" keeps the bash watch while everything else is Python (TR-1069)
 
 
 def _bash_watch(argv: list[str], env: dict) -> bool:
-    """True for `watch` / `crew watch` that is not opted in: the bash watch stays the default where there is
-    bash. TARES_FACTORY_ENGINE=python (asked for outright) and Windows (no bash) run the Python one."""
+    """True for `watch` / `crew watch` asked to stay bash with TARES_FACTORY_WATCH=bash. The Python watch is
+    the default now; the engine setting (bash) is handled by route. Windows has no bash to keep."""
     if argv[:1] == ["crew"]:
         argv = argv[1:]
-    return (argv[:1] == ["watch"] and (env.get(ENGINE_VAR) or "") == ""
-            and env.get(WATCH_VAR) != "python" and not is_windows())
+    return argv[:1] == ["watch"] and env.get(WATCH_VAR) == "bash" and not is_windows()
 
 
 def _view(name: str):
@@ -214,14 +218,43 @@ def command_name(argv: list[str]) -> str:
     return argv[0]
 
 
+def _crew_json_engine(env: dict) -> str:
+    """The "engine" of crew.json in the crew home: "" when the file, the key or a text value is not there.
+    Standard library only, and read only when TARES_FACTORY_ENGINE is not set."""
+    import json
+    from .paths import default_home
+    home = env.get("FACTORY_CREW_HOME") or default_home(env)
+    try:
+        with open(os.path.join(home, "crew.json"), encoding="utf-8") as f:
+            value = json.load(f).get("engine")
+    except (OSError, ValueError, AttributeError):
+        return ""
+    return value if isinstance(value, str) else ""
+
+
+def engine_setting(env: dict) -> tuple[str, str]:
+    """(engine, source). engine is "" (the default: Python where ported), "python" or "bash"; source is
+    "TARES_FACTORY_ENGINE", "crew.json" or "" for the default. An unknown value comes back as it is, for route
+    to refuse. The variable wins over crew.json. "python" in crew.json is the default, not the strict mode:
+    only the variable asks for Python alone."""
+    asked = env.get(ENGINE_VAR) or ""
+    if asked:
+        return asked, ENGINE_VAR
+    filed = _crew_json_engine(env)
+    if filed == "python":
+        return "", "crew.json"
+    return filed, "crew.json" if filed else ""
+
+
 def route(argv: list[str], env: dict) -> tuple[str, Callable[[list[str], dict], int] | None, str]:
     """(kind, function, message). kind is "python" (call the function), "bash" (run the script) or
     "error" (print the message, exit 2)."""
-    engine = env.get(ENGINE_VAR) or ""
+    engine, source = engine_setting(env)
     if engine not in ("", *ENGINES):
-        return "error", None, f'{ENGINE_VAR} must be "python" or "bash" (or unset), not "{engine}"'
+        where = ENGINE_VAR if source == ENGINE_VAR else '"engine" in crew.json'
+        return "error", None, f'{where} must be "python" or "bash" (or unset), not "{engine}"'
     fn = find(argv)
-    if engine == "bash" or (fn is None and engine == "") or (fn is not None and _bash_watch(argv, env)):
+    if engine == "bash" or (fn is None and engine == "") or (fn is not None and engine == "" and _bash_watch(argv, env)):
         return "bash", None, ""
     if fn is None:  # engine == "python"
         return "error", None, (f'"{command_name(argv)}" is not yet ported to the Python engine '
@@ -281,9 +314,9 @@ def run(argv: list[str], env: dict, script: str | Path) -> None:
                 pass
         raise SystemExit(code or 0)
     if is_windows():
-        if env.get(ENGINE_VAR) == "bash":
-            _fail(f'{ENGINE_VAR}=bash needs bash, which is not available on Windows; '
-                  f'unset {ENGINE_VAR} to use the Python engine')
+        if engine_setting(env)[0] == "bash":
+            _fail('the bash engine needs bash, which is not available on Windows; '
+                  f'unset {ENGINE_VAR} and remove "engine": "bash" from crew.json to use the Python engine')
         _fail(f'"{command_name(argv)}" is not yet ported to the Python engine, '
               "and bash is not available on Windows")
     os.execve("/bin/bash", ["bash", str(script), *argv], env)

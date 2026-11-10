@@ -320,9 +320,18 @@ class Doctor:
         self.check_tares_path()
 
     def check_engine(self) -> None:
-        asked = self.env.get("TARES_FACTORY_ENGINE") or ""
-        why = f"TARES_FACTORY_ENGINE={asked}" if asked else "the default"
-        self.ok("engine", f"engine: python ({why}; TARES_FACTORY_ENGINE=bash runs bash instead)", True)
+        from . import dispatch
+        engine, source = dispatch.engine_setting(self.env)
+        if engine == "bash":
+            where = "TARES_FACTORY_ENGINE=bash" if source == dispatch.ENGINE_VAR else 'engine: bash in crew.json'
+            self.ok("engine", f"engine: bash ({where}; unset it to use the Python engine)", True)
+            return
+        if engine not in ("", "python"):
+            self.no("engine", f'engine: "{engine}" is not an engine', 'use "python" or "bash"', True)
+            return
+        why = {dispatch.ENGINE_VAR: "TARES_FACTORY_ENGINE=python", "crew.json": "engine: python in crew.json"}.get(
+            source, "the default")
+        self.ok("engine", f"engine: python ({why}; TARES_FACTORY_ENGINE=bash or engine: bash in crew.json runs bash instead)", True)
 
     def check_tares_version(self) -> None:
         need = version.plugin_min_version(self.root)
