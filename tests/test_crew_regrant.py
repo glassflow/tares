@@ -139,6 +139,17 @@ r = watch_revive.Round()
 r.unread = True
 check("a round whose session list the revive step could not read restarts nothing", run_step(r, ["a", "b"]) == [])
 
+# the steps after this one leave a restarted station alone this round (bash's elif chain; TR-961 idle wake reads it)
+r = watch_revive.Round()
+r.started.add("a")
+run_step(r, ["a", "b", "c"])
+check("a station restarted for new grants is recorded as handled, one the revive step started is not",
+      r.handled == {"b", "c"})
+r = watch_revive.Round()
+r.unread = True
+run_step(r, ["a"])
+check("a round restarting nothing records nothing as handled", r.handled == set())
+
 # a restart that fails is not tried again every round (reviewer F1, F2): grants_tried is written before it
 class RestartClient(StepClient):
     def __init__(self, text):

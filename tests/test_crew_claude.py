@@ -841,6 +841,46 @@ def settle(pid):
 
 
 @test
+def attached_skips_a_process_it_may_not_read():
+    reset()
+    station("st", id="0000000a")
+    real = cc.psutil.Process
+    bad = os.getpid() + 1_000_000
+    odd = os.getpid() + 1_000_001
+
+    class Denied:
+        def __init__(self, pid):
+            if pid == bad:
+                raise PermissionError(13, "force permission denied")
+            self._pid = pid
+            self._p = None if pid == odd else real(pid)
+
+        def cmdline(self):
+            if self._pid == odd:   # psutil on macOS can leak this instead of an AccessDenied
+                raise SystemError("<built-in function proc_cmdline> returned a result with an exception set")
+            return self._p.cmdline()
+
+    def iterate(*_a, **_k):   # what psutil's process_iter does on a process it may not read
+        raise PermissionError(13, "force permission denied")
+        yield
+
+    pids, process_iter = cc.psutil.pids, cc.psutil.process_iter
+    cc.psutil.Process = Denied
+    cc.psutil.pids = lambda: [bad, odd] + list(pids())
+    cc.psutil.process_iter = iterate
+    try:
+        ck("a process whose command line cannot be read does not end the search", cc.attached("st", paths=PATHS) is False)
+        pid = spawn(["attach", "0000000a"])
+        settle(pid)
+        ck("...and a session opened behind it is still found", cc.attached("st", paths=PATHS) is True)
+    finally:
+        cc.psutil.Process = real
+        cc.psutil.pids = pids
+        cc.psutil.process_iter = process_iter
+        stop_procs()
+
+
+@test
 def attached_sees_a_terminal_session():
     reset()
     station("st", id="0000000a")

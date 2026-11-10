@@ -179,6 +179,9 @@ def step(paths: CrewPaths, env=None) -> None:
                     continue   # the revive step starts it fresh
             if (not state.halted(paths) and claude.between_turns(station, binary, paths)
                     and regrant_due(paths, client, station)):
+                # bash's elif chain stops here, whether or not the restart goes through: the steps after this
+                # one (idle wake, pace) leave the station alone this round
+                watch_revive.last.handled.add(station)
                 regrant_station(paths, station, claude_bin=binary, env=env)
     finally:
         client.close()

@@ -24,11 +24,8 @@ Paths in the JSON
   shlex.quote on POSIX, and on Windows (quote_windows) double quotes around a path that needs them, with
   a refusal for a character that cmd or Git Bash would act on inside them. Both are tested without Windows.
 
-Stubs for later tickets
-  iw_launch_note (TR-961) does nothing yet: the real one writes a station's idle-wake file when it starts.
-  The "started" line and stations.json are the same; until that ticket lands, a start while the crew is
-  idle-waking leaves that file for the watch's next round to write. The pace file is written by
-  pace.launch_note (TR-962).
+Notes written at a start
+  The idle-wake file is written by iw_launch_note (TR-961), the pace file by pace.launch_note (TR-962).
 
 Differences from bash
   * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` runs
@@ -267,10 +264,25 @@ def idle_wake_note() -> str:
             "CronCreate tick (if you hold one, delete it: CronList, then CronDelete).")
 
 
-def iw_launch_note(station: str) -> str:
-    # TR-961 ports the real one: a start with idle_wake on is a start with its tick released (the wake file
-    # of the station is updated); off, with it back. Until then a start writes no wake file.
-    return ""
+def idle_wake_state(client: TaresClient) -> str:
+    """on, off, or unknown (Tares gave no settings: nothing changes on a blip)."""
+    try:
+        return "on" if client.crew_settings().get("idle_wake") is True else "off"
+    except CrewError:
+        return "unknown"
+
+
+def iw_launch_note(client: TaresClient, station: str) -> None:
+    """A start with idle_wake on is a start with its tick released (the wake file of the station says so);
+    off, it is back, for a station that has a wake file."""
+    paths = client.paths
+    if state.stations_get(station, "role", paths=paths) not in ("orchestrator", "reviewer", "releaser", "builder"):
+        return
+    st = idle_wake_state(client)
+    if st == "on":
+        state.wake_update(station, {"released": True, "n": 0, "clock": state.now_s()}, paths)
+    elif st == "off" and paths.wake_file(station).is_file():
+        state.wake_update(station, {"released": False}, paths)
 
 
 # ---------- the settings file ----------
@@ -527,7 +539,7 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
         "status": "active", "startedAt": state.utc_stamp()}, paths)
     if gsum:
         state.atomic_write_text(paths.station_file(station, "grants"), grants + "\n")
-    iw_launch_note(station)
+    iw_launch_note(client, station)
     pace.launch_note(client, paths, station)
     state.event("started", station, job, paths=paths)
     print(f"  \u2713 started {station} ({model}, {effort})", file=sys.stderr)

@@ -1241,8 +1241,8 @@
       "what": "on, off or unknown",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:idle_wake_state",
+      "ported": true,
       "note": ""
     },
     {
@@ -1483,8 +1483,8 @@
       "what": "path of a station's wake file",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.wake_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -1494,8 +1494,8 @@
       "what": "read a station's wake state",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:wake_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -1505,8 +1505,8 @@
       "what": "rewrite a station's wake state",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:wake_update",
+      "ported": true,
       "note": ""
     },
     {
@@ -1516,9 +1516,9 @@
       "what": "idle wake note added to a start",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by launch (TR-953), which needs a stub that does nothing until TR-961 ports the real note (the wake file update). TR-953 must say so in its working doc."
+      "python": "tares.crew.launch:iw_launch_note",
+      "ported": true,
+      "note": "Called by launch (TR-953). Writes the wake file when a station starts: released on with the setting on, released off when it is switched off."
     },
     {
       "name": "wake_base_min",
@@ -1527,8 +1527,8 @@
       "what": "base wake interval by role",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:wake_base_min",
+      "ported": true,
       "note": ""
     },
     {
@@ -1549,8 +1549,8 @@
       "what": "reviewer work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_reviewer",
+      "ported": true,
       "note": ""
     },
     {
@@ -1560,8 +1560,8 @@
       "what": "builder work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_builder",
+      "ported": true,
       "note": ""
     },
     {
@@ -1571,8 +1571,8 @@
       "what": "releaser work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_releaser",
+      "ported": true,
       "note": ""
     },
     {
@@ -1582,8 +1582,8 @@
       "what": "orchestrator work to wake for",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:scan_orchestrator",
+      "ported": true,
       "note": ""
     },
     {
@@ -1593,8 +1593,8 @@
       "what": "prompt telling a woken station its work",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:work_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1604,8 +1604,8 @@
       "what": "decide whether to wake a station now",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -1615,8 +1615,8 @@
       "what": "wake a station by restarting it",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:send",
+      "ported": true,
       "note": ""
     },
     {
@@ -4538,9 +4538,9 @@
       "what": "idle wake",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases and the curl URL checks (the Python client is httpx); the bash suite stays for them."
     },
     {
       "name": "route_proxy.py",
