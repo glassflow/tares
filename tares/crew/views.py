@@ -25,10 +25,11 @@ import time
 from pathlib import Path
 
 from . import claude, contract, state
-from .client import TaresClient, TaresHTTPError, cksum, grants_sum
+from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, SessionListUnreadableError
 from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
 from .paths import ME, CrewPaths
+from .regrant import regranted  # moved there by TR-960; the status view reads it
 from .watch_revive import stuck_on_context  # moved there by TR-959; status and roster read it
 
 LETTERS = "ABCDEFGH"
@@ -261,19 +262,6 @@ def stale_kit(paths: CrewPaths, station: str, kit: str, frozen: Frozen) -> bool:
 
 
 # ---------- grants, context, Claude Code versions ----------
-
-
-def regranted(paths: CrewPaths, client: TaresClient, station: str) -> bool:
-    """True when the station's grants on Tares differ from those it started with, not yet acted on."""
-    was = state.stations_get(station, "grants", paths=paths)
-    if not was:
-        return False
-    try:
-        text = client.grants_read(state.stations_get(station, "project", paths=paths))
-    except CrewError:
-        return False
-    now = str(grants_sum(text.rstrip("\n") + "\n"))
-    return now != was and now != state.stations_get(station, "grants_tried", paths=paths)
 
 
 def cc_retry_in(paths: CrewPaths, station: str) -> str:
