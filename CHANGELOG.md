@@ -12,7 +12,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - On a team cell's Home, your builder shows what it is working on even when the ticket is assigned to a teammate (TR-890).
-- A challenger review that did not finish is never recorded as a pass (TR-530). Any Codex failure now shows as an error with its real reason, instead of "sandbox probably failed". When Codex is out of quota or signed out, the crew keeps working and one item on your desk says reviews have stopped.
+- Plugin 0.6.8: a challenger review that did not finish is never recorded as a pass (TR-530). Any Codex failure now shows as an error with its real reason, instead of "sandbox probably failed". When Codex is out of quota or signed out, the crew keeps working and one item on your desk says reviews have stopped.
 - Allow on a crew permission request on a project page now opens the Allow dialog and keeps the grant there, instead of sending you to Home with nothing allowed. If the cell refuses, the dialog says why, and you stay on the list to allow the next one.
 - On the factory Home page, a long answer option on a question in "Waiting for you" now wraps inside its card instead of running past the right edge.
 - On a factory project page, a milestone check that is a shell command now shows in the console's monospace font and wraps inside its row, so long commands are easy to read. Checks written as sentences look the same as before (TR-1082).
