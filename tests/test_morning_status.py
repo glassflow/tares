@@ -360,7 +360,7 @@ async def routes():
         # a real standup report: a private project stays out of it
         px = (await admin.post("/api/projects", json={"template": "custom", "name": "open-project", "objects": [], "goal": "g", "kind": "software_factory"})).json()["id"]
         sx = (await admin.post("/api/projects", json={"template": "custom", "name": "secret-project", "objects": [], "goal": "g", "kind": "software_factory"})).json()["id"]
-        store.con.execute("UPDATE usecases SET scope='private' WHERE id=?", [sx])
+        store.set_project_scope(sx, "private")
         hidden = {p["id"] for p in store.private_projects()}
         ck("the report's hide set holds the private project", sx in hidden and px not in hidden, hidden)
         since, until = ms.report_range(CFG, utc(10, 8))
