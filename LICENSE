@@ -1,4 +1,4 @@
-This licence covers everything in this repository except directories named `ee`, which are under the licence in `ee/LICENSE`.
+This licence covers everything in this repository except directories named `ee` and the `tares_ee` package built from them, which are under the licence in `ee/LICENSE`.
 
 MIT License
 
