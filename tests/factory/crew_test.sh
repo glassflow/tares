@@ -409,11 +409,13 @@ agent crew-releaser 'del(.status)'
 # After /clear the live session has a new transcript: the old one's notice no longer counts.
 agent crew-releaser '.state = "done"'
 jq '.sessionId = "session-cleared"' "$HOME/.claude/jobs/$rel/state.json" > "$T/js" && mv "$T/js" "$HOME/.claude/jobs/$rel/state.json"
+agent crew-releaser '.sessionId = "session-cleared"' # the Python engine reads the session from the list, bash from the job file
 "$F" crew watch --once >/dev/null 2>&1
 check "a cleared session is not restarted" '[ "$(st crew-releaser .id)" = "$rel" ]'
 
 # A stuck station that stopped before the watch saw it comes back in a new conversation, not resumed.
 jq --arg s "$(st crew-releaser .sessionId)" '.sessionId = $s' "$HOME/.claude/jobs/$rel/state.json" > "$T/js" && mv "$T/js" "$HOME/.claude/jobs/$rel/state.json"
+agent crew-releaser ".sessionId = \"$(st crew-releaser .sessionId)\""
 agent crew-releaser '.state = "stopped" | del(.pid)'
 jq '.state = "working"' "$HOME/.claude/jobs/$rel/state.json" > "$T/js" && mv "$T/js" "$HOME/.claude/jobs/$rel/state.json" # frozen when it died
 "$F" crew watch --once >/dev/null 2>&1
