@@ -23,7 +23,7 @@
   },
   "statusLine": {
     "type": "command",
-    "command": "python3 <ROOT>/claude-plugin/scripts/statusline.py",
+    "command": "tares hook statusline --plugin-root <ROOT>/claude-plugin",
     "padding": 0
   },
   "worktree": {
