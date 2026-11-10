@@ -205,12 +205,13 @@ class ClaudeCodeConnector(Connector):
         from .. import claude_usage as cu
         sid, at, typ = str(o.get("sessionId") or ""), self._ts(o), o.get("type")
         if typ == "session_status" and sid and isinstance(o.get("status"), dict):
-            self.store.set_session_status(sid, cu.compact_status(o["status"]), at)
+            self.store.set_session_status(sid, cu.compact_status(o["status"]), at, self.person_id)
         elif typ == "session_context" and sid and isinstance(o.get("context_usage"), dict):
             self.store.set_session_context(sid, cu.compact_context(o["context_usage"]), at)
         elif typ == "claude_plan" and isinstance(o.get("usage_report"), dict):
             self.store.set_setting(cu.PLAN_SETTING, json.dumps(
-                {"at": at.isoformat(), "plan": cu.compact_plan(o["usage_report"])}))
+                {"at": at.isoformat(), "plan": cu.compact_plan(o["usage_report"]),
+                 "person_id": self.person_id}))
 
     def _record_usage(self, o: dict, projects: dict) -> None:
         """A model reply's line: its token usage, counted once per reply, for the project the line

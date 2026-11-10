@@ -135,6 +135,7 @@ async def main():
                             "", [], False, "crew-orchestrator", [], ago(hours=1))
         one = await home("root")
         ck("no summary key", "summary" not in one, sorted(one))
+        ck("a cell of one reads Your Claude plan, even with no reading", one["plan"]["title"] == "Your Claude plan", one["plan"])
         ck("the single-person kinds, not the team ones", {i["kind"] for i in one["waiting_for_you"]}
            == {"permission", "question"}, [i["kind"] for i in one["waiting_for_you"]])
         real = th.team_home
@@ -814,6 +815,61 @@ async def main():
         ck("Alex sees it, and its title does not name the private project",
            g.get("title") == "A grant over acme/web" and "Vault" not in json.dumps(g)
            and "launch codes" not in json.dumps(g), g)
+
+        print("== the Claude plan says whose it is (TR-1020) ==")
+        stamp = lambda minutes: ago(minutes=minutes).isoformat().replace("+00:00", "Z")
+        title = lambda h: h["plan"]["title"]
+
+        async def usage_line(who, minutes):
+            limits = [{"kind": "session", "percent": 27, "severity": "normal", "is_active": True},
+                      {"kind": "weekly_all", "percent": 5, "severity": "normal", "is_active": False}]
+            r = await call(who, "POST", "/ingest/claude_code",
+                           {"type": "claude_plan", "timestamp": stamp(minutes),
+                            "usage_report": {"rate_limits": {"limits": limits}}})
+            assert r.status_code < 300, r.text
+
+        async def status_line(who, minutes, windows):
+            r = await call(who, "POST", "/ingest/claude_code",
+                           {"type": "session_status", "sessionId": "plan-status", "timestamp": stamp(minutes),
+                            "status": {"rate_limits": {w: {"used_percentage": 40} for w in windows}}})
+            assert r.status_code < 300, r.text
+
+        before = await home("alex")
+        ck("no reading yet: neutral, never Your", not before["plan"]["known"] and title(before) == "Claude plan", before["plan"])
+        await usage_line("kim", 20)
+        k, a, l = await home("kim"), await home("alex"), await home("lee")
+        ck("the person whose Claude reported reads Your Claude plan", title(k) == "Your Claude plan", k["plan"])
+        ck("a teammate reads the owner's name", title(a) == "Kim's Claude plan" and title(l) == "Kim's Claude plan", a["plan"])
+        ck("the limits are the same for everyone", a["plan"]["limits"] == k["plan"]["limits"] and k["plan"]["known"], a["plan"])
+        r = (await call("root", "GET", "/api/home")).json()
+        ck("the cell's own token is nobody's: it reads the owner's name", title(r) == "Kim's Claude plan", r["plan"])
+
+        real_person = store.get_person
+        store.get_person = lambda p: {**(real_person(p) or {}), "name": None}
+        try:
+            fh._cache.clear()
+            a = await home("alex")
+        finally:
+            store.get_person = real_person
+        ck("an owner with no name to show: neutral", title(a) == "Claude plan", a["plan"])
+
+        await usage_line("root", 15)
+        k, a = await home("kim"), await home("alex")
+        ck("a reading that names nobody: neutral for everyone, never Your",
+           title(k) == "Claude plan" and title(a) == "Claude plan", (k["plan"], a["plan"]))
+
+        await status_line("alex", 10, ["five_hour", "seven_day"])
+        k, a = await home("kim"), await home("alex")
+        ck("a newer status line for both limits makes it the sender's plan",
+           title(a) == "Your Claude plan" and title(k) == "Alex's Claude plan", (a["plan"], k["plan"]))
+
+        await usage_line("kim", 5)
+        k, a = await home("kim"), await home("alex")
+        ck("a newer /usage reading takes it back", title(k) == "Your Claude plan" and title(a) == "Kim's Claude plan", (k["plan"], a["plan"]))
+
+        await status_line("alex", 2, ["five_hour"])
+        k, a = await home("kim"), await home("alex")
+        ck("limits from two people: neutral for both", title(k) == "Claude plan" and title(a) == "Claude plan", (k["plan"], a["plan"]))
 
         print("== kinds, actions and words ==")
         items = [i for i in SEEN.values() if "kind" in i]

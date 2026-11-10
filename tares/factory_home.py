@@ -382,12 +382,27 @@ def _resets(at: datetime | None, now: datetime) -> str | None:
     return at.strftime("%H:%M") if at.date() == now.date() else _DAYS[at.weekday()]
 
 
-def _plan(store, now: datetime, names: dict) -> dict:
+def _plan_title(store, owner: str | None, fx, request) -> str:
+    """Whose plan the section says it is. On a cell of one person it is theirs. Otherwise it is
+    "Your" only for the person who sent the reading, the person's name for anyone else, and
+    neutral when the cell cannot tell (TR-1020)."""
+    if store.only_local_person():
+        return "Your Claude plan"
+    if owner is None:
+        return "Claude plan"
+    read_caller = getattr(fx, "caller_person", None)
+    caller = read_caller(request) if read_caller is not None and request is not None else None
+    if caller and caller.get("id") == owner:
+        return "Your Claude plan"
+    name = (store.get_person(owner) or {}).get("name")
+    return f"{name}'s Claude plan" if name else "Claude plan"
+
+
+def _plan(store, now: datetime, names: dict, fx=None, request=None) -> dict:
     plan = claude_usage.plan(store)
     limits = []
-    for x in (plan or {}).get("limits") or []:
-        if x["kind"] not in _LIMITS:
-            continue
+    shown = [x for x in (plan or {}).get("limits") or [] if x["kind"] in _LIMITS]
+    for x in shown:
         at = None if x.get("reset") else claude_usage._when(x.get("resets_at"))
         pct = 0 if x.get("reset") else round(x.get("percent") or 0)
         resets = _resets(at, now)
@@ -398,7 +413,8 @@ def _plan(store, now: datetime, names: dict) -> dict:
               for r in claude_usage.by_project(store, now - timedelta(days=7))
               if r["kind"] == "project" and r["project"] in names and (r["share"] or 0) >= 0.05]
     return {"known": plan is not None, "limits": limits,
-            "share_text": "This week: " + ", ".join(shares) if shares else None}
+            "share_text": "This week: " + ", ".join(shares) if shares else None,
+            "title": _plan_title(store, claude_usage.plan_person(shown), fx, request)}
 
 
 # ── the page ──────────────────────────────────────────────────────────────────
@@ -489,7 +505,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
-            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}),
+            "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
             # the same rows Settings shows (factory_tools, TR-1013): the chip shows `short`
             "tools": _tools(store, now, hidden),
             "start": start_steps.checklist(

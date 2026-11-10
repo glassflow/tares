@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- On a team cell, the factory Home no longer shows someone else's Claude plan as "Your Claude plan": it now says whose plan it is, or just "Claude plan" when the cell cannot tell.
+
 ## [1.56.0] - 2026-11-10
 
 A cell now opens as a Software Factory or an AI SRE, each with its own screens, and working as a team

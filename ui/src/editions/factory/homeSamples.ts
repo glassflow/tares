@@ -104,6 +104,7 @@ const PLAN: HomeData["plan"] = {
     { kind: "weekly_all", label: "This week", pct: 11, resets: "Fri", resets_at: "2026-11-06T10:00:00Z", text: "11% used · resets Fri" },
   ],
   share_text: "This week: project-x 20%, project-y 72%",
+  title: "Your Claude plan",
 };
 
 const TOOLS: HomeData["tools"] = [
@@ -155,7 +156,7 @@ export const empty: HomeData = {
     members: [{ station: "crew-lead", role: "orchestrator", name: "Lead", state: "ended", since: "",
                 doing: "Starts when you hand over a project", memory_pct: null, memory: null }],
   },
-  plan: { known: false, limits: [], share_text: null },
+  plan: { known: false, limits: [], share_text: null, title: "Your Claude plan" },
   tools: [{ key: "github", name: "GitHub", connected: false, short: null }],
 };
 
