@@ -38,7 +38,7 @@ def ck(l, c, d=""):
 from tares import linear
 from tares.envelope import now_utc
 from tares.integrations import registry
-from tares.integrations.builtin.tickets_linear import DESK_AFTER, TicketsLinear, pick_state
+from tares.integrations.builtin.tickets_linear import TicketsLinear, pick_state
 from tares.integrations.types import Status
 from tares.store import Store
 
@@ -315,12 +315,11 @@ t1 = tk(s, "FAC-1")
 STATE["mode"] = "down"
 run(b.set_status(t1, Status.in_review))
 counts = [len(s.list_desk(project="p1"))]
-for _ in range(DESK_AFTER - 1):
+for _ in range(4):
     run(b.sync("p1"))
     counts.append(len(s.list_desk(project="p1")))
-ck(f"attempts 1 to {DESK_AFTER - 1}: no desk item; attempt {DESK_AFTER}: one",
-   counts == [0] * (DESK_AFTER - 1) + [1], counts)
-ck("the row counts five", s.get_pending_writeback(t1["id"], "linear")["attempts"] == DESK_AFTER)
+ck("attempts 1 to 4: no desk item; attempt 5: one", counts == [0, 0, 0, 0, 1], counts)
+ck("the row counts five", s.get_pending_writeback(t1["id"], "linear")["attempts"] == 5)
 item = s.list_desk(project="p1")[0]
 ck("it names the ticket, the status and Linear's error",
    "FAC-1" in item["question"] and "in review" in item["question"]
@@ -330,7 +329,7 @@ ck("it is not blocking, and has no em dash", not item["blocking"]
 run(b.sync("p1"))
 run(b.sync("p1"))
 ck("more failures add no second item", len(s.list_desk(project="p1")) == 1
-   and s.get_pending_writeback(t1["id"], "linear")["attempts"] == DESK_AFTER + 2)
+   and s.get_pending_writeback(t1["id"], "linear")["attempts"] == 7)
 STATE["mode"] = "ok"
 run(b.sync("p1"))
 ck("a success afterwards clears the row", s.get_pending_writeback(t1["id"], "linear") is None)
@@ -342,10 +341,10 @@ STATE["mode"] = "down"
 run(b.set_status(t3, Status.done))
 ck("a pending row", s.get_pending_writeback(t3["id"]) is not None)
 STATE["issues"] = [i for i in STATE["issues"] if i["id"] != "i3"]
-STATE["mode"] = "ok"
-run(b.sync("p1"))
+run(b.sync("p1"))     # Linear still refuses the write (but can be read), so the row is not retried away
 ck("the ticket left the project: canceled, and its row is gone",
    tk(s, "FAC-3")["status"] == "canceled" and s.get_pending_writeback(t3["id"]) is None)
+STATE["mode"] = "ok"
 STATE["mode"] = "down"
 t2 = tk(s, "FAC-2")
 run(b.set_status(t2, Status.done))
