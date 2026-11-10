@@ -60,6 +60,9 @@ postgres-state = ["psycopg[binary]>=3.1"]
 
 # The enterprise code is loaded through the `tares.ee` entry point group (tares/team.py). Core
 # never imports it; with no valid licence the cell uses SingleTeam instead.
+[project.entry-points."tares.integrations"]
+"tickets.tares" = "tares.integrations.builtin.tickets_tares:TicketsTares"
+
 [project.entry-points."tares.ee"]
 team = "tares_ee.team:Team"
 

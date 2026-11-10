@@ -5,6 +5,13 @@
         {
           "allowed": true,
           "ee": false,
+          "name": "tares",
+          "settings_schema": [],
+          "title": "Tares"
+        },
+        {
+          "allowed": true,
+          "ee": false,
           "name": "github",
           "settings_schema": [],
           "title": "GitHub Issues"
@@ -56,7 +63,7 @@
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "tares"
+        "title": "Tares"
       },
       "slot": "tickets"
     },
@@ -354,7 +361,7 @@
           "reason": "",
           "slot": "tickets",
           "source": "default",
-          "title": "tares"
+          "title": "Tares"
         },
         {
           "integration": "tares",
