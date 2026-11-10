@@ -1,7 +1,7 @@
 """The setup contract of `crew up` (TR-956): the same questions in a terminal and as data.
 
-  tares factory crew setup --questions --json    every outstanding question as JSON
-  tares factory crew setup --answers <file>      validate the answers and save them on Tares
+  tares factory crew setup --questions --json    every outstanding question, in one document ({schema_version, questions})
+  tares factory crew setup --answers <file>      validate the answers and save them on Tares (--json: what was saved)
   tares factory crew up --yes                    use what is saved, ask nothing
 
 Checks, against a stand-in Tares (tests/factory/fake_up_tares.py) and the Python fake of Claude Code, all in
@@ -33,6 +33,20 @@ import parity  # noqa: E402  (the harness: crew_env and the stand-in Tares)
 from fake_up_tares import FakeTares  # noqa: E402
 
 from tares.crew import dispatch, up  # noqa: E402
+
+try:
+    from jsonschema import Draft202012Validator, FormatChecker  # noqa: E402  (a test-only dependency, as in test_crew_contract)
+except ImportError:
+    print("FAIL  jsonschema is not installed (a test-only dependency: pip install jsonschema)")
+    sys.exit(1)
+
+SCHEMAS = ROOT / "tares" / "crew" / "schemas"
+
+
+def schema_problems(name, doc):
+    """What is wrong with doc against schemas/<name>.json; [] when it validates."""
+    v = Draft202012Validator(json.loads((SCHEMAS / f"{name}.json").read_text(encoding="utf-8")), format_checker=FormatChecker())
+    return [f"{'/'.join(map(str, e.absolute_path)) or '<root>'}: {e.message}" for e in v.iter_errors(doc)]
 
 P = F = 0
 TIMEOUT = 120
@@ -87,9 +101,11 @@ class Case:
 def questions(c, extra=()):
     r = c.run(["crew", "setup", "--questions", "--json", *extra])
     try:
-        return r, json.loads(r.stdout)
+        doc = json.loads(r.stdout)
     except ValueError:
         return r, None
+    # the document is {"schema_version": 1, "questions": [...]}; the checks below read the list
+    return r, doc["questions"] if isinstance(doc, dict) and doc.get("schema_version") == 1 else doc
 
 
 ALL_IDS = ["autonomy", "releaser", "release_profile", "challenger", "builders_max", "grant"]
@@ -98,8 +114,19 @@ ALL_IDS = ["autonomy", "releaser", "release_profile", "challenger", "builders_ma
 print("the questions as data")
 c = Case()
 r, qs = questions(c)
-ck("--questions --json exits 0 and prints a JSON list", r.returncode == 0 and isinstance(qs, list), (r.returncode, r.stderr[-300:]))
+def as_doc(text):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+qdoc = as_doc(r.stdout)
+ck("--questions --json exits 0 and prints one document: schema_version 1 and the questions list",
+   r.returncode == 0 and isinstance(qs, list) and isinstance(qdoc, dict) and set(qdoc) == {"schema_version", "questions"}
+   and len(r.stdout.strip().splitlines()) == 1, (r.returncode, r.stdout[:120], r.stderr[-300:]))
 qs = qs or []
+ck("the document validates against setup_questions.json", schema_problems("setup_questions", qdoc) == [], schema_problems("setup_questions", qdoc))
 ck("a fresh Tares: every setting is outstanding, in the order crew up asks them, then the grant",
    [q["id"] for q in qs] == ALL_IDS, [q.get("id") for q in qs])
 ck("every question has exactly id, text, kind, choices, default, recommendation, why, pattern (and when)",
@@ -121,7 +148,7 @@ ck("the release profile is only asked after a yes to the releaser", by["release_
 ck("the grant is free text with no pattern", by["grant"]["kind"] == "text" and by["grant"]["pattern"] == "")
 ck("asking for the questions saves nothing", c.tares.written() == [])
 r2 = c.run(["crew", "setup", "--questions"])
-ck("--questions without --json prints the same JSON", r2.returncode == 0 and json.loads(r2.stdout) == qs)
+ck("--questions without --json prints the same document", r2.returncode == 0 and r2.stdout == r.stdout, (r2.stdout[:80], r.stdout[:80]))
 c.close()
 
 c = Case(settings={"autonomy": "L4-ship", "releaser": False, "release_profile": "kind",
@@ -156,6 +183,11 @@ t = c1.run(["crew", "up"], stdin=TERMINAL)          # the stations part needs ba
 c2 = Case()
 a = c2.run(["crew", "setup", "--answers", c2.answers(ANSWERS), "--json"])
 ck("--answers exits 0 and says what it saved", a.returncode == 0 and json.loads(a.stdout)["grants"] == 1, (a.returncode, a.stdout, a.stderr[-300:]))
+ck("the --answers --json document validates against setup_answers.json", schema_problems("setup_answers", json.loads(a.stdout)) == [],
+   schema_problems("setup_answers", json.loads(a.stdout)))
+ck("--answers --json is one document: schema_version 1, then saved and grants",
+   list(json.loads(a.stdout)) == ["schema_version", "saved", "grants"] and json.loads(a.stdout)["schema_version"] == 1
+   and "autonomy" in json.loads(a.stdout)["saved"] and len(a.stdout.strip().splitlines()) == 1, a.stdout[:200])
 ck("the terminal path saved the settings", c1.tares.settings.get("autonomy") == "L3-review", (t.returncode, t.stderr[-400:]))
 ck("same settings on Tares (all keys, prod_pattern with the release profile)", c1.tares.settings == c2.tares.settings,
    (c1.tares.settings, c2.tares.settings))
@@ -180,7 +212,7 @@ ck("no releaser: same settings on both paths", a.returncode == 0 and c1.tares.se
 ck("no releaser: no release profile is saved", "release_profile" not in c2.tares.settings)
 ck("no grant said: none saved", c1.tares.grants == [] and c2.tares.grants == [])
 ck("the answers may be words (yes, no) as the terminal takes them",
-   c2.run(["crew", "setup", "--questions"]).stdout.strip() == "[]")
+   json.loads(c2.run(["crew", "setup", "--questions"]).stdout) == {"schema_version": 1, "questions": []})
 c1.close()
 c2.close()
 
@@ -238,6 +270,22 @@ c.close()
 c = Case()
 r = c.run(["crew", "setup", "--questions"], env={"TARESD_URL": "http://127.0.0.1:9"})
 ck("no Tares: says so plainly", r.returncode != 0 and "no Tares answers at http://127.0.0.1:9" in r.stderr, (r.returncode, r.stderr[-200:]))
+r = c.run(["crew", "setup", "--questions", "--json"], env={"TARESD_URL": "http://127.0.0.1:9"})
+err = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+ck("the error document validates against error.json", schema_problems("error", err) == [], schema_problems("error", err))
+ck("no Tares with --json: the error document on stdout, exit 1, nothing on stderr",
+   r.returncode == 1 and err.get("schema_version") == 1 and "no Tares answers at http://127.0.0.1:9" in err.get("error", {}).get("message", "")
+   and set(err.get("error", {})) == {"code", "message"} and r.stderr.strip() == "", (r.returncode, r.stdout[:200], r.stderr[-200:]))
+c.close()
+c = Case()
+r = c.run(["crew", "setup", "--answers", c.answers({"autonomy": "nope", "releaser": False, "challenger": False, "builders_max": 2}), "--json"])
+err = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+ck("bad answers with --json: the problems are in the error document, nothing saved",
+   r.returncode == 1 and "autonomy" in err.get("error", {}).get("message", "") and "the answers were not saved" in err.get("error", {}).get("message", "")
+   and r.stderr.strip() == "" and c.tares.written() == [], (r.returncode, r.stdout[:300], r.stderr[-200:]))
+r = c.run(["crew", "setup", "--answers", c.answers({"autonomy": "nope", "releaser": False, "challenger": False, "builders_max": 2})])
+ck("bad answers without --json: the problems stay on stderr, stdout empty",
+   r.returncode == 1 and "autonomy" in r.stderr and r.stdout.strip() == "", (r.returncode, r.stdout[:100], r.stderr[-200:]))
 c.close()
 
 # ====================================================================================
