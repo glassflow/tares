@@ -115,6 +115,12 @@ ticket(k, "Split the review list", milestone=mk1, stage="merged", status="done")
 store.record_milestone_check(k, mk1, 0, "pass", "12 passed", "crew", "crew-orchestrator", None, now_utc())
 mk2 = store.create_milestone(k, "M2: Later", "Later.", [])
 ticket(k, "Later work", milestone=mk2)
+# M3 (TR-1082): commands and a sentence among one milestone's checks
+mk3 = store.create_milestone(k, "M3: Commands", "Checks written as commands.", [
+    {"check": "python tests/ci_run.py --suite ee", "expect": "0 failed"},
+    {"check": "T=$(mktemp -d); env -u TARES_LICENSE PYTHONPATH=/tmp/a/very/long/path/that/keeps/going/without/any/space/at/all/so/it/has/to/wrap TARES_HOME=$T .venv/bin/tares up --port 8999 --data-dir $T & P=$!; sleep 2; curl -s http://127.0.0.1:8999/api/licence; kill $P", "expect": "The cell says no licence"},
+    {"check": "Open the licence page and read the seats", "expect": "It says no licence"}])
+ticket(k, "Commands in checks", milestone=mk3)
 
 # project-x: a starting prompt only
 x = project("project-x", "Let customers connect their own tools, with a setup page for each.")

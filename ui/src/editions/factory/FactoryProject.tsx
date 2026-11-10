@@ -16,6 +16,7 @@ import {
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
+import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
@@ -459,7 +460,9 @@ function MilestoneRow({ m, onAnswer, onAccept }: {
               <ol className="mb-0.5 mt-1.5 list-decimal pl-5">
                 {m.checks.map((c) => (
                   <li key={c.n} className="my-1.5 text-[13px] [overflow-wrap:anywhere]" data-testid="milestone-check" data-for={c.for} data-result={c.result ?? ""}>
-                    <span data-user-text>{c.check}</span>
+                    {looksLikeCommand(c.check)
+                      ? <code data-user-text className="whitespace-pre-wrap font-mono text-[12.5px]">{c.check}</code>
+                      : <span data-user-text>{c.check}</span>}
                     {c.expect && <span className="block text-xs text-muted-foreground">Should show: <span data-user-text>{c.expect}</span></span>}
                     <span className="block text-xs text-muted-foreground" data-testid="check-state">
                       {c.for === "person" ? "For you. " : "The crew's. "}{checkWords(c)}
