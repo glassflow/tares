@@ -5,6 +5,12 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.56.0] - 2026-11-10
+
+A cell now opens as a Software Factory or an AI SRE, each with its own screens, and working as a team
+on one cell moves to an enterprise licence (the code is in `ee/`). This release also brings a project
+GitHub page, delete on the project page, a new factory Settings page, and one team list on Tares Cloud.
+
 ### Added
 - Delete a project from its page: the last section of a factory project page deletes it, after you type its name. Its tickets, decisions, calls and docs are removed; pull requests and branches on GitHub stay.
 - The crew engine ships inside the `tares` package everywhere it is installed (TR-1064): `psutil` and `keyring` are now installed with it, `tares/crew/schemas/` is in the wheel, and the Claude Code plugin names the oldest tares it works with (`min_tares.txt`). `tares hook compat` prints one line when the installed tares is older than that, and the plugin's session start shows it. A `tares` on PATH without the command, or any failure, shows nothing.
