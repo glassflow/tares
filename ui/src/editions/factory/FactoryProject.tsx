@@ -15,6 +15,7 @@ import {
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
+import { AllowDialog } from "./FactoryHome";
 import { DetailLines } from "./HomeDetail";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
@@ -22,8 +23,9 @@ import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSample
 // One factory project, from one read (GET /api/factory/projects/{id}): what waits for you, the few
 // tickets moving now, a compact row per milestone, the calls the crew made, your decisions, the
 // documents and the command that opens a builder's session. The full ticket list is the Tickets
-// screen; "All N tickets" and each milestone's count open it. A button that does something on Home
-// (keep, allow, copy the hand-over command) links there with an arrow and never acts here. The cell
+// screen; "All N tickets" and each milestone's count open it. Allow is done here, in its own dialog,
+// so several can be allowed in a row. Any other button that does something on Home (copy the
+// hand-over command) links there with an arrow and never acts here. The cell
 // shapes every string for people; names, goals, titles, calls, decisions and doc titles are the
 // person's own text and marked data-user-text. The one raw string is the terminal command.
 
@@ -129,7 +131,7 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-function ActionButton({ action, onClose, onKeep }: { action: HomeAction; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void> }) {
+function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (a: HomeAction) => void }) {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px]! max-sm:flex-1 max-sm:justify-center max-sm:text-center";
@@ -152,6 +154,9 @@ function ActionButton({ action, onClose, onKeep }: { action: HomeAction; onClose
       </span>
     );
   }
+  if (action.do === "allow" && onAllow) {
+    return <Button variant={variant} className={cn(cls, strong)} onClick={() => onAllow(action)} data-testid="waiting-allow">{action.label}</Button>;
+  }
   if (action.href) {
     const external = !action.href.startsWith("/");
     return (
@@ -168,7 +173,7 @@ function ActionButton({ action, onClose, onKeep }: { action: HomeAction; onClose
   );
 }
 
-function WaitingRow({ item, onClose, onKeep }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void> }) {
+function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void }) {
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
     <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-[var(--row-hover)]")}
@@ -186,23 +191,23 @@ function WaitingRow({ item, onClose, onKeep }: { item: HomeItem; onClose: () => 
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2 max-sm:w-full">
-          {actions.map((a) => <ActionButton key={a.label} action={a} onClose={onClose} onKeep={onKeep} />)}
+          {actions.map((a) => <ActionButton key={a.label} action={a} onClose={onClose} onKeep={onKeep} onAllow={onAllow && ((x) => onAllow(item, x))} />)}
         </div>
       )}
     </div>
   );
 }
 
-function Waiting({ items, onClose, onKeep }: {
-  items: HomeItem[]; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>;
+function Waiting({ items, onClose, onKeep, onAllow }: {
+  items: HomeItem[]; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void;
 }) {
   const [all, setAll] = React.useState(false);
   const g = groupWaiting(items);
   const count = items.length;
   const rest = all ? g.rest : g.rest.slice(0, SHOW_WAITING);
   const more = g.rest.length - rest.length;
-  const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close" && !(a.do === "keep_assumptions" && onKeep)));
-  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} onKeep={onKeep} />;
+  const arrows = items.some((i) => i.question || i.actions.some((a) => a.do && a.do !== "close" && !(a.do === "keep_assumptions" && onKeep) && !(a.do === "allow" && onAllow)));
+  const row = (it: HomeItem) => <WaitingRow key={it.id} item={it} onClose={onClose} onKeep={onKeep} onAllow={onAllow} />;
   return (
     <section id="waiting" aria-label="Waiting for you" className="min-w-0 scroll-mt-4" data-testid="waiting">
       <SectionHead title="Waiting for you"
@@ -824,8 +829,10 @@ function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promi
   );
 }
 
-export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, start }: {
+export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, start }: {
   data: FactoryProjectData;
+  /** Allow is done on this page, and this reads the project again after it. Left out (a sample), Allow links to Home. */
+  onAllowed?: () => void;
   /** Delete the project for good; the page then leaves for Projects. */
   onDelete?: () => Promise<void>;
   onClose?: () => Promise<void>;
@@ -844,6 +851,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
   const [busy, setBusy] = React.useState(false);
   const [closeError, setCloseError] = React.useState(start?.error ?? "");
   const [kept, setKept] = React.useState<string[]>([]);
+  const [allowing, setAllowing] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [moving, setMoving] = React.useState(false);
   const later = async (on: boolean) => {
     setMoving(true);
@@ -941,7 +949,8 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
 
       <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-8">
         <div className="grid min-w-0 gap-6">
-          <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} onKeep={onKeep} />
+          <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} onKeep={onKeep}
+                   onAllow={onAllowed && ((item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); })} />
           <Moving d={d} />
           <RecentPrs d={d} />
           <section id="milestones" aria-label="Milestones" className="min-w-0 scroll-mt-4" data-testid="milestones">
@@ -972,6 +981,16 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAnswer, onAcc
                   <Button busy={busy} onClick={confirm} data-testid="close-confirm">Close</Button>
                 </>
               } />
+      {allowing && (
+        <AllowDialog key={allowing.item.id} item={allowing.item} desk={allowing.desk} mayLimit={allowing.mayLimit} onClose={() => setAllowing(null)}
+          onDone={(r) => {
+            toast(r.added ? "Allowed. The crew restarts it with the permission once it is between turns."
+              : "That grant was already kept, so nothing changed.");
+            setKept((k) => [...k, allowing.item.id]);
+            setAllowing(null);
+            onAllowed?.();
+          }} />
+      )}
       <Toaster />
     </div>
   );
@@ -1042,7 +1061,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAllowed={sample ? undefined : reload} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} start={sample ? sampleClose(sample) : undefined} />
     </>
   );
 }

@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- Allow on a crew permission request on a project page now opens the Allow dialog and keeps the grant there, instead of sending you to Home with nothing allowed. If the cell refuses, the dialog says why, and you stay on the list to allow the next one.
+
 ## [1.56.0] - 2026-11-10
 
 A cell now opens as a Software Factory or an AI SRE, each with its own screens, and working as a team

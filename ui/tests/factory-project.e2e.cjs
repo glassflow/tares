@@ -116,12 +116,14 @@ async function waitFor(url, tries = 100) {
        && (await T("waiting-row").first().getAttribute("data-kind")) !== "milestone_to_check", await T("waiting-row").first().getAttribute("data-kind"));
     ck("all four show: nothing that waits is behind a button here", (await T("waiting-row").count()) === 4 && (await T("waiting-more").count()) === 0,
        String(await T("waiting-row").count()));
-    ck("the note says what an arrow does", (await txt(T("waiting"))).includes("Buttons with an arrow open Home, where they are done."));
+    ck("nothing here opens Home, so there is no note about arrows", !(await txt(T("waiting"))).includes("Buttons with an arrow"));
     const row = (kind) => T("waiting-row").and(page.locator(`[data-kind=${kind}]`));
     ck("a question: Answer opens the desk of this project", (await row("question").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/projects/${y}#desk-D1`);
     ck("a permission: Answer opens the request, and the command is code",
        (await row("permission").getByRole("link", { name: "Answer" }).getAttribute("href")) === `/projects/${y}#desk-D2`
        && (await row("permission").locator("code[data-words-exempt]").innerText()) === "gh pr merge 13 --squash");
+    ck("a permission: Allow is done here, a button with no arrow (TR-1074)", (await row("permission").getByTestId("waiting-allow").count()) === 1
+       && !(await txt(row("permission").getByTestId("waiting-allow"))).includes("↗"));
     ck("calls to confirm: Read them opens the project's calls page",
        (await row("calls_to_confirm").getByRole("link", { name: "Read them" }).getAttribute("href")) === `/projects/${y}/calls`);
     ck("calls to confirm: each call on its own line", (await row("calls_to_confirm").getByTestId("detail-lines").locator("li").count()) === 2);
