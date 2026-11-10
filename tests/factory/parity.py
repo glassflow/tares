@@ -2718,15 +2718,16 @@ scenario(Scenario(
 # three stations (a builder or a helper where the case wants one) whose sessions the fake Claude Code lists. The
 # fake `claude --version` says the installed version (claude/version); a station's row says the version it runs
 # (`version`), and a restart's new row carries the installed one (claude/stamp-version), so neither engine needs
-# a process listing. The bash round also reads GET /api/crew/pace, which the Python watch does not yet (TR-962).
+# a process listing.
 # The fake versions are all below 2, so a real Claude Code spare on the host is never "older" and never stopped.
 
 _CC_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind",
                                                            "challenger": False, "builders_max": 3}}),
              "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
-# Left out of the comparison: what Tares is read for (the pace, TR-962, is not in the Python watch yet, and the two
-# engines read the settings a different number of times), the retry flags sent to it (TR-964), and how often the
-# session list and `--version` are read. What is written to Tares, started and stopped is compared.
+# Left out of the comparison: every read of Tares (the other steps of a round read settings, health and pace in a
+# different order and number in each engine; the pace itself is real in Python since TR-962), the retry flags sent to
+# it (TR-964), and how often the session list and `--version` are read. What is written to Tares, started and stopped
+# is compared.
 _CC_NOT_YET = ("GET ", "PUT /api/crew/claude-retry?crew=crew")
 _CC_READS = (("agents",), ("--version",))
 _CC_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "cccc0003"}
