@@ -2309,6 +2309,192 @@ scenario(Scenario(
 
 
 # ---------------------------------------------------------------------------------------------
+# The watch's revive step (TR-959): one round of `cmd_watch --once` on each engine, through the watch driver. The
+# crews here have nothing for the other branches of the round to do (no pace file, no newer plugin or Claude Code,
+# no grants to give), so the round is the revive and the stuck restart.
+
+WATCH_DRIVER = "watch_support.py"
+# The bash round also reads `claude --version` and the session list for the steps that are not ported yet (updates,
+# regrant, idle wake); those are not compared. What the round starts and stops (--bg, stop, rm) is.
+WATCH_QUIET = (["--version"], ["agents"])
+THRASH_LINE = ('{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Autocompact is '
+               'thrashing: the context refilled to the limit within 3 turns of the previous compact, 3 times in a row."}]}}')
+ORDINARY_LINE = '{"type":"assistant","message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"tick done"}]}}'
+WOKEN_LINE = '{"type":"user","message":{"role":"user","content":"carry on with T4"}}'
+
+
+def _transcript(tmp: Path, session: str, *lines: str) -> None:
+    folder = tmp / "home" / ".claude" / "projects" / "-crew"
+    folder.mkdir(parents=True, exist_ok=True)
+    with open(folder / f"{session}.jsonl", "a", encoding="utf-8", newline="\n") as f:
+        for line in lines:
+            f.write(line + "\n")
+
+
+def _watch_setup(rows: list, transcripts: dict | None = None, done: tuple = ()):
+    """rows: (name, role, parent, state) -> a station on a session of that state; transcripts: session -> lines."""
+    def setup(tmp: Path, env: dict) -> None:
+        sys.path.insert(0, str(HERE))
+        sys.path.insert(0, str(ROOT))
+        import launch_support as LS
+        from tares.crew import launch
+        kit = launch.kit_version(LS.make_kit(tmp))   # a station on this kit is not one to move onto a new plugin
+        work = tmp / "work"
+        work.mkdir(parents=True, exist_ok=True)
+        stations, agents = {}, []
+        for i, (name, role, parent, st) in enumerate(rows, 1):
+            sid = f"aaaa{i:04x}"
+            stations[name] = {"role": role, "status": "active", "parent": parent, "project": "shop" if role == "builder" else "",
+                              "repo": "", "cwd": str(work), "model": "opus", "effort": "high", "id": sid,
+                              "sessionId": f"sess-{i}", "kit": kit}
+            agents.append(_row(st, sid, name, cwd=str(work)))
+        LS.make_crew(tmp, {"stations": stations})
+        for name in done:
+            (tmp / "crew" / "stations" / f"{name}.done").write_text("", encoding="utf-8")
+        state = tmp / "claude"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+        (state / "version").write_text("2.1.310\n", encoding="utf-8")
+        for sess, lines in (transcripts or {}).items():
+            _transcript(tmp, sess, *lines)
+    return setup
+
+
+def _bg_names(r: Run) -> list:
+    return [arg_after(c["args"], "-n") for c in bg_calls(r)]
+
+
+_WATCH_ONCE = Step(["once"])
+
+scenario(Scenario(
+    name="watch_revive_stopped",
+    suite="crew",
+    about="a round revives a stopped station in its own conversation; a running station, a helper and a finished builder are left",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_watch_setup([("shop-build-m1", "builder", "crew-orchestrator", "stopped"),
+                        ("crew-reviewer", "reviewer", "", "idle"),
+                        ("shop-build-m2", "builder", "crew-orchestrator", "stopped"),
+                        ("shop-build-m1-probe", "helper", "shop-build-m1", "stopped"),
+                        ("crew-releaser", "releaser", "", "stopped")],
+                       done=("shop-build-m2",)),
+    steps=[_WATCH_ONCE, _WATCH_ONCE],
+    checks=[
+        ("a stopped station is revived under the same name",
+         lambda r: r.code(0) == 0 and "shop-build-m1 stopped; reviving it under the same name" in r.out(0)
+         and "shop-build-m1" in _bg_names(r)),
+        ("...resuming its recorded conversation", lambda r: "sess-1" in [arg_after(c["args"], "--resume") for c in bg_calls(r)]),
+        ("a station that runs is left", lambda r: "crew-reviewer" not in _bg_names(r)),
+        ("a finished builder and a helper are left",
+         lambda r: "shop-build-m2" not in _bg_names(r) and "shop-build-m1-probe" not in _bg_names(r)),
+        ("a releaser is revived whatever else is done", lambda r: "crew-releaser" in _bg_names(r)),
+        ("the next round finds them running and starts nothing", lambda r: r.launches() == 2 and r.code(1) == 0),
+        ("the revives are in the event log", lambda r: _events(r).count("revived") >= 2),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_revive_unreadable",
+    suite="crew",
+    about="a round that cannot read Claude Code's session list revives nothing; the next one that can does",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_watch_setup([("shop-build-m1", "builder", "crew-orchestrator", "stopped")]),
+    steps=[Step(["once"], env={"FAKE_CLAUDE_AGENTS_FAIL": "1"}), _WATCH_ONCE],
+    checks=[
+        ("nothing is revived, and it says so",
+         lambda r: "nothing is revived or restarted this round" in r.out(0) and r.code(0) == 0),
+        ("the next round revives it",
+         lambda r: "shop-build-m1 stopped; reviving it under the same name" in r.out(1) and r.launches() == 1),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_revive_station_skipped",
+    suite="crew",
+    about="a station whose state cannot be told is skipped for the round and the rest go on",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_watch_setup([("shop-build-m1", "builder", "crew-orchestrator", "stopped"),
+                        ("shop-build-m2", "builder", "crew-orchestrator", "stopped")]),
+    steps=[Step(["once"], env={"FAKE_CLAUDE_AGENTS_FAIL_AFTER": "1"}), _WATCH_ONCE],
+    checks=[
+        ("it says it skips each, and starts nothing",
+         lambda r: "skipping shop-build-m1 this round" in r.out(0) and "skipping shop-build-m2 this round" in r.out(0)
+         and "reviving it" not in r.out(0)),
+        ("the next round revives them, only then",
+         lambda r: r.launches() == 2 and "skipping" not in r.out(1) and "reviving it" in r.out(1)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_revive_fails",
+    suite="crew",
+    about="a revive that fails is reported and tried again next round; the other stations are still revived",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_watch_setup([("shop-build-m1", "builder", "crew-orchestrator", "stopped"),
+                        ("shop-build-m2", "builder", "crew-orchestrator", "stopped")]),
+    steps=[Step(["once"], env={"FAKE_CLAUDE_FAIL_RESUME": "1"}), _WATCH_ONCE],
+    checks=[
+        ("each failure is reported with its retry",
+         lambda r: "could not revive shop-build-m1; will try again next round" in r.out(0)
+         and "could not revive shop-build-m2; will try again next round" in r.out(0)),
+        ("the next round revives them", lambda r: "could not revive" not in r.out(1) and "reviving it" in r.out(1)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_stuck_restart",
+    suite="crew",
+    about="a station Claude Code stopped for thrashing on autocompact is started fresh; a working, a woken and an ordinary one are left",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_watch_setup([("crew-orchestrator", "orchestrator", "", "idle"),
+                        ("crew-reviewer", "reviewer", "", "idle"),
+                        ("crew-releaser", "releaser", "", "working"),
+                        ("shop-build-m1", "builder", "crew-orchestrator", "idle")],
+                       transcripts={"sess-1": [ORDINARY_LINE, THRASH_LINE], "sess-2": [THRASH_LINE, ORDINARY_LINE],
+                                    "sess-3": [THRASH_LINE], "sess-4": [THRASH_LINE, WOKEN_LINE]}),
+    steps=[Step(["once"], env={"FACTORY_STOP_WAIT": "3"}), _WATCH_ONCE],
+    checks=[
+        ("the stuck station is said to be stuck, stopped and started fresh",
+         lambda r: r.code(0) == 0 and "crew-orchestrator is stuck: Claude Code stopped it for thrashing on autocompact; "
+         "starting it fresh under the same name" in r.out(0) and ["stop", "aaaa0001"] in [c["args"] for c in r.calls()]
+         and _bg_names(r) == ["crew-orchestrator"]),
+        ("...in a new conversation: no --resume", lambda r: all(arg_after(c["args"], "--resume") is None for c in bg_calls(r))),
+        ("...with thrashing and restarted-fresh events", lambda r: "thrashing" in _events(r) and "restarted-fresh" in _events(r)),
+        ("an ordinary last reply, a working station and a woken one are left",
+         lambda r: all(n not in _bg_names(r) for n in ("crew-reviewer", "crew-releaser", "shop-build-m1"))),
+        ("the new conversation is not restarted in the next round", lambda r: r.launches() == 1),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_stuck_stopped",
+    suite="crew",
+    about="a station that stopped on a thrashed conversation comes back in a new one, not resumed",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_watch_setup([("crew-releaser", "releaser", "", "stopped")], transcripts={"sess-1": [THRASH_LINE]}),
+    steps=[_WATCH_ONCE],
+    checks=[
+        ("it says why the conversation is new",
+         lambda r: r.code(0) == 0 and "crew-releaser stopped; reviving it under the same name, in a new conversation "
+         "since its last one thrashed" in r.out(0)),
+        ("not resumed", lambda r: all(arg_after(c["args"], "--resume") is None for c in bg_calls(r))),
+        ("restarted-fresh is in the event log", lambda r: "restarted-fresh" in _events(r) and "thrashing" not in _events(r)),
+    ],
+    covers=[],
+))
+
+
+# ---------------------------------------------------------------------------------------------
 # Normalising
 
 ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")

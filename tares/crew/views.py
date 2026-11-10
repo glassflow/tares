@@ -29,6 +29,7 @@ from .client import TaresClient, TaresHTTPError, cksum, grants_sum
 from .errors import CrewError, SessionListUnreadableError
 from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
 from .paths import ME, CrewPaths
+from .watch_revive import stuck_on_context  # moved there by TR-959; status and roster read it
 
 LETTERS = "ABCDEFGH"
 DESK_END = f"Answer in the orchestrator's session, one at a time: {ME} crew attach orchestrator"
@@ -273,41 +274,6 @@ def regranted(paths: CrewPaths, client: TaresClient, station: str) -> bool:
         return False
     now = str(grants_sum(text.rstrip("\n") + "\n"))
     return now != was and now != state.stations_get(station, "grants_tried", paths=paths)
-
-
-_THRASH = re.compile(r'"<synthetic>".*Autocompact is thrashing')
-
-
-def stuck_on_context(paths: CrewPaths, binary: str, station: str, agents=None) -> bool:
-    """True when Claude Code's thrashing notice is the last thing said and nothing new runs."""
-    try:
-        transcript = claude.transcript_of(station, binary, paths, agents)
-    except (CrewError, OSError):
-        return False
-    if not transcript:
-        return False
-    try:
-        with open(transcript, encoding="utf-8", errors="replace", newline="\n") as f:
-            tail = f.read().split("\n")
-    except OSError:
-        return False
-    if tail and tail[-1] == "":
-        tail.pop()
-    last = None
-    for line in tail[-200:]:
-        try:
-            obj = state.loads_json(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and obj.get("type") in ("assistant", "user"):
-            last = obj
-    if last is None or not _THRASH.search(state.dumps_compact(last)):
-        return False
-    try:
-        turn_state = claude.turn_state(state.stations_get(station, "id", paths=paths), binary)
-    except SessionListUnreadableError:
-        return False
-    return turn_state != "working"
 
 
 def cc_retry_in(paths: CrewPaths, station: str) -> str:
