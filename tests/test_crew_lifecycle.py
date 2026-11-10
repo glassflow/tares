@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -506,12 +507,16 @@ ck("restart passes --fresh and the prompt on", code == 0 and launched[0]["resume
    and events()[-1]["event"] == "restarted-fresh", str(launched))
 reset({"shop-build-m1": station()}, RUNNING)
 del launched[:]
-real_sleep, real_stop = LC.time.sleep, LC._stop_session
+real_time, real_stop = LC.time, LC._stop_session
 slept = []
-LC.time.sleep = slept.append
+# Swap lifecycle's own `time` name, not time.sleep: subprocess polls with the shared time.sleep too
+# (1ms, 2ms ... 50ms), and those calls must not land in the list.
+LC.time = types.SimpleNamespace(sleep=slept.append)
 LC._stop_session = lambda job_id, binary: None   # a session that ignores the stop
-code, out, err, _ = run("restart", ["shop-build-m1"], FACTORY_STOP_WAIT="2")
-LC.time.sleep, LC._stop_session = real_sleep, real_stop
+try:
+    code, out, err, _ = run("restart", ["shop-build-m1"], FACTORY_STOP_WAIT="2")
+finally:
+    LC.time, LC._stop_session = real_time, real_stop
 ck("a station that will not stop: says how long it waited", code == 1 and said(err) == ["shop-build-m1 did not stop within 2s; try again"]
    and not launched, str(said(err)))
 ck("...it looked FACTORY_STOP_WAIT times, a second apart", slept == [1, 1], str(slept))
