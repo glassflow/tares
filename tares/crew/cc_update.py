@@ -25,7 +25,7 @@ Stubs, each behind one small named function so the ticket that owns the real thi
   * cc_backoff (TR-964): never waiting. A station that failed a move is tried again the next round.
   * cc_delay (TR-964): FACTORY_CC_BACKOFF seconds (default 600), no doubling and no FACTORY_CC_BACKOFF_MAX.
   * cc_retry_sync (TR-964): does nothing, so the Crew page's retry flags are not sent.
-  * _pace_closed (TR-962): reads stations.pace_read_stub, which says "not paced" until the pace is ported.
+  * _pace_closed: the pace module's reading of this round (TR-962), `pace.current(paths).closed`.
   * upgrades_frozen (TR-965): views.Frozen, the read-only copy of the freeze check.
 cc_retry_in (the text of the retry time) is views.cc_retry_in, imported when needed (TR-964 owns it).
 
@@ -60,7 +60,7 @@ import time
 
 import psutil
 
-from . import claude, launch, lifecycle, stations, state
+from . import claude, launch, lifecycle, state
 from .client import TaresClient
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -188,10 +188,10 @@ def claude_auto(client: TaresClient) -> bool:
 
 
 def _pace_closed(client: TaresClient) -> bool:
-    """Whether a plan limit is full and has not reset (bash: pace_read, then pace_closed). TR-962 replaces this
-    with the real reading; until then stations.pace_read_stub says "not paced"."""
-    pace = stations.pace_read_stub()
-    return isinstance(pace, dict) and pace.get("at_limit") is True
+    """Whether a plan limit is full and has not reset (bash: pace_read, then pace_closed). The reading of this
+    round, from TR-962's pace module: the one its step remembered if it is young, else a new one."""
+    from . import pace   # here, not at the top: pace imports modules that import this one
+    return pace.current(client.paths, client.env).closed
 
 
 def upgrades_frozen(paths: CrewPaths, client: TaresClient, *, fresh: bool = False) -> bool:

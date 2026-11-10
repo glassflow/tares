@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -481,7 +482,8 @@ try:
                (p_new.pid, spare_cmd("2.1.200", new_sock)), (p_other.pid, "/usr/bin/vim notes.txt")]
     with patched(CU, "_listing", lambda: listing):
         CU.prune_spares(CP, NEW)
-    ck("an older spare nobody has claimed is stopped", gone_soon(p_old))
+    ck("an older spare nobody has claimed is stopped", gone_soon(p_old),
+       str({"socket": old_sock.exists(), "listed": [c for _, c in listing][:1], "events": kinds()}))
     ck("a claimed one (no claim socket any more) is left", p_claimed.poll() is None)
     ck("a spare of the target version is left", p_new.poll() is None)
     ck("another process is left", p_other.poll() is None)
@@ -518,10 +520,13 @@ try:
                                    "/x/versions/0.0.1/claude", "--bg-spare", str(real_sock)])
         procs.append(p_real)
         time.sleep(0.3)
-        with patched(CU, "_listing", REAL_LISTING):
-            CU.prune_spares(CP, "0.0.2")
-        ck("the real process list: the older spare is found and stopped", gone_soon(p_real) and kinds()[-1] == ("spare-pruned", "", "0.0.1"),
-           str(kinds()))
+        if p_real.poll() is not None:   # Windows cannot run a linked python.exe: nothing to find
+            print("  skip the real process list: the python shim did not start")
+        else:
+            with patched(CU, "_listing", REAL_LISTING):
+                CU.prune_spares(CP, "0.0.2")
+            ck("the real process list: the older spare is found and stopped",
+               gone_soon(p_real) and kinds()[-1:] == [("spare-pruned", "", "0.0.1")], str(kinds()))
 finally:
     for p in procs:
         if p.poll() is None:
@@ -642,7 +647,15 @@ ON_LAUNCH.append(lambda n: closed.append(1))
 with patched(CU, "_pace_closed", lambda c: bool(closed)):
     rc, _, _ = move()
 ck("6: the limit fills between the tries", rc == 6 and len(launched) == 1, str((rc, len(launched))))
-ck("the pace seam says not closed until TR-962", CU._pace_closed(None) is False)
+from tares.crew import pace as PACE   # noqa: E402
+_who = types.SimpleNamespace(paths=CP, env={})
+PACE.remember(CP, PACE.Reading("active", 2, True))
+ck("_pace_closed: a full limit that has not reset is closed", CU._pace_closed(_who) is True)
+PACE.remember(CP, PACE.Reading("active", 1, False))
+ck("_pace_closed: a slow-down is not closed", CU._pace_closed(_who) is False)
+PACE.remember(CP, PACE.Reading("off"))
+ck("_pace_closed: pace off is not closed", CU._pace_closed(_who) is False)
+PACE.forget()
 
 world(one, old_row)
 ON_LAUNCH.append(lambda n: (_ for _ in ()).throw(CrewError("launch failed (fake)")))
