@@ -160,6 +160,16 @@ def fresh(builtins, points):
 
 import fake_integ_mod as M
 
+# the integrations Tares ships are in BUILTINS (TR-846: GitHub Issues joins Tares and Linear)
+ck("BUILTINS holds the shipped tickets integrations",
+   {"tares.integrations.builtin.tickets_tares:TicketsTares",
+    "tares.integrations.builtin.tickets_linear:TicketsLinear",
+    "tares.integrations.builtin.tickets_github:TicketsGithub"} <= set(registry.BUILTINS),
+   registry.BUILTINS)
+registry.load(refresh=True)
+ck("the shipped tickets integrations load by name",
+   all(registry.get("tickets", n) is not None for n in ("tares", "linear", "github")))
+
 # built-ins and an entry point integration both come back
 fresh(["fake_integ_mod:FakeMemory"], {"fake-ci": "fake_integ_mod:FakeCI"})
 ck("a built-in is returned", registry.get("memory", "fake") is M.FakeMemory)

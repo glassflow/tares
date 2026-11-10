@@ -40,6 +40,7 @@ SLOTS = tuple(SLOT_BASES)
 BUILTINS: list[str] = [
     "tares.integrations.builtin.tickets_tares:TicketsTares",
     "tares.integrations.builtin.tickets_linear:TicketsLinear",
+    "tares.integrations.builtin.tickets_github:TicketsGithub",
 ]
 
 _loaded: dict[tuple[str, str], type[Integration]] | None = None
