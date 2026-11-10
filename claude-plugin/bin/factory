@@ -758,7 +758,7 @@ write_settings() { # station role parent project repo
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
     --arg crew "$(crew_name)" --arg orch "$(crew_orchestrator)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
-    --arg status_line "$(printf 'python3 %q' "$(kit_dir)/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
+    --arg status_line "$(printf 'tares hook statusline --plugin-root %q' "$(kit_dir)")" --arg compact "$(compact_window 2>/dev/null)" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,

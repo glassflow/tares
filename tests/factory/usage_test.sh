@@ -27,9 +27,9 @@ SID=$(jq -r '."crew-orchestrator".sessionId' "$FACTORY_CREW_HOME/stations.json")
 
 check "a station is told where it compacts" '[ "$(jq -r .env.FACTORY_AUTOCOMPACT "$S")" = 200000 ]'
 check "a station runs the plugin's status line" \
-  '[ "$(jq -r .statusLine.command "$S")" = "python3 $T/kit-under-test/scripts/statusline.py" ] && [ "$(jq -r .statusLine.type "$S")" = command ]'
+  '[ "$(jq -r .statusLine.command "$S")" = "tares hook statusline --plugin-root $T/kit-under-test" ] && [ "$(jq -r .statusLine.type "$S")" = command ]'
 
-# The status line, as Claude Code runs it for the station: with the station's environment and its state on stdin.
+# The status line, as Claude Code runs it for the station (its settings' own command, `tares hook statusline`): with the station's environment and its state on stdin.
 api POST /ingest/claude_code "$(jq -cn --arg s "$SID" '{type: "session_station", sessionId: $s, timestamp: (now | todate),
   station: "crew-orchestrator", role: "orchestrator", parent: "", factory_station: "crew-orchestrator"}')" >/dev/null
 status() { # used% five-hour% → the status line's output
@@ -38,7 +38,7 @@ status() { # used% five-hour% → the status line's output
     context_window: {total_input_tokens: 95300, total_output_tokens: 800, context_window_size: 1000000, used_percentage: $p},
     rate_limits: {five_hour: {used_percentage: $h, resets_at: 4102444800}, seven_day: {used_percentage: 6, resets_at: 4102444800}},
     cost: {total_cost_usd: 1.5}}' \
-  | env $(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$S") python3 "$T/kit-under-test/scripts/statusline.py"
+  | env $(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$S") sh -c "$(jq -r .statusLine.command "$S")"
 }
 out=$(status 48 31)
 check "the status line prints the window and the plan" '[ "$out" = "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%" ]'
@@ -50,9 +50,9 @@ status 48 31 >/dev/null
 check "an unchanged report within the minute is not sent again" '[ "$(api GET /api/crew | jq -r ".stations[] | select(.name == \"crew-orchestrator\") | .context.pct")" = 1 ]'
 status 52 33 >/dev/null
 check "a changed one is" '[ "$(api GET /api/crew | jq -r ".stations[] | select(.name == \"crew-orchestrator\") | .context.pct")" = 52 ]'
-out=$(echo 'not json' | python3 "$T/kit-under-test/scripts/statusline.py"); rc=$?
+out=$(echo 'not json' | sh -c "$(jq -r .statusLine.command "$S")"); rc=$?
 check "bad input: a plain line, no failure" '[ $rc = 0 ] && [ "$out" = Claude ]'
-out=$(status 52 33 2>&1 | TARES_FACTORY_URL=http://127.0.0.1:9 python3 "$T/kit-under-test/scripts/statusline.py" 2>&1; echo "rc=$?")
+out=$(status 52 33 2>&1 | TARES_FACTORY_URL=http://127.0.0.1:9 sh -c "$(jq -r .statusLine.command "$S")" 2>&1; echo "rc=$?")
 check "no Tares: the line still prints" 'grep -q "rc=0" <<<"$out"'
 
 # /context of a station: through a copy of its session that is never saved, in its folder, with its settings.

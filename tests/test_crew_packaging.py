@@ -5,9 +5,9 @@ version module and the plugin's min_tares.txt, and its metadata requires psutil 
 keeps the dependency lines and the dev group; check_plugin_compat (older and newer min_tares, rc
 versions, a missing file, malformed JSON, min_tares in plugin.json); `tares hook compat` end to end
 (one line when the plugin wants a newer tares, nothing otherwise, exit 0 both ways, exit 2 for an
-unknown hook); and the plugin's session-start.sh (the line appears when min_tares is above the
-installed version, and the hook says nothing extra when it is not, when tares is not on PATH, or when
-the check fails).
+unknown hook); and the plugin's session_start.py run by itself, with no tares to import (the line appears when
+min_tares is above the installed version, and the hook says nothing extra when it is not, when tares is
+not on PATH, or when the check fails).
 
 The wheel is built in a copy of the tree (git's file list, with a stub console), so the test leaves no
 dist/ or build output in the checkout. With `uv` not installed, the wheel checks are skipped and say so.
@@ -228,20 +228,18 @@ r = tares(["--help"])
 ck("`tares --help` lists hook", r.returncode == 0 and "hook" in r.stdout, short(r.stdout[:200]))
 
 # ---------- session-start.sh ----------
-print("session-start.sh")
-HOOK = ROOT / "claude-plugin" / "hooks" / "session-start.sh"
-if os.name == "nt" or not shutil.which("bash") or not shutil.which("jq"):
-    print("  skip  no bash or jq here: the session-start checks")
+print("session_start.py on its own")
+HOOK = ROOT / "claude-plugin" / "hooks" / "session_start.py"
+if os.name == "nt":
+    print("  skip  the tares shims are sh scripts: the session-start checks")
 else:
     bindir = T / "hookbin"
     bindir.mkdir()
     shim = bindir / "tares"
     shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" -c "{SHIM_PY}" "$@"\n', encoding="utf-8")
     shim.chmod(0o755)
-    nobin = T / "nobin"  # a PATH with bash, jq and the system tools, and no tares
+    nobin = T / "nobin"  # a PATH with the system tools, and no tares
     nobin.mkdir()
-    for tool in ("bash", "jq"):
-        (nobin / tool).symlink_to(shutil.which(tool))
     broken = T / "brokenbin"  # a tares that fails and prints junk
     broken.mkdir()
     (broken / "tares").write_text("#!/bin/sh\necho junk\necho oops >&2\nexit 1\n", encoding="utf-8")
@@ -251,7 +249,8 @@ else:
     def hook(bins, root, stdin='{"source": "startup"}', extra=None):
         env = dict(CLEAN, PATH=os.pathsep.join([str(bins), syspath]), CLAUDE_PLUGIN_ROOT=str(root))
         env.update(extra or {})
-        return subprocess.run(["bash", str(HOOK)], input=stdin, capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(T))
+        # -S -I: no site-packages and no PYTHONPATH, so tares cannot be imported and the hook asks the one on PATH
+        return subprocess.run([sys.executable, "-S", "-I", str(HOOK)], input=stdin, capture_output=True, text=True, encoding="utf-8", env=env, cwd=str(T))
 
     def ctx(r):
         try:
@@ -273,10 +272,10 @@ else:
     # the plugin root defaults to the hook's own plugin when CLAUDE_PLUGIN_ROOT is not set
     own = T / "own"
     (own / "hooks").mkdir(parents=True)
-    shutil.copy(HOOK, own / "hooks" / "session-start.sh")
+    shutil.copy(HOOK, own / "hooks" / "session_start.py")
     (own / "min_tares.txt").write_text("999.0.0\n", encoding="utf-8")
     env = dict(CLEAN, PATH=os.pathsep.join([str(bindir), syspath]))
-    r = subprocess.run(["bash", str(own / "hooks" / "session-start.sh")], input='{"source": "startup"}', capture_output=True, text=True,
+    r = subprocess.run([sys.executable, "-S", "-I", str(own / "hooks" / "session_start.py")], input='{"source": "startup"}', capture_output=True, text=True,
                        encoding="utf-8", env=env, cwd=str(T))
     ck("...with CLAUDE_PLUGIN_ROOT unset it reads the plugin the hook sits in", r.returncode == 0 and (ctx(r) or "").startswith("This Tares plugin needs"),
        short((r.returncode, r.stdout, r.stderr[-200:])))

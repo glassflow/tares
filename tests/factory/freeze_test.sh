@@ -99,7 +99,7 @@ stopped crew-reviewer
 "$F" crew watch --once >"$T/revive.out" 2>&1
 check "a stopped station is revived while frozen" '[ "$(st crew-reviewer .id)" != "$r" ] && [ "$(launches)" = $((launches0 + 1)) ]'
 check "its plugin is the frozen copy" '[ "$(plugin_dir crew-reviewer)" = "$SNAP" ] && [ "$(st crew-reviewer .plugin)" = "$SNAP" ]'
-check "its status line is the frozen copy's" 'jq -e --arg p "python3 $SNAP/scripts/statusline.py" ".statusLine.command == \$p" "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json" >/dev/null'
+check "its status line is the frozen copy's" 'jq -e --arg p "tares hook statusline --plugin-root $SNAP" ".statusLine.command == \$p" "$FACTORY_CREW_HOME/stations/crew-reviewer.settings.json" >/dev/null'
 check "it records the frozen kit as its own" '[ "$(st crew-reviewer .kit)" = "$V0" ]'
 check "the revive resumed its conversation, and nothing else moved" '[ "$(resumes)" = $((resumes0 + 1)) ] && [ "$(st crew-orchestrator .id)" = "$o" ]'
 

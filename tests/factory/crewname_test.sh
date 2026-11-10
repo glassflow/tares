@@ -127,9 +127,9 @@ FACTORY_CREW_HOME=$T/empty FACTORY_CREW_NAME=Bad_Name "$F" status >"$T/bad-statu
 check "a command other than roster refuses an invalid crew name" '[ $rc -ne 0 ] && grep -q "is not valid: it is 1 to 31 characters" "$T/bad-status.out"'
 
 # The hooks follow the crew: a helper of a-reviewer is a reviewer, a helper of a builder is a builder.
-G="$here/../../claude-plugin/hooks/guard.sh"
+PLUGIN="$here/../../claude-plugin"
 hook() { # parent command crew: deny or allow, for a helper under that parent
-  local out; out=$(jq -n --arg c "$2" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_ROLE=helper FACTORY_CREW=$3 FACTORY_PARENT=$1 bash "$G")
+  local out; out=$(jq -n --arg c "$2" '{tool_name: "Bash", tool_input: {command: $c}}' | FACTORY_ROLE=helper FACTORY_CREW=$3 FACTORY_PARENT=$1 tares hook guard --plugin-root "$PLUGIN")
   if grep -q '"deny"' <<<"$out"; then echo deny; else echo allow; fi
 }
 check "guard: a helper of a-releaser acts as a releaser (named crew)" '[ "$(hook a-releaser "gh pr merge 3" a)" = deny ] && [ "$(hook a-releaser "kubectl --context kind-factory rollout undo deploy/app" a)" = allow ]'
@@ -138,7 +138,7 @@ check "guard: the default crew still works with no FACTORY_CREW" '[ "$(hook crew
 check "guard: a helper whose name has -build- under crew-releaser is still a releaser's" '[ "$(hook crew-releaser-build-x "gh pr merge 3" "")" = deny ] && [ "$(hook a-releaser-build-x "gh pr merge 3" a)" = deny ]'
 
 start() { # parent crew: the skill a helper's session is told to load
-  echo '{"source": "startup"}' | FACTORY_ROLE=helper FACTORY_STATION=h FACTORY_CREW=$2 FACTORY_PARENT=$1 bash "$here/../../claude-plugin/hooks/session-start.sh" | jq -r '.hookSpecificOutput.additionalContext' | grep -o 'station-[a-z]*'
+  echo '{"source": "startup"}' | FACTORY_ROLE=helper FACTORY_STATION=h FACTORY_CREW=$2 FACTORY_PARENT=$1 tares hook session-start --plugin-root "$PLUGIN" | jq -r '.hookSpecificOutput.additionalContext' | grep -o 'station-[a-z]*'
 }
 check "session start: a helper of a-reviewer loads station-reviewer (named crew)" '[ "$(start a-reviewer a)" = station-reviewer ] && [ "$(start a-shop-build-m1 a)" = station-builder ] && [ "$(start crew-releaser "")" = station-releaser ]'
 check "session start: a helper whose name has -build- under crew-reviewer loads station-reviewer" '[ "$(start crew-reviewer-build-x "")" = station-reviewer ] && [ "$(start a-reviewer-build-x a)" = station-reviewer ]'

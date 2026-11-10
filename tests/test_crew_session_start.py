@@ -1,7 +1,7 @@
-"""The SessionStart hook in Python (claude-plugin/hooks/session_start.py), the twin of session-start.sh.
+"""The SessionStart hook (claude-plugin/hooks/session_start.py, started by `tares hook session-start`).
 
-Checks: where bash and jq are here, the Python hook says the same as the bash script for every kind of
-session (a plain one, a person's bound session, a contributor, each station role, a helper of each
+Checks: the hook says what session-start.sh said (pinned in tests/session_start_cases.json, taken from the
+script before it was removed) for every kind of session (a plain one, a person's bound session, a contributor, each station role, a helper of each
 parent, a halted crew) and every kind of input (each source, none, null, a number, junk, invalid
 UTF-8); the compat line is bounded and tidy (TR-972 F2, F3): a `tares` on PATH that prints two lines
 and noise gives one line and no noise, one that hangs costs about two seconds and drops only that line,
@@ -42,7 +42,7 @@ def short(x, n=300):
 WINDOWS = os.name == "nt"
 PY = sys.executable
 SCRIPT = ROOT / "claude-plugin" / "hooks" / "session_start.py"
-BASH_HOOK = ROOT / "claude-plugin" / "hooks" / "session-start.sh"
+PINNED = json.loads((ROOT / "tests" / "session_start_cases.json").read_text(encoding="utf-8"))
 T = Path(tempfile.mkdtemp(prefix="crew_session_start_"))
 
 # a clean base: nothing of the machine's own factory or Tares settings leaks in
@@ -77,95 +77,89 @@ def ctx_of(stdout: bytes):
         return None
 
 
-# ---------- parity with session-start.sh ----------
-print("parity with session-start.sh")
-if WINDOWS or not shutil.which("bash") or not shutil.which("jq"):
-    print("  skip  no bash or jq here: the parity checks")
-else:
-    nobin = T / "nobin"  # bash, jq and the system tools, and no tares
-    nobin.mkdir()
-    for tool in ("bash", "jq"):
-        (nobin / tool).symlink_to(str(shutil.which(tool)))
-    syspath = os.pathsep.join([str(nobin), "/usr/bin", "/bin"])
-    halted = T / "halted"
-    halted.mkdir()
-    (halted / "HALT").write_text(json.dumps({"reason": "deploy freeze \u00e9\u540d", "at": "now"}), encoding="utf-8")
-    junk_halt = T / "junkhalt"
-    junk_halt.mkdir()
-    (junk_halt / "HALT").write_text("not json at all", encoding="utf-8")
-    num_halt = T / "numhalt"
-    num_halt.mkdir()
-    (num_halt / "HALT").write_text('{"reason": 42}', encoding="utf-8")
-    null_halt = T / "nullhalt"
-    null_halt.mkdir()
-    (null_halt / "HALT").write_text('{"reason": null}', encoding="utf-8")
-    clear_home = T / "clearhome"
-    clear_home.mkdir()
+# ---------- what session-start.sh said ----------
+print("what session-start.sh said, pinned")
+halted = T / "halted"
+halted.mkdir()
+(halted / "HALT").write_text(json.dumps({"reason": "deploy freeze \u00e9\u540d", "at": "now"}), encoding="utf-8")
+junk_halt = T / "junkhalt"
+junk_halt.mkdir()
+(junk_halt / "HALT").write_text("not json at all", encoding="utf-8")
+num_halt = T / "numhalt"
+num_halt.mkdir()
+(num_halt / "HALT").write_text('{"reason": 42}', encoding="utf-8")
+null_halt = T / "nullhalt"
+null_halt.mkdir()
+(null_halt / "HALT").write_text('{"reason": null}', encoding="utf-8")
+clear_home = T / "clearhome"
+clear_home.mkdir()
 
-    STATION = {"FACTORY_ROLE": "builder", "FACTORY_STATION": "shop-build-m1", "FACTORY_PARENT": "crew-orchestrator",
-               "TARES_PROJECT": "uc_123", "TARES_PROJECT_NAME": "Shop \u00e9\u540d", "FACTORY_REPO": "/r/shop",
-               "TARES_FACTORY_URL": "http://127.0.0.1:8788"}
-    envs = {
-        "a plain session": {},
-        "a plain session with a Tares address": {"TARES_FACTORY_URL": "http://x"},
-        "a bound session": {"TARES_PROJECT": "uc_1"},
-        "a bound session with a name and an address": {"TARES_PROJECT": "uc_1", "TARES_PROJECT_NAME": "Shop \u00e9",
-                                                       "TARES_FACTORY_URL": "http://x:1"},
-        "a bound session taken over": {"TARES_PROJECT": "uc_1", "TARES_SESSION_TAKEOVER": "1"},
-        "a bound session with an empty takeover": {"TARES_PROJECT": "uc_1", "TARES_SESSION_TAKEOVER": ""},
-        "a contributor": {"TARES_PROJECT": "uc_1", "TARES_SESSION_KIND": "contributor", "TARES_FACTORY_URL": "http://x"},
-        "a contributor with no address": {"TARES_PROJECT": "uc_1", "TARES_SESSION_KIND": "contributor"},
-        "a session kind that is not contributor": {"TARES_PROJECT": "uc_1", "TARES_SESSION_KIND": "other"},
-        "a builder": STATION,
-        "a builder with no name or repo": {"FACTORY_ROLE": "builder", "TARES_PROJECT": "uc_9"},
-        "an orchestrator": {"FACTORY_ROLE": "orchestrator", "FACTORY_STATION": "crew-orchestrator"},
-        "a reviewer with no station name": {"FACTORY_ROLE": "reviewer"},
-        "a station with an address": {"FACTORY_ROLE": "releaser", "FACTORY_STATION": "r", "TARES_FACTORY_URL": "http://t"},
-        "a helper of the orchestrator": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h", "FACTORY_PARENT": "crew-orchestrator"},
-        "a helper of a reviewer": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h", "FACTORY_PARENT": "crew-reviewer-2"},
-        "a helper of a releaser in a named crew": {"FACTORY_ROLE": "helper", "FACTORY_CREW": "acme", "FACTORY_STATION": "h",
-                                                   "FACTORY_PARENT": "acme-releaser"},
-        "a helper of a builder": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h", "FACTORY_PARENT": "shop-build-m1"},
-        "a helper of a builder in a named crew": {"FACTORY_ROLE": "helper", "FACTORY_CREW": "acme", "FACTORY_STATION": "h",
-                                                  "FACTORY_PARENT": "acme-shop-build-m2"},
-        "a helper whose parent is in another crew": {"FACTORY_ROLE": "helper", "FACTORY_CREW": "acme", "FACTORY_STATION": "h",
-                                                     "FACTORY_PARENT": "crew-orchestrator"},
-        "a helper with no parent": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h"},
-        "a station in a halted crew": dict(STATION, FACTORY_HOME=str(halted)),
-        # (a HALT file that is not JSON is left out: jq fails on it and the bash hook dies with exit 5)
-        "a station, HALT with a number reason": dict(STATION, FACTORY_HOME=str(num_halt)),
-        "a station, HALT with a null reason": dict(STATION, FACTORY_HOME=str(null_halt)),
-        "a station with a crew home and no HALT": dict(STATION, FACTORY_HOME=str(clear_home)),
-        "a station with a crew home that is missing": dict(STATION, FACTORY_HOME=str(T / "nowhere")),
-    }
-    # (no empty input: jq prints nothing for it and the bash hook then took it for a resume)
-    sources = ['{"source": "startup"}', '{"source": "resume"}', '{"source": "compact"}', '{"source": "clear"}',
-               "{}", '{"source": null}', '{"source": false}', '{"source": ""}', '{"source": 7}',
-               "[]", "null", "junk"]
-    # the bash hook wrote "compactd" and "cleard"; the Python one says "compacted" and "cleared"
-    fix = (("was compactd:", "was compacted:"), ("was cleard:", "was cleared:"))
-    bad = []
-    n = 0
-    for label, extra in envs.items():
-        for src in sources:
-            n += 1
-            base = dict(CLEAN, PATH=syspath, CLAUDE_PLUGIN_ROOT=str(bare))
-            base.update(extra)
-            sh = subprocess.run(["bash", str(BASH_HOOK)], input=src.encode(), capture_output=True, env=base, cwd=str(T), timeout=60)
-            py = subprocess.run([PY, str(SCRIPT)], input=src.encode(), capture_output=True, env=dict(base, PYTHONUTF8="1"),
-                                cwd=str(T), timeout=60)
-            a, b = ctx_of(sh.stdout), ctx_of(py.stdout)
-            for old, new in fix:
-                a = a.replace(old, new) if a else a
-            if sh.returncode != 0 or py.returncode != 0 or a != b or (a is None) != (not py.stdout.strip()) \
-                    or (a is not None and "hookEventName" not in py.stdout.decode()):
-                bad.append((label, src, sh.returncode, py.returncode, a, b, py.stderr[-200:]))
-    ck(f"the Python hook says what the bash hook says, {len(envs)} kinds of session x {len(sources)} inputs ({n} runs)",
-       not bad, short(bad[:2], 900))
-    # silence is silence: nothing at all on stdout for a plain session
-    py = run_py('{"source": "startup"}')
-    ck("a plain session hears nothing: no output, exit 0, no noise", py.returncode == 0 and py.stdout == b"" and py.stderr == b"",
-       short((py.returncode, py.stdout, py.stderr)))
+STATION = {"FACTORY_ROLE": "builder", "FACTORY_STATION": "shop-build-m1", "FACTORY_PARENT": "crew-orchestrator",
+           "TARES_PROJECT": "uc_123", "TARES_PROJECT_NAME": "Shop \u00e9\u540d", "FACTORY_REPO": "/r/shop",
+           "TARES_FACTORY_URL": "http://127.0.0.1:8788"}
+envs = {
+    "a plain session": {},
+    "a plain session with a Tares address": {"TARES_FACTORY_URL": "http://x"},
+    "a bound session": {"TARES_PROJECT": "uc_1"},
+    "a bound session with a name and an address": {"TARES_PROJECT": "uc_1", "TARES_PROJECT_NAME": "Shop \u00e9",
+                                                   "TARES_FACTORY_URL": "http://x:1"},
+    "a bound session taken over": {"TARES_PROJECT": "uc_1", "TARES_SESSION_TAKEOVER": "1"},
+    "a bound session with an empty takeover": {"TARES_PROJECT": "uc_1", "TARES_SESSION_TAKEOVER": ""},
+    "a contributor": {"TARES_PROJECT": "uc_1", "TARES_SESSION_KIND": "contributor", "TARES_FACTORY_URL": "http://x"},
+    "a contributor with no address": {"TARES_PROJECT": "uc_1", "TARES_SESSION_KIND": "contributor"},
+    "a session kind that is not contributor": {"TARES_PROJECT": "uc_1", "TARES_SESSION_KIND": "other"},
+    "a builder": STATION,
+    "a builder with no name or repo": {"FACTORY_ROLE": "builder", "TARES_PROJECT": "uc_9"},
+    "an orchestrator": {"FACTORY_ROLE": "orchestrator", "FACTORY_STATION": "crew-orchestrator"},
+    "a reviewer with no station name": {"FACTORY_ROLE": "reviewer"},
+    "a station with an address": {"FACTORY_ROLE": "releaser", "FACTORY_STATION": "r", "TARES_FACTORY_URL": "http://t"},
+    "a helper of the orchestrator": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h", "FACTORY_PARENT": "crew-orchestrator"},
+    "a helper of a reviewer": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h", "FACTORY_PARENT": "crew-reviewer-2"},
+    "a helper of a releaser in a named crew": {"FACTORY_ROLE": "helper", "FACTORY_CREW": "acme", "FACTORY_STATION": "h",
+                                               "FACTORY_PARENT": "acme-releaser"},
+    "a helper of a builder": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h", "FACTORY_PARENT": "shop-build-m1"},
+    "a helper of a builder in a named crew": {"FACTORY_ROLE": "helper", "FACTORY_CREW": "acme", "FACTORY_STATION": "h",
+                                              "FACTORY_PARENT": "acme-shop-build-m2"},
+    "a helper whose parent is in another crew": {"FACTORY_ROLE": "helper", "FACTORY_CREW": "acme", "FACTORY_STATION": "h",
+                                                 "FACTORY_PARENT": "crew-orchestrator"},
+    "a helper with no parent": {"FACTORY_ROLE": "helper", "FACTORY_STATION": "h"},
+    "a station in a halted crew": dict(STATION, FACTORY_HOME=str(halted)),
+    # (a HALT file that is not JSON is left out: jq fails on it and the bash hook dies with exit 5)
+    "a station, HALT with a number reason": dict(STATION, FACTORY_HOME=str(num_halt)),
+    "a station, HALT with a null reason": dict(STATION, FACTORY_HOME=str(null_halt)),
+    "a station with a crew home and no HALT": dict(STATION, FACTORY_HOME=str(clear_home)),
+    "a station with a crew home that is missing": dict(STATION, FACTORY_HOME=str(T / "nowhere")),
+}
+# (no empty input: jq prints nothing for it and the bash hook then took it for a resume)
+sources = ['{"source": "startup"}', '{"source": "resume"}', '{"source": "compact"}', '{"source": "clear"}',
+           "{}", '{"source": null}', '{"source": false}', '{"source": ""}', '{"source": 7}',
+           "[]", "null", "junk"]
+# the old bash script wrote "compactd" and "cleard"; the pinned texts have "compacted" and "cleared" (the one fix)
+src_keys = dict(zip(sources, ["startup", "resume", "compact", "clear", "other:{}", "other:null-source", "other:false",
+                              "other:empty", "other:7", "other:[]", "other:null", "other:junk"]))
+ck("the pinned file has every kind of session", sorted(PINNED) == sorted(envs), sorted(set(PINNED) ^ set(envs)))
+bad = []
+n = 0
+for label, extra in envs.items():
+    for src in sources:
+        n += 1
+        base = dict(CLEAN, CLAUDE_PLUGIN_ROOT=str(bare))
+        base.update(extra)
+        py = subprocess.run([PY, str(SCRIPT)], input=src.encode(), capture_output=True, env=dict(base, PYTHONUTF8="1"),
+                            cwd=str(T), timeout=60)
+        pin = PINNED[label]
+        i = pin["by_source"][src_keys[src]]
+        want = None if i is None else pin["contexts"][i]
+        got = ctx_of(py.stdout)
+        if py.returncode != 0 or got != want or (got is None) != (not py.stdout.strip()) \
+                or (got is not None and "hookEventName" not in py.stdout.decode()):
+            bad.append((label, src, py.returncode, want, got, py.stderr[-200:]))
+ck(f"the hook says what session-start.sh said, {len(envs)} kinds of session x {len(sources)} inputs ({n} runs)",
+   not bad, short(bad[:2], 900))
+# silence is silence: nothing at all on stdout for a plain session
+py = run_py('{"source": "startup"}')
+ck("a plain session hears nothing: no output, exit 0, no noise", py.returncode == 0 and py.stdout == b"" and py.stderr == b"",
+   short((py.returncode, py.stdout, py.stderr)))
 
 # ---------- the output ----------
 print("output")

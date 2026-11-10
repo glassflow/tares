@@ -3,7 +3,7 @@
     "tares": {
       "type": "http",
       "url": "${TARES_FACTORY_MCP_URL:-${user_config.mcp_url}}",
-      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/mcp-headers",
+      "headersHelper": "tares hook mcp-headers --plugin-root \"${CLAUDE_PLUGIN_ROOT}\"",
       "headers": {
         "Authorization": "Bearer ${user_config.access_token}",
         "X-Tares-Station": "${FACTORY_STATION:-}",
