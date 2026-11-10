@@ -253,8 +253,10 @@ def status_of(state: dict | None) -> str:
 
 
 async def fetch_issues(store, linear_project_id: str) -> list[dict]:
+    """Every issue of the Linear project. Never a partial list: the sync cancels any ticket it
+    did not see, so a list cut short would cancel tickets that are still in the project."""
     out, after = [], None
-    while len(out) < MAX_ISSUES:
+    while True:
         data = await query(store, _ISSUES, {"id": linear_project_id, "after": after})
         proj = data.get("project")
         if proj is None:
@@ -263,9 +265,11 @@ async def fetch_issues(store, linear_project_id: str) -> list[dict]:
         page = proj["issues"]
         out.extend(page.get("nodes") or [])
         if not page["pageInfo"]["hasNextPage"]:
-            break
+            return out
+        if len(out) >= MAX_ISSUES:
+            raise LinearError(f"the Linear project has more than {MAX_ISSUES} issues; "
+                              "nothing was changed")
         after = page["pageInfo"]["endCursor"]
-    return out
 
 
 def _env(project: dict, link: dict, issue: dict, change: str, text: str, detail: dict) -> Envelope:
@@ -290,6 +294,8 @@ async def sync_project(store, uid: str) -> list[Envelope]:
     try:
         issues = await fetch_issues(store, link["id"])
         milestones = await fetch_milestones(store, link["id"])
+        if not issues and any(t["owner"] == "linear" for t in store.list_tickets(uid)):
+            raise LinearError("Linear returned no issues for this project; nothing was changed")
     except LinearError as e:
         store.set_project_linear(uid, {**link, "error": str(e)})
         raise
