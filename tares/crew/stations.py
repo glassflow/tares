@@ -44,7 +44,10 @@ def _real(path: str) -> str:
 
 
 def _repo_label(repo: dict) -> str:
-    """jq's `.path // .name`: the path unless it is null or false."""
+    """jq's `.path // .name`: the path unless it is null or false. A repo that is a plain string (a malformed
+    payload) is shown as it is."""
+    if not isinstance(repo, dict):
+        return state.jq_raw(repo)
     p = repo.get("path")
     return state.jq_raw(p if p is not None and p is not False else repo.get("name"))
 

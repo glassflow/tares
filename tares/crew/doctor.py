@@ -69,6 +69,24 @@ class Check:
         return f"  {LABELS[self.level]} {self.message}"
 
 
+def repo_ids(rows: list) -> list:
+    """One id part per (project, repo) row, unique within its project: the repo's folder name, with -2, -3
+    after the first when two repos of a project share a folder name or the same repo is listed twice (and
+    on to the next free number when that name is a folder name too). The desktop app tells checks apart
+    by id, so a project with several repos needs one per repo."""
+    used: set = set()
+    out = []
+    for project, repo in rows:
+        base = re.split(r"[\\/]", str(repo).rstrip("/\\"))[-1] or "repo"
+        part, n = base, 1
+        while (project, part) in used:
+            n += 1
+            part = f"{base}-{n}"
+        used.add((project, part))
+        out.append(part)
+    return out
+
+
 def _windows() -> bool:
     """A function so a test can patch it."""
     return sys.platform == "win32"
@@ -563,14 +581,14 @@ class Doctor:
             rows = c.project_repo_rows()
         except CrewError:
             return
-        for p, repo in rows:
+        for (p, repo), rid in zip(rows, repo_ids(rows)):
             if not os.path.isdir(repo):
-                self.no(f"project_{p}", f"project {p}: {repo} does not exist on this machine", "fix the repo path on Tares")
+                self.no(f"project_{p}_{rid}", f"project {p}: {repo} does not exist on this machine", "fix the repo path on Tares")
                 continue
             if self.trusted(repo):
-                self.ok(f"project_{p}_trust", f"project {p}: {repo} trusted")
+                self.ok(f"project_{p}_{rid}_trust", f"project {p}: {repo} trusted")
             else:
-                self.no(f"project_{p}_trust", f"project {p}: Claude Code has not trusted {repo} (its git root must be "
+                self.no(f"project_{p}_{rid}_trust", f"project {p}: Claude Code has not trusted {repo} (its git root must be "
                         "trusted itself); run `claude` there once", f"cd {repo} && claude, accept the trust prompt")
             gh = shutil.which("gh", path=self.env.get("PATH"))
             if not gh:
@@ -582,12 +600,12 @@ class Doctor:
             if not _:
                 name, perm = line, line
             if perm in ("ADMIN", "MAINTAIN", "WRITE"):
-                self.ok(f"project_{p}_github", f"project {p}: {repo} is {name} on GitHub ({perm})")
+                self.ok(f"project_{p}_{rid}_github", f"project {p}: {repo} is {name} on GitHub ({perm})")
             elif perm == "":
-                self.no(f"project_{p}_github", f"project {p}: gh can't read the GitHub repo of {repo} (no GitHub remote, "
+                self.no(f"project_{p}_{rid}_github", f"project {p}: gh can't read the GitHub repo of {repo} (no GitHub remote, "
                         "or no access); builders open PRs there", "gh auth login, and add a GitHub remote")
             else:
-                self.no(f"project_{p}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
+                self.no(f"project_{p}_{rid}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
                         "push and merge", "ask for write access to the repo")
 
     def check_cmux(self) -> None:
@@ -603,8 +621,9 @@ class Doctor:
         if not rows:
             return
         plugins = doctor_lsp.read_plugins(self.claude_path)
-        for level, project, lang, msg, cmds in doctor_lsp.doctor_rows(rows, plugins, self.env):
-            self.add(level, f"lsp_{project}_{lang.lower()}", msg, " && ".join(cmds))
+        for row, rid in zip(rows, repo_ids(rows)):
+            for level, project, lang, msg, cmds in doctor_lsp.doctor_rows([row], plugins, self.env):
+                self.add(level, f"lsp_{project}_{rid}_{lang.lower()}", msg, " && ".join(cmds))
 
     def check_git(self) -> None:
         r = self.run(["git", "--version"], timeout=30)

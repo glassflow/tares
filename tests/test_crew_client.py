@@ -60,7 +60,7 @@ def ck(label, cond, detail=""):
 TOKEN = "stub-token"
 SETTINGS = {"autonomy": "L4-ship", "releaser": False, "challenger": True, "builders_max": 2}
 PROJECTS = [
-    {"id": "p-1", "name": "Links App", "repos": [{"path": "/r/links"}, {"path": "/r/shared"}, {"path": None}]},
+    {"id": "p-1", "name": "Links App", "repos": [{"path": "/r/links"}, {"path": "/r/shared"}, {"path": None}, "glassflow/plain"]},
     {"id": "p-2", "name": "🔄 Emoji App", "repos": [{"path": "/r/emoji"}, {"path": "/r/shared"}]},
 ]
 GRANTS = {"all": '- "the reviewer may comment on draft PRs" (2026-01-02)', "projects": {
@@ -467,7 +467,7 @@ ck("project_row by name, id and slug",
    c.project_row("Links App")["id"] == "p-1" and c.project_row("p-2")["name"] == "🔄 Emoji App"
    and c.project_row("links-app")["id"] == "p-1" and c.project_row("LINKS   app!")["id"] == "p-1", c.project_row("links-app"))
 ck("project_row of an unknown project is None", c.project_row("nope") is None)
-ck("project_repo_rows skips repos with no path", c.project_repo_rows() == [("Links App", "/r/links"), ("Links App", "/r/shared"),
+ck("project_repo_rows skips repos with no path, and repos that are plain strings (TR-1130)", c.project_repo_rows() == [("Links App", "/r/links"), ("Links App", "/r/shared"),
                                                                         ("🔄 Emoji App", "/r/emoji"), ("🔄 Emoji App", "/r/shared")], c.project_repo_rows())
 ck("all_repos is sorted and unique", c.all_repos() == ["/r/emoji", "/r/links", "/r/shared"], c.all_repos())
 ck("crew_projects_or_die passes when Tares answered", len(c.crew_projects_or_die()) == 2)

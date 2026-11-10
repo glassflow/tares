@@ -1051,6 +1051,28 @@ setup_crew_name() {
   store_crew_name "$n"
 }
 
+# The second half of crew up: start each role's station, the orchestrator first. Also the internal command
+# `_start-stations <role...>` the Python crew up calls until launch is ported (TR-953).
+start_stations() {
+  local roles="$*"
+  [ -n "${roles// /}" ] || roles=$(crew_roles)
+  # Orchestrator first so the others can check in with it.
+  local ordered="" r
+  for r in $roles; do [ "$r" = orchestrator ] && ordered="orchestrator"; done
+  for r in $roles; do [ "$r" = orchestrator ] || ordered="$ordered $r"; done
+
+  echo >&2; echo "Starting the crew" >&2
+  for r in $ordered; do
+    case "$r" in orchestrator|reviewer|releaser) ;; *) die "unknown crew role '$r' (crew roles: orchestrator, reviewer, releaser; builders start with factory spawn)" ;; esac
+    local station; station=$(station_name "$r")
+    station_lock "$station"
+    if is_alive "$station"; then echo "  ✓ $station is already running" >&2; continue; fi
+    launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
+    [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
+  done
+  return 0   # the loop ends on a false test for any role but the orchestrator; as a function that would be a failure under set -e
+}
+
 cmd_crew_up() {
   local roles="" watch=1
   while [ $# -gt 0 ]; do
@@ -1067,21 +1089,7 @@ cmd_crew_up() {
   ensure_settings
   prime
   lsp_offer
-  [ -n "${roles// /}" ] || roles=$(crew_roles)
-  # Orchestrator first so the others can check in with it.
-  local ordered="" r
-  for r in $roles; do [ "$r" = orchestrator ] && ordered="orchestrator"; done
-  for r in $roles; do [ "$r" = orchestrator ] || ordered="$ordered $r"; done
-
-  echo >&2; echo "Starting the crew" >&2
-  for r in $ordered; do
-    case "$r" in orchestrator|reviewer|releaser) ;; *) die "unknown crew role '$r' (crew roles: orchestrator, reviewer, releaser; builders start with factory spawn)" ;; esac
-    local station; station=$(station_name "$r")
-    station_lock "$station"
-    if is_alive "$station"; then echo "  ✓ $station is already running" >&2; continue; fi
-    launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
-    [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
-  done
+  start_stations $roles
   [ $watch = 1 ] && start_watch
   cat >&2 <<NEXT
 
@@ -3125,6 +3133,7 @@ case "$cmd" in
   tidy) cmd_tidy "$@" ;;
   _parse-bg-id) parse_bg_id ;;
   _mcp-url) mcp_url ;;
+  _start-stations) start_stations "$@" ;;
   doctor) cmd_doctor ;;
   *) usage; exit 1 ;;
 esac

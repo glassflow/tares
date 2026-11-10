@@ -2,8 +2,8 @@
 and the scenario count gate.
 
 Checks: what the normaliser removes (temp folder, timestamps, pids, ids, key order) and what it keeps;
-`parity.py crew_basic` exits 0 and prints `SKIP python: not ported` while the Python engine has not
-moved that command over; a failing bash side exits 1; a Python side that prints the same as bash
+`parity.py crew_basic` exits 0 and its Python side matches bash now that `crew up` is ported; a scenario
+whose command the Python engine has not moved over (a made-up word) prints `SKIP python: not ported` and exits 0; a failing bash side exits 1; a Python side that prints the same as bash
 matches, and one that prints something else exits 1; `--coverage` prints a percentage and exits 0;
 `--require-full` exits 1 below 100%; an unknown scenario exits 2.
 
@@ -284,7 +284,16 @@ else:
     code, text = run("crew_basic")
     ck("crew_basic exits 0", code == 0, f"{code}\n{text}")
     ck("crew_basic: bash passes", "PASS bash: 1 checks" in text, text)
-    ck("crew_basic: python is skipped as not ported", "SKIP python: not ported" in text, text)
+    ck("crew_basic: python is ported and matches bash", "PASS python: 1 checks" in text and "MATCH" in text, text)
+
+    # A command the Python engine has not ported (a made-up word, so a later port cannot turn it ported): that side skips.
+    unported = parity.Scenario(name="fx_unported", suite="a", steps=[parity.Step(["no-such-command"])],
+                               checks=[("it ran", lambda r: True)], covers=["x"], about="fixture")
+    lines = []
+    with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith(("PARITY_", "TARES_FACTORY_"))}):
+        code, passes = parity.evaluate(unported, out=lines.append)
+    ck("an unported command skips the Python side: SKIP python: not ported",
+       any("SKIP python: not ported" in x for x in lines) and passes is not True, "\n".join(lines))
 
     code, text = run("crew_basic", env={"PARITY_FAIL": "bash"})
     ck("a failing bash side exits 1", code == 1 and "FAIL bash" in text, f"{code}\n{text}")
