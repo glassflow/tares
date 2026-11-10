@@ -34,8 +34,9 @@ Differences from bash
     round: a kit upgrade this round means no Claude Code move. The kit part is not ported; `step` marks where
     it chains in.
   * `step` runs after the revive step has had its turn in the same round (the steps run in order, each with its
-    own reading). A station the revive step started this round is up when `step` looks, where bash still counts
-    it as down for this round. It has just started, so it is not quiet and is not picked.
+    own reading). A station the revive step started this round is up when `step` looks, so `step` also reads
+    the revive step's own `down` (`watch_revive.last.down`), and a round in which any station was down moves
+    nothing, as in bash. The revived station is not picked either: it has just started, so it is not quiet.
   * The unreadable session list is reported once, by the revive step; `step` just moves nothing then.
   * prune_spares reads the process list with psutil on every platform (bash runs `ps -axo pid=,command=`), and
     ends a spare with a polite terminate (SIGTERM; TerminateProcess on Windows), as `kill` does. A process this
@@ -60,7 +61,7 @@ import time
 
 import psutil
 
-from . import claude, launch, lifecycle, state
+from . import claude, launch, lifecycle, state, watch_revive
 from .client import TaresClient
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -88,18 +89,18 @@ def _active(paths: CrewPaths) -> list:
             if isinstance(row, dict) and row.get("status") == "active"]
 
 
-def station_cc(paths: CrewPaths, station: str, agents=None) -> str:
+def station_cc(paths: CrewPaths, station: str, agents=None, binary=None) -> str:
     """The Claude Code version a station's process runs; "" when it cannot be told. `agents` is a session list
-    already read (without one it is read here)."""
-    return claude.running_version(state.stations_get(station, "id", paths=paths), agents)
+    already read (without one it is read here, with `binary`)."""
+    return claude.running_version(state.stations_get(station, "id", paths=paths), agents, binary)
 
 
-def cc_behind(paths: CrewPaths, target: str, agents=None) -> int:
+def cc_behind(paths: CrewPaths, target: str, agents=None, binary=None) -> int:
     """How many stations that matter run an older Claude Code than target: active, not finished. An unreadable
     session list counts none."""
     if agents is None:
         try:
-            agents = claude.active_json()
+            agents = claude.active_json(binary)
         except SessionListUnreadableError:
             return 0
     n = 0
@@ -187,10 +188,14 @@ def claude_auto(client: TaresClient) -> bool:
     return state.jq_raw(settings.get("claude_update")) != "false"
 
 
-def _pace_closed(client: TaresClient) -> bool:
+def _pace_closed(client: TaresClient, *, fresh: bool = False) -> bool:
     """Whether a plan limit is full and has not reset (bash: pace_read, then pace_closed). The reading of this
-    round, from TR-962's pace module: the one its step remembered if it is young, else a new one."""
+    round, from TR-962's pace module: the one its step remembered if it is young, else a new one. `fresh` reads
+    the pace again (bash reads it again right before a restart)."""
     from . import pace   # here, not at the top: pace imports modules that import this one
+    if fresh:
+        with TaresClient(client.paths, client.env, lambda _m: None) as other:
+            return pace.read(other).closed
     return pace.current(client.paths, client.env).closed
 
 
@@ -204,10 +209,10 @@ def upgrades_frozen(paths: CrewPaths, client: TaresClient, *, fresh: bool = Fals
     return views.Frozen(paths, client).on
 
 
-def tell_newer_claude(paths: CrewPaths, client: TaresClient, version: str) -> None:
+def tell_newer_claude(paths: CrewPaths, client: TaresClient, version: str, binary=None) -> None:
     """A frozen crew moves no station onto a newer Claude Code either, but says so: once for each version.
     Nothing behind removes the file that remembers which version it said it for."""
-    n = cc_behind(paths, version)
+    n = cc_behind(paths, version, binary=binary)
     if n == 0:
         with contextlib.suppress(FileNotFoundError):
             os.unlink(paths.cc_newer_file)
@@ -313,7 +318,7 @@ def claude_move(paths: CrewPaths, client: TaresClient, station: str, target: str
     with TaresClient(client.paths, client.env, client.say) as own:   # bash's subshell: nothing cached carries in
         try:
             return _move(paths, own, station, target, claude_bin)
-        except (CrewError, OSError, subprocess.SubprocessError) as e:
+        except Exception as e:   # bash's errexit: whatever a restart or the pace read raises ends the move with rc 1
             client.say(getattr(e, "message", "") or str(e))
             return 1
 
@@ -367,7 +372,7 @@ def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin
             lifecycle.restart(client, paths, [s, prompt], claude_bin=claude_bin)
         v = ""
         for _ in range(VERSION_POLLS):
-            v = station_cc(paths, s)
+            v = station_cc(paths, s, binary=claude_bin)
             if v:
                 break
             time.sleep(pause)
@@ -397,7 +402,7 @@ def watch_claude_move(paths: CrewPaths, client: TaresClient, station: str, targe
     """The watch's turn at claude_move, with what it says."""
     if upgrades_frozen(paths, client, fresh=True):
         return   # frozen since the round began: the freeze wins
-    if _pace_closed(client):
+    if _pace_closed(client, fresh=True):
         return   # the plan's limit filled since the round began: wait for the reset (TR-674)
     client.say(f"{station} runs an older Claude Code than {target}; restarting it on {target} now that it's idle, "
                "in the same conversation")
@@ -468,7 +473,8 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
         claude.active_json(claude_bin)
     except SessionListUnreadableError:
         return   # the revive step says so; nothing is moved this round
-    down = _down(paths, claude_bin)
+    # bash's `down` holds for the whole round: a station the revive step brought back this round still counts
+    down = watch_revive.last.down or _down(paths, claude_bin)
     with TaresClient(paths, env) as client:
         # TR-965 chains in here: bash's round is `if <a station is due a kit upgrade> then upgrade_station
         # elif <the Claude Code part below>`, so the Claude Code part must be skipped on a round that upgraded one.
@@ -476,7 +482,7 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
             # the same, for Claude Code itself: one idle station a round, the orchestrator last; a frozen crew
             # only hears that there is a newer one
             if upgrades_frozen(paths, client):
-                tell_newer_claude(paths, client, cc_now)
+                tell_newer_claude(paths, client, cc_now, claude_bin)
             elif _pace_closed(client):
                 pass   # the plan's limit is full: a restart is a model turn into it, so the move waits for the reset (TR-674)
             else:

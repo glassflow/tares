@@ -2720,6 +2720,8 @@ scenario(Scenario(
 # (`version`), and a restart's new row carries the installed one (claude/stamp-version), so neither engine needs
 # a process listing.
 # The fake versions are all below 2, so a real Claude Code spare on the host is never "older" and never stopped.
+# These scenarios read the machine's real process table (the spare-pruning ones start spare-like processes), so
+# run them alone: two runs at once, or one beside test_crew_cc_update.py, stop each other's spares.
 
 _CC_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind",
                                                            "challenger": False, "builders_max": 3}}),
