@@ -504,6 +504,15 @@ try:
     with patched(CU, "_listing", lambda: [(2 ** 22 + 12345, spare_cmd("2.1.100", old_sock))]):
         CU.prune_spares(CP, NEW)
     ck("a spare that is gone by the kill is skipped, with no event", len(events()) == 1, str(kinds()))
+    # a socket path with a space in it (a Windows profile name such as "Jane Doe") is still found
+    spaced = SCRATCH / "a b" / "spaced.claim.sock"
+    spaced.parent.mkdir(exist_ok=True)
+    spaced.write_text("")
+    p_spaced = sleeper()
+    procs.append(p_spaced)
+    with patched(CU, "_listing", lambda: [(p_spaced.pid, spare_cmd("2.1.100", spaced))]):
+        CU.prune_spares(CP, NEW)
+    ck("an older spare whose socket path holds a space is stopped", gone_soon(p_spaced), str(spare_cmd("2.1.100", spaced)))
 
     # the real process list, with a child whose command line says it is a spare of version 0.0.1
     shim = SCRATCH / "py"
