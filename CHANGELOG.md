@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- On the factory Home page, a long answer option on a question in "Waiting for you" now wraps inside its card instead of running past the right edge.
+
 ## [1.56.0] - 2026-11-10
 
 A cell now opens as a Software Factory or an AI SRE, each with its own screens, and working as a team
