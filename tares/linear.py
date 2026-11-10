@@ -135,7 +135,12 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
                           "again in Settings")
     if r.status_code >= 400:
         raise LinearError(f"Linear answered {r.status_code}: {r.text[:200]}")
-    body = r.json()
+    try:
+        body = r.json()
+    except ValueError as e:
+        raise LinearError(f"Linear answered {r.status_code} with something that is not JSON") from e
+    if not isinstance(body, dict):
+        raise LinearError(f"Linear answered {r.status_code} with something Tares cannot read")
     if body.get("errors"):
         msg = "; ".join(str(e.get("message")) for e in body["errors"])
         if "authentication" in msg.lower():

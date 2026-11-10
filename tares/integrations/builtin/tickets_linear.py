@@ -19,12 +19,15 @@ the project), never a bare id, because a ticket is looked up inside its project.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from .. import tickets
 from ..types import Field, Status, TicketRef
 from ... import factory as factory_mod
 from ... import linear
 from ...envelope import now_utc
+
+log = logging.getLogger("tares.integrations.tickets_linear")
 
 # Failures of one write before the desk hears of it.
 DESK_AFTER = 5
@@ -34,7 +37,8 @@ _WORDS = {Status.todo: "to do", Status.in_progress: "in progress", Status.in_rev
 
 # a ticket's Linear issue: its team and the team's workflow states
 _STATES = """query($id: String!) {
-  issue(id: $id) { id team { id name states { nodes { id name type position } } } }
+  issue(id: $id) { id state { id name type }
+    team { id name states { nodes { id name type position } } } }
 }"""
 
 _MOVE = """mutation($id: String!, $state: String!) {
@@ -53,7 +57,10 @@ def pick_state(states: list[dict], status: Status) -> dict | None:
         return of[0] if of else None
 
     def named(name: str) -> dict | None:
-        return next((s for s in states if str(s.get("name") or "").strip().lower() == name), None)
+        # a state of that name counts when Linear files it as started: the sync reads a status
+        # back from the state's type, so a "In Progress" of another type would read as something else
+        return next((s for s in states if str(s.get("name") or "").strip().lower() == name
+                     and str(s.get("type") or "").lower() == "started"), None)
 
     if status == Status.todo:
         return first("unstarted")
@@ -64,6 +71,18 @@ def pick_state(states: list[dict], status: Status) -> dict | None:
     if status == Status.done:
         return first("completed")
     return None
+
+
+def _shows(now: dict, wanted: dict, status: Status) -> bool:
+    """True when the issue's state `now` already is what `status` means. The state `pick_state`
+    chose is the match; for to do, in progress and done, so is any state of its type (a team's
+    own "Doing" is in progress). In review is only the state picked, since its type is started."""
+    if not now:
+        return False
+    if now.get("id") and now.get("id") == wanted.get("id"):
+        return True
+    return (status != Status.in_review and bool(now.get("type"))
+            and str(now["type"]).lower() == str(wanted.get("type") or "").lower())
 
 
 class TicketsLinear(tickets.TicketBackend):
@@ -155,6 +174,10 @@ class TicketsLinear(tickets.TicketBackend):
         except linear.LinearError as e:
             await asyncio.to_thread(self._failed, t, status, str(e))
             return False
+        except Exception as e:  # noqa: BLE001 - a write that fails for any reason is kept, never raised
+            await asyncio.to_thread(self._failed, t, status,
+                                    f"the move failed: {type(e).__name__}")
+            return False
         await asyncio.to_thread(self.store.pending_writeback_clear, t["id"], self.name)
         return True
 
@@ -169,16 +192,22 @@ class TicketsLinear(tickets.TicketBackend):
         if state is None:
             team = (issue.get("team") or {}).get("name") or "its team"
             raise linear.LinearError(f"{team} in Linear has no state for {_WORDS[status]}")
+        if _shows(issue.get("state") or {}, state, status):
+            return          # the issue is there already (moved by hand): nothing to write
         data = await linear.query(self.store, _MOVE, {"id": t["external_id"], "state": state["id"]})
         if not (data.get("issueUpdate") or {}).get("success"):
             raise linear.LinearError(f"Linear did not move {factory_mod.label(t)} to "
                                      f"{state.get('name') or _WORDS[status]}")
 
     def _failed(self, t: dict, status: Status, error: str) -> None:
+        error = error[:300]     # what the row keeps and the desk shows (its limit is 1500)
         attempts = self.store.pending_writeback_fail(t["id"], self.name, status.value,
-                                                     error[:300], now_utc())
-        if attempts == DESK_AFTER:       # once: the attempts only grow
-            self._desk(t, status, error, attempts)
+                                                     error, now_utc())
+        if attempts == DESK_AFTER:       # once per status wanted
+            try:
+                self._desk(t, status, error, attempts)
+            except Exception:  # noqa: BLE001 - the desk is a courtesy; the write's failure is kept
+                log.exception("the desk item for %s could not be added", t.get("id"))
 
     def _desk(self, t: dict, status: Status, error: str, attempts: int) -> None:
         """The desk item, made the way the desk route makes one: the same checks on its words,
@@ -186,13 +215,16 @@ class TicketsLinear(tickets.TicketBackend):
         ref = factory_mod.label(t)
         q, rec, why, opts, ctx, _, _ = factory_mod.desk_ok(
             f"{ref} could not be moved to {_WORDS[status]} in Linear",
-            "Fix the Linear connection, or move the issue in Linear yourself. Tares keeps trying "
-            "each time it reads Linear, and stops when the issue shows the status.",
+            "Fix the Linear connection, add the missing state to the team in Linear, or move the "
+            "issue in Linear yourself. Tares tries again each time this integration syncs, and "
+            "stops when the issue shows the status.",
             f"Tares tried {attempts} times and Linear refused or could not be reached each time. "
             f"Until it works, Tares keeps {ref} as it is and does not copy Linear's status over it.",
             [], f"Linear said: {error}")
+        to = (t.get("assignee_person_id")
+              or (self.store.get_project(t["project"]) or {}).get("lead_person_id"))
         self.store.add_desk_item(t["project"], q, ctx, opts, rec, why, "", [ref], False, "tares",
-                                 [], now_utc(), to_person_id=t.get("assignee_person_id"))
+                                 [], now_utc(), to_person_id=to)
 
     # ── the ticket and the store ──────────────────────────────────────────────
     def _store(self):

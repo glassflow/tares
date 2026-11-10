@@ -84,6 +84,12 @@ def handler(request: httpx.Request) -> httpx.Response:
     if q.lstrip().startswith("mutation") or "team {" in q:
         if STATE["mode"] == "down":
             return httpx.Response(503, text="unavailable")
+        if STATE["mode"] == "html":
+            return httpx.Response(200, text="<html>down for maintenance</html>")
+        if STATE["mode"] == "array":
+            return httpx.Response(200, json=[1, 2])
+        if STATE["mode"] == "longerr":
+            return httpx.Response(200, json={"errors": [{"message": "boom " * 400}]})
     if q.lstrip().startswith("mutation"):
         STATE["calls"].append((v["id"], v["state"]))
         if STATE["mode"] == "refuse":
@@ -91,12 +97,18 @@ def handler(request: httpx.Request) -> httpx.Response:
         state = next(s for s in STATE["team"]["states"]["nodes"] if s["id"] == v["state"])
         for iss in STATE["issues"]:
             if iss["id"] == v["id"]:
-                iss["state"] = {"name": state["name"], "type": state["type"]}
+                iss["state"] = {"id": state["id"], "name": state["name"], "type": state["type"]}
         return httpx.Response(200, json={"data": {"issueUpdate": {"success": True}}})
     if "team {" in q:
         if STATE["no_issue"]:
             return httpx.Response(200, json={"data": {"issue": None}})
-        return httpx.Response(200, json={"data": {"issue": {"id": v["id"], "team": STATE["team"]}}})
+        iss = next((i for i in STATE["issues"] if i["id"] == v["id"]), {})
+        now = dict(iss.get("state") or {})
+        if now and not now.get("id"):       # Linear always says which state; the fixtures give the name
+            now["id"] = next((x["id"] for x in STATE["team"]["states"]["nodes"]
+                              if x["name"] == now.get("name")), None)
+        return httpx.Response(200, json={"data": {"issue": {"id": v["id"], "state": now,
+                                                             "team": STATE["team"]}}})
     return httpx.Response(400, json={"errors": [{"message": "unexpected query"}]})
 
 
@@ -236,7 +248,7 @@ ck("a team without In Review: in review is the in progress state", STATE["calls"
 print("== a failure leaves a pending row, and the stage does not flip back ==")
 s, b = world()
 t1 = tk(s, "FAC-1")
-s.update_ticket(t1["id"], status="in_progress", why="started in Tares")   # what the caller did
+s.update_ticket(t1["id"], status="in_progress", stage="doing", why="started in Tares")   # what the caller did
 STATE["mode"] = "down"
 r = run(b.set_status(t1, Status.in_progress))
 row = s.get_pending_writeback(t1["id"], "linear")
@@ -254,7 +266,7 @@ for iss in STATE["issues"]:
 STATE["mode"] = "down"
 run(b.sync("p1"))
 ck("a sync with Linear still saying todo does not flip it back",
-   tk(s, "FAC-1")["status"] == "in_progress")
+   tk(s, "FAC-1")["status"] == "in_progress" and tk(s, "FAC-1")["stage"] == "doing")
 ck("and says nothing on the timeline about a move that did not happen", status_events(s) == base)
 ck("the sync retried: two attempts now",
    s.get_pending_writeback(t1["id"], "linear")["attempts"] == 2)
@@ -308,6 +320,141 @@ STATE["valid"].clear()
 run(b.set_status(tk(s, "FAC-1"), Status.done))
 ck("a refused credential is a pending row as well", s.get_pending_writeback(
    tk(s, "FAC-1")["id"], "linear")["last_error"].startswith("Linear did not accept"))
+
+print("== Linear already shows the status: the wait ends ==")
+s, b = world()
+t1 = tk(s, "FAC-1")
+s.update_ticket(t1["id"], status="in_progress", why="started in Tares")
+STATE["mode"] = "down"
+run(b.set_status(t1, Status.in_progress))
+for _ in range(4):
+    run(b.sync("p1"))
+ck("five failures, a row, one desk item", s.get_pending_writeback(t1["id"], "linear")["attempts"] == 5
+   and len(s.list_desk(project="p1")) == 1)
+STATE["mode"] = "ok"
+STATE["issues"][0]["state"] = {"name": "In Progress", "type": "started"}   # moved by hand in Linear
+STATE["calls"].clear()
+run(b.sync("p1"))
+ck("the next sync writes nothing: Linear shows in progress already", STATE["calls"] == [], STATE["calls"])
+ck("the row is gone", s.get_pending_writeback(t1["id"], "linear") is None)
+ck("Tares follows Linear again", tk(s, "FAC-1")["status"] == "in_progress")
+
+s, b = world()
+STATE["issues"][0]["state"] = {"name": "In Progress", "type": "started"}
+STATE["calls"].clear()
+run(b.set_status(tk(s, "FAC-1"), Status.in_review))
+ck("in review needs the In Review state: an In Progress issue is moved",
+   STATE["calls"] == [("i1", "s-review")], STATE["calls"])
+STATE["issues"][0]["state"] = {"name": "In Review", "type": "started"}
+STATE["calls"].clear()
+run(b.set_status(tk(s, "FAC-1"), Status.in_review))
+ck("an issue in In Review is left alone", STATE["calls"] == [], STATE["calls"])
+STATE["issues"][0]["state"] = {"name": "Done", "type": "completed"}
+run(b.set_status(tk(s, "FAC-1"), Status.done))
+ck("done: an issue in Done is left alone", STATE["calls"] == [], STATE["calls"])
+s2, b2 = world("team_plain")
+STATE["issues"][1]["state"] = {"name": "Doing", "type": "started"}
+STATE["calls"].clear()
+run(b2.set_status(tk(s2, "FAC-2"), Status.in_review))
+ck("a team without In Review: an issue in its started state is left alone", STATE["calls"] == [],
+   STATE["calls"])
+
+s, b = world("team_no_done")
+t3 = tk(s, "FAC-3")
+run(b.set_status(t3, Status.done))
+for _ in range(4):
+    run(b.sync("p1"))
+row = s.get_pending_writeback(t3["id"], "linear")
+item = s.list_desk(project="p1")[0]
+ck("a team with no state for done keeps its row, and the desk says to add the state",
+   row and row["attempts"] == 5 and "add the missing state" in item["recommendation"], (row, item))
+
+print("== a pick that is not a started state ==")
+odd = [{"id": "x1", "name": "In Progress", "type": "backlog", "position": 1},
+       {"id": "x2", "name": "Doing", "type": "started", "position": 2}]
+ck("a state named In Progress of another type is not picked",
+   ids(odd, Status.in_progress) == "x2" and ids(odd, Status.in_review) == "x2")
+
+print("== a failure of any kind is kept, never raised ==")
+for mode, text in (("html", "not JSON"), ("array", "cannot read"), ("longerr", "boom")):
+    s, b = world()
+    STATE["mode"] = mode
+    t = tk(s, "FAC-2")
+    r = fails(b.set_status(t, Status.done), Exception)
+    row = s.get_pending_writeback(t["id"], "linear")
+    ck(f"a {mode} answer: set_status does not raise, the row says why",
+       r is False and row and text in row["last_error"], (r, row))
+    ck(f"a {mode} answer: retry_pending does not raise and lands nothing",
+       run(b.retry_pending("p1")) == 0)
+    ck(f"a {mode} answer: sync does not abort", run(b.sync("p1")) == 3)
+s, b = world()
+async def boom(*a, **k):
+    raise RuntimeError("secret detail")
+b._move = boom
+t = tk(s, "FAC-1")
+run(b.set_status(t, Status.done))
+row = s.get_pending_writeback(t["id"], "linear")
+ck("any other error is kept as a short line, not its text", row and row["last_error"]
+   == "the move failed: RuntimeError", row)
+
+print("== a long error is cut, and the desk item still lands ==")
+s, b = world()
+STATE["mode"] = "longerr"
+t = tk(s, "FAC-1")
+run(b.set_status(t, Status.done))
+for _ in range(4):
+    run(b.sync("p1"))
+row = s.get_pending_writeback(t["id"], "linear")
+ck("the row keeps at most 300 characters of the error", row and len(row["last_error"]) <= 300, row)
+ck("the fifth failure still put one item on the desk", len(s.list_desk(project="p1")) == 1
+   and row["attempts"] == 5)
+s, b = world()
+STATE["mode"] = "down"
+def nope(*a, **k):
+    raise RuntimeError("desk is broken")
+b._desk = nope
+t = tk(s, "FAC-1")
+run(b.set_status(t, Status.done))
+for _ in range(4):
+    run(b.sync("p1"))
+ck("a desk that fails does not fail the write: the row counts five",
+   s.get_pending_writeback(t["id"], "linear")["attempts"] == 5)
+
+print("== who the desk item is for ==")
+s, b = world()
+lead = s.create_person("Lena Lead")["id"]
+doer = s.create_person("Dan Doer")["id"]
+s.set_project_lead("p1", lead)
+s.update_ticket(tk(s, "FAC-2")["id"], assignee_person_id=doer)
+STATE["mode"] = "down"
+run(b.set_status(tk(s, "FAC-1"), Status.done))
+run(b.set_status(tk(s, "FAC-2"), Status.done))
+for _ in range(4):
+    run(b.sync("p1"))
+who = {("FAC-1" in d["question"]): d["to_person_id"] for d in s.list_desk(project="p1")}
+ck("a ticket with an assignee: the item is for them", who.get(False) == doer, who)
+ck("a ticket with none: the item is for the project lead", who.get(True) == lead, who)
+
+print("== a new status wanted starts the count again ==")
+s, b = world()
+t1 = tk(s, "FAC-1")
+STATE["mode"] = "down"
+run(b.set_status(t1, Status.in_progress))
+run(b.set_status(t1, Status.in_progress))
+ck("the same status counts up", s.get_pending_writeback(t1["id"], "linear")["attempts"] == 2)
+run(b.set_status(t1, Status.done))
+row = s.get_pending_writeback(t1["id"], "linear")
+ck("a different status replaces the row and starts at one", row["status"] == "done"
+   and row["attempts"] == 1, row)
+
+print("== a Tares ticket's row is never retried ==")
+s, b = world()
+mine = s.get_ticket("p1", s.create_ticket("p1", "tares", "Mine", external_id="i1"))   # an id Linear knows
+s.pending_writeback_fail(mine["id"], "linear", "done", "x", now_utc())
+STATE["calls"].clear()
+run(b.retry_pending("p1"))
+ck("no call to Linear, and the row is dropped", STATE["calls"] == []
+   and s.get_pending_writeback(mine["id"], "linear") is None)
 
 print("== the desk hears after five failures, once ==")
 s, b = world()

@@ -1881,12 +1881,14 @@ class FactoryStore:
     def pending_writeback_fail(self, ticket: str, integration: str, status: str, error: str,
                                at) -> int:
         """A write of `status` to the ticket system failed: add the ticket's row, or update it
-        with the status wanted now and the error, one attempt more. Returns the attempts so far.
+        with the status wanted now and the error, one attempt more (the count starts again when the
+        status wanted is not the one the row held). Returns the attempts so far.
         Select, then insert or update, under one lock: no ON CONFLICT, so it runs on Postgres."""
         with self._swrite:
-            cur = self.sc.execute("SELECT attempts FROM pending_writeback WHERE ticket = ? "
-                                  "AND integration = ?", [ticket, integration]).fetchone()
-            attempts = int(cur[0] or 0) + 1 if cur else 1
+            cur = self.sc.execute("SELECT attempts, status FROM pending_writeback WHERE "
+                                  "ticket = ? AND integration = ?", [ticket, integration]).fetchone()
+            # a different status wanted now is a new write: its attempts start again
+            attempts = int(cur[0] or 0) + 1 if cur and cur[1] == status else 1
             if cur:
                 self.sc.execute("UPDATE pending_writeback SET status = ?, attempts = ?, "
                                 "last_error = ?, updated_at = ? WHERE ticket = ? AND "
