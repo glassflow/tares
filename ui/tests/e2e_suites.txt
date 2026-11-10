@@ -18,9 +18,9 @@ factory-project-controls
 factory-projects
 factory-reviews
 factory-settings
-factory-team
 factory-start
 factory-start-show
+factory-team
 factory-ticket
 factory-tickets
 grants-declined
