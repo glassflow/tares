@@ -4862,7 +4862,7 @@
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
-      "line": 888,
+      "line": 905,
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
       "ticket": "TR-953",
       "dropped": false,
