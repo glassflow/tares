@@ -44,7 +44,7 @@ NEEDS_EE = {"test_ee_packaging"}
 DEFAULT_WEIGHT = 4
 WEIGHT = {
     "factory:claude_update": 240, "factory:idle_wake": 235, "factory:pace": 225,
-    "factory:crew": 100, "test_watch_escalate": 70, "test_slack": 65, "factory:freeze": 60,
+    "test_parity": 900, "factory:crew": 100, "test_watch_escalate": 70, "test_slack": 65, "factory:freeze": 60,
     "test_project_keys": 19, "test_agents": 15, "test_plugin_challenger": 11, "test_tracing": 11,
     "factory:lsp": 11, "test_seed": 10, "factory:tares": 10, "test_login": 9, "test_usage": 9,
     "test_slack_ask": 9, "factory:usage": 9, "test_github_tickets": 8, "test_degraded": 8,
