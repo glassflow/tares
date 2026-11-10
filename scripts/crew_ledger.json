@@ -4543,6 +4543,16 @@
       "note": ""
     },
     {
+      "name": "route_proxy.py",
+      "kind": "suite",
+      "what": "a pass-through proxy in front of a test Tares that fails one route on purpose, so both engines see the failed lookup",
+      "ticket": "TR-1123",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by spec_test.sh through start_failing_route in lib.sh; standard library only."
+    },
+    {
       "name": "launch_support.py",
       "kind": "suite",
       "what": "a fake Tares, a copy of the kit and a driver that runs one launch function on either engine",
