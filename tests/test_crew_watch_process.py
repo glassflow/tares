@@ -224,16 +224,20 @@ try:
     ck("--once runs one round and returns 0", watch.cmd_watch(["crew", "watch", "--once"], {}) == 0)
 
     print("the claim: a launcher's pid in the pid file becomes the loop's own")
-    code = ("import os, sys; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
-            "from tares.crew.paths import CrewPaths; p = CrewPaths.at(sys.argv[2]); watch.claim_pidfile(p); "
-            "print(os.getpid())")
-    watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")   # this process is the child's parent
+    # The child writes the file naming its own parent (the launcher, on Windows: a venv's python.exe starts the real
+    # one as its child, so the test process is not the parent there), then claims it.
+    code = ("import os, sys, psutil; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
+            "from tares.crew.paths import CrewPaths; p = CrewPaths.at(sys.argv[2]); "
+            "par = psutil.Process().parent(); watch.write_pidfile(p, par.pid, par.create_time(), 'python'); "
+            "watch.claim_pidfile(p); print(os.getpid())")
     r = subprocess.run([sys.executable, "-c", code, str(ROOT), str(CREW)], capture_output=True, text=True, timeout=60)
     row = watch.read_pidfile(paths)
     ck("the child that the pid file names as its parent takes the file", row is not None and str(row[0]) == r.stdout.strip(),
        f"{row} {r.stdout} {r.stderr[-200:]}")
     watch.write_pidfile(paths, 99999999, 1.0, "python")
-    subprocess.run([sys.executable, "-c", code, str(ROOT), str(CREW)], capture_output=True, text=True, timeout=60)
+    plain = ("import sys; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
+             "from tares.crew.paths import CrewPaths; watch.claim_pidfile(CrewPaths.at(sys.argv[2]))")
+    subprocess.run([sys.executable, "-c", plain, str(ROOT), str(CREW)], capture_output=True, text=True, timeout=60)
     ck("a pid file that names someone else's process is left alone", watch.read_pidfile(paths)[0] == 99999999)
     (CREW / "watch.pid").unlink(missing_ok=True)
 
@@ -263,7 +267,7 @@ try:
         started = time.monotonic()
         watch.stop(paths, lines.append, timeout=20)
         ck("stop: the watch is gone, by its stop file well before the timeout",
-           not alive(pid) and time.monotonic() - started < 10 and lines == ["stopped the watch"], f"{lines}")
+           time.monotonic() - started < 10 and lines == ["stopped the watch"] and wait_for(lambda: not alive(pid)), f"{lines}")
         ck("...it left on its own (the log says so), and the files are gone",
            "asked to stop; leaving" in log_text() and not (CREW / "watch.pid").exists() and not (CREW / "watch.stop").exists(),
            log_text()[-300:])
@@ -280,8 +284,8 @@ try:
            row is not None and wait_for(lambda: watch.running_pid(paths) == row[0]))
         time.sleep(1.5)   # a few rounds
         ck("...a second later still", row is not None and watch.running_pid(paths) == row[0])
-        ck("...and it still answers to the stop file", (lambda: (watch.stop(paths, lambda m: None, timeout=20),
-                                                                  not alive(row[0]))[1])())
+        watch.stop(paths, lambda m: None, timeout=20)   # the process may still be finishing when stop returns
+        ck("...and it still answers to the stop file", wait_for(lambda: not alive(row[0])))
 
         print("a start after a reboot: the pid file names a pid some other process has")
         stale = sleeper()
