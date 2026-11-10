@@ -475,11 +475,14 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
         team = {**team, **fx.team_projects(request, open_ps, tickets, rows, projects_view(request), now,
                                                   team["waiting_for_you"])}
     # on a team cell "Your crew" is the caller's own crew; the others are the side column's rows
-    # and so are its open questions and the tickets it works on: the caller's person's, not the cell's
+    # and so are its open questions and the count of tickets at work: the caller's person's, not the cell's
     mine = _cut(fx, "own_stations", request, stations)
     own = _cut(fx, "own_tickets", request, tickets, open_ps)
     desk_open = len(mine_desk)
-    crew = _crew(mine, settings, {p["id"] for p in open_ps}, own, desk_open, now)
+    # What a builder is working on: the caller's own tickets first, because station names repeat
+    # between people's crews, then any other ticket it holds in a project the caller may see.
+    held = {pid: own.get(pid, []) + [t for t in ts if t not in own.get(pid, [])] for pid, ts in tickets.items()}
+    crew = _crew(mine, settings, {p["id"] for p in open_ps}, held, desk_open, now)
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())

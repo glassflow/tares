@@ -635,6 +635,17 @@ async def main():
         ck("Kim's card never shows Alex's builder, whatever its name shares with her ticket",
            not any(m["station"] == "a-build-m1" for m in h["crew"]["members"]), h["crew"]["members"])
         print("   kim headline:", h["headline"])
+        print("== part two: a builder holding a ticket assigned to someone else (TR-890) ==")
+        await push("alex", [st_line("a8", "a-build-z", "builder", 3, "a", "mz", project=atlas),
+                            state_line("a8", "working", 3)])
+        await ticket("kim", atlas, "Kim's ticket Alex's builder took", "acme/web", stage="doing", holder="a-build-z",
+                     assignee_person_id=pid["kim"])
+        h = await home_of("alex")
+        taken = next(m for m in h["crew"]["members"] if m["station"] == "a-build-z")
+        ck("the builder says what it is working on, though the ticket is Kim's",
+           taken["doing"] == "Working on Kim's ticket Alex's builder took", taken)
+        ck("and the headline still counts only Alex's own tickets", "working on 1 ticket." in h["headline"], h["headline"])
+        await push("alex", [state_line("a8", "ended", 1)])
         nobody = await home_of("root")
         ck("the cell's own credential has no crew: 'not running', and none of the cell's work counted",
            nobody["crew"]["members"] == [] and not nobody["crew"]["running"]

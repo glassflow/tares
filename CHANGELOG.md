@@ -9,6 +9,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The Software Factory now has an integrations framework (TR-838 to TR-843): seven slots (tickets, review, ci, memory, monitoring, guardrails, runtime), each filled by an integration. `GET /api/factory/integrations` lists them with their defaults, an admin can choose one for the factory, and a project can choose its own tickets, review and ci. Stored secrets never come back on a read. `/health` now lists the cell's capabilities, and `tares factory crew up` stops with an upgrade message when the cell does not have what it needs. Nothing changes for a running crew yet: the integrations themselves arrive in later milestones.
 
 ### Fixed
+- On a team cell's Home, your builder shows what it is working on even when the ticket is assigned to a teammate (TR-890).
 - A challenger review that did not finish is never recorded as a pass (TR-530). Any Codex failure now shows as an error with its real reason, instead of "sandbox probably failed". When Codex is out of quota or signed out, the crew keeps working and one item on your desk says reviews have stopped.
 
 ## [1.56.0] - 2026-11-10
