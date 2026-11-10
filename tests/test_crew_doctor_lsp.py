@@ -283,9 +283,15 @@ real_read = L.read_plugins
 try:
     L.read_plugins = lambda path="": []
     d.check_lsp(fake_client([("Shop", str(repo))]))
-    ck("a Go repo with no server: one warn with id lsp_<project>_<language> and the commands as its fix",
-       len(d.checks) == 1 and d.checks[0].id == "lsp_Shop_go" and d.checks[0].level == "warn"
+    ck("a Go repo with no server: one warn with id lsp_<project>_<repo>_<language> and the commands as its fix",
+       len(d.checks) == 1 and d.checks[0].id == "lsp_Shop_doc-repo_go" and d.checks[0].level == "warn"
        and d.checks[0].fix == "go install golang.org/x/tools/gopls@latest && claude plugin install gopls-lsp@claude-plugins-official", d.checks)
+    d.checks.clear()
+    repo2 = fresh("doc-repo2")
+    touch(repo2, "go.mod")
+    d.check_lsp(fake_client([("Shop", str(repo)), ("Shop", str(repo2))]))
+    ids = [c.id for c in d.checks]
+    ck("a project with two Go repos: one lsp id per repo, none repeated", ids == ["lsp_Shop_doc-repo_go", "lsp_Shop_doc-repo2_go"], ids)
     d.checks.clear()
     d.check_lsp(fake_client([]))
     ck("no repo handed over: nothing added (and the plugins are not even asked for)", not d.checks)

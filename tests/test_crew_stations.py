@@ -66,6 +66,7 @@ PROJECTS = [
     {"id": "uc_strict", "name": "Strict", "autonomy": "L3-review", "repos": [{"path": SHOP}]},
     {"id": "uc_crew", "name": "Crew Tools", "repos": [{"path": SHOP}]},
     {"id": "uc_named", "name": "No Path", "repos": [{"name": "glassflow/nopath"}]},
+    {"id": "uc_strs", "name": "String Repos", "repos": [LINKS, "glassflow/plain"]},   # a malformed payload: repos as plain strings
 ]
 SETUP = {"stations": {"crew-reviewer": {"role": "reviewer", "status": "active", "project": "", "repo": "", "cwd": str(SCRATCH / "crew"),
                                         "model": "sonnet", "effort": "high"}}}
@@ -148,6 +149,9 @@ refused("a project that is not handed over", ["builder", "Nobody", "m9", LINKS, 
 refused("a folder that is no repository", ["builder", "Links App", "m9", str(SCRATCH / "nowhere"), "x"], "is not a git repository")
 refused("a repo of another project", ["builder", "Links App", "m9", OTHER, "x"], "is not one of Links App's repos on Tares")
 refused("a repo listed by name only has no path to match", ["builder", "No Path", "m9", LINKS, "x"], "glassflow/nopath")
+refused("a repo list of plain strings is refused cleanly, not with a traceback",
+        ["builder", "String Repos", "m9", LINKS, "x"], "is not one of String Repos's repos on Tares")
+refused("a repo list of plain strings is named in the refusal", ["builder", "String Repos", "m9", LINKS, "x"], "glassflow/plain")
 refused("a project named like the crew", ["builder", "Crew Tools", "m9", SHOP, "x"], "a project name can't start with \"crew\"")
 refused("a slug with no letters", ["builder", "Links App", "!!!", LINKS, "x"], "need letters or digits a station name can use")
 refused("no MCP server", ["builder", "Links App", "m9", LINKS, "x"], "no MCP server answers at", mcp=False)
