@@ -172,6 +172,8 @@ try:
     watch.write_pidfile(paths, proc.pid, created - 3600, "python")
     ck("a stale pid file (a pid a reboot gave to another process: the create time differs) names nothing",
        watch.running_pid(paths) is None and LC.watch_pid(paths) is None)
+    ck("...doctor says the same (it reads through running_pid, so the two cannot drift apart)",
+       doctor.watch_running(paths) is False)
     lines = []
     watch.stop(paths, lines.append, timeout=0.2)
     ck("...stopping it removes the file, says nothing and leaves that process alone",
@@ -217,6 +219,50 @@ try:
         watch.stop(paths, lines.append, timeout=0.3)
         ck("a watch that ignores the terminate is killed", victim.wait(15) is not None and lines == ["stopped the watch"],
            str(lines))
+
+    print("a watch that cannot be stopped keeps its pid file")
+    victim = sleeper(ignore_term=True) if not WINDOWS else sleeper()
+    vcreated = psutil.Process(victim.pid).create_time()
+    watch.write_pidfile(paths, victim.pid, vcreated, "python")
+    real_term, real_kill = psutil.Process.terminate, psutil.Process.kill
+    def refuse(self, *a):
+        if self.pid == victim.pid:
+            raise psutil.AccessDenied(self.pid)
+        return None
+    psutil.Process.terminate = psutil.Process.kill = refuse
+    lines = []
+    try:
+        watch.stop(paths, lines.append, timeout=0.3)
+    finally:
+        psutil.Process.terminate, psutil.Process.kill = real_term, real_kill
+    ck("stop says it could not, and keeps the pid file and the process",
+       len(lines) == 1 and lines[0].startswith("could not stop the watch") and (CREW / "watch.pid").exists()
+       and alive(victim.pid), str(lines))
+    watch.stop(paths, lines.append, timeout=0.3)
+    ck("...a later stop that is allowed ends it and says stopped", lines[-1] == "stopped the watch" and victim.wait(15) is not None
+       and not (CREW / "watch.pid").exists(), str(lines))
+
+    if not WINDOWS:
+        print("the launcher claim is retried every round (the pid file may be written after the loop starts)")
+        # P stands for the launcher: it starts the loop C, and only later writes the pid file naming itself, as start() does.
+        pcode = ("import os, subprocess, sys, time, psutil; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
+                 "from tares.crew.paths import CrewPaths; p = CrewPaths.at(sys.argv[2]); "
+                 "ccode = 'import sys; sys.path.insert(0, sys.argv[1]); from tares.crew import watch; "
+                 "from tares.crew.paths import CrewPaths; watch.watch(CrewPaths.at(sys.argv[2]), 0.2, poll=0.05)'; "
+                 "c = subprocess.Popen([sys.executable, '-c', ccode, sys.argv[1], sys.argv[2], 'crew watch']); "
+                 "time.sleep(1.0); watch.write_pidfile(p, os.getpid(), psutil.Process().create_time(), 'python'); "
+                 "end = time.time() + 15\n"
+                 "while time.time() < end:\n"
+                 "    row = watch.read_pidfile(p)\n"
+                 "    if row and row[0] == c.pid: break\n"
+                 "    time.sleep(0.1)\n"
+                 "ok = bool(row and row[0] == c.pid); (p.home / 'watch.stop').write_text('x'); c.wait(20); print('claimed' if ok else 'not claimed')")
+        r = subprocess.run([sys.executable, "-c", pcode, str(ROOT), str(CREW)], env=child_env(), capture_output=True,
+                           text=True, timeout=90)
+        ck("a loop that started before the pid file existed takes it once the launcher writes its own pid",
+           r.stdout.strip() == "claimed", f"{r.stdout} {r.stderr[-300:]}")
+        for name in ("watch.pid", "watch.pid.meta", "watch.stop"):
+            (CREW / name).unlink(missing_ok=True)
 
     if not WINDOWS:
         print("a zombie is not the watch")
@@ -271,8 +317,11 @@ try:
         argv, engine = watch._watch_command({})
         ck("not opted in: the bash watch stays the default", engine == "bash" and argv[0] == "bash" and argv[-2:] == ["crew", "watch"], str(argv))
     argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python", "TARES_FACTORY_ENGINE": "bash"})
-    ck("TARES_FACTORY_ENGINE=bash wins over TARES_FACTORY_WATCH=python (on POSIX)",
+    ck("TARES_FACTORY_ENGINE=bash wins over TARES_FACTORY_WATCH=python (on POSIX; Windows has no bash and runs Python)",
        engine == ("python" if WINDOWS else "bash"), str(argv))
+    argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
+    ck("TARES_FACTORY_ENGINE=bash alone: bash on POSIX, Python on Windows",
+       engine == ("python" if WINDOWS else "bash") and (WINDOWS or argv[0] == "bash"), str(argv))
     for words in (["watch"], ["crew", "watch"]):
         kind = dispatch.route(words, {})[0]
         ck(f"`{' '.join(words)}` goes to bash unless opted in" if not WINDOWS else f"`{' '.join(words)}` runs in Python on Windows",

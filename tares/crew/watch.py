@@ -188,9 +188,10 @@ def stop_requested(paths: CrewPaths) -> bool:
 
 
 def _watch_command(env: dict) -> tuple:
-    """(argv, engine): the command that runs the watch. Python when opted in, and always on Windows (no bash)."""
+    """(argv, engine): the command that runs the watch. Python when opted in, and always on Windows (no bash),
+    whatever TARES_FACTORY_ENGINE says."""
     from . import dispatch   # the one rule for which engine runs `crew watch`; imported late, dispatch imports us
-    if dispatch.route(["crew", "watch"], env)[0] == "python":
+    if os.name == "nt" or dispatch.route(["crew", "watch"], env)[0] == "python":
         exe = sys.executable
         if os.name == "nt":
             gui = os.path.join(os.path.dirname(exe), "pythonw.exe")
@@ -280,6 +281,9 @@ def stop(paths: CrewPaths, say, timeout: float | None = None, env: dict | None =
                 _wait_gone(pid, created, TERMINATE_WAIT)
         except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
             pass
+    if not _gone(pid, created):   # refused (access denied): it runs, so its pid file stays and we say so
+        say(f"could not stop the watch (pid {pid}); its pid file is left as it is")
+        return
     _unlink(paths.home / STOP_FILE)
     remove_pidfile(paths)
     say("stopped the watch")
