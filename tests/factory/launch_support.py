@@ -224,6 +224,7 @@ done
 # worked or not). The revive itself is not made: the prompt it would get is printed.
 BASH_PACE_DOWN = '''
 pace_read || true
+pace_tidy || true   # the top of the round, which the revive step runs after
 for a in "$@"; do
   s=${a%%:*}; o=${a##*:}
   if [ "$o" = up ]; then [ ! -f "$PACE_FILE" ] || pace_revived "$s"; continue; fi

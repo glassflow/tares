@@ -155,17 +155,22 @@ def last(paths: CrewPaths) -> Reading:
     return Reading() if hit is None else hit[1]
 
 
-def current(paths: CrewPaths, env=None) -> Reading:
+def current(paths: CrewPaths, env=None, *, round_start: bool = False) -> Reading:
     """The reading of this round: the one the pace step remembered if it is younger than READING_TTL, else a new
-    one. For the steps that run before the pace step and the commands that need the pace."""
+    one. For the steps that run before the pace step and the commands that need the pace. A new reading with
+    `round_start` also tidies the pace file, as bash does at the top of a round: the revive step then never sees
+    a stopped station of a pace that has since been turned off."""
     hit = _LAST.get(str(paths.home))
     if hit is not None and time.monotonic() - hit[0] < READING_TTL:
         return hit[1]
     client = TaresClient(paths, env)
     try:
-        return read(client)
+        r = read(client)
     finally:
         client.close()
+    if round_start:
+        tidy(paths, r)
+    return r
 
 
 # ---------- pace.json: the stopped ones ----------
@@ -419,7 +424,7 @@ class Seam:
         self.env = env
 
     def _reading(self, paths: CrewPaths) -> Reading:
-        return current(paths, self.env)
+        return current(paths, self.env, round_start=True)
 
     def revived(self, paths: CrewPaths, station: str) -> None:
         revived(paths, station, self._reading(paths))

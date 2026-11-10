@@ -539,6 +539,16 @@ with FakeTares(doc(100, 10, level=2, at_limit=True)) as t:
     seam.revived(paths, "crew-reviewer")
     ck("revived with the limit gone: the file goes", pace_json() is None)
 
+print("revive after the pace was turned off")
+reset()
+paths.pace_file.write_text(json.dumps({"limit_since": "", "until": "", "said": True, "stopped": ["crew-reviewer"], "tried": []}),
+                           encoding="utf-8")
+with FakeTares(doc(99, 0, on=False)) as t:
+    seam = pace.Seam(dict(os.environ))
+    ck("a stopped station of a pace that is now off is not stopped (bash tidied at the top of the round)",
+       not seam.stopped(paths, "crew-reviewer"))
+    ck("...and the pace file is gone", pace_json() is None)
+
 print("the watch runs it as a step")
 ck("pace is a step of the watch", "pace" in watch.STEP_NAMES)
 ck("and the step is this one", watch._STEPS.get("pace") is pace.step)
