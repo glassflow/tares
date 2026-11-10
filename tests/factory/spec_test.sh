@@ -143,20 +143,18 @@ check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\
 skill="$here/../../claude-plugin/skills/spec-project/SKILL.md"
 check "the Contributor section asks my_work for this project's questions (Q numbers restart per project)" 'sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "Call .my_work(project=<project>). and read .person. (who this is) and .spec_questions." && sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "restart in each project"'
 
-# A lookup that fails must not block the normal flow: a curl that fails for one route.
-mkdir -p "$T/shim"
-real_curl=$(command -v curl)
-cat > "$T/shim/curl" <<SHIM
-#!/usr/bin/env bash
-for a in "\$@"; do case "\$a" in *"\$SHIM_FAIL") exit 22 ;; esac; done
-exec "$real_curl" "\$@"
-SHIM
-chmod +x "$T/shim/curl"
+# A lookup that fails must not block the normal flow: Tares answers 500 for one route. A proxy in front
+# of it does that, so the bash and the Python engine (both reach Tares through TARESD_URL) see the same failure.
 for route in /api/whoami /api/projects; do
-  (cd "$T/shop/src" && PATH="$T/shim:$PATH" SHIM_FAIL=$route TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >/dev/null 2>&1)
+  start_failing_route $route
+  rm -f "$FAKE_CLAUDE_STATE/calls.jsonl" "$FAKE_CLAUDE_STATE/last.env"   # a launch that never happens must not pass on the last one
+  (cd "$T/shop/src" && TARESD_URL=$PROXY_URL TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >"$T/fail.out" 2>&1)
   check "a failed $route lookup stays today's flow" '[ "$(last | jq -r ".args[-1]")" = "/tares:spec (project name: Acme web)" ] && ! grep -q "^TARES_PROJECT=" "$FAKE_CLAUDE_STATE/last.env"'
+  stop_failing_route
 done
-(cd "$T/plain" && PATH="$T/shim:$PATH" SHIM_FAIL=/api/whoami TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >"$T/failplain.out" 2>&1); rc=$?
+start_failing_route /api/whoami
+(cd "$T/plain" && TARESD_URL=$PROXY_URL TARES_AUTH_TOKEN=$kiran_tok "$F" spec --project "Acme web" >"$T/failplain.out" 2>&1); rc=$?
+stop_failing_route
 check "and a failed lookup outside a repo is refused as today, not opened as a contributor" '[ $rc != 0 ] && grep -q "inside the git repo the project builds on" "$T/failplain.out"'
 
 [ $fail = 0 ] && echo "spec: all cases pass"
