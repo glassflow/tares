@@ -52,6 +52,14 @@ def _spawn(argv: list[str], env: dict) -> int:
 PORTED[("spawn",)] = _spawn
 
 
+def _settings(argv: list[str], env: dict) -> int:
+    from .stations import cmd_settings  # imported when used (TR-1122)
+    return cmd_settings(argv, env)
+
+
+PORTED[("settings",)] = _settings
+
+
 def _lifecycle(name: str) -> Callable[[list[str], dict], int]:
     """A lifecycle command (TR-955), imported when it runs."""
     def run_it(argv: list[str], env: dict) -> int:

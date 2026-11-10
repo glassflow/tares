@@ -2154,9 +2154,9 @@
       "what": "print a station's settings",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Prints what write_settings builds; the writing is TR-953."
+      "python": "tares.crew.stations:cmd_settings",
+      "ported": true,
+      "note": "Prints what write_settings builds (tares.crew.launch:write_settings, TR-953). Left out of TR-957; ported by TR-1122."
     },
     {
       "name": "cmd_crew",

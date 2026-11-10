@@ -369,14 +369,15 @@ def attach_and_logs():
 
 
 @case
-def settings_stays_in_bash():
+def unported_stays_in_bash():
     eb, _ = world(crew_of(), sessions())
     ep, _ = world(crew_of(), sessions())
-    b = run("bash", eb, ["settings"])
-    p = run("auto", ep, ["settings"])
-    ck("settings: through the dispatcher it still runs in bash (TR-953 ports it)", b[0] == p[0] == 1 and "usage: tares factory settings" in p[2], (b, p))
-    pe = run("python", ep, ["settings"])
-    ck("settings: forced to Python it says it is not ported", pe[0] == 2 and "not yet ported" in pe[2], pe)
+    word = "unported-probe"  # a command the table does not have (TR-1122 ported the last real one, settings)
+    b = run("bash", eb, [word])
+    p = run("auto", ep, [word])
+    ck("a command not in the table: through the dispatcher it still runs in bash", b[0] == p[0] == 1 and "usage" in p[1] + p[2], (b, p))
+    pe = run("python", ep, [word])
+    ck("...forced to Python it says it is not ported", pe[0] == 2 and "not yet ported" in pe[2], pe)
 
 
 def main(names):

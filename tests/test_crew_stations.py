@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -204,6 +204,46 @@ with redirect_stderr(buf):
         rc_ok = S.cmd_spawn(["spawn", "helper", "crew-reviewer", "second", "look"], env)
 ck("a refusal prints its line on stderr and exits 1", rc_bad == 1 and buf.getvalue().strip() == "tares factory: spawn takes builder or helper", buf.getvalue())
 ck("a spawn that works exits 0", rc_ok == 0 and "crew-reviewer-second" in [x[0] for x in launched])
+
+print("settings")
+WORLD = {"settings": {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind", "challenger": False, "builders_max": 3},
+         "projects": PROJECTS}
+
+
+def settings_cmd(*words):
+    """(exit code, stdout, stderr) of `settings <words>` on a fake Tares."""
+    out, err = io.StringIO(), io.StringIO()
+    with LS.FakeTares(WORLD) as t:
+        env = {**os.environ, "TARESD_URL": t.url, "TARES_FACTORY_MCP_URL": t.url + "/mcp"}
+        with redirect_stdout(out), redirect_stderr(err):
+            rc = S.cmd_settings(["settings", *words], env)
+    return rc, out.getvalue(), err.getvalue()
+
+
+rc, out, err = settings_cmd("crew-reviewer")
+ck("settings prints the file a station launches with", rc == 0 and out == (CREW / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8")
+   and out.startswith("{"), err)
+doc = json.loads(out) if out.startswith("{") else {}
+ck("...the reviewer's: its role is the one stations.json records", doc.get("env", {}).get("FACTORY_ROLE") == "reviewer", out[:120])
+_saved = (CREW / "stations.json").read_text(encoding="utf-8")
+_all = json.loads(_saved)
+_all["crew-extra"] = {**_all["crew-reviewer"], "role": "releaser"}
+(CREW / "stations.json").write_text(json.dumps(_all), encoding="utf-8")
+rc, out, err = settings_cmd("crew-extra")
+(CREW / "stations.json").write_text(_saved, encoding="utf-8")
+ck("a station's role is the one stations.json records, not what its name suggests",
+   rc == 0 and json.loads(out)["env"]["FACTORY_ROLE"] == "releaser" and json.loads(out)["env"]["FACTORY_STATION"] == "crew-extra", err or out[:120])
+rc, out, err = settings_cmd("orchestrator")
+ck("a role word names this crew's station", rc == 0 and "orchestrator station `crew-orchestrator`" in out, err or out[:120])
+rc, out, err = settings_cmd("crew-reviewer", "releaser")
+ck("a second word is the role", rc == 0 and "releaser station `crew-reviewer`" in out, err or out[:120])
+rc, out, err = settings_cmd("crew-releaser")
+ck("a station with no record takes its role from its name", rc == 0 and json.loads(out)["env"]["FACTORY_ROLE"] == "releaser", err or out[:120])
+rc, out, err = settings_cmd()
+ck("no station is refused with the usage line", rc == 1 and out == "" and err.strip() == "tares factory: usage: settings <station> [role]", err)
+rc, out, err = settings_cmd("")
+ck("an empty station is refused too", rc == 1 and "usage: settings <station> [role]" in err, err)
+ck("the dispatcher has settings", dispatch.find(["settings", "crew-reviewer"]) is not None)
 
 L.launch = real_launch
 print(f"\n{P} passed, {F} failed")

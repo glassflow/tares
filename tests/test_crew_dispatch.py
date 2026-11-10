@@ -65,8 +65,8 @@ SYS_ENV = ({k: os.environ[k] for k in ("SYSTEMROOT", "USERPROFILE", "HOME", "TEM
 ENGINE = dispatch.ENGINE_VAR
 # A command that stays on bash, for the checks that need one (roster, status and the other views are
 # ported with TR-957). Whoever ports this one (settings, TR-953) changes this line to another.
-UNPORTED = "settings"
-BASH_RAN = "no Tares answers at http://127.0.0.1:9"  # what bash's `settings` says with no Tares, in the fake crew
+UNPORTED = "unported-probe"  # a command the table does not have (each port used up the last real one: TR-1122 took settings)
+BASH_RAN = "no Tares answers at http://127.0.0.1:9"  # what bash says to any command with no Tares, in the fake crew
 
 calls = []
 
