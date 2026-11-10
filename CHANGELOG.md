@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- On a factory project page, a milestone check that is a shell command now shows in the console's monospace font and wraps inside its row, so long commands are easy to read. Checks written as sentences look the same as before (TR-1082).
+
 ## [1.56.0] - 2026-11-10
 
 A cell now opens as a Software Factory or an AI SRE, each with its own screens, and working as a team

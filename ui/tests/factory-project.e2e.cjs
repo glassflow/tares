@@ -28,6 +28,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
+const esbuild = require(path.join(UI_DIR, "node_modules", "esbuild"));
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8330);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -272,6 +273,41 @@ async function waitFor(url, tries = 100) {
          && ((await row.locator('[data-testid="milestone-check"][data-for="person"]').nth(1).getByTestId("check-state").textContent()) || "").includes("Home lists one more than Reviews"));
       ck("and the item leaves the Waiting list", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 0);
       await shot(page, "live-milestone-checks-1440.png");
+    }
+
+    // ── 1c. a check that is a command is set as one, a sentence stays as it is (TR-1082) ─────────
+    {
+      const built = esbuild.buildSync({ entryPoints: [path.join(UI_DIR, "src/editions/factory/checkText.ts")], bundle: true, platform: "node", format: "cjs", write: false });
+      const mod = { exports: {} };
+      new Function("module", "exports", built.outputFiles[0].text)(mod, mod.exports);
+      const { looksLikeCommand } = mod.exports;
+      const commands = ["pytest tests/test_reviews.py", "python tests/ci_run.py --suite ee", "npm run build", "git status", "./scripts/check.sh", "scripts/check.sh", "$ npm test",
+                        "TARES_E2E_PORT=10200 node tests/x.e2e.cjs", "T=$(mktemp -d); env -u TARES_LICENSE tares up & P=$!; kill $P", "cat a.log | wc -l", "go test ./... -count=1",
+                        "git commit -m \"fix the bug\"", "find . -name x"];
+      const sentences = ["Open Reviews", "Open the docs home page", "Search for a title", "Reviews shows three lists.", "Run `npm test` and read the result", "make sure it works", "go to settings",
+                         "run the tests", "python is installed", "open /projects and look", "/projects loads", "Tares shows the list", "", "It costs $5 and is done!"];
+      const wrongC = commands.filter((c) => !looksLikeCommand(c)), wrongS = sentences.filter((c) => looksLikeCommand(c));
+      ck("these checks are read as commands", wrongC.length === 0, JSON.stringify(wrongC));
+      ck("these checks are read as sentences", wrongS.length === 0, JSON.stringify(wrongS));
+
+      for (const width of [1440, 390]) {
+        const { ctx: c, page: p } = await newPage(width);
+        await open(p, ids["project-k"]);
+        await settle(p);
+        const row = p.locator('[data-testid="milestone-row"][data-ms="M3"]');
+        await row.getByTestId("milestone-checks").evaluate((e) => { e.open = true; });
+        const texts = row.getByTestId("milestone-check").locator(":scope > [data-user-text]");
+        const fonts = await texts.evaluateAll((els) => els.map((e) => ({ font: getComputedStyle(e).fontFamily, wrap: getComputedStyle(e).overflowWrap, inner: e.scrollWidth - e.clientWidth })));
+        ck(`${width}: three checks, each still marked as the person's text`, fonts.length === 3, JSON.stringify(fonts));
+        ck(`${width}: the short command is in the console's mono font`, /Geist Mono/.test(fonts[0]?.font || ""), fonts[0]?.font);
+        ck(`${width}: the long command is in the console's mono font`, /Geist Mono/.test(fonts[1]?.font || ""), fonts[1]?.font);
+        ck(`${width}: the sentence is not`, !!fonts[2] && !/Mono/.test(fonts[2].font), fonts[2]?.font);
+        ck(`${width}: the long command wraps inside its row`, fonts[1]?.wrap === "anywhere" && (await row.evaluate((e) => e.scrollWidth - e.clientWidth)) <= 0, JSON.stringify(fonts[1]));
+        ck(`${width}: no sideways scroll with the long command`, (await overflow(p)) <= 0, String(await overflow(p)));
+        await checkWords(p, ck, `${width}: commands in checks`);
+        await shot(p, `live-milestone-commands-${width}.png`);
+        await c.close();
+      }
     }
 
     // ── 2. project-z: ready to close ────────────────────────────────────────────────────────────
