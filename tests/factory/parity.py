@@ -2840,11 +2840,22 @@ _CC_READS = (("agents",), ("--version",))
 _CC_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "cccc0003"}
 
 
-def _cc_kit() -> str:
+def _cc_kit(plugin: Path | None = None) -> str:
     """The fingerprint of the kit both engines run on (a station of this kit is not due a plugin upgrade)."""
     sys.path.insert(0, str(ROOT))
     from tares.crew import launch
-    return launch.kit_version(ROOT / "claude-plugin")
+    return launch.kit_version(plugin or ROOT / "claude-plugin")
+
+
+def _cc_plugin(tmp: Path, env: dict) -> Path:
+    """A copy of the plugin outside any git checkout, set as the run's TARES_PLUGIN_DIR: the kit step only
+    moves a station onto a new kit when the plugin's checkout is clean, and the real checkout is not
+    (edited files while one works, git's own line-ending settings on Windows). The copy is always clean."""
+    copy = tmp / "kit" / "claude-plugin"
+    shutil.copytree(ROOT / "claude-plugin", copy, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules"))
+    env["TARES_PLUGIN_DIR"] = str(copy)
+    return copy
 
 
 def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | None = None, extra=(), done=(), files=None):
@@ -2854,7 +2865,7 @@ def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | No
     def setup(tmp: Path, env: dict) -> None:
         _setup_views(tmp, env)
         crew, state = tmp / "crew", tmp / "claude"
-        kit = _cc_kit()
+        kit = _cc_kit(_cc_plugin(tmp, env))
         base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
         rows, agents = {}, []
         for name, sid in _CC_IDS.items():
