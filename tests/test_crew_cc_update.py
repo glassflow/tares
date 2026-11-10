@@ -646,14 +646,14 @@ with patched(CU, "prune_spares", lambda p, t: seen.append((t, len(launched)))):
 ck("older spares are pruned before each restart", rc == 0 and seen == [(NEW, 0), (NEW, 1)], str((rc, seen)))
 
 world(one, old_row)
-with patched(CU, "_pace_closed", lambda c: True):
+with patched(CU, "_pace_closed", lambda c, **k: True):
     rc, _, _ = move()
 ck("6: the plan's limit is full", rc == 6 and launched == [])
 world(one, old_row)
 SPAWN[:] = [OLD]
 closed = []
 ON_LAUNCH.append(lambda n: closed.append(1))
-with patched(CU, "_pace_closed", lambda c: bool(closed)):
+with patched(CU, "_pace_closed", lambda c, **k: bool(closed)):
     rc, _, _ = move()
 ck("6: the limit fills between the tries", rc == 6 and len(launched) == 1, str((rc, len(launched))))
 from tares.crew import pace as PACE   # noqa: E402
@@ -686,7 +686,7 @@ def watch_move(rc, s="shop-build-m1", settings=None, closed=False, dup_rows=None
     """watch_claude_move with claude_move answering rc: (what it said, whether claude_move ran)."""
     ran = []
     with FakeTares(settings), Said() as sd, patched(CU, "claude_move", lambda *a, **k: ran.append(1) or rc), \
-            patched(CU, "_pace_closed", lambda c: closed):
+            patched(CU, "_pace_closed", lambda c, **k: closed):
         CU.watch_claude_move(CP, sd.client, s, NEW, claude_bin=BIN)
     return sd.msgs, bool(ran)
 
@@ -739,7 +739,7 @@ def step(settings=None, health=True, closed=False):
     if not health:
         os.environ["TARESD_URL"] = "http://127.0.0.1:9"   # nothing listens there
     with (FakeTares(settings) if health else contextlib.nullcontext()), patched(CU, "watch_claude_move", lambda p, c, s, t, **k: moved.append((s, t))), \
-            patched(CU, "_pace_closed", lambda c: closed):
+            patched(CU, "_pace_closed", lambda c, **k: closed):
         _, said = round_says(lambda: CU.step(CP))
     os.environ.pop("TARESD_URL", None)
     return said, moved
@@ -862,6 +862,80 @@ launched.clear()
 with FakeTares():
     _, said = round_says(lambda: CU.step(CP))
 ck("then nothing is behind", launched == [] and said == [])
+
+# a round in which the revive step found a station down moves nothing, even when that station is up again
+from tares.crew import watch_revive as WR   # noqa: E402
+world(TWO, TWO_ROWS)
+WR.last = WR.Round()
+WR.last.down = True
+synced = []
+with patched(CU, "cc_retry_sync", lambda p, c: synced.append(1)):
+    said, moved = step()
+ck("a station revived this round holds every move, and the retry flags", moved == [] and synced == [], str((moved, synced)))
+WR.last = WR.Round()
+said, moved = step()
+ck("...while a round the revive step found nothing down moves one", moved == [("shop-build-m1", NEW)], str(moved))
+
+# claude_auto: a null setting is on
+for label, settings in (("null", {"claude_update": None}),):
+    with FakeTares(settings), Said() as sd:
+        ck(f"claude_auto: a {label} setting is on", CU.claude_auto(sd.client) is True)
+
+# the binary the step resolved reaches the version reads
+world(TWO, TWO_ROWS)
+ck("cc_behind reads the session list with the binary it is given", CU.cc_behind(CP, NEW, binary=BIN) == 2
+   and CU.cc_behind(CP, NEW, binary="/nonexistent/claude") == 0)
+ck("station_cc reads the session list with the binary it is given", CU.station_cc(CP, "shop-build-m1", binary=BIN) == OLD
+   and CU.station_cc(CP, "shop-build-m1", binary="/nonexistent/claude") == "")
+
+# any error from a restart ends the move with 1, not only the usual ones
+world(one, old_row)
+ON_LAUNCH.append(lambda n: (_ for _ in ()).throw(ValueError("bad json (fake)")))
+rc, msgs, _ = move()
+ck("1: any other error from a restart is said and gives 1", rc == 1 and msgs == ["bad json (fake)"], str((rc, msgs)))
+
+# the failure count carries over for the same version only
+world({"shop-build-m1": station(cc_failed="2.1.50", cc_fails=3, cc_retry_at=99)}, old_row)
+SPAWN[:] = [OLD]
+rc, msgs, _ = move()
+st = stations_now()["shop-build-m1"]
+ck("5: a count left by an older target starts again at 1", rc == 5 and st["cc_failed"] == NEW and st["cc_fails"] == 1, str((rc, st)))
+
+# the version poll goes on past an empty read
+world(one, old_row)
+SPAWN[:] = [None]
+naps = []
+
+
+def nap(_secs):
+    naps.append(1)
+    if len(naps) == 2:   # the version shows up on the third look
+        rows = json.loads((STATE / "agents.json").read_text(encoding="utf-8"))
+        for r in rows:
+            if r.get("name") == "shop-build-m1" and "pid" in r:
+                r.pop("pid")
+                r["version"] = NEW
+        fake_claude.write_agents(STATE, rows)
+
+
+with patched(CU.time, "sleep", nap):
+    rc, msgs, _ = move()
+ck("0: a version that appears on a later look is the one taken, and nothing is said", rc == 0 and msgs == [] and len(naps) == 2,
+   str((rc, msgs, len(naps))))
+
+# watch_claude_move reads the freeze and the pace afresh, not from what the round read
+world(one, old_row)
+ran, asked = [], []
+with FakeTares() as t, Said() as sd, patched(CU, "claude_move", lambda *a, **k: ran.append(1) or 4), \
+        patched(CU, "_pace_closed", lambda c, **k: asked.append(k) or False):
+    sd.client.crew_settings()   # the round's own copy: not frozen
+    t.routes["GET /api/crew/settings"] = (200, {"settings": {"kit": {"frozen": {"at": "x", "by": "y"}}}})
+    CU.watch_claude_move(CP, sd.client, "shop-build-m1", NEW, claude_bin=BIN)
+ck("watch_claude_move: a freeze since the round read the settings wins", ran == [] and sd.msgs == [], str((ran, sd.msgs)))
+world(one, old_row)
+with FakeTares(), Said() as sd, patched(CU, "claude_move", lambda *a, **k: 4), patched(CU, "_pace_closed", lambda c, **k: asked.append(k) or False):
+    CU.watch_claude_move(CP, sd.client, "shop-build-m1", NEW, claude_bin=BIN)
+ck("watch_claude_move: the pace is read again right before the restart", {"fresh": True} in asked, str(asked))
 
 # the watch runs the step
 ran = []
