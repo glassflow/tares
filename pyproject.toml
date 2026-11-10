@@ -69,6 +69,7 @@ team = "tares_ee.team:Team"
 [project.entry-points."tares.integrations"]
 "tickets.tares" = "tares.integrations.builtin.tickets_tares:TicketsTares"
 "tickets.linear" = "tares.integrations.builtin.tickets_linear:TicketsLinear"
+"tickets.github" = "tares.integrations.builtin.tickets_github:TicketsGithub"
 
 [project.scripts]
 tares = "tares.cli:main"
