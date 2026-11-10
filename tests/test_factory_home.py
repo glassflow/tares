@@ -243,7 +243,7 @@ async def main():
                and h["headline"] == "No projects yet. Start one and hand it to the crew.", h)
             ck("the crew is not running, the plan unknown, no tool connected",
                h["crew"]["running"] is False and h["crew"]["summary"] == "Not running"
-               and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None}
+               and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None, "title": "Your Claude plan"}
                and [t["connected"] for t in h["tools"]] == [False, False, False, False], h)
             ck("every key of the shape", set(h) == {"edition", "headline", "waiting_for_you", "waiting_total",
                "projects", "finished_count", "later_count", "crew", "plan", "tools", "start", "now"}, sorted(h))

@@ -157,7 +157,8 @@ def register(app, store, h, ctx):
             return member(s) if s else None
 
         groups: dict = {}
-        for s in sorted((x for x in shown if x["role"] == "builder"), key=lambda x: x["name"]):
+        for s in sorted((x for x in shown if x["role"] == "builder"),
+                        key=lambda x: (x["state"] == "ended", x["name"])):   # running ones first
             pid = s.get("project")
             p = projects.get(pid)
             if s["state"] == "ended" and p is not None and p["status"] == "done":
@@ -199,8 +200,9 @@ def register(app, store, h, ctx):
     @app.get("/api/factory/crew")
     def get_crew_page(request: Request):
         """The Crew page in one read. `talk_to`, `reviewer` and `releaser` are a member or null
-        (not started, or no releaser by choice); `builders` are grouped by project, ended builders
-        of finished projects left out, helpers counted under the builder that started them.
+        (not started, or no releaser by choice); `builders` are grouped by project, running ones
+        first, ended builders of finished projects left out, helpers counted under the builder that
+        started them.
         A member is {station, role_label, state (working, idle, waiting for you, not heard,
         ended), state_text, doing, heard, memory_pct, memory_text, helpers}; `station` is for the
         detail call and is never shown. `pacing` is a sentence while the plan presses on the crew,

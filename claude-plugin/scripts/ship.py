@@ -196,13 +196,27 @@ def ship_lines(cfg: dict, objs: list) -> bool:
     return _ship_body(cfg, body)
 
 
+# Why the last POST failed, when the size of the request may be the reason: "refused" (413, this
+# request will never be taken) or "slow" (it outlasted the timeout). Empty for any other outcome.
+_size_failure = ""
+
+
+def _timed_out(e: BaseException) -> bool:
+    reason = getattr(e, "reason", e)
+    return isinstance(e, (TimeoutError, socket.timeout)) or isinstance(reason, (TimeoutError, socket.timeout))
+
+
 def _ship_body(cfg: dict, body: bytes) -> bool:
+    global _size_failure
+    _size_failure = ""
     base, headers = cfg["base"], cfg["headers"]
     marker = os.path.join(cfg["data_dir"], "ensured-" + hashlib.sha1(base.encode()).hexdigest()[:12])
     try:
         _post(base + "/ingest/claude_code", body, headers)
         return True
     except urllib.error.HTTPError as e:
+        if e.code == 413:
+            _size_failure = "refused"
         if e.code == 404:          # source went missing — recreate and retry once
             try:
                 os.remove(marker)
@@ -216,7 +230,9 @@ def _ship_body(cfg: dict, body: bytes) -> bool:
                 except Exception:
                     return False
         return False
-    except Exception:
+    except Exception as e:
+        if _timed_out(e):
+            _size_failure = "slow"
         return False
 
 
@@ -600,8 +616,14 @@ def ship_subagents(cfg: dict, hook: dict, flow: str, project: str) -> None:
 # whole backlog can outlast the post timeout, fail on every hook, and leave the offset stuck. The
 # offset moves after each chunk that ships, so a backlog drains over the next hooks. A single line
 # larger than the read goes out alone; one larger than MAX_MAIN_LINE is stepped over with a note.
+#
+# A session resumed under a new id (a restart in the same conversation) gets a new file that opens
+# with the whole conversation, so its first request is a full read (TR-1102). A request refused for
+# its size or too slow to answer is tried again smaller in the same hook, down to one line. One
+# line that is refused for its size is stepped over, as it would be refused on every hook.
 
-MAX_MAIN_READ = 2 * 1024 * 1024      # bytes read from the session's transcript per hook
+MAX_MAIN_READ = 768 * 1024           # bytes read per hook: under the 1 MiB an nginx ingress accepts
+SPLIT_BUDGET = 15                    # seconds a hook spends retrying a request in smaller pieces
 MAX_MAIN_LINE = 8 * 1024 * 1024      # a line longer than this is not sent
 SESSION_END_BUDGET = 10             # seconds SessionEnd spends draining a backlog
 
@@ -618,20 +640,22 @@ def _main_offset(cfg: dict, transcript: str) -> int:
         return 0
 
 
-def _main_chunk(path: str, offset: int) -> tuple:
-    """(complete lines to ship, the offset after them, size of a line too large to send or 0)."""
+def _main_chunk(path: str, offset: int, limit: int = 0) -> tuple:
+    """(complete lines to ship, the offset after them, size of a line too large to send or 0),
+    reading at most `limit` bytes (MAX_MAIN_READ by default) unless one line is longer."""
+    limit = limit or MAX_MAIN_READ
     with open(path, "rb") as f:
         f.seek(offset)
-        chunk = f.read(MAX_MAIN_READ)
+        chunk = f.read(limit)
         last_nl = chunk.rfind(b"\n")
         if last_nl >= 0:
             return chunk[: last_nl + 1], offset + last_nl + 1, 0
-        if len(chunk) < MAX_MAIN_READ:
+        if len(chunk) < limit:
             return b"", offset, 0            # a line still being written: wait for its end
         # one line larger than a whole read: find its end, keeping it only while it is sendable
         line, end = chunk, offset + len(chunk)
         while True:
-            more = f.read(MAX_MAIN_READ)
+            more = f.read(limit)
             if not more:
                 return b"", offset, 0        # not finished yet
             nl = more.find(b"\n")
@@ -659,29 +683,45 @@ def ship_main(cfg: dict, hook: dict, transcript: str, flow: str) -> tuple:
         offset = 0
     if offset >= size:
         return True, flow
-    data, new_offset, skipped = _main_chunk(transcript, offset)
-    if skipped:
+
+    def step_over(skipped_bytes: int, past: int) -> bool:
         # session_warning: every Tares version renders it ("warning: ...")
         note = synthetic_line(hook, "session_warning", flow,
-                              warning=f"a transcript line of {skipped} bytes was too large to record")
+                              warning=f"a transcript line of {skipped_bytes} bytes was too large to record")
         project = read_project(data_dir, session_id) if session_id else ""
         if project:
             note["tares_project"] = project
         ok = ship_lines(cfg, stamp_station([note]))
         if ok:
             with open(off_file, "w") as f:
-                f.write(str(new_offset))
-        return ok, flow
-    if not data:
-        return True, flow
+                f.write(str(past))
+        return ok
 
-    raw_lines = data.decode("utf-8", "replace").splitlines()
-    objs, flow, changed = process_lines(raw_lines, flow, hook)
+    limit, deadline = MAX_MAIN_READ, time.monotonic() + SPLIT_BUDGET
+    while True:
+        data, new_offset, skipped = _main_chunk(transcript, offset, limit)
+        if skipped:
+            return step_over(skipped, new_offset), flow
+        if not data:
+            return True, flow
+        raw_lines = data.decode("utf-8", "replace").splitlines()
+        objs, after, changed = process_lines(raw_lines, flow, hook)
+        project = read_project(data_dir, session_id) if session_id else ""
+        objs, project, p_changed = stamp_project(objs, project, hook)
+        ok = ship_lines(cfg, stamp_station(objs))
+        if ok or not _size_failure:
+            break
+        if data.count(b"\n") <= 1:
+            if _size_failure == "refused":
+                return step_over(len(data), new_offset), flow
+            break                                # one slow line: the next hook tries it again
+        if time.monotonic() >= deadline:
+            break
+        limit = len(data) // 2
+
+    flow = after
     if changed and session_id:
         write_flow(data_dir, session_id, flow)   # the local hooks gate on this
-    project = read_project(data_dir, session_id) if session_id else ""
-    objs, project, p_changed = stamp_project(objs, project, hook)
-    ok = ship_lines(cfg, stamp_station(objs))
     if ok and p_changed and session_id:
         # only once shipped: a failed post retries these lines, the session_project line with them
         write_project(data_dir, session_id, project)
@@ -783,8 +823,9 @@ def main() -> None:
 
     if session_id and shipped_ok:
         ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
-        if event != "SessionEnd":
-            report_state(cfg, hook, event, flow)
+    if session_id and event != "SessionEnd":
+        # whatever became of the transcript: a session whose lines can't get through is still alive
+        report_state(cfg, hook, event, flow)
 
     if event == "SessionEnd" and session_id and flow:
         # the line the challenger_session_ended trigger watches; the marker goes with the session

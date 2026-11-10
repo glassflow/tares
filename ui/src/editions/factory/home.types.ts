@@ -173,6 +173,7 @@ export interface HomePlan {
   known: boolean;
   limits: HomePlanLimit[];
   share_text: string | null; // "This week: project-x 75%, project-y 25%"
+  title: string; // "Your Claude plan", "Kim's Claude plan", or "Claude plan" when the cell cannot tell whose it is
 }
 
 export interface HomeTool {
