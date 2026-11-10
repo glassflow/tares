@@ -1,6 +1,7 @@
 import { type FormEvent, useEffect, useState } from "react";
 
-import { type CloudMember, type CloudResult, type CloudWorkspaceOverview, cloudApi } from "../api";
+import { api, type CloudMember, type CloudResult, type CloudWorkspaceOverview, cloudApi } from "../api";
+import type { Person } from "../types";
 import { type Cloud, reloadList, signInLink, slugFromHost, useWorkspaceOverview, type WorkspaceOverview } from "../cloud";
 import { Switch } from "../components/setup/common";
 import { UsagePanels } from "../components/UsagePanels";
@@ -68,8 +69,10 @@ function PanelStatus({ o, loginUrl }: { o: Outcome; loginUrl?: string }) {
   return <Fail text={o.err} />;
 }
 
-export default function WorkspaceSettings({ cloud, apiUrl, onOpenTab }: {
+export default function WorkspaceSettings({ cloud, apiUrl, onOpenTab, noTeam }: {
   cloud: Cloud; apiUrl: string; onOpenTab: (tab: "anthropic") => void;
+  /** The team has its own page (a factory cell's Settings, Team, People). */
+  noTeam?: boolean;
 }) {
   const ov = useWorkspaceOverview(apiUrl);
   const r = ov.result;
@@ -103,7 +106,7 @@ export default function WorkspaceSettings({ cloud, apiUrl, onOpenTab }: {
   return (
     <>
       <OverviewPanel w={w} />
-      <TeamPanel {...p} isOwner={isOwner} you={w.you?.email} />
+      {!noTeam && <TeamPanel {...p} isOwner={isOwner} you={w.you?.email} />}
       <StoragePanel {...p} w={w} isOwner={isOwner} />
       {showCredit && <CreditPanel w={w} onOpenTab={onOpenTab} />}
       {/* what this cell spent on model providers; storage is the panel above, from the control plane */}
@@ -129,7 +132,12 @@ function OverviewPanel({ w }: { w: CloudWorkspaceOverview }) {
   );
 }
 
-function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOwner: boolean; you?: string }) {
+/** What this cell knows about the people on the team: their GitHub login and whether they are admins. */
+export type CellTeam = { people?: Person[]; admin: boolean; reload: () => void };
+
+const hasEmail = (p: Person, email: string) => [p.email, ...p.emails].some((e) => e?.toLowerCase() === email.toLowerCase());
+
+export function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you, cell }: Omit<PanelProps, "ov"> & { isOwner: boolean; you?: string; cell?: CellTeam }) {
   const [members, setMembers] = useState<CloudMember[]>();
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState<string>();   // "invite" or the user_id being removed
@@ -154,6 +162,7 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
     setBusy("invite"); setO({}); setMsg(undefined); setNoLicence(false);
     const r = await cloudApi.invite(apiUrl, slug, to);
     if (r.status === "ok") {
+      cell?.reload();
       setEmail("");
       setMsg(`Invited ${to}. They get access when they sign in with that email.`);
       await load();
@@ -162,10 +171,33 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
     setBusy(undefined);
   };
 
+  // One list: the workspace says who is on the team, the cell adds what it knows about each.
+  const [edit, setEdit] = useState<{ id: string; github: string; is_admin: boolean }>();
+  const [cellErr, setCellErr] = useState<string>();
+  const personOf = (m: CloudMember) => cell?.people?.find((p) => hasEmail(p, m.email));
+  // on the cell but not in the workspace: added by hand, or left before leaving reached the cell
+  const strays = members ? (cell?.people ?? []).filter((p) => p.id !== "local" && !members.some((m) => hasEmail(p, m.email))) : [];
+  const saveEdit = async () => {
+    if (!edit) return;
+    setBusy(edit.id); setCellErr(undefined);
+    try {
+      await api.updatePerson(edit.id, { github: edit.github.trim() || null, is_admin: edit.is_admin });
+      setEdit(undefined);
+      cell?.reload();
+    } catch (e) { setCellErr(String((e as Error).message ?? e)); }
+    setBusy(undefined);
+  };
+  const removeStray = async (p: Person) => {
+    setBusy(p.id); setCellErr(undefined);
+    try { await api.removePerson(p.id); cell?.reload(); }
+    catch (e) { setCellErr(String((e as Error).message ?? e)); }
+    setBusy(undefined);
+  };
+
   const remove = async (m: CloudMember) => {
     setBusy(m.user_id); setO({}); setMsg(undefined);
     const r = await cloudApi.removeMember(apiUrl, slug, m.user_id);
-    if (r.status === "ok") { setMsg(`${m.email} no longer has access.`); await load(); }
+    if (r.status === "ok") { setMsg(`${m.email} no longer has access.`); await load(); cell?.reload(); }
     else setO(outcome(r));
     setBusy(undefined);
   };
@@ -173,20 +205,39 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
   const me = (m: CloudMember) => !!you && m.email.toLowerCase() === you.toLowerCase();
   return (
     <div className="panel">
-      <h2 style={{ marginTop: 0 }}>Team</h2>
-      <p className="help" style={{ marginTop: 0 }}>
+      <h2 style={{ marginTop: 0 }}>{cell ? "People" : "Team"}</h2>
+      {!cell && <p className="help" style={{ marginTop: 0 }}>
         {isOwner
           ? "People with access to this workspace. Invited teammates get access when they sign in with that email."
           : "People with access to this workspace."}
-      </p>
+      </p>}
       <PanelStatus o={o} loginUrl={loginUrl} />
       {msg && <p className="help" role="status">{msg}</p>}
+      {cellErr && <Fail text={cellErr} />}
       {!members ? (!o.err && !o.signedOut && <div className="muted">loading…</div>) : (
+        <div className="table-scroll">
         <table>
-          <thead><tr><th>email</th><th>role</th>{isOwner && <th aria-label="actions" />}</tr></thead>
+          <thead><tr><th>email</th><th>role</th>{cell && <><th>GitHub</th><th>admin</th></>}{(isOwner || cell?.admin) && <th aria-label="actions" />}</tr></thead>
           <tbody>
-            {members.map((m) => (
-              <tr key={m.user_id}>
+            {members.map((m) => {
+              const person = personOf(m);
+              if (edit && person?.id === edit.id) return (
+                <tr key={m.user_id} data-testid="team-edit">
+                  <td>{m.email}</td>
+                  <td>{m.role === "owner" ? "owner" : "member"}</td>
+                  <td><input type="text" className="mono" aria-label="GitHub login" placeholder="e.g. octocat" value={edit.github}
+                             onChange={(e) => setEdit({ ...edit, github: e.target.value })} /></td>
+                  <td><input type="checkbox" aria-label="Admin" checked={edit.is_admin} onChange={(e) => setEdit({ ...edit, is_admin: e.target.checked })} /></td>
+                  <td style={{ textAlign: "right" }}>
+                    <div className="btnrow" style={{ justifyContent: "flex-end" }}>
+                      <button className="primary" disabled={!!busy} onClick={saveEdit}>Save</button>
+                      <button disabled={!!busy} onClick={() => setEdit(undefined)}>Cancel</button>
+                    </div>
+                  </td>
+                </tr>
+              );
+              return (
+              <tr key={m.user_id} data-testid="team-row">
                 <td>
                   {m.email}{m.name && <span className="help"> {m.name}</span>}
                   {me(m) && <span className="help"> (you)</span>}
@@ -196,20 +247,43 @@ function TeamPanel({ apiUrl, slug, loginUrl, isOwner, you }: PanelProps & { isOw
                   {m.role !== "owner" && m.status === "invited"
                     && <span className="badge paused" style={{ marginLeft: 8 }}>invited</span>}
                 </td>
-                {isOwner && (
+                {cell && <>
+                  <td className="mono help">{person?.github ?? ""}</td>
+                  <td className="help">{person ? (person.is_admin ? "yes" : "no") : ""}</td>
+                </>}
+                {(isOwner || cell?.admin) && (
                   <td style={{ textAlign: "right" }}>
-                    {m.role !== "owner" && (
-                      <button className="danger" disabled={!!busy} onClick={() => remove(m)}
-                              aria-label={`Remove ${m.email}`}>
-                        {busy === m.user_id ? "removing…" : "Remove"}
-                      </button>
-                    )}
+                    <div className="btnrow" style={{ justifyContent: "flex-end" }}>
+                      {cell?.admin && person && (
+                        <button disabled={!!busy || !!edit} aria-label={`Edit ${m.email}`}
+                                onClick={() => setEdit({ id: person.id, github: person.github ?? "", is_admin: person.is_admin })}>Edit</button>
+                      )}
+                      {isOwner && m.role !== "owner" && (
+                        <button className="danger" disabled={!!busy} onClick={() => remove(m)}
+                                aria-label={`Remove ${m.email}`}>
+                          {busy === m.user_id ? "removing…" : "Remove"}
+                        </button>
+                      )}
+                    </div>
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
+        </div>
+      )}
+      {strays.length > 0 && (
+        <div style={{ marginTop: 14 }} data-testid="team-strays">
+          <p className="help" style={{ margin: "0 0 6px" }}>Listed on this workspace's records, but not on the team:</p>
+          {strays.map((p) => (
+            <div key={p.id} className="btnrow" style={{ justifyContent: "space-between", padding: "6px 0" }} data-testid="team-stray">
+              <span>{p.name}{p.email && <span className="help"> {p.email}</span>}</span>
+              {cell?.admin && <button className="danger" disabled={!!busy} aria-label={`Remove ${p.name}`} onClick={() => removeStray(p)}>Remove</button>}
+            </div>
+          ))}
+        </div>
       )}
       {isOwner && (canInvite ? (
         <form className="btnrow" style={{ marginTop: 14, maxWidth: 560 }} onSubmit={invite}>

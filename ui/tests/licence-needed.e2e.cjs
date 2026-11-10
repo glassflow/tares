@@ -176,8 +176,8 @@ async function fakeHome(page) {
     {
       const page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
       await fakeCloud(page, { status: 200, body: {} });
-      await page.goto(`${cloudBare.base}/settings?tab=workspace`);
-      await page.getByRole("heading", { name: "Team" }).waitFor({ timeout: 15000 });
+      await page.goto(`${cloudBare.base}/settings?tab=people`);
+      await page.getByRole("heading", { name: "People" }).waitFor({ timeout: 15000 });
       await checkPlain(page, "workspace, no licence", "Inviting people");
       ck("workspace, no licence: there is no invite form", (await page.locator("#ws-invite").count()) === 0);
       await page.context().close();
@@ -186,7 +186,7 @@ async function fakeHome(page) {
     {
       const page = await (await browser.newContext({ viewport: { width: 390, height: 900 } })).newPage();
       await fakeCloud(page, { status: 402, body: BODY });
-      await page.goto(`${cloudLicensed.base}/settings?tab=workspace`);
+      await page.goto(`${cloudLicensed.base}/settings?tab=people`);
       await page.locator("#ws-invite").waitFor({ timeout: 15000 });
       ck("workspace, licensed: no licence line before an invite", (await page.getByTestId("licence-needed").count()) === 0);
       await page.locator("#ws-invite").fill("sam@example.com");
@@ -208,8 +208,8 @@ async function fakeHome(page) {
         await checkPlain(p, "cloud, no licence, People add slot @390", "Adding people"); await p.context().close(); }
       // Settings, Access on a factory cell with no licence (the one-person panel)
       { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
-        await p.goto(`${cloudBare.base}/settings?tab=people`); await p.getByTestId("you-row").waitFor({ timeout: 15000 });
-        await checkPlain(p, "cloud, no licence, Settings Access", "Adding people"); await p.context().close(); }
+        await p.goto(`${cloudBare.base}/settings?tab=people`); await p.getByTestId("team-row").first().waitFor({ timeout: 15000 });
+        await checkPlain(p, "cloud, no licence, Settings People", "Inviting people"); await p.context().close(); }
       // a page for teams only (Areas), on a platform cell with no licence
       { const p = await page(); await fakeCloud(p, { status: 200, body: {} });
         await p.goto(`${cloudPlatNone.base}/settings?tab=areas`);
@@ -238,7 +238,7 @@ async function fakeHome(page) {
         await p.getByTestId("people-email").fill("sam@example.com"); await p.getByTestId("people-submit").click();
         await checkPlain(p, "cloud, ended licence, People invite refused", "Inviting people"); await p.context().close(); }
       { const p = await page(390); await fakeCloud(p, { status: 402, body: BODY });
-        await p.goto(`${cloudExpired.base}/settings?tab=workspace`); await p.locator("#ws-invite").waitFor({ timeout: 15000 });
+        await p.goto(`${cloudExpired.base}/settings?tab=people`); await p.locator("#ws-invite").waitFor({ timeout: 15000 });
         await p.locator("#ws-invite").fill("sam@example.com"); await p.locator("#ws-invite").press("Enter");
         await checkPlain(p, "cloud, ended licence, Workspace invite refused", "Inviting people"); await p.context().close(); }
       // a licence that ended: an add the cell itself refuses (402 on POST /api/people), as the cell words it
@@ -321,8 +321,8 @@ async function fakeHome(page) {
           await new Promise((r) => setTimeout(r, 3500));
           return route.continue();
         });
-        await page.goto(`${cloudLicensed.base}/settings?tab=workspace`);
-        await page.getByRole("heading", { name: "Team" }).waitFor({ timeout: 15000 });
+        await page.goto(`${cloudLicensed.base}/settings?tab=people`);
+        await page.getByRole("heading", { name: "People" }).waitFor({ timeout: 15000 });
         await page.waitForTimeout(2000);
         ck(`workspace, licence read ${label}, at 2 s: the invite form shows`, (await page.locator("#ws-invite").count()) === 1);
         ck(`workspace, licence read ${label}, at 2 s: no licence line`, (await page.getByTestId("licence-needed").count()) === 0);
@@ -358,7 +358,7 @@ async function fakeHome(page) {
       // Tares Cloud, /health slow: never the licence words, no line while pending, then the plain line
       for (const [label, base, route, ready] of [
         ["cloud, slow /health, People add slot", cloudBare.base, "/people", (p) => p.getByTestId("people-list")],
-        ["cloud, slow /health, Settings Access", cloudBare.base, "/settings?tab=people", (p) => p.getByTestId("you-row")],
+        ["cloud, slow /health, Settings People", cloudBare.base, "/settings?tab=people", null],   // the list itself waits for /health
         ["cloud, slow /health, Areas page", cloudPlatNone.base, "/settings?tab=areas", null],
       ]) {
         const p = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
