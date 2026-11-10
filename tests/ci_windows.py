@@ -56,7 +56,9 @@ EXTRA = ["test_ci_windows.py"]
 # The fewest checks a test may pass on Windows (TR-976, the TR-1066 review's F3). Each number is what the
 # Windows job counted when it was written; it only guards against a drop, so a test that gains checks needs no
 # change here. A test that loses checks on purpose lowers its number in the same PR. Applied only with
-# --floors, which the Windows job passes; a test not listed has no floor.
+# --floors, which the Windows job passes; a test not listed has no floor. The numbers are exact, with no margin,
+# on purpose: every one of these tests runs the same checks on every run, so a drop of even one is a check that
+# stopped running. A test whose count depends on the machine must not be listed.
 FLOOR = {
     "test_crew_claude.py": 298,
     "test_crew_client.py": 109,
@@ -82,6 +84,7 @@ FLOOR = {
     "test_crew_state.py": 55,
     "test_crew_stations.py": 50,
     "test_crew_tidy_safety.py": 78,
+    "test_crew_unicode_home.py": 8,
     "test_crew_watch_process.py": 47,
     "test_crew_watch_revive.py": 53,
 }
@@ -179,9 +182,24 @@ def scenarios(root, timeout):
     return [ln.strip() for ln in out.splitlines() if ln.strip()], ""
 
 
+def details(r):
+    """A failed run's FAIL lines and last lines, printed at once: the job can be killed (its timeout) before the end."""
+    lines = r.output.rstrip("\n").splitlines()
+    # a test that prints a long list of "ok" lines after its failure would hide it in the tail
+    fails = [ln for ln in lines if FAIL_LINE.match(ln)]
+    if fails:
+        print("\n---- %s (exit %d), its %d FAIL lines ----" % (r.name, r.code, len(fails)))
+        print("\n".join(ln[:600] for ln in fails[:MAX_FAIL_LINES]))
+    print("\n---- %s (exit %d), last %d lines ----" % (r.name, r.code, TAIL_LINES))
+    print("\n".join(lines[-TAIL_LINES:]))
+    print()
+
+
 def show(r):
     print("%-5s %-40s exit %-3d %6.1fs  %s" % ("ok" if not r.failed else "FAIL", r.name, r.code, r.seconds,
                                               r.note or r.last))
+    if r.failed:
+        details(r)
     sys.stdout.flush()
 
 
@@ -262,15 +280,6 @@ def main(argv):
     ran = [r for r in results if r.executed]
     ran_tests = [r for r in ran if r.kind != "coverage"]  # the coverage report alone is not a test
     idle = [r for r in results if not r.failed and not r.executed]
-    for r in failed:
-        lines = r.output.rstrip("\n").splitlines()
-        # a test that prints a long list of "ok" lines after its failure would hide it in the tail
-        fails = [ln for ln in lines if FAIL_LINE.match(ln)]
-        if fails:
-            print("\n---- %s (exit %d), its %d FAIL lines ----" % (r.name, r.code, len(fails)))
-            print("\n".join(ln[:600] for ln in fails[:MAX_FAIL_LINES]))
-        print("\n---- %s (exit %d), last %d lines ----" % (r.name, r.code, TAIL_LINES))
-        print("\n".join(lines[-TAIL_LINES:]))
     print("\nci_windows: %d ran and passed, %d failed, %d skipped (ran nothing)"
           % (len(ran), len(failed), len(idle)))
     for r in idle:

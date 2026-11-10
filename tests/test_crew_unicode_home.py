@@ -3,7 +3,8 @@ is not UTF-8 (TR-976). A Windows user name can have both (C:\\Users\\Jane Do\u00
 uses a legacy code page. Each command must run, print UTF-8 whatever the console says, and never raise
 UnicodeEncodeError.
 
-Real `python -m tares.crew` subprocesses against the throwaway crew of tests/_crew_fake.py, with
+Real `python -m tares.crew` subprocesses against the throwaway crew of tests/_crew_fake.py (its fake Claude Code
+swapped for a launcher that also starts on Windows), with
 PYTHONUTF8=0 and PYTHONIOENCODING=cp1252 so the console is the hostile one. Nothing reaches a real crew home.
 
 Run: python tests/test_crew_unicode_home.py
@@ -44,6 +45,25 @@ env.update(PYTHONPATH=str(ROOT), PYTHONUTF8="0", PYTHONIOENCODING="cp1252", TARE
 env.pop("PYTHONSTARTUP", None)
 
 
+def make_launcher(folder, script):
+    """A `claude` that runs `python script args`: a sh script, or claude.cmd on Windows, where tests/factory/fake-claude
+    (a sh script) cannot start. The same launcher test_crew_claude.py uses."""
+    folder.mkdir(parents=True, exist_ok=True)
+    if sys.platform == "win32":
+        import ctypes
+        page = "cp%d" % ctypes.windll.kernel32.GetOEMCP()  # cmd.exe reads a batch file in the OEM code page
+        f = folder / "claude.cmd"
+        f.write_bytes(('@"%s" "%s" %%*\r\n' % (sys.executable, script)).encode(page))
+    else:
+        f = folder / "claude"
+        f.write_text('#!/bin/sh\nexec "%s" "%s" "$@"\n' % (sys.executable, script), encoding="utf-8")
+        f.chmod(0o755)
+    return str(f)
+
+
+env["CLAUDE_BIN"] = make_launcher(TOP / "launcher", ROOT / "tests" / "factory" / "fake_claude.py")
+
+
 def tares(*argv):
     p = subprocess.run([sys.executable, "-m", "tares.crew"] + list(argv), env=env, cwd=str(ROOT),
                        capture_output=True, timeout=120)
@@ -70,9 +90,11 @@ home = [c for c in doc.get("checks", []) if c.get("id") == "crew_home"]
 ck("the crew_home check names the folder with its space and its letter", bool(home) and str(crew) in home[0]["message"], home)
 ck("no UnicodeEncodeError", "UnicodeEncodeError" not in err and "Traceback" not in err, err)
 
-print("an error message with the path")
-code, out, err = tares("tidy", str(TOP / "not there \u65e5"))
-ck("it refuses without a traceback or a UnicodeEncodeError", "UnicodeEncodeError" not in err and "Traceback" not in err, (code, err))
+print("a message with the path")
+gone = TOP / "not there \u65e5"
+code, out, err = tares("tidy", str(gone))
+ck("tidy of a path that is not there says so, naming the path whole, and exits 0", code == 0 and str(gone) in err and "already gone" in err, (code, err))
+ck("no UnicodeEncodeError", "UnicodeEncodeError" not in err and "Traceback" not in err, err)
 
 shutil.rmtree(TOP, ignore_errors=True)
 print("\n%d passed, %d failed" % (P, F))

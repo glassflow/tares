@@ -1,7 +1,7 @@
 # The crew tests and the parity harness on Windows, from the first milestone (TR-1066), so a Windows
 # break shows up in the PR that causes it. Advisory for now: continue-on-error keeps a red run from
 # blocking a merge, and the job name says so. Its own workflow, so ci.yml (and the required checks) stay as they are.
-# The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_parity.py and the parity scenarios, and fails
+# The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_ci_windows.py and the parity scenarios, and fails
 # if it ran no test, if a test printed no summary, or (--floors) if a test passed fewer checks than its floor (TR-976).
 name: windows-crew
 

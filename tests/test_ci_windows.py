@@ -100,6 +100,11 @@ LONG = "print('  FAIL the early one  detail-xyz')\nfor i in range(120):\n    pri
 code, out = runner(tree({"test_crew_state.py": LONG}, parity()))
 ck("its FAIL line is printed on its own", code == 1 and "its 1 FAIL lines" in out and out.count("FAIL the early one  detail-xyz") == 1, out)
 
+print("a failure is printed when it happens, not only at the end")
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity(), packaging=FAILING))
+ck("its details come before the next test's line, so a job killed by its timeout still shows them",
+   code == 1 and 0 <= out.index("---- tests/test_crew_packaging.py") < out.index("ok    tests/test_crew_state.py"), out)
+
 print("a test that crashes (a traceback, not a clean failure)")
 code, out = runner(tree({"test_crew_state.py": "raise RuntimeError('boom')\n"}, parity()))
 ck("exit 1 and the traceback is shown", code == 1 and "RuntimeError: boom" in out, out)
