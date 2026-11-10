@@ -103,7 +103,6 @@ class Scenario:
     ignore_asked: tuple = ()  # routes left out of the "asked of Tares" comparison: "PUT /api/x" itself, or every route
                               # that starts with an entry ending in a space ("GET ": the reads, which the engines make
                               # in a different number and order)
-    ignore_routes: tuple = ()  # routes asked of the fake Tares that are left out of the list of what was asked
 
 
 class Run:
@@ -2833,10 +2832,9 @@ _CC_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L4-ship"
                                                            "challenger": False, "builders_max": 3}}),
              "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
 # Left out of the comparison: every read of Tares (the other steps of a round read settings, health and pace in a
-# different order and number in each engine; the pace itself is real in Python since TR-962), the retry flags sent to
-# it (TR-964), and how often the session list and `--version` are read. What is written to Tares, started and stopped
+# different order and number in each engine; the pace itself is real in Python since TR-962), and how often the session list and `--version` are read. What is written to Tares, started and stopped
 # is compared.
-_CC_NOT_YET = ("GET ", "PUT /api/crew/claude-retry?crew=crew")
+_CC_NOT_YET = ("GET ",)
 _CC_READS = (("agents",), ("--version",))
 _CC_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "cccc0003"}
 
@@ -4820,8 +4818,6 @@ def run_side(sc: Scenario, engine: str) -> Side:
             for q in fake.requests:
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
                     continue
-                if q["route"] in sc.ignore_routes:
-                    continue
                 line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
                 if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
                     asked.append(line)
@@ -4998,7 +4994,9 @@ CU_TARES = {"GET /api/crew/settings": (200, {"settings": CU_SETTINGS}), "GET /ap
 CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2"}
 # bash reads GET /api/crew/pace before it starts a session; the Python pace is a stub until TR-962, so the
 # read is left out of the list of what was asked (the pace itself is not what these scenarios test).
-CU_NO_PACE = ("GET /api/crew/pace",)
+# Reads of Tares are left out, as in the cc_move scenarios: the engines make them in a different number and order
+# (the pace is real in Python since TR-962). What is written to Tares, started and stopped is compared.
+CU_NO_PACE = ("GET ",)
 CU_NO_HOOK = "the new session's version is set by the fake Claude Code's on-bg hook, which runs through bash"
 
 CU_HOOK = '''import json, os
@@ -5151,7 +5149,7 @@ scenario(Scenario(
     about="a --wait that is not a number of seconds, or an argument it does not know, is refused with nothing restarted",
     setup=_cu_world(),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     steps=[Step(["crew", "update", "--wait", "abc"], env=CU_ENV), Step(["crew", "update", "--wait", "1e3"], env=CU_ENV),
            Step(["crew", "update", "--wait", "-5"], env=CU_ENV), Step(["crew", "update", "--wait", ""], env=CU_ENV),
            Step(["crew", "update", "--wait", "99999999999999999999"], env=CU_ENV), Step(["crew", "update", "--wait"], env=CU_ENV),
@@ -5174,7 +5172,7 @@ scenario(Scenario(
     about="halted, no readable Claude Code version and no stations recorded each stop the command, restarting nothing",
     setup=_cu_world(),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     steps=[Step(["crew", "halt", "maintenance"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV),
            Step(["crew", "restart"], env=CU_ENV), Step(["crew", "resume"], env=CU_ENV),
            Step(["crew", "update"], env={**CU_ENV, "CLAUDE_BIN": "{tmp}/noclaude"}, before=_cu_no_claude),
@@ -5196,7 +5194,7 @@ scenario(Scenario(
     about="stations already on the installed Claude Code are left; crew restart and --force restart them anyway, the orchestrator last",
     setup=_cu_world(runs=CU_NEW),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "restart"], env=CU_ENV), Step(["crew", "update", "--force"], env=CU_ENV)],
     checks=[
@@ -5217,7 +5215,7 @@ scenario(Scenario(
     about="stations behind move in the same conversation, the others first and the orchestrator last; a second run finds none behind",
     setup=_cu_world(),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV)],
     checks=[
@@ -5241,7 +5239,7 @@ scenario(Scenario(
                               "crew-builder": {"role": "builder", "id": "dddd0004", "sessionId": "sess-b", "project": "shop"}},
                     states={"crew-builder": "stopped"}),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV)],
     checks=[
@@ -5261,7 +5259,7 @@ scenario(Scenario(
     about="a busy station is waited for, then given up on at --wait; the others still move and the run fails naming it",
     setup=_cu_world(),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
     checks=[
@@ -5280,7 +5278,7 @@ scenario(Scenario(
     about="run from the orchestrator it leaves that station out and says how it moves; --force says it needs another session",
     setup=_cu_world(),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}),
            Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}, before=_cu_orchestrator_current),
@@ -5306,7 +5304,7 @@ scenario(Scenario(
     about="two sessions under one station name are reported and fail the run",
     setup=_cu_world(runs=CU_NEW),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     steps=[Step(["crew", "update"], env=CU_ENV, before=lambda tmp: _cu_add_dup(tmp)), Step(["crew", "update"], env=CU_ENV, before=lambda tmp: _cu_drop_dup(tmp))],
     checks=[
         ("two sessions under one name: reported, the update fails",
@@ -5338,7 +5336,7 @@ scenario(Scenario(
     about="a halt that comes after the first restart stops the run before the orchestrator, and says so",
     setup=_cu_world(),
     tares=CU_TARES,
-    ignore_routes=CU_NO_PACE,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV, before=_cu_halt_file)],
     checks=[("halted in the middle: crew update stops and says so",
@@ -5352,7 +5350,6 @@ scenario(Scenario(
 
 # A start in bash reads the grants and the projects again on every try; the Python side reads them once for the
 # run. Neither read changes what is done, so the retry scenarios leave them out of the list of what was asked.
-CU_QUIET = CU_NO_PACE + ("GET /api/grants", "GET /api/crew/projects")
 CU_RETRY_ENV = CU_ENV
 
 scenario(Scenario(
@@ -5362,7 +5359,7 @@ scenario(Scenario(
           "Tares gets the list; a second run tries at once and doubles the wait; a run that gets there clears the marks",
     setup=_cu_with_key(_cu_world(spawn=CU_OLD)),
     tares=CU_TARES,
-    ignore_routes=CU_QUIET,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()),
            Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait())],
@@ -5401,7 +5398,7 @@ scenario(Scenario(
     about="FACTORY_CC_BACKOFF sets the first wait and FACTORY_CC_BACKOFF_MAX the cap it doubles up to",
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares=CU_TARES,
-    ignore_routes=CU_QUIET,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
            for _ in range(3)],
@@ -5420,7 +5417,7 @@ scenario(Scenario(
     about="FACTORY_CC_TRIES is the number of tries in the conversation before the new one",
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares=CU_TARES,
-    ignore_routes=CU_QUIET,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "1"}),
            Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "5"})],
@@ -5438,7 +5435,7 @@ scenario(Scenario(
     about="a Tares that refuses the retry list does not change what the command says or does",
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares={**CU_TARES, CU_RETRY: (500, "boom")},
-    ignore_routes=CU_QUIET,
+    ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV)],
     checks=[("the run fails as it would, naming the station and the retry",
