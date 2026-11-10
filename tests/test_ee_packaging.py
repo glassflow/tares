@@ -24,7 +24,7 @@ def first_line(path):
 
 
 # static checks, no build
-ck("ee/LICENSE starts with the draft line", first_line(ROOT / "ee" / "LICENSE") == "DRAFT, pending legal review")
+ck("ee/LICENSE starts with its title", first_line(ROOT / "ee" / "LICENSE") == "Tares Enterprise Licence")
 ck("tares_ee/__init__.py starts with the licence header",
    first_line(ROOT / "ee" / "tares_ee" / "__init__.py") == "# Tares enterprise licence, see ee/LICENSE")
 ck("the Dockerfile copies ee/", "COPY ee/ ./ee/" in (ROOT / "deploy" / "docker" / "Dockerfile").read_text().splitlines())
