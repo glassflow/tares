@@ -45,7 +45,7 @@ sys.path.insert(0, str(FACTORY_DIR))
 
 import fake_claude  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
-from tares.crew import pace, state, watch  # noqa: E402
+from tares.crew import pace, state, watch, watch_revive  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
@@ -452,6 +452,25 @@ with FakeTares(doc(85, 10)) as t:
     round_(t)
     ck("back to normal: each is told once to go back", sorted(told()[3:]) == [("crew-reviewer", "release"), ("shop-build-m1", "release")]
        and pfile("crew-reviewer") is None and pfile("shop-build-m1") is None, str(told()))
+
+print("a round whose session list could not be read does no pace work (bash skips the whole round)")
+reset()
+del launched[:]
+with FakeTares(doc(85, 10)) as t:
+    watch_revive.last = watch_revive.Round()
+    watch_revive.last.unread = True
+    try:
+        round_(t)
+        ck("nobody is told while the revive step could not read the list", launched == [] and told() == [], str(told()))
+        ck("...and the pace file is not touched", pfile("crew-reviewer") is None)
+        watch_revive.last = watch_revive.Round()
+        round_(t)
+        ck("the next round that could read it tells them", len(told()) == 2, str(told()))
+    finally:
+        watch_revive.last = watch_revive.Round()
+
+print("the watch hands the revive loop the real pace")
+ck("watch_revive.pace is the pace's Seam", isinstance(watch_revive.pace, pace.Seam))
 
 print("the step with a builder that is done, a station mid-turn, and a reading that is missing")
 reset(states={"crew-reviewer": "working"})

@@ -395,4 +395,5 @@ register("revive", watch_revive.step)
 
 from . import pace as _pace  # noqa: E402
 
+watch_revive.pace = _pace.Seam()   # TR-962: the revive loop asks the real pace, not the inert stand-in
 register("pace", _pace.step)

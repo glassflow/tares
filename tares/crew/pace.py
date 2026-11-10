@@ -37,7 +37,7 @@ import os
 import sys
 import time
 
-from . import claude, state
+from . import claude, state, watch_revive
 from .client import TaresClient, TaresHTTPError
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -466,6 +466,10 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     """One round of the pace: read the plan's limits, tidy the pace file, and tell every active, live station of a
     crew role that is between turns what the pace now asks of it."""
     env = os.environ if env is None else env
+    # Bash skips the whole round when the session list is unreadable; the revive step says so. Read it as
+    # `watch_revive.last`: the revive step rebinds `last` every round.
+    if watch_revive.last.unread:
+        return
     client = TaresClient(paths, env)
     try:
         reading = read(client)
