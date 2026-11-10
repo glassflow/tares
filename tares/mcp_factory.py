@@ -85,6 +85,28 @@ async def list_milestones(project: str = "") -> str:
                        for m in r.json().get("milestones") or []], default=str)
 
 
+# ── the integrations (TR-842) ─────────────────────────────────────────────────
+
+@mcp.tool()
+async def get_integrations(project: str = "") -> str:
+    """Which integration each of the factory's seven slots uses (tickets, review, ci, memory,
+    monitoring, guardrails, runtime): its name and title, whether the factory's choice, the
+    project's own or the built-in default applies (`source`), and `reason` when a stored choice
+    was passed over. Pass `project` to see what applies to that project; leave it out for a
+    builder station's own project, or the factory's choice outside one. Never returns an
+    integration's settings or secrets."""
+    project = (project or "").strip() or _default_project()
+    async with _cx(10) as cx:
+        if project:
+            uid, why = await _project_id(cx, project)
+            if uid is None:
+                return why
+            r = await cx.get(f"{TARESD}/api/factory/integrations/effective", params={"project": uid})
+        else:
+            r = await cx.get(f"{TARESD}/api/factory/integrations/effective")
+    return _out(r)
+
+
 # ── the ledger (TR-427, TR-428, TR-410) ───────────────────────────────────────
 
 @writable()

@@ -12,9 +12,7 @@ import contextvars
 import hashlib
 import hmac
 import json
-import ipaddress
 import os
-import socket
 import threading
 import time
 import re
@@ -64,7 +62,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, standup as standup_mod
+from . import claude_usage, factory_api, integrations_api, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -256,6 +254,11 @@ def _ui_dist() -> Path:
 
 UI_DIST = _ui_dist()
 
+# What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
+# cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
+# launch_spec, recall). A daemon that could not start lists none.
+CAPABILITIES = ["integrations"]
+
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
 DEGRADED_PCT = float(os.getenv("TARES_DEGRADED_PCT", "90"))
@@ -343,7 +346,7 @@ def _degraded_app(reason: str, retry: bool = False) -> FastAPI:
         # HTTP 200 with status "down": a probe that can read the body learns WHAT is wrong, and the
         # console (which only ever reaches this daemon) can render it. Keys AuthGate depends on stay.
         body = {"status": "down", "detail": reason, "auth_required": bool(AUTH_TOKEN),
-                "sources": [], "pct_used": None}
+                "sources": [], "pct_used": None, "capabilities": []}
         if LOGIN_URL:
             body["login_url"] = LOGIN_URL
         return JSONResponse(body, status_code=503) if retry else body
@@ -793,6 +796,7 @@ def make_app() -> FastAPI:
     _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke|decline))?$")
     _REPLY_WRITE = re.compile(r"^/api/desk/[^/]+/reply$")
+    _PROJECT_INTEGRATION = re.compile(r"^/api/projects/[^/]+/integrations/[^/]+(/test)?$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
 
     def _required_scope(method: str, path: str) -> str | None:
@@ -821,6 +825,10 @@ def make_app() -> FastAPI:
             return "ingest"   # an area owner answering a question addressed to them (TR-636), or
                               # a person answering their own desk item from the console (TR-740):
                               # the handler decides by the credential's person
+        if method != "GET" and _PROJECT_INTEGRATION.match(path):
+            return "ingest"   # a project's own integration choice and its test (TR-842): an
+                              # admin or the project's lead; the handler decides, it needs the
+                              # credential's person. A read key is refused here
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
@@ -1149,6 +1157,7 @@ def make_app() -> FastAPI:
         body = {"status": status, "auth_required": bool(AUTH_TOKEN),
                 "sources": [] if AUTH_TOKEN else list(runtime.catalog.sources),
                 "pct_used": pct, "version": _installed_version(),
+                "capabilities": list(CAPABILITIES),
                 "uptime_seconds": int(time.monotonic() - _STARTED_MONO)}
         if detail:
             body["detail"] = detail
@@ -5993,6 +6002,7 @@ def make_app() -> FastAPI:
     fx = factory_api.register(app, store, h)
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime))
+    integrations_api.register(app, store, h)
 
     @app.get("/api/home")
     async def home(request: Request):
@@ -6527,21 +6537,16 @@ def make_app() -> FastAPI:
 
     async def _refuse_internal_hook(url: str) -> None:
         """A project key is handed to an outside agent, so its webhook may not point inside the
-        cell's network (loopback, private ranges, link-local such as cloud metadata).
-        TARES_WEBHOOK_ALLOW_PRIVATE=1 allows it, for a cell whose agents live on its network."""
-        if os.environ.get("TARES_WEBHOOK_ALLOW_PRIVATE", "").lower() in ("1", "true", "yes"):
-            return
-        host = urlsplit(url).hostname or ""
+        cell's network (loopback, private ranges, link-local such as cloud metadata); the rule is
+        tares/outbound.py. TARES_WEBHOOK_ALLOW_PRIVATE=1 allows it, for a cell whose agents live
+        on its network."""
         try:
-            infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
-        except OSError:
-            _err(ValueError(f"cannot resolve {host!r}"), 400)
-        for info in infos:
-            ip = ipaddress.ip_address(info[4][0].split("%")[0])
-            if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
-                    or ip.is_multicast or ip.is_unspecified):
-                _err(ValueError(f"a project key cannot send firings to {host} (an internal "
-                                "address); use a public URL"), 400)
+            await outbound.refuse_internal(url)
+        except outbound.AddressRefused as e:
+            if e.reason == "unresolved":
+                _err(ValueError(f"cannot resolve {e.host!r}"), 400)
+            _err(ValueError(f"a project key cannot send firings to {e.host} (an internal "
+                            "address); use a public URL"), 400)
 
     @app.post("/api/projects/{uid}/subscribe")
     async def subscribe_project(uid: str, request: Request, body: dict = Body(...)):
