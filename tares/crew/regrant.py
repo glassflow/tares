@@ -9,8 +9,9 @@ A station's grants are fingerprinted when it starts (launch.launch keeps the cks
 the text in stations/<station>.grants). Each round the step reads the grants on Tares now; a station whose
 fingerprint differs, and that is not the one already acted on (`grants_tried`), is restarted in the same
 conversation with a prompt that quotes the added grants, but only when it is between turns (done or blocked,
-nothing in flight), has a session, has no `.done` file, is not open in someone's terminal, and the crew is not
-halted. A Tares that does not answer is never a change. Once per change: `grants_tried` is written before the
+nothing in flight), has a session, is not open in someone's terminal, and the crew is not halted. A station with
+a `.done` file is restarted only for a new grant that names it (TR-645); any other change is noted once in the
+event log as `regrant-skipped`. A Tares that does not answer is never a change. Once per change: `grants_tried` is written before the
 restart, so a restart that fails is not tried again every round.
 
 Standard library plus the crew modules (no duckdb, fastapi or daemon). lifecycle is imported as a module and
@@ -27,6 +28,7 @@ Differences from bash
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 from . import claude, launch, state, watch_revive
@@ -62,9 +64,30 @@ def regranted(paths: CrewPaths, client: TaresClient, station: str) -> bool:
 def regrant_due(paths: CrewPaths, client: TaresClient, station: str) -> bool:
     """True when the watch is to restart the station with new grants, once it is between turns."""
     return (bool(state.stations_get(station, "sessionId", paths=paths))
-            and not paths.done_file(station).exists()
             and not claude.attached(station, paths=paths)
-            and regranted(paths, client, station))
+            and regranted(paths, client, station)
+            and (not paths.done_file(station).exists() or _done_regrant_due(paths, client, station)))
+
+
+def names_station(added: str, station: str) -> bool:
+    """True when a line of the added grants names this station as a whole name: s-1 is not s-10."""
+    return re.search(rf"(?<![A-Za-z0-9_-]){re.escape(station)}(?![A-Za-z0-9_-])", added) is not None
+
+
+def _done_regrant_due(paths: CrewPaths, client: TaresClient, station: str) -> bool:
+    """True when a new grant names this done station; otherwise says so in the event log, once per change."""
+    try:
+        now = client.grants_read(state.stations_get(station, "project", paths=paths)).rstrip("\n")
+    except CrewError:
+        return False
+    kept = paths.station_file(station, "grants")
+    if names_station(added_grants(now, state.read_text(kept) if kept.is_file() else None), station):
+        return True
+    total = str(grants_sum(now + "\n"))
+    if state.stations_get(station, "grants_skipped", paths=paths) != total:
+        state.stations_put(station, {"grants_skipped": total}, paths=paths)
+        state.event("regrant-skipped", station, "done", paths=paths)
+    return False
 
 
 def _lines(text: str) -> list:
@@ -128,6 +151,7 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
             client.say(f"{station} has new permissions from Tares; restarting it with them now that it's "
                        "between turns, in the same conversation")
             lifecycle.restart(client, paths, [station, prompt], claude_bin=claude_bin)
+            paths.done_file(station).unlink(missing_ok=True)   # it has work again; it says so itself when that is over
             state.event("regranted", station, total, paths=paths)
         except (CrewError, OSError) as e:   # bash says "could not restart" for any failure of the restart
             sys.stdout.flush()
@@ -163,7 +187,12 @@ def step(paths: CrewPaths, env=None) -> None:
                 continue   # the revive step started it this round: bash's elif chain stops there
             role = row.get("role")
             if role == "builder" and paths.done_file(station).exists():
-                continue   # it ended with nothing left to do
+                # it ended with nothing left to do: only a new grant that names it brings it back
+                if (not state.halted(paths) and claude.between_turns(station, binary, paths)
+                        and regrant_due(paths, client, station)):
+                    watch_revive.last.handled.add(station)
+                    regrant_station(paths, station, claude_bin=binary, env=env)
+                continue
             if role != "helper":
                 # is_alive and the stuck check on one read of the session list (bash reads it once here too)
                 try:

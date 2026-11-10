@@ -195,7 +195,7 @@ def desk_items(t: HomeRead) -> list[dict]:
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`", **base,
                 actions=[{"label": "Answer", "primary": False, "do": "answer", "desk": d["label"],
                           "options": list(d.get("options") or [])},
-                         {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"],
+                         {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
                           "may_limit": may_limit}]))
         else:
             out.append(fh.home_item(

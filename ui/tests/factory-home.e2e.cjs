@@ -240,6 +240,7 @@ function cleanEnv(extra) {
     const seeded = spawnSync(process.env.TARES_E2E_PYTHON || "python3", [path.join(__dirname, "seed-factory-home.py"), String(PORT)],
                              { cwd: REPO, encoding: "utf8", env: cleanEnv({ PYTHONPATH: REPO }) });
     ck("seed ran", seeded.status === 0, (seeded.stderr || seeded.stdout || "").slice(-300));
+    const station = "billing-export-build-t2-api"; // the seed's builder
     const ids = seeded.status === 0 ? JSON.parse(seeded.stdout.trim().split("\n").pop()) : {};
     const api = async (method, p, body) => {
       const r = await fetch(BASE + p, { method, headers: { "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
@@ -397,12 +398,12 @@ function cleanEnv(extra) {
         await dialog.waitFor();
         const words = dialog.getByTestId("allow-words");
         ck(t("Allow: the box offers a grant in words, with the command and the project"),
-           (await words.inputValue()) === "The builder may run `npm run test -- --watch=false` in Billing export", await words.inputValue());
+           (await words.inputValue()) === `${station} may run \`npm run test -- --watch=false\` in Billing export`, await words.inputValue());
         ck(t("Allow: a builder's grant may hold in its project only"), (await dialog.getByRole("radio").count()) === 2 && (await dialog.getByRole("radio").first().isChecked()));
         await liveShot(page, "allow", width);
         await checkWords(page, ck, t("allow dialog"));
         await dialog.getByRole("radio").nth(1).check();
-        ck(t("Allow: Every project rewrites the words"), (await words.inputValue()) === "The builder may run `npm run test -- --watch=false` in every project");
+        ck(t("Allow: Every project rewrites the words"), (await words.inputValue()) === `${station} may run \`npm run test -- --watch=false\` in every project`);
         await words.fill((await words.inputValue()) + " (my words)");
         await dialog.getByRole("radio").first().check();
         ck(t("Allow: words the person edited stay"), (await words.inputValue()).endsWith("(my words)"));
@@ -425,7 +426,7 @@ function cleanEnv(extra) {
         await crew.getByRole("button", { name: "Allow" }).click();
         await dialog.waitFor();
         ck(t("Allow: a crew station's grant is for every project, with no choice"), (await dialog.getByRole("radio").count()) === 0
-           && (await dialog.getByText("Kept for every project").count()) === 1 && (await words.inputValue()).startsWith("The reviewer may run `gh pr view 12 --json state`"));
+           && (await dialog.getByText("Kept for every project").count()) === 1 && (await words.inputValue()).startsWith("crew-reviewer may run `gh pr view 12 --json state`"));
         await dialog.getByRole("button", { name: "Cancel" }).click();
         await dialog.waitFor({ state: "detached" });
         // a refusal: the request was withdrawn while the box was open

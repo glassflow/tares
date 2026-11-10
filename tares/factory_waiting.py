@@ -322,7 +322,7 @@ def desk_items(store, fx, now) -> list[dict]:
                 since=d["created_at"], now=now, project=project, id=f"permission:{d['label']}",
                 blocking=True,
                 actions=[{**answer, "primary": False},
-                         {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"],
+                         {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
                           "may_limit": may_limit}]))
         else:
             out.append(fh.home_item(

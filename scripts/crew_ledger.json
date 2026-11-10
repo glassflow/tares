@@ -1224,6 +1224,17 @@
       "note": ""
     },
     {
+      "name": "done_regrant_due",
+      "kind": "function",
+      "line": 1392,
+      "what": "is a finished builder named by a new grant",
+      "ticket": "TR-645",
+      "dropped": false,
+      "python": "tares.crew.regrant:_done_regrant_due",
+      "ported": true,
+      "note": ""
+    },
+    {
       "name": "regrant_station",
       "kind": "function",
       "line": 1375,
@@ -2615,6 +2626,18 @@
       "python": "claude-plugin.hooks.guard:decide",
       "ported": true,
       "note": "Python: owner_only is a local function of decide."
+    },
+    {
+      "name": "granted",
+      "kind": "function",
+      "file": "claude-plugin/hooks/guard.sh",
+      "line": 31,
+      "what": "did the person allow this exact command for this station",
+      "ticket": "TR-644",
+      "dropped": false,
+      "python": "claude-plugin.hooks.guard:granted",
+      "ported": true,
+      "note": ""
     },
     {
       "name": "session-start.sh",

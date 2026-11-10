@@ -508,7 +508,9 @@ function reason(e: unknown): string {
 /** The command a permission item names, in backticks, and the role that wants it ("The builder"). */
 function permissionParts(item: HomeItem): { who: string; command: string } {
   const m = /`([\s\S]+)`/.exec(item.detail);
-  const who = item.detail.split(" wants to use")[0] || "The crew";
+  const station = item.actions?.find((a) => a.do === "allow")?.station;
+  // by name, as the Crew page says it: the watch wakes a builder that has finished only when its grant names it
+  const who = (typeof station === "string" && station) || item.detail.split(" wants to use")[0] || "The crew";
   return { who, command: m ? m[1] : "" };
 }
 

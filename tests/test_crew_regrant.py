@@ -81,7 +81,22 @@ check("no session to resume: not due", not regrant.regrant_due(paths, Client(A +
 paths = crew({"s": {"grants": was, "sessionId": "abc"}})
 (paths.home / "stations").mkdir()
 paths.done_file("s").write_text("", encoding="utf-8")
-check("a station that is done is not due", not regrant.regrant_due(paths, Client(A + B), "s"))
+check("a done station is not due for a grant that does not name it", not regrant.regrant_due(paths, Client(A + B), "s"))
+events = lambda p: [json.loads(l) for l in p.events.read_text(encoding="utf-8").splitlines()]
+check("the skip is one line in the event log",
+      [(e["event"], e["station"], e["detail"]) for e in events(paths)] == [("regrant-skipped", "s", "done")])
+regrant.regrant_due(paths, Client(A + B), "s")
+check("and only once for the same change", len(events(paths)) == 1)
+regrant.regrant_due(paths, Client(A + B + '- "may read in shop" (2026-02-05)\n'), "s")
+check("a further change is noted again", len(events(paths)) == 2)
+NAMED = '- "s may run `gh pr merge 1` in shop" (2026-02-05)\n'
+check("a done station is due for a new grant that names it", regrant.regrant_due(paths, Client(A + NAMED), "s"))
+paths.station_file("s", "grants").write_text(A + NAMED, encoding="utf-8")
+check("a grant that named it before it started does not wake it",
+      not regrant.regrant_due(paths, Client(A + NAMED + B), "s"))
+check("the name is matched whole", not regrant.names_station('- "s-10 may run x"', "s-1")
+      and not regrant.names_station('- "xs-1 may run x"', "s-1") and regrant.names_station('- "s-1 may run x"', "s-1"))
+check("the role's name wakes nobody", not regrant.names_station('- "The builder may run x"', "shop-build-m1"))
 
 # what the prompt quotes
 check("added grants are the lines not already whole lines of the kept file", regrant.added_grants(A + B, A) == B.rstrip("\n"))
