@@ -1,0 +1,9 @@
+{
+  "id": "u1",
+  "name": "Ada",
+  "email": "ada@acme.dev",
+  "organization": {
+    "name": "Acme",
+    "urlKey": "acme"
+  }
+}

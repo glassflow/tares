@@ -1,0 +1,32 @@
+{
+  "id": "team-2",
+  "name": "Plain",
+  "states": {
+    "nodes": [
+      {
+        "id": "p-todo",
+        "name": "To do",
+        "type": "unstarted",
+        "position": 1
+      },
+      {
+        "id": "p-testing",
+        "name": "Testing",
+        "type": "started",
+        "position": 3
+      },
+      {
+        "id": "p-doing",
+        "name": "Doing",
+        "type": "started",
+        "position": 2
+      },
+      {
+        "id": "p-shipped",
+        "name": "Shipped",
+        "type": "completed",
+        "position": 4
+      }
+    ]
+  }
+}

@@ -15,7 +15,9 @@ The connection is one of two kinds:
 A connection from the cell's own Linear sign-in (kind 'oauth', before TR-538) is no longer used:
 it shows as needing to be connected again.
 
-Everything here is read-only towards Linear.
+The sync only reads from Linear. A ticket with a status change waiting to reach Linear
+(a pending_writeback row, TR-845) keeps the status Tares gave it until the write lands.
+The writes themselves are tares/integrations/builtin/tickets_linear.py.
 """
 from __future__ import annotations
 
@@ -332,11 +334,14 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             out.append(_env(project, link, iss, "renamed",
                             f"{ident} renamed in Linear: {cur['title']} -> {iss.get('title')}",
                             {"from": cur["title"], "to": iss.get("title")}))
+        moved = None
         if cur["status"] != status:
-            changes["status"] = status
-            out.append(_env(project, link, iss, "status",
-                            f"{ident} moved to {(iss.get('state') or {}).get('name') or status} "
-                            f"in Linear", {"from": cur["status"], "to": status}))
+            # written apart from the rest: a status change of this ticket waiting to reach Linear
+            # (TR-845) must not be undone by what Linear still says
+            moved = _env(project, link, iss, "status",
+                         f"{ident} moved to {(iss.get('state') or {}).get('name') or status} "
+                         f"in Linear", {"from": cur["status"], "to": status})
+            out.append(moved)
         if cur["position"] != pos:
             changes["position"] = pos
             out.append(_env(project, link, iss, "reordered", f"{ident} reordered in Linear",
@@ -348,9 +353,12 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         if mapped is not None and (cur["assignee_person_id"], cur["assignee_raw"]) != mapped:
             changes.update(assignee_person_id=mapped[0], assignee_raw=mapped[1])
             team.assignee_sync_join(store, project, mapped[0], status)
+        why = f"Linear marked it {(iss.get('state') or {}).get('name') or status}"
         if changes:
-            store.update_ticket(cur["id"], why=f"Linear marked it "
-                                f"{(iss.get('state') or {}).get('name') or status}", **changes)
+            store.update_ticket(cur["id"], why=why, **changes)
+        if moved is not None and not store.update_ticket(cur["id"], why=why, status=status,
+                                                         unless_pending=True):
+            out.remove(moved)      # a status change is waiting to reach Linear: Tares's stands
     # blocking relations become dependencies, once every issue has its ticket
     by_ext = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "linear"}
     for iss in issues:
@@ -366,6 +374,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         # gone from the project in Linear (moved, deleted, archived): canceled here, not dropped,
         # so its working doc stays reachable
         store.update_ticket(cur["id"], status="canceled", why="it left the Linear project")
+        store.pending_writeback_clear(cur["id"])     # nothing left in Linear to write to
         out.append(_env(project, link,
                         {"id": ext, "identifier": cur["identifier"], "title": cur["title"]},
                         "removed", f"{cur['identifier']} left the Linear project",

@@ -368,6 +368,18 @@ FACTORY_SCHEMA = [
       updated_by  TEXT,
       PRIMARY KEY (project_uid, slot)
     )""",
+    # A status change a ticket system refused or could not be reached for (TR-845). One row per
+    # ticket and integration, the status wanted last; the row is retried on each refresh and
+    # goes when the write lands. While a row exists a sync leaves the ticket's status alone.
+    """CREATE TABLE IF NOT EXISTS pending_writeback (
+      ticket       TEXT,
+      integration  TEXT,
+      status       TEXT,
+      attempts     INTEGER,
+      last_error   TEXT,
+      updated_at   TIMESTAMPTZ,
+      PRIMARY KEY (ticket, integration)
+    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -1857,6 +1869,66 @@ class FactoryStore:
         with self._sread:
             r = self.sc.execute(sql, args).fetchone()
         return self._load_settings(r[1]) if r and r[0] == name else {}
+
+    # ── status changes waiting to reach the ticket system (TR-845) ────────────
+    _PW_COLS = "ticket, integration, status, attempts, last_error, updated_at"
+
+    @staticmethod
+    def _pw_row(r) -> dict:
+        return {"ticket": r[0], "integration": r[1], "status": r[2], "attempts": r[3],
+                "last_error": r[4], "updated_at": r[5]}
+
+    def pending_writeback_fail(self, ticket: str, integration: str, status: str, error: str,
+                               at) -> int:
+        """A write of `status` to the ticket system failed: add the ticket's row, or update it
+        with the status wanted now and the error, one attempt more. Returns the attempts so far.
+        Select, then insert or update, under one lock: no ON CONFLICT, so it runs on Postgres."""
+        with self._swrite:
+            cur = self.sc.execute("SELECT attempts FROM pending_writeback WHERE ticket = ? "
+                                  "AND integration = ?", [ticket, integration]).fetchone()
+            attempts = int(cur[0] or 0) + 1 if cur else 1
+            if cur:
+                self.sc.execute("UPDATE pending_writeback SET status = ?, attempts = ?, "
+                                "last_error = ?, updated_at = ? WHERE ticket = ? AND "
+                                "integration = ?", [status, attempts, error, at, ticket,
+                                                    integration])
+            else:
+                self.sc.execute(f"INSERT INTO pending_writeback ({self._PW_COLS}) VALUES "
+                                "(?, ?, ?, ?, ?, ?)",
+                                [ticket, integration, status, attempts, error, at])
+        return attempts
+
+    def pending_writeback_clear(self, ticket: str, integration: str | None = None) -> bool:
+        """The ticket's row goes (the write landed, or the ticket left the system). False when
+        there was none."""
+        sql, args = "FROM pending_writeback WHERE ticket = ?", [ticket]
+        if integration:
+            sql, args = sql + " AND integration = ?", args + [integration]
+        with self._swrite:
+            had = self.sc.execute("SELECT 1 " + sql, args).fetchone()
+            self.sc.execute("DELETE " + sql, args)
+        return bool(had)
+
+    def get_pending_writeback(self, ticket: str, integration: str | None = None) -> dict | None:
+        sql, args = (f"SELECT {self._PW_COLS} FROM pending_writeback WHERE ticket = ?", [ticket])
+        if integration:
+            sql, args = sql + " AND integration = ?", args + [integration]
+        with self._sread:
+            r = self.sc.execute(sql, args).fetchone()
+        return self._pw_row(r) if r else None
+
+    def list_pending_writebacks(self, integration: str | None = None,
+                                project: str | None = None) -> list[dict]:
+        """The rows waiting, oldest first; `project` keeps those of that project's tickets."""
+        sql, args = f"SELECT {self._PW_COLS} FROM pending_writeback WHERE 1 = 1", []
+        if integration:
+            sql, args = sql + " AND integration = ?", args + [integration]
+        if project:
+            sql += " AND ticket IN (SELECT id FROM tickets WHERE project = ?)"
+            args.append(project)
+        with self._sread:
+            rows = self.sc.execute(sql + " ORDER BY updated_at, ticket", args).fetchall()
+        return [self._pw_row(r) for r in rows]
 
     def clear_project_choice(self, uid: str, slot: str) -> bool:
         """Drop the project's own choice, so the slot follows the factory's again. False when
