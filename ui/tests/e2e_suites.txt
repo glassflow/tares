@@ -20,6 +20,7 @@ factory-reviews
 factory-settings
 factory-start
 factory-start-show
+factory-team
 factory-ticket
 factory-tickets
 grants-declined

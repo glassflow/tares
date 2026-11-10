@@ -239,6 +239,7 @@ the project follows [Semantic Versioning](https://semver.org/).
   field to add one line.
 
 ### Changed
+- On a Tares Cloud factory cell, Settings, Team, People is the one team list: who is on the workspace, with invite and remove, plus each person's GitHub login and admin flag. General no longer lists the team and Add person is gone there. `DELETE /api/people/{id}` takes a person off the list and the seat count and revokes their keys; their work keeps their name. Self-hosted cells keep their own list.
 - Final releases are open again: the team code now lives in ee/ under the enterprise licence.
 - Settings on a factory cell is one page with a two-level sidebar: Crew, Tools, Models, Team, Workspace and Advanced, one group open at a time. The main menu gives way to a Back link. What you allowed has its own page, Advanced has its own place in the sidebar, and the long introductions are gone. The separate All settings page is gone on factory cells; old links land on the right item.
 - Ticket assignees (naming an assignee on a ticket, and Linear and GitHub setting one on sync) are part of the enterprise code (TR-920). Without an enterprise licence, naming an assignee answers 402 `licence_required`, clearing one still works, and a sync never changes who a ticket is assigned to; an assignee already stored still shows. With a licence nothing changes.

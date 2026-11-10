@@ -287,6 +287,7 @@ export const api = {
     request<LicenceState & { env_in_use?: boolean }>("/api/licence", { method: "PUT", body: JSON.stringify({ key }) }),
   deleteLicence: () => request<{ ok?: boolean }>("/api/licence", { method: "DELETE" }),
   people: () => request<{ people: Person[] }>("/api/people"),
+  removePerson: (id: string) => request<{ removed: boolean }>(`/api/people/${encodeURIComponent(id)}`, { method: "DELETE" }),
   updatePerson: (id: string, body: { name?: string; email?: string | null; emails?: string[]; github?: string | null; is_admin?: boolean; picture?: string | null }) =>
     request<Person>(`/api/people/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(body) }),
 

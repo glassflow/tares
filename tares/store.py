@@ -534,6 +534,9 @@ _MIGRATIONS = [
     # A person's picture (TR-1016): an https address the console shows instead of their initials,
     # the one they sign in to Tares Cloud with or one they set. NULL = initials. Never fetched here.
     "ALTER TABLE people ADD COLUMN IF NOT EXISTS picture TEXT",
+    # When a person left the cell (their membership ended). NULL = on the cell. The row stays, so
+    # the work they did keeps their name; they no longer count as a person on the cell.
+    "ALTER TABLE people ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ",
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
     # The person a doc belongs to (a people.id): a personal AGENTS.md or memory (TR-624). NULL =
     # a doc of the cell, as every doc made before this column.
@@ -4553,7 +4556,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return True
 
     # ── People: who is on the cell. A key belongs to one; the credential names the person ─
-    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via, picture"
+    _PERSON_COLS = "id, name, email, emails, github, is_admin, created_at, created_via, picture, removed_at"
     PICTURE_MAX = 2048
 
     @staticmethod
@@ -4561,7 +4564,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return {"id": r[0], "name": r[1], "email": r[2],
                 "emails": json.loads(r[3]) if r[3] else [], "github": r[4],
                 "is_admin": bool(r[5]), "created_at": r[6], "created_via": r[7],
-                "picture": r[8] or None}
+                "picture": r[8] or None, "removed_at": r[9]}
 
     @classmethod
     def check_picture(cls, picture) -> str | None:
@@ -4654,7 +4657,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def _people(self) -> list[dict]:
         """list_people for a caller that already holds the lock."""
         rows = self.sc.execute(
-            f"SELECT {self._PERSON_COLS} FROM people ORDER BY created_at, id").fetchall()
+            f"SELECT {self._PERSON_COLS} FROM people WHERE removed_at IS NULL "
+            "ORDER BY created_at, id").fetchall()
         return [self._person_row(r) for r in rows]
 
     def list_people(self) -> list[dict]:
@@ -4711,6 +4715,24 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                                              new["github"], new["is_admin"], new["picture"], pid])
         return self.get_person(pid)
 
+    def remove_person(self, pid: str) -> bool:
+        """They left: off the list of people and the seat count, every key bound to them revoked.
+        The row stays so what they did keeps their name, and coming back makes a new person.
+        False when there is no such person on the cell. `local` owns what has no owner: ValueError."""
+        if pid == "local":
+            raise ValueError("this person cannot be removed")
+        cur = self.get_person(pid)
+        if not cur or cur.get("removed_at"):
+            return False
+        with self._sread:
+            keys = [r[0] for r in self.sc.execute(
+                "SELECT id FROM api_keys WHERE person_id = ? AND revoked_at IS NULL", [pid]).fetchall()]
+        for kid in keys:
+            self.revoke_api_key(kid)
+        with self._swrite:
+            self.sc.execute("UPDATE people SET removed_at = ? WHERE id = ?", [now_utc(), pid])
+        return True
+
     def claim_local(self, email: str, name: str | None = None) -> dict | None:
         """The cell's owner arrives: `local` becomes them (their name and email) instead of a new
         person being made, so what `local` owns (projects without a lead, desk items addressed to
@@ -4757,7 +4779,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """True while `local` is the only person on the cell: a key nobody has bound still acts
         as them, so a single-user cell keeps working."""
         with self._sread:
-            rows = self.sc.execute("SELECT id FROM people LIMIT 2").fetchall()
+            rows = self.sc.execute("SELECT id FROM people WHERE removed_at IS NULL LIMIT 2").fetchall()
         return [r[0] for r in rows] == ["local"]
 
     def touch_api_key(self, kid: str) -> None:
