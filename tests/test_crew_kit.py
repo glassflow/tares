@@ -480,6 +480,11 @@ with FakeTares(settings_status=500):
 CP.frozen_kit.mkdir()
 CP.checkout_file.write_text(f"{KITDIR}\n", encoding="utf-8")
 ck("a factory run from the copy means the checkout", kit.map_checkout(CP, Path(kit.frozen_phys(CP))) == KITDIR)
+FP = kit.frozen_phys(CP)
+ck("_within: the copy itself, a file in it, a sibling that shares the prefix, and a ../ out of it",
+   kit._within(FP, FP) and kit._within(Path(FP) / "bin" / "factory", FP) and not kit._within(FP + "2", FP)
+   and not kit._within(Path(FP) / ".." / "x", FP))
+ck("a run from a sibling of the copy means itself", kit.map_checkout(CP, Path(FP + "2")) == Path(FP + "2"))
 ck("...a path elsewhere means itself", kit.map_checkout(CP, Path("/x/y")) == Path("/x/y"))
 CP.checkout_file.write_text("/does/not/exist\n", encoding="utf-8")
 ck("...unless the checkout is gone", kit.map_checkout(CP, Path(kit.frozen_phys(CP))) == Path(kit.frozen_phys(CP)))

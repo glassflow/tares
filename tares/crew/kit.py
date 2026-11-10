@@ -91,10 +91,18 @@ def frozen_phys(paths: CrewPaths) -> str:
     return f"{home}/frozen-kit"
 
 
+def _within(path, base) -> bool:
+    """Whether `path` is `base` or under it, whatever the separators (the frozen copy's name is built with "/",
+    a Path on Windows spells it with backslashes) and, on Windows, whatever the case."""
+    p = os.path.normcase(os.path.normpath(os.fspath(path)))
+    b = os.path.normcase(os.path.normpath(os.fspath(base)))
+    return p == b or p.startswith(b + os.sep)
+
+
 def map_checkout(paths: CrewPaths, root) -> Path:
     """A factory run from the frozen copy still means the checkout the freeze was taken from (the kit-checkout
     file), while that checkout is there."""
-    if paths.checkout_file.is_file() and (os.fspath(root) + "/").startswith(frozen_phys(paths) + "/"):
+    if paths.checkout_file.is_file() and _within(root, frozen_phys(paths)):
         c = state.read_text(paths.checkout_file).rstrip("\n")
         if c and os.path.isdir(c):
             return Path(c)
