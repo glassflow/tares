@@ -323,6 +323,10 @@ ck("a Tares that does not list integrations: crew up stops with the upgrade mess
 ck("...before it saved or started anything", c.tares.written() == [] and c.calls() == [], (c.tares.written(), c.calls()))
 r = c.run(["crew", "setup", "--questions", "--json"])
 ck("...while the read-only questions still answer (only commands that start something need it)", r.returncode == 0, r.stderr[-200:])
+# the capability check comes before the MCP check: an old Tares with no MCP server up says "upgrade", not "start MCP"
+r = c.run(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": "http://127.0.0.1:9/mcp"})
+ck("an old Tares with no MCP server up: the upgrade message wins over the MCP one",
+   "missing integrations" in r.stderr and "no MCP server answers" not in r.stderr, (r.returncode, r.stderr[-300:]))
 c.close()
 c = Case(capabilities=["integrations", "other"])
 r = c.run(["crew", "up", "--yes", "--no-watch"])
