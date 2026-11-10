@@ -1,0 +1,106 @@
+{
+ "from": "git show 7b57d5d4^:claude-plugin/hooks/hooks.json",
+ "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/mcp-headers",
+ "hooks": [
+  {
+   "event": "SessionStart",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "SessionStart",
+   "matcher": "*",
+   "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"",
+   "args": []
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "Bash|mcp__.*",
+   "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"",
+   "args": []
+  },
+  {
+   "event": "PreToolUse",
+   "matcher": "AskUserQuestion",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "UserPromptSubmit",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "PostToolUse",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "PostToolUse",
+   "matcher": "Bash|ExitPlanMode",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"
+   ]
+  },
+  {
+   "event": "Stop",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py"
+   ]
+  },
+  {
+   "event": "Stop",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "SubagentStop",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "PermissionRequest",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "Notification",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  },
+  {
+   "event": "SessionEnd",
+   "matcher": "*",
+   "command": "python3",
+   "args": [
+    "${CLAUDE_PLUGIN_ROOT}/scripts/ship.py"
+   ]
+  }
+ ]
+}

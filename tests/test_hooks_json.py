@@ -3,7 +3,8 @@
 Proves: each hooks.json command is `tares hook <known name>` whose script exists in the plugin; the entry
 count, matchers and timeouts are kept; `min_tares.txt` names the first release that has `tares hook`;
 the session start tells an older install to upgrade (the `||` fallback, and `tares hook compat`); the
-shell helpers `tares hook` replaced are gone; `.mcp.json` starts its header helper the same way.
+shell helpers `tares hook` replaced are only shims for sessions already open (test_plugin_shims.py runs them);
+`.mcp.json` starts its header helper the same way.
 
 Run: python tests/test_hooks_json.py
 """
@@ -148,9 +149,12 @@ else:
     r = run_cmd(fallback, fail_dir)
     ck("a session start that fails for another reason does not claim tares is old", "needs tares" not in r.stdout, r.stdout)
 
-print("the shell helpers are gone, and .mcp.json uses `tares hook`")
-for rel in ("hooks/guard.sh", "hooks/session-start.sh", "bin/mcp-headers"):
-    ck(f"claude-plugin/{rel} is deleted", not (plugin / rel).exists())
+print("the shell helpers are only shims, and .mcp.json uses `tares hook`")
+SHIMS = ("hooks/guard.sh", "hooks/session-start.sh", "bin/mcp-headers")
+for rel in SHIMS:
+    t = (plugin / rel).read_text(encoding="utf-8") if (plugin / rel).is_file() else ""
+    ck(f"claude-plugin/{rel} is a shim: one `exec tares hook`, no shebang, no bash",
+       bool(re.search(r"^exec tares hook ", t, re.M)) and not t.startswith("#!") and len([l for l in t.splitlines() if l and not l.startswith("#")]) == 1, t)
 ck("bin/factory-heavy stays (the crew's heavy-command wrapper, not a hook)", (plugin / "bin" / "factory-heavy").is_file())
 mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["tares"]
 ck(".mcp.json starts its header helper with `tares hook mcp-headers`", mcp["headersHelper"].startswith("tares hook mcp-headers "), mcp["headersHelper"])
@@ -163,9 +167,9 @@ for f in list(plugin.rglob("*")):
             t = f.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        if re.search(r"hooks/guard\.sh|hooks/session-start\.sh|bin/mcp-headers", t):
+        if re.search(r"hooks/guard\.sh|hooks/session-start\.sh|bin/mcp-headers", t) and f.relative_to(plugin).as_posix() not in SHIMS:
             left.append(str(f.relative_to(plugin)))
-ck("nothing in the plugin still names a deleted helper", not left, left)
+ck("nothing in the plugin but the shims themselves still names a replaced helper", not left, left)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

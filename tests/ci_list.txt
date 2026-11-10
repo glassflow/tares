@@ -151,6 +151,7 @@ test_personal_docs
 test_pickup
 test_plugin_challenger
 test_plugin_resume_ship
+test_plugin_shims
 test_port_drift
 test_postgres
 test_pricing
