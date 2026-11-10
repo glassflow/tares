@@ -633,6 +633,23 @@ def transcript_of_finds_the_conversation():
     ck("a session id with a path separator is refused (gives '')", cc.transcript_of("st4", paths=PATHS) == "")
     station("st5", sessionId="*")
     ck("a bare * does not match every transcript", cc.transcript_of("st5", paths=PATHS) == "")
+    # TR-1155: the job's state.json names the live session first, as in bash. After a /clear the list and
+    # the recorded id may still show the old one.
+    station("st6", id="0000000d", sessionId="sess-recorded")
+    agents(sess(id="0000000d", sessionId="sess-list"))
+    job("0000000d", {"sessionId": "sess-cleared"})
+    ck("a session cleared in the job file has no transcript yet: '', not the old one on the list",
+       cc.transcript_of("st6", paths=PATHS) == "")
+    (proj / "-w-e").mkdir(parents=True, exist_ok=True)
+    (proj / "-w-e" / "sess-cleared.jsonl").write_text("{}\n", encoding="utf-8")
+    ck("the job file's session id wins over the list and the recorded one",
+       cc.transcript_of("st6", paths=PATHS) == str(proj / "-w-e" / "sess-cleared.jsonl"))
+    job("0000000d", "{\"half\": ")
+    ck("a job file that is not JSON falls back to the list, no error",
+       cc.transcript_of("st6", paths=PATHS) == str(proj / "-w-a" / "sess-list.jsonl"))
+    job("0000000d", {})
+    ck("a job file with no sessionId falls back to the list",
+       cc.transcript_of("st6", paths=PATHS) == str(proj / "-w-a" / "sess-list.jsonl"))
 
 
 # ============================================================ job_state, quiet, between_turns
@@ -672,7 +689,8 @@ def job_state_reads_the_job_file():
     users = re.findall(r"^def (\w+)\(.*?(?=^def |\Z)", src, re.S | re.M)
     callers = sorted(n for n, body in ((m.group(1), m.group(0)) for m in re.finditer(r"^def (\w+)\(.*?(?=^def |\Z)", src, re.S | re.M))
                      if n != "job_state" and "job_state(" in re.sub(r'""".*?"""', "", body, flags=re.S) and not n.startswith("_"))
-    ck("only quiet and station_updated read the job file", callers == ["quiet", "station_updated"] and users, short(callers))
+    ck("only quiet, station_updated and transcript_of (TR-1155) read the job file",
+       callers == ["quiet", "station_updated", "transcript_of"] and users, short(callers))
 
 
 @test

@@ -98,7 +98,9 @@ try:
     fake = FakeTares({"GET /api/crew/projects": (200, {"projects": PROJECTS})})
     try:
         r = run(env, "projects", "--json", fake=fake)
-        rows = json.loads(r.stdout) if r.returncode == 0 else []
+        rows = json.loads(r.stdout)["projects"] if r.returncode == 0 else []
+        ck("projects --json: a contract document", r.returncode == 0 and json.loads(r.stdout).get("schema_version") == 1
+           and len(r.stdout.strip().splitlines()) == 1, r.stdout)
         ck("projects --json: each project with its builders", r.returncode == 0
            and [(p["name"], p["builders"]) for p in rows] == [("Links App", 1), ("shop", 0)], r.stdout + r.stderr)
         ck("projects --json: Tares's own fields are kept", rows and rows[0]["milestone"]["name"] == "Links"
@@ -108,15 +110,18 @@ try:
     fake = FakeTares({"GET /api/crew/projects": (200, {"projects": []})})
     try:
         r = run(env, "projects", "--json", fake=fake)
-        ck("projects --json: no project is an empty list", r.returncode == 0 and json.loads(r.stdout) == [], r.stdout + r.stderr)
+        ck("projects --json: no project is an empty list", r.returncode == 0
+           and json.loads(r.stdout)["projects"] == [], r.stdout + r.stderr)
     finally:
         fake.stop()
 
     fake = FakeTares({"GET /api/crew/projects": (401, {"detail": "bad key"})})
     try:
         r = run(env, "projects", "--json", fake=fake)
-        ck("projects --json: a list Tares refuses is an error, not []", r.returncode == 1 and not r.stdout.strip()
-           and "did not give the crew's projects" in r.stderr, r.stdout + r.stderr)
+        err = json.loads(r.stdout) if r.stdout.strip() else {}
+        ck("projects --json: a list Tares refuses is the error shape, not []", r.returncode == 1
+           and err.get("error", {}).get("code") and "did not give the crew's projects" in err["error"]["message"]
+           and not r.stderr.strip(), r.stdout + r.stderr)
         r = run(env, "projects", fake=fake)
         ck("projects: the text view keeps bash's answer when Tares refuses", r.returncode == 0
            and "no projects handed to the crew yet" in r.stdout, r.stdout + r.stderr)

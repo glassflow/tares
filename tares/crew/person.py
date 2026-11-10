@@ -14,7 +14,7 @@ has_commit).
 `context` and `plan` need Claude Code itself, so they run here and send the reading to Tares through its
 claude_code source. Neither makes a model call; hooks and the status line are off for them.
 
-Where bash and this port differ, bash is right. The one thing bash does not have is `projects --json`.
+Where bash and this port differ, bash is right. The one thing bash does not have is `projects --json`, a contract document (schemas/projects.json).
 Standard library plus the Tares client (httpx). Nothing here imports the daemon or DuckDB.
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ import subprocess
 import sys
 import tempfile
 
-from . import state
+from . import contract, state
 from .claude import _child_env, _creationflags, _home, claude_bin, claude_command, job_state
 from .client import TaresClient, TaresHTTPError
 from .errors import CrewError
@@ -390,7 +390,8 @@ def cmd_projects(argv: list, env: dict) -> int:
     try:
         return _projects(argv[1:], env)
     except CrewError as e:
-        print(e.line, file=sys.stderr)
+        if not contract.refuse(e, argv):
+            print(e.line, file=sys.stderr)
         return 1
 
 
@@ -403,7 +404,7 @@ def _projects(args: list, env: dict) -> int:
         rows = [p for p in client.crew_projects() if isinstance(p, dict)]
         if "--json" in args:
             out = [{**p, "builders": builders_of(p.get("name"), client.paths)} for p in rows]
-            print(state.dumps_pretty(out))
+            contract.emit({"projects": out}, "projects")
             return 0
         if not rows:
             print(f"no projects handed to the crew yet: {ME} spec in a repo starts one")
