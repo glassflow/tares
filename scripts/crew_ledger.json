@@ -1714,9 +1714,9 @@
       "what": "the Claude Code version of a station",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Wrapper over running_version used by the move, status and roster; owned by the move ticket. TR-957 keeps a read-only copy in tares/crew/views.py (station_cc) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) reads it through tares.crew.doctor.Doctor.check_stations."
+      "python": "tares.crew.cc_update:station_cc",
+      "ported": true,
+      "note": "Wrapper over running_version used by the move, status and roster; owned by the move ticket. TR-957 keeps a read-only copy in tares/crew/views.py (station_cc) for status and roster; TR-963 moved it to tares.crew.cc_update and views.py imports it from there. doctor (TR-969) reads it through tares.crew.doctor.Doctor.check_stations."
     },
     {
       "name": "prune_spares",
@@ -1725,9 +1725,9 @@
       "what": "stop spare sessions after a move",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called from claude_move (TR-963) to stop spare sessions after a move: TR-963 ports the stopping of spares with claude_move; TR-964 adds the retry handling."
+      "python": "tares.crew.cc_update:prune_spares",
+      "ported": true,
+      "note": "Called from claude_move (TR-963) to stop older spare sessions before each try of a move. TR-963 ports the stopping here; TR-964 adds the retry handling."
     },
     {
       "name": "duplicate_sessions",
@@ -1736,8 +1736,8 @@
       "what": "stations with more than one live session",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:duplicate_sessions",
+      "ported": true,
       "note": "Used by crew update and the watch to find two live sessions under one name; part of the Claude Code move."
     },
     {
@@ -1747,8 +1747,8 @@
       "what": "is the claude_update setting on",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:claude_auto",
+      "ported": true,
       "note": "Reads the claude_update crew setting for the watch and crew update; sits with the Claude Code move work."
     },
     {
@@ -1758,9 +1758,9 @@
       "what": "how many stations run an older Claude Code",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (cc_behind) for status and roster; this ticket's port moves it and keeps views.py calling it."
+      "python": "tares.crew.cc_update:cc_behind",
+      "ported": true,
+      "note": "TR-957 kept a read-only copy in tares/crew/views.py (cc_behind) for status and roster; TR-963 moved it to tares.crew.cc_update and views.py imports it from there."
     },
     {
       "name": "tell_newer_claude",
@@ -1769,8 +1769,8 @@
       "what": "tell the person of a newer Claude Code",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:tell_newer_claude",
+      "ported": true,
       "note": ""
     },
     {
@@ -1791,8 +1791,8 @@
       "what": "may the watch move a station now",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:cc_movable",
+      "ported": true,
       "note": ""
     },
     {
@@ -1802,8 +1802,8 @@
       "what": "pick the next station to move",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:cc_pick",
+      "ported": true,
       "note": ""
     },
     {
@@ -1857,8 +1857,8 @@
       "what": "move a station onto the new Claude Code",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:claude_move",
+      "ported": true,
       "note": "The move itself (TR-963); retry/backoff around it is TR-964."
     },
     {
@@ -1868,9 +1868,9 @@
       "what": "the watch's turn at claude_move",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.cc_update:watch_claude_move",
+      "ported": true,
+      "note": "TR-963 ports it with the move so the watch's updates step works; its retry text (cc_retry_in) is TR-964's. Ticket stays TR-964: it calls upgrades_frozen (TR-965), whose note names TR-964 only."
     },
     {
       "name": "cmd_crew_update",
