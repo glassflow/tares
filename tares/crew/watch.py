@@ -32,6 +32,8 @@ Differences from bash
   * A meta file next to the pid file has the create time and the engine.
   * The loop leaves on a stop file, and on SIGTERM where the platform has it, removing its pid file and stop file.
   * Only the steps registered so far run; see above.
+  * When the kit step sees the plugin updated, `restart_self` runs the watch again on the new code: `os.execve` where
+    the platform has it (same pid, same pid file), a new detached watch on Windows (untested there, TR-946).
 
 Untested on real Windows (TR-946 is deferred): the creation flags, `pythonw.exe` and the launcher case below.
 On Windows a venv's `python.exe` starts the real interpreter as a child, so `Popen.pid` is the launcher's; the
@@ -96,8 +98,15 @@ register("idle_wake", _idle_wake_step)   # TR-961
 
 
 def _updates_step(paths: CrewPaths) -> None:
-    from . import cc_update   # here, not at the top: cc_update imports crew modules that import this one
-    cc_update.step(paths)
+    """The kit part of the round (TR-965), then the Claude Code part: bash moves one station in a round, onto a new
+    kit or a new Claude Code, and the kit comes first. A kit part that fails does not stop the Claude Code part."""
+    from . import cc_update, kit   # here, not at the top: they import crew modules that import this one
+    upgraded = False
+    try:
+        upgraded = kit.step(paths)
+    except Exception as e:
+        _say(f"the kit step failed: {type(e).__name__}: {e}")
+    cc_update.step(paths, kit_upgraded=upgraded)
 
 
 register("updates", _updates_step)  # TR-963
@@ -219,6 +228,39 @@ def _watch_command(env: dict) -> tuple:
     return ["bash", str(plugin_dir() / "bin" / "factory"), "crew", "watch"], "bash"
 
 
+def _spawn(paths: CrewPaths, argv: list, env: dict) -> tuple:
+    """Run `argv` detached from this process, its output in the watch log: (pid, create time)."""
+    kwargs: dict = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0x8)
+                                   | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200))
+    else:
+        kwargs["start_new_session"] = True
+    with open(paths.home / LOG_FILE, "ab") as out:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                env=env, **kwargs)
+    try:
+        return proc.pid, psutil.Process(proc.pid).create_time()
+    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
+        raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
+
+
+def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
+    """The plugin was updated: run the watch again on the new code (bash: `exec watch --interval`). Where the platform
+    has exec, this process becomes the new watch (same pid, same pid file). On Windows there is none: a new watch is
+    started, takes over the pid file, and this one leaves. Does not return. Untested on real Windows (TR-946)."""
+    env = dict(os.environ if env is None else env)
+    argv, engine = _watch_command(env)
+    argv = [*argv, "--interval", f"{interval:g}"]
+    if os.name == "nt":
+        pid, created = _spawn(paths, argv, env)
+        write_pidfile(paths, pid, created, engine)   # the pid file names the new watch, so this one's exit leaves it alone
+        raise SystemExit(0)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(argv[0], argv, env)
+
+
 def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:
     """Start the watch in the background, unless it already runs (or FACTORY_NO_WATCH is set)."""
     env = dict(os.environ if env is None else env)
@@ -230,22 +272,9 @@ def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:
         note(f"  ✓ the watch keeps the crew alive (already running, pid {pid})")
         return
     argv, engine = _watch_command(env)
-    log = paths.home / LOG_FILE
     _unlink(paths.home / STOP_FILE)   # a stop asked for the watch that ran before is not for this one
-    kwargs: dict = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0x8)
-                                   | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200))
-    else:
-        kwargs["start_new_session"] = True
-    with open(log, "ab") as out:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                                env=env, **kwargs)
-    try:
-        created = psutil.Process(proc.pid).create_time()
-    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
-        raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
-    write_pidfile(paths, proc.pid, created, engine)
+    proc_pid, created = _spawn(paths, argv, env)
+    write_pidfile(paths, proc_pid, created, engine)
     note(f"  ✓ started the watch, which revives any station that stops (log: {paths.shown(LOG_FILE)})")
 
 
@@ -339,8 +368,21 @@ def nap(paths: CrewPaths, seconds: float, poll: float = DEFAULT_POLL, *, sleep=t
     return stop_requested(paths)
 
 
+class Loop:
+    """How the running loop was asked to go (bash's ONCE and INTERVAL), for the steps that need it: the kit step
+    restarts the watch on new code after the same interval, and never in a --once run."""
+
+    def __init__(self):
+        self.once = False
+        self.interval = float(DEFAULT_INTERVAL)
+
+
+LOOP = Loop()
+
+
 def watch(paths: CrewPaths, interval: float, once: bool = False, poll: float = DEFAULT_POLL) -> None:
     """The loop: a round of steps, then a nap, until a stop file shows or SIGTERM comes."""
+    LOOP.once, LOOP.interval = once, interval
     if once:
         run_steps(paths)
         return

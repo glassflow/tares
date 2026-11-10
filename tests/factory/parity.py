@@ -1818,6 +1818,111 @@ scenario(Scenario(
 ))
 
 
+# freeze_test.sh, the part that needs no daemon of its own and no running station: the freeze and the
+# unfreeze against a fake Tares that keeps a settings PUT. (The watch's side of the freeze, a revive on the
+# copy and the move after an unfreeze, runs in the bash suite itself and in tests/test_crew_kit.py.)
+_WORLDS: dict = {}
+_KIT = ROOT / "claude-plugin"
+
+
+def _freeze_world(keep: bool = True):
+    def setup(tmp: Path, env: dict) -> None:
+        w = fake_tares.World()
+        w.keep = keep
+        _WORLDS[str(tmp)] = w
+        _doctor_world(w)(tmp, env)
+        _crew_json(tmp)
+    return setup
+
+
+def _frozen_of(tmp: Path):
+    return _WORLDS[str(tmp)].settings.get("kit", {}).get("frozen")
+
+
+def _kit_events(r: Run, name: str) -> int:
+    try:
+        lines = (r.crew / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and json.loads(x).get("event") == name)
+
+
+def _same_tree(a: Path, b: Path) -> bool:
+    """Both folders hold the same files with the same bytes (`diff -r`; compiled caches left out)."""
+    def files(root: Path) -> dict:
+        return {f.relative_to(root).as_posix(): f.read_bytes() for f in sorted(root.rglob("*"))
+                if f.is_file() and "__pycache__" not in f.parts}
+    return a.is_dir() and b.is_dir() and files(a) == files(b)
+
+
+def _freeze_state(tmp: Path) -> dict:
+    """What a freeze left: the setting on Tares and the copy on disk."""
+    frozen = _frozen_of(tmp) or {}
+    snap = tmp / "crew" / "frozen-kit"
+    return {"frozen": bool(frozen), "keys": sorted(frozen), "at": frozen.get("at"), "by": frozen.get("by"),
+            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "factory").exists(),
+            "extra": (tmp / "crew" / "frozen-kit.new").exists() or (tmp / "crew" / "freezing").exists()}
+
+
+scenario(Scenario(
+    name="freeze_cycle",
+    suite="freeze",
+    about="crew freeze keeps the freeze on Tares and a copy of the kit; freezing twice changes nothing; unfreeze clears both",
+    setup=_freeze_world(),
+    steps=[Step(["crew", "unfreeze"], after=_freeze_state),
+           Step(["crew", "freeze"], after=_freeze_state),
+           Step(["crew", "freeze"], after=_freeze_state),
+           Step(["crew", "unfreeze"], after=_freeze_state)],
+    checks=[("an unfrozen crew's setting is null", lambda r: r.snap(0)["frozen"] is False),
+            ("unfreeze when not frozen says so and exits 0",
+             lambda r: r.code(0) == 0 and "the kit is not frozen" in r.out(0) and not r.snap(0)["copy"]),
+            ("freeze exits 0", lambda r: r.code(1) == 0),
+            ("freeze keeps when, who and the kit version on Tares",
+             lambda r: r.snap(1)["keys"] == ["at", "by", "version"] and r.snap(1)["by"] not in (None, "")),
+            ("the copy is the kit as it was", lambda r: r.snap(1)["same"] and r.snap(1)["binary"]),
+            ("freeze is in the events", lambda r: _kit_events(r, "freeze") == 1),
+            ("freezing twice says so, exits 0 and keeps the first time and who",
+             lambda r: r.code(2) == 0 and "already frozen" in r.out(2) and r.snap(2)["at"] == r.snap(1)["at"]
+             and r.snap(2)["by"] == r.snap(1)["by"] and _kit_events(r, "freeze") == 1),
+            ("freezing again takes no second copy", lambda r: r.snap(2)["same"] and not r.snap(2)["extra"]),
+            ("unfreeze exits 0 and clears the setting",
+             lambda r: r.code(3) == 0 and r.snap(3)["frozen"] is False and _kit_events(r, "unfreeze") == 1),
+            ("unfreeze removes a copy nothing runs from", lambda r: not r.snap(3)["copy"])],
+    covers=["an unfrozen crew's setting is null", "unfreeze when not frozen says so and exits 0", "freeze exits 0",
+            "freeze keeps when, who and the kit version on Tares", "the copy is the kit as it was",
+            "freeze is in the events", "freezing twice says so, exits 0 and keeps the first time and who",
+            "freezing again takes no second copy", "unfreeze exits 0 and clears the setting",
+            "unfreeze removes a copy nothing runs from"],
+))
+
+scenario(Scenario(
+    name="freeze_nokeep",
+    suite="freeze",
+    about="a Tares that answers the freeze without keeping it: freeze dies and leaves nothing behind",
+    setup=_freeze_world(keep=False),
+    steps=[Step(["crew", "freeze"], after=_freeze_state)],
+    checks=[("freeze dies when Tares does not keep the setting",
+             lambda r: r.code(0) != 0 and "did not keep the freeze" in r.out(0)),
+            ("and leaves no copy, marker or setting behind",
+             lambda r: not r.snap(0)["copy"] and not r.snap(0)["extra"] and r.snap(0)["frozen"] is False
+             and not (r.crew / "kit-checkout").exists())],
+    covers=["freeze dies when Tares does not keep the setting", "and leaves no copy, marker or setting behind"],
+))
+
+scenario(Scenario(
+    name="freeze_notares",
+    suite="freeze",
+    about="freeze needs a Tares that answers",
+    setup=lambda tmp, env: (_doctor_world(fake_tares.World())(tmp, env), _crew_json(tmp)),
+    steps=[Step(["crew", "freeze"], env={"TARESD_URL": "http://127.0.0.1:9"},
+                after=lambda tmp: (tmp / "crew" / "frozen-kit").exists())],
+    checks=[("freeze needs Tares",
+             lambda r: r.code(0) != 0 and re.search(r"no Tares answers|could not read the crew settings", r.out(0)) is not None
+             and r.snap(0) is False)],
+    covers=["freeze needs Tares"],
+))
+
+
 def _settings(**kw):
     def setup(tmp: Path, env: dict) -> None:
         _doctor_world(fake_tares.World(settings=kw))(tmp, env)

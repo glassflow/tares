@@ -87,6 +87,19 @@ for _word in ("down", "halt", "resume"):
     PORTED[("crew", _word)] = _lifecycle(f"cmd_{_word}")
 
 
+def _kit(name: str) -> Callable[[list[str], dict], int]:
+    """A command of kit.py (the freeze, TR-965), imported when it runs."""
+    def run_it(argv: list[str], env: dict) -> int:
+        from . import kit
+        return getattr(kit, name)(argv, env)
+    return run_it
+
+
+# bash has `crew freeze` and `crew unfreeze` only, no one-word forms
+for _word in ("freeze", "unfreeze"):
+    PORTED[("crew", _word)] = _kit(f"cmd_{_word}")
+
+
 def _watch(argv: list[str], env: dict) -> int:
     from .watch import cmd_watch  # imported when used (TR-958)
     return cmd_watch(argv, env)

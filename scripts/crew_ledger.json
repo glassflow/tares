@@ -64,9 +64,9 @@
       "what": "physical path of the frozen kit copy",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Defined at top level near the path constants but only freeze logic uses it. TR-957 keeps a read-only copy in tares/crew/views.py (frozen_phys) for status and roster; this ticket's port moves it and keeps views.py calling it."
+      "python": "tares.crew.kit:frozen_phys",
+      "ported": true,
+      "note": "Moved from views.py (TR-965); views.py imports it back."
     },
     {
       "name": "ccfg",
@@ -801,9 +801,9 @@
       "what": "is the kit frozen",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by cmd_crew_update and watch_claude_move (TR-964): TR-964 stubs it as never frozen until TR-965 ports the freeze check."
+      "python": "tares.crew.kit:upgrades_frozen",
+      "ported": true,
+      "note": "Ported (TR-965). TR-964's stub in cc_update.upgrades_frozen now calls it."
     },
     {
       "name": "frozen_field",
@@ -812,9 +812,9 @@
       "what": "a field the freeze recorded",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:Frozen",
+      "ported": true,
+      "note": "Frozen.field (TR-965)."
     },
     {
       "name": "kit_dir",
@@ -823,9 +823,9 @@
       "what": "the kit folder stations start on",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called first by launch (TR-953), which needs a partial port: the checkout plugin folder, with the frozen branch left out until TR-965 adds upgrades_frozen and frozen_phys. TR-965 completes it."
+      "python": "tares.crew.kit:kit_dir",
+      "ported": true,
+      "note": "Ported (TR-965): the frozen branch. tares.crew.launch.kit_dir(client) calls it."
     },
     {
       "name": "on_frozen_copy",
@@ -834,9 +834,9 @@
       "what": "does a station run from the frozen copy",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:on_frozen_copy",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "frozen_copy_in_use",
@@ -845,9 +845,9 @@
       "what": "is any active station on the frozen copy",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:frozen_copy_in_use",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "installed_tares",
@@ -911,9 +911,9 @@
       "what": "fingerprint of the kit stations run on",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by launch (TR-953), which stamps each station with the version of the kit it starts on. TR-953 ports it with the rest of launch (the fingerprint of the kit folder it starts on); TR-965 adds the frozen-kit use. TR-957 keeps a read-only copy in tares/crew/views.py (kit_version) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) keeps its own copy too: tares.crew.doctor.kit_version reads it for doctor (TR-969)."
+      "python": "tares.crew.kit:kit_version",
+      "ported": true,
+      "note": "Ported (TR-965); views.py imports it back. launch.py and doctor.py keep their copies."
     },
     {
       "name": "kit_clean",
@@ -922,9 +922,9 @@
       "what": "is the plugin checkout free of local edits",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:kit_clean",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "quiet",
@@ -1648,9 +1648,9 @@
       "what": "does a station run another kit version",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Kit comparison for the watch; kit move is TR-965, not the Claude Code move. TR-957 keeps a read-only copy in tares/crew/views.py (stale_kit) for status and roster; this ticket's port moves it and keeps views.py calling it."
+      "python": "tares.crew.kit:stale_kit",
+      "ported": true,
+      "note": "Moved from views.py (TR-965); views.py imports it back."
     },
     {
       "name": "movable",
@@ -1659,9 +1659,9 @@
       "what": "may a station be moved onto a new kit",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Kit move readiness; compare cc_movable (TR-963)."
+      "python": "tares.crew.kit:movable",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "upgrade_station",
@@ -1670,9 +1670,9 @@
       "what": "restart a station on the new kit",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Restarts a station on a newer kit; the Claude Code version is claude_move."
+      "python": "tares.crew.kit:upgrade_station",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "claude_version",
@@ -1912,9 +1912,9 @@
       "what": "since when and by whom frozen",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "tares.crew.doctor.frozen_text words it for doctor (TR-969)."
+      "python": "tares.crew.kit:Frozen",
+      "ported": true,
+      "note": "Frozen.text (TR-965). tares.crew.doctor.frozen_text words it for doctor (TR-969)."
     },
     {
       "name": "tell_newer_kit",
@@ -1923,9 +1923,9 @@
       "what": "tell the person of a newer kit",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:tell_newer_kit",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "freezing",
@@ -1934,9 +1934,9 @@
       "what": "is a freeze in progress",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:freezing",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "reap_frozen_copy",
@@ -1945,9 +1945,9 @@
       "what": "remove the frozen copy when unused",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:reap_frozen_copy",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "freeze_fail",
@@ -1956,9 +1956,9 @@
       "what": "clean up after a failed freeze",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:_freeze_fail",
+      "ported": true,
+      "note": "Ported (TR-965)."
     },
     {
       "name": "cmd_freeze",
@@ -1967,9 +1967,9 @@
       "what": "crew freeze",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:cmd_freeze",
+      "ported": true,
+      "note": "Ported (TR-965); registered in tares.crew.dispatch."
     },
     {
       "name": "cmd_unfreeze",
@@ -1978,9 +1978,9 @@
       "what": "crew unfreeze",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:cmd_unfreeze",
+      "ported": true,
+      "note": "Ported (TR-965); registered in tares.crew.dispatch."
     },
     {
       "name": "desk_json",
@@ -3133,9 +3133,9 @@
       "what": "freeze the kit",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:cmd_freeze",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-965)."
     },
     {
       "name": "crew unfreeze",
@@ -3147,9 +3147,9 @@
       "what": "lift the freeze",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:cmd_unfreeze",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-965)."
     },
     {
       "name": "crew update",
@@ -3917,9 +3917,9 @@
       "what": "folder: copy of the kit while frozen",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.kit:freeze",
+      "ported": true,
+      "note": "Written by freeze, removed by unfreeze and reap_frozen_copy in tares.crew.kit (TR-965)."
     },
     {
       "name": "kit-newer",
@@ -3945,9 +3945,9 @@
       "what": "present while a freeze has the copy but Tares not yet the setting",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Counts as fresh for five minutes."
+      "python": "tares.crew.kit:freeze",
+      "ported": true,
+      "note": "The marker freeze writes and removes in tares.crew.kit (TR-965); honoured for five minutes."
     },
     {
       "name": "claude-newer",
@@ -4466,9 +4466,9 @@
       "what": "kit freeze and unfreeze",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "tests/test_crew_kit.py and the freeze_* parity scenarios; freeze_test.sh takes TARES_FACTORY_ENGINE=python (TR-965)."
     },
     {
       "name": "guard_test.sh",
