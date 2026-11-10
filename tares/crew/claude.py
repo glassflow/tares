@@ -37,10 +37,9 @@ Untested on real Windows
 Differences from bash
   * claude_bin also looks in the known install folders after PATH, and on Windows for claude.exe and
     claude.cmd. It skips empty PATH entries (bash's `which` reads one as the current folder).
-  * transcript_of takes the session id from `claude agents --json` (the station's row), then the
-    station's recorded sessionId. Bash asks the job's state.json first; the state.json fallback is kept
-    to quiet and station_updated. After a /clear of a session that is no longer listed, the recorded id
-    may be the older one.
+  * transcript_of takes the session id from the job's state.json first, as bash does (TR-1155: after a
+    /clear it names the new session, and the list may still show the old one), then from the station's
+    row of `claude agents --json`, then from the station's recorded sessionId.
   * active_json and job_state raise instead of returning non-zero; station_updated gives None, not "",
     for an unknown time; the other values are the same text bash prints.
   * attached and running_version read process command lines with psutil, not pgrep and ps: a process
@@ -380,7 +379,7 @@ def job_state(job_id: str) -> dict:
     """~/.claude/jobs/<id>/state.json as a dict; {} when the job has no file.
 
     # STATE.JSON FALLBACK: fields claude agents --json does not give (updatedAt, inFlight)
-    Only quiet() and station_updated() call this. Raises JobStateUnreadableError for a file that is there
+    quiet(), station_updated() and transcript_of() call this. Raises JobStateUnreadableError for a file that is there
     but is not a JSON object, so a half-written file is never read as "nothing in flight"."""
     if not job_id or job_id in (".", "..") or "/" in job_id or "\\" in job_id:
         return {}
@@ -398,12 +397,17 @@ def job_state(job_id: str) -> dict:
 
 def transcript_of(station: str, claude=None, paths=None, agents=None) -> str:
     """The station's conversation transcript, ~/.claude/projects/*/<session>.jsonl; "" when there is none.
-    The session id is the one on the station's row of `claude agents --json`, else the one recorded for
-    the station. `agents` is that list when the caller already has it (status asks once, not per station)."""
+    The session id is the one in the job's state.json, else the one on the station's row of
+    `claude agents --json`, else the one recorded for the station. `agents` is that list when the caller already has it (status asks once, not per station)."""
     paths = paths or CrewPaths.from_env()
     sid = stations_get(station, "id", paths=paths)
     s = ""
     if sid:
+        try:   # the job's own state.json comes first, as in bash: after a /clear it names the new session
+            s = jq_raw(_val(job_state(sid).get("sessionId"), ""))
+        except JobStateUnreadableError:
+            pass
+    if sid and not s:
         try:
             for row in (agents if agents is not None else active_json(claude)):
                 if row.get("id") == sid:

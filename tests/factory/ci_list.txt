@@ -2,6 +2,7 @@
 claude_update
 compat
 crew
+crew_python
 crewname
 freeze
 guard
