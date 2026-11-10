@@ -390,8 +390,13 @@ def cmd_watch(argv: list, env: dict) -> int:
     return 0
 
 
+# ---------- the steps that have landed ----------
+
+from . import regrant as _regrant  # noqa: E402  (after the registry above; regrant imports lifecycle, which imports this module)
 from . import watch_revive   # noqa: E402  (TR-959: revive a stopped station, restart a stuck one)
+
 register("revive", watch_revive.step)
+register("regrant", _regrant.step)   # TR-960: restart a station between turns when its grants change
 
 from . import pace as _pace  # noqa: E402
 

@@ -51,6 +51,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -2394,6 +2395,189 @@ scenario(Scenario(
     covers=[],
 ))
 
+# ---------------------------------------------------------------------------------------------
+# The watch's regrant step (TR-960): crew_test.sh, "A permission the person allows in the console is a grant on Tares".
+# `watch_regrant` runs one round of the step on the launch driver (bash: the regrant branches of cmd_watch's loop,
+# Python: regrant.step). A station is started with the grants of the world; the next step's world has more, fewer
+# or none, and the station is idle, busy, waiting on a person, done, open in a terminal or without a session.
+
+REGRANT_GRANT = '- "the reviewer may label pull requests" (2026-02-03)\n'
+REGRANT_SHOP = '- "shop-build-m1 may run gh pr merge 12 --squash in shop" (2026-02-04)\n'
+
+
+def _agent_of(tmp: Path, station: str) -> str:
+    return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[station]["id"]
+
+
+def _set_agent(tmp: Path, station: str, **fields) -> None:
+    p = tmp / "claude" / "agents.json"
+    sid = _agent_of(tmp, station)
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if row.get("id") == sid:
+            row.update(fields)
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _idle(*stations: str):
+    """Between turns (done): the session is alive and idle."""
+    def run(tmp: Path) -> None:
+        for s in stations:
+            _set_agent(tmp, s, state="working", status="idle")
+    return run
+
+
+def _busy(*stations: str):
+    def run(tmp: Path) -> None:
+        for s in stations:
+            _set_agent(tmp, s, state="working", status="busy")
+    return run
+
+
+def _waiting(station: str):
+    """Blocked on a person (a question or a permission prompt)."""
+    def run(tmp: Path) -> None:
+        _set_agent(tmp, station, state="blocked", status="waiting")
+    return run
+
+
+def _set_station(station: str, **fields):
+    def run(tmp: Path) -> None:
+        p = tmp / "crew" / "stations.json"
+        data = json.loads(p.read_text(encoding="utf-8"))
+        data[station].update(fields)
+        p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return run
+
+
+def _both(*fns):
+    def run(tmp: Path) -> None:
+        for fn in fns:
+            fn(tmp)
+    return run
+
+
+def _touch_done(station: str):
+    def run(tmp: Path) -> None:
+        (tmp / "crew" / "stations" / f"{station}.done").write_text("", encoding="utf-8")
+    return run
+
+
+def _forget_kept(station: str):
+    def run(tmp: Path) -> None:
+        (tmp / "crew" / "stations" / f"{station}.grants").unlink()
+    return run
+
+
+_ATTACHED: dict = {}
+
+
+def _attach(station: str):
+    """Someone has the session open in a terminal: a process whose command line says `attach <id>`."""
+    def run(tmp: Path) -> None:
+        _ATTACHED[station] = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "attach",
+                                                _agent_of(tmp, station)])
+        time.sleep(0.5)
+    return run
+
+
+def _leave(station: str):
+    def run(tmp: Path) -> None:
+        p = _ATTACHED.pop(station, None)
+        if p is not None:
+            p.terminate()
+            p.wait()
+    return run
+
+
+def _halted(tmp: Path) -> None:
+    (tmp / "crew" / "HALT").write_text(json.dumps({"at": "2026-01-01T00:00:00Z", "reason": "testing"}, separators=(",", ":")) + "\n",
+                                       encoding="utf-8")
+
+
+def _resumed(tmp: Path) -> None:
+    (tmp / "crew" / "HALT").unlink()
+
+
+def _sessions_started(tmp: Path) -> int:
+    try:
+        lines = (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and "--bg" in json.loads(x)["args"])
+
+
+def _sessions_and(station: str):
+    """After the step: the sessions started so far, the station's allow list and its row."""
+    def run(tmp: Path):
+        settings = json.loads((tmp / "crew" / "stations" / f"{station}.settings.json").read_text(encoding="utf-8"))
+        row = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[station]
+        return {"started": _sessions_started(tmp), "allow": settings["autoMode"]["allow"], "row": row}
+    return run
+
+
+def wstep(world: dict, before=None, env: dict | None = None, after=None) -> Step:
+    s = lstep("watch_regrant", world=world, env=env)
+    s.before = before
+    s.after = after or _sessions_started   # the sessions started so far, as this step left them
+    return s
+
+
+def _launch(station: str, role: str, world: dict, parent: str = "", project: str = "") -> Step:
+    return lstep("launch", station, role, parent, project, "", "{TMP}/crew", "sonnet", "high", f"Boot as the {role} station", world=world)
+
+
+def _station(r: "Run", station: str) -> dict:
+    return _stations_now(r)[station]
+
+
+def _prompt_of(r: "Run", n: int = -1) -> str:
+    return bg_calls(r)[n]["args"][-1]
+
+
+def _resumed_session(r: "Run", n: int = -1):
+    return arg_after(bg_calls(r)[n]["args"], "--resume")
+
+
+_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+_W1 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT)
+_W_GONE = lworld("L3-review", grants="")
+_W_UNREAD = {**lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT), "grants_status": 500}
+
+WIN_NO_MULTILINE_REGRANT = ("a station is restarted through claude.cmd here, and cmd.exe cannot take the regrant prompt "
+                            "(several lines); the claude.exe form waits for TR-946")
+
+scenario(Scenario(
+    name="watch_regrant_restart",
+    suite="crew",
+    about="a station between turns whose grants changed is restarted in its own conversation, told only what is new, once per change",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("crew-reviewer", "reviewer", _W0),
+           wstep(_W1, before=_busy("crew-reviewer")),                      # 1: busy: waits
+           wstep(_W1, before=_idle("crew-reviewer"), after=_sessions_and("crew-reviewer")),   # 2: between turns: restarted
+           wstep(_W1, before=_idle("crew-reviewer")),                      # 3: once per change
+           wstep(_W_GONE, before=_idle("crew-reviewer"))],                 # 4: the grants shrank: a new change, nothing added
+    checks=[
+        ("a busy station waits for its new grant", lambda r: r.code(1) == 0 and r.snap(1) == 1),
+        ("between turns it is restarted with the grant",
+         lambda r: r.code(2) == 0 and r.snap(2)["started"] == 2 and "crew-reviewer has new permissions from Tares" in r.out(2)
+         and '"event":"regranted"' in _events(r).replace(" ", "")),
+        ("in the same conversation", lambda r: _resumed_session(r, 1) == "session-1"),
+        ("its fresh settings have the grant",
+         lambda r: any('"the reviewer may label pull requests"' in a for a in r.snap(2)["allow"])),
+        ("its prompt quotes the new grant and says to run the refused command again",
+         lambda r: "allowed new permissions in Tares" in _prompt_of(r, 1) and '"the reviewer may label pull requests"' in _prompt_of(r, 1)
+         and "run it again now" in _prompt_of(r, 1)),
+        ("and only the new one", lambda r: "staging database" not in _prompt_of(r, 1)),
+        ("once per change", lambda r: r.code(3) == 0 and r.snap(3) == 2),
+        ("a change with nothing added says so",
+         lambda r: r.code(4) == 0 and r.snap(4) == 3 and "changed what the crew is allowed in Tares" in _prompt_of(r, 2)
+         and "read_grants shows them" in _prompt_of(r, 2)),
+    ],
+    covers=[],
+))
+
 scenario(Scenario(
     name="watch_revive_unreadable",
     suite="crew",
@@ -2407,6 +2591,35 @@ scenario(Scenario(
          lambda r: "nothing is revived or restarted this round" in r.out(0) and r.code(0) == 0),
         ("the next round revives it",
          lambda r: "shop-build-m1 stopped; reviving it under the same name" in r.out(1) and r.launches() == 1),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_regrant_waits",
+    suite="crew",
+    about="nothing is restarted for a Tares that cannot give the grants, while the crew is halted, for a station without a conversation, one that is done, or one open in a terminal",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("crew-reviewer", "reviewer", _W0),
+           _launch("crew-releaser", "releaser", _W0),
+           wstep(_W_UNREAD, before=_idle("crew-reviewer", "crew-releaser")),                # 2: grants unreadable
+           wstep(_W1, before=_both(_idle("crew-reviewer", "crew-releaser"), _halted)),      # 3: halted
+           wstep(_W1, before=_both(_resumed, _set_station("crew-reviewer", sessionId=""))),  # 4: no conversation (the releaser moves)
+           wstep(_W1, before=_both(_touch_done("crew-releaser"), _idle("crew-releaser"))),   # 5: done: left alone
+           wstep(_W1, before=_both(_set_station("crew-reviewer", sessionId="session-1"), _attach("crew-reviewer"),
+                                   _idle("crew-reviewer"))),                                # 6: open in a terminal
+           wstep(_W1, before=_leave("crew-reviewer"))],                                     # 7: they left
+    checks=[
+        ("grants that can't be read restart nothing", lambda r: r.code(2) == 0 and r.snap(2) == 2 and "new permissions" not in r.out(2)),
+        ("nothing restarts while halted", lambda r: r.code(3) == 0 and r.snap(3) == 2),
+        ("a station with no conversation to resume isn't restarted, the other is",
+         lambda r: r.code(4) == 0 and r.snap(4) == 3 and "crew-releaser has new permissions" in r.out(4)
+         and "crew-reviewer has new permissions" not in r.out(4)),
+        ("a station that is done is left alone", lambda r: r.code(5) == 0 and r.snap(5) == 3),
+        ("a station open in a terminal waits", lambda r: r.code(6) == 0 and r.snap(6) == 3),
+        ("and gets it once they leave",
+         lambda r: r.code(7) == 0 and r.snap(7) == 4 and "crew-reviewer has new permissions" in r.out(7)),
     ],
     covers=[],
 ))
@@ -2489,6 +2702,33 @@ scenario(Scenario(
          "since its last one thrashed" in r.out(0)),
         ("not resumed", lambda r: all(arg_after(c["args"], "--resume") is None for c in bg_calls(r))),
         ("restarted-fresh is in the event log", lambda r: "restarted-fresh" in _events(r) and "thrashing" not in _events(r)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="watch_regrant_roles",
+    suite="crew",
+    about="a station blocked on a person is restarted at once; a helper and a project's builder get their grants; a station that kept no grants is quoted all of them",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("crew-reviewer", "reviewer", _W0),
+           _launch("shop-build-m1", "builder", _W0, parent="crew-orchestrator", project="shop"),
+           _launch("shop-build-m1-e2e", "helper", _W0, parent="shop-build-m1", project="shop"),
+           wstep(lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": REGRANT_SHOP}),
+                 before=_both(_waiting("crew-reviewer"), _idle("shop-build-m1-e2e"), _busy("shop-build-m1"))),     # 3
+           wstep(lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": REGRANT_SHOP}),
+                 before=_both(_idle("shop-build-m1"), _forget_kept("shop-build-m1")))],                            # 4
+    checks=[
+        ("a station blocked on a person gets the grant at once",
+         lambda r: r.code(3) == 0 and "crew-reviewer has new permissions" in r.out(3)),
+        ("a live helper is restarted with its grant",
+         lambda r: "shop-build-m1-e2e has new permissions" in r.out(3)
+         and any("gh pr merge 12 --squash" in a for a in allow_of(r, "shop-build-m1-e2e"))),
+        ("a busy builder of the same project still waits", lambda r: "shop-build-m1 has new permissions" not in r.out(3)),
+        ("a builder that kept no grants is quoted all of them, the project's with its scope",
+         lambda r: "shop-build-m1 has new permissions" in r.out(4) and "staging database" in _prompt_of(r)
+         and "for project shop, in their own words" in _prompt_of(r)),
     ],
     covers=[],
 ))

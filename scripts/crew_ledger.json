@@ -1164,8 +1164,8 @@
       "what": "a station's grants fingerprint on Tares now",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:grants_now",
+      "ported": true,
       "note": ""
     },
     {
@@ -1175,9 +1175,9 @@
       "what": "did a station's grants change",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (regranted) for status and roster; this ticket's port moves it and keeps views.py calling it."
+      "python": "tares.crew.regrant:regranted",
+      "ported": true,
+      "note": "Moved from tares.crew.views (the read-only copy of TR-957); views imports it from here for status and roster."
     },
     {
       "name": "between_turns",
@@ -1208,8 +1208,8 @@
       "what": "is a regrant restart due",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:regrant_due",
+      "ported": true,
       "note": ""
     },
     {
@@ -1219,8 +1219,8 @@
       "what": "restart a station with new grants",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:regrant_station",
+      "ported": true,
       "note": ""
     },
     {
@@ -4806,7 +4806,7 @@
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
-      "line": 503,
+      "line": 504,
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
       "ticket": "TR-953",
       "dropped": false,

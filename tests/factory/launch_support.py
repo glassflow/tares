@@ -15,8 +15,9 @@ Both print what the function prints and exit as it does, so the two can be compa
 write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
 level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
 watch round), pace_down (what the revive step asks of the pace for stations that are down or up), and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
-tares.crew.stations), `revive` and `restart` (cmd_revive and cmd_restart, or those of tares.crew.lifecycle). The word {TMP} in an
-argument is the temp folder.
+tares.crew.stations), `revive` and `restart` (cmd_revive and cmd_restart, or those of tares.crew.lifecycle). `watch_regrant` is one round of
+the watch's regrant step (TR-960): bash's per-station loop of cmd_watch cut down to its regrant branches, or regrant.step of tares.crew. The
+word {TMP} in an argument is the temp folder.
 
 Environment: LAUNCH_WORLD is JSON for the fake Tares (settings, projects, grants, token, health,
 grants_status); LAUNCH_SETUP is JSON for the crew home, made on the first call (crew: keys merged into
@@ -198,7 +199,7 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
                   "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note", "spawn", "revive", "restart", "pace_round", "pace_down"}
+                  "idle_wake_note", "spawn", "revive", "restart", "pace_round", "pace_down", "watch_regrant"}
 NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "pace_round",
                "pace_down"}
 
@@ -239,6 +240,23 @@ for a in "$@"; do
 done
 '''
 
+# One round of cmd_watch for the regrant step: the same loop and the same branches (a helper between turns; a
+# builder that is done is left alone; a stopped or stuck station is the revive step's), with the functions of the
+# kit itself. Tares is asked once at the start of the round, as cmd_watch does.
+WATCH_REGRANT_BASH = r'''
+tares_on || true
+active_json >/dev/null || exit 0
+for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+  case "$(stations_get "$s" '.role')" in
+    helper) if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi; continue ;;
+    builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
+  esac
+  is_alive "$s" || continue
+  stuck_on_context "$s" && continue
+  if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi
+done
+'''
+
 
 def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
     """Source the cut factory script from the kit and call the bash function."""
@@ -254,6 +272,8 @@ def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
         script = script.replace('pace_round "$@"', BASH_PACE_ROUND)
     if fn == "pace_down":
         script = script.replace('pace_down "$@"', BASH_PACE_DOWN)
+    if fn == "watch_regrant":
+        script = f'set -euo pipefail; source "$1" x; shift; {WATCH_REGRANT_BASH}'
     p = subprocess.run(["bash", "-c", script, "bash", str(lib), *args], env=env, stdin=None)
     return p.returncode
 
@@ -332,6 +352,9 @@ def run_python(fn: str, args: list) -> int:
         elif fn in ("revive", "restart"):
             from tares.crew import lifecycle
             return getattr(lifecycle, f"cmd_{fn}")([fn, *args], dict(os.environ))
+        elif fn == "watch_regrant":
+            from tares.crew import regrant
+            regrant.step(paths)
         else:
             print(f"launch_support: no function {fn}", file=sys.stderr)
             return 2
