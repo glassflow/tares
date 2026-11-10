@@ -2544,11 +2544,15 @@ _W1 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT)
 _W_GONE = lworld("L3-review", grants="")
 _W_UNREAD = {**lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT), "grants_status": 500}
 
+WIN_NO_MULTILINE_REGRANT = ("a station is restarted through claude.cmd here, and cmd.exe cannot take the regrant prompt "
+                            "(several lines); the claude.exe form waits for TR-946")
+
 scenario(Scenario(
     name="watch_regrant_restart",
     suite="crew",
     about="a station between turns whose grants changed is restarted in its own conversation, told only what is new, once per change",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            wstep(_W1, before=_busy("crew-reviewer")),                      # 1: busy: waits
            wstep(_W1, before=_idle("crew-reviewer"), after=_sessions_and("crew-reviewer")),   # 2: between turns: restarted
@@ -2596,6 +2600,7 @@ scenario(Scenario(
     suite="crew",
     about="nothing is restarted for a Tares that cannot give the grants, while the crew is halted, for a station without a conversation, one that is done, or one open in a terminal",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("crew-releaser", "releaser", _W0),
            wstep(_W_UNREAD, before=_idle("crew-reviewer", "crew-releaser")),                # 2: grants unreadable
@@ -2706,6 +2711,7 @@ scenario(Scenario(
     suite="crew",
     about="a station blocked on a person is restarted at once; a helper and a project's builder get their grants; a station that kept no grants is quoted all of them",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("shop-build-m1", "builder", _W0, parent="crew-orchestrator", project="shop"),
            _launch("shop-build-m1-e2e", "helper", _W0, parent="shop-build-m1", project="shop"),
