@@ -65,8 +65,8 @@ SYS_ENV = ({k: os.environ[k] for k in ("SYSTEMROOT", "USERPROFILE", "HOME", "TEM
 ENGINE = dispatch.ENGINE_VAR
 # A command that stays on bash, for the checks that need one (roster, status and the other views are
 # ported with TR-957). Whoever ports this one (settings, TR-953) changes this line to another.
-UNPORTED = "settings"
-BASH_RAN = "no Tares answers at http://127.0.0.1:9"  # what bash's `settings` says with no Tares, in the fake crew
+UNPORTED = "unported-probe"  # a command the table does not have (each port used up the last real one: TR-1122 took settings)
+BASH_RAN = "no Tares answers at http://127.0.0.1:9"  # what bash says to any command with no Tares, in the fake crew
 
 calls = []
 
@@ -328,10 +328,10 @@ if HAVE_BASH:
     env = {"PATH": os.environ.get("PATH", ""), "CHECK_VARS": "TARESD_URL TARES_AUTH_TOKEN TARES_FACTORY_URL EMPTY SPACED UNI PARENT_ONLY TARES_FACTORY_ENGINE",
            "TARESD_URL": "http://127.0.0.1:1", "TARES_AUTH_TOKEN": "tok en", "TARES_FACTORY_URL": "http://x:2",
            "EMPTY": "", "SPACED": "a  b\tc", "UNI": "é名", ENGINE: ""}
-    r = run_stub(["spawn", "builder", "a b", "é名", ""], env)
+    r = run_stub([UNPORTED, "builder", "a b", "é名", ""], env)
     ck("a real exec runs the script under bash", r.returncode == 0, short((r.returncode, r.stderr[-300:])))
     ck("...with the arguments one by one, spaces, unicode and empty ones intact",
-       r.stdout.splitlines()[:6] == ["ARGC=5", "ARG<spawn>", "ARG<builder>", "ARG<a b>", "ARG<é名>", "ARG<>"], short(r.stdout))
+       r.stdout.splitlines()[:6] == ["ARGC=5", f"ARG<{UNPORTED}>", "ARG<builder>", "ARG<a b>", "ARG<é名>", "ARG<>"], short(r.stdout))
     ck("...with the env variables unchanged",
        all(f"ENV {k}=<{v}>" in r.stdout.splitlines() for k, v in env.items() if k in ("TARESD_URL", "TARES_AUTH_TOKEN", "TARES_FACTORY_URL", "EMPTY", "SPACED", "UNI")),
        short(r.stdout))

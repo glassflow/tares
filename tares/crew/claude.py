@@ -174,11 +174,27 @@ def claude_bin(env=None, platform=None) -> str:
     raise ClaudeNotFoundError()
 
 
+# Windows refuses a command line over 32767 characters (CreateProcess), and cmd.exe one over 8191 (a .cmd or
+# .bat shim). A start with a long task in its prompt could pass 8191; it is refused by name, not cut off.
+WIN_LINE_MAX = 32767
+CMD_LINE_MAX = 8191
+
+
+def _check_length(claude: str, args) -> None:
+    line = subprocess.list2cmdline([claude, *args])
+    limit = CMD_LINE_MAX if claude.lower().endswith((".cmd", ".bat")) else WIN_LINE_MAX
+    if len(line) > limit:
+        raise CrewError(f"the command line to start Claude Code is {len(line)} characters long and Windows allows "
+                        f"{limit}; shorten the task in the prompt, or put it in a file the station can read")
+
+
 def claude_command(claude: str, args, platform=None, env=None):
     """What to hand subprocess.run to run `claude <args>`. A list, except for a Windows .cmd or .bat, which
     cmd.exe must run: one command line string, `cmd.exe /d /s /c "<quoted path and arguments>"`. A path or
     argument cmd would act on (% ^ & | < > a quote, a line break) is refused, not quoted."""
     args = [str(a) for a in args]
+    if _is_windows(platform):
+        _check_length(claude, args)
     if not (_is_windows(platform) and claude.lower().endswith((".cmd", ".bat"))):
         return [claude, *args]
     env = os.environ if env is None else env
@@ -196,9 +212,10 @@ def _creationflags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
 
 
-def _child_env() -> dict:
-    env = dict(os.environ)
+def _child_env(extra=None, drop=()) -> dict:
+    env = {k: v for k, v in os.environ.items() if k not in drop}
     env["NO_COLOR"] = "1"
+    env.update(extra or {})
     return env
 
 
@@ -217,14 +234,22 @@ def _kill_tree(pid: int) -> None:
             pass
 
 
-def run_claude(args, claude=None, timeout=AGENTS_TIMEOUT, platform=None) -> subprocess.CompletedProcess:
+def run_claude(args, claude=None, timeout=AGENTS_TIMEOUT, platform=None, *, cwd=None, merge_stderr=False,
+               env_extra=None, drop_env=()) -> subprocess.CompletedProcess:
     """Run `claude <args>`: UTF-8 text, undecodable bytes replaced, NO_COLOR=1, no stdin, stderr dropped, a
     timeout that ends the whole process tree. OSError (claude cannot start) and subprocess.TimeoutExpired
-    reach the caller."""
+    reach the caller.
+
+    For starting a session (`claude --bg`, see launch.py): cwd is the folder it runs in; merge_stderr
+    gives stdout and stderr as one text, in the order they were written (bash's `2>&1`), because the line
+    that names the new session or says the folder is not trusted may be on either; env_extra adds
+    variables (FORCE_COLOR=0); drop_env removes some the person's shell has (the crew's key, which no
+    process the engine starts may inherit)."""
     cmd = claude_command(claude or claude_bin(), args, platform)
-    with subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                          text=True, encoding="utf-8", errors="replace", env=_child_env(),
-                          creationflags=_creationflags()) as proc:
+    with subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
+                          text=True, encoding="utf-8", errors="replace", env=_child_env(env_extra, drop_env),
+                          cwd=cwd, creationflags=_creationflags()) as proc:
         try:
             out, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -505,11 +530,16 @@ def attached(station: str, paths=None) -> bool:
         return False
     pattern = re.compile("attach " + re.escape(sid) + "( |$)")
     me = os.getpid()
-    for p in psutil.process_iter(["pid", "cmdline"]):
+    # One pid at a time: process_iter reads each command line itself and can raise a PermissionError that ends
+    # the whole loop (a process it may not read), where this skips just that process. psutil on macOS can also
+    # leak a SystemError ("returned a result with an exception set") for such a process.
+    for pid in psutil.pids():
+        if pid == me:
+            continue
         try:
-            if p.info["pid"] != me and pattern.search(" ".join(p.info["cmdline"] or [])):
+            if pattern.search(" ".join(psutil.Process(pid).cmdline() or [])):
                 return True
-        except (psutil.Error, OSError):
+        except (psutil.Error, OSError, SystemError):
             continue
     return False
 

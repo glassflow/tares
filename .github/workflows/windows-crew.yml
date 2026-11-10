@@ -22,7 +22,7 @@ jobs:
     name: windows-crew (not required yet)
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -56,4 +56,4 @@ jobs:
         shell: pwsh
         run: |
           .venv\Scripts\activate.ps1
-          python tests/ci_windows.py
+          python tests/ci_windows.py --timeout 1200

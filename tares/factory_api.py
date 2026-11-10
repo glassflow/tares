@@ -2242,8 +2242,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
             if a["state"] != "open":
                 h.err(ValueError(f"{a['label']} was already {a['state']}"), 409)
             plan.append((a, st, w))
-        missing = set(d["assumptions"]) - {a["label"] for a, _, _ in plan}
-        if d["assumptions"] and missing:
+        # one already decided elsewhere (the project's calls page) has nothing left to say
+        still_open = {x for x in d["assumptions"]
+                      if (s := store.get_assumption(d["project"], x)) is not None and s["state"] == "open"}
+        missing = still_open - {a["label"] for a, _, _ in plan}
+        if missing:
             h.err(ValueError("the answer must keep or overturn every assumption of "
                              f"{d['label']}; left out: " + ", ".join(sorted(missing))))
         return plan

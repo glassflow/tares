@@ -654,6 +654,7 @@ def _crew_up(argv: list, env: dict) -> int:
             watch = False
         else:
             roles.append(a)
+    c.need_capability("integrations")
     c.require_mcp()
     my_version = kit_version(up.kit)
     clash = installed_tares(env, my_version)

@@ -743,6 +743,36 @@ async def main():
         ck("Lee leads none of them: none of the three", not ({"ready_to_start", "calls_to_confirm"} & set(l))
            and f"signoff:{fin}" not in {i["id"] for i in l.get("signoff", [])}, l)
 
+        print("== a batch of calls on the desk: one step keeps them all ==")
+        mk_call = lambda q, c: store.add_assumption(orbit, q, c, "a default", "", [], "orbit-build-m1", "builder", ago(hours=2))["label"]
+        c1, c2, c3 = mk_call("Which port?", "8080"), mk_call("Which region?", "eu"), mk_call("Which zone?", "a")
+        kims = store.add_desk_item(orbit, "Keep these calls?", "", ["keep all", "change some"], "keep", "defaults", "", [], False,
+                                   "crew-orchestrator", [c1, c2], ago(hours=2), to_person_id=pid["kim"])
+        lees = store.add_desk_item(orbit, "Keep this call?", "", [], "keep", "defaults", "", [], False,
+                                   "crew-orchestrator", [c3], ago(hours=2), to_person_id=pid["lee"])
+        k = by_kind(await home("kim"))
+        row = next(i for i in k["desk"] if i["id"] == f"desk:{kims['label']}")
+        ck("the row says how many and names them", row["label"] == "2 calls to confirm" and row["lines"] == ["8080", "eu"], row)
+        ck("it keeps them in one step, or opens the calls page, and offers no free answer", row["actions"] == [
+            {"label": "Change some", "primary": False, "href": f"/projects/{orbit}/calls"},
+            {"label": "Keep both", "primary": True, "do": "keep_batch", "desk": kims["label"], "kept": [c1, c2]}], row["actions"])
+        lines = next(i for i in k["calls_to_confirm"] if i["title"] == "Orbit")["lines"]
+        ck("a call on the lead's own desk shows once; one addressed to someone else stays with the lead", "8080" not in lines and "eu" not in lines and "a" in lines, lines)
+        l = by_kind(await home("lee"))
+        ck("someone who is not the lead still gets a batch addressed to them", any(i["id"] == f"desk:{lees['label']}" for i in l.get("desk", [])), l)
+        r = await call("kim", "POST", f"/api/desk/{kims['label']}/reply", {"words": "Keep both", "choice": "Keep both", "standing": False, "kept": [c1]})
+        ck("an answer that leaves one out is still refused", r.status_code >= 400 and "left out" in r.text, r.text[:200])
+        r = await call("kim", "POST", f"/api/projects/{orbit}/assumptions/{c1}/state", {"state": "kept"})
+        ck("one is kept on the calls page", r.status_code < 300, r.text[:200])
+        row = next(i for i in by_kind(await home("kim"))["desk"] if i["id"] == f"desk:{kims['label']}")
+        ck("the row now asks only about the one left", row["label"] == "1 call to confirm" and row["actions"][-1]["kept"] == [c2] and row["actions"][-1]["label"] == "Keep it", row)
+        r = await call("kim", "POST", f"/api/desk/{kims['label']}/reply", {"words": "Keep it", "choice": "Keep it", "standing": False, "kept": [c2]})
+        ck("and keeping it closes the item", r.status_code < 300 and r.json()["desk_item"]["state"] != "open", r.text[:200])
+        ck("every call reads kept", all(store.get_assumption(orbit, x)["state"] == "kept" for x in (c1, c2)))
+        ck("the decision holds the person's words", r.json()["decision"]["choice"] == "Keep it" or "Keep it" in str(r.json()["decision"]), r.json()["decision"])
+        ck("it left the desk", all(i["id"] != f"desk:{kims['label']}" for i in by_kind(await home("kim")).get("desk", [])))
+        await call("lee", "POST", f"/api/desk/{lees['label']}/reply", {"words": "Keep it", "choice": "Keep it", "standing": False, "kept": [c3]})
+
         print("== behaviours a quick change could drop ==")
         own = store.add_desk_item(orbit, "Pick a name?", "", [], "Nova", "short", "", [], False,
                                   "crew-orchestrator", [], ago(minutes=9), station="a-build-m1",

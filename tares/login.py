@@ -231,16 +231,16 @@ def _save(data: dict) -> str:
     if kr is not None:
         account = _account(data)
         try:
-            before = kr.get_password(KEYRING_SERVICE, account)
+            before: str | None = kr.get_password(KEYRING_SERVICE, account) or ""
         except Exception:  # noqa: BLE001
-            before = None
+            before = None      # unknown: what the entry held cannot be put back, and must not be deleted
         if _kc_set(kr, account, data["key"]):
             try:
                 _write_file({**meta, "key_store": "keychain"})
             except (OSError, CrewError):
                 if before:
                     _kc_set(kr, account, before)
-                else:
+                elif before is not None:
                     _kc_delete(account)
                 raise
             return keychain_name(kr)
@@ -359,6 +359,14 @@ def _revoke(data: dict) -> tuple[bool, str]:
     return False, ""
 
 
+def _left_behind(data: dict) -> str:
+    """Plain words for a key just made that could not be removed again, and where to remove it."""
+    key_id = data.get("key_id") or ""
+    named = f" (key {key_id})" if key_id else ""
+    return (f"The key just made for this machine{named} could not be removed; remove it under "
+            f"Security > API keys on {data.get('cell') or data.get('cell_url')}.")
+
+
 def crew_key_file() -> Path:
     """The tares factory crew's key file: its stations read only this, never login.json."""
     home_ = os.getenv("FACTORY_CREW_HOME") or str(Path.home() / "factory")
@@ -455,26 +463,28 @@ def login(cloud: str = "", open_browser: bool = True, wait: int = WAIT_SECONDS) 
     except httpx.HTTPError:
         version = ""
     if (_version(version) or (0, 0, 0)) < MIN_VERSION:
-        _revoke(data)
+        removed, _how = _revoke(data)
         print(f"tares login: {data['cell']} runs Tares {version or 'of an unknown version'}; "
-              f"tares login needs {MIN_VERSION_TEXT} or later. Nothing was saved.")
+              f"tares login needs {MIN_VERSION_TEXT} or later. Nothing was saved."
+              + ("" if removed else f" {_left_behind(data)}"))
         return 1
 
     try:
         where = _save(data)
     except (OSError, CrewError) as e:
-        _revoke(data)
-        print(f"tares login: could not save the login ({e}). The key just made for this machine was "
-              f"removed, and the saved login (if any) is as it was.")
+        removed, _how = _revoke(data)
+        print(f"tares login: could not save the login ({e}). "
+              + ("The key just made for this machine was removed, and the saved login (if any) is as it was."
+                 if removed else f"The saved login (if any) is as it was. {_left_behind(data)}"))
         return 1
-    if old and _account(old) != _account(data):
-        _kc_delete(_account(old))        # the previous workspace's key leaves the keychain too
     _crew_follows(data["key"])
     if old and old.get("key_id") != data["key_id"]:
         ok, _how = _revoke(old)
         if not ok:
             print(f"tares login: the previous key on {old.get('cell')} could not be removed; "
                   f"remove it under Security > API keys on {old.get('cell_url')}.")
+    if old and _account(old) != _account(data):
+        _kc_delete(_account(old))        # the previous workspace's key leaves the keychain, after it is revoked
     print(f"tares login: this machine ({machine}) is connected to {data['cell']} "
           f"({data['cell_url']}), Tares {version}.")
     if where == str(login_file()):
@@ -495,7 +505,8 @@ def logout() -> int:
     data, key, why = _load()
     if data is not None and not key and why:
         # The login is there but its key cannot be read: deleting it would lose the last record of a live key.
-        print(_unreadable(why, data, "tares logout"))
+        print(_unreadable(why, data, "tares logout") + f" Or, to start over, delete {login_file()} "
+              "and remove that key yourself under Security > API keys.")
         return 1
     if not key:
         _forget()

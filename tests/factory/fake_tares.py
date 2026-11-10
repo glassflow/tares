@@ -1,134 +1,102 @@
 #!/usr/bin/env python3
-"""A small stand-in for a Tares and its MCP endpoint, for the parity scenarios of `crew up`.
+"""The small fakes the doctor scenarios of tests/factory/parity.py run against: a Tares that answers the
+few routes `tares factory doctor` asks, a `gh`, and a `tares` command. Standard library only.
 
-It answers what crew up and the station launches ask, from memory, on one free port of 127.0.0.1:
-
-    GET  /health                    ok
-    GET  /api/crew/settings         the crew settings saved so far (a flat object)
-    PUT  /api/crew/settings         merge the body into them
-    GET  /api/grants                {"all": "- \\"<words>\\" (<date>)\\n..."}
-    POST /api/grants                {words, scope: "all"}: one more line
-    GET  /api/people                {"people": [...]}
-    GET  /api/crew/projects         {"projects": []}
-    GET  /api/desk                  {"desk": []}
-    POST /mcp                       an MCP `initialize` answer (it has serverInfo)
-
-Every write (PUT, POST except /mcp) is kept in order in <dir>/writes.jsonl as {method, path, body}, so a
-scenario can compare what two engines saved. Anything else answers 404. Standard library only; it runs in a
-thread of the process that starts it, so it works on Windows too. This is a test double, not the product:
-the milestone runs of tests/factory/crew_test.sh still use a real daemon.
+    World         what the fake Tares answers; a scenario's `before` hook changes it between two steps
+    serve(world)  start it on a free port in a thread: (server, base url)
+    gh_main()     the fake gh: `auth status` is signed in; `repo view` names the folder's repo, with WRITE
+                  access unless the folder's name starts with ro (READ) or nogh (no GitHub repo)
+    tares_main()  the fake tares: `--version`, and `hook <name>` exits 0
 """
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from urllib.parse import urlparse
+
+SETTINGS = {"autonomy": "L4-ship", "releaser": False, "challenger": False, "builders_max": 2,
+            "idle_wake": False, "pace": False, "claude_update": True, "kit": {"frozen": None}}
 
 
-class FakeTares:
-    def __init__(self, directory, settings=None, people=None, grants=None):
-        self.dir = Path(directory)
-        self.dir.mkdir(parents=True, exist_ok=True)
-        self.writes = self.dir / "writes.jsonl"
-        self.writes.write_text("", encoding="utf-8")
-        self.settings = dict(settings or {})
-        self.people = list(people if people is not None else [{"id": "local", "name": "Local"}])
-        self.grants = list(grants or [])
-        self.lock = threading.Lock()
-        outer = self
+class World:
+    def __init__(self, token: str = "", projects=None, settings=None):
+        self.token = token                  # "" = no auth
+        self.projects = projects or []
+        self.settings = dict(SETTINGS, **(settings or {}))
+        self.mcp = True
+        self.log = []
 
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.0"
 
-            def log_message(self, *a):  # silence
-                pass
+def _handler(world: World):
+    class Fake(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"
 
-            def _send(self, code, doc):
-                body = json.dumps(doc).encode("utf-8")
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+        def _json(self, code, body):
+            raw = (body if isinstance(body, str) else json.dumps(body)).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
 
-            def _body(self):
-                n = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(n).decode("utf-8") if n else ""
-                try:
-                    return json.loads(raw) if raw else None
-                except ValueError:
-                    return raw
+        def _go(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if n:
+                self.rfile.read(n)
+            path = urlparse(self.path).path
+            world.log.append((self.command, path, self.headers.get("Authorization")))
+            if path == "/health":
+                return self._json(200, {"status": "ok"})
+            if world.token and self.headers.get("Authorization") != f"Bearer {world.token}":
+                return self._json(401, {"detail": "unauthorized"})
+            if path == "/mcp":
+                if not world.mcp:
+                    return self._json(404, {})
+                return self._json(200, '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"tares"}}}')
+            if path == "/api/crew/settings":
+                return self._json(200, {"settings": world.settings})
+            if path == "/api/crew/projects":
+                return self._json(200, {"projects": world.projects})
+            self._json(404, {})
 
-            def do_GET(self):
-                path = self.path.split("?", 1)[0]
-                with outer.lock:
-                    if path == "/health":
-                        return self._send(200, {"status": "ok"})
-                    if path == "/api/crew/settings":
-                        return self._send(200, dict(outer.settings))
-                    if path == "/api/grants":
-                        return self._send(200, {"all": "".join(line + "\n" for line in outer.grants).rstrip("\n")})
-                    if path == "/api/people":
-                        return self._send(200, {"people": outer.people})
-                    if path == "/api/crew/projects":
-                        return self._send(200, {"projects": []})
-                    if path == "/api/desk":
-                        return self._send(200, {"desk": []})
-                self._send(404, {"error": "not found"})
+        do_GET = do_POST = do_DELETE = _go  # noqa: N815
 
-            def do_PUT(self):
-                body = self._body()
-                path = self.path.split("?", 1)[0]
-                with outer.lock:
-                    outer._log("PUT", path, body)
-                    if path == "/api/crew/settings" and isinstance(body, dict):
-                        outer.settings.update(body)
-                        return self._send(200, dict(outer.settings))
-                self._send(404, {"error": "not found"})
+        def log_message(self, *a):
+            pass
 
-            def do_POST(self):
-                body = self._body()
-                path = self.path.split("?", 1)[0]
-                if path.startswith("/mcp"):
-                    return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {
-                        "protocolVersion": "2025-03-26", "capabilities": {},
-                        "serverInfo": {"name": "fake-tares", "version": "0"}}})
-                with outer.lock:
-                    outer._log("POST", path, body)
-                    if path == "/api/grants" and isinstance(body, dict) and body.get("words"):
-                        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                        outer.grants.append(f'- "{body["words"]}" ({today})')
-                        return self._send(200, {"ok": True})
-                self._send(404, {"error": "not found"})
+    return Fake
 
-        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
-    def _log(self, method, path, body):
-        with open(self.writes, "a", encoding="utf-8") as f:
-            f.write(json.dumps({"method": method, "path": path, "body": body}, sort_keys=True) + "\n")
+def serve(world: World):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _handler(world))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
 
-    @property
-    def port(self) -> int:
-        return self._server.server_address[1]
 
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+def gh_main(argv: list) -> int:
+    if argv[:2] == ["auth", "status"]:
+        return 0
+    if argv[:2] == ["repo", "view"]:
+        base = os.path.basename(os.getcwd())
+        if base.startswith("nogh"):
+            return 1
+        print(f"o/{base} {'READ' if base.startswith('ro') else 'WRITE'}")
+        return 0
+    return 1
 
-    @property
-    def mcp_url(self) -> str:
-        return f"{self.url}/mcp"
 
-    def start(self) -> "FakeTares":
-        self._thread.start()
-        return self
+def tares_main(argv: list) -> int:
+    if argv[:1] == ["--version"]:
+        print("tares 99.0.0")
+        return 0
+    if argv[:1] == ["hook"]:
+        return 0
+    return 2
 
-    def stop(self) -> None:
-        self._server.shutdown()
-        self._server.server_close()
 
-    def written(self) -> list:
-        return [json.loads(x) for x in self.writes.read_text(encoding="utf-8").splitlines() if x.strip()]
+if __name__ == "__main__":
+    which = sys.argv[1]
+    sys.exit({"gh": gh_main, "tares": tares_main}[which](sys.argv[2:]))

@@ -4,7 +4,7 @@
   tares factory crew setup --answers <file>      validate the answers and save them on Tares
   tares factory crew up --yes                    use what is saved, ask nothing
 
-Checks, against a stand-in Tares (tests/factory/fake_tares.py) and the Python fake of Claude Code, all in
+Checks, against a stand-in Tares (tests/factory/fake_up_tares.py) and the Python fake of Claude Code, all in
 throwaway folders: the shape of every question; which ones are outstanding (none when everything is saved;
 the crew's name first when a second person has joined); that the contract path and the terminal path save
 the same settings, the same grant and the same requests, in the same order; that bad answers (an unknown
@@ -30,7 +30,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "factory"))
 
 import parity  # noqa: E402  (the harness: crew_env and the stand-in Tares)
-from fake_tares import FakeTares  # noqa: E402
+from fake_up_tares import FakeTares  # noqa: E402
 
 from tares.crew import dispatch, up  # noqa: E402
 

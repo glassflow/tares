@@ -24,10 +24,13 @@ import sys
 import time
 from pathlib import Path
 
-from . import claude, contract, locks, state
-from .client import TaresClient, TaresHTTPError, cksum, grants_sum
+from . import claude, contract, state
+from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, SessionListUnreadableError
+from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
 from .paths import ME, CrewPaths
+from .regrant import regranted  # moved there by TR-960; the status view reads it
+from .watch_revive import stuck_on_context  # moved there by TR-959; status and roster read it
 
 LETTERS = "ABCDEFGH"
 DESK_END = f"Answer in the orchestrator's session, one at a time: {ME} crew attach orchestrator"
@@ -261,54 +264,6 @@ def stale_kit(paths: CrewPaths, station: str, kit: str, frozen: Frozen) -> bool:
 # ---------- grants, context, Claude Code versions ----------
 
 
-def regranted(paths: CrewPaths, client: TaresClient, station: str) -> bool:
-    """True when the station's grants on Tares differ from those it started with, not yet acted on."""
-    was = state.stations_get(station, "grants", paths=paths)
-    if not was:
-        return False
-    try:
-        text = client.grants_read(state.stations_get(station, "project", paths=paths))
-    except CrewError:
-        return False
-    now = str(grants_sum(text.rstrip("\n") + "\n"))
-    return now != was and now != state.stations_get(station, "grants_tried", paths=paths)
-
-
-_THRASH = re.compile(r'"<synthetic>".*Autocompact is thrashing')
-
-
-def stuck_on_context(paths: CrewPaths, binary: str, station: str, agents=None) -> bool:
-    """True when Claude Code's thrashing notice is the last thing said and nothing new runs."""
-    try:
-        transcript = claude.transcript_of(station, binary, paths, agents)
-    except (CrewError, OSError):
-        return False
-    if not transcript:
-        return False
-    try:
-        with open(transcript, encoding="utf-8", errors="replace", newline="\n") as f:
-            tail = f.read().split("\n")
-    except OSError:
-        return False
-    if tail and tail[-1] == "":
-        tail.pop()
-    last = None
-    for line in tail[-200:]:
-        try:
-            obj = state.loads_json(line)
-        except ValueError:
-            continue
-        if isinstance(obj, dict) and obj.get("type") in ("assistant", "user"):
-            last = obj
-    if last is None or not _THRASH.search(state.dumps_compact(last)):
-        return False
-    try:
-        turn_state = claude.turn_state(state.stations_get(station, "id", paths=paths), binary)
-    except SessionListUnreadableError:
-        return False
-    return turn_state != "working"
-
-
 def cc_retry_in(paths: CrewPaths, station: str) -> str:
     """How long until the watch tries a station's move again: "10 min", "3 h"."""
     at = state.stations_get(station, "cc_retry_at", paths=paths)
@@ -340,17 +295,6 @@ def cc_behind(paths: CrewPaths, target: str, agents: list) -> int:
 
 
 # ---------- the watch and the pace ----------
-
-
-def watch_pid(paths: CrewPaths):
-    """The pid of the background watch when it runs, else None."""
-    try:
-        pid = int(state.read_text(paths.home / "watch.pid").strip())
-    except (OSError, ValueError):
-        return None
-    if not locks.pid_alive(pid) or "crew watch" not in claude._command_line(pid):
-        return None
-    return pid
 
 
 def pace_status_line(client: TaresClient) -> str:

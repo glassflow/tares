@@ -9,7 +9,8 @@ export FACTORY_NO_WATCH=1
 # settings it inherits. start_tares sets TARESD_URL and TARES_AUTH_TOKEN for the test itself.
 unset FACTORY_STATION FACTORY_ROLE FACTORY_PARENT FACTORY_CREW FACTORY_ORCHESTRATOR FACTORY_CREW_NAME TARES_FACTORY_URL TARES_FACTORY_TOKEN_FILE TARES_FACTORY_MCP_URL TARES_FACTORY_CRED_FILE TARES_PROJECT TARES_URL
 TARES_PIDS=""
-stop_tares() { local p; for p in $TARES_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; TARES_PIDS=""; }
+PROXY_PIDS=""
+stop_tares() { local p; for p in $TARES_PIDS $PROXY_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; TARES_PIDS=""; PROXY_PIDS=""; }
 
 # People on a cell before it starts: `seed_people <dir> "Name=email" ...`. Adding a second person over
 # HTTP needs a licence (ee/tests), so a test that only needs them there makes them here, once, in the
@@ -33,6 +34,19 @@ s = Store(sys.argv[1] + '/tares.duckdb')
 s.set_project_scope(sys.argv[2], 'private')
 del s" "$1" "$2") || { echo "FAIL could not make the project private"; exit 1; }
 }
+
+# A pass-through in front of the Tares start_tares started that answers one route with an error (500, or the
+# status given): `start_failing_route /api/whoami [status]` exports PROXY_URL; point TARESD_URL at it for the
+# command under test. Every engine reaches Tares through TARESD_URL, so each sees the same failure.
+start_failing_route() { # route [status]
+  local port; port=$("$PY" -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+  "$PY" "$ROOT/tests/factory/route_proxy.py" "$port" "$TARESD_URL" "$1" "${2:-500}" >/dev/null 2>&1 &
+  PROXY_PIDS="$PROXY_PIDS $!"
+  PROXY_URL="http://127.0.0.1:$port"
+  local _ up=0; for _ in $(seq 50); do curl -s -o /dev/null "$PROXY_URL/health" && { up=1; break; }; sleep 0.1; done
+  [ $up = 1 ] || { echo "FAIL the failing-route proxy did not start on $PROXY_URL"; exit 1; }
+}
+stop_failing_route() { local p; for p in $PROXY_PIDS; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done; PROXY_PIDS=""; }
 
 start_tares() { # dir [token]
   local dir=$1 token=${2:-} port

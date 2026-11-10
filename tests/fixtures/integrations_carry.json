@@ -1,0 +1,404 @@
+{
+  "integrations": [
+    {
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "github",
+          "settings_schema": [],
+          "title": "GitHub Issues"
+        },
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "faketix",
+          "settings_schema": [
+            {
+              "help": "",
+              "kind": "url",
+              "label": "Address",
+              "name": "url",
+              "options": [],
+              "required": false
+            },
+            {
+              "help": "",
+              "kind": "secret",
+              "label": "Token",
+              "name": "token",
+              "options": [],
+              "required": false
+            }
+          ],
+          "title": "Fake tickets"
+        },
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "linear",
+          "settings_schema": [
+            {
+              "help": "",
+              "kind": "secret",
+              "label": "API key",
+              "name": "token",
+              "options": [],
+              "required": false
+            }
+          ],
+          "title": "Linear"
+        }
+      ],
+      "choice": null,
+      "effective": {
+        "integration": "tares",
+        "reason": "",
+        "settings": {},
+        "source": "default",
+        "title": "tares"
+      },
+      "slot": "tickets"
+    },
+    {
+      "available": [],
+      "choice": null,
+      "effective": {
+        "integration": "tares",
+        "reason": "",
+        "settings": {},
+        "source": "default",
+        "title": "tares"
+      },
+      "slot": "review"
+    },
+    {
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "github",
+          "settings_schema": [
+            {
+              "help": "",
+              "kind": "bool",
+              "label": "This repository has no CI",
+              "name": "no_ci",
+              "options": [],
+              "required": false
+            }
+          ],
+          "title": "GitHub Actions"
+        }
+      ],
+      "choice": null,
+      "effective": {
+        "integration": "local",
+        "reason": "",
+        "settings": {},
+        "source": "default",
+        "title": "local"
+      },
+      "slot": "ci"
+    },
+    {
+      "available": [],
+      "choice": null,
+      "effective": {
+        "integration": "tares",
+        "reason": "",
+        "settings": {},
+        "source": "default",
+        "title": "tares"
+      },
+      "slot": "memory"
+    },
+    {
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "rius",
+          "settings_schema": [
+            {
+              "help": "",
+              "kind": "secret",
+              "label": "API key",
+              "name": "key",
+              "options": [],
+              "required": false
+            }
+          ],
+          "title": "Rius"
+        },
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "otlp",
+          "settings_schema": [
+            {
+              "help": "",
+              "kind": "url",
+              "label": "Endpoint",
+              "name": "endpoint",
+              "options": [],
+              "required": false
+            }
+          ],
+          "title": "OTLP"
+        }
+      ],
+      "choice": null,
+      "effective": {
+        "integration": "rius",
+        "reason": "",
+        "settings": {},
+        "source": "carried",
+        "title": "Rius"
+      },
+      "slot": "monitoring"
+    },
+    {
+      "available": [],
+      "choice": null,
+      "effective": {
+        "integration": "tares",
+        "reason": "",
+        "settings": {},
+        "source": "default",
+        "title": "tares"
+      },
+      "slot": "guardrails"
+    },
+    {
+      "available": [],
+      "choice": null,
+      "effective": {
+        "integration": "claude-code",
+        "reason": "",
+        "settings": {},
+        "source": "default",
+        "title": "claude-code"
+      },
+      "slot": "runtime"
+    }
+  ],
+  "projects": {
+    "p_both": {
+      "project": "p_both",
+      "slots": [
+        {
+          "integration": "linear",
+          "reason": "",
+          "slot": "tickets",
+          "source": "carried",
+          "title": "Linear"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "review",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "github",
+          "reason": "",
+          "slot": "ci",
+          "source": "carried",
+          "title": "GitHub Actions"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "memory",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "rius",
+          "reason": "",
+          "slot": "monitoring",
+          "source": "carried",
+          "title": "Rius"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "guardrails",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "claude-code",
+          "reason": "",
+          "slot": "runtime",
+          "source": "default",
+          "title": "claude-code"
+        }
+      ]
+    },
+    "p_github": {
+      "project": "p_github",
+      "slots": [
+        {
+          "integration": "github",
+          "reason": "",
+          "slot": "tickets",
+          "source": "carried",
+          "title": "GitHub Issues"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "review",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "github",
+          "reason": "",
+          "slot": "ci",
+          "source": "carried",
+          "title": "GitHub Actions"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "memory",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "rius",
+          "reason": "",
+          "slot": "monitoring",
+          "source": "carried",
+          "title": "Rius"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "guardrails",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "claude-code",
+          "reason": "",
+          "slot": "runtime",
+          "source": "default",
+          "title": "claude-code"
+        }
+      ]
+    },
+    "p_linear": {
+      "project": "p_linear",
+      "slots": [
+        {
+          "integration": "linear",
+          "reason": "",
+          "slot": "tickets",
+          "source": "carried",
+          "title": "Linear"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "review",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "github",
+          "reason": "",
+          "slot": "ci",
+          "source": "carried",
+          "title": "GitHub Actions"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "memory",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "rius",
+          "reason": "",
+          "slot": "monitoring",
+          "source": "carried",
+          "title": "Rius"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "guardrails",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "claude-code",
+          "reason": "",
+          "slot": "runtime",
+          "source": "default",
+          "title": "claude-code"
+        }
+      ]
+    },
+    "p_tares": {
+      "project": "p_tares",
+      "slots": [
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "tickets",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "review",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "local",
+          "reason": "",
+          "slot": "ci",
+          "source": "default",
+          "title": "local"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "memory",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "rius",
+          "reason": "",
+          "slot": "monitoring",
+          "source": "carried",
+          "title": "Rius"
+        },
+        {
+          "integration": "tares",
+          "reason": "",
+          "slot": "guardrails",
+          "source": "default",
+          "title": "tares"
+        },
+        {
+          "integration": "claude-code",
+          "reason": "",
+          "slot": "runtime",
+          "source": "default",
+          "title": "claude-code"
+        }
+      ]
+    }
+  }
+}

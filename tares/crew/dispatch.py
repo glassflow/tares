@@ -56,6 +56,56 @@ def _events(argv: list[str], env: dict) -> int:
 PORTED[("events",)] = _events  # new in Python (TR-1067): bash has no such command
 
 
+def _spawn(argv: list[str], env: dict) -> int:
+    from .stations import cmd_spawn  # imported when used (TR-954)
+    return cmd_spawn(argv, env)
+
+
+PORTED[("spawn",)] = _spawn
+
+
+def _settings(argv: list[str], env: dict) -> int:
+    from .stations import cmd_settings  # imported when used (TR-1122)
+    return cmd_settings(argv, env)
+
+
+PORTED[("settings",)] = _settings
+
+
+def _lifecycle(name: str) -> Callable[[list[str], dict], int]:
+    """A lifecycle command (TR-955), imported when it runs."""
+    def run_it(argv: list[str], env: dict) -> int:
+        from . import lifecycle
+        return getattr(lifecycle, name)(argv, env)
+    return run_it
+
+
+# `crew restart` is not here: bash runs it as `crew update --force`
+for _word in ("revive", "restart", "retire", "down", "halt", "resume"):
+    PORTED[(_word,)] = _lifecycle(f"cmd_{_word}")
+for _word in ("down", "halt", "resume"):
+    PORTED[("crew", _word)] = _lifecycle(f"cmd_{_word}")
+
+
+def _watch(argv: list[str], env: dict) -> int:
+    from .watch import cmd_watch  # imported when used (TR-958)
+    return cmd_watch(argv, env)
+
+
+PORTED[("watch",)] = _watch
+PORTED[("crew", "watch")] = _watch
+WATCH_VAR = "TARES_FACTORY_WATCH"  # "python" opts the watch in; bash stays the default one
+
+
+def _bash_watch(argv: list[str], env: dict) -> bool:
+    """True for `watch` / `crew watch` that is not opted in: the bash watch stays the default where there is
+    bash. TARES_FACTORY_ENGINE=python (asked for outright) and Windows (no bash) run the Python one."""
+    if argv[:1] == ["crew"]:
+        argv = argv[1:]
+    return (argv[:1] == ["watch"] and (env.get(ENGINE_VAR) or "") == ""
+            and env.get(WATCH_VAR) != "python" and not is_windows())
+
+
 def _view(name: str):
     """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
     def run(argv: list[str], env: dict) -> int:
@@ -78,8 +128,24 @@ def _person(name: str) -> Callable[[list[str], dict], int]:
     return run_it
 
 
-for _word in ("projects", "finish", "context", "plan"):
+for _word in ("projects", "finish", "context", "plan", "spec", "session"):
     PORTED[(_word,)] = _person(f"cmd_{_word}")
+
+
+def _heavy(argv: list[str], env: dict) -> int:
+    from .heavy import cmd_heavy
+    return cmd_heavy(argv, env)
+
+
+PORTED[("heavy",)] = _heavy
+
+
+def _doctor(argv: list[str], env: dict) -> int:
+    from .doctor import cmd_doctor  # imported when used, so other commands start without it
+    return cmd_doctor(argv, env)
+
+
+PORTED[("doctor",)] = _doctor
 
 
 def is_windows() -> bool:
@@ -113,7 +179,7 @@ def route(argv: list[str], env: dict) -> tuple[str, Callable[[list[str], dict], 
     if engine not in ("", *ENGINES):
         return "error", None, f'{ENGINE_VAR} must be "python" or "bash" (or unset), not "{engine}"'
     fn = find(argv)
-    if engine == "bash" or (fn is None and engine == ""):
+    if engine == "bash" or (fn is None and engine == "") or (fn is not None and _bash_watch(argv, env)):
         return "bash", None, ""
     if fn is None:  # engine == "python"
         return "error", None, (f'"{command_name(argv)}" is not yet ported to the Python engine '

@@ -156,6 +156,12 @@ def _desk_from(t: HomeRead, d: dict) -> dict | None:
     return _ref(t.store.get_person(who["id"])) or who
 
 
+def _open_calls(t: HomeRead, d: dict) -> list[dict]:
+    """The assumptions of a desk batch nobody has decided yet."""
+    found = (t.store.get_assumption(d["project"], x) for x in d["assumptions"])
+    return [a for a in found if a and a["state"] == "open"]
+
+
 def desk_items(t: HomeRead) -> list[dict]:
     rows = [d for d in t.store.list_desk("open")
             if t.c.desk_is_mine(d, t.me["id"]) and d["project"] not in t.hidden]
@@ -170,7 +176,19 @@ def desk_items(t: HomeRead) -> list[dict]:
                     id=f"desk:{d['label']}", meta="Asked " + fh.plain_ago(since, t.now),
                     title=project["name"] if project else "Every project",
                     blocking=fw.desk_blocks(d))
-        if d.get("command"):
+        if d.get("assumptions"):
+            # A batch of calls: a free answer can never name them all, so the row keeps them all
+            # in one step or sends the person to the page where one can be overturned.
+            calls = _open_calls(t, d)
+            n = len(calls)
+            actions = ([{"label": "Change some", "primary": False, "href": f"/projects/{d['project']}/calls"}]
+                       if project else [])
+            actions.append({"label": "Keep it" if n == 1 else "Keep both" if n == 2 else "Keep all",
+                            "primary": True, "do": "keep_batch", "desk": d["label"],
+                            "kept": [a["label"] for a in calls]})
+            out.append(fh.home_item("desk", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
+                                    detail=d["question"], lines=fw.call_lines(calls), **base, actions=actions))
+        elif d.get("command"):
             who = fw._role_of_station(d.get("station"))
             out.append(fh.home_item(
                 "desk", label="Permission",
@@ -222,7 +240,11 @@ def lead_items(t: HomeRead) -> list[dict]:
             led[pid] = pid not in t.hidden and t.c.leads(t.store.get_project(pid), t.me["id"])
         return led[pid]
 
-    return [i for build in (fw.ready_to_start, fw.calls_to_confirm, fw.projects_to_close)
+    # calls already on this person's desk as a batch show once, there
+    batched = {(d["project"], x) for d in t.store.list_desk("open")
+               if d.get("assumptions") and t.c.desk_is_mine(d, t.me["id"]) for x in d["assumptions"]}
+    calls = lambda store, fx_, now: fw.calls_to_confirm(store, fx_, now, skip=batched)
+    return [i for build in (fw.ready_to_start, calls, fw.projects_to_close)
             for i in build(t.store, fx, t.now) if mine((i["project"] or {}).get("id"))]
 
 

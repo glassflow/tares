@@ -46,10 +46,10 @@ export function finishProject(id: string): Promise<unknown> {
 }
 
 /** The person answers a crew question from the console. `standing` keeps the answer as a grant. */
-export function deskReply(ref: string, words: string, standing: boolean, choice?: string): Promise<unknown> {
+export function deskReply(ref: string, words: string, standing: boolean, choice?: string, kept?: string[]): Promise<unknown> {
   return request(`/api/desk/${enc(ref)}/reply`, {
     method: "POST",
-    body: JSON.stringify(choice ? { words, choice, standing } : { words, standing }),
+    body: JSON.stringify({ words, standing, ...(choice ? { choice } : {}), ...(kept ? { kept } : {}) }),
   });
 }
 
