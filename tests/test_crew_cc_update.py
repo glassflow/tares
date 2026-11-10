@@ -901,27 +901,30 @@ rc, msgs, _ = move()
 st = stations_now()["shop-build-m1"]
 ck("5: a count left by an older target starts again at 1", rc == 5 and st["cc_failed"] == NEW and st["cc_fails"] == 1, str((rc, st)))
 
-# the version poll goes on past an empty read
+# the version poll goes on past an empty read. The poll's own sleeps and looks are counted, not every sleep in the
+# process (time.sleep is shared: on Windows other threads sleep too, and counting them flipped the version too early)
 world(one, old_row)
 SPAWN[:] = [None]
-naps = []
+naps, looks = [], []
+real_station_cc = CU.station_cc
 
 
-def nap(_secs):
-    naps.append(1)
-    if len(naps) == 2:   # the version shows up on the third look
+def look(paths, s, agents=None, binary=None):
+    looks.append(1)
+    if len(looks) == 3:   # the version shows up on the third look
         rows = json.loads((STATE / "agents.json").read_text(encoding="utf-8"))
         for r in rows:
             if r.get("name") == "shop-build-m1" and "pid" in r:
                 r.pop("pid")
                 r["version"] = NEW
         fake_claude.write_agents(STATE, rows)
+    return real_station_cc(paths, s, agents, binary)
 
 
-with patched(CU.time, "sleep", nap):
+with patched(CU, "station_cc", look), patched(CU, "time", types.SimpleNamespace(sleep=lambda _s: naps.append(1), time=time.time)):
     rc, msgs, _ = move()
-ck("0: a version that appears on a later look is the one taken, and nothing is said", rc == 0 and msgs == [] and len(naps) == 2,
-   str((rc, msgs, len(naps))))
+ck("0: a version that appears on a later look is the one taken, and nothing is said",
+   rc == 0 and msgs == [] and len(looks) == 3 and len(naps) == 2, str((rc, msgs, len(looks), len(naps))))
 
 # watch_claude_move reads the freeze and the pace afresh, not from what the round read
 world(one, old_row)
