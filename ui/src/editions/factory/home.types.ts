@@ -19,6 +19,7 @@ export type HomeItemKind =
 export type HomeVerb =
   | "copy"
   | "keep_assumptions"
+  | "keep_batch"
   | "allow"
   | "answer"
   | "choose"

@@ -702,6 +702,12 @@ function useHomeActions(live: boolean, changed: (done?: Done) => void) {
           working.current.delete(item.id);
         }
       })();
+    } else if (a.do === "keep_batch") {
+      // a desk item holding a batch of calls: one reply decides them all and closes it. Its label is
+      // also the choice, since a batch may offer options of its own and an answer has to say which.
+      const desk = typeof a.desk === "string" ? a.desk : "";
+      const kept = Array.isArray(a.kept) ? a.kept.map(String) : [];
+      if (desk) void run(item, "keep_batch", () => deskReply(desk, a.label, false, a.label, kept), "Kept. The crew carries on.", () => {});
     } else if (a.do === "allow") {
       if (typeof a.desk === "string") setAllow({ item, desk: a.desk, mayLimit: a.may_limit === true });
     } else if (a.do === "close") {
