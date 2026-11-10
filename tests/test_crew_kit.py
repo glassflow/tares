@@ -51,6 +51,13 @@ from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
+
+def _lf(path, text):
+    """Write `text` with LF endings on every platform: the crew reads its state files with no newline translation,
+    and Path.write_text would write CRLF on Windows."""
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
+
 P = F = 0
 CP = CrewPaths.at(CREW)
 WORK = SCRATCH / "work"
@@ -178,9 +185,9 @@ def world(stations=None, rows=None) -> None:
     shutil.rmtree(STATE, ignore_errors=True)
     (CREW / "stations").mkdir(parents=True)
     shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", CREW / "crew.json")
-    (CREW / "stations.json").write_text(json.dumps(stations or {}, indent=2) + "\n", encoding="utf-8")
+    _lf(CREW / "stations.json", json.dumps(stations or {}, indent=2) + "\n")
     fake_claude.write_agents(STATE, rows or [])
-    (STATE / "version").write_text("2.1.100\n", encoding="utf-8")
+    _lf(STATE / "version", "2.1.100\n")
     make_kit()
     kit.reset()
     watch_revive.last = watch_revive.Round()
@@ -308,8 +315,8 @@ with FakeTares() as ft:
     ck("freezing twice says so and keeps the first time", raised is None and len(said) == 1 and said[0].startswith("the kit is already frozen since ")
        and said[0].endswith("; tares factory crew unfreeze lifts it") and ft.settings["kit"]["frozen"]["at"] == old_at, str(said))
     ck("...no second PUT, no second event", len(ft.puts()) == 1 and len(kinds("freeze")) == 1)
-    (CP.newer_file).write_text("1\n", encoding="utf-8")
-    (CP.cc_newer_file).write_text("2.1.9\n", encoding="utf-8")
+    _lf(CP.newer_file, "1\n")
+    _lf(CP.cc_newer_file, "2.1.9\n")
     raised, said = unfreeze_here()
     ck("unfreeze with no station on the copy removes it", raised is None and not CP.frozen_kit.exists() and not CP.checkout_file.exists(), str(raised))
     ck("...clears the setting and the remembered newer versions", ft.settings["kit"]["frozen"] is None and not CP.newer_file.exists()
@@ -412,7 +419,7 @@ with FakeTares() as ft:
 print("unfreeze: a copy in use stays")
 world({"s1": station(plugin=kit.frozen_phys(CP))})
 CP.frozen_kit.mkdir()
-CP.checkout_file.write_text(f"{KITDIR}\n", encoding="utf-8")
+_lf(CP.checkout_file, f"{KITDIR}\n")
 with FakeTares(settings=frozen_settings("1")) as ft:
     raised, said = unfreeze_here()
     ck("unfreeze keeps the copy while a station runs from it, and says so", raised is None and CP.frozen_kit.is_dir() and CP.checkout_file.exists()
@@ -478,7 +485,7 @@ with FakeTares(settings_status=500):
     with TaresClient(CP, os.environ, lambda m: None) as c:
         ck("Tares unreadable and no copy: not frozen", not kit.Frozen(CP, c).on)
 CP.frozen_kit.mkdir()
-CP.checkout_file.write_text(f"{KITDIR}\n", encoding="utf-8")
+_lf(CP.checkout_file, f"{KITDIR}\n")
 ck("a factory run from the copy means the checkout", kit.map_checkout(CP, Path(kit.frozen_phys(CP))) == KITDIR)
 FP = kit.frozen_phys(CP)
 ck("_within: the copy itself, a file in it, a sibling that shares the prefix, and a ../ out of it",
