@@ -168,8 +168,7 @@ os.environ.pop("TARES_PLUGIN_DIR")
 ck("kit_dir: with no override it is the claude-plugin of this tree", L.kit_dir() == os.path.realpath(ROOT / "claude-plugin"), L.kit_dir())
 
 print("the notes not ported yet, and the idle wake")
-ck("pace_launch_note and iw_launch_note are stubs (TR-962, TR-961) that add nothing",
-   L.pace_launch_note("crew-reviewer") == "" and L.iw_launch_note("crew-reviewer") == "")
+ck("iw_launch_note is a stub (TR-961) that adds nothing", L.iw_launch_note("crew-reviewer") == "")
 note = L.idle_wake_note()
 ck("idle_wake_note says the tick is released and how to delete one", "idle_wake is on" in note and "CronDelete" in note)
 

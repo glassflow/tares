@@ -7,8 +7,8 @@ every difference is listed under "Differences from bash" below.
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
-What is not here: the pace read (TR-962). The watch itself is watch.py (TR-958); watch_pid and stop_watch call it. rearm_text reads the pace
-through stations.pace_read_stub, which says "not paced" until TR-962.
+What is not here: the pace (pace.py, TR-962). The watch itself is watch.py (TR-958); watch_pid and stop_watch call it.
+rearm_text reads the pace with pace.read.
 
 Differences from bash
   * A missing station argument (`factory revive` with nothing after it) is refused with
@@ -16,7 +16,6 @@ Differences from bash
     "<script>: line N: 1: usage: ..." and exits 1.
   * A Python watch is asked to stop with a stop file and given time to finish its round before it is terminated
     (watch.stop); a process that is gone or may not be stopped is left alone, as bash's `kill ... || true` does.
-  * The pace is not read (a stub), so revive and restart never ask Tares for GET /api/crew/pace yet.
 """
 from __future__ import annotations
 
@@ -25,7 +24,7 @@ import subprocess
 import sys
 import time
 
-from . import claude, launch, locks, stations, state, watch
+from . import claude, launch, locks, pace, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -52,23 +51,16 @@ def stop_watch(paths: CrewPaths, say) -> None:
 
 
 def rearm_text(client: TaresClient) -> str:
-    """What a restart tells a station about its schedule. The pace comes from stations.pace_read_stub: None
-    (not paced) until TR-962; a reading is a dict with the pace "level"."""
-    pace = stations.pace_read_stub()
+    """What a restart tells a station about its schedule. The pace is read here, as bash does for a command that
+    has not read it yet (pace.read; a watch round has its own reading in pace.step)."""
+    reading = pace.read(client)
     if launch.idle_wake_on(client):
         return ("arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds "
                 "your tick; if you hold one, delete it with CronList and CronDelete)")
-    if pace is not None and _level(pace) >= 1:
+    if reading.paced:
         return ("re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before "
                 "the plan's limit")
     return "re-arm your schedule if you have one"
-
-
-def _level(pace) -> int:
-    try:
-        return int(pace.get("level") or 0)
-    except (AttributeError, TypeError, ValueError):
-        return 0
 
 
 # ---------- reviving ----------

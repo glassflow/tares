@@ -395,13 +395,13 @@ with FakeTares({"GET /api/crew/settings": (200, {"settings": {}})}):
     c = TaresClient(paths)
     c.prime()
     ck("not paced: the plain advice", LC.rearm_text(c) == PLAIN, LC.rearm_text(c))
-    real_pace = LC.stations.pace_read_stub
-    LC.stations.pace_read_stub = lambda: {"state": "active", "level": 1}
+    real_pace = LC.pace.read
+    LC.pace.read = lambda client: LC.pace._read_doc({"on": True, "known": True, "level": 1})
     ck("paced at level 1: 45 minutes", LC.rearm_text(c) == "re-arm your schedule if you have one, at 45 minutes while the factory "
        "paces the crew before the plan's limit", LC.rearm_text(c))
-    LC.stations.pace_read_stub = lambda: {"state": "active", "level": 0}
+    LC.pace.read = lambda client: LC.pace._read_doc({"on": True, "known": True, "level": 0})
     ck("paced at level 0: the plain advice", LC.rearm_text(c) == PLAIN)
-    LC.stations.pace_read_stub = real_pace
+    LC.pace.read = real_pace
     c.close()
 with FakeTares({"GET /api/crew/settings": (500, "no")}):
     c = TaresClient(paths)

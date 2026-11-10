@@ -392,3 +392,7 @@ def cmd_watch(argv: list, env: dict) -> int:
 
 from . import watch_revive   # noqa: E402  (TR-959: revive a stopped station, restart a stuck one)
 register("revive", watch_revive.step)
+
+from . import pace as _pace  # noqa: E402
+
+register("pace", _pace.step)

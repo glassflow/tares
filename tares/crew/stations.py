@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 
-from . import claude, launch, locks, state
+from . import claude, launch, locks, pace, state
 from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths
@@ -26,12 +26,6 @@ def station_name(word: str, paths: CrewPaths | None = None) -> str:
     if word in ("orchestrator", "reviewer", "releaser"):
         return f"{state.crew_name(paths)}-{word}"
     return word
-
-
-def pace_read_stub():
-    """The pace of the plan, as bash's pace_read gives it: None when nothing is paced. A stub until TR-962
-    ports the real read of /api/crew/pace, so a builder is never held back here yet."""
-    return None
 
 
 def _git(*args: str) -> str:
@@ -64,8 +58,10 @@ def _builder_plan(client: TaresClient, paths: CrewPaths, args: list) -> dict:
             args = args[2:]
     if len(args) < 4:
         raise CrewError(SPAWN_USAGE)
-    if pace_read_stub() is not None:
-        raise CrewError("no new builder starts now")
+    reading = pace.read(client)
+    if reading.paced:
+        raise CrewError(f"no new builder starts now. {state.jq_raw(reading.raw.get('note'))} Spawn it after that, or when the plan has "
+                        "room. Helpers are not affected.")
     if autonomy:
         # A project may be stricter than the crew, never looser: a looser level is a new grant from the person.
         want = launch.level_rank(autonomy)
