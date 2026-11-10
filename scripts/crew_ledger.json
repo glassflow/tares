@@ -825,7 +825,7 @@
       "dropped": false,
       "python": "tares.crew.kit:kit_dir",
       "ported": true,
-      "note": "Ported (TR-965): the frozen branch. tares.crew.launch.kit_dir(client) calls it."
+      "note": "Ported (TR-965): the frozen branch. tares.crew.launch.kit_dir(client) (TR-953) calls it."
     },
     {
       "name": "on_frozen_copy",
@@ -913,7 +913,7 @@
       "dropped": false,
       "python": "tares.crew.kit:kit_version",
       "ported": true,
-      "note": "Ported (TR-965); views.py imports it back. launch.py and doctor.py keep their copies."
+      "note": "Ported (TR-965); views.py imports it back. launch (TR-953) and doctor.py keep their copies."
     },
     {
       "name": "kit_clean",
