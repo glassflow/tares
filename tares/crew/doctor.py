@@ -167,12 +167,10 @@ def cc_retry_in(stations_at: str, now=None) -> str:
 
 
 def watch_running(paths: CrewPaths) -> bool:
-    """bash watch_pid: watch.pid names a live process whose command line holds "crew watch"."""
-    try:
-        pid = int(state.read_text(paths.home / "watch.pid").strip())
-        return "crew watch" in " ".join(psutil.Process(pid).cmdline())
-    except (OSError, ValueError, psutil.Error):
-        return False
+    """bash watch_pid: watch.pid names a live process whose command line holds "crew watch" (and, for a Python
+    watch, that started when its meta file says)."""
+    from . import watch
+    return watch.running_pid(paths) is not None
 
 
 # ---------- Windows: who can read a file ----------

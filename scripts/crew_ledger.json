@@ -999,9 +999,9 @@
       "what": "pid of the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Moved to tares.crew.lifecycle:watch_pid by TR-955 (cmd_down needs the pid file read, through stop_watch); tares.crew.views imports it for status and roster. doctor (TR-969) keeps its own copy: tares.crew.doctor.watch_running reads the pid file for doctor. TR-958 completes the watch itself."
+      "python": "tares.crew.watch:running_pid",
+      "ported": true,
+      "note": "TR-955 ported the read in tares.crew.lifecycle:watch_pid, which now calls this; TR-958 adds the identity check (alive, not a zombie, `crew watch` in the command line, and the create time from the watch.pid.meta file beside the pid file). watch.pid stays the pid alone, as bash writes it. A pid file with no meta (bash's) still counts. doctor.watch_running (TR-969) now calls this; tares.crew.views imports watch_pid for status and roster."
     },
     {
       "name": "start_watch",
@@ -1010,9 +1010,9 @@
       "what": "start the watch in the background",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called first by cmd_crew_up (TR-956), which stubs it: crew up on Python skips the watch and prints \"watch: not ported yet\" (TR-956 step 4). TR-958 ports start_watch with the watch it starts."
+      "python": "tares.crew.watch:start",
+      "ported": true,
+      "note": "Detached (new session; DETACHED_PROCESS and pythonw.exe on Windows), env and PATH captured, pid file with pid, create time and engine. Not wired into cmd_crew_up here: TR-956 (PR 532, held for 522 under D65) stubs it and prints `watch: not ported yet`; whichever of 532 and this merges second swaps the stub for tares.crew.watch:start."
     },
     {
       "name": "stop_watch",
@@ -1021,9 +1021,9 @@
       "what": "stop the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-955 ported the part cmd_down needs in tares.crew.lifecycle:stop_watch (read the pid file, stop that process with psutil, remove the file, say it). TR-958 completes it with the watch itself."
+      "python": "tares.crew.watch:stop",
+      "ported": true,
+      "note": "TR-955's tares.crew.lifecycle:stop_watch calls this: a Python watch is asked to stop with the stop file and terminated (then killed) only after FACTORY_WATCH_STOP_TIMEOUT seconds; a bash watch or a plain pid file is terminated at once, as before."
     },
     {
       "name": "store_crew_name",
@@ -1153,9 +1153,9 @@
       "what": "the watch loop",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
+      "note": "The loop skeleton. Its steps (revive, regrant, idle wake, pace, updates) and the readings tick are registered by later tickets; with none registered a round does nothing, so the bash watch stays the default and TARES_FACTORY_WATCH=python opts in (always on Windows)."
     },
     {
       "name": "grants_now",
@@ -2110,9 +2110,9 @@
       "what": "wait between watch rounds, serving readings",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Watch sleep between rounds; calls serve_readings."
+      "python": "tares.crew.watch:nap",
+      "ported": true,
+      "note": "Looks for the stop file on every tick (FACTORY_ASK_POLL, at least 0.05s) and calls the readings step (serve_readings, TR-967) once registered."
     },
     {
       "name": "cmd_roster",
@@ -2709,9 +2709,9 @@
       "what": "same as crew watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
     },
     {
       "name": "halt",
@@ -3115,9 +3115,9 @@
       "what": "the watch loop",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
     },
     {
       "name": "crew halt",
@@ -4796,7 +4796,7 @@
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
-      "line": 502,
+      "line": 503,
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
       "ticket": "TR-953",
       "dropped": false,
