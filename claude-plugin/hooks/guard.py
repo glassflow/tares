@@ -1,14 +1,14 @@
 """PreToolUse guard for factory stations: one owner per action type, halt, heavy commands.
 
-The Python twin of guard.sh (TR-971), run as `tares hook guard`. It reads the hook payload on stdin and
+Run as `tares hook guard` (TR-971; it replaced guard.sh, TR-1103). It reads the hook payload on stdin and
 prints a deny decision, or nothing to allow. Sessions without FACTORY_ROLE (the person's own) are never
-touched. A payload that is not JSON, or has no tool name, is allowed, as with jq in guard.sh.
+touched. A payload that is not JSON, or has no tool name, is allowed.
 
 Standard library only and nothing from the tares package: a hook starts at every tool call.
 
-The regular expressions are the ones guard.sh hands to perl and grep -E, matched one line at a time
-as grep does, so a decision here is the decision there. A change to either file goes into both until
-guard.sh is removed (TR-1103).
+The regular expressions are the ones guard.sh used to hand to perl and grep -E, matched one line at a time
+as grep did, so a decision is the one guard.sh made. tests/guard_cases.jsonl and
+tests/guard_extra_cases.jsonl pin them.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import time
 
 
 def _re(pattern: str, flags: int = 0):
-    """A pattern with \\w, \\s, \\d and \\b read as ASCII, as perl and grep -E read them in guard.sh
+    """A pattern with \\w, \\s, \\d and \\b read as ASCII, as perl and grep -E read them in the old guard.sh
     (Python's default is Unicode: an accented letter would count as a word character here)."""
     return re.compile(pattern, flags | re.ASCII)
 
@@ -42,7 +42,7 @@ COMMAND_SPLIT = _re(r"\|\||&&|[;&|]")
 # The quoted-string scans rescan the rest of the command at every quote, so a command with thousands of
 # quotes takes seconds (a hook gets 5 s, and a timeout lets the command through). Above this many
 # characters they are skipped: nothing is blanked, so the guard sees more of the text and refuses more,
-# never less. guard.sh has no such limit.
+# never less. the old guard.sh had no such limit.
 MAX_QUOTE_SCAN = 10000
 
 # The factory CLI by its name, whatever its path or quoting: `factory x`, `/abs/bin/factory x`,
@@ -143,7 +143,7 @@ def blank_prose(cmd: str) -> str:
     run are listed: find, xargs, env, the shells, echo, printf and rg (--pre) are not. The reader must sit
     at the start of a command outside any quote, and its arguments are plain words or whole quoted strings.
     """
-    text = cmd + "\n"  # guard.sh hands perl a here-string, which ends in a newline
+    text = cmd + "\n"  # guard.sh handed perl a here-string, which ends in a newline
 
     def message(m):
         return m.group(1) + m.group(2) + " _"

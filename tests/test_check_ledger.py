@@ -152,8 +152,9 @@ code, out = run("--list-only", "--bash", str(bash_copy("cmux_new", "\n# zz_new_c
 ck("a new cmux line in the bash exits 1 and is named", code == 1 and "zz_new_cmux_line" in out and "cmux" in out, f"exit {code}: {out}")
 
 # and the ledger rows that cover them, taken away one by one
-for section, label in (("env_vars", "env var"), ("state_files", "state file"), ("cmux_touchpoints", "cmux touchpoint"),
-                       ("hook_entries", "hook entry")):
+# hook_entries has no rows since TR-1103: every hooks.json command runs `tares hook`, none python3 or bash
+ck("the ledger lists no hook entries (every hooks.json command is a `tares hook` one)", load()["hook_entries"] == [])
+for section, label in (("env_vars", "env var"), ("state_files", "state file"), ("cmux_touchpoints", "cmux touchpoint")):
     data = load()
     # an external state file is only seen through its row, so take a crew_home one; the rest: the last row
     pick = [r for r in data[section] if r.get("scope") != "external"] or data[section]
@@ -171,7 +172,7 @@ for name in ("<repo>/.factory/worktrees", "<repo>/.git/info/exclude"):
     ck("a deleted row for %s exits 1 and is named" % name, code == 1 and name in out, f"exit {code}: {out}")
 
 # a row listed twice
-for section in ("functions", "env_vars", "state_files", "hook_entries", "dispatcher_cases"):
+for section in ("functions", "env_vars", "state_files", "dispatcher_cases"):
     data = load()
     dup = data[section][0]["name"]
     data[section].append(dict(data[section][0]))

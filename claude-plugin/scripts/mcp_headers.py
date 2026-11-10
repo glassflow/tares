@@ -1,5 +1,5 @@
 """MCP headers helper: prints the JSON headers Claude Code adds to its calls to the Tares MCP endpoint.
-The Python twin of bin/mcp-headers, with the same answers; `tares hook mcp-headers` runs it in process.
+It replaced the shell helper that sat in the plugin's bin folder (TR-1103); `tares hook mcp-headers` runs it in process.
 
 The bearer comes from the first of these that gives one:
   1. The crew's token file, named by TARES_FACTORY_CRED_FILE (the factory keeps the token in a file,

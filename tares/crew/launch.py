@@ -241,11 +241,12 @@ def quote_windows(text: str) -> str:
     return f'"{text}"'
 
 
-def status_line_command(script: str, platform: str | None = None) -> str:
-    """`python3 <script>` for the shell that runs the status line, with the script path quoted for it."""
+def status_line_command(kit: str, platform: str | None = None) -> str:
+    """`tares hook statusline --plugin-root <kit>` for the shell that runs the status line, with the kit
+    path quoted for it. The kit is named, so a frozen copy keeps its own status line script."""
     if (platform or sys.platform) == "win32":
-        return f"python {quote_windows(script.replace(chr(92), '/'))}"
-    return f"python3 {shlex.quote(script)}"
+        return f"tares hook statusline --plugin-root {quote_windows(kit.replace(chr(92), '/'))}"
+    return f"tares hook statusline --plugin-root {shlex.quote(kit)}"
 
 
 # ---------- idle wake ----------
@@ -451,7 +452,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         "env": env,
         "crossSessionInbound": "accept",
         "enabledPlugins": {"tares@inline": True},
-        "statusLine": {"type": "command", "command": status_line_command(f"{_forward(kit_dir())}/scripts/statusline.py"),
+        "statusLine": {"type": "command", "command": status_line_command(_forward(kit_dir())),
                        "padding": 0},
         "worktree": {"bgIsolation": "none"},
         "permissions": perms,

@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CHECK = ROOT / "scripts" / "check_port_drift.py"
 FACTORY = "claude-plugin/bin/factory"
-GUARD = "claude-plugin/hooks/guard.sh"
+GUARD = "claude-plugin/bin/factory-heavy"  # a helper script the ledger lists (any listed one will do)
 
 P = F = 0
 

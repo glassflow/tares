@@ -2566,67 +2566,7 @@
       "dropped": false,
       "python": "tares.crew.heavy:cmd_heavy",
       "ported": true,
-      "note": "tares.crew.heavy is the Python port (mkdir lock shared with bash, psutil tree-kill, exit 142 on timeout); tares factory heavy reaches it through the dispatcher. bin/factory-heavy stays until TR-1103."
-    },
-    {
-      "name": "mcp-headers",
-      "kind": "script",
-      "file": "claude-plugin/bin/mcp-headers",
-      "line": 1,
-      "what": "print the MCP Authorization header from the crew token file or the saved login",
-      "ticket": "TR-972",
-      "dropped": false,
-      "python": "claude-plugin.scripts.mcp_headers:main",
-      "ported": true,
-      "note": "mcp_headers.py is the Python twin (TR-972) and also reads the key from the OS keychain; tares hook mcp-headers runs it. bin/mcp-headers and .mcp.json stay until TR-1103 points them at it."
-    },
-    {
-      "name": "guard.sh",
-      "kind": "script",
-      "file": "claude-plugin/hooks/guard.sh",
-      "line": 1,
-      "what": "PreToolUse hook: one owner per action type, halt, heavy commands",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "claude-plugin.hooks.guard:main",
-      "ported": true,
-      "note": "guard.py is the Python twin (TR-971); guard.sh and its hooks.json entry stay until TR-1103 switches them. tares hook guard already runs guard.py."
-    },
-    {
-      "name": "deny",
-      "kind": "function",
-      "file": "claude-plugin/hooks/guard.sh",
-      "line": 18,
-      "what": "emit a deny decision and log guard-deny",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "claude-plugin.hooks.guard:deny_output",
-      "ported": true,
-      "note": "Python: deny_output builds the JSON, log_deny appends the guard-deny line."
-    },
-    {
-      "name": "owner_only",
-      "kind": "function",
-      "file": "claude-plugin/hooks/guard.sh",
-      "line": 27,
-      "what": "deny unless the station's role owns the action",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "claude-plugin.hooks.guard:decide",
-      "ported": true,
-      "note": "Python: owner_only is a local function of decide."
-    },
-    {
-      "name": "session-start.sh",
-      "kind": "script",
-      "file": "claude-plugin/hooks/session-start.sh",
-      "line": 1,
-      "what": "SessionStart hook: tell a station or bound session who it is",
-      "ticket": "TR-972",
-      "dropped": false,
-      "python": "claude-plugin.hooks.session_start:main",
-      "ported": true,
-      "note": "session_start.py is the Python twin (TR-972); tares hook session-start runs it. session-start.sh and its hooks.json entry stay until TR-1103."
+      "note": "tares.crew.heavy is the Python port (mkdir lock shared with bash, psutil tree-kill, exit 142 on timeout); tares factory heavy reaches it through the dispatcher. bin/factory-heavy stays (TR-1103): stations run the bare command `factory-heavy` from the plugin's bin folder, and the guard and the skills name it."
     },
     {
       "name": "_factory",
@@ -3285,18 +3225,6 @@
       "note": ""
     },
     {
-      "name": "CLAUDE_CODE_MCP_SERVER_URL",
-      "kind": "env",
-      "reads": true,
-      "writes": false,
-      "what": "set by Claude Code for the MCP header helper (mcp-headers)",
-      "ticket": "TR-972",
-      "dropped": false,
-      "python": "claude-plugin.scripts.mcp_headers:saved_key",
-      "ported": true,
-      "note": "read by mcp_headers.py"
-    },
-    {
       "name": "CLAUDE_JOB_DIR",
       "kind": "env",
       "reads": true,
@@ -3307,18 +3235,6 @@
       "python": "",
       "ported": false,
       "note": ""
-    },
-    {
-      "name": "CLAUDE_PLUGIN_ROOT",
-      "kind": "env",
-      "reads": true,
-      "writes": false,
-      "what": "set by Claude Code; hooks.json commands expand it; tares hook reads it to find the plugin",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "tares.crew.hooks:plugin_root",
-      "ported": true,
-      "note": "hooks.json still expands it until TR-1103 switches the commands to tares hook <name>."
     },
     {
       "name": "FACTORY_ASK_POLL",
@@ -3381,23 +3297,11 @@
       "note": ""
     },
     {
-      "name": "FACTORY_CLI",
-      "kind": "internal",
-      "reads": true,
-      "writes": true,
-      "what": "shell variable of guard.sh: regex for the factory CLI by name",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "claude-plugin.hooks.guard:FACTORY_CLI",
-      "ported": true,
-      "note": ""
-    },
-    {
       "name": "FACTORY_CREW",
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "written to station settings (crew name); read by guard.sh and session-start.sh",
+      "what": "written to station settings (crew name); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3429,23 +3333,11 @@
       "note": ""
     },
     {
-      "name": "FACTORY_END",
-      "kind": "internal",
-      "reads": true,
-      "writes": true,
-      "what": "shell variable of guard.sh: regex closing a verb",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "claude-plugin.hooks.guard:FACTORY_END",
-      "ported": true,
-      "note": ""
-    },
-    {
       "name": "FACTORY_HOME",
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "written to station settings (crew home); read by guard.sh and session-start.sh",
+      "what": "written to station settings (crew home); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3505,7 +3397,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "written to station settings (parent station); read by guard.sh and session-start.sh",
+      "what": "written to station settings (parent station); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3565,7 +3457,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "written to station settings (repo path); read by tidy_roots and session-start.sh",
+      "what": "written to station settings (repo path); read by tidy_roots and the session-start hook",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3577,7 +3469,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "written to station settings (role); read by guard.sh and session-start.sh",
+      "what": "written to station settings (role); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3733,7 +3625,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "crew token file path under a name Claude Code does not hide; read by mcp-headers",
+      "what": "crew token file path under a name Claude Code does not hide; read by the MCP header helper (mcp_headers.py)",
       "ticket": "TR-949",
       "dropped": false,
       "python": "",
@@ -3805,7 +3697,7 @@
       "kind": "env",
       "reads": true,
       "writes": false,
-      "what": "Tares data folder; login.json lives there (mcp-headers, doctor)",
+      "what": "Tares data folder; login.json lives there (the MCP header helper, doctor)",
       "ticket": "TR-949",
       "dropped": false,
       "python": "",
@@ -3841,7 +3733,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "project id sent as X-Tares-Project; written to station settings and by session and spec; read by session-start.sh",
+      "what": "project id sent as X-Tares-Project; written to station settings and by session and spec; read by the session-start hook",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3853,7 +3745,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "project name for reading; written to station settings and by session; read by session-start.sh",
+      "what": "project name for reading; written to station settings and by session; read by the session-start hook",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
@@ -3865,7 +3757,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "contributor for a spec session on someone else's project; read by session-start.sh",
+      "what": "contributor for a spec session on someone else's project; read by the session-start hook",
       "ticket": "TR-966",
       "dropped": false,
       "python": "",
@@ -3889,7 +3781,7 @@
       "kind": "env",
       "reads": true,
       "writes": true,
-      "what": "set when the person took a project over from the crew; read by session-start.sh",
+      "what": "set when the person took a project over from the crew; read by the session-start hook",
       "ticket": "TR-966",
       "dropped": false,
       "python": "",
@@ -3974,7 +3866,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "guard.sh also appends guard-deny lines (TR-971)."
+      "note": "guard.py also appends guard-deny lines (TR-971)."
     },
     {
       "name": "HALT",
@@ -3988,7 +3880,7 @@
       "dropped": false,
       "python": "tares.crew.lifecycle:halt",
       "ported": true,
-      "note": "guard.sh and session-start.sh read it (TR-971, TR-972). Written by halt and removed by resume in tares.crew.lifecycle (TR-955)."
+      "note": "guard.py and session_start.py read it (TR-971, TR-972). Written by halt and removed by resume in tares.crew.lifecycle (TR-955)."
     },
     {
       "name": "frozen-kit",
@@ -4836,136 +4728,5 @@
       "note": "Same words as the crew_test.sh check, so the coverage report can match them."
     }
   ],
-  "hook_entries": [
-    {
-      "name": "SessionStart: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "SessionStart: *: bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-972",
-      "dropped": false,
-      "python": "tares.crew.hooks:HOOKS",
-      "ported": true,
-      "note": "tares hook session-start runs session_start.py (TR-972); hooks.json still runs session-start.sh until TR-1103."
-    },
-    {
-      "name": "PreToolUse: Bash|mcp__.*: bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guard.sh\"",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "tares.crew.hooks:HOOKS",
-      "ported": true,
-      "note": "tares hook guard runs guard.py (TR-971); hooks.json still runs guard.sh until TR-1103."
-    },
-    {
-      "name": "PreToolUse: AskUserQuestion: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "UserPromptSubmit: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "PostToolUse: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "PostToolUse: Bash|ExitPlanMode: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "Stop: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/challenger.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "Stop: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "SubagentStop: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "PermissionRequest: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "Notification: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    },
-    {
-      "name": "SessionEnd: *: python3 ${CLAUDE_PLUGIN_ROOT}/scripts/ship.py",
-      "kind": "hook",
-      "what": "hooks.json entry",
-      "ticket": "TR-1068",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "python3 is not on PATH on Windows; start through tares hook."
-    }
-  ]
+  "hook_entries": []
 }

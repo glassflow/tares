@@ -26,7 +26,9 @@ setting left is `mcp_url`: `tares login` prints the workspace's address to paste
 tares, Configure). The key is only ever sent to that workspace: session shipping uses it while
 `tares_url` and `access_token` are left as they came, and the MCP connection presents it only when
 `mcp_url` is that workspace's `/mcp`. `tares logout` removes the key.
-- `python3` on PATH: runs the shipper hook.
+- `tares` 1.56.0 or newer on PATH (`uv tool install tares`): every hook, the status line and the MCP header
+  helper start through `tares hook <name>`, so no `python3` or `bash` is needed on PATH. With an older tares (no `tares hook`)
+  the hooks do nothing and the session start says to upgrade it; the guard does not run until you do.
 - A Tares daemon reachable at `tares_url`.
 
 Tested with Claude Code 2.1.296. The MCP connection relies on its expansion of `${VAR:-}` and
