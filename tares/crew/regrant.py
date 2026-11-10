@@ -19,9 +19,9 @@ used at call time: it imports watch, and watch registers this step.
 Differences from bash
   * The watch loop of bash does one thing a round for a station (an `elif` chain: stuck, regrant, idle wake,
     pace, update). Here each step is its own function; this one leaves a station alone that is stopped or stuck
-    on its context (the revive step owns those) and one that the revive step has just restarted is mid-turn,
-    so it is not between turns.
-  * A session list that cannot be read ends this step for the round without a line: the revive step says
+    on its context (the revive step owns those) and one the revive step started this round (`watch_revive.last.started`).
+  * A round whose session list the revive step could not read (`watch_revive.last.unread`), or that this step
+    cannot read, ends this step for the round without a line: the revive step says
     "<UNREAD>; nothing is revived or restarted this round".
 """
 from __future__ import annotations
@@ -29,7 +29,7 @@ from __future__ import annotations
 import os
 import sys
 
-from . import claude, launch, state
+from . import claude, launch, state, watch_revive
 from .client import TaresClient, grants_sum
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -145,6 +145,8 @@ def step(paths: CrewPaths, env=None) -> None:
     """One round of the regrant step: every active station that is between turns and has new grants is
     restarted with them, one after the other."""
     env = dict(os.environ if env is None else env)
+    if watch_revive.last.unread:
+        return   # the revive step could not read the session list and said so; nothing is restarted this round
     binary = claude.claude_bin(env)
     try:
         claude.active_json(binary)
@@ -157,6 +159,8 @@ def step(paths: CrewPaths, env=None) -> None:
         for station, row in rows.items():
             if not isinstance(row, dict) or row.get("status") != "active":
                 continue
+            if station in watch_revive.last.started:
+                continue   # the revive step started it this round: bash's elif chain stops there
             role = row.get("role")
             if role == "builder" and paths.done_file(station).exists():
                 continue   # it ended with nothing left to do
@@ -171,8 +175,7 @@ def step(paths: CrewPaths, env=None) -> None:
                 if not any(not claude.gone(r) and ((r.get("name") == station and r.get("cwd") == cwd)
                                                    or (sid != "" and r.get("id") == sid)) for r in rows):
                     continue   # stopped: the revive step starts it with fresh settings
-                from . import views   # at call time: views imports this module
-                if views.stuck_on_context(paths, binary, station, rows):
+                if watch_revive.stuck_on_context(paths, binary, station, rows):
                     continue   # the revive step starts it fresh
             if (not state.halted(paths) and claude.between_turns(station, binary, paths)
                     and regrant_due(paths, client, station)):

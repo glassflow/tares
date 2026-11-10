@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tares.crew import regrant, watch  # noqa: E402
+from tares.crew import claude, regrant, watch, watch_revive  # noqa: E402
 from tares.crew.client import grants_sum  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
@@ -96,6 +96,48 @@ check("the prompt with rules quotes them and says to run the refused command aga
 p = regrant._prompt("Kiran", "", "read the rules")
 check("the prompt without rules says what changed and points at read_grants",
       "changed what the crew is allowed in Tares" in p and "read_grants shows them" in p)
+
+# the step against the revive step's round (reviewer F3, F4 on TR-959)
+class StepClient:
+    def tares_on(self):
+        pass
+
+    def close(self):
+        pass
+
+
+def run_step(round_, stations):
+    """regrant.step over `stations` (all running, between turns, due), with the revive step's `round_` as its last."""
+    acted = []
+    saved = (claude.claude_bin, claude.active_json, claude.between_turns, claude.gone, regrant.TaresClient,
+             regrant.regrant_due, regrant.regrant_station, watch_revive.stuck_on_context, watch_revive.last)
+    try:
+        claude.claude_bin = lambda env: "claude"
+        claude.active_json = lambda binary: [{"id": f"id-{s}", "name": s, "cwd": "/w"} for s in stations]
+        claude.between_turns = lambda *a, **k: True
+        claude.gone = lambda row: False
+        regrant.TaresClient = lambda paths, env: StepClient()
+        regrant.regrant_due = lambda *a, **k: True
+        regrant.regrant_station = lambda paths, station, **k: acted.append(station)
+        watch_revive.stuck_on_context = lambda *a, **k: False
+        watch_revive.last = round_
+        rows = {s: {"status": "active", "role": "reviewer", "cwd": "/w", "id": f"id-{s}"} for s in stations}
+        regrant.step(crew(rows), env={})
+    finally:
+        (claude.claude_bin, claude.active_json, claude.between_turns, claude.gone, regrant.TaresClient,
+         regrant.regrant_due, regrant.regrant_station, watch_revive.stuck_on_context, watch_revive.last) = saved
+    return acted
+
+
+check("every due station is restarted when the revive step started none",
+      run_step(watch_revive.Round(), ["a", "b"]) == ["a", "b"])
+r = watch_revive.Round()
+r.started.add("a")
+check("a station the revive step started this round is left alone, the others go on",
+      run_step(r, ["a", "b"]) == ["b"])
+r = watch_revive.Round()
+r.unread = True
+check("a round whose session list the revive step could not read restarts nothing", run_step(r, ["a", "b"]) == [])
 
 # registered with the skeleton
 check("the watch runs this step under the name the skeleton reserves", watch._STEPS.get("regrant") is regrant.step)
