@@ -53,11 +53,14 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
+sys.path.insert(0, str(HERE))
+from fake_up_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
 CI_LIST = HERE / "ci_list.txt"
 ENGINES = ("bash", "python")
 STEP_TIMEOUT = 180
@@ -71,11 +74,12 @@ NOT_PORTED = "not yet ported"
 class Step:
     argv: list           # everything after `tares factory`; "{tmp}" in an argument or env value is the scenario's folder,
                          # "{tares}" in an env value is the address of the scenario's fake Tares
-    env: dict = field(default_factory=dict)
+    env: object = field(default_factory=dict)   # a dict, or fn(Run) -> dict when it names the throwaway folders
     stdin: str = ""
     cwd: str = ""        # the folder the command runs in ("{tmp}" works); default the repo root
     before: object = None   # fn(tmp) run before the step: change files between two commands
     after: object = None    # fn(tmp) -> anything, run after the step; Run.snap(i) gives it back to a check
+    run_before: object = None   # fn(Run) run just before the step: files the suite writes between its commands
     drop: tuple = ()        # regexes: printed lines that match one are left out of the comparison (not of the checks)
 
 
@@ -87,6 +91,9 @@ class Scenario:
     checks: list         # (label, fn(Run) -> bool), the assertions of the bash suite, kept as they are
     covers: list         # labels of the suite's `check` calls this scenario stands for
     about: str = ""
+    stand_in: object = None  # None: no stand-in. A dict (settings, people, grants): a stand-in Tares (fake_up_tares.py)
+                             # on a free port, TARESD_URL and TARES_FACTORY_MCP_URL point at it
+    prepare: object = None   # fn(Run) run once before the first step: ~/.claude.json, crew.json, ...
     setup: object = None    # fn(tmp, env) run once before the first step: build files, a repo, a link
     tares: dict | None = None   # routes of a fake Tares to run for the scenario (see FakeTares); None: no Tares
     not_windows: str = ""   # why the Python side is skipped on Windows (the reason is printed), e.g. a claude.cmd cannot take a prompt of several lines
@@ -98,13 +105,49 @@ class Scenario:
 class Run:
     """What a scenario's checks can look at: the steps' output and the crew's state on disk."""
 
-    def __init__(self, tmp: Path, results: list, tares=None):
+    def __init__(self, tmp: Path, results: list, tares=None, stand_in=None):
         self.tmp = tmp
-        self.tares = tares
+        self.tares = tares      # the route table (FakeTares) of the read commands, or None
         self.crew = tmp / "crew"
         self.state = tmp / "claude"
+        self.home = tmp / "home"
         self.results = results
+        self.stand_in = stand_in    # the stand-in Tares (fake_up_tares.py) of `crew up`, or None
         self.ignore_calls: tuple = ()
+        self.marks: dict = {}   # what a step's `before` kept for the checks (see mark())
+
+    def station(self, name: str, key: str, home=None):
+        """A field of a station in stations.json (the suites' `st`); "" when it is not there. `home`: another
+        crew's home folder than the default crew's."""
+        try:
+            v = json.loads(((home or self.crew) / "stations.json").read_text(encoding="utf-8")).get(name, {}).get(key)
+        except (OSError, ValueError, AttributeError):
+            return ""
+        return "" if v is None or v is False else v
+
+    def station_settings(self, name: str, home=None) -> dict:
+        try:
+            return json.loads(((home or self.crew) / "stations" / f"{name}.settings.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def crew_json(self, home=None) -> dict:
+        try:
+            return json.loads(((home or self.crew) / "crew.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def trust(self, *folders) -> None:
+        """Claude Code's trust of a folder, recorded as its trust prompt does ($HOME/.claude.json)."""
+        f = self.home / ".claude.json"
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+        for d in folders:
+            Path(d).mkdir(parents=True, exist_ok=True)
+            doc.setdefault("projects", {}).setdefault(str(d), {})["hasTrustDialogAccepted"] = True
+        f.write_text(json.dumps(doc), encoding="utf-8")
 
     def out(self, i: int = -1) -> str:
         """stdout and stderr of step i together, as the bash suites capture them (`>out 2>&1`)."""
@@ -149,6 +192,364 @@ scenario(Scenario(
              lambda r: "no Tares answers at http://127.0.0.1:9" in r.out(0)
              and "tares up" in r.out(0) and r.launches() == 0)],
     covers=["without Tares crew up stops plainly"],
+))
+
+
+# --- crew up (TR-956): crew_test.sh, the parts that run `crew up` -------------------------------------------------
+# Same assertions as the bash checks, on a stand-in Tares (fake_up_tares.py) instead of a daemon. The labels in
+# `covers` are the bash suite's own words, `$r` included, as `--coverage` matches them. The assertions on the
+# settings and the grant are read from what the stand-in kept; the milestone runs of crew_test.sh itself use
+# a real daemon.
+
+TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+GRANT = "the releaser may restart the staging database"
+KIT = os.path.realpath(ROOT / "claude-plugin")
+PROD = "(^|[-_.])(prod|production)([-_.]|$)"
+SAVED = {"autonomy": "L3-review", "releaser": True, "release_profile": "kind", "prod_pattern": PROD,
+         "challenger": False, "builders_max": 3}
+ROLES = ("orchestrator", "reviewer", "releaser")
+# The language-server offer (TR-970) is not ported: the bash side asks Claude Code which plugins are on, the
+# Python side does not, so that one call is left out of the compared record.
+LSP_PROBE = (("plugin", "list"),)
+
+
+def mark(name):
+    """A step's `before`: keep the launches so far under `name`, for a check to read."""
+    def before(r):
+        r.marks[name] = r.launches()
+    return before
+
+
+def before_all(*fns):
+    def before(r):
+        for f in fns:
+            f(r)
+    return before
+
+
+def trust_crew(r):
+    r.trust(r.crew)
+
+
+def plugin_installed_elsewhere(r):
+    d = r.home / ".claude" / "plugins"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"tares@tares": [{"scope": "project", "projectPath": "/w/main", "version": "0.2.1"}]}}),
+        encoding="utf-8")
+
+
+def env_of(r, station, key):
+    v = r.station_settings(station).get("env", {}).get(key)
+    return "" if v is None or v is False else v
+
+
+def allow_has(r, station, text):
+    allow = r.station_settings(station).get("autoMode", {}).get("allow", [])
+    return any(isinstance(x, str) and text in x for x in allow)
+
+
+def started(r):
+    """The station names `claude --bg` was called for, in order."""
+    return [c["args"][2] for c in r.calls() if c["args"][:1] == ["--" + "bg"]]
+
+
+def role_checks():
+    out = []
+    for role in ROLES:
+        s = "crew-" + role
+        out += [
+            ("crew-$r recorded (%s)" % role, lambda r, s=s: r.station(s, "status") == "active"),
+            ("crew-$r runs in the crew home (%s)" % role, lambda r, s=s: r.station(s, "cwd") == str(r.crew)),
+            ("crew-$r env FACTORY_STATION (%s)" % role, lambda r, s=s: env_of(r, s, "FACTORY_STATION") == s),
+            ("crew-$r env FACTORY_ROLE (%s)" % role, lambda r, s=s, role=role: env_of(r, s, "FACTORY_ROLE") == role),
+            ("crew-$r env FACTORY_PARENT empty (%s)" % role,
+             lambda r, s=s: r.station_settings(s).get("env", {}).get("FACTORY_PARENT") == ""),
+            ("crew-$r has no TARES_PROJECT (%s)" % role, lambda r, s=s: env_of(r, s, "TARES_PROJECT") == ""),
+            ("crew-$r reaches the same Tares (%s)" % role,
+             lambda r, s=s: env_of(r, s, "TARES_FACTORY_URL") == r.stand_in.url),
+            ("crew-$r is told the shared MCP endpoint (%s)" % role,
+             lambda r, s=s: env_of(r, s, "TARES_FACTORY_MCP_URL") == r.stand_in.mcp_url),
+        ]
+    return out
+
+
+scenario(Scenario(
+    name="crew_up_basic",
+    ignore_calls=LSP_PROBE,
+    suite="crew",
+    about="crew up stops plainly in an untrusted crew home, and warns of another installed tares plugin",
+    stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
+    steps=[
+        Step(["crew", "up", "--yes"], stdin=""),
+        Step(["crew", "up", "--yes"], stdin="",
+             run_before=before_all(mark("untrusted"), trust_crew, plugin_installed_elsewhere)),
+    ],
+    checks=[
+        ("an untrusted crew home stops crew up plainly",
+         lambda r: "Claude Code has not trusted the crew home %s yet" % r.crew in r.out(0)
+         and 'pick "Yes, I trust this folder"' in r.out(0) and r.code(0) != 0 and r.marks["untrusted"] == 0),
+        ("an installed older tares plugin is named with how to remove it",
+         lambda r: "warning: another version of the tares plugin is installed" in r.out(1)
+         and "claude plugin uninstall tares@tares --scope project (run it in /w/main)" in r.out(1)),
+        ("...and crew up still starts the crew", lambda r: r.code(1) == 0 and r.launches() == 2),
+    ],
+    covers=["an untrusted crew home stops crew up plainly",
+            "an installed older tares plugin is named with how to remove it"],
+))
+
+scenario(Scenario(
+    name="crew_up_yes",
+    ignore_calls=LSP_PROBE,
+    suite="crew",
+    about="crew up --yes uses the answers saved on Tares and asks nothing; a second run starts nothing",
+    stand_in={"settings": dict(SAVED), "grants": ['- "%s" (%s)' % (GRANT, TODAY)]},
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], stdin=""), Step(["crew", "up"], stdin="")],
+    checks=[
+        ("crew up --yes exits 0 and asks nothing",
+         lambda r: r.code(0) == 0 and "Choice [" not in r.out(0)),
+        ("three crew stations started (a releaser was asked for)", lambda r: r.launches() == 3),
+        *role_checks(),
+        ("no Rius, no comms", lambda r: not any(w in (r.crew / "stations" / "crew-reviewer.settings.json").read_text(
+            encoding="utf-8").lower() for w in ("rius", "comms"))),
+        ("orchestrator started first", lambda r: started(r)[:1] == ["crew-orchestrator"]),
+        ("stations turn the plugin on, whatever the person's settings say",
+         lambda r: r.station_settings("crew-reviewer").get("enabledPlugins", {}).get("tares@inline") is True),
+        ("stations load this plugin", lambda r: {c["args"][c["args"].index("--plugin-dir") + 1]
+                                                 for c in r.calls() if c["args"][:1] == ["--" + "bg"]} == {KIT}),
+        ("settings not kept locally", lambda r: r.crew_json().get("settings") is None),
+        ("no local desk or grant files", lambda r: not (r.crew / "DESK.md").exists() and not (r.crew / "GRANTS.md").exists()),
+        ("grant quoted in the allow rules",
+         lambda r: allow_has(r, "crew-releaser", 'granted this on %s for all projects, in their own words: "%s". Acting' % (TODAY, GRANT))),
+        ("orchestrator may spawn",
+         lambda r: "Bash(factory spawn *)" in r.station_settings("crew-orchestrator").get("permissions", {}).get("allow", [])),
+        ("stations launch with a 200k autocompact window",
+         lambda r: any(c["args"][2] == "crew-orchestrator" and "--autocompact" in c["args"]
+                       and c["args"][c["args"].index("--autocompact") + 1] == "200000"
+                       for c in r.calls() if c["args"][:1] == ["--" + "bg"])),
+        ("nothing goes to production without the person",
+         lambda r: any("needs" in x and "prod" in x for x in r.station_settings("crew-releaser").get("autoMode", {}).get("soft_deny", []))
+         and "L5" not in (r.crew / "stations" / "crew-releaser.settings.json").read_text(encoding="utf-8")),
+        ("second crew up asks nothing", lambda r: "Choice [" not in r.out(1) and r.code(1) == 0),
+        ("second crew up starts nothing", lambda r: r.launches() == 3),
+        ("nothing is written to Tares: every answer was already there", lambda r: r.stand_in.written() == []),
+    ],
+    covers=["three crew stations started (a releaser was asked for)", "no Rius, no comms",
+            "orchestrator started first", "stations turn the plugin on, whatever the person's settings say",
+            "stations load this plugin", "settings not kept locally", "no local desk or grant files",
+            "grant quoted in the allow rules", "orchestrator may spawn",
+            "stations launch with a 200k autocompact window", "nothing goes to production without the person",
+            "second crew up asks nothing", "second crew up starts nothing"],
+))
+
+scenario(Scenario(
+    name="crew_up_questions",
+    ignore_calls=LSP_PROBE,
+    suite="crew",
+    about="the first crew up asks the settings one at a time and keeps the answers and one grant on Tares",
+    stand_in={},
+    prepare=trust_crew,
+    steps=[Step(["crew", "up"], stdin="L3-review\nyes\n\nno\n3\n%s\n\n" % GRANT)],
+    checks=[
+        ("crew up exits 0", lambda r: r.code(0) == 0),
+        ("the settings are asked one at a time",
+         lambda r: all(q in r.out(0) for q in ("Who merges pull requests?", "Should the crew release and deploy finished work?",
+                                               "How does the releaser ship?", "Should a second AI (Codex) check every commit before review?",
+                                               "How many builders may work at the same time?"))),
+        ("settings saved on Tares", lambda r: [r.stand_in.settings.get(k) for k in
+                                               ("autonomy", "releaser", "release_profile", "challenger", "builders_max")]
+         == ["L3-review", True, "kind", False, 3]),
+        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, TODAY)]),
+        ("crew up points at the Crew page", lambda r: "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
+        ("three stations started, a releaser among them",
+         lambda r: r.launches() == 3 and r.station("crew-releaser", "status") == "active"),
+    ],
+    covers=["crew up exits 0", "settings saved on Tares", "grant saved on Tares as the person said it",
+            "crew up points at the Crew page"],
+))
+
+
+# --- crewname_test.sh (TR-541), the parts that run `crew up` -------------------------------------------------
+# Two crews and the default one on one machine and one Tares, one fake Claude Code. The roster and the builders
+# are not ported yet (TR-957, TR-953): the scenario with the roster's title warning runs on bash alone until then.
+
+def crew_at(name):
+    """A step's env: crew `name` in its own folder beside the default crew's."""
+    return lambda r: {"FACTORY_CREW_HOME": str(r.tmp / ("crew-" + name)), "FACTORY_CREW_NAME": name}
+
+
+def crew_at_as(name, as_name):
+    """Crew `name`'s folder, said to be named `as_name`."""
+    return lambda r: {"FACTORY_CREW_HOME": str(r.tmp / ("crew-" + name)), "FACTORY_CREW_NAME": as_name}
+
+
+def crew_at_unnamed(name):
+    return lambda r: {"FACTORY_CREW_HOME": str(r.tmp / ("crew-" + name))}
+
+
+def trust_all(r):
+    r.trust(r.crew, r.tmp / "crew-a", r.tmp / "crew-b")
+
+
+def home_of(r, name):
+    return r.tmp / ("crew-" + name)
+
+
+def second_person(r):
+    r.stand_in.people.extend([{"id": "p2", "name": "Two"}, {"id": "p3", "name": "Three"}])   # bash asks for a name above one
+
+
+def agent_names(r):
+    try:
+        rows = json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [x.get("name", "") for x in rows]
+
+
+def two_crew_checks():
+    out = []
+    for role in ("orchestrator", "reviewer"):
+        s = "crew-" + role
+        out += [
+            ("default crew: crew-$r is recorded (%s)" % role, lambda r, s=s: r.station(s, "status") == "active"),
+            ("default crew: crew-$r env FACTORY_CREW (%s)" % role, lambda r, s=s: env_of(r, s, "FACTORY_CREW") == "crew"),
+            ("default crew: crew-$r env FACTORY_ORCHESTRATOR (%s)" % role,
+             lambda r, s=s: env_of(r, s, "FACTORY_ORCHESTRATOR") == "crew-orchestrator"),
+        ]
+    for c in ("a", "b"):
+        for role in ("orchestrator", "reviewer"):
+            s = "%s-%s" % (c, role)
+            out += [
+                ("crew $c: $c-$r is recorded and active (%s)" % s,
+                 lambda r, c=c, s=s, role=role: r.station(s, "status", home_of(r, c)) == "active"
+                 and r.station(s, "role", home_of(r, c)) == role),
+                ("crew $c: $c-$r runs in its own crew home (%s)" % s,
+                 lambda r, c=c, s=s: r.station(s, "cwd", home_of(r, c)) == str(home_of(r, c))),
+                ("crew $c: $c-$r env FACTORY_STATION (%s)" % s,
+                 lambda r, c=c, s=s: env_of_in(r, home_of(r, c), s, "FACTORY_STATION") == s),
+                ("crew $c: $c-$r env FACTORY_CREW (%s)" % s,
+                 lambda r, c=c, s=s: env_of_in(r, home_of(r, c), s, "FACTORY_CREW") == c),
+                ("crew $c: $c-$r env FACTORY_ORCHESTRATOR (%s)" % s,
+                 lambda r, c=c, s=s: env_of_in(r, home_of(r, c), s, "FACTORY_ORCHESTRATOR") == c + "-orchestrator"),
+            ]
+        out += [
+            ("crew $c: the name is kept in crew.json (%s)" % c, lambda r, c=c: r.crew_json(home_of(r, c)).get("crew_name") == c),
+            ("crew $c: no station of the default crew is recorded (%s)" % c,
+             lambda r, c=c: r.station("crew-orchestrator", "status", home_of(r, c)) == ""
+             and r.station("crew-reviewer", "status", home_of(r, c)) == ""),
+        ]
+    return out
+
+
+scenario(Scenario(
+    name="crew_up_old_tares",
+    suite="crew",
+    about="a Tares that does not list the integrations capability: crew up stops with the upgrade message, starting nothing",
+    stand_in={"settings": {**SAVED, "releaser": False}, "capabilities": []},
+    prepare=trust_all,
+    ignore_calls=LSP_PROBE,
+    steps=[Step(["crew", "up", "--yes"], stdin="")],
+    checks=[
+        ("crew up fails and names the missing capability",
+         lambda r: r.code(0) != 0 and "This needs a newer Tares on the cell (missing integrations)" in r.out(0)),
+        ("nothing was started and nothing was saved", lambda r: started(r) == [] and r.stand_in.written() == []),
+    ],
+    covers=[],
+))
+
+
+def env_of_in(r, home, station, key):
+    v = r.station_settings(station, home).get("env", {}).get(key)
+    return "" if v is None or v is False else v
+
+
+scenario(Scenario(
+    name="crewname_two_crews",
+    suite="crewname",
+    about="two named crews and the default crew side by side; the name comes from FACTORY_CREW_NAME, then crew.json",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    prepare=trust_all,
+    ignore_calls=LSP_PROBE,
+    steps=[
+        Step(["crew", "up", "--yes"], stdin=""),                                   # 0 the default crew
+        Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),                 # 1
+        Step(["crew", "up", "--yes"], env=crew_at("b"), stdin=""),                 # 2
+        Step(["crew", "up", "--yes"], env=crew_at_unnamed("a"), stdin="",          # 3 crew.json alone names it
+             run_before=mark("before_again")),
+        Step(["crew", "up", "--yes"], env=crew_at_as("a", "zzz"), stdin=""),        # 4 refused, not quietly applied
+        Step(["crew", "up", "--yes"], stdin="", run_before=second_person),             # 5 the default crew, running
+        Step(["crew", "up", "--yes"], env={"FACTORY_CREW_NAME": "zzz"}, stdin=""), # 6 refused, nothing stored
+    ],
+    checks=[
+        ("default crew: up exits 0", lambda r: r.code(0) == 0 and "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
+        *two_crew_checks(),
+        ("default crew: no crew_name is stored, one person", lambda r: "crew_name" not in r.crew_json()),
+        ("default crew: orchestrator started first, under today's name", lambda r: started(r)[:1] == ["crew-orchestrator"]),
+        ("both crews and the default one run: no station was started twice",
+         lambda r: r.launches() == 6 and len(started(r)) == len(set(started(r)))),
+        ("the fake Claude holds six sessions with six different names",
+         lambda r: len({n for n in agent_names(r) if n in ("crew-orchestrator", "crew-reviewer", "a-orchestrator",
+                                                           "a-reviewer", "b-orchestrator", "b-reviewer")}) == 6),
+        ("crew a: up again starts nothing and keeps the name",
+         lambda r: r.code(3) == 0 and r.marks["before_again"] == 6 and r.crew_json(home_of(r, "a")).get("crew_name") == "a"),
+        ("crew a: another FACTORY_CREW_NAME is refused",
+         lambda r: r.code(4) != 0 and "this crew is named a" in r.out(4)
+         and r.crew_json(home_of(r, "a")).get("crew_name") == "a" and r.launches() == 6),
+        ("running default crew: crew up does not ask, rename or start anything",
+         lambda r: r.code(5) == 0 and "What should this crew be called" not in r.out(5)
+         and "crew_name" not in r.crew_json() and r.launches() == 6),
+        ("running default crew: another FACTORY_CREW_NAME is refused and nothing is stored",
+         lambda r: r.code(6) != 0 and "already running under the name crew" in r.out(6)
+         and "crew_name" not in r.crew_json() and r.launches() == 6),
+    ],
+    covers=["default crew: up exits 0",
+            "default crew: crew-$r is recorded", "default crew: crew-$r env FACTORY_CREW",
+            "default crew: crew-$r env FACTORY_ORCHESTRATOR",
+            "default crew: no crew_name is stored, one person",
+            "default crew: orchestrator started first, under today's name",
+            "crew $c: $c-$r is recorded and active", "crew $c: $c-$r runs in its own crew home",
+            "crew $c: $c-$r env FACTORY_STATION", "crew $c: $c-$r env FACTORY_CREW",
+            "crew $c: $c-$r env FACTORY_ORCHESTRATOR", "crew $c: the name is kept in crew.json",
+            "crew $c: no station of the default crew is recorded",
+            "both crews and the default one run: no station was started twice",
+            "the fake Claude holds six sessions with six different names",
+            "crew a: up again starts nothing and keeps the name", "crew a: another FACTORY_CREW_NAME is refused",
+            "running default crew: crew up does not ask, rename or start anything",
+            "running default crew: another FACTORY_CREW_NAME is refused and nothing is stored"],
+))
+
+
+def rename_orchestrator_session(r):
+    """The orchestrator's session carries another title than the name messages go to."""
+    f = r.state / "agents.json"
+    rows = json.loads(f.read_text(encoding="utf-8"))
+    for x in rows:
+        if x.get("name") == "a-orchestrator":
+            x["name"] = "orchestrator-of-a"
+    f.write_text(json.dumps(rows), encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crewname_roster_title",
+    suite="crewname",
+    about="the roster warns when the orchestrator's session title is not the name messages go to",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    prepare=trust_all,
+    ignore_calls=LSP_PROBE,
+    steps=[
+        Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),
+        Step(["crew", "up", "--yes"], env=crew_at("b"), stdin=""),
+        Step(["roster"], env=crew_at_unnamed("a"), run_before=rename_orchestrator_session),
+        Step(["roster"], env=crew_at_unnamed("b")),
+    ],
+    checks=[
+        ("roster warns of a different orchestrator session title",
+         lambda r: "Orchestrator session title is orchestrator-of-a, expected a-orchestrator: messages to it will not arrive" in r.out(2)),
+        ("roster stays quiet when the title is the name", lambda r: "Orchestrator session title" not in r.out(3)),
+    ],
+    covers=["roster warns of a different orchestrator session title", "roster stays quiet when the title is the name"],
 ))
 
 
@@ -3611,9 +4012,14 @@ ID_KEYS = {"sessionId", "session_id", "id"}
 TIME_KEY = re.compile(r"(^(ts|time|at|since|until)$)|(_at$)|(At$)|(_ts$)|(_time$)", re.I)
 
 
+TARES_ADDR: list = []   # the stand-in Tares' "127.0.0.1:<port>" while a side runs: its port changes every run
+
+
 def norm_text(s: str, tmp: Path | None = None) -> str:
     """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids."""
     s = s.replace("\r\n", "\n")
+    for addr in TARES_ADDR:
+        s = s.replace(addr, "<TARES>")
     if tmp is not None:
         forms = {str(tmp), os.path.realpath(tmp), tmp.as_posix(), Path(os.path.realpath(tmp)).as_posix()}
         # a Windows path inside JSON text has its backslashes doubled; and a drive letter may change case
@@ -3786,7 +4192,10 @@ def _without_calls(text: str, prefixes: tuple) -> str:
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
-    for base, prefix, only in ((run.crew, "crew/", None), (run.state, "claude/", {"calls.jsonl", "agents.json"})):
+    bases = [(run.crew, "crew/", None)]
+    bases += [(d, d.name + "/", None) for d in sorted(run.tmp.glob("crew-*")) if d.is_dir()]   # more crews, side by side
+    bases.append((run.state, "claude/", {"calls.jsonl", "agents.json"}))
+    for base, prefix, only in bases:
         if not base.is_dir():
             continue
         for p in sorted(base.rglob("*")):
@@ -3801,6 +4210,9 @@ def snapshot(run: Run) -> dict:
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
+    t = run.tmp / "tares" / "writes.jsonl"   # what the stand-in Tares was asked to save
+    if t.is_file():
+        files["tares/writes.jsonl"] = norm_file(t.read_text(encoding="utf-8", errors="replace"), t.name, run.tmp)
     return files
 
 
@@ -3825,21 +4237,33 @@ def run_side(sc: Scenario, engine: str) -> Side:
         side.skip = sc.not_windows
         return side
     tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-{engine}-")).resolve()
+    stand_in = None
     fake = None
     try:
         env = crew_env(tmp, engine)
+        if sc.stand_in is not None:
+            stand_in = StandInTares(tmp / "tares", **sc.stand_in).start()
+            env.update(TARESD_URL=stand_in.url, TARES_FACTORY_MCP_URL=stand_in.mcp_url)
+            TARES_ADDR[:] = [f"127.0.0.1:{stand_in.port}"]
         results = []
         if sc.tares is not None:
             fake = FakeTares(routes_in(sc.tares, tmp))
             env["TARESD_URL"] = fake.url
+        run = Run(tmp, results, fake, stand_in)
+        run.ignore_calls = sc.ignore_calls
+        if sc.prepare:
+            sc.prepare(run)
         if sc.setup:
             sc.setup(tmp, env)
         here = lambda text: (text.replace("{tmp}", str(tmp)).replace("{tares}", fake.url if fake else "")
                              if isinstance(text, str) else text)
         for step in sc.steps:
+            if step.run_before:
+                step.run_before(run)
             if step.before:
                 step.before(tmp)
-            senv = {**env, **{k: here(v) for k, v in step.env.items()}}
+            step_env = step.env(run) if callable(step.env) else step.env
+            senv = {**env, **{k: here(v) for k, v in step_env.items()}}
             try:
                 p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv],
                                    cwd=here(step.cwd) or str(ROOT), env=senv,
@@ -3853,8 +4277,6 @@ def run_side(sc: Scenario, engine: str) -> Side:
             if engine == "python" and results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
                 side.skip = "not ported"
                 return side
-        run = Run(tmp, results, fake)
-        run.ignore_calls = sc.ignore_calls
         for label, fn in sc.checks:
             try:
                 ok = bool(fn(run))
@@ -3888,6 +4310,9 @@ def run_side(sc: Scenario, engine: str) -> Side:
                              for s, r in zip(sc.steps, results))
         return side
     finally:
+        TARES_ADDR[:] = []
+        if stand_in is not None:
+            stand_in.stop()
         if fake is not None:
             fake.stop()
         shutil.rmtree(tmp, ignore_errors=True)

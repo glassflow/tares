@@ -47,6 +47,7 @@ test_crew_person
 test_crew_regrant
 test_crew_session
 test_crew_session_start
+test_crew_setup_contract
 test_crew_standup
 test_crew_startup_time
 test_crew_state
