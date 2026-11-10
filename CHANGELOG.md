@@ -7,6 +7,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - The Software Factory now has an integrations framework (TR-838 to TR-843): seven slots (tickets, review, ci, memory, monitoring, guardrails, runtime), each filled by an integration. `GET /api/factory/integrations` lists them with their defaults, an admin can choose one for the factory, and a project can choose its own tickets, review and ci. Stored secrets never come back on a read. `/health` now lists the cell's capabilities, and `tares factory crew up` stops with an upgrade message when the cell does not have what it needs. Nothing changes for a running crew yet: the integrations themselves arrive in later milestones.
+- Tares tickets are now the built-in tickets integration (TR-844): the integrations list shows Tares as installed, and creating, updating and changing the status of a Tares ticket or milestone can go through it. Tickets stay where they were; nothing changes for a project that keeps its tickets in Tares.
 
 ### Fixed
 - A Linear-linked project no longer has its tickets canceled when Linear answers with nothing, or when the project has more than 1000 issues. The sync now stops, shows the reason on the project's Linear link and leaves every ticket as it was (TR-1024).
