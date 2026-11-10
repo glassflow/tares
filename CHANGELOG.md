@@ -10,6 +10,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - On the factory Home page, a long answer option on a question in "Waiting for you" now wraps inside its card instead of running past the right edge.
 - On a factory project page, a milestone check that is a shell command now shows in the console's monospace font and wraps inside its row, so long commands are easy to read. Checks written as sentences look the same as before (TR-1082).
 - On the factory Crew page, each project now lists its running workers first, hides finished ones behind "Show N finished", and its count reads running and total, for example "2 running · 19".
+- Plugin 0.6.7: a station restarted in the same conversation keeps showing up on the Crew page. The restart gives it a new transcript that starts with the whole conversation, and when the first request for that was too big to be accepted or answered in time, every later hook retried it and nothing else from the station was recorded, so it looked quiet for hours while it worked (TR-1102).
 
 ## [1.56.0] - 2026-11-10
 
