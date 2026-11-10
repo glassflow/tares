@@ -1265,7 +1265,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which ported it in tares.crew.lifecycle:rearm_text with a stub for pace_read until TR-962; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the TR-955 stub for pace_read; TR-961 completes it."
+      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which ported it in tares.crew.lifecycle:rearm_text and TR-962 replaced its stub for pace_read with pace.read; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the pace.read of TR-962; TR-961 completes it."
     },
     {
       "name": "pace_read",
@@ -1274,9 +1274,9 @@
       "what": "read the plan pace from Tares",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called first by cmd_spawn (TR-954), which needs a stub that reads as \"not paced\" until TR-962 ports the real read of /api/crew/pace. TR-954 must say so in its working doc. Also called by rearm_text (TR-961), which uses the same stub until TR-962. TR-954: stations.pace_read_stub reads as not paced until then."
+      "python": "tares.crew.pace:read",
+      "ported": true,
+      "note": "Called first by cmd_spawn (TR-954), by rearm_text (TR-955, TR-961) and by the watch round. Python: pace.read reads once and remembers the reading; the watch has no hook at the start of a round, so pace.current serves the steps that run before the pace step (see the module's Differences from bash)."
     },
     {
       "name": "pace_closed",
@@ -1285,8 +1285,8 @@
       "what": "is a plan limit full",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:Reading.closed",
+      "ported": true,
       "note": ""
     },
     {
@@ -1296,8 +1296,8 @@
       "what": "the crew pace file with defaults",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:json_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -1307,8 +1307,8 @@
       "what": "rewrite the pace file",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:json_update",
+      "ported": true,
       "note": ""
     },
     {
@@ -1318,8 +1318,8 @@
       "what": "did a station stop at a full limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:stopped",
+      "ported": true,
       "note": ""
     },
     {
@@ -1329,8 +1329,8 @@
       "what": "did its resume fail twice",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:tried",
+      "ported": true,
       "note": ""
     },
     {
@@ -1340,8 +1340,8 @@
       "what": "record a failed resume",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:mark_tried",
+      "ported": true,
       "note": ""
     },
     {
@@ -1351,8 +1351,8 @@
       "what": "remember a station down at a full limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:hold_down",
+      "ported": true,
       "note": ""
     },
     {
@@ -1362,8 +1362,8 @@
       "what": "forget a station that runs again",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:revived",
+      "ported": true,
       "note": ""
     },
     {
@@ -1373,8 +1373,8 @@
       "what": "forget stations that will not be revived",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:tidy",
+      "ported": true,
       "note": ""
     },
     {
@@ -1384,8 +1384,8 @@
       "what": "prompt for a resume after the limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:resume_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1395,8 +1395,8 @@
       "what": "prompt for a fresh start after the limit",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:fresh_prompt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1406,8 +1406,8 @@
       "what": "path of a station's pace file",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.pace_station_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -1417,8 +1417,8 @@
       "what": "read a station's pace state",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:pace_station_read",
+      "ported": true,
       "note": ""
     },
     {
@@ -1428,8 +1428,8 @@
       "what": "write a station's pace state",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:pace_station_put",
+      "ported": true,
       "note": ""
     },
     {
@@ -1439,9 +1439,9 @@
       "what": "pace note added to a start",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by launch (TR-953), which needs a stub that does nothing until TR-962 ports the real note (the pace station put). TR-953 must say so in its working doc."
+      "python": "tares.crew.pace:launch_note",
+      "ported": true,
+      "note": "Called by launch (TR-953). Python: launch calls pace.launch_note(client, paths, station); it uses the reading this process took last, as bash's PACE_STATE is."
     },
     {
       "name": "pace_plan",
@@ -1450,8 +1450,8 @@
       "what": "decide whether to restart a station with a pace note",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -1461,8 +1461,8 @@
       "what": "restart a station with the pace note",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:send",
+      "ported": true,
       "note": ""
     },
     {
@@ -1472,9 +1472,9 @@
       "what": "pace in one line for status",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (pace_status_line) for status and roster; this ticket's port moves it and keeps views.py calling it."
+      "python": "tares.crew.views:pace_status_line",
+      "ported": true,
+      "note": "TR-957 kept the read-only copy in tares/crew/views.py (pace_status_line) for status and roster; it is the port, and this ticket checks it against pace_test."
     },
     {
       "name": "wake_file",
@@ -4073,8 +4073,8 @@
       "what": "crew-wide pace state: stopped, tried, limit_since, said",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.pace:json_update",
+      "ported": true,
       "note": "Written whole through a temp file."
     },
     {
@@ -4171,8 +4171,8 @@
       "what": "what the pace told a station: stretched, held",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:pace_station_put",
+      "ported": true,
       "note": ""
     },
     {
@@ -4588,9 +4588,9 @@
       "what": "the pace",
       "ticket": "TR-962",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tests.factory.parity:SCENARIOS",
+      "ported": true,
+      "note": "Scenarios pace_off, pace_levels, pace_idle_wake, pace_unknown, pace_turn_off, pace_restart_fails, pace_limit, pace_tried and pace_tidy cover the pace step and what revive asks of it (33 of the 101 checks), through the drivers pace_round and pace_down in tests/factory/launch_support.py. Not in the harness yet: the status line (views, TR-957), the builder spawn gate (stations, TR-961 and spawn), the idle_wake wake timings under pace (TR-961), retiring a station, and the revive launches themselves (TR-959); pace_test.sh still checks those through bash and through TARES_FACTORY_ENGINE=python. Unit checks: tests/test_crew_pace.py."
     },
     {
       "name": "parity.py",

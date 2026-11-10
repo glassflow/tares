@@ -25,10 +25,10 @@ Paths in the JSON
   a refusal for a character that cmd or Git Bash would act on inside them. Both are tested without Windows.
 
 Stubs for later tickets
-  pace_launch_note (TR-962) and iw_launch_note (TR-961) do nothing yet: the real ones write a station's
-  pace file and its idle-wake file when it starts. The "started" line and stations.json are the same;
-  until those tickets land, a start while the crew is paced or idle-waking leaves those two files for
-  the watch's next round to write.
+  iw_launch_note (TR-961) does nothing yet: the real one writes a station's idle-wake file when it starts.
+  The "started" line and stations.json are the same; until that ticket lands, a start while the crew is
+  idle-waking leaves that file for the watch's next round to write. The pace file is written by
+  pace.launch_note (TR-962).
 
 Differences from bash
   * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` runs
@@ -56,7 +56,7 @@ import time
 from pathlib import Path
 
 from . import claude as cl
-from . import state
+from . import pace, state
 from .client import TaresClient, cksum
 from .errors import CrewError
 from .paths import ME, CrewPaths
@@ -270,12 +270,6 @@ def idle_wake_note() -> str:
 def iw_launch_note(station: str) -> str:
     # TR-961 ports the real one: a start with idle_wake on is a start with its tick released (the wake file
     # of the station is updated); off, with it back. Until then a start writes no wake file.
-    return ""
-
-
-def pace_launch_note(station: str) -> str:
-    # TR-962 ports the real one: a start while the crew is paced is a start with the stretched tick (the
-    # pace file of the station is written). Until then a start writes no pace file.
     return ""
 
 
@@ -534,7 +528,7 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
     if gsum:
         state.atomic_write_text(paths.station_file(station, "grants"), grants + "\n")
     iw_launch_note(station)
-    pace_launch_note(station)
+    pace.launch_note(client, paths, station)
     state.event("started", station, job, paths=paths)
     print(f"  \u2713 started {station} ({model}, {effort})", file=sys.stderr)
 

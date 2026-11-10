@@ -2495,6 +2495,433 @@ scenario(Scenario(
 
 
 # ---------------------------------------------------------------------------------------------
+# The pace (TR-962): with the crew setting pace on, a pass of the watch round tells every station, once, to
+# stretch its tick before the plan's limit, a builder to hold at the next level, and each to go back when the
+# plan has room. pace_test.sh is the bash suite these come from; it runs a real Tares fed fake /usage
+# readings, here a fake one answers GET /api/crew/pace with the same documents (the reading Tares would
+# have made), and the round is the pace pass alone (`pace_round` of launch_support.py: the reading, the tidy,
+# then each live station's plan and send). What the revive step asks of the pace (`pace_down`) is run
+# for the stations that are down. A restarted station is idle again before the next round, as it is when its
+# turn ends.
+
+PC_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "bbbb0003",
+          "links-app-build-m1": "cccc0004"}
+PC_STATIONS = tuple(PC_IDS)
+PC_B = "links-app-build-m1"
+PC_N0 = 2_000_000_000
+PC_UNTIL = "2033-05-18T05:00:00Z"
+
+
+def _setup_pace(tmp: Path, env: dict) -> None:
+    crew = tmp / "crew"
+    crew.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", crew / "crew.json")
+    base = {"status": "active", "repo": "", "cwd": str(tmp), "model": "opus", "effort": "high"}
+    roles = {"crew-orchestrator": ("orchestrator", ""), "crew-reviewer": ("reviewer", ""),
+             "crew-releaser": ("releaser", ""), PC_B: ("builder", "links-app")}
+    stations = {n: {**base, "role": r, "project": pr, "id": PC_IDS[n], "sessionId": f"sess-{PC_IDS[n]}",
+                    "parent": "crew-orchestrator" if n != "crew-orchestrator" else ""} for n, (r, pr) in roles.items()}
+    (crew / "stations.json").write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    agents = [{"id": PC_IDS[n], "name": n, "cwd": str(tmp), "state": "done", "pid": 40000 + int(PC_IDS[n][-4:], 16)}
+              for n in stations]
+    state = tmp / "claude"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+    (state / "version").write_text("2.1.310\n", encoding="utf-8")
+    for sid in PC_IDS.values():
+        job = tmp / "home" / ".claude" / "jobs" / sid
+        job.mkdir(parents=True, exist_ok=True)
+        (job / "state.json").write_text(json.dumps({"sessionId": f"sess-{sid}"}) + "\n", encoding="utf-8")
+
+
+def _pc_idle(tmp: Path) -> None:
+    """Every session idle again (a restarted one is, when its turn ends); a station restarted by the fake keeps its row."""
+    f = tmp / "claude" / "agents.json"
+    rows = json.loads(f.read_text(encoding="utf-8"))
+    for row in rows:
+        row["state"] = "done"
+    f.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _pc_state(tmp: Path) -> dict:
+    """After a step: the pace events so far as (station, detail), each station's pace file, and the crew's pace.json."""
+    events, files = [], {}
+    ev = tmp / "crew" / "events.jsonl"
+    for line in (ev.read_text(encoding="utf-8").splitlines() if ev.is_file() else []):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") == "pace":
+            events.append((e.get("station"), str(e.get("detail", ""))))
+    st = tmp / "crew" / "stations"
+    for p in sorted(st.glob("*.pace")) if st.is_dir() else []:
+        files[p.name[:-len(".pace")]] = json.loads(p.read_text(encoding="utf-8"))
+    pj = tmp / "crew" / "pace.json"
+    return {"events": events, "files": files, "pace": json.loads(pj.read_text(encoding="utf-8")) if pj.is_file() else None}
+
+
+def _pc_doc(session, weekly, reset=False, known=True, on=True) -> dict:
+    """The document GET /api/crew/pace gives for a reading: the levels (85% of the window or 90% of the week
+    slow the crew, 95% of the window holds builders, 100% of either limit closes the door), the words of the note."""
+    if not on:
+        return {"on": False, "known": False}
+    if not known:
+        return {"on": True, "known": False}
+    full = (session >= 100 or weekly >= 100) and not reset
+    level = 2 if session >= 95 else 1 if (session >= 85 or weekly >= 90) else 0
+    state = "limit" if full else "hold" if level == 2 else "slow" if level == 1 else "ok"
+    what = f"the 5-hour window is at {session}%" if session >= 85 else f"the weekly limit is at {weekly}%"
+    return {"on": True, "known": True, "level": level, "at_limit": full, "state": state, "until": PC_UNTIL,
+            "session_pct": session, "weekly_pct": weekly, "note": f"Pacing: {what}." if level else ""}
+
+
+WIN_NO_PERCENT = ("a station is told through claude.cmd here, and cmd.exe cannot take a note that holds a percent sign ('the 5-hour window is at 85%'); "
+                  "the engine says so and tries again next round; the claude.exe form waits for TR-946")
+
+
+def _pc_world(doc: dict, idle_wake=None) -> dict:
+    settings = {"pace": bool(doc.get("on"))}
+    if idle_wake is not None:
+        settings["idle_wake"] = idle_wake
+    return {"settings": settings, "projects": [{"id": "p1", "name": "links-app", "repos": []}],
+            "routes": {"/api/crew/pace": [200, doc]}}
+
+
+def _pc_round(session, weekly, *, idle_wake=None, env=None, before=None, **kw) -> Step:
+    doc = _pc_doc(session, weekly, **kw)
+
+    def pre(tmp: Path) -> None:
+        _pc_idle(tmp)
+        if before:
+            before(tmp)
+    e = {"FACTORY_NOW": str(PC_N0), "LAUNCH_WORLD": json.dumps(_pc_world(doc, idle_wake)), **(env or {})}
+    return Step(["pace_round"], env=e, before=pre, after=_pc_state)
+
+
+def _pc_n(r: Run, i: int = -1, station: str = "", word: str = "") -> int:
+    return sum(1 for s, d in r.snap(i)["events"] if (not station or s == station) and d == (word or d))
+
+
+def _pc_f(r: Run, i: int, station: str, key: str):
+    return r.snap(i)["files"].get(station, {}).get(key)
+
+
+def _pc_prompts(r: Run, station: str) -> list:
+    """The prompts the station was started with, in order."""
+    return [c["args"][-1] for c in r.calls() if c["args"][:1] == ["--bg"] and len(c["args"]) > 2 and c["args"][2] == station]
+
+
+def _pc_resumed(r: Run, station: str) -> bool:
+    rows = [c["args"] for c in r.calls() if c["args"][:1] == ["--bg"] and len(c["args"]) > 2 and c["args"][2] == station]
+    return bool(rows) and "--resume" in rows[-1]
+
+
+scenario(Scenario(
+    name="pace_off",
+    suite="pace",
+    about="with the setting unset or false, whatever the plan says: no note, no restart, no pace file",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_pace,
+    steps=[_pc_round(99, 99, on=False) for _ in range(3)] + [_pc_round(99, 99, on=False) for _ in range(2)],
+    checks=[
+        ("three rounds with the plan at 99%: no note, no restart",
+         lambda r: all(r.code(i) == 0 for i in range(5)) and all(r.snap(i)["events"] == [] for i in range(3)) and r.launches() == 0),
+        ("no pace file is written", lambda r: all(r.snap(i)["files"] == {} and r.snap(i)["pace"] is None for i in range(5))),
+        ("the same on false", lambda r: r.snap(4)["events"] == [] and r.launches() == 0),
+    ],
+    covers=["unset, with the plan at 99%: three rounds, no note, no restart", "unset: no pace file is written", "false: the same"],
+))
+
+scenario(Scenario(
+    name="pace_levels",
+    suite="pace",
+    about="85% of the window or 90% of the week: each station is told once to stretch; 95%: a builder is told to hold; back down: told to go back",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
+    setup=_setup_pace,
+    steps=[
+        _pc_round(84, 89),      # 0 nothing
+        _pc_round(85, 89),      # 1 slow: stretch each
+        _pc_round(85, 89), _pc_round(85, 89),   # 2, 3 once
+        _pc_round(10, 10),      # 4 release each
+        _pc_round(10, 10), _pc_round(10, 10),   # 5, 6 once
+        _pc_round(10, 89),      # 7 nothing
+        _pc_round(10, 90),      # 8 week slow: stretch again
+        _pc_round(10, 90),      # 9 once
+        _pc_round(94, 90),      # 10 no hold
+        _pc_round(95, 90),      # 11 hold: the builder only
+        _pc_round(95, 90), _pc_round(95, 90),   # 12, 13 once
+        _pc_round(10, 10),      # 14 back: all four, the builder once
+        _pc_round(96, 10),      # 15 stretch and hold in one note for the builder
+        _pc_round(90, 10),      # 16 unhold
+        _pc_round(90, 10),      # 17 once
+        _pc_round(10, 10),      # 18 release
+    ],
+    checks=[
+        ("84% of the window, 89% of the week: nothing", lambda r: r.snap(0)["events"] == [] and r.snap(0)["files"] == {}),
+        ("85% of the window: each station is told once to stretch its tick",
+         lambda r: all(_pc_n(r, 1, s, "stretch") == 1 for s in PC_STATIONS) and len(r.snap(1)["events"]) == 4
+         and all(_pc_f(r, 1, s, "stretched") is True for s in PC_STATIONS) and _pc_f(r, 1, PC_B, "held") is False),
+        ("the first note is in the same conversation, with the reading and what to do",
+         lambda r: _pc_resumed(r, "crew-reviewer") and "Pacing: the 5-hour window is at 85%" in _pc_prompts(r, "crew-reviewer")[0]
+         and "Stretch your tick to 45 minutes" in _pc_prompts(r, "crew-reviewer")[0]
+         and "CronList, then CronDelete" in _pc_prompts(r, "crew-reviewer")[0]
+         and "Finish the step you are on" not in _pc_prompts(r, PC_B)[0]),
+        ("the builder at the hold is told to finish its step, push, report where it is, and wait",
+         lambda r: "Finish the step you are on, push, write in your report where you are" in _pc_prompts(r, PC_B)[3]
+         and "wait" in _pc_prompts(r, PC_B)[3] and "Finish the step" not in _pc_prompts(r, "crew-reviewer")[-1]),
+        ("a release says the tick goes back to its normal interval",
+         lambda r: "stopped pacing the crew" in _pc_prompts(r, "crew-reviewer")[1] and "normal interval" in _pc_prompts(r, "crew-reviewer")[1]),
+        ("next rounds: not again", lambda r: len(r.snap(2)["events"]) == 4 and len(r.snap(3)["events"]) == 4),
+        ("back to 10%: each station is told once to go back, and the pace files are gone",
+         lambda r: all(_pc_n(r, 4, s, "release") == 1 for s in PC_STATIONS) and r.snap(4)["files"] == {} and len(r.snap(4)["events"]) == 8),
+        ("once: nothing more is sent", lambda r: len(r.snap(6)["events"]) == 8),
+        ("89% of the week: nothing", lambda r: len(r.snap(7)["events"]) == 8),
+        ("90% of the week: each station is told again, once",
+         lambda r: all(_pc_n(r, 8, s, "stretch") == 2 for s in PC_STATIONS) and len(r.snap(8)["events"]) == 12 and len(r.snap(9)["events"]) == 12),
+        ("94%: no hold", lambda r: _pc_n(r, 10, PC_B, "hold") == 0 and len(r.snap(10)["events"]) == 12),
+        ("95%: only the builder is told to hold, once; the others are not",
+         lambda r: _pc_n(r, 11, PC_B, "hold") == 1 and _pc_f(r, 11, PC_B, "held") is True and _pc_f(r, 11, PC_B, "stretched") is True
+         and all(_pc_n(r, 11, s, "hold") == 0 and _pc_f(r, 11, s, "held") is False
+                 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))
+         and len(r.snap(11)["events"]) == 13 and len(r.snap(13)["events"]) == 13),
+        ("back to 10%: all four are told to go back, the builder once, and its hold is gone",
+         lambda r: all(_pc_n(r, 14, s, "release") == 2 for s in PC_STATIONS) and r.snap(14)["files"] == {}),
+        ("96% from nothing: the builder is told to stretch and hold in one note, the others only to stretch",
+         lambda r: _pc_f(r, 15, PC_B, "held") is True and _pc_n(r, 15, PC_B, "stretch") == 3 and _pc_n(r, 15, PC_B, "hold") == 1
+         and all(_pc_n(r, 15, s, "stretch") == 3 and _pc_f(r, 15, s, "held") is False
+                 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))),
+        ("back down to 90%: the builder is told once it may carry on, the others hear nothing",
+         lambda r: _pc_n(r, 16, PC_B, "unhold") == 1 and _pc_n(r, 17, PC_B, "unhold") == 1 and _pc_f(r, 16, PC_B, "held") is False
+         and _pc_f(r, 16, PC_B, "stretched") is True and _pc_n(r, 17, "crew-reviewer", "unhold") == 0),
+        ("the last round goes back to normal", lambda r: r.snap(18)["files"] == {} and _pc_n(r, 18, PC_B, "release") == 3),
+    ],
+    covers=["84% of the window, 89% of the week: nothing", "each station is told once to stretch its tick",
+            "next rounds: not again", "back to 10%: each station is told once to go back to its normal tick",
+            "and the pace files are gone", "once: nothing more is sent", "89% of the week: nothing",
+            "94%: no hold", "once", "back to 10%: all four are told to go back, the builder once, and its hold is gone",
+            "96% from nothing: the builder is told to stretch and to hold in one note",
+            "the others are only told to stretch"],
+))
+
+
+
+def _pc_put(doc=None, stretched=(), held=()):
+    """Before a step: the crew's pace.json, and a pace file for each station that has been told to stretch."""
+    def fn(tmp: Path) -> None:
+        crew = tmp / "crew"
+        if doc is not None:
+            (crew / "pace.json").write_text(json.dumps(doc) + "\n", encoding="utf-8")
+        (crew / "stations").mkdir(parents=True, exist_ok=True)
+        for s in stretched:
+            (crew / "stations" / f"{s}.pace").write_text(json.dumps({"stretched": True, "held": s in held}) + "\n", encoding="utf-8")
+    return fn
+
+
+def _pc_done(tmp: Path) -> None:
+    """The builder has finished its tickets (the `.done` file the watch leaves it stopped for)."""
+    d = tmp / "crew" / "stations"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{PC_B}.done").write_text("", encoding="utf-8")
+
+
+def _pc_down(session, weekly, *outcomes, **kw) -> Step:
+    """What the revive step asks of the pace for stations that are down ("<station>:ok|fail") or up ("<station>:up")."""
+    e = {"FACTORY_NOW": str(PC_N0), "LAUNCH_WORLD": json.dumps(_pc_world(_pc_doc(session, weekly, **kw)))}
+    return Step(["pace_down", *outcomes], env=e, before=_pc_idle, after=_pc_state)
+
+
+def _pc_pace(r: Run, i: int):
+    return r.snap(i)["pace"]
+
+
+def _pc_said(r: Run, i: int) -> int:
+    return r.out(i).count("the plan's limit is full until")
+
+
+scenario(Scenario(
+    name="pace_idle_wake",
+    suite="pace",
+    about="with idle_wake on the stations hold no tick of their own: a pace file is dropped, and nothing is sent",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
+    setup=_setup_pace,
+    steps=[_pc_round(85, 10, idle_wake=True, before=_pc_put(stretched=PC_STATIONS)),
+           _pc_round(95, 10, idle_wake=True), _pc_round(85, 10, idle_wake=False)],
+    checks=[
+        ("idle_wake on under pace: the pace files go and no pace note is sent",
+         lambda r: r.snap(0)["files"] == {} and r.snap(0)["events"] == [] and r.snap(1)["events"] == [] and r.launches() == 4),
+        ("and a hold sends nothing either (the wake machinery has the hold)", lambda r: r.snap(1)["files"] == {}),
+        ("idle_wake off again: the stations are told to stretch",
+         lambda r: all(_pc_n(r, 2, s, "stretch") == 1 for s in PC_STATIONS)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="pace_unknown",
+    suite="pace",
+    about="a reading that is missing changes nothing: no note, no restart, the pace file as it was",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_pace,
+    steps=[_pc_round(0, 0, known=False, before=_pc_put({"limit_since": 5, "until": PC_UNTIL, "said": True,
+                                                         "stopped": ["crew-reviewer"], "tried": []}, stretched=PC_STATIONS)),
+           _pc_round(0, 0, known=False), _pc_round(0, 0, known=False)],
+    checks=[
+        ("unknown: no note and no restart",
+         lambda r: all(r.snap(i)["events"] == [] for i in range(3)) and r.launches() == 0),
+        ("and the pace files are as they were",
+         lambda r: len(r.snap(2)["files"]) == 4 and _pc_pace(r, 2)["stopped"] == ["crew-reviewer"]),
+    ],
+    covers=["unknown: no note and no restart"],
+    # bash lists the sessions before pace_plan declines; Python returns before it asks (an unknown reading needs no list)
+    ignore_calls=(("agents",),),
+))
+
+scenario(Scenario(
+    name="pace_turn_off",
+    suite="pace",
+    about="turning the setting off while stations are stretched: each is told once to go back, and then nothing",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
+    setup=_setup_pace,
+    steps=[_pc_round(85, 10), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False)],
+    checks=[
+        ("(the stations are stretched)", lambda r: all(_pc_f(r, 0, s, "stretched") is True for s in PC_STATIONS)),
+        ("off while stretched: each is told once to go back, and the files are gone",
+         lambda r: all(_pc_n(r, 1, s, "release") == 1 for s in PC_STATIONS) and r.snap(1)["files"] == {}),
+        ("and then nothing", lambda r: len(r.snap(3)["events"]) == len(r.snap(1)["events"])),
+    ],
+    covers=["(the stations are stretched)", "and then nothing"],
+))
+
+scenario(Scenario(
+    name="pace_restart_fails",
+    suite="pace",
+    about="a note whose restart fails sends no event and marks nothing told; the stations it left stopped are not told again",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
+    setup=_setup_pace,
+    steps=[_pc_round(10, 10), _pc_round(85, 10, env={"FAKE_CLAUDE_FAIL_RESUME": "1"}), _pc_round(85, 10)],
+    checks=[
+        ("a note whose restart fails sends no event and marks nothing told",
+         lambda r: r.snap(1)["events"] == [] and r.snap(1)["files"] == {}
+         and "could not tell crew-orchestrator about the pace" in r.out(1)),
+        ("the stations the failed restart left stopped are not told again by the pace (the revive step brings them back)",
+         lambda r: r.snap(2)["events"] == [] and r.snap(2)["files"] == {} and r.launches() == 4),
+    ],
+    covers=["a note whose restart fails sends no event and marks nothing told"],
+))
+
+scenario(Scenario(
+    name="pace_limit",
+    suite="pace",
+    about="a station that is down while a limit is full is not revived into it; after the reset it is revived with a short prompt in its own conversation",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
+    setup=_setup_pace,
+    steps=[
+        _pc_down(100, 10, "crew-reviewer:ok", "crew-releaser:ok"),    # 0 held down, said once
+        _pc_down(100, 10, "crew-reviewer:ok"),                        # 1 not said again
+        _pc_round(100, 10),                                           # 2 the running ones are still paced
+        _pc_down(10, 10, "crew-reviewer:ok", "crew-releaser:ok"),     # 3 the reset: revived, short prompt
+        _pc_down(10, 10, "crew-orchestrator:ok"),                     # 4 down for another reason: no pace prompt
+    ],
+    checks=[
+        ("100%: two stopped stations are held down, not revived",
+         lambda r: r.code(0) == 0 and "revive crew-" not in r.out(0) and r.snap(0)["events"] == []),
+        ("the watch says so once, with the reset time",
+         lambda r: _pc_said(r, 0) == 1 and PC_UNTIL in r.out(0) and _pc_said(r, 1) == 0),
+        ("and remembers both, and since when",
+         lambda r: set(_pc_pace(r, 1)["stopped"]) == {"crew-reviewer", "crew-releaser"} and _pc_pace(r, 1)["limit_since"] == PC_N0
+         and _pc_pace(r, 1)["until"] == PC_UNTIL),
+        ("the stations that run are still paced", lambda r: _pc_n(r, 2, "crew-orchestrator", "stretch") == 1),
+        ("after the reset both are revived with a short prompt that does not tell them to reload the skills",
+         lambda r: r.out(3).count("revive crew-") == 2 and "The plan's limit was reset. Carry on from where you stopped" in r.out(3)
+         and "Reload the skills" not in r.out(3)),
+        ("and nothing is left to carry out", lambda r: _pc_pace(r, 3) is None),
+        ("a station stopped for another reason keeps today's revive prompt",
+         lambda r: r.out(4).strip() == "revive crew-orchestrator:"),
+    ],
+    covers=["the watch says so once, with the reset time", "and remembers both, and since when",
+            "with a short prompt that does not tell them to reload the skills", "and nothing is left to carry out",
+            "a station stopped for another reason keeps today's revive prompt"],
+))
+
+scenario(Scenario(
+    name="pace_tried",
+    suite="pace",
+    about="a resume that fails is tried again in its own conversation; two failures in a row, and the next is a new one; the limit filling again starts over",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_pace,
+    steps=[
+        _pc_down(100, 10, "crew-reviewer:ok"),        # 0 held down
+        _pc_down(10, 90, "crew-reviewer:fail"),       # 1 resume fails: tried once
+        _pc_down(10, 90, "crew-reviewer:fail"),       # 2 tried twice, still its own conversation
+        _pc_down(10, 90, "crew-reviewer:ok"),         # 3 now a new one, and it comes up
+        _pc_down(100, 10, "crew-reviewer:ok"),        # 4 held down again
+        _pc_down(10, 90, "crew-reviewer:fail"),       # 5 one failure
+        _pc_down(10, 90, "crew-reviewer:ok"),         # 6 still resumed in its own conversation
+        _pc_down(100, 10, "crew-reviewer:ok"),        # 7 held down
+        _pc_down(10, 90, "crew-reviewer:fail"),       # 8
+        _pc_down(10, 90, "crew-reviewer:fail"),       # 9
+        _pc_down(100, 10, "crew-reviewer:ok"),        # 10 the limit fills again: the count starts over
+        _pc_down(10, 90, "crew-reviewer:fail"),       # 11
+        _pc_down(10, 90, "crew-reviewer:ok"),         # 12 own conversation again
+    ],
+    checks=[
+        ("the resume fails: marked tried once", lambda r: _pc_pace(r, 1)["tried"] == ["crew-reviewer"]),
+        ("one failure does not make the next fresh: tried again in its own conversation, and fails again",
+         lambda r: "The plan's limit was reset" in r.out(2) and "--fresh" not in r.out(2) and len(_pc_pace(r, 2)["tried"]) == 2),
+        ("the next round, after two failures in a row, starts it fresh, and says why and to reload the skills",
+         lambda r: "revive crew-reviewer --fresh:" in r.out(3) and "could not be resumed" in r.out(3)
+         and "Reload the skills factory-protocol and station-reviewer" in r.out(3)),
+        ("then nothing is left to carry out", lambda r: _pc_pace(r, 3) is None),
+        ("a single failed resume does not make the next one fresh",
+         lambda r: "--fresh" not in r.out(6) and "could not be resumed" not in r.out(6) and _pc_pace(r, 6) is None),
+        ("the limit filling again forgets the failed resumes", lambda r: _pc_pace(r, 10)["tried"] == []),
+        ("so one failed resume in the new recovery is still tried in its own conversation",
+         lambda r: "--fresh" not in r.out(12) and "could not be resumed" not in r.out(12)),
+    ],
+    covers=["the resume fails: said, its conversation is untouched, and marked tried once",
+            "one failure does not make the next fresh: it is tried in its own conversation again, and fails again",
+            "and says why, and to reload the skills", "a single failed resume does not make the next one fresh",
+            "the limit filling again forgets the failed resumes",
+            "so one failed resume in the new recovery is still tried in its own conversation"],
+))
+
+scenario(Scenario(
+    name="pace_tidy",
+    suite="pace",
+    about="the pace file forgets a station that will not be revived, says the limit is full again in a new episode, and goes when nothing is left",
+    driver=LAUNCH_DRIVER,
+    setup=_setup_pace,
+    steps=[
+        _pc_down(100, 10, "crew-reviewer:ok", "links-app-build-m1:ok"),       # 0 two waiting
+        _pc_round(100, 10, before=_pc_done),   # 1 the builder is done
+        _pc_round(100, 10),                                                   # 2 the limit is still full: said stays
+        _pc_round(10, 90),                                                    # 3 reset: the episode is over, the station is waited for
+        _pc_down(100, 10, "crew-reviewer:ok"),                                # 4 a new episode says so again
+        _pc_down(10, 10, "crew-reviewer:ok"),                                 # 5 revived with the limit gone: nothing left, the file goes
+        _pc_round(10, 10, before=_pc_put({"limit_since": 5, "until": PC_UNTIL, "said": True, "stopped": ["crew-reviewer"], "tried": []})),
+        _pc_round(0, 0, on=False),                                            # 7 off: the file goes
+    ],
+    checks=[
+        ("two stations are waiting", lambda r: set(_pc_pace(r, 0)["stopped"]) == {"crew-reviewer", PC_B}),
+        ("a builder that finished while it waited is not waited for", lambda r: _pc_pace(r, 1)["stopped"] == ["crew-reviewer"]),
+        ("the limit still full: the file is kept, and the limit is said once", lambda r: _pc_pace(r, 2)["said"] is True),
+        ("the reset: the episode is over", lambda r: _pc_pace(r, 3)["said"] is False and _pc_pace(r, 3)["stopped"] == ["crew-reviewer"]),
+        ("a new limit episode says the limit is full again", lambda r: _pc_said(r, 4) == 1),
+        ("with the limit gone and no one left, the pace file is gone", lambda r: _pc_pace(r, 5) is None),
+        ("with the pace off the pace file is dropped", lambda r: _pc_pace(r, 6) is not None and _pc_pace(r, 7) is None),
+    ],
+    covers=["a builder that finished while it waited is not waited for", "a new limit episode says the limit is full again",
+            "with the limit gone and no one left, the pace file is gone"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
 # Normalising
 
 ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\d\d)?")
@@ -2705,6 +3132,8 @@ def snapshot(run: Run) -> dict:
                     text = p.read_text(encoding="utf-8", errors="replace")
                     if p.name == "calls.jsonl" and run.ignore_calls:
                         text = _without_calls(text, run.ignore_calls)
+                        if not text:
+                            continue    # a run that made only left-out calls has no calls file, as one that made none
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"

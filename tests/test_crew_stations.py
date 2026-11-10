@@ -107,7 +107,6 @@ ck("station_name: a role word is this crew's station", S.station_name("reviewer"
    and S.station_name("orchestrator") == "crew-orchestrator")
 ck("station_name: anything else is already a name", S.station_name("shop-build-m1") == "shop-build-m1" and S.station_name("") == "")
 ck("the dispatcher has spawn", dispatch.find(["spawn", "builder", "x"]) is not None)
-ck("pace_read is a stub: nothing is paced until TR-962", S.pace_read_stub() is None)
 
 print("a builder")
 err, ls = run(["builder", "Links App", "m1", LINKS, "work T1 and T2"])
@@ -164,11 +163,17 @@ refused("a builders_max that is no number refuses too", ["builder", "Links App",
         "(crew setting builders_max is lots); retire one first",
         settings={"autonomy": "L4-ship", "releaser": True, "release_profile": "kind", "challenger": False, "builders_max": "lots"})
 (CREW / "stations.json").write_text(_saved, encoding="utf-8")
-S.pace_read_stub, real_pace = (lambda: {"level": 1}), S.pace_read_stub
-refused("a plan that is nearly full holds new builders", ["builder", "Links App", "m9", LINKS, "x"], "no new builder starts now")
+_busy = {"on": True, "known": True, "level": 1, "at_limit": False, "note": "The 5-hour window is 86% full."}
+S.pace.read, real_pace = (lambda client: S.pace._read_doc(_busy)), S.pace.read
+refused("a plan that is nearly full holds new builders", ["builder", "Links App", "m9", LINKS, "x"],
+        "no new builder starts now. The 5-hour window is 86% full. Spawn it after that, or when the plan has room. "
+        "Helpers are not affected.")
 err, ls = run(["helper", "crew-reviewer", "probe", "look"])
 ck("...but not helpers", err is None and len(ls) == 1, str(err))
-S.pace_read_stub = real_pace
+S.pace.read = lambda client: S.pace._read_doc({**_busy, "level": 0})
+err, ls = run(["builder", "Links App", "m9", LINKS, "x"])
+ck("a plan with room (level 0) holds nobody", err is None and len(ls) == 1, str(err))
+S.pace.read = real_pace
 
 print("a helper")
 err, ls = run(["helper", "reviewer", "probe", "look at PR 9"])

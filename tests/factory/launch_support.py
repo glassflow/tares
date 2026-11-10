@@ -13,7 +13,8 @@ The driver runs in a throwaway crew (the environment parity.crew_env gives: the 
 
 Both print what the function prints and exit as it does, so the two can be compared. Functions:
 write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
-level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
+level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
+watch round), pace_down (what the revive step asks of the pace for stations that are down or up), and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
 tares.crew.stations), `revive` and `restart` (cmd_revive and cmd_restart, or those of tares.crew.lifecycle). The word {TMP} in an
 argument is the temp folder.
 
@@ -52,6 +53,7 @@ DEFAULT_WORLD = {
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
+    "routes": {},            # any other GET: "<path>[?query]" -> [status, body] (the full path with its query wins over the path)
 }
 
 
@@ -106,6 +108,9 @@ class FakeTares:
                             return self._send(404, {"detail": "unknown project"})
                         return self._send(200, {"all": w["grants"]["all"], "project": mine[q["project"][0]]})
                     return self._send(200, {"all": w["grants"]["all"]})
+                hit = w["routes"].get(self.path) or w["routes"].get(u.path)
+                if hit:
+                    return self._send(hit[0], hit[1])
                 return self._send(404, {"detail": "no"})
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -193,8 +198,46 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
                   "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note", "spawn", "revive", "restart"}
-NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart"}
+                  "idle_wake_note", "spawn", "revive", "restart", "pace_round", "pace_down"}
+NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "pace_round",
+               "pace_down"}
+
+# The pace pass of one watch round, as the bash watch loop runs it: the reading and the tidy at the top of the
+# round, then for each active station that is up the plan and the send (the revive and the regrant before it
+# belong to other steps).
+BASH_PACE_ROUND = '''
+pace_read || true
+pace_tidy || true
+for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
+  case "$(stations_get "$s" '.role')" in
+    helper) continue ;;
+    builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
+  esac
+  up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; continue; }
+  [ "$up" = yes ] || continue
+  if pace_plan "$s"; then pace_send; fi
+done
+'''
+
+# What the watch loop asks of the pace around a revive, for each "<station>:<what>" argument: `up` (the station
+# runs: forget it), `ok` or `fail` (it is down; a closed limit holds it down, else it is revived, and the revive
+# worked or not). The revive itself is not made: the prompt it would get is printed.
+BASH_PACE_DOWN = '''
+pace_read || true
+pace_tidy || true   # the top of the round, which the revive step runs after
+for a in "$@"; do
+  s=${a%%:*}; o=${a##*:}
+  if [ "$o" = up ]; then [ ! -f "$PACE_FILE" ] || pace_revived "$s"; continue; fi
+  if pace_closed; then pace_hold_down "$s"; continue; fi
+  fresh=""; pprompt=""
+  if pace_stopped "$s"; then
+    if pace_tried "$s"; then fresh=--fresh; pprompt=$(pace_fresh_prompt "$s"); else pprompt=$(pace_resume_prompt); fi
+  fi
+  echo "revive $s${fresh:+ $fresh}: $pprompt"
+  if [ "$o" = ok ]; then pace_revived "$s"
+  else [ -z "$pprompt" ] || [ -n "$fresh" ] || pace_mark_tried "$s"; fi
+done
+'''
 
 
 def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
@@ -207,6 +250,10 @@ def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
         script = script.replace('idle_wake_on "$@"', 'idle_wake_on')
     if fn in ("spawn", "revive", "restart"):
         script = script.replace(f'{fn} "$@"', f'cmd_{fn} "$@"')
+    if fn == "pace_round":
+        script = script.replace('pace_round "$@"', BASH_PACE_ROUND)
+    if fn == "pace_down":
+        script = script.replace('pace_down "$@"', BASH_PACE_DOWN)
     p = subprocess.run(["bash", "-c", script, "bash", str(lib), *args], env=env, stdin=None)
     return p.returncode
 
@@ -254,6 +301,31 @@ def run_python(fn: str, args: list) -> int:
             return 0 if L.idle_wake_on(client) else 1
         elif fn == "idle_wake_note":
             print(L.idle_wake_note())
+        elif fn == "pace_round":
+            from tares.crew import pace
+            pace.step(paths)
+        elif fn == "pace_down":
+            from tares.crew import pace
+            seam = pace.Seam()
+            for a in args:
+                s, _, o = a.rpartition(":")
+                if o == "up":
+                    seam.revived(paths, s)
+                    continue
+                if seam.closed(paths):
+                    seam.hold_down(paths, s)
+                    continue
+                fresh, pprompt = "", ""
+                if seam.stopped(paths, s):
+                    if seam.tried(paths, s):
+                        fresh, pprompt = " --fresh", seam.fresh_prompt(paths, s)
+                    else:
+                        pprompt = seam.resume_prompt(paths)
+                print(f"revive {s}{fresh}: {pprompt}")
+                if o == "ok":
+                    seam.revived(paths, s)
+                elif pprompt and not fresh:
+                    seam.mark_tried(paths, s)
         elif fn == "spawn":
             from tares.crew import stations
             return stations.cmd_spawn(["spawn", *args], dict(os.environ))

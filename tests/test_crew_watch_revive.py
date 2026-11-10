@@ -457,8 +457,9 @@ ck("a running station is not told it runs again while there is no pace file", WR
 go()
 ck("...with one, it is", ("revived", "shop-build-m1") in WR.pace.log, str(WR.pace.log))
 WR.pace = real_pace
-ck("the seam is inert by default", not real_pace.closed(None) and not real_pace.stopped(None, "x") and not real_pace.tried(None, "x")
-   and real_pace.resume_prompt(None) == "" and real_pace.fresh_prompt(None, "x") == "")
+inert = WR.PaceSeam()   # watch.py hands the revive loop the real pace (TR-962); the stand-in it replaced stays inert
+ck("the seam is inert by default", not inert.closed(None) and not inert.stopped(None, "x") and not inert.tried(None, "x")
+   and inert.resume_prompt(None) == "" and inert.fresh_prompt(None, "x") == "")
 
 L.launch = real_launch
 print(f"{P} passed, {F} failed")
