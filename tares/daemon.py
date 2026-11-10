@@ -48,6 +48,7 @@ from .connectors import (SPECS, normalize_config, redact_config, restore_secrets
 from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
 from .host import Host
+from .projects.icon import normalize_icon
 from .envelope import now_utc
 from .models import add_usage, empty_usage
 from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
@@ -468,6 +469,7 @@ class ProjectIn(BaseModel):
     objects: list | None = None   # template "custom": the objects, each {kind, name}
     goal: str | None = None       # one line, at most 200 characters; none = the template's GOAL
     kind: str | None = None       # "software_factory" for a project a spec session makes
+    icon: str | None = None       # one emoji shown beside the name; none = no icon
 
     @model_validator(mode="before")
     @classmethod
@@ -485,6 +487,9 @@ class ProjectUpdate(BaseModel):
     # the project's goal; left out = unchanged, "" or null = cleared. A body that sets only the
     # goal changes nothing else, and is the one edit the default project takes.
     goal: str | None = None
+    # the project's icon, one emoji; left out = unchanged, "" or null = removed. Like the goal, a
+    # body that sets only the icon changes nothing else.
+    icon: str | None = None
 
 
 class ProjectRepair(BaseModel):
@@ -4114,7 +4119,8 @@ def make_app() -> FastAPI:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
             hidden = _hidden_ids()
             out = projects.create(body.template, params, name=body.name or None, goal=body.goal,
-                                  gone=lambda kind, name: _is_hidden(kind, name, hidden))
+                                  gone=lambda kind, name: _is_hidden(kind, name, hidden),
+                                  icon=body.icon)
         except Exception as e:
             _uc_err(e)
         # the person who makes a project leads it; the system credential is no person, so a
@@ -4142,13 +4148,23 @@ def make_app() -> FastAPI:
         _project_or_404(uid)
         given = body.model_fields_set
         try:
-            if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
-                return projects.set_goal(uid, body.goal)
+            if "icon" in given:     # before anything is written: a wrong icon changes nothing
+                normalize_icon(body.icon)
+            if {"goal", "icon"} & given and not ({"params", "objects"} & given) and not body.name.strip():
+                out = projects.set_goal(uid, body.goal) if "goal" in given else None
+                if "icon" in given:
+                    out = projects.set_icon(uid, body.icon)
+                    factory_home.clear_cache()   # Home keeps its answer for a few seconds
+                return out
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
             hidden = _hidden_ids()
             out = projects.update(uid, params, gone=lambda kind, name: _is_hidden(kind, name, hidden))
             if "goal" in given:
                 projects.set_goal(uid, body.goal)
+                out = {**projects.get(uid), "report": out["report"]}
+            if "icon" in given:
+                projects.set_icon(uid, body.icon)
+                factory_home.clear_cache()
                 out = {**projects.get(uid), "report": out["report"]}
             if body.name.strip():
                 store.update_project(uid, name=body.name.strip())

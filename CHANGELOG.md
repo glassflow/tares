@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- A software factory project can have an optional emoji icon, picked from a search-and-browse picker on the project page, shown beside its name on Projects, Home, Crew and its sub-pages. It saves at once and is never part of the project's name.
 - The Software Factory now has an integrations framework (TR-838 to TR-843): seven slots (tickets, review, ci, memory, monitoring, guardrails, runtime), each filled by an integration. `GET /api/factory/integrations` lists them with their defaults, an admin can choose one for the factory, and a project can choose its own tickets, review and ci. Stored secrets never come back on a read. `/health` now lists the cell's capabilities, and `tares factory crew up` stops with an upgrade message when the cell does not have what it needs. Nothing changes for a running crew yet: the integrations themselves arrive in later milestones.
 
 ### Fixed

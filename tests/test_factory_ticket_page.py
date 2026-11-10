@@ -220,7 +220,7 @@ async def main():
                                 "href": f"/projects/{px}/tickets/T3"}], a["blocks"])
             ck("the pull request", a["pr"] == {"number": 12, "url": f"https://github.com/{REPO}/pull/12",
                                                 "state_text": "open, CI failing"}, a["pr"])
-            ck("the project and a link back to it", a["project"] == {"id": px, "name": "project-x",
+            ck("the project and a link back to it", a["project"] == {"id": px, "name": "project-x", "icon": None,
                                                                     "href": f"/projects/{px}"}, a["project"])
 
             print("== reviews and findings ==")

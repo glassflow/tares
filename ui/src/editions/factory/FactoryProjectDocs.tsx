@@ -6,6 +6,7 @@ import { Banner, Button, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { DocPane } from "./FactoryDocs";
+import { InlineIcon } from "./ProjectIcon";
 import { projectDocs, type ProjectDocLink, type ProjectDocsPage } from "./FactoryDocs.api";
 
 // /projects/:id/docs: every document of one project on its own page. The list on the left in
@@ -59,7 +60,7 @@ export default function FactoryProjectDocs() {
   const crumb = (
     <div className={MUTED} data-testid="crumb">
       <Link to="/projects" className={LINK}>Projects</Link>
-      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text>{data.project.name}</Link></>}
+      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text><InlineIcon icon={data.project.icon} className="mr-1" />{data.project.name}</Link></>}
       {" / "}Docs
     </div>
   );

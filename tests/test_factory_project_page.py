@@ -304,7 +304,7 @@ async def main():
             ck("the route answers", r.status_code == 200, r.text[:300])
             a = r.json()
             ck("the top level has exactly the fields of the page",
-               set(a) == {"id", "name", "goal", "stage", "stage_label", "state", "state_label", "waiting",
+               set(a) == {"id", "name", "icon", "can_edit_icon", "goal", "stage", "stage_label", "state", "state_label", "waiting",
                           "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
                           "decisions", "calls", "calls_past", "docs", "terminal", "linked", "can_close", "now",
                           "people", "docs_total", "later", "can_later", "prs_total", "prs_recent"}, sorted(a))

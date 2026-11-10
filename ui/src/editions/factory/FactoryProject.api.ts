@@ -80,6 +80,10 @@ export interface ProjectPeople {
 export interface FactoryProjectData {
   id: string;
   name: string;
+  /** One emoji shown beside the name, or none. */
+  icon?: string | null;
+  /** The caller may change the icon (an edit of the project); a sample leaves it out. */
+  can_edit_icon?: boolean;
   goal: string;
   stage: ProjectStage;
   stage_label: string;
@@ -124,6 +128,9 @@ export const setLater = (id: string, later: boolean) =>
 /** The whole project page, in one read. */
 export const setProjectLead = (id: string, personId: string) =>
   request<unknown>(`/api/projects/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify({ lead_person_id: personId }) });
+
+export const setProjectIcon = (id: string, icon: string | null) =>
+  request<unknown>(`/api/projects/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ icon }) });
 
 export const addProjectMember = (id: string, personId: string) =>
   request<unknown>(`/api/projects/${encodeURIComponent(id)}/members`, { method: "POST", body: JSON.stringify({ person_id: personId }) });
@@ -190,6 +197,7 @@ export interface ProjectRepoPrs {
 export interface ProjectGitHubData {
   id: string;
   name: string;
+  icon?: string | null;
   repos: ProjectRepoPrs[];
   counts: { open: number; merged: number; closed: number };
   /** "1 minute ago": when Tares last read GitHub for this project; null before any read. */

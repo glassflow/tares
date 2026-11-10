@@ -161,6 +161,16 @@ def waiting_items(store, fx, now, hidden=()) -> list[dict]:
     return order_waiting(items, now)
 
 
+def with_icons(store, items: list[dict]) -> list[dict]:
+    """The waiting items, each item whose project has an icon carrying it, for the page to show
+    beside the name. One read of the projects, and none when nothing waits."""
+    if not items:
+        return items
+    icons = {p["id"]: p["icon"] for p in store.list_projects() if p.get("icon")}
+    return [{**i, "project": {**i["project"], "icon": icons[i["project"]["id"]]}}
+            if i.get("project") and i["project"]["id"] in icons else i for i in items]
+
+
 # ── projects ──────────────────────────────────────────────────────────────────
 
 _ASKS = ("permission", "question", "desk")   # the crew is held up until the person answers
@@ -225,7 +235,8 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
     meta = [_count(builders, "builder")] if builders else []
     meta += [", ".join(repos)] if repos else []
     meta += ["active " + ago] if ago else []
-    return {"id": p["id"], "name": p["name"], "goal": p.get("goal") or "", "state": state,
+    return {"id": p["id"], "name": p["name"], "icon": p.get("icon"), "goal": p.get("goal") or "",
+            "state": state,
             "state_label": STATE_LABEL[state], "milestone": milestone,
             "tickets": {"merged": prog["done"], "blocked": prog["blocked"], "total": prog["total"]},
             "repos": repos, "builders": builders, "last_activity_at": _iso(at),
@@ -473,7 +484,10 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
     desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
-    waiting = team["waiting_for_you"] if team else waiting_items(store, fx, now, hidden)
+    waiting = with_icons(store, team["waiting_for_you"] if team else
+                         waiting_items(store, fx, now, hidden))
+    if team:
+        team = {**team, "waiting_for_you": waiting}
     # a person's home never lists another person's desk item, licence or not (core, TR-1048)
     mine_desk = _cut(fx, "own_desk", request, desk)
     if not team and len(mine_desk) != len(desk):

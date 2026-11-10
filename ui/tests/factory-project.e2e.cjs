@@ -86,6 +86,10 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("factory-project").waitFor();
     };
 
+    const expectIcon = async (p, emoji, words = "the icon shows") => {
+      ck(words, (await p.getByTestId("project-icon").innerText()).trim() === emoji);
+    };
+
     // ── 1. project-y at 1440: the rich page ─────────────────────────────────────────────────────
     const y = ids["project-y"];
     const { ctx, page } = await newPage(1440);
@@ -555,6 +559,101 @@ async function waitFor(url, tries = 100) {
       });
       ck("dark: no light text on a white ground (steps, command box)", pale.length === 0, JSON.stringify(pale));
       await c.close();
+    }
+
+    // the project's icon (TR-617): add it, search, pick, it survives a reload, change it, remove it
+    {
+      const { ctx: c, page: p } = await newPage(1440);
+      const id = ids["project-p"];
+      await open(p, id);
+      const T2 = (t) => p.getByTestId(t);
+      const opacity = (loc) => loc.evaluate((e) => getComputedStyle(e).opacity);
+      const iconNow = async () => (await (await fetch(`${BASE}/api/projects/${id}`)).json()).icon;
+      const add = T2("project-add-icon");
+      ck("no icon: no emoji at the title, an Add icon control near it", (await T2("project-icon").count()) === 0 && (await add.count()) === 1);
+      ck("Add icon says what it does", (await txt(add)) === "Add icon");
+      ck("Add icon is quiet until the heading is hovered", (await opacity(add)) === "0");
+      await add.focus();
+      await p.waitForTimeout(250);
+      ck("it shows on keyboard focus", (await opacity(add)) === "1");
+      await p.evaluate(() => document.activeElement.blur());
+      await T2("project-name").hover();
+      await p.waitForTimeout(250);
+      ck("it shows when the heading is hovered", (await opacity(add)) === "1");
+      await checkWords(p, ck, "icon: Add icon showing");
+      await add.click();
+      await T2("icon-picker").waitFor();
+      ck("the picker opens with the search box focused", await T2("icon-search").evaluate((e) => e === document.activeElement));
+      ck("a grid of emoji by category", (await T2("icon-option").count()) > 150 && (await p.getByRole("group", { name: "Smileys" }).count()) === 1);
+      ck("every emoji is a named button", await p.locator("[data-testid=icon-option]:not([aria-label])").count() === 0);
+      ck("no Remove while there is no icon", (await T2("icon-remove").count()) === 0);
+      await checkWords(p, ck, "icon: picker open");
+      await p.keyboard.press("Escape");
+      await T2("icon-picker").waitFor({ state: "detached" });
+      ck("Escape closes the picker", (await T2("icon-picker").count()) === 0);
+      ck("and focus goes back to the control", await add.evaluate((e) => e === document.activeElement));
+      ck("Escape saved nothing", (await iconNow()) === null);
+
+      await add.click();
+      await T2("icon-search").fill("rocket");
+      await p.getByRole("button", { name: "Rocket" }).waitFor();
+      ck("search narrows the grid to what matches", (await T2("icon-option").count()) === 1);
+      await checkWords(p, ck, "icon: search");
+      await T2("icon-search").fill("zzzzzz");
+      ck("nothing matches says so", (await txt(T2("icon-none"))) === "No emoji matches.");
+      await T2("icon-search").fill("rock");
+      await p.locator('[data-testid=icon-option][data-emoji="🚀"]').click();
+      await T2("project-icon").waitFor();
+      await expectIcon(p, "🚀");
+      ck("the pick saves at once, with no Save button", (await iconNow()) === "🚀");
+      ck("the emoji is not in the name", (await T2("project-name").innerText()).trim() === "project-p");
+      ck("the Add icon control is gone", (await add.count()) === 0);
+      await p.reload({ waitUntil: "load" });
+      await T2("factory-project").waitFor();
+      await expectIcon(p, "🚀", "it survives a reload");
+
+      await T2("project-icon").click();
+      await T2("icon-picker").waitFor();
+      ck("Remove is offered when there is an icon", (await T2("icon-remove").count()) === 1);
+      await p.locator('[data-testid=icon-option][data-emoji="🔥"]').click();
+      await p.waitForFunction(() => document.querySelector("[data-testid=project-icon]").textContent === "🔥");
+      ck("change: the new one is saved", (await iconNow()) === "🔥");
+      await T2("project-icon").click();
+      await T2("icon-picker").waitFor();
+      ck("arrow down moves from the search box into the grid",
+         await (async () => { await p.keyboard.press("ArrowDown"); return p.evaluate(() => document.activeElement.dataset.testid === "icon-option"); })());
+      await p.keyboard.press("Escape");
+      await p.waitForFunction(() => document.activeElement.dataset.testid === "project-icon");
+      ck("Escape from the grid closes and returns to the emoji", (await T2("icon-picker").count()) === 0);
+      await T2("project-icon").click();
+      await T2("icon-remove").click();
+      await p.waitForFunction(() => !document.querySelector("[data-testid=project-icon]"));
+      ck("remove: the emoji is gone", (await iconNow()) === null);
+      ck("and Add icon is back", (await add.count()) === 1);
+      await c.close();
+
+      // at 390 px Add icon is always there, the picker fits and the page does not scroll sideways
+      const { ctx: c390, page: q } = await newPage(390);
+      await open(q, id);
+      const T3 = (t) => q.getByTestId(t);
+      ck("390: Add icon is always visible", (await T3("project-add-icon").evaluate((e) => getComputedStyle(e).opacity)) === "1");
+      await T3("project-add-icon").click();
+      await T3("icon-picker").waitFor();
+      const box = await T3("icon-picker").boundingBox();
+      ck("390: the picker fits the phone", box.x >= 0 && box.x + box.width <= 390, JSON.stringify(box));
+      ck("390: no sideways scroll with the picker open", (await overflow(q)) <= 0);
+      await T3("icon-search").fill("tree");
+      ck("390: search works", (await T3("icon-option").count()) >= 3);
+      await q.keyboard.press("Escape");
+      await q.locator('[data-testid=project-add-icon]').click();
+      await T3("icon-search").fill("rocket");
+      await q.keyboard.press("Enter");
+      await T3("project-icon").waitFor();
+      ck("390: Enter picks the first match", (await fetch(`${BASE}/api/projects/${id}`).then((r) => r.json())).icon === "🚀");
+      await T3("project-icon").click();
+      await T3("icon-remove").click();
+      await q.waitForFunction(() => !document.querySelector("[data-testid=project-icon]"));
+      await c390.close();
     }
 
     // delete: the last section; the dialog asks for the name, then the project is gone

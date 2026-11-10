@@ -164,7 +164,8 @@ def register(app, store, h, ctx):
             if s["state"] == "ended" and p is not None and p["status"] == "done":
                 continue   # a finished project's builders are done, not on the crew
             key = pid if p is not None else None
-            groups.setdefault(key, {"project": {"id": p["id"], "name": p["name"]} if p else _NO_PROJECT,
+            groups.setdefault(key, {"project": {"id": p["id"], "name": p["name"], "icon": p.get("icon")}
+                                    if p else _NO_PROJECT,
                                     "members": []})["members"].append(member(s))
         builders = sorted(groups.values(), key=lambda g: (g["project"]["id"] is None,
                                                           str(g["project"]["name"]).lower()))
