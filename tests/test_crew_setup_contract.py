@@ -314,6 +314,22 @@ with mock.patch.object(os, "execve", fake_execve), \
     ck("engine=python: the Python crew up runs", calls == [("python", ["crew", "up"])], calls)
 
 # ====================================================================================
+print("an older Tares (need_capability)")
+c = Case(capabilities=[])
+r = c.run(["crew", "up", "--yes"])
+ck("a Tares that does not list integrations: crew up stops with the upgrade message",
+   r.returncode != 0 and "This needs a newer Tares on the cell (missing integrations). Upgrade Tares, then run this again." in r.stderr,
+   (r.returncode, r.stderr[-300:]))
+ck("...before it saved or started anything", c.tares.written() == [] and c.calls() == [], (c.tares.written(), c.calls()))
+r = c.run(["crew", "setup", "--questions", "--json"])
+ck("...while the read-only questions still answer (only commands that start something need it)", r.returncode == 0, r.stderr[-200:])
+c.close()
+c = Case(capabilities=["integrations", "other"])
+r = c.run(["crew", "up", "--yes", "--no-watch"])
+ck("a Tares that lists integrations among others is not refused", "needs a newer Tares" not in r.stderr, r.stderr[-300:])
+c.close()
+
+# ====================================================================================
 print("the module")
 src = (ROOT / "tares" / "crew" / "up.py").read_text(encoding="utf-8")
 ck("up.py has no em dash", "\u2014" not in src)

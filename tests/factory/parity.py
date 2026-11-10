@@ -443,6 +443,23 @@ def two_crew_checks():
     return out
 
 
+scenario(Scenario(
+    name="crew_up_old_tares",
+    suite="crew",
+    about="a Tares that does not list the integrations capability: crew up stops with the upgrade message, starting nothing",
+    stand_in={"settings": {**SAVED, "releaser": False}, "capabilities": []},
+    prepare=trust_all,
+    ignore_calls=LSP_PROBE,
+    steps=[Step(["crew", "up", "--yes"], stdin="")],
+    checks=[
+        ("crew up fails and names the missing capability",
+         lambda r: r.code(0) != 0 and "This needs a newer Tares on the cell (missing integrations)" in r.out(0)),
+        ("nothing was started and nothing was saved", lambda r: started(r) == [] and r.stand_in.written() == []),
+    ],
+    covers=[],
+))
+
+
 def env_of_in(r, home, station, key):
     v = r.station_settings(station, home).get("env", {}).get(key)
     return "" if v is None or v is False else v
