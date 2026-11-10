@@ -335,7 +335,9 @@ export function FactoryCrewView({ data, error, reload, actions }: {
               {started && <Proposals list={data.rule_proposals ?? []} actions={actions} reload={reload} />}
               {started && (
                 <section data-testid="crew-standup">
-                  <SectionHead title="Standup" />
+                  <SectionHead title="Standup" aside={
+                    <Link to="/settings?tab=morning" className="text-[13px] text-[color:var(--accent-deep)]! underline!" data-testid="standup-morning-link">Send it every morning</Link>
+                  } />
                   <div className={CARD}>
                     {data.standup ? (
                       <div className="px-4 py-3.5">

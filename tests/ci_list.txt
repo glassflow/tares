@@ -138,6 +138,7 @@ test_metrics
 test_milestone_checks
 test_model_provider
 test_model_providers
+test_morning_status
 test_normalize
 test_openai_provider
 test_otlp

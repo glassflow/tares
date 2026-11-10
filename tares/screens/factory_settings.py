@@ -18,7 +18,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from fastapi import Request
+from fastapi import Body, Request
 
 from .. import edition as edition_mod
 from .. import linear as linear_mod
@@ -144,6 +144,7 @@ def register(app, store, h, ctx):
         team = _text(os.getenv("TARES_WORKSPACE_URL"))
         return {
             "can_change": can_change,
+            "morning": safe(ctx.morning.page, None),
             "tools": factory_tools.tools(store, now, h.hidden_ids()),
             "crew": {
                 "how_far": {"value": how["autonomy"], "releases": how["releases"],
@@ -171,3 +172,23 @@ def register(app, store, h, ctx):
                         "note": ("Switching changes the screens, not your data. What only the "
                                  "other edition shows stays reachable under Settings, Advanced.")},
         }
+
+    # ── Morning status (TR-825): an admin's, like every other change here ────
+    @app.put("/api/factory/settings/morning")
+    def save_morning(request: Request, body: dict = Body(...)):
+        """Saves the report's settings. The saved days are the timer's and are never taken from
+        here. 400 with what is wrong when the time, the zone or the destinations do not hold."""
+        h.require_admin(request)
+        try:
+            return ctx.morning.save(body)
+        except ValueError as e:
+            h.err(e)
+
+    @app.post("/api/factory/settings/morning/send")
+    async def send_morning_now(request: Request):
+        """One report now, on the saved settings; today's scheduled one still goes."""
+        h.require_admin(request)
+        try:
+            return await ctx.morning.send_now()
+        except ValueError as e:
+            h.err(e)

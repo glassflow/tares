@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Settings, Crew, Morning status: the cell can send the standup each weekday morning to Slack, by email on Tares Cloud, or both, with a Send one now button (TR-825). Off until turned on.
 - The Software Factory now has an integrations framework (TR-838 to TR-843): seven slots (tickets, review, ci, memory, monitoring, guardrails, runtime), each filled by an integration. `GET /api/factory/integrations` lists them with their defaults, an admin can choose one for the factory, and a project can choose its own tickets, review and ci. Stored secrets never come back on a read. `/health` now lists the cell's capabilities, and `tares factory crew up` stops with an upgrade message when the cell does not have what it needs. Nothing changes for a running crew yet: the integrations themselves arrive in later milestones.
 
 ### Fixed
