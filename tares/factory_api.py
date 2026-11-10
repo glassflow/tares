@@ -2085,6 +2085,27 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                 asm, now_utc(), station, command, person_of(request), to)
         return desk_out(d)
 
+    @app.post("/api/factory/challenger/stopped")
+    def challenger_stopped(request: Request, body: dict = Body(...)):
+        """{reviewer, reason}: a station's commit review could not run and won't until someone acts
+        (out of quota, signed out). Any station may say so, unlike the rest of the desk, because
+        it is the builder's commit that finds out. Puts one open item on the person's desk, however
+        many commits report it; the answer is the item the person already has."""
+        reason = " ".join(str(body.get("reason") or "").split())[:500]
+        if not reason:
+            h.err(ValueError("reason is required"))
+        reviewer = " ".join(str(body.get("reviewer") or "The reviewer").split())[:40]
+        question = f"Commit reviews have stopped: {reviewer} cannot run."
+        to = desk_target(request, None, None, [])
+        for d in store.list_desk("open", None):
+            if d["question"] == question and d.get("to_person_id") == to:
+                return desk_out(d)
+        d = store.add_desk_item(None, question, "", [], f"Sort out {reviewer} so reviews can run again.",
+                                f"The crew keeps working, but its commits are not being reviewed. {reason}",
+                                "", [], False, "the challenger", [], now_utc(), None, None,
+                                person_of(request), to)
+        return desk_out(d)
+
     @app.get("/api/desk")
     def desk_list(request: Request, state: str = "open", project: str = "",
                         mine: bool = False):

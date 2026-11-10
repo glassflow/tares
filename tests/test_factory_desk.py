@@ -525,6 +525,22 @@ async def main():
            row["state"] == "waiting" and "linter" not in d["project"]
            and all(not g["in_effect"] for g in d["grants"] if g["id"] == left["id"]), (row, d["project"]))
 
+        print("== commit reviews have stopped (TR-530) ==")
+        as_station("shop-build-m1", "builder", "crew-orchestrator")
+        async with mk() as cx:
+            r0 = await cx.post("/api/desk", json={"question": "May I?", "recommendation": "yes", "why": "x"})
+            r1 = await cx.post("/api/factory/challenger/stopped", json={"reviewer": "Codex", "reason": "usage limit reached, try again Nov 4"})
+            r2 = await cx.post("/api/factory/challenger/stopped", json={"reviewer": "Codex", "reason": "usage limit reached, try again Nov 4"})
+            r3 = await cx.post("/api/factory/challenger/stopped", json={"reviewer": "Codex"})
+        ck("a builder still may not write the rest of the desk", r0.status_code == 403, r0.text[:200])
+        ck("but it may say reviews have stopped", r1.status_code == 200 and r1.json()["question"] == "Commit reviews have stopped: Codex cannot run.", r1.text[:200])
+        ck("with the reason, and no crew work held up", "usage limit reached" in r1.json()["why"] and r1.json()["blocking"] is False, r1.text[:300])
+        ck("a second report is the same item", r2.json()["label"] == r1.json()["label"], r2.text[:200])
+        ck("a report needs a reason", r3.status_code == 400, r3.text[:200])
+        as_station("crew-orchestrator", "orchestrator")
+        async with mk() as cx:
+            await cx.post(f"/api/desk/{r1.json()['label']}/withdraw", json={"reason": "test"})
+        as_station()
 
 
 unit()

@@ -34,6 +34,7 @@ def check(label, cond, detail=""):
 
 # ── a fake Tares: records what lands on /ingest/claude_code, serves memory ───
 INGESTED = []
+STOPPED = []
 MEMORY = [{"key": "shop", "event_type": "decision", "text": "The shop repo runs tests with make test."},
           {"key": "other", "event_type": "decision", "text": "not this repo"},
           {"key": "shop", "event_type": "observation", "text": "not accepted memory"}]
@@ -67,6 +68,9 @@ class FakeTares(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("content-type", "application/json")
             self.end_headers(); self.wfile.write(body)
             return
+        if self.path == "/api/factory/challenger/stopped":
+            STOPPED.append(json.loads(raw))
+            self.send_response(200); self.end_headers(); self.wfile.write(b"{}"); return
         if self.path == "/api/sources":
             self.send_response(409); self.end_headers(); return
         if self.path == "/ingest/claude_code":
@@ -94,6 +98,19 @@ elif mode == "inconclusive":
     emit({"type": "item.completed", "item": {"type": "agent_message", "text": "ok"}})
 elif mode == "error":
     sys.stderr.write("auth failure\n"); sys.exit(2)
+elif mode == "interrupted":
+    emit({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 0}})
+    emit({"type": "item.completed", "item": {"type": "agent_message",
+          "text": "Review was interrupted. Please re-run /review and wait for it to complete."}})
+    sys.exit(1)
+elif mode == "limit":
+    emit({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 0}})
+    emit({"type": "turn.failed", "error": {"message": "usage_limit_exceeded: You've hit your usage limit, try again at Nov 4th"}})
+    sys.exit(1)
+elif mode == "retried":
+    emit({"type": "error", "message": "Reconnecting... 1/5"})
+    emit({"type": "item.completed", "item": {"type": "command_execution", "exit_code": 0}})
+    emit({"type": "item.completed", "item": {"type": "agent_message", "text": "Looks good, no findings."}})
 '''
 
 
@@ -135,6 +152,7 @@ def main():
                     FAKE_CODEX_LOG=log_file, TARES_CHALLENGER_MAX_LOOPS="3",
                     TARES_CHALLENGER_BACKEND=None, XAI_API_KEY=None, XAI_BASE_URL=None,
                     TARES_GROK_MODEL=None)
+    tmp_codex = tempfile.mkdtemp()
     sid = "sess-abc"
     hook = {"session_id": sid, "transcript_path": transcript, "cwd": repo}
 
@@ -250,6 +268,30 @@ def main():
     o, _ = run(CHAL, commit("v4"), env)
     ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
     check("codex error: context with the stderr, not blocked", "decision" not in o and "auth failure" in ctx, str(o)[:200])
+
+    print("== a review that did not finish is never a pass (TR-530) ==")
+    set_mode("interrupted")
+    o, _ = run(CHAL, commit("v4a"), env)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("interrupted after running a command: ERROR, not PASS", INGESTED[-1]["challenge"]["verdict"] == "ERROR", str(INGESTED[-1])[:200])
+    check("and not blocked, and it says so", "decision" not in o and "no verdict" in ctx, str(o)[:200])
+    check("an interrupted review does not reach the desk", STOPPED == [], str(STOPPED))
+    set_mode("limit")
+    o, _ = run(CHAL, commit("v4b"), env)
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("out of quota: ERROR quoting the real reason", INGESTED[-1]["challenge"]["verdict"] == "ERROR" and "usage limit" in ctx and "sandbox" not in ctx, ctx[:300])
+    check("not blocked, and says the commit is not reviewed", "decision" not in o and "NOT reviewed" in ctx, str(o)[:200])
+    check("the cell is told reviews have stopped, with the reason", len(STOPPED) == 1 and "usage limit" in STOPPED[0]["reason"], str(STOPPED))
+    set_mode("retried")
+    o, _ = run(CHAL, commit("v4c"), env)
+    check("a retry that then succeeds is still a pass", INGESTED[-1]["challenge"]["verdict"] == "PASS", str(INGESTED[-1])[:200])
+    set_mode("interrupted")
+    os.makedirs(os.path.join(tmp_codex, "sessions", "2026", "10", "15"), exist_ok=True)
+    with open(os.path.join(tmp_codex, "sessions", "2026", "10", "15", "rollout-1.jsonl"), "w") as f:
+        f.write(json.dumps({"code": "usage_limit_exceeded", "message": "You've hit your usage limit. Try again at Nov 4th, 2026."}) + "\n")
+    o, _ = run(CHAL, commit("v4d"), {**env, "CODEX_HOME": tmp_codex})
+    ctx = o.get("hookSpecificOutput", {}).get("additionalContext", "")
+    check("the reason is read from Codex's session log when it said nothing else", "usage limit" in ctx and len(STOPPED) == 2, ctx[:300])
 
     print("== waive ==")
     set_mode("fail")
