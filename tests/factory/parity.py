@@ -100,6 +100,9 @@ class Scenario:
     driver: str = ""     # a script of this folder that runs a function of the engine instead of a command
                          # (`<driver> <engine> <argv...>`), for code that has no command yet
     ignore_calls: tuple = ()  # argument prefixes of calls to Claude Code that are left out of the comparison
+    ignore_asked: tuple = ()  # routes left out of the "asked of Tares" comparison: "PUT /api/x" itself, or every route
+                              # that starts with an entry ending in a space ("GET ": the reads, which the engines make
+                              # in a different number and order)
 
 
 class Run:
@@ -2710,6 +2713,402 @@ scenario(Scenario(
 ))
 
 
+# cc_move_*: the watch moves stations onto a newer Claude Code (claude_update_test.sh, TR-669 and TR-687), one idle
+# station a round, the orchestrator last. Each scenario runs `crew watch --once`, a round at a time, on a crew of
+# three stations (a builder or a helper where the case wants one) whose sessions the fake Claude Code lists. The
+# fake `claude --version` says the installed version (claude/version); a station's row says the version it runs
+# (`version`), and a restart's new row carries the installed one (claude/stamp-version), so neither engine needs
+# a process listing. The bash round also reads GET /api/crew/pace, which the Python watch does not yet (TR-962).
+# The fake versions are all below 2, so a real Claude Code spare on the host is never "older" and never stopped.
+
+_CC_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind",
+                                                           "challenger": False, "builders_max": 3}}),
+             "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+# Left out of the comparison: what Tares is read for (the pace, TR-962, is not in the Python watch yet, and the two
+# engines read the settings a different number of times), the retry flags sent to it (TR-964), and how often the
+# session list and `--version` are read. What is written to Tares, started and stopped is compared.
+_CC_NOT_YET = ("GET ", "PUT /api/crew/claude-retry?crew=crew")
+_CC_READS = (("agents",), ("--version",))
+_CC_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "cccc0003"}
+
+
+def _cc_kit() -> str:
+    """The fingerprint of the kit both engines run on (a station of this kit is not due a plugin upgrade)."""
+    sys.path.insert(0, str(ROOT))
+    from tares.crew import launch
+    return launch.kit_version(ROOT / "claude-plugin")
+
+
+def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | None = None, extra=(), done=(), files=None):
+    """A setup: the three stations idle, each running `have` (versions overrides per station), `installed`
+    the version of `claude --version`. `extra` are (station, row fields) of more stations, and their sessions;
+    `done` names builders that are finished (stations/<s>.done); `files` are more files of the fake Claude Code."""
+    def setup(tmp: Path, env: dict) -> None:
+        _setup_views(tmp, env)
+        crew, state = tmp / "crew", tmp / "claude"
+        kit = _cc_kit()
+        base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
+        rows, agents = {}, []
+        for name, sid in _CC_IDS.items():
+            role = name.split("-", 1)[1]
+            rows[name] = {**base, "role": role, "id": sid, "sessionId": f"old-{role}"}
+            agents.append(_row("idle", sid, name, cwd=str(crew), version=(versions or {}).get(name, have)))
+        for name, fields in extra:
+            rows[name] = {**base, **fields}
+            agents.append(_row(fields.get("_state", "idle"), fields["id"], name, cwd=str(crew),
+                               version=fields.get("_version", have)))
+            rows[name].pop("_state", None)
+            rows[name].pop("_version", None)
+        (crew / "stations.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+        (state / "version").write_text(installed + "\n", encoding="utf-8")
+        (state / "stamp-version").write_text("1\n", encoding="utf-8")
+        for name in done:
+            (crew / "stations").mkdir(exist_ok=True)
+            (crew / "stations" / f"{name}.done").write_text("", encoding="utf-8")
+        for name, text in (files or {}).items():
+            (state / name).write_text(text, encoding="utf-8")
+    return setup
+
+
+def _all_idle(tmp: Path) -> None:
+    """Every session that runs is between turns again (a restarted one starts on its prompt, a busy turn)."""
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if "pid" in row:
+            row["state"], row["status"] = "working", "idle"
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cc_installed(version: str):
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / "version").write_text(version + "\n", encoding="utf-8")
+        _all_idle(tmp)
+    return before
+
+
+def _cc_busy(*names: str, flight=()):
+    """Sessions of these stations are in a turn; `flight` names stations with a subagent running."""
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        ids = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for row in rows:
+            if row.get("id") in [ids[n]["id"] for n in names]:
+                row["status"] = "busy"
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        for v in ids.values():   # no subagent runs, but where `flight` names one
+            shutil.rmtree(tmp / "home" / ".claude" / "jobs" / v["id"], ignore_errors=True)
+        for n in flight:
+            job = tmp / "home" / ".claude" / "jobs" / ids[n]["id"]
+            job.mkdir(parents=True, exist_ok=True)
+            (job / "state.json").write_text(json.dumps({"inFlight": {"tasks": 2, "queued": 0, "kinds": ["local_agent"]}}), encoding="utf-8")
+    return before
+
+
+def _watch_once(before=None, env: dict | None = None, after=None) -> Step:
+    s = Step(["crew", "watch", "--once"], env=env or {}, before=before, after=after)
+    return s
+
+
+def _stn(r: Run, name: str, field: str = "id"):
+    return _stations_now(r)[name].get(field)
+
+
+def _launched(r: Run) -> list:
+    """The names of the sessions started with --bg, in order."""
+    return [c["args"][2] for c in bg_calls(r)]
+
+
+def _bg_of(r: Run, name: str) -> list:
+    return [c["args"] for c in bg_calls(r) if c["args"][2] == name]
+
+
+def _cc_checks_moved(r: Run, name: str, old_session: str, version: str) -> bool:
+    """The last start of the station resumed its old conversation and told it Claude Code was updated."""
+    args = _bg_of(r, name)[-1]
+    return arg_after(args, "--resume") == old_session and f"Claude Code was updated to {version}" in args[-1]
+
+
+_CC_ORDER = ["crew-reviewer", "crew-releaser", "crew-orchestrator"]
+
+scenario(Scenario(
+    name="cc_move_order",
+    suite="claude_update",
+    about="a newer Claude Code: one idle station a round in its own conversation, the orchestrator last; then nothing is left to move",
+    setup=_cc_setup(),
+    tares=_CC_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=[_watch_once(), _watch_once(before=_all_idle), _watch_once(before=_all_idle), _watch_once(before=_all_idle)],
+    checks=[
+        ("a round moves one idle station: the reviewer first, in its own conversation, told why",
+         lambda r: r.code(0) == 0 and _launched(r)[:1] == ["crew-reviewer"] and _cc_checks_moved(r, "crew-reviewer", "old-reviewer", "1.1.0")),
+        ("the move is said and recorded",
+         lambda r: "crew-reviewer runs an older Claude Code than 1.1.0; restarting it on 1.1.0 now that it's idle, in the same conversation" in r.out(0)
+         and "crew-reviewer runs Claude Code 1.1.0" in r.out(0) and '"event":"claude-updated"' in _events(r).replace(" ", "")),
+        ("the orchestrator waits while the releaser is behind", lambda r: _launched(r)[:2] == ["crew-reviewer", "crew-releaser"]),
+        ("the orchestrator moves last", lambda r: _launched(r) == _CC_ORDER),
+        ("all on the new version: nothing more moves", lambda r: r.code(3) == 0 and len(_launched(r)) == 3 and r.out(3).strip() == ""),
+    ],
+    covers=["the orchestrator waits while others are behind", "the orchestrator still waits", "the orchestrator moves last",
+            "all on 1.1.5: nothing more moves"],
+))
+
+
+def _cc(name: str, about: str, steps: list, checks: list, covers: list, setup=None, tares=None, not_windows: str = "") -> Scenario:
+    return scenario(Scenario(name=name, suite="claude_update", about=about, setup=setup or _cc_setup(), tares=tares or _CC_TARES,
+                             steps=steps, checks=checks, covers=covers, not_windows=not_windows,
+                             ignore_asked=_CC_NOT_YET, ignore_calls=_CC_READS))
+
+
+def _cc_tares(**settings) -> dict:
+    """The fake Tares of these scenarios, with more crew settings."""
+    doc = dict(_CC_TARES["GET /api/crew/settings"][1]["settings"], **settings)
+    return {**_CC_TARES, "GET /api/crew/settings": (200, {"settings": doc})}
+
+
+def _runs(r: Run, name: str):
+    """The Claude Code version the station's current session shows in the list."""
+    sid = _stn(r, name)
+    rows = json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    return next((x.get("version") for x in rows if x.get("id") == sid), None)
+
+
+def _moved(r: Run, name: str, old_session: str, version: str) -> bool:
+    """The station was restarted on `version` in its old conversation, told why."""
+    return bool(_bg_of(r, name)) and _cc_checks_moved(r, name, old_session, version)
+
+
+_CC_PROCS: dict = {}   # (scenario folder, key) -> a process that stands for someone attached, or for a spare
+
+
+def _cc_process(tmp: Path, key: str, argv0: str) -> None:
+    """A process whose command line starts with argv0 (`exec -a`), for `attached` and the process listing to find."""
+    import time
+    _CC_PROCS[(str(tmp), key)] = subprocess.Popen(["bash", "-c", f"exec -a '{argv0}' sleep 120"],
+                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.4)   # until bash has exec'd
+
+
+def _cc_reap(tmp: Path) -> dict:
+    """End the processes of this scenario's folder; which of them were still running (key -> bool)."""
+    import time
+    time.sleep(0.2)
+    alive = {}
+    for (folder, key), p in list(_CC_PROCS.items()):
+        if folder != str(tmp):
+            continue
+        alive[key] = p.poll() is None
+        if alive[key]:
+            p.kill()
+            p.wait()
+        del _CC_PROCS[(folder, key)]
+    return alive
+
+
+def _cc_after(reap: bool = False):
+    """After a round: the sessions started so far (name, in order), and with `reap` the processes that were left."""
+    def after(tmp: Path) -> dict:
+        names = []
+        try:
+            for line in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines():
+                args = json.loads(line)["args"]
+                if "--bg" in args:
+                    names.append(args[2])
+        except OSError:
+            pass
+        return {"launched": names, "alive": _cc_reap(tmp) if reap else {}}
+    return after
+
+
+def _round(before=None, env: dict | None = None, reap: bool = False) -> Step:
+    """One `crew watch --once`; its snap says what had been started by then."""
+    return _watch_once(before=before, env=env, after=_cc_after(reap))
+
+
+def _seen(r: Run, i: int) -> list:
+    return r.snap(i)["launched"]
+
+
+def _cc_attach(name: str):
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        sid = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[name]["id"]
+        _cc_process(tmp, f"attach {name}", f"claude attach {sid}")
+    return before
+
+
+def _cc_detach(name: str):
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        p = _CC_PROCS.pop((str(tmp), f"attach {name}"), None)
+        if p:
+            p.kill()
+            p.wait()
+    return before
+
+
+_WIN_NO_EXEC_A = "a process is given its command line with bash `exec -a`, which Windows has no counterpart for"
+_R, _L, _O = "crew-reviewer", "crew-releaser", "crew-orchestrator"
+_NOTHING = "nothing is said and nothing is started"
+
+# A busy station and one with a subagent running wait, and the orchestrator with them; a busy station first in line
+# does not hold up an idle one behind it.
+_cc("cc_move_busy", "a busy station and one with a subagent running wait (the orchestrator too); the releaser moves once its subagent is done",
+    [_round(before=_cc_busy(_R, flight=(_L,))), _round(before=_cc_busy(_R))],
+    [("a busy station and one with a subagent running wait, and so does the orchestrator",
+      lambda r: r.code(0) == 0 and r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("the idle releaser behind the busy reviewer moves, in the same conversation, told why",
+      lambda r: _seen(r, 1) == [_L] and _moved(r, _L, "old-releaser", "1.1.0") and _runs(r, _L) == "1.1.0"),
+     ("the move is recorded, and the orchestrator still waits",
+      lambda r: '"event":"claude-updated"' in _events(r).replace(" ", "") and _stn(r, _O) == "aaaa0001")],
+    ["a busy station and one with a subagent running wait", "the orchestrator waits while others are behind",
+     "busy reviewer waits, the idle releaser behind it moves, in the same conversation, told why", "the move is recorded",
+     "the orchestrator still waits"])
+
+# Someone has a station open: it waits, the orchestrator with it; it moves once it is closed.
+_cc("cc_move_attached", "a station someone has open waits (the orchestrator too), the one behind it moves, and it moves once it is closed",
+    [_round(before=_cc_attach(_R)), _round(before=_all_idle), _round(before=_cc_detach(_R), reap=True)],
+    [("an attached station waits, the releaser behind it moves, in the same conversation, told why",
+      lambda r: _seen(r, 0) == [_L] and _runs(r, _L) == "1.1.0"
+      and _moved(r, _L, "old-releaser", "1.1.0")),
+     ("still attached: the reviewer waits, the orchestrator too",
+      lambda r: _seen(r, 1) == [_L] and r.out(1).strip() == ""),
+     ("no longer attached: the reviewer moves, not the orchestrator",
+      lambda r: _seen(r, 2) == [_L, _R] and _moved(r, _R, "old-reviewer", "1.1.0") and _runs(r, _R) == "1.1.0" and _stn(r, _O) == "aaaa0001")],
+    ["an attached station waits (the other one moves)", "the moved station runs 1.1.5, in the same conversation, told why",
+     "still attached: the reviewer waits, the orchestrator too", "no longer attached: the reviewer moves, not the orchestrator"],
+    not_windows=_WIN_NO_EXEC_A)
+
+# The setting off, a halted crew, a version that does not move anything.
+_cc("cc_move_off", "the claude_update setting off: nothing moves",
+    [_round()],
+    [("the setting off: nothing moves", lambda r: r.code(0) == 0 and r.out(0).strip() == "" and _seen(r, 0) == [] and r.launches() == 0)],
+    ["the setting off: nothing moves"], tares=_cc_tares(claude_update=False))
+
+_cc("cc_move_halted", "a halted crew moves nothing; resumed, a station moves",
+    [_round(before=lambda tmp: (tmp / "crew" / "HALT").write_text('{"at":1700000000,"reason":"testing"}\n', encoding="utf-8")),
+     _round(before=lambda tmp: ((tmp / "crew" / "HALT").unlink(), _all_idle(tmp)))],
+    [("halted: nothing moves", lambda r: r.code(0) == 0 and r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("resumed: a station moves again", lambda r: _seen(r, 1) == [_R])],
+    ["halted: nothing moves"])
+
+_cc("cc_move_same", "the same version, an installed one older than the stations' and no readable version move nothing",
+    [_round(), _round(before=_cc_installed("1.9.0")), _round(before=_cc_installed(""))],
+    [("the same version: nothing moves", lambda r: r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("a station on a newer version than installed is left (1.10.0 against 1.9.0)", lambda r: r.out(1).strip() == "" and _seen(r, 1) == []),
+     ("no readable version: nothing moves", lambda r: r.out(2).strip() == "" and _seen(r, 2) == [] and r.launches() == 0)],
+    ["the same version: nothing moves", "a station on a newer version than installed is left"],
+    setup=_cc_setup(have="1.10.0", installed="1.10.0"))
+
+# `claude --version` says a different thing each time it is asked (the installer swaps a symlink): no release.
+_cc("cc_move_flip", "a version that flips within a round moves nothing; once it holds still a station moves",
+    [_round(), _round(before=lambda tmp: [(tmp / "claude" / n).unlink(missing_ok=True) for n in ("version-flip", "version-calls")])],
+    [("a version that flips within a round moves nothing", lambda r: r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("it holds still: a station moves", lambda r: _seen(r, 1) == [_R])],
+    ["a version that flips within a round moves nothing"],
+    setup=_cc_setup(files={"version-flip": "1.2.0\n"}))
+
+# Numbers compare as numbers: 1.10.0 is newer than 1.5.x (a plain sort puts it before them).
+_cc("cc_move_numbers", "1.10.0 is newer than the 1.5.x the stations run: the watch moves a station onto it",
+    [_round()],
+    [("1.10.0 is newer than 1.5.x: the watch moves a station onto it",
+      lambda r: _seen(r, 0) == [_R] and _runs(r, _R) == "1.10.0" and _moved(r, _R, "old-reviewer", "1.10.0"))],
+    ["1.10.0 is newer than 1.5.x: the watch moves a station onto it"],
+    setup=_cc_setup(have="1.5.4", installed="1.10.0"))
+
+# A helper follows its station: after the others, before the orchestrator, in the same conversation. A busy helper is left
+# alone and does not hold the orchestrator back. A finished builder is not moved and does not hold it back either.
+_HELPER = ("crew-reviewer-probe", {"role": "helper", "parent": "crew-reviewer", "id": "dddd0004", "sessionId": "old-probe"})
+_BUILDER = ("shop-build-m1", {"role": "builder", "project": "shop", "id": "eeee0005", "sessionId": "old-builder"})
+_H = _HELPER[0]
+_cc("cc_move_helper", "a helper moves after the other stations and before the orchestrator, in its conversation, told to load its parent's skill",
+    [_round(), _round(before=_all_idle), _round(before=_all_idle), _round(before=_all_idle)],
+    [("the helper moves with the watch: four restarts, the helper before the orchestrator, which is last",
+      lambda r: _seen(r, 3) == [_R, _L, _H, _O] and _runs(r, _H) == "1.1.0" and _runs(r, _O) == "1.1.0"),
+     ("the helper keeps its conversation and is told to load its parent role skill",
+      lambda r: _moved(r, _H, "old-probe", "1.1.0") and "station-reviewer" in _bg_of(r, _H)[-1][-1])],
+    ["the helper moves with the watch: four restarts, the helper before the orchestrator, which is last",
+     "the helper keeps its conversation and is told to load its parent role skill"],
+    setup=_cc_setup(extra=(_HELPER,)))
+
+_cc("cc_move_helper_busy", "a busy helper is left alone and does not hold the orchestrator back; once it is idle it moves too",
+    [_round(before=_cc_busy(_H)), _round(before=_cc_busy(_H)), _round(before=_cc_busy(_H)), _round(before=_all_idle)],
+    [("a busy helper is left alone, and does not hold the orchestrator back",
+      lambda r: _seen(r, 2) == [_R, _L, _O] and _runs(r, _O) == "1.1.0" and _runs(r, _R) == "1.1.0"),
+     ("once the helper is idle it moves too", lambda r: _seen(r, 3) == [_R, _L, _O, _H] and _runs(r, _H) == "1.1.0")],
+    ["a busy helper is left alone, and does not hold the orchestrator back", "once the helper is idle it moves too"],
+    setup=_cc_setup(extra=(_HELPER,)))
+
+_cc("cc_move_builder_done", "a finished builder is not moved and does not hold the orchestrator back",
+    [_round(), _round(before=_all_idle), _round(before=_all_idle), _round(before=_all_idle)],
+    [("the builder that is done stays as it is, the others move, the orchestrator last",
+      lambda r: _seen(r, 3) == [_R, _L, _O] and _stn(r, _BUILDER[0]) == "eeee0005" and _runs(r, _BUILDER[0]) == "1.0.0")],
+    [], setup=_cc_setup(extra=(_BUILDER,), done=(_BUILDER[0],)))
+
+
+# An older pre-warmed spare comes back from Claude Code's pool: the restart is tried again, and a spare nobody claimed is
+# stopped first. The spares are real processes the process listing finds (the same for both engines).
+def _cc_spares(tmp: Path) -> None:
+    _all_idle(tmp)
+    for sock in ("unclaimed", "new"):
+        (tmp / f"{sock}.claim.sock").write_text("", encoding="utf-8")   # not claimed yet
+    for key, sock, version in (("unclaimed", "unclaimed", "1.1.0"), ("claimed", "gone", "1.1.0"), ("fresh", "new", "1.2.0")):
+        _cc_process(tmp, key, f"claude bg-pty-host --bg-pty-host {tmp}/{sock}.pty.sock 200 50 -- /x/versions/{version} "
+                              f"--bg-spare {tmp}/{sock}.claim.sock")
+
+
+_cc("cc_move_stale_spare", "a restart that lands on an older spare is tried again; an unclaimed older spare is stopped, a claimed one and a new one are left",
+    [_round(before=_cc_spares, reap=True)],
+    [("a stale spare is noticed and the restart tried again",
+      lambda r: len(_bg_of(r, _R)) == 2 and _runs(r, _R) == "1.2.0" and "crew-reviewer came back on Claude Code 1.1.0, an older spare" in r.out(0)
+      and '"event":"stale-spare"' in _events(r).replace(" ", "")),
+     ("the move succeeded in the end", lambda r: "crew-reviewer runs Claude Code 1.2.0" in r.out(0)),
+     ("an unclaimed older spare was stopped, recorded", lambda r: r.snap(0)["alive"]["unclaimed"] is False and '"event":"spare-pruned"' in _events(r).replace(" ", "")),
+     ("a claimed one (a session runs in it) and a new one were left", lambda r: r.snap(0)["alive"]["claimed"] and r.snap(0)["alive"]["fresh"])],
+    ["a stale spare is noticed and the restart tried again", "an unclaimed older spare was stopped",
+     "a claimed one (a session runs in it) and a new one were left", "the move succeeded in the end"],
+    setup=_cc_setup(installed="1.2.0", files={"spawn-version": "1.1.0\n", "stale-left": "1\n"}), not_windows=_WIN_NO_EXEC_A)
+
+
+def _resumed(r: Run, name: str) -> int:
+    return sum(1 for a in _bg_of(r, name) if "--resume" in a)
+
+
+def _cc_marks(r: Run, name: str) -> list:
+    return [_stn(r, name, k) for k in ("cc_failed", "cc_fails", "cc_retry_at", "cc_fresh")]
+
+
+# Three tries land on an old spare: the fourth starts the station again, in a new conversation, once for the version.
+_cc("cc_move_fresh", "three resumed tries land on old spares: the fourth starts the station again in a new conversation on the new version",
+    [_round()],
+    [("three resumed tries land on old spares, the fourth is a new conversation on 1.2.1",
+      lambda r: len(_bg_of(r, _R)) == 4 and _resumed(r, _R) == 3 and "--resume" not in _bg_of(r, _R)[-1] and _runs(r, _R) == "1.2.1"),
+     ("it is told it was started again, and the event is recorded",
+      lambda r: "started you again under the same name, in a new conversation" in _bg_of(r, _R)[-1][-1]
+      and "starting it again in a new conversation on 1.2.1" in r.out(0) and '"event":"restarted-fresh"' in _events(r).replace(" ", "")),
+     ("a station that got there is not marked: no failure, no retry", lambda r: _cc_marks(r, _R) == [None, None, None, None])],
+    ["three resumed tries land on old spares, the fourth is a new conversation on 1.2.1",
+     "it is told it was started again, and the event is recorded", "a station that got there is not marked: no failure, no retry"],
+    setup=_cc_setup(installed="1.2.1", files={"spawn-version": "1.1.0\n", "stale-left": "3\n"}))
+
+# Old spares every time: three tries, the new conversation, then it stops and says it will retry (the backoff itself is TR-964).
+_cc("cc_move_old_spares", "old spares every time: three tries and the new conversation, then the station is marked with a retry time ten minutes on",
+    [_round()],
+    [("old spares every time: three tries, the new conversation, then it stops and says it will retry",
+      lambda r: len(_bg_of(r, _R)) == 4 and _resumed(r, _R) == 3 and "keeps coming back on an older Claude Code than 1.2.1" in r.out(0)
+      and "the watch tries again in 10 min" in r.out(0) and _runs(r, _R) == "1.1.0"),
+     ("it is marked: the version, one failed move, a retry time ten minutes on, the new conversation done",
+      lambda r: _cc_marks(r, _R)[:2] == ["1.2.1", 1] and _cc_marks(r, _R)[3] == "1.2.1"
+      and 540 < int(_cc_marks(r, _R)[2]) - __import__("time").time() <= 600)],
+    ["old spares every time: three tries, the new conversation, then it stops and says it will retry",
+     "it is marked: the version, one failed move, a retry time ten minutes on, the new conversation done"],
+    setup=_cc_setup(installed="1.2.1", files={"spawn-version": "1.1.0\n", "stale-left": "all\n"}))
+
+
 # ---------------------------------------------------------------------------------------------
 # The watch's revive step (TR-959): one round of `cmd_watch --once` on each engine, through the watch driver. The
 # crews here have nothing for the other branches of the round to do (no pace file, no newer plugin or Claude Code,
@@ -4299,6 +4698,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
             # A read asked twice in a row counts once: bash asks again from a subshell that lost its cache.
             asked = []
             for q in fake.requests:
+                if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
+                    continue
                 line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
                 if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
                     asked.append(line)
