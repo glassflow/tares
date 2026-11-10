@@ -73,8 +73,10 @@ def handler(request: httpx.Request) -> httpx.Response:
     if "issues(" in q:
         if v["id"] != PROJECT["id"]:
             return httpx.Response(200, json={"data": {"project": None}})
+        more = bool(STATE.get("more_pages"))   # Linear says there is a next page, whatever we read
         return httpx.Response(200, json={"data": {"project": {"issues": {
-            "nodes": STATE["issues"], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}})
+            "nodes": STATE["issues"],
+            "pageInfo": {"hasNextPage": more, "endCursor": "c1" if more else None}}}}})
     if "project(id" in q:
         hit = v["id"] in (PROJECT["id"], PROJECT["slugId"])
         if not hit:
@@ -245,6 +247,42 @@ async def main():
             ck("the poll fails so the source's health shows it", False)
         except linear.LinearError:
             ck("the poll fails so the source's health shows it", True)
+
+        print("== a project Linear answers for in part, or not at all (TR-1024) ==")
+        STATE["valid_tokens"].add(GOOD_KEY)
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("sync works again with the key back", r.status_code == 200, r.text)
+        before = store.list_tickets(uid)
+        real_cap, linear.MAX_ISSUES = linear.MAX_ISSUES, 2   # the fake's one page is 4 issues
+        STATE["more_pages"] = True
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("more pages than the cap: the sync is refused and says why", r.status_code == 400
+           and "more than 2 issues" in r.json()["detail"], r.text)
+        ck("the error is on the link", "more than 2 issues" in
+           ((await cx.get(f"/api/projects/{uid}/tickets")).json()["linear"]["error"] or ""))
+        ck("no ticket changed, none canceled", store.list_tickets(uid) == before)
+        STATE["more_pages"] = False
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("a project that fits the cap exactly still syncs", r.status_code == 200
+           and r.json()["linear"]["error"] is None, r.text)
+        linear.MAX_ISSUES = real_cap
+        kept, STATE["issues"] = STATE["issues"], []
+        before = store.list_tickets(uid)
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("an empty answer: the sync is refused and says why", r.status_code == 400
+           and "no issues" in r.json()["detail"], r.text)
+        ck("the empty answer is on the link", "no issues" in
+           ((await cx.get(f"/api/projects/{uid}/tickets")).json()["linear"]["error"] or ""))
+        ck("no ticket changed, none canceled", store.list_tickets(uid) == before)
+        try:
+            await conn_src.poll()
+            ck("the poll fails so the source's health shows it", False)
+        except linear.LinearError:
+            ck("the poll fails so the source's health shows it", True)
+        STATE["issues"] = kept
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("once Linear answers again the error clears", r.status_code == 200
+           and r.json()["linear"]["error"] is None, r.text)
 
         print("== unlink and disconnect ==")
         STATE["valid_tokens"].add("Bearer oauth-access-2")
