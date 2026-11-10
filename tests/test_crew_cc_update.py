@@ -937,6 +937,35 @@ with FakeTares(), Said() as sd, patched(CU, "claude_move", lambda *a, **k: 4), p
     CU.watch_claude_move(CP, sd.client, "shop-build-m1", NEW, claude_bin=BIN)
 ck("watch_claude_move: the pace is read again right before the restart", {"fresh": True} in asked, str(asked))
 
+# _pace_closed(fresh=True) reads the pace again; without fresh it takes the round's reading
+world(one, old_row)
+reads = []
+with FakeTares(), Said() as sd, patched(PACE, "read", lambda c: reads.append("read") or PACE.Reading("active", 2, True)), \
+        patched(PACE, "current", lambda p, e: reads.append("current") or PACE.Reading("active", 1, False)):
+    fresh_closed = CU._pace_closed(sd.client, fresh=True)
+    round_closed = CU._pace_closed(sd.client)
+ck("_pace_closed: fresh reads the pace again, the default takes the round's reading",
+   reads == ["read", "current"] and fresh_closed is True and round_closed is False, str((reads, fresh_closed, round_closed)))
+
+# the binary the step resolved reaches every read after it
+world(one, old_row)
+SPAWN[:] = [OLD, NEW]
+got = []
+real_station_cc = CU.station_cc
+with patched(CU, "station_cc", lambda paths, s, agents=None, binary=None: got.append(binary) or real_station_cc(paths, s, agents, binary)):
+    rc, _, _ = move()
+ck("the version poll of a move reads with the binary the move was given", rc == 0 and got and set(got) == {BIN}, str((rc, got)))
+world(TWO, TWO_ROWS)
+told = []
+with patched(CU, "tell_newer_claude", lambda paths, c, v, binary=None: told.append(binary)):
+    step(settings=frozen)
+ck("step hands the binary it resolved to the frozen-crew notice", told == [BIN], str(told))
+world(TWO, TWO_ROWS)
+behind = []
+with FakeTares(frozen), Said() as sd, patched(CU, "cc_behind", lambda paths, v, agents=None, binary=None: behind.append(binary) or 0):
+    CU.tell_newer_claude(CP, sd.client, NEW, BIN)
+ck("tell_newer_claude counts the stations behind with the binary it is given", behind == [BIN], str(behind))
+
 # the watch runs the step
 ran = []
 with patched(CU, "step", lambda paths: ran.append(paths)):
