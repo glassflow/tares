@@ -144,7 +144,7 @@ async def main():
     r = await cx.get(f"/api/factory/projects/{g}/github")
     ck("the route answers", r.status_code == 200, r.text[:300])
     a = r.json()
-    ck("exactly the page's fields", set(a) == {"id", "name", "repos", "counts", "checked", "github_error", "now"}, sorted(a))
+    ck("exactly the page's fields", set(a) == {"id", "name", "icon", "repos", "counts", "checked", "github_error", "now"}, sorted(a))
     ck("repos in the hand-over's order, by their GitHub name", [x["name"] for x in a["repos"]] == [WEB, API],
        [x["name"] for x in a["repos"]])
     api = next(x for x in a["repos"] if x["name"] == API)

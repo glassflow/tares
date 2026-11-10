@@ -538,6 +538,9 @@ _MIGRATIONS = [
     # the work they did keeps their name; they no longer count as a person on the cell.
     "ALTER TABLE people ADD COLUMN IF NOT EXISTS removed_at TIMESTAMPTZ",
     "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS scope TEXT",
+    # A project's icon (TR-617): one emoji the console shows beside its name, never part of the
+    # name. NULL = no icon, as for every project made before this column.
+    "ALTER TABLE usecases ADD COLUMN IF NOT EXISTS icon TEXT",
     # The person a doc belongs to (a people.id): a personal AGENTS.md or memory (TR-624). NULL =
     # a doc of the cell, as every doc made before this column.
     "ALTER TABLE docs ADD COLUMN IF NOT EXISTS owner TEXT",
@@ -2605,15 +2608,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def create_project(self, uid: str, template: str, name: str, params: dict,
                        status: str = "active", goal: str | None = None,
-                       lead_person_id: str | None = None) -> None:
+                       lead_person_id: str | None = None, icon: str | None = None) -> None:
         ts = now_utc()
         with self._swrite:
             self.sc.execute(
                 "INSERT INTO usecases (id, recipe, name, params, status, created_at, updated_at, "
-                "last_error, goal, lead_person_id, scope) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team')",
+                "last_error, goal, lead_person_id, scope, icon) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, 'team', ?)",
                 [uid, template, name, json.dumps(params), status, ts, ts, goal or None,
-                 lead_person_id or None])
+                 lead_person_id or None, icon or None])
 
     def update_project(self, uid: str, params: dict | None = None, status: str | None = None,
                        last_error: str | None = "", name: str | None = None,
@@ -2640,13 +2643,13 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return {"id": r[0], "template": r[1], "name": r[2], "params": json.loads(r[3] or "{}"),
                 "status": r[4], "created_at": r[5], "updated_at": r[6], "last_error": r[7],
                 "goal": r[8], "kind": r[9], "lead_person_id": r[10],
-                "scope": r[11] or "team"}
+                "scope": r[11] or "team", "icon": r[12]}
 
     def list_projects(self) -> list[dict]:
         with self._sread:
             rows = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind, lead_person_id, scope FROM usecases ORDER BY created_at").fetchall()
+                "goal, kind, lead_person_id, scope, icon FROM usecases ORDER BY created_at").fetchall()
         return [self._project_row(r) for r in rows]
 
     # Licence-independent by design (TR-915): never consult licence or team here.
@@ -2662,7 +2665,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         with self._sread:
             r = self.sc.execute(
                 "SELECT id, recipe, name, params, status, created_at, updated_at, last_error, "
-                "goal, kind, lead_person_id, scope FROM usecases WHERE id = ?", [uid]).fetchone()
+                "goal, kind, lead_person_id, scope, icon FROM usecases WHERE id = ?", [uid]).fetchone()
         return self._project_row(r) if r else None
 
     # ── who a project belongs to: its lead, its scope and its members (TR-623) ──
@@ -2670,6 +2673,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         with self._swrite:
             self.sc.execute("UPDATE usecases SET lead_person_id = ? WHERE id = ?",
                              [person_id or None, uid])
+
+    def set_project_icon(self, uid: str, icon: str | None) -> None:
+        """Set or clear a project's icon. Not `updated_at`: an icon is not activity on the project,
+        and the Projects list sorts by activity."""
+        with self._swrite:
+            self.sc.execute("UPDATE usecases SET icon = ? WHERE id = ?", [icon or None, uid])
 
     def set_project_scope(self, uid: str, scope: str) -> None:
         if scope not in ("team", "private"):

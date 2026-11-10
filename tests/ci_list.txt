@@ -157,6 +157,7 @@ test_postgres
 test_pricing
 test_private_any_licence
 test_project_access_single
+test_project_icon
 test_project_keys
 test_project_later
 test_project_timeline

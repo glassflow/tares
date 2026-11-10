@@ -9,6 +9,7 @@ import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import { factoryProjects, type FactoryProjectRow, type FactoryProjectsData, type ProjectState } from "./FactoryProjects.api";
+import { InlineIcon } from "./ProjectIcon";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectsSamples";
 
 // Projects: every software factory project as one row, from one read (GET /api/factory/projects).
@@ -52,6 +53,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
     <div className="border-b border-border px-4 py-3.5 last:border-b-0 hover:bg-[var(--row-hover)]" data-testid="project-row" data-state={p.state} data-project={p.id}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
+          <InlineIcon icon={p.icon} />
           <Link to={`/projects/${encodeURIComponent(p.id)}`} data-user-text data-testid="project-name"
                 className="font-bold [overflow-wrap:anywhere] text-foreground! underline! decoration-border! underline-offset-[3px]">
             {p.name}

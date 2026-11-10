@@ -10,6 +10,7 @@ import {
   crewMember, decideRule, factoryCrew, readMemoryAgain,
   type CrewBuilders, type CrewMember, type CrewPage, type CrewProposal, type MemberDetail, type MemberLine,
 } from "./FactoryCrew.api";
+import { InlineIcon } from "./ProjectIcon";
 import { isSample, sampleDetail, sampleLoad } from "./crewSamples";
 
 // The factory Crew page: who is on the crew, what each member is doing, how far the crew may go,
@@ -207,7 +208,7 @@ function BuilderGroup({ g, actions }: { g: CrewBuilders; actions: CrewActions })
   return (
     <div data-testid="crew-group">
       <div className="flex items-baseline justify-between gap-3 border-b border-border bg-[var(--wash-2)] px-4 py-2.5 text-[13px] font-semibold">
-        <span data-user-text>{g.project.name}</span>
+        <span data-user-text><InlineIcon icon={g.project.icon} />{g.project.name}</span>
         <span className="shrink-0 whitespace-nowrap font-mono text-xs font-normal text-muted-foreground">{running.length} running · {g.members.length}</span>
       </div>
       {running.map((m) => <Member key={m.station} m={m} actions={actions} />)}

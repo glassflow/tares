@@ -283,7 +283,8 @@ def waiting_on(t: HomeRead) -> list[dict]:
         no_lead = not p.get("lead_person_id")
         actions = ([{"label": "Set a lead", "primary": False, "href": f"/projects/{p['id']}#people"}]
                    if no_lead else [])
-        out.append({"project": {"id": p["id"], "name": p["name"]}, "title": p["name"],
+        ref = {"id": p["id"], "name": p["name"], **({"icon": p["icon"]} if p.get("icon") else {})}
+        out.append({"project": ref, "title": p["name"],
                     "detail": f"{fh._count(len(questions), 'question')} open for {fw._and(names)}.",
                     "open_questions": questions, "actions": actions, "no_lead": no_lead})
     return out
