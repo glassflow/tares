@@ -10,8 +10,9 @@
       "description": "Empty when no project is handed to the crew. A list Tares refuses to give is an error, never an empty list.",
       "type": "array",
       "items": {
+        "description": "A row of Tares's crew project list (GET /api/crew/projects, tares/factory_api.py) passed through, plus `builders`, which the crew adds. Only `name` and `builders` are guaranteed here; the other keys are Tares's and are typed when present.",
         "type": "object",
-        "required": ["id", "name", "tickets_done", "tickets_total", "milestone", "repos", "builders"],
+        "required": ["name", "builders"],
         "properties": {
           "id": {"type": "string"},
           "name": {"type": "string"},

@@ -208,6 +208,8 @@ ck("every schema pins schema_version to the number in schema_version.json",
    all(v.schema["properties"]["schema_version"] == {"const": version} for n, v in VALIDATORS.items() if n != "settings"))
 readme = (SCHEMAS / "README.md").read_text(encoding="utf-8") if (SCHEMAS / "README.md").is_file() else ""
 ck("the README documents the exit codes", all(re.search(rf"^\|\s*{c}\s*\|", readme, re.M) for c in "012"), readme[:200])
+_GOOD_QUESTION = {"id": "q", "text": "t", "kind": "text", "choices": [], "default": "", "recommendation": "",
+                  "why": "w", "pattern": "", "when": None}
 ck("a document that is not the shape fails",
    problems("roster", {"schema_version": 1, "crew": "x", "orchestrator": "y"}) != []
    and problems("error", {"schema_version": 1, "error": {"code": "Bad Code", "message": "m"}}) != []
@@ -216,6 +218,13 @@ ck("a document that is not the shape fails",
    and problems("doctor", [{"id": "x", "ok": True, "message": "m", "fix": "", "level": "ok"}]) != []
    and problems("projects", {"schema_version": 1, "projects": [{"id": "p", "name": "n"}]}) != []
    and problems("setup_questions", {"schema_version": 1, "questions": [{"id": "q", "kind": "number"}]}) != []
+   and problems("setup_questions", {"schema_version": 1}) != []
+   and problems("setup_questions", {"schema_version": 1, "questions": [dict(_GOOD_QUESTION, why=None)]}) != []
+   and all(problems("setup_questions", {"schema_version": 1, "questions": [{k: v for k, v in _GOOD_QUESTION.items() if k != drop}]}) != []
+           for drop in _GOOD_QUESTION)
+   and problems("setup_questions", {"schema_version": 1, "questions": [_GOOD_QUESTION]}) == []
+   and problems("projects", {"schema_version": 1, "projects": [{"name": "n"}]}) != []
+   and problems("projects", {"schema_version": 1, "projects": [{"name": "n", "builders": 0, "tickets_done": 1, "extra": True}]}) == []
    and problems("setup_answers", {"schema_version": 1, "saved": "crew_name", "grants": 1}) != [])
 
 if NO_FAKE_CLAUDE:

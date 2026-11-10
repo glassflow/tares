@@ -696,6 +696,13 @@ def entry_crew_setup(argv: list, env: dict) -> int:
     return cmd_crew_setup(argv, env)
 
 
+def _setup_usage(args: list) -> int:
+    text = f"usage: {ME} crew setup --questions [--json] | {ME} crew setup --answers <file.json> [--json]"
+    if "--json" in args:
+        contract.fail("usage", text, contract.EXIT_USAGE)
+    raise CrewError(text)
+
+
 def _crew_setup(argv: list, env: dict) -> int:
     args = argv[2:]
     flags = [a for a in args if a != "--json"]
@@ -708,9 +715,9 @@ def _crew_setup(argv: list, env: dict) -> int:
         elif flags[i] == "--answers" and i + 1 < len(flags):
             mode, answers_file, i = "answers", flags[i + 1], i + 2
         else:
-            raise CrewError(f"usage: {ME} crew setup --questions [--json] | {ME} crew setup --answers <file.json>")
+            return _setup_usage(args)
     if not mode:
-        raise CrewError(f"usage: {ME} crew setup --questions [--json] | {ME} crew setup --answers <file.json>")
+        return _setup_usage(args)
     up = Up(env)
     state.crew_name(up.paths)
     up.client.prime()

@@ -266,6 +266,14 @@ r = c.run(["crew", "setup", "--answers", str(c.tmp / "missing.json")])
 ck("a file that is not there: refused, says so", r.returncode != 0 and "missing.json" in r.stderr and c.tares.written() == [], r.stderr[-200:])
 r = c.run(["crew", "setup"])
 ck("crew setup with no flag: a usage line, exit 1", r.returncode == 1 and "usage" in r.stderr, (r.returncode, r.stderr[-200:]))
+r = c.run(["crew", "setup", "--bogus", "--json"])
+err = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+ck("a usage error with --json: error code usage, exit 2, nothing on stderr (as doctor does)",
+   r.returncode == 2 and err.get("error", {}).get("code") == "usage" and "usage:" in err.get("error", {}).get("message", "")
+   and r.stderr.strip() == "" and schema_problems("error", err) == [], (r.returncode, r.stdout[:200], r.stderr[-200:]))
+r = c.run(["crew", "setup", "--json"])
+err = json.loads(r.stdout) if r.stdout.strip().startswith("{") else {}
+ck("no flag with --json: also the usage error, exit 2", r.returncode == 2 and err.get("error", {}).get("code") == "usage", (r.returncode, r.stdout[:200]))
 c.close()
 c = Case()
 r = c.run(["crew", "setup", "--questions"], env={"TARESD_URL": "http://127.0.0.1:9"})

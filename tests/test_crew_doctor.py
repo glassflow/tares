@@ -130,6 +130,27 @@ ck("an unknown argument with --json is the usage error shape, exit 2", exit_code
    and json.loads(out.getvalue()) == {"schema_version": 1, "error": {"code": "usage", "message": doctor.USAGE}},
    (exit_code, out.getvalue(), err.getvalue()))
 
+# a CrewError while collecting is the error document under --json (TR-973 review F2), a text line without it
+_real_collect = doctor.Doctor.collect
+def _boom(self):
+    raise doctor.CrewError("the crew home is unreadable")
+doctor.Doctor.collect = _boom
+try:
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = doctor.cmd_doctor(["doctor", "--json"], {})
+    jd = json.loads(out.getvalue()) if out.getvalue().strip().startswith("{") else {}
+    ck("a CrewError with --json is the error document on stdout, exit 1, nothing on stderr",
+       code == 1 and jd.get("error", {}).get("message") == "the crew home is unreadable" and not err.getvalue(),
+       (code, out.getvalue(), err.getvalue()))
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = doctor.cmd_doctor(["doctor"], {})
+    ck("a CrewError without --json is a text line on stderr, exit 1, nothing on stdout",
+       code == 1 and "the crew home is unreadable" in err.getvalue() and not out.getvalue(), (code, out.getvalue(), err.getvalue()))
+finally:
+    doctor.Doctor.collect = _real_collect
+
 base = fresh("run")
 env_run = {"HOME": str(base / "h"), "USERPROFILE": str(base / "h"), "TARES_HOME": str(base / "th"),
            "FACTORY_CREW_HOME": str(base / "crew"), "PATH": os.environ.get("PATH", ""),
