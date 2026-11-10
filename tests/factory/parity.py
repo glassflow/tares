@@ -2576,6 +2576,10 @@ def _pc_doc(session, weekly, reset=False, known=True, on=True) -> dict:
             "session_pct": session, "weekly_pct": weekly, "note": f"Pacing: {what}." if level else ""}
 
 
+WIN_NO_PERCENT = ("a station is told through claude.cmd here, and cmd.exe cannot take a note that holds a percent sign ('the 5-hour window is at 85%'); "
+                  "the engine says so and tries again next round; the claude.exe form waits for TR-946")
+
+
 def _pc_world(doc: dict, idle_wake=None) -> dict:
     settings = {"pace": bool(doc.get("on"))}
     if idle_wake is not None:
@@ -2634,6 +2638,7 @@ scenario(Scenario(
     suite="pace",
     about="85% of the window or 90% of the week: each station is told once to stretch; 95%: a builder is told to hold; back down: told to go back",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[
         _pc_round(84, 89),      # 0 nothing
@@ -2740,6 +2745,7 @@ scenario(Scenario(
     suite="pace",
     about="with idle_wake on the stations hold no tick of their own: a pace file is dropped, and nothing is sent",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(85, 10, idle_wake=True, before=_pc_put(stretched=PC_STATIONS)),
            _pc_round(95, 10, idle_wake=True), _pc_round(85, 10, idle_wake=False)],
@@ -2778,6 +2784,7 @@ scenario(Scenario(
     suite="pace",
     about="turning the setting off while stations are stretched: each is told once to go back, and then nothing",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(85, 10), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False)],
     checks=[
@@ -2794,6 +2801,7 @@ scenario(Scenario(
     suite="pace",
     about="a note whose restart fails sends no event and marks nothing told; the stations it left stopped are not told again",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(10, 10), _pc_round(85, 10, env={"FAKE_CLAUDE_FAIL_RESUME": "1"}), _pc_round(85, 10)],
     checks=[
@@ -2811,6 +2819,7 @@ scenario(Scenario(
     suite="pace",
     about="a station that is down while a limit is full is not revived into it; after the reset it is revived with a short prompt in its own conversation",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[
         _pc_down(100, 10, "crew-reviewer:ok", "crew-releaser:ok"),    # 0 held down, said once
