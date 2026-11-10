@@ -39,6 +39,7 @@ SLOTS = tuple(SLOT_BASES)
 # "package.module:ClassName" import paths of the integrations shipped in tares/.
 BUILTINS: list[str] = [
     "tares.integrations.builtin.tickets_tares:TicketsTares",
+    "tares.integrations.builtin.tickets_linear:TicketsLinear",
 ]
 
 _loaded: dict[tuple[str, str], type[Integration]] | None = None

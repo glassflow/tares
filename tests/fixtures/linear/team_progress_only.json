@@ -1,0 +1,32 @@
+{
+  "id": "team-3",
+  "name": "Progress",
+  "states": {
+    "nodes": [
+      {
+        "id": "q-todo",
+        "name": "Todo",
+        "type": "unstarted",
+        "position": 1
+      },
+      {
+        "id": "q-started",
+        "name": "Started",
+        "type": "started",
+        "position": 2
+      },
+      {
+        "id": "q-prog",
+        "name": "in progress",
+        "type": "started",
+        "position": 3
+      },
+      {
+        "id": "q-done",
+        "name": "Done",
+        "type": "completed",
+        "position": 4
+      }
+    ]
+  }
+}

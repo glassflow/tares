@@ -202,6 +202,7 @@ test_state_postgres
 test_status
 test_team_interface
 test_ticket_assignee_single
+test_tickets_linear
 test_tickets_tares
 test_tracing
 test_trigger_debounce

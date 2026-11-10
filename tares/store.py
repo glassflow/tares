@@ -2758,6 +2758,8 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self.sc.execute("DELETE FROM project_members WHERE project = ?", [uid])
             self._forget_unused_skills()   # a skill another project uses stays
             self._forget_unused_docs()     # so does a doc
+            self.sc.execute("DELETE FROM pending_writeback WHERE ticket IN "
+                            "(SELECT id FROM tickets WHERE project = ?)", [uid])
             self.sc.execute("DELETE FROM tickets WHERE project = ?", [uid])
             self._factory_forget_project(uid)
             self._usage_forget_project(uid)
@@ -3081,7 +3083,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return tid
 
     def update_ticket(self, tid: str, touch: bool = True, why: str | None = None,
-                      **fields) -> None:
+                      unless_pending: bool = False, **fields) -> bool:
         """Set the given columns (title, status, position, working_doc, identifier, url,
         external_id, milestone, depends_on); None clears working_doc or milestone only when passed
         explicitly. `touch=False` leaves updated_at alone: a re-read that found nothing new is
@@ -3089,7 +3091,12 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
         A status of done or canceled closes the ticket everywhere (TR-1008): a stage still in the
         work (todo, doing, review, changes, blocked) is cleared in the same write, and the history
-        says why (`why`, e.g. "Linear marked it done"). Merged and shipped stay: they are true."""
+        says why (`why`, e.g. "Linear marked it done"). Merged and shipped stay: they are true.
+
+        `unless_pending` (TR-845) leaves the ticket alone when a status change of it is waiting to
+        reach the ticket system (a pending_writeback row), and returns False. The row is looked
+        for under the same lock as the write, so one added a moment ago is seen. Returns True
+        when the ticket was written."""
         allowed = {"title", "status", "position", "working_doc", "identifier", "url",
                    "external_id", "milestone", "depends_on", "holder", "stage", "stage_reason",
                    "pr", "repo", "assignee_person_id", "assignee_raw"}
@@ -3106,6 +3113,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             sets.append("stage = CASE WHEN stage IN ('merged', 'shipped') THEN stage ELSE NULL END")
         vals.append(tid)
         with self._swrite:
+            if unless_pending and self.sc.execute(
+                    "SELECT 1 FROM pending_writeback WHERE ticket = ?", [tid]).fetchone():
+                return False
             was = (self.sc.execute("SELECT project, stage FROM tickets WHERE id = ?", [tid]).fetchone()
                    if closes else None)
             self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals)
@@ -3113,6 +3123,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self.add_ticket_history(tid, was[0], "stage", None,
                                     why or f"the ticket was marked {fields['status']}",
                                     "tares", "tares", now_utc())
+        return True
 
     def _ticket_stage_repair(self) -> None:
         """Tickets closed before TR-1008 kept their stage, so a done ticket could still sit in
@@ -3176,6 +3187,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         """The ticket goes, and with it the other tickets' dependency on it."""
         with self._swrite:
             row = self.sc.execute("SELECT project FROM tickets WHERE id = ?", [tid]).fetchone()
+            self.sc.execute("DELETE FROM pending_writeback WHERE ticket = ?", [tid])
             self.sc.execute("DELETE FROM tickets WHERE id = ?", [tid])
             if row:
                 for oid, deps in self.sc.execute(

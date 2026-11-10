@@ -1,0 +1,20 @@
+{
+  "id": "team-4",
+  "name": "Open",
+  "states": {
+    "nodes": [
+      {
+        "id": "o-todo",
+        "name": "Todo",
+        "type": "unstarted",
+        "position": 1
+      },
+      {
+        "id": "o-prog",
+        "name": "In Progress",
+        "type": "started",
+        "position": 2
+      }
+    ]
+  }
+}

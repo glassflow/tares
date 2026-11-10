@@ -1,0 +1,44 @@
+{
+  "id": "team-1",
+  "name": "Factory",
+  "states": {
+    "nodes": [
+      {
+        "id": "s-backlog",
+        "name": "Backlog",
+        "type": "backlog",
+        "position": 0
+      },
+      {
+        "id": "s-todo",
+        "name": "Todo",
+        "type": "unstarted",
+        "position": 1
+      },
+      {
+        "id": "s-prog",
+        "name": "In Progress",
+        "type": "started",
+        "position": 2
+      },
+      {
+        "id": "s-review",
+        "name": "In Review",
+        "type": "started",
+        "position": 3
+      },
+      {
+        "id": "s-done",
+        "name": "Done",
+        "type": "completed",
+        "position": 4
+      },
+      {
+        "id": "s-cancel",
+        "name": "Canceled",
+        "type": "canceled",
+        "position": 5
+      }
+    ]
+  }
+}

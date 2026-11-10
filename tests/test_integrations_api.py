@@ -170,7 +170,8 @@ async def main():
             tix = slots[0]
             names = {a["name"]: a for a in tix["available"]}
             ck("tickets lists what is installed, with its schema",
-               set(names) == {"tares", "faketix", "slowtix", "eetix"}
+               set(names) == {"tares", "linear", "faketix", "slowtix", "eetix"}
+               and [f["name"] for f in names["linear"]["settings_schema"]] == ["api_key"]
                and names["faketix"]["title"] == "Fake tickets" and names["faketix"]["ee"] is False
                and names["faketix"]["allowed"] is True
                and [f["name"] for f in names["faketix"]["settings_schema"]] == ["url", "token", "project", "sync", "flow"]

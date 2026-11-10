@@ -136,6 +136,15 @@ def dist(name, points):
 
 sys.path.insert(0, tmp)
 
+# The registry reads entry points through `metadata.entry_points`, which scans all of sys.path, so
+# the entry points of an installed Tares (tickets.tares, tickets.linear) would join every case.
+# The cases see only the dist-info folders of their own temporary folder.
+import importlib.metadata, types as _types
+def _only_tmp(group):
+    return [ep for d in importlib.metadata.distributions(path=[tmp])
+            for ep in d.entry_points if ep.group == group]
+registry.metadata = _types.SimpleNamespace(entry_points=_only_tmp)
+
 def fresh(builtins, points):
     """A clean registry for one case: the dist-info set is rewritten and the logs are emptied."""
     for entry in os.listdir(tmp):
