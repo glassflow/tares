@@ -136,10 +136,11 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         ctl.reads++;
         if (ctl.hold) await ctl.hold;
         if (ctl.fail) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) });
-        if (ctl.more) {   // a sign-off over more tickets than the daemon lists by title
+        if (ctl.more || ctl.planTitle) {   // a sign-off over more tickets than the daemon lists by title, or a plan of a long name
           const res = await route.fetch();
           const data = await res.json();
           for (const it of data.waiting_for_you || []) for (const a of it.actions || []) if (a.do === "sign_off") a.more_tickets = ctl.more;
+          if (ctl.planTitle) data.plan.title = ctl.planTitle;
           return route.fulfill({ response: res, json: data });
         }
         return route.continue();
@@ -846,7 +847,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
          && /example-org\/service-a/.test((await texts("repo-you-own"))[0]) && /1 question open/.test((await texts("repo-you-own"))[0])
          && /nothing waiting/.test((await texts("repo-you-own"))[1]), JSON.stringify(await texts("repo-you-own")));
       ck(t("All owners links to Settings, Advanced"), (await page.getByRole("link", { name: "All owners" }).getAttribute("href")) === "/settings/advanced?tab=areas");
-      ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1
+      ck(t("the Claude plan and the connected tools stay"), (await page.locator('section[aria-label="Kim\'s Claude plan"]').count()) === 1
          && (await page.locator('section[aria-label="Connected"]').count()) === 1);
       ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
       await shot(page, "side-three-people", width);
@@ -889,6 +890,56 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("a cell of one still has Autonomy and the plan"), (await page.getByRole("link", { name: "Autonomy" }).count()) === 1
          && (await page.locator('section[aria-label="Your Claude plan"]').count()) === 1);
       await ctx.close();
+    }
+    // ── the Claude plan says whose it is (TR-1020): the reading the seed sent is Kim's ──
+    {
+      const openHome = async (who, width) => {
+        const o = await open(who, width);
+        await o.page.goto(`${BASE}/`, { waitUntil: "load" });
+        await o.page.getByTestId("factory-home").waitFor();
+        await settle(o.page);
+        return o;
+      };
+      const planSection = (page) => page.locator('section[aria-label$="Claude plan"]');
+      const heading = async (page) => (await planSection(page).locator("h2").innerText()).trim();
+      const label = (page) => planSection(page).getAttribute("aria-label");
+      for (const width of [390, 1440]) {
+        const t = (s) => `@${width}: ${s}`;
+        for (const [who, want] of [["kim", "Your Claude plan"], ["alex", "Kim's Claude plan"], ["lee", "Kim's Claude plan"]]) {
+          const { ctx, page } = await openHome(who, width);
+          ck(t(`${who} reads "${want}"`), (await heading(page)) === want, await heading(page));
+          ck(t(`${who}: the section's label says the same`), (await label(page)) === want, await label(page));
+          ck(t(`${who}: the limits show`), /27% used/.test(await planSection(page).innerText()));
+          ck(t(`${who}: no horizontal scroll`), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+          await shot(page, `plan-${who}`, width);
+          await checkWords(page, ck, t(`the plan, read by ${who}`));
+          await ctx.close();
+        }
+        const { ctx, page, ctl } = await openHome("alex", width);
+        ctl.planTitle = "Alexandria Featherstonehaugh-Montgomery-Smythe's Claude plan";
+        await page.reload({ waitUntil: "load" });
+        await page.getByTestId("factory-home").waitFor();
+        await settle(page);
+        ck(t("a long name wraps and never pushes the page wider"), (await heading(page)) === ctl.planTitle && (await overflow(page)) <= 0, `${await overflow(page)}px over`);
+        await shot(page, "plan-long-name", width);
+        await ctx.close();
+      }
+      // a reading sent with the cell's own token names nobody: nobody is told it is theirs
+      const unclaimed = await fetch(`${BASE}/ingest/claude_code`, { method: "POST", headers: { "content-type": "application/x-ndjson", authorization: `Bearer ${ROOT}` },
+        body: JSON.stringify({ type: "claude_plan", timestamp: new Date().toISOString(), usage_report: { rate_limits: { limits: [
+          { kind: "session", percent: 40, severity: "normal", is_active: true }, { kind: "weekly_all", percent: 9, severity: "normal", is_active: false }] } } }) + "\n" });
+      ck("a plan reading with no person arrives", unclaimed.status === 202, String(unclaimed.status));
+      await new Promise((r) => setTimeout(r, 5500));   // past the home's five seconds of keeping
+      for (const width of [390, 1440]) {
+        for (const who of ["kim", "alex"]) {
+          const { ctx, page } = await openHome(who, width);
+          ck(`@${width}: ${who} reads "Claude plan" when the cell cannot tell whose it is`, (await heading(page)) === "Claude plan" && (await label(page)) === "Claude plan", await heading(page));
+          ck(`@${width}: ${who}: the limits still show`, /40% used/.test(await planSection(page).innerText()));
+          await shot(page, `plan-unknown-${who}`, width);
+          await checkWords(page, ck, `@${width}: the plan nobody claims, read by ${who}`);
+          await ctx.close();
+        }
+      }
     }
     // a cell of one person on its own daemon has none of the side column's team parts
     {

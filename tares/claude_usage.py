@@ -137,16 +137,18 @@ def compact_plan(report: dict) -> dict:
 _STATUS_KINDS = {"five_hour": "session", "seven_day": "weekly_all"}
 
 
-def plan_now(report: dict | None, report_at, status: tuple | None, now=None) -> dict | None:
+def plan_now(report: dict | None, report_at, status: tuple | None, now=None,
+             report_person: str | None = None) -> dict | None:
     """The plan's limits now: /usage's list, each limit the status line saw more recently taken
     from it instead. A limit whose reset time has passed is marked `reset`: it started over, and
-    nothing has read it since."""
+    nothing has read it since. Each limit carries `person`, the person of the credential that
+    sent it (None when it named nobody). `status` is (when, rate_limits, person id)."""
     now = now or now_utc()
     limits: dict[str, dict] = {}
     for x in (report or {}).get("limits") or []:
-        limits[x["kind"]] = {**x, "at": report_at, "from": "usage"}
+        limits[x["kind"]] = {**x, "at": report_at, "from": "usage", "person": report_person}
     if status:
-        at, rl = status
+        at, rl, *sender = status
         for k, kind in _STATUS_KINDS.items():
             w = _dict(_dict(rl).get(k))
             if _num(w.get("used_percentage")) is None:
@@ -158,7 +160,8 @@ def plan_now(report: dict | None, report_at, status: tuple | None, now=None) -> 
                                            "severity": None, "active": False}),
                                 "percent": w["used_percentage"],
                                 "resets_at": when.isoformat() if when else None,
-                                "at": at, "from": "status line"}
+                                "at": at, "from": "status line",
+                                "person": sender[0] if sender else None}
     if not limits:
         return None
     order = {"session": 0, "weekly_all": 1}
@@ -169,6 +172,13 @@ def plan_now(report: dict | None, report_at, status: tuple | None, now=None) -> 
     ats = [x["at"] for x in out if x.get("at") is not None]
     return {"limits": out, "extra_usage": (report or {}).get("extra_usage"),
             "at": max(ats) if ats else None}
+
+
+def plan_person(limits: list[dict]) -> str | None:
+    """The person these limits all came from, or None: a limit that names nobody, or limits sent
+    by two people, cannot be called one person's plan."""
+    people = {x.get("person") for x in limits}
+    return people.pop() if len(people) == 1 else None
 
 
 def code_version(meters: dict | None) -> str | None:
@@ -215,7 +225,8 @@ def plan(store) -> dict | None:
         saved = None
     saved = saved if isinstance(saved, dict) else None
     at = _when(saved.get("at")) if saved else None
-    return plan_now(saved.get("plan") if saved else None, at, store.latest_rate_limits())
+    return plan_now(saved.get("plan") if saved else None, at, store.latest_rate_limits(),
+                    report_person=saved.get("person_id") if saved else None)
 
 
 def by_project(store, since=None) -> list[dict]:

@@ -332,8 +332,8 @@ function CrewCard({ data }: { data: HomeData }) {
 function PlanCard({ data }: { data: HomeData }) {
   const { plan } = data;
   return (
-    <section aria-label="Your Claude plan" className="min-w-0">
-      <SectionHead title="Your Claude plan" />
+    <section aria-label={plan.title} className="min-w-0">
+      <SectionHead title={plan.title} />
       {plan.known ? (
         <Panel>
           {plan.limits.map((l) => (
@@ -478,7 +478,7 @@ export function FactoryHomeLoading() {
         </div>
         <aside className={RIGHT}>
           <section className="min-w-0"><SectionHead title="Your crew" /><LoadingBox rows={3} /></section>
-          <section className="min-w-0"><SectionHead title="Your Claude plan" /><LoadingBox rows={2} /></section>
+          <section className="min-w-0"><SectionHead title="Claude plan" /><LoadingBox rows={2} /></section>
         </aside>
       </div>
     </div>
