@@ -1,8 +1,8 @@
 """`tares factory crew up` in Python (TR-956), and the setup contract the desktop app asks its questions through.
 
     crew up [--yes] [--no-watch] [role...]
-    crew setup --questions [--json]        every outstanding setup question, as JSON
-    crew setup --answers <file.json>       validate the answers and save them, as the prompts would
+    crew setup --questions [--json]        every outstanding setup question, as one document (schemas/setup_questions.json)
+    crew setup --answers <file.json> [--json]  validate the answers and save them, as the prompts would; --json says what was saved (schemas/setup_answers.json)
 
 Bash stays the default engine: this runs only for TARES_FACTORY_ENGINE=python (or when the dispatcher
 sends `crew up` here). Wherever it differs from claude-plugin/bin/factory, bash is right, except for the
@@ -60,7 +60,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import state
+from . import contract, state
 from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
 from .errors import CrewError
 from .paths import CREW_NAME_RULE, ME, CrewPaths
@@ -683,11 +683,24 @@ def _crew_up(argv: list, env: dict) -> int:
 
 
 def cmd_crew_setup(argv: list, env: dict) -> int:
-    return _run(lambda: _crew_setup(argv, env))
+    """With `--json` a failure is the error document on stdout (schemas/error.json); otherwise a line on stderr."""
+    try:
+        return _crew_setup(argv, env) or 0
+    except CrewError as e:
+        if not contract.refuse(e, argv):
+            _err(e.line + "\n")
+        return 1
 
 
 def entry_crew_setup(argv: list, env: dict) -> int:
     return cmd_crew_setup(argv, env)
+
+
+def _setup_usage(args: list) -> int:
+    text = f"usage: {ME} crew setup --questions [--json] | {ME} crew setup --answers <file.json> [--json]"
+    if "--json" in args:
+        contract.fail("usage", text, contract.EXIT_USAGE)
+    raise CrewError(text)
 
 
 def _crew_setup(argv: list, env: dict) -> int:
@@ -702,15 +715,15 @@ def _crew_setup(argv: list, env: dict) -> int:
         elif flags[i] == "--answers" and i + 1 < len(flags):
             mode, answers_file, i = "answers", flags[i + 1], i + 2
         else:
-            raise CrewError(f"usage: {ME} crew setup --questions [--json] | {ME} crew setup --answers <file.json>")
+            return _setup_usage(args)
     if not mode:
-        raise CrewError(f"usage: {ME} crew setup --questions [--json] | {ME} crew setup --answers <file.json>")
+        return _setup_usage(args)
     up = Up(env)
     state.crew_name(up.paths)
     up.client.prime()
     questions = up.outstanding()
     if mode == "questions":
-        sys.stdout.write(state.dumps_pretty(questions) + "\n")
+        contract.emit({"questions": questions}, "setup_questions")
         return 0
     try:
         answers = state.loads_json(state.read_text(Path(answers_file)))
@@ -718,6 +731,8 @@ def _crew_setup(argv: list, env: dict) -> int:
         raise CrewError(f"could not read the answers from {answers_file}: {e}") from None
     name, body, grants, problems = up.check_answers(questions, answers)
     if problems:
+        if "--json" in args:  # the reader gets them in the error document, not on stderr
+            raise CrewError("the answers were not saved: " + "; ".join(problems))
         for p in problems:
             _err(f"{ME}: {p}\n")
         raise CrewError("the answers were not saved: fix the ones listed above")
@@ -725,7 +740,7 @@ def _crew_setup(argv: list, env: dict) -> int:
     up.save_answers(name, body, grants)
     saved = ([] if not name else ["crew_name"]) + list(body) + (["grant"] if grants else [])
     if "--json" in args:
-        sys.stdout.write(state.dumps_pretty({"saved": saved, "grants": len(grants)}) + "\n")
+        contract.emit({"saved": saved, "grants": len(grants)}, "setup_answers")
     else:
         sys.stdout.write(f"saved on Tares: {', '.join(saved) or 'nothing'}\n")
     return 0

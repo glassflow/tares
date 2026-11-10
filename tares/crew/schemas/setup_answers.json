@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/setup_answers.json",
+  "title": "tares factory crew setup --answers <file> --json: what was saved",
+  "type": "object",
+  "required": ["schema_version", "saved", "grants"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "saved": {"description": "The settings written to Tares: `crew_name`, each answered setting, `grant`. Empty when nothing changed.", "type": "array", "items": {"type": "string"}},
+    "grants": {"description": "How many grants were recorded.", "type": "integer", "minimum": 0}
+  },
+  "additionalProperties": false
+}

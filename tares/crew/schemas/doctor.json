@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/doctor.json",
+  "title": "tares factory doctor --json: every check the crew needs, and what to fix",
+  "type": "object",
+  "required": ["schema_version", "ok", "checks"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ok": {"description": "False when any check is `fix`. The exit code is 1 then, and 0 otherwise; the document is printed either way.", "type": "boolean"},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "ok", "level", "message", "fix"],
+        "properties": {
+          "id": {"description": "Names the check (`claude`, `tares_access`, `project_<name>`). Stable: branch on it, never on `message`.", "type": "string", "minLength": 1},
+          "ok": {"description": "False only for level `fix`.", "type": "boolean"},
+          "level": {"enum": ["ok", "warn", "fix"]},
+          "message": {"description": "What the check found, in a sentence a person reads.", "type": "string"},
+          "fix": {"description": "What to run or change. Empty when there is nothing to do.", "type": "string"}
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

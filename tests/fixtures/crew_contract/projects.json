@@ -1,0 +1,1 @@
+{"schema_version":1,"projects":[{"id":"p1","name":"shop","tickets_total":4,"tickets_done":1,"milestone":{"name":"M1","done":1,"total":3},"repos":[{"name":"acme/shop","path":"/w/shop"}],"builders":2},{"id":"p2","name":"docs","tickets_total":2,"tickets_done":2,"milestone":null,"repos":[{"path":"/w/docs"}],"builders":0}]}

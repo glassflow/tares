@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/setup_questions.json",
+  "title": "tares factory crew setup --questions: every setup question still outstanding",
+  "type": "object",
+  "required": ["schema_version", "questions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "questions": {
+      "description": "In the order to ask them. Empty when nothing is outstanding.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "kind", "choices", "default", "recommendation", "why", "pattern", "when"],
+        "properties": {
+          "id": {"description": "The key to answer under in the file given to `crew setup --answers`.", "type": "string", "minLength": 1},
+          "text": {"type": "string"},
+          "kind": {"enum": ["text", "bool", "choice"]},
+          "choices": {
+            "description": "Empty for `text`.",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["value", "label"],
+              "properties": {"value": {"type": ["string", "boolean"]}, "label": {"type": "string"}},
+              "additionalProperties": false
+            }
+          },
+          "default": {"type": ["string", "boolean"]},
+          "recommendation": {"type": ["string", "boolean"]},
+          "why": {"type": "string"},
+          "pattern": {"description": "A regular expression a `text` answer must match; empty when any text will do.", "type": "string"},
+          "when": {
+            "description": "Null, or the answer that makes this question apply, such as {\"releaser\": true}.",
+            "oneOf": [{"type": "null"}, {"type": "object"}]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
