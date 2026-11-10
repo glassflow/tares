@@ -129,9 +129,9 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
                        "between turns, in the same conversation")
             lifecycle.restart(client, paths, [station, prompt], claude_bin=claude_bin)
             state.event("regranted", station, total, paths=paths)
-        except CrewError as e:
+        except (CrewError, OSError) as e:   # bash says "could not restart" for any failure of the restart
             sys.stdout.flush()
-            print(e.line, file=sys.stderr)
+            print(getattr(e, "line", None) or str(e), file=sys.stderr)
             client.say(f"could not restart {station} with its new permissions; it gets them when it next "
                        f"starts ({ME} restart {station})")
     finally:
@@ -167,15 +167,15 @@ def step(paths: CrewPaths, env=None) -> None:
             if role != "helper":
                 # is_alive and the stuck check on one read of the session list (bash reads it once here too)
                 try:
-                    rows = claude.active_json(binary)
+                    agents = claude.active_json(binary)
                 except SessionListUnreadableError:
                     continue
                 cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
                 sid = state.stations_get(station, "id", paths=paths)
                 if not any(not claude.gone(r) and ((r.get("name") == station and r.get("cwd") == cwd)
-                                                   or (sid != "" and r.get("id") == sid)) for r in rows):
+                                                   or (sid != "" and r.get("id") == sid)) for r in agents):
                     continue   # stopped: the revive step starts it with fresh settings
-                if watch_revive.stuck_on_context(paths, binary, station, rows):
+                if watch_revive.stuck_on_context(paths, binary, station, agents):
                     continue   # the revive step starts it fresh
             if (not state.halted(paths) and claude.between_turns(station, binary, paths)
                     and regrant_due(paths, client, station)):

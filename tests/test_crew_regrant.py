@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from tares.crew import claude, regrant, watch, watch_revive  # noqa: E402
+from tares.crew import claude, launch, lifecycle, regrant, state, watch, watch_revive  # noqa: E402
 from tares.crew.client import grants_sum  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
@@ -138,6 +138,55 @@ check("a station the revive step started this round is left alone, the others go
 r = watch_revive.Round()
 r.unread = True
 check("a round whose session list the revive step could not read restarts nothing", run_step(r, ["a", "b"]) == [])
+
+# a restart that fails is not tried again every round (reviewer F1, F2): grants_tried is written before it
+class RestartClient(StepClient):
+    def __init__(self, text):
+        self.text = text
+        self.said = []
+
+    def tares_on(self):
+        return True
+
+    def crew_settings(self):
+        pass
+
+    def grants_read(self, project=""):
+        return self.text
+
+    def say(self, line):
+        self.said.append(line)
+
+
+def run_failing_restart(error):
+    paths = crew({"s": {"grants": str(grants_sum(A)), "sessionId": "abc", "status": "active"}})
+    client = RestartClient(A + B)
+    saved = (regrant.TaresClient, claude.between_turns, launch._ccfg_or, launch.grant_rules, lifecycle.restart,
+             lifecycle.rearm_text)
+    try:
+        regrant.TaresClient = lambda p, e: client
+        claude.between_turns = lambda *a, **k: True
+        launch._ccfg_or = lambda *a, **k: "Kiran"
+        launch.grant_rules = lambda *a, **k: ["may merge"]
+        lifecycle.rearm_text = lambda c: ""
+
+        def boom(*a, **k):
+            raise error
+        lifecycle.restart = boom
+        regrant.regrant_station(paths, "s", claude_bin="claude", env={})
+    finally:
+        (regrant.TaresClient, claude.between_turns, launch._ccfg_or, launch.grant_rules, lifecycle.restart,
+         lifecycle.rearm_text) = saved
+    return paths, client
+
+
+for what, err in (("a refused restart", CrewError("no room")), ("a restart that hits the disk", OSError("disk full"))):
+    paths, client = run_failing_restart(err)
+    check(f"{what} is said, and the station gets the grants when it next starts",
+          any("could not restart s with its new permissions" in line for line in client.said))
+    check(f"{what} has written grants_tried first, so the next round does not try again",
+          state.stations_get("s", "grants_tried", paths=paths) == str(grants_sum(A + B))
+          and not regrant.regranted(paths, Client(A + B), "s"))
 
 # registered with the skeleton
 check("the watch runs this step under the name the skeleton reserves", watch._STEPS.get("regrant") is regrant.step)
