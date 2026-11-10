@@ -1,4 +1,5 @@
-# Compatibility shim (TR-1131); it has no shebang on purpose. A session opened before the plugin moved to
+#!/bin/sh
+# Compatibility shim (TR-1131); its shebang is /bin/sh, not bash, so a direct start works. A session opened before the plugin moved to
 # `tares hook` (TR-1103) still starts its MCP header helper by this path. Remove it one release after the
 # switch (TR-975).
 exec tares hook mcp-headers --plugin-root "${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}" "$@"

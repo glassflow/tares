@@ -153,8 +153,9 @@ print("the shell helpers are only shims, and .mcp.json uses `tares hook`")
 SHIMS = ("hooks/guard.sh", "hooks/session-start.sh", "bin/mcp-headers")
 for rel in SHIMS:
     t = (plugin / rel).read_text(encoding="utf-8") if (plugin / rel).is_file() else ""
-    ck(f"claude-plugin/{rel} is a shim: one `exec tares hook`, no shebang, no bash",
-       bool(re.search(r"^exec tares hook ", t, re.M)) and not t.startswith("#!") and len([l for l in t.splitlines() if l and not l.startswith("#")]) == 1, t)
+    code = [l for l in t.splitlines() if l and not l.startswith("#")]
+    ck(f"claude-plugin/{rel} is a shim: one `tares hook` call, and no bash shebang",
+       len(code) == 1 and bool(re.match(r"(exec )?tares hook ", code[0])) and not re.match(r"#!.*bash", t), t)
 ck("bin/factory-heavy stays (the crew's heavy-command wrapper, not a hook)", (plugin / "bin" / "factory-heavy").is_file())
 mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["tares"]
 ck(".mcp.json starts its header helper with `tares hook mcp-headers`", mcp["headersHelper"].startswith("tares hook mcp-headers "), mcp["headersHelper"])
