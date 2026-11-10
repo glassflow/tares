@@ -52,6 +52,21 @@ def _spawn(argv: list[str], env: dict) -> int:
 PORTED[("spawn",)] = _spawn
 
 
+def _lifecycle(name: str) -> Callable[[list[str], dict], int]:
+    """A lifecycle command (TR-955), imported when it runs."""
+    def run_it(argv: list[str], env: dict) -> int:
+        from . import lifecycle
+        return getattr(lifecycle, name)(argv, env)
+    return run_it
+
+
+# `crew restart` is not here: bash runs it as `crew update --force`
+for _word in ("revive", "restart", "retire", "down", "halt", "resume"):
+    PORTED[(_word,)] = _lifecycle(f"cmd_{_word}")
+for _word in ("down", "halt", "resume"):
+    PORTED[("crew", _word)] = _lifecycle(f"cmd_{_word}")
+
+
 def _view(name: str):
     """A view command (TR-957). views is imported when the command runs, so other commands start without it."""
     def run(argv: list[str], env: dict) -> int:

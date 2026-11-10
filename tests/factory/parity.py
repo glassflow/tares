@@ -1862,6 +1862,237 @@ _session_scenario(
      "no argument lists the open factory projects", "picking a project opens it", "something new asks what to build"])
 
 
+# The lifecycle commands (TR-955): retire, down, halt, resume work on the stations in stations.json and the
+# sessions of the fake Claude Code, and tell the fake Tares; revive and restart start a session, so they go
+# through the launch driver (the Python side does not read GET /api/crew/pace yet, which the driver does not compare).
+
+def _setup_life(tmp: Path, env: dict) -> None:
+    _setup_views(tmp, env)
+    stations = tmp / "crew" / "stations"
+    stations.mkdir(parents=True, exist_ok=True)
+    (stations / "crew-reviewer.pace").write_text('{"stretched":true,"held":false}\n', encoding="utf-8")
+    (tmp / "crew" / "watch.pid").write_text("999999\n", encoding="utf-8")   # no such process
+
+
+def _ended(station: str, code: int, doc=None) -> dict:
+    return {f"POST /api/crew/{station}/end?crew=crew": (code, doc if doc is not None else {"ok": True})}
+
+
+def _stations_now(r: Run) -> dict:
+    return json.loads((r.crew / "stations.json").read_text(encoding="utf-8"))
+
+
+def _events(r: Run) -> str:
+    p = r.crew / "events.jsonl"
+    return p.read_text(encoding="utf-8") if p.is_file() else ""
+
+
+def _tares_end_bodies(r: Run, station: str) -> list:
+    return [q["body"] for q in r.tares.asked(f"POST /api/crew/{station}/end?crew=crew")]
+
+
+scenario(Scenario(
+    name="lifecycle_retire",
+    suite="crew",
+    about="retire stops the session, marks the station retired, drops its pace file and tells Tares (200 and 404 silent, else a note)",
+    setup=_setup_life,
+    tares={**_ended("crew-reviewer", 200), **_ended("shop-build-m1", 404, {"detail": "no such station"}),
+           **_ended("crew-orchestrator", 500, "boom")},
+    steps=[Step(["retire", "reviewer"]), Step(["retire", "shop-build-m1"]), Step(["retire", "crew-orchestrator"]),
+           Step(["retire", "nobody"])],
+    checks=[
+        ("retire writes status retired", lambda r: r.code(0) == 0 and _stations_now(r)["crew-reviewer"]["status"] == "retired"),
+        ("retire says so, and Tares' 200 is silent", lambda r: r.out(0).strip() == "tares factory: retired crew-reviewer"),
+        ("retire removes the pace file", lambda r: not (r.crew / "stations" / "crew-reviewer.pace").exists()),
+        ("retire stops and removes the session",
+         lambda r: ["stop", "bbbb0002"] in [c["args"] for c in r.calls()] and ["rm", "bbbb0002"] in [c["args"] for c in r.calls()]),
+        ("retire writes the event", lambda r: '"retired"' in _events(r) or "retired" in _events(r)),
+        ("retire tells Tares the station ended",
+         lambda r: _tares_end_bodies(r, "crew-reviewer") == ['{"reason":"retired"}']),
+        ("a 404 from Tares is silent too", lambda r: r.code(1) == 0 and "could not tell Tares" not in r.out(1)),
+        ("any other answer prints could not tell Tares",
+         lambda r: r.code(2) == 0 and "could not tell Tares at " in r.out(2) and "that crew-orchestrator ended" in r.out(2)),
+        ("an unknown station dies", lambda r: r.code(3) == 1 and "is not a recorded station" in r.out(3)),
+    ],
+    covers=[],
+))
+
+_DESK = {"desk": [
+    {"id": "d1", "question": "Is Links App done?", "project_finished": True},
+    {"id": "d2", "question": "Shall I stop the crew?"},
+    {"id": "d3", "question": "Run crew down now?"},
+    {"id": "d4", "question": "Which branch should I use?"},
+]}
+
+scenario(Scenario(
+    name="lifecycle_down",
+    suite="crew",
+    about="down stops the watch, retires every active station and withdraws the moot desk questions; a second down finds nothing to stop",
+    setup=_setup_life,
+    tares={"GET /api/desk?state=open": (200, _DESK),
+           **_ended("crew-orchestrator", 200), **_ended("crew-reviewer", 200), **_ended("shop-build-m1", 200),
+           **_ended("shop-build-m2", 200),
+           "POST /api/desk/d1/withdraw": (200, {"ok": True}), "POST /api/desk/d2/withdraw": (200, {"ok": True}),
+           "POST /api/desk/d3/withdraw": (200, {"ok": True}), "POST /api/desk/d4/withdraw": (200, {"ok": True})},
+    steps=[Step(["crew", "down"]), Step(["down"])],
+    checks=[
+        ("down retires every active station",
+         lambda r: r.code(0) == 0 and all(_stations_now(r)[s]["status"] == "retired" for s in
+                                           ("crew-orchestrator", "crew-reviewer", "shop-build-m1", "shop-build-m2"))
+         and _stations_now(r)["old-helper"]["status"] == "stopped"),
+        ("down clears the watch", lambda r: not (r.crew / "watch.pid").exists()),
+        ("down says what it did",
+         lambda r: "retired crew-orchestrator" in r.out(0) and "all stations stopped. Tares keeps the projects, tickets and the desk;" in r.out(0)),
+        ("down withdraws the finished project's and the stop questions, not the others",
+         lambda r: sorted({q["route"] for q in r.tares.requests if q["route"].endswith("/withdraw")})
+         == ["POST /api/desk/d1/withdraw", "POST /api/desk/d2/withdraw", "POST /api/desk/d3/withdraw"]),
+        ("the finished project's question gives its reason",
+         lambda r: json.loads(r.tares.asked("POST /api/desk/d1/withdraw")[0]["body"]) ==
+         {"reason": "the crew stopped and the project is finished"}),
+        ("the stop questions give theirs",
+         lambda r: json.loads(r.tares.asked("POST /api/desk/d2/withdraw")[0]["body"]) == {"reason": "the person stopped the crew"}),
+        ("a second down has nothing to retire", lambda r: r.code(1) == 0 and "retired" not in r.out(1)),
+    ],
+    covers=[],
+))
+
+def _setup_life_unrecorded(tmp: Path, env: dict) -> None:
+    _setup_life(tmp, env)
+    (tmp / "crew" / "stations.json").unlink()
+
+
+scenario(Scenario(
+    name="lifecycle_down_unrecorded",
+    suite="crew",
+    about="down with no stations.json says so",
+    setup=_setup_life_unrecorded,
+    steps=[Step(["down"], env=NO_TARES)],
+    checks=[("down with no stations recorded says so", lambda r: r.code(0) == 0 and "no stations recorded" in r.out(0)
+             and not (r.crew / "watch.pid").exists())],
+    covers=[],
+))
+
+def _halt_after(tmp: Path):
+    p = tmp / "crew" / "HALT"
+    return json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+
+
+scenario(Scenario(
+    name="lifecycle_halt",
+    suite="crew",
+    about="halt writes HALT with the default or the given reason and prints both lines; the second halt replaces the first",
+    setup=_setup_life,
+    steps=[Step(["halt"], env=NO_TARES, after=_halt_after), Step(["crew", "halt", "out of money", "ignored"], env=NO_TARES, after=_halt_after)],
+    checks=[
+        ("halt without a reason says why",
+         lambda r: r.code(0) == 0 and r.snap(0)["reason"] == "halted by the human"),
+        ("halt prints both lines",
+         lambda r: "crew halted: stations finish their current step and start nothing risky (merges, pushes, deploys, tags, new sessions)." in r.out(0)
+         and "crew resume lifts it." in r.out(0) and "crew attach orchestrator) so it sends HALT to every station" in r.out(0)),
+        ("halt takes the first word as the reason", lambda r: r.code(1) == 0 and r.snap(1)["reason"] == "out of money"),
+        ("halt is in the event log", lambda r: "halt" in _events(r)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="lifecycle_resume",
+    suite="crew",
+    about="resume lifts a halt; with no halt it still says so",
+    setup=_setup_life,
+    steps=[Step(["halt", "pause"], env=NO_TARES), Step(["resume"], env=NO_TARES, after=_halt_after),
+           Step(["crew", "resume"], env=NO_TARES, after=_halt_after)],
+    checks=[
+        ("resume removes HALT", lambda r: r.code(1) == 0 and r.snap(1) is None and "crew resumed" in r.out(1)),
+        ("resume with no halt is the same", lambda r: r.code(2) == 0 and "crew resumed" in r.out(2)),
+        ("resume is in the event log", lambda r: "resume" in _events(r)),
+    ],
+    covers=[],
+))
+
+
+# revive and restart, on the launch driver. The first step starts crew-reviewer; `_stop_all` then leaves its session
+# stopped, as a station that died is found.
+
+_LIFE_WORLD = lworld("L3-review", grants=LAUNCH_GRANT)
+_LIFE_LAUNCH = lstep("launch", "crew-reviewer", "reviewer", "", "", "", "{TMP}/crew", "sonnet", "high",
+                     "Boot as the reviewer station", world=_LIFE_WORLD)
+
+
+def _stop_all(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        row["state"] = "stopped"
+        row.pop("pid", None)
+        row.pop("status", None)
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _retire_row(tmp: Path) -> None:
+    p = tmp / "crew" / "stations.json"
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["crew-reviewer"]["status"] = "retired"
+    p.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def lifecycle_step(op: str, *args: str, before=None, env: dict | None = None) -> Step:
+    s = lstep(op, *args, world=_LIFE_WORLD, env=env)
+    s.before = before
+    return s
+
+
+def _resumes(r: Run) -> list:
+    return [arg_after(c["args"], "--resume") for c in bg_calls(r)]
+
+
+scenario(Scenario(
+    name="lifecycle_revive",
+    suite="crew",
+    about="revive resumes a stopped station's session, --fresh starts a new one; a running or retired station and an unknown one are refused",
+    driver=LAUNCH_DRIVER,
+    steps=[_LIFE_LAUNCH,
+           lifecycle_step("revive", "crew-reviewer", before=_stop_all),
+           lifecycle_step("revive", "crew-reviewer", "--fresh", "start over", before=_stop_all),
+           lifecycle_step("revive", "crew-reviewer"),
+           lifecycle_step("revive", "crew-reviewer", before=_retire_row),
+           lifecycle_step("revive", "nobody")],
+    checks=[
+        ("revive resumes the recorded session",
+         lambda r: r.code(1) == 0 and "started crew-reviewer (sonnet, high)" in r.out(1) and _resumes(r)[1] is not None
+         and _resumes(r)[1] == _stations_now(r)["crew-reviewer"]["earlier"][0]["sessionId"]),
+        ("revive keeps the replaced session in the station's history",
+         lambda r: len(_stations_now(r)["crew-reviewer"].get("earlier", [])) == 2),
+        ("revive --fresh starts without --resume", lambda r: r.code(2) == 0 and _resumes(r)[2] is None),
+        ("revive writes revived and restarted-fresh events", lambda r: "revived" in _events(r) and "restarted-fresh" in _events(r)),
+        ("a running station is refused", lambda r: r.code(3) == 1 and "crew-reviewer is running; message it instead" in r.out(3)),
+        ("a retired station is refused", lambda r: r.code(4) == 1 and "crew-reviewer was retired; factory spawn starts it again" in r.out(4)),
+        ("an unknown station dies", lambda r: r.code(5) == 1 and "nobody is not a recorded station" in r.out(5)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="lifecycle_restart",
+    suite="crew",
+    about="restart stops the session and revives it; it refuses when it cannot see the station stop; an unknown station dies",
+    driver=LAUNCH_DRIVER,
+    steps=[_LIFE_LAUNCH,
+           lifecycle_step("restart", "crew-reviewer", env={"FACTORY_STOP_WAIT": "3"}),
+           lifecycle_step("restart", "crew-reviewer", env={"FAKE_CLAUDE_AGENTS_FAIL": "1"}),
+           lifecycle_step("restart", "nobody")],
+    checks=[
+        ("restart stops the old session and starts the station again",
+         lambda r: r.code(1) == 0 and any(c["args"][:1] == ["stop"] for c in r.calls()) and r.launches() == 2),
+        ("restart refuses when it cannot see the station stop",
+         lambda r: r.code(2) == 1 and "claude agents --json); not stopping crew-reviewer without being able to see it stop" in r.out(2)
+         and r.launches() == 2),
+        ("an unknown station dies", lambda r: r.code(3) == 1 and "nobody is not a recorded station" in r.out(3)),
+    ],
+    covers=[],
+))
+
+
 # ---------------------------------------------------------------------------------------------
 # Normalising
 

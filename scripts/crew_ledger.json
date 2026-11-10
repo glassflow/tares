@@ -1001,7 +1001,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Needed first by cmd_down (TR-955, through stop_watch), which ports the pid file read it needs; TR-958 completes it. TR-957 keeps a read-only copy in tares/crew/views.py (watch_pid) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) keeps its own copy too: tares.crew.doctor.watch_running reads the pid file for doctor (TR-969); TR-958 completes the real one."
+      "note": "Moved to tares.crew.lifecycle:watch_pid by TR-955 (cmd_down needs the pid file read, through stop_watch); tares.crew.views imports it for status and roster. doctor (TR-969) keeps its own copy: tares.crew.doctor.watch_running reads the pid file for doctor. TR-958 completes the watch itself."
     },
     {
       "name": "start_watch",
@@ -1023,7 +1023,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Called first by cmd_down (TR-955), which needs a partial port: read the pid file, stop that process and remove the file. TR-958 completes it with the watch itself."
+      "note": "TR-955 ported the part cmd_down needs in tares.crew.lifecycle:stop_watch (read the pid file, stop that process with psutil, remove the file, say it). TR-958 completes it with the watch itself."
     },
     {
       "name": "store_crew_name",
@@ -1098,8 +1098,8 @@
       "what": "revive a stopped station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_revive",
+      "ported": true,
       "note": ""
     },
     {
@@ -1109,8 +1109,8 @@
       "what": "restart a station with fresh settings",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_restart",
+      "ported": true,
       "note": ""
     },
     {
@@ -1120,8 +1120,8 @@
       "what": "retire a station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_retire",
+      "ported": true,
       "note": ""
     },
     {
@@ -1131,8 +1131,8 @@
       "what": "tell Tares a station ended",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:tell_tares_ended",
+      "ported": true,
       "note": ""
     },
     {
@@ -1142,8 +1142,8 @@
       "what": "stop the watch and every station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_down",
+      "ported": true,
       "note": ""
     },
     {
@@ -1265,7 +1265,7 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which port it with a stub for pace_read until TR-962; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the TR-955 stub for pace_read; TR-961 completes it."
+      "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which ported it in tares.crew.lifecycle:rearm_text with a stub for pace_read until TR-962; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the TR-955 stub for pace_read; TR-961 completes it."
     },
     {
       "name": "pace_read",
@@ -1868,8 +1868,8 @@
       "what": "halt the crew",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_halt",
+      "ported": true,
       "note": ""
     },
     {
@@ -1879,8 +1879,8 @@
       "what": "lift a halt",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:cmd_resume",
+      "ported": true,
       "note": ""
     },
     {
@@ -2723,9 +2723,9 @@
       "what": "same as crew halt",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_halt",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "resume",
@@ -2737,9 +2737,9 @@
       "what": "same as crew resume",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_resume",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "attach",
@@ -2779,9 +2779,9 @@
       "what": "same as crew down",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_down",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "roster",
@@ -2821,9 +2821,9 @@
       "what": "start a stopped station again",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_revive",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "restart",
@@ -2835,9 +2835,9 @@
       "what": "restart a station with fresh settings",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_restart",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "retire",
@@ -2849,9 +2849,9 @@
       "what": "stop a station for good",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_retire",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "spec",
@@ -3045,9 +3045,9 @@
       "what": "stop the watch and every station",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_down",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "crew status",
@@ -3129,9 +3129,9 @@
       "what": "halt the crew",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_halt",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "crew resume",
@@ -3143,9 +3143,9 @@
       "what": "lift a halt",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:cmd_resume",
+      "ported": true,
+      "note": "Registered in tares.crew.dispatch (TR-955)."
     },
     {
       "name": "crew freeze",
@@ -3593,9 +3593,9 @@
       "what": "seconds to wait for a retired station to stop",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.lifecycle:restart",
+      "ported": true,
+      "note": "Read by restart (seconds to wait for the stop; default 10)."
     },
     {
       "name": "FACTORY_UPDATE_POLL",
@@ -3975,9 +3975,9 @@
       "what": "present while the crew is halted; holds the reason",
       "ticket": "TR-955",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "guard.sh and session-start.sh read it (TR-971, TR-972)."
+      "python": "tares.crew.lifecycle:halt",
+      "ported": true,
+      "note": "guard.sh and session-start.sh read it (TR-971, TR-972). Written by halt and removed by resume in tares.crew.lifecycle (TR-955)."
     },
     {
       "name": "frozen-kit",
