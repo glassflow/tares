@@ -10274,6 +10274,14 @@ _st_cc("cc_update_helper_down", "crew update, a helper whose restart fails: the 
 
 
 
+# Scenario modules: every tests/factory/parity_scn_*.py is imported here, after the scenarios above, and
+# registers its own with the same `scenario(...)` call. Each does `from parity import *` (this file is `parity`
+# whether it runs as a script or is imported), so a group of scenarios lives in a file of its own.
+sys.modules.setdefault("parity", sys.modules[__name__])
+for _mod in sorted(HERE.glob("parity_scn_*.py")):
+    __import__(_mod.stem)
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
