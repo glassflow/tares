@@ -4361,6 +4361,16 @@
       "note": ""
     },
     {
+      "name": "claude_update_mixed_test.sh",
+      "kind": "suite",
+      "what": "claude_update_test.sh on the Python engine in mixed mode (engine unset); any FAIL fails it",
+      "ticket": "TR-1156",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "CI wrapper: sets FACTORY_BIN; the suite sets TARES_FAKE_PS_DIR. Replace by the TARES_FACTORY_ENGINE=python form once TR-964 merges."
+    },
+    {
       "name": "compat_test.sh",
       "kind": "suite",
       "what": "crew up refuses a cell without the integrations capability; status and down still work",
