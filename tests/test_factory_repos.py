@@ -81,7 +81,18 @@ def rules():
     win = factory_mod.handover_repos(["C:/x/repo"])
     ck("a Windows folder with slashes is accepted as a path, not a name", win == [{"path": "C:/x/repo", "name": None}], win)
     unc = factory_mod.handover_repos(["\\\\srv\\share\\repo\\"])
-    ck("a share is accepted", unc == [{"path": "//srv/share/repo", "name": None}], unc)
+    ck("a share is accepted and keeps its backslashes, so its spelling says Windows",
+       unc == [{"path": "\\\\srv\\share\\repo", "name": None}], unc)
+    ck("a share in two cases and slashes is one repo",
+       len(factory_mod.handover_repos(["\\\\srv\\share\\repo", "\\\\SRV\\Share\\Repo\\"])) == 1)
+    ck("a later hand-over of a share in another spelling adds nothing",
+       factory_mod.merge_repos(factory_mod.handover_repos(["\\\\srv\\share\\repo"]),
+                               factory_mod.handover_repos([{"path": "\\\\SRV\\share\\repo", "name": "g/r"}]))
+       == [{"path": "\\\\srv\\share\\repo", "name": "g/r"}])
+    ck("a Mac path with two leading slashes is not a share",
+       not factory_mod.is_windows_path("//srv/share/repo") and factory_mod.handover_repos(["//srv/share/repo"])[0]["path"]
+       == os.path.normpath("//srv/share/repo"))
+    ck("a share root keeps no trailing slash", factory_mod.handover_repos(["\\\\srv\\share\\"])[0]["path"] == "\\\\srv\\share")
     ck("dots and a trailing slash are dropped", factory_mod.handover_repos(["D:\\a\\.\\b\\..\\repo\\"])[0]["path"] == "D:/a/repo")
     ck("a drive root keeps its slash", factory_mod.handover_repos(["C:\\"])[0]["path"] == "C:/")
     same = factory_mod.handover_repos([{"path": "C:\\x\\repo"}, {"path": "c:/X/Repo/", "name": "g/repo"}, "C:/x/./repo"])

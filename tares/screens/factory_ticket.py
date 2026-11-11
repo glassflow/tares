@@ -82,11 +82,9 @@ def register(app, store, h, ctx):
         # the crew's folders stay on the crew's machine
         hidden = {}
         for r in (store.get_handover(uid) or {}).get("repos") or []:
-            base = (r.get("path") or "").rstrip("/")
+            base = factory_mod.hidden_key(r.get("path"))
             if base:
-                hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
-                if factory_mod.is_windows_path(base):      # a title may spell the folder with backslashes
-                    hidden[base.replace("/", "\\")] = hidden[base]
+                hidden[base] = r.get("name") or factory_mod.folder_name(base) or "the repo"
 
         def by_words(station, role=None) -> str | None:
             name = str(station or "").strip()
@@ -109,9 +107,7 @@ def register(app, store, h, ctx):
                       if stations else None)
 
         def clean(text):
-            out = str(text or "")
-            for path in sorted(hidden, key=len, reverse=True):
-                out = out.replace(path, hidden[path])
+            out = factory_mod.hide_paths(text, hidden)
             out = _HOME_PATH.sub(lambda m: m.group(0).rstrip("/").rsplit("/", 1)[-1], out)
             if station_re:
                 out = station_re.sub(lambda m: by_words(m.group(0)) or "the crew", out)

@@ -213,16 +213,16 @@ def is_windows_path(path: str) -> bool:
 
 
 def windows_path(path: str) -> str:
-    """A Windows folder spelled one way, forward slashes, no `.`, `..` or trailing slash, so
-    C:\\x\\repo, C:/x/repo and C:/x/./repo/ are one repo. Windows takes forward slashes everywhere."""
+    """A Windows folder spelled one way, no `.`, `..` or trailing slash, so C:\\x\\repo, C:/x/repo and
+    C:/x/./repo/ are one repo. A drive folder keeps forward slashes (Windows takes them everywhere). A
+    share keeps its backslashes (\\\\srv\\share\\repo): its leading pair is what says Windows, since
+    //srv/share is a valid Mac or Linux path."""
     p = path.replace("\\", "/")
     if _WIN_DRIVE.match(p):
-        head, rest = p[:2], p[2:]
-    else:
-        m = re.match(r"^//+([^/]+)/+([^/]+)(.*)$", p)
-        head, rest = f"//{m.group(1)}/{m.group(2)}", m.group(3)
-    rest = posixpath.normpath("/" + rest.lstrip("/"))
-    return head + rest if _WIN_DRIVE.match(p) else head + ("" if rest == "/" else rest)
+        return p[:2] + posixpath.normpath("/" + p[2:].lstrip("/"))
+    m = re.match(r"^//+([^/]+)/+([^/]+)(.*)$", p)
+    rest = posixpath.normpath("/" + m.group(3).lstrip("/"))
+    return "\\\\" + m.group(1) + "\\" + m.group(2) + ("" if rest == "/" else rest.replace("/", "\\"))
 
 
 def same_path(a: str, b: str) -> bool:
@@ -230,6 +230,32 @@ def same_path(a: str, b: str) -> bool:
     if is_windows_path(a) and is_windows_path(b):
         return windows_path(a).lower() == windows_path(b).lower()
     return a == b
+
+
+def hidden_key(path) -> str | None:
+    """The text a screen swaps for the repo's name: the stored folder without its trailing slash. None for
+    a bare drive (C:/), which would turn every "C:" in a title into the repo's name."""
+    base = (path or "").rstrip("/")
+    return None if not base or re.fullmatch(r"[A-Za-z]:", base) else base
+
+
+def folder_name(path: str) -> str:
+    """The last name of a folder, for either slash."""
+    return re.split(r"[\\/]", path.rstrip("/\\"))[-1]
+
+
+def hide_paths(text, hidden: dict[str, str]) -> str:
+    """Swap each folder in `hidden` ({stored path: words}) for its words, longest first. A Windows folder
+    matches in any case and with either slash, the way dedupe compares it, so a title that spells it
+    c:\\X\\Repo does not leak it."""
+    out = str(text or "")
+    for path in sorted(hidden, key=len, reverse=True):
+        if is_windows_path(path):
+            pat = "".join(r"[\\/]" if c in "\\/" else re.escape(c) for c in path)
+            out = re.sub(pat, lambda _m, w=hidden[path]: w, out, flags=re.I)
+        else:
+            out = out.replace(path, hidden[path])
+    return out
 
 
 def handover_repos(repos) -> list[dict]:
