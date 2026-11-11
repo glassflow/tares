@@ -106,7 +106,9 @@ def handler(req: httpx.Request):
         return httpx.Response(200, headers=hdr, json={
             "number": int(p[4]), "title": "PR", "state": pr["state"], "merged": pr["merged"],
             "draft": pr["draft"], "html_url": f"https://github.com/{repo}/pull/{p[4]}",
-            "head": {"sha": pr["head"], "ref": pr["branch"]}, "base": {"ref": pr["base"]}})
+            "head": {"sha": pr["head"], "ref": pr["branch"],
+                     "repo": {"full_name": pr.get("head_repo", repo)}},
+            "base": {"ref": pr["base"]}})
     if p[3] == "pulls" and method == "PUT" and p[-1] == "merge":
         n = int(p[4])
         body = json.loads(req.content or b"{}")
@@ -116,6 +118,9 @@ def handler(req: httpx.Request):
             return httpx.Response(403, json={"message": "Resource not accessible"}, headers=hdr)
         if mode == "403":
             return httpx.Response(403, json={"message": "Resource not accessible"}, headers=hdr)
+        if mode == "403_secondary":      # GitHub's secondary limit: a retry-after, no remaining=0
+            return httpx.Response(403, json={"message": "You have exceeded a secondary rate limit"},
+                                  headers={"retry-after": "60"})
         if mode == "403_rate":
             return httpx.Response(403, json={"message": "rate limit"},
                                   headers={"x-ratelimit-remaining": "0"})
@@ -430,6 +435,21 @@ async def main():
         await tick()
         ck("a blocked row stays blocked and asks nothing more", desk(up) == [] and
            [row(repo, n)["state"] for n in (1, 2, 3)] == ["blocked"] * 3)
+        async with mk() as cx:
+            pkey = (await cx.post("/api/keys", json={"name": "user:priya2", "scopes": ["admin"],
+                                                     "person_id": person["id"]})).json()["secret"]
+        async with mk({"Authorization": f"Bearer {pkey}"}) as cx:
+            lift = await cx.post(f"/api/factory/merge-queue/{row(repo, 1)['id']}/approve")
+        ck("the person who said no can lift the hold through the route",
+           lift.status_code == 200 and row(repo, 1)["state"] == "queued"
+           and row(repo, 1)["approved_head"] == sha(1), (lift.text, row(repo, 1)))
+        del MERGES[:]
+        await tick()
+        ck("and it merges that commit", [n for n, _ in merged_calls(repo)] == [1] and stage(up, t1) == "merged")
+        PRS[(repo, 2)]["head"] = sha(2, 1)
+        await tick()
+        ck("a blocked row whose pull request got a new commit is dropped and asks afresh",
+           row(repo, 2)["head"] == sha(2, 1) and row(repo, 2)["state"] == "waiting_approval", row(repo, 2))
 
         print("== L3-review: the console route approves ==")
         repo = "acme/route"
@@ -437,23 +457,57 @@ async def main():
         t = ticket(up, repo, "By route", 1)
         await tick()
         mid = row(repo, 1)["id"]
+        omar = store.create_person("Omar", email="omar@example.com")
         async with mk() as cx:
             bad = await cx.post("/api/factory/merge-queue/mq_nothing/approve")
+            sysk = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
+            key = (await cx.post("/api/keys", json={"name": "user:priya", "scopes": ["admin"],
+                                                    "person_id": person["id"]})).json()["secret"]
+            okey = (await cx.post("/api/keys", json={"name": "user:omar", "scopes": ["admin"],
+                                                     "person_id": omar["id"]})).json()["secret"]
+            rkey = (await cx.post("/api/keys", json={"name": "read:priya", "scopes": ["read"],
+                                                     "person_id": person["id"]})).json()["secret"]
+        pk = {"Authorization": f"Bearer {key}"}
+        async with mk({"Authorization": f"Bearer {rkey}"}) as cx:
+            nope = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
+        async with mk({"Authorization": f"Bearer {okey}"}) as cx:
+            other = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
+        async with mk({**pk, "x-tares-station": "crew-builder", "x-tares-role": "builder"}) as cx:
+            station = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
+        ck("an unknown entry is a 404", bad.status_code == 404, bad.text)
+        ck("a crew station is refused even with the addressee's own key", station.status_code == 403
+           and row(repo, 1)["state"] == "waiting_approval", (station.text, row(repo, 1)))
+        ck("an admin who is not the person it is addressed to is refused", other.status_code == 403
+           and row(repo, 1)["state"] == "waiting_approval", (other.text, row(repo, 1)))
+        ck("the cell's own credential is no person, so it is refused too", sysk.status_code == 403, sysk.text)
+        ck("a read-scope key is refused", nope.status_code == 403, nope.text)
+        async with mk(pk) as cx:
             ok = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
             again = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
-            key = (await cx.post("/api/keys", json={"name": "user:priya", "scopes": ["read"],
-                                                    "person_id": person["id"]})).json()["secret"]
-        async with mk({"Authorization": f"Bearer {key}"}) as cx:
-            nope = await cx.post(f"/api/factory/merge-queue/{mid}/approve")
-        ck("an unknown entry is a 404", bad.status_code == 404, bad.text)
-        ck("the route approves the commit", ok.status_code == 200 and ok.json()["approved_head"] == sha(1)
-           and ok.json()["state"] == "queued", ok.text)
+        ck("the person it is addressed to approves the commit", ok.status_code == 200
+           and ok.json()["approved_head"] == sha(1) and ok.json()["state"] == "queued", ok.text)
         ck("its question is closed as answered", store.get_desk_item(row(repo, 1)["desk_item"])["state"] == "answered")
         ck("a second approval is a 409, it is not waiting", again.status_code == 409, again.text)
-        ck("a caller who is neither admin nor lead is refused", nope.status_code == 403, nope.text)
         del MERGES[:]
         await tick()
         ck("the next tick merges it", [n for n, _ in merged_calls(repo)] == [1] and stage(up, t) == "merged")
+
+        print("== the route, for a row with no question ==")
+        repo = "acme/route2"
+        up = project("route2", "L3-review")
+        t = ticket(up, repo, "No question", 1)
+        bare = store.merge_queue_add(repo, "main", 1, sha(1), t, up, state="waiting_approval")
+        async with mk() as cx:
+            ikey = (await cx.post("/api/keys", json={"name": "ingest:omar", "scopes": ["ingest"],
+                                                     "person_id": omar["id"]})).json()["secret"]
+        async with mk({"Authorization": f"Bearer {ikey}"}) as cx:
+            ing = await cx.post(f"/api/factory/merge-queue/{bare['id']}/approve")
+        kept = row(repo, 1)["state"]
+        async with mk(pk) as cx:      # an admin key
+            adm = await cx.post(f"/api/factory/merge-queue/{bare['id']}/approve")
+        ck("with no question, a key without the admin scope is refused",
+           ing.status_code == 403 and kept == "waiting_approval", (ing.text, kept))
+        ck("with no question, an admin approves", adm.status_code == 200 and row(repo, 1)["state"] == "queued", adm.text)
 
         print("== a new commit voids everything ==")
         repo = "acme/push"
@@ -513,6 +567,61 @@ async def main():
         ck("the question says what to add", ds[0]["question"] == "No GitHub credential on this Tares can write to "
            "acme/readonly. Add one with write access in Settings, GitHub.", ds[0]["question"])
         ck("nothing merged", stage(up, t1) == "review")
+        item = ds[0]["id"]
+        PRS[(repo, 2)].update(state="closed")
+        await tick()
+        ck("one blocked row leaving does not close the question the other still needs",
+           row(repo, 2)["state"] == "sent_back" and row(repo, 1)["state"] == "blocked"
+           and store.get_desk_item(item)["state"] == "open", (row(repo, 2), store.get_desk_item(item)))
+        MODE[repo] = "ok"
+        await tick()
+        ck("a credential that can write now: the blocked row merges by itself",
+           row(repo, 1)["state"] == "merged" and stage(up, t1) == "merged", row(repo, 1))
+        ck("and the question for the credential is closed", store.get_desk_item(item)["state"] == "withdrawn"
+           and desk(up) == [], store.get_desk_item(item))
+        del MODE[repo]
+
+        print("== GitHub's secondary rate limit is not a missing credential ==")
+        repo = "acme/secondary"
+        up = project("secondary", "L4-ship")
+        MODE[repo] = "403_secondary"
+        t = ticket(up, repo, "Slow down", 1)
+        await tick()
+        ck("a 403 with retry-after keeps the row queued and asks no one",
+           row(repo, 1)["state"] == "queued" and desk(up) == [] and "rate limit" in (row(repo, 1)["reason"] or ""),
+           (row(repo, 1), desk(up)))
+        del MODE[repo]
+        await tick()
+        ck("and it merges once GitHub lets go", row(repo, 1)["state"] == "merged")
+
+        print("== a pull request from a fork never deletes the base repo's branch ==")
+        repo = "acme/fork"
+        up = project("fork", "L4-ship")
+        t = ticket(up, repo, "From a fork", 1)
+        PRS[(repo, 1)]["head_repo"] = "someone/fork"
+        del DELETES[:]
+        await tick()
+        ck("it merges, and no branch of the base repo is deleted", row(repo, 1)["state"] == "merged"
+           and [d for d in DELETES if d[0] == repo] == [], (row(repo, 1), DELETES))
+
+        print("== a team at L3-review holds a hand-over's L4-ship ==")
+        repo = "acme/ceiling"
+        up = project("ceiling", "L4-ship")
+        store.set_setting(factory_api.CREW_SETTING, json.dumps({"autonomy": "L3-review"}))
+        ck("the team's L3-review wins over the hand-over's L4-ship",
+           merge_queue.autonomy_of(store, up) == "L3-review", merge_queue.autonomy_of(store, up))
+        t = ticket(up, repo, "Held by the team", 1)
+        del MERGES[:]
+        await tick()
+        ck("so it asks the person and merges nothing", row(repo, 1)["state"] == "waiting_approval"
+           and merged_calls(repo) == [], row(repo, 1))
+        store.set_setting(factory_api.CREW_SETTING, json.dumps({"autonomy": "L4-ship"}))
+        ck("a team at L4-ship lets the hand-over's L4-ship stand",
+           merge_queue.autonomy_of(store, up) == "L4-ship")
+        store.set_setting(factory_api.CREW_SETTING, json.dumps({}))
+        ck("a team with no setting changes nothing", merge_queue.autonomy_of(store, up) == "L4-ship")
+        ck("and a project handed over with no autonomy falls to L3-review",
+           merge_queue.autonomy_of(store, project("ceiling2", None)) == "L3-review")
 
         print("== GitHub says no to this one pull request ==")
         for code in ("405", "409", "422"):
@@ -573,6 +682,50 @@ async def main():
         await tick()
         ck("at L3 a recovered row asks again and merges nothing", row(repo, 1)["state"] == "waiting_approval"
            and merged_calls(repo) == [], row(repo, 1))
+
+        print("== the claim's own checks, read once more before the PUT ==")
+        repo = "acme/guard"
+        up = project("guard", "L4-ship")
+        t_h = ticket(up, repo, "Pushed after the claim", 1)
+        t_r = ticket(up, repo, "Broken after the claim", 2)
+        r_h = store.merge_queue_add(repo, "main", 1, sha(1), t_h, up, state="merging")
+        r_r = store.merge_queue_add(repo, "main", 2, sha(2), t_r, up, state="merging")
+        PRS[(repo, 1)]["head"] = sha(1, 1)
+        CI_FAIL.add((repo, 2))
+        del MERGES[:]
+        await merge_queue._merge(store, dict(r_h), store.get_ticket(up, t_h))
+        await merge_queue._merge(store, dict(r_r), store.get_ticket(up, t_r))
+        ck("a head that moved after the claim is not merged, and its row is dropped",
+           merged_calls(repo) == [] and row(repo, 1) is None, (MERGES, rows(repo)))
+        ck("gates that failed after the claim stop the merge, and the row goes back in line with the reason",
+           row(repo, 2)["state"] == "queued" and bool(row(repo, 2)["reason"]), row(repo, 2))
+        CI_FAIL.discard((repo, 2))
+
+        print("== recovery marks a merged row by itself ==")
+        repo = "acme/recover"
+        up = project("recover", "L4-ship")
+        t = ticket(up, repo, "Merged while dead", 1)
+        PRS[(repo, 1)].update(merged=True, state="closed")
+        rr = store.merge_queue_add(repo, "main", 1, PRS[(repo, 1)]["head"], t, up, state="merging")
+        await merge_queue._recover(store)
+        ck("the recovery alone ends the row and the ticket, with no later walker",
+           row(repo, 1)["state"] == "merged" and stage(up, t) == "merged", row(repo, 1))
+
+        print("== the team goes to L4-ship while a question is open ==")
+        repo = "acme/switch"
+        up = project("switch", "L3-review")
+        t = ticket(up, repo, "Asked, then released", 1)
+        await tick()
+        q = row(repo, 1)["desk_item"]
+        ck("it asks at L3-review", row(repo, 1)["state"] == "waiting_approval"
+           and store.get_desk_item(q)["state"] == "open")
+        store.set_handover(up, [{"path": "/w/a", "name": "switch"}], "L4-ship", None, now_utc(),
+                           person_id=person["id"])
+        del MERGES[:]
+        await tick()
+        ck("at L4-ship the question is withdrawn and the pull request merges, nobody asked",
+           store.get_desk_item(q)["state"] == "withdrawn" and row(repo, 1)["state"] == "merged"
+           and [n for n, _ in merged_calls(repo)] == [1], (store.get_desk_item(q), row(repo, 1)))
 
         print("== the rate limit ==")
         resp = lambda v: httpx.Response(200, headers={} if v is None else {"x-ratelimit-remaining": v})

@@ -194,6 +194,7 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
             review = next((s for s in statuses if s.get("context") == REVIEW_CONTEXT), None)
             out.update({
                 "title": pr.get("title"), "branch": (pr.get("head") or {}).get("ref"),
+                "head_repo": ((pr.get("head") or {}).get("repo") or {}).get("full_name"),
                 "head": head, "state": pr.get("state"), "merged": bool(pr.get("merged")),
                 "merge_commit": pr.get("merge_commit_sha") if pr.get("merged") else None,
                 "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs),
@@ -261,9 +262,13 @@ async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squas
             out.update(message=msg or f"GitHub answered {r.status_code}", no_write=False,
                        rate_limited=False)
             return out
-        if r.status_code in (401, 403, 404):
-            if r.status_code == 403 and r.headers.get("x-ratelimit-remaining") == "0":
-                out["rate_limited"] = True
+        if r.status_code in (401, 403, 404, 429):
+            if r.status_code in (403, 429) and (
+                    r.headers.get("x-ratelimit-remaining") == "0" or r.headers.get("retry-after")
+                    or "rate limit" in msg.lower()):
+                out["rate_limited"] = True      # a spent limit, not a credential that cannot write
+                out["message"] = msg or "GitHub's rate limit is spent"
+                continue
             refused += 1
             out["message"] = msg or f"GitHub answered {r.status_code}"
             continue

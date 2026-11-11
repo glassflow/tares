@@ -2782,15 +2782,31 @@ def register(app, store, h: Host) -> SimpleNamespace:
     @app.post("/api/factory/merge-queue/{mid}/approve")
     async def merge_queue_approve(mid: str, request: Request):
         """Approve the merge of a queued pull request that waits for a person (autonomy
-        L3-review), without answering its desk item by hand: the same as a yes there. Only an
-        admin or the project's lead. The merge follows within one sync interval. A new commit
-        on the pull request voids the approval."""
+        L3-review), without answering its desk item by hand: the same as a yes there. Also lifts
+        a hold the person's earlier answer left (the question was withdrawn, or they said no).
+        Refused from any crew station: a person approves in the console. The person the row's
+        question is addressed to approves it (as on /api/desk/{ref}/reply); a row with no
+        question is for an admin or the project's lead. The merge follows within one sync
+        interval. A new commit on the pull request voids the approval."""
         from . import merge_queue as merge_queue_mod
+        if caller(request)["station"]:
+            h.err(PermissionError("a person approves a merge in the console"), 403)
         row = await asyncio.to_thread(store.merge_queue_get, mid)
         if row is None:
             h.err(KeyError(f"no merge queue entry {mid!r}"), 404)
-        lead_or_admin(request, row["project_uid"])
-        if row["state"] != "waiting_approval":
+        d = await asyncio.to_thread(store.get_desk_item, row["desk_item"]) if row.get("desk_item") else None
+        if d is not None:
+            me = work_person(request)
+            if not desk_can_act(d, me["id"], request):
+                who = (store.get_person(d.get("to_person_id")) or {}).get("name") or d.get("to_person_id")
+                h.err(PermissionError(f"the merge of PR #{row['pr']} is for {who}: only they approve it"
+                                      if who else f"the merge of PR #{row['pr']} is not addressed to you"),
+                      403)
+        else:
+            lead_or_admin(request, row["project_uid"])
+        held = row["state"] == "blocked" and row.get("reason") != merge_queue_mod.no_write_reason(
+            row["repo"])
+        if row["state"] != "waiting_approval" and not held:
             h.err(ValueError(f"the merge of PR #{row['pr']} is {row['state']}, "
                              "not waiting for approval"), 409)
         person = h.current_person(request) or {}

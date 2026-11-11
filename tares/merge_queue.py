@@ -68,10 +68,13 @@ def judge(decision: dict) -> tuple[bool, str]:
 
 def autonomy_of(store, project_id: str) -> str:
     """L4-ship when the hand-over (else the crew's setting, with the hand-over person's own over
-    it) says so; L3-review for anything else."""
+    it) says so, and the team's stored autonomy, a ceiling, allows it; L3-review for anything
+    else. A hand-over's own L4-ship never beats a team set to L3-review."""
     ho = store.get_handover(project_id) or {}
     crew = factory_api.crew_settings(store, ho.get("person")).get("autonomy")
     level = effective_autonomy(store, None, project_id, crew=crew)
+    team = factory_api.stored_crew_setting(store, factory_api.CREW_SETTING).get("autonomy")
+    level = factory_mod._stricter_autonomy(level, team)
     return AUTO if level == AUTO else "L3-review"
 
 
@@ -80,10 +83,13 @@ def _person_id(store, project_id: str) -> str | None:
 
 
 def _withdraw(store, row: dict, why: str) -> None:
-    """Close the row's open question as withdrawn; nothing when it has none or it is closed."""
+    """Close the row's open question as withdrawn; nothing when it has none, it is closed, or
+    another open row still points at it (the credential question serves every blocked row of a
+    repo)."""
     did = row.get("desk_item")
     d = store.get_desk_item(did) if did else None
-    if d and d.get("state") == "open":
+    if d and d.get("state") == "open" and not any(
+            x["id"] != row["id"] and x.get("desk_item") == did for x in store.merge_queue_open()):
         store.close_desk_item(d["id"], "withdrawn", why, now_utc())
 
 
@@ -127,6 +133,10 @@ def _ask(store, row: dict, t: dict) -> None:
     _set(store, row, "waiting_approval", None, desk_item=d["id"], approved_head=None)
 
 
+def no_write_reason(repo: str) -> str:
+    return f"No GitHub credential can write to {repo}"
+
+
 def _blocked_for_credential(store, row: dict, t: dict) -> None:
     """No credential on this Tares can write to the repo: the row is blocked and ONE question
     (not one per pull request, not one per tick) tells the person what to add."""
@@ -141,8 +151,7 @@ def _blocked_for_credential(store, row: dict, t: dict) -> None:
             "Tares merges ready pull requests itself and needs write access to do it.",
             f"The merge of PR #{row['pr']}", [factory_mod.label(t)], True, BY, [], now_utc(),
             to_person_id=_person_id(store, row["project_uid"]))
-    _set(store, row, "blocked", f"No GitHub credential can write to {row['repo']}",
-         desk_item=d["id"])
+    _set(store, row, "blocked", no_write_reason(row["repo"]), desk_item=d["id"])
 
 
 async def _merged(store, row: dict, t: dict | None, reason: str, by: str, role: str,
@@ -261,6 +270,10 @@ async def _keep_rows(store, g: dict) -> dict[str, dict]:
                 g["rows"].remove(row)
                 continue
             fresh[row["id"]] = ans
+            if row["state"] == "blocked" and row.get("reason") == no_write_reason(row["repo"]):
+                # a credential may have been added since: line up again and try the merge; it
+                # blocks again (one question for the repo, no new one) when none can write yet
+                await asyncio.to_thread(_set, store, row, "queued", None)
             if row["state"] == "waiting_approval":
                 if g["level"].get(row["project_uid"]) == AUTO:
                     await asyncio.to_thread(_withdraw, store, row,
@@ -334,8 +347,10 @@ async def _merge(store, row: dict, t: dict) -> None:
         pr = await factory_github.read_pr(store, row["repo"], int(row["pr"]), t.get("pr"))
         pr = {**pr, "merged": True, "state": "closed"}
         branch = pr.get("branch") or (t.get("pr") or {}).get("branch")
+        await asyncio.to_thread(_withdraw, store, row, "a credential can write now")
         await _merged(store, row, t, "Tares merged the pull request", BY, BY, pr)
-        if branch:
+        same_repo = str(pr.get("head_repo") or "").lower() == str(row["repo"]).lower()
+        if branch and same_repo:      # a fork's branch is not the base repo's to delete
             await factory_github.delete_branch(store, row["repo"], branch)
         return
     if res["no_write"]:
