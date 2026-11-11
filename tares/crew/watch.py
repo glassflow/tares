@@ -422,6 +422,7 @@ def cmd_watch(argv: list, env: dict) -> int:
         args = args[1:]
     paths = CrewPaths.from_env()
     state.require_crew(paths)
+    state.merge_crew_defaults(paths)   # bash primes before every command but a local one: the crew's defaults are filled in
     once = False
     try:
         interval = float(env.get("FACTORY_WATCH_INTERVAL") or DEFAULT_INTERVAL)
@@ -470,3 +471,7 @@ from . import pace as _pace  # noqa: E402
 watch_revive.pace = _pace.Seam()   # TR-962: the revive loop asks the real pace, not the inert stand-in
 register("pace", _pace.step)
 register(ROUND_NAME, _pace.round_start)   # TR-1157: the pace is read once, at the top of the round
+
+from . import readings as _readings  # noqa: E402
+
+register("readings", _readings.step)   # TR-1163: the Crew page's asks and the plan's limits, on every tick of a nap
