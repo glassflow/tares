@@ -993,6 +993,38 @@ def running_version_from_the_list_or_the_process():
         stop_procs()
 
 
+@test
+def fake_ps_hook():
+    """TARES_FAKE_PS_DIR: the files a suite's fake `ps` answers from stand in for the processes."""
+    d = Path(tempfile.mkdtemp(prefix="fakeps "))
+    old = os.environ.get("TARES_FAKE_PS_DIR")
+    try:
+        (d / "ps").mkdir()
+        (d / "ps" / "4001.command").write_text("claude bg-spare\n", encoding="utf-8")
+        (d / "ps" / "4001.ppid").write_text("5001\n", encoding="utf-8")
+        (d / "ps" / "5001.command").write_text("claude bg-pty-host -- /home/u/.local/share/claude/versions/2.1.399 --bg-spare /x\n", encoding="utf-8")
+        (d / "ps-list").write_text("4001 claude bg-spare\n5001 claude bg-pty-host -- /home/u/versions/2.1.399 --bg-spare /tmp/s.claim.sock\nnot-a-pid x\n", encoding="utf-8")
+        os.environ["TARES_FAKE_PS_DIR"] = str(d)
+        ck("the hook gives a pid's command line from <pid>.command", cc._command_line(4001) == "claude bg-spare")
+        ck("a pid with no file there is read from the real process (gone: '')", cc._command_line(2 ** 22 + 777) == "")
+        ck("running_version reads the parent named in <pid>.ppid, then the pid",
+           cc.running_version("0000000a", [{"id": "0000000a", "pid": 4001}]) == "2.1.399")
+        ck("the listing is the ps-list file: pid and command, a line without a pid skipped",
+           cc.process_listing() == [(4001, "claude bg-spare"),
+                                    (5001, "claude bg-pty-host -- /home/u/versions/2.1.399 --bg-spare /tmp/s.claim.sock")])
+        (d / "ps-list").unlink()
+        ck("no ps-list file: an empty listing, never the machine's processes", cc.process_listing() == [])
+        del os.environ["TARES_FAKE_PS_DIR"]
+        ck("the hook off: the real process list (this process is in it)", any(p == os.getpid() for p, _ in cc.process_listing()))
+        ck("...and a pid with a file there is not read from it", cc._command_line(4001) != "claude bg-spare")
+    finally:
+        if old is None:
+            os.environ.pop("TARES_FAKE_PS_DIR", None)
+        else:
+            os.environ["TARES_FAKE_PS_DIR"] = old
+        shutil.rmtree(d, ignore_errors=True)
+
+
 # ============================================================ older_than and claude_version
 
 

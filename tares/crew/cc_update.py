@@ -116,15 +116,8 @@ def cc_behind(paths: CrewPaths, target: str, agents=None, binary=None) -> int:
 
 
 def _listing():
-    """[(pid, command line)] of the processes this user can see; the command line joined by spaces, as
-    `ps -o command=` shows it."""
-    out = []
-    for pid in psutil.pids():
-        try:   # one process at a time: psutil on macOS can raise SystemError for one that is just ending
-            out.append((pid, " ".join(psutil.Process(pid).cmdline())))
-        except (psutil.Error, OSError, SystemError):
-            continue
-    return out
+    """[(pid, command line)] of the processes this user can see (claude.process_listing)."""
+    return claude.process_listing()
 
 
 def prune_spares(paths: CrewPaths, target: str) -> None:
