@@ -2119,11 +2119,11 @@
       "kind": "function",
       "line": 2451,
       "what": "answer the Crew page's reading asks",
-      "ticket": "TR-958",
+      "ticket": "TR-1163",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Runs in the watch nap but answers the Crew page's /context and /usage asks (TR-967 supplies the readings)."
+      "python": "tares.crew.readings:step",
+      "ported": true,
+      "note": "Runs on every tick of the watch nap: reads the plan's limits every FACTORY_PLAN_EVERY seconds (said once when it cannot) and answers the Crew page's /context asks for this station's own session. Parity: usage_watch_*; unit checks: tests/test_crew_readings.py."
     },
     {
       "name": "nap",
@@ -2134,7 +2134,7 @@
       "dropped": false,
       "python": "tares.crew.watch:nap",
       "ported": true,
-      "note": "Looks for the stop file on every tick (FACTORY_ASK_POLL, at least 0.05s) and calls the readings step (serve_readings, TR-967) once registered."
+      "note": "Looks for the stop file on every tick (FACTORY_ASK_POLL, at least 0.05s) and calls the readings step (serve_readings, tares/crew/readings.py) on every tick."
     },
     {
       "name": "cmd_roster",
@@ -4508,7 +4508,17 @@
       "dropped": false,
       "python": "tests.factory.parity:SCENARIOS",
       "ported": true,
-      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases and the curl URL checks (the Python client is httpx); the bash suite stays for them."
+      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases; the bash suite stays for them. The curl URL checks run on the Python engine too (TR-1158): the client notes each URL in the file TARES_URL_LOG names."
+    },
+    {
+      "name": "idle_wake_python_test.sh",
+      "kind": "suite",
+      "what": "idle_wake_test.sh on the Python engine (TARES_FACTORY_ENGINE=python); any FAIL fails it",
+      "ticket": "TR-1158",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "CI wrapper: sets FACTORY_BIN and TARES_FACTORY_ENGINE=python; the suite sets TARES_URL_LOG."
     },
     {
       "name": "route_proxy.py",
@@ -4649,6 +4659,16 @@
       "python": "",
       "ported": false,
       "note": "Used by the watch_* scenarios of parity.py; it goes when the bash engine does."
+    },
+    {
+      "name": "readings_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the watch between its rounds on either engine and waits until a fake Tares has answered the asks route N times",
+      "ticket": "TR-1163",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the usage_watch_* scenarios of parity.py; standard library only; it goes when the bash engine does."
     }
   ],
   "cmux_touchpoints": [

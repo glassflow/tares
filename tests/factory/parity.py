@@ -42,6 +42,7 @@ Standard library only.
 from __future__ import annotations
 
 import difflib
+from concurrent.futures import ProcessPoolExecutor
 import fnmatch
 import json
 import os
@@ -4898,13 +4899,33 @@ def suite_scenarios() -> dict:
     return out
 
 
+def passes_one(name: str) -> bool:
+    """Whether scenario `name` passes against Python now (a worker of passes_now)."""
+    return evaluate(SCENARIOS[name], out=lambda _line: None)[1]
+
+
+def passes_now() -> dict:
+    """{scenario name: passes against Python}, every scenario run on both engines. Scenarios share nothing (each
+    has its own folder and its own fake Tares on a free port), so they run in PARITY_JOBS processes at once
+    (default: the CPUs, at most 4; 1 runs them one after the other in this process)."""
+    try:
+        jobs = int(os.environ.get("PARITY_JOBS") or min(os.cpu_count() or 1, 4))
+    except ValueError:
+        jobs = 1
+    names = list(SCENARIOS)
+    if jobs <= 1 or len(names) <= 1:
+        return {n: passes_one(n) for n in names}
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        return dict(zip(names, pool.map(passes_one, names)))
+
+
 def coverage(require_full: bool, out=print) -> int:
     found = suite_scenarios()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
+    results = passes_now()
     for sc in SCENARIOS.values():
-        quiet: list = []
-        ok = evaluate(sc, out=quiet.append)[1]
+        ok = results[sc.name]
         for label in sc.covers:
             if label not in found.get(sc.suite, []):
                 out(f"ERROR scenario {sc.name} covers a check that is not in {sc.suite}_test.sh: {label}")
@@ -4926,6 +4947,1418 @@ def coverage(require_full: bool, out=print) -> int:
         out(f"FAIL: --require-full wants every scenario ported, {total - done} are not")
         return 1
     return bad
+
+
+# >>> TR-1159 crew_test.sh checks, one scenario per group of checks (every `check "<label>"` of tests/factory/crew_test.sh)
+# group g1
+# crew_test.sh: the shared MCP endpoint, the desk and status, down and finish, a hand-made crew.json, an
+# unrecorded builder in a second repo, and the stops when no MCP server answers.
+
+def g1_json(r: Run, i: int):
+    return json.loads(r.results[i]["stdout"])
+
+
+def g1_line(r: Run, pattern: str, i: int = -1) -> bool:
+    """Whether a line of step i's output matches the pattern from its start (grep -q "^...")."""
+    return re.search(pattern, r.out(i), re.M) is not None
+
+
+# --- the shared MCP endpoint: `settings` and `_mcp-url` --------------------------------------------------------
+
+scenario(Scenario(
+    name="crew_g1_up_endpoints",
+    ignore_calls=LSP_PROBE,
+    suite="crew",
+    about="crew up gives every crew station the same Tares address; `settings` shows the MCP endpoint too",
+    stand_in={"settings": dict(SAVED)},
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], stdin=""), Step(["settings", "crew-builder-x", "builder"])],
+    checks=[
+        ("crew-$r reaches the same Tares",
+         lambda r: all(env_of(r, "crew-" + role, "TARES_FACTORY_URL") == r.stand_in.url for role in ROLES)),
+        ("the settings command shows the MCP endpoint too",
+         lambda r: g1_json(r, 1)["env"]["TARES_FACTORY_MCP_URL"] == r.stand_in.mcp_url),
+    ],
+    covers=["crew-$r reaches the same Tares", "the settings command shows the MCP endpoint too"],
+))
+
+scenario(Scenario(
+    name="crew_g1_mcp_url",
+    suite="crew",
+    about="_mcp-url: a local Tares has its MCP on its own port, a remote one on its own host, TARES_FACTORY_MCP_URL wins",
+    steps=[
+        Step(["_mcp-url"], env={"TARESD_URL": "http://localhost:8787"}),
+        Step(["_mcp-url"], env={"TARESD_URL": "http://127.0.0.1:8787", "TARES_MCP_PORT": "9911"}),
+        Step(["_mcp-url"], env={"TARESD_URL": "https://cell.example.com/"}),
+        Step(["_mcp-url"], env={"TARES_FACTORY_MCP_URL": "http://mcp.example:1/mcp/", "TARESD_URL": "https://cell.example.com"}),
+    ],
+    checks=[
+        ("a local Tares: MCP on its own port", lambda r: r.out(0).strip() == "http://127.0.0.1:8788/mcp"),
+        ("a local Tares: TARES_MCP_PORT moves it", lambda r: r.out(1).strip() == "http://127.0.0.1:9911/mcp"),
+        ("a remote Tares: MCP on its own host", lambda r: r.out(2).strip() == "https://cell.example.com/mcp"),
+        ("TARES_FACTORY_MCP_URL wins", lambda r: r.out(3).strip() == "http://mcp.example:1/mcp"),
+    ],
+    covers=["a local Tares: MCP on its own port", "a local Tares: TARES_MCP_PORT moves it",
+            "a remote Tares: MCP on its own host", "TARES_FACTORY_MCP_URL wins"],
+))
+
+
+# --- the desk, read from Tares ---------------------------------------------------------------------------------
+
+G1_NO_PROJECTS = {"GET /api/crew/projects": (200, {"projects": []})}
+G1_D1 = {"id": "d1", "label": "D1", "question": "Keep the old endpoint?", "recommendation": "keep it until v2 ships",
+         "why": "two callers still use it", "options": ["keep it until v2 ships", "drop it now"], "blocks": "T7",
+         "blocking": True, "project": "p1", "project_name": "Links App"}
+G1_D2 = {"id": "d2", "label": "D2", "question": "Rename the bucket?", "recommendation": "leave it",
+         "why": "nothing reads the name", "options": ["rename now", "leave it"], "blocking": False}
+
+scenario(Scenario(
+    name="crew_g1_desk_empty",
+    suite="crew",
+    about="an empty desk: crew desk and status both say nothing waits",
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": []})},
+    setup=_setup_views,
+    steps=[Step(["crew", "desk"]), Step(["crew", "status"])],
+    checks=[
+        ("empty desk: crew desk says nothing waits", lambda r: "Nothing waits for you" in r.out(0)),
+        ("empty desk: status says nothing waits", lambda r: g1_line(r, r"^desk: nothing waits", 1)),
+    ],
+    covers=["empty desk: crew desk says nothing waits", "empty desk: status says nothing waits"],
+))
+
+scenario(Scenario(
+    name="crew_g1_desk_two",
+    suite="crew",
+    about="two questions: status shows the blocking one first with its options, crew desk shows both, desk is short for it",
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": [G1_D1, G1_D2]})},
+    setup=_setup_views,
+    steps=[Step(["crew", "status"]), Step(["crew", "desk"]), Step(["desk"])],
+    checks=[
+        ("status counts the questions", lambda r: g1_line(r, r"^desk: 2 waiting for you", 0)),
+        ("status shows the blocking one first, with its project",
+         lambda r: "D1 (blocks work) · Links App: Keep the old endpoint?" in r.out(0)),
+        ("status shows its options and recommendation",
+         lambda r: "A) keep it until v2 ships" in r.out(0) and "B) drop it now" in r.out(0)
+         and "recommended: keep it until v2 ships, since two callers still use it" in r.out(0)),
+        ("status leaves out the later question", lambda r: "Rename the bucket" not in r.out(0)),
+        ("crew desk shows every question",
+         lambda r: "Keep the old endpoint?" in r.out(1) and "D2: Rename the bucket?" in r.out(1) and "blocks: T7" in r.out(1)),
+        ("crew desk says where to answer", lambda r: "tares factory crew attach orchestrator" in r.out(1)),
+        ("factory desk is short for crew desk", lambda r: r.out(2).rstrip("\n") == r.out(1).rstrip("\n")),
+    ],
+    covers=["status counts the questions", "status shows the blocking one first, with its project",
+            "status shows its options and recommendation", "status leaves out the later question",
+            "crew desk shows every question", "crew desk says where to answer", "factory desk is short for crew desk"],
+))
+
+
+# --- a finished project's questions, crew down, and a stopped crew's status -------------------------------------
+
+G1_F1 = {"id": "d1", "label": "D1", "question": "No project is left. Stop the crew?", "recommendation": "yes",
+         "why": "nothing to build", "project": "p9", "project_name": "finishing", "project_finished": True,
+         "blocking": True, "blocks": ""}
+G1_F2 = {"id": "d2", "label": "D2", "recommendation": "yes", "why": "nothing to build",
+         "question": "No project is left. Stop the crew? Run `tares factory crew down` in your terminal."}
+G1_F3 = {"id": "d3", "label": "D3", "question": "Nothing left to build. Stop the crew?", "recommendation": "yes",
+         "why": "shorter words"}
+G1_F4 = {"id": "d4", "label": "D4", "question": "Keep nightly dependency bumps?", "recommendation": "yes", "why": "cheap"}
+G1_F5 = {"id": "d5", "label": "D5", "question": "Stop the crew now?", "recommendation": "yes", "why": "late",
+         "project": "p9", "project_name": "finishing", "project_finished": True, "blocking": True}
+G1_DESK = "GET /api/desk?state=open"
+
+
+def g1_later_desk(r: Run) -> None:
+    """The desk after crew down: the stop questions are withdrawn, and a new one of the finished project is asked."""
+    r.tares.routes[G1_DESK] = (200, {"desk": [G1_F4, G1_F5]})
+
+
+def g1_withdrawn(r: Run, qid: str, reason: str = "") -> bool:
+    asks = r.tares.asked(f"POST /api/desk/{qid}/withdraw")
+    return bool(asks) and (not reason or any(json.loads(a["body"]) == {"reason": reason} for a in asks))
+
+
+scenario(Scenario(
+    name="crew_g1_down_desk",
+    suite="crew",
+    about="a running crew sees a finished project's question, crew down retires all and withdraws the stop questions, "
+          "and a stopped crew's status leaves the finished project's question out",
+    tares={**G1_NO_PROJECTS, G1_DESK: (200, {"desk": [G1_F1, G1_F2, G1_F3, G1_F4]}),
+           **{f"POST /api/desk/d{n}/withdraw": (200, {"ok": True}) for n in (1, 2, 3, 4)}},
+    setup=_setup_views,
+    steps=[Step(["crew", "desk"]), Step(["crew", "down"]), Step(["crew", "status"], run_before=g1_later_desk)],
+    checks=[
+        ("a running crew sees a finished project's question", lambda r: "finishing: No project is left" in r.out(0)),
+        ("a question with nothing in blocks prints no empty blocks line",
+         lambda r: re.search(r"^  blocks: *$", r.out(0), re.M) is None),
+        ("stations that never reported to Tares retire without a warning", lambda r: "could not tell Tares" not in r.out(1)),
+        ("down retires all", lambda r: not [s for s in _stations_now(r).values() if s.get("status") == "active"]),
+        ("crew down withdraws it", lambda r: g1_withdrawn(r, "d1", "the crew stopped and the project is finished")),
+        ("and the stop-the-crew question asked with no project",
+         lambda r: g1_withdrawn(r, "d2", "the person stopped the crew")),
+        ("and one in other words that still asks to stop the crew",
+         lambda r: g1_withdrawn(r, "d3", "the person stopped the crew")),
+        ("a crew-wide question about something else stays open", lambda r: not r.tares.asked("POST /api/desk/d4/withdraw")),
+        ("a stopped crew's status leaves it out",
+         lambda r: g1_line(r, r"^desk: %d waiting" % (len(r.tares.routes[G1_DESK][1]["desk"]) - 1), 2)
+         and "Stop the crew now" not in r.out(2)),
+        ("and says no stations run instead of an empty table",
+         lambda r: g1_line(r, r"^no stations running; tares factory crew up starts them", 2)
+         and not g1_line(r, r"^STATION ", 2)),
+    ],
+    covers=["a running crew sees a finished project's question",
+            "a question with nothing in blocks prints no empty blocks line",
+            "stations that never reported to Tares retire without a warning", "down retires all",
+            "crew down withdraws it", "and the stop-the-crew question asked with no project",
+            "and one in other words that still asks to stop the crew",
+            "a crew-wide question about something else stays open", "a stopped crew's status leaves it out",
+            "and says no stations run instead of an empty table"],
+))
+
+
+# --- finish takes a project off the crew's list ----------------------------------------------------------------
+
+def g1_after_finish(r: Run) -> None:
+    r.tares.routes["GET /api/crew/projects"] = (200, {"projects": [p for p in PROJECTS if p["id"] != "p2"]})
+
+
+scenario(Scenario(
+    name="crew_g1_finish_list",
+    suite="crew",
+    about="a finished project is no longer on the crew's list",
+    tares={"GET /api/crew/projects": (200, {"projects": PROJECTS}), "POST /api/projects/p2/finish": (200, {"open_projects": 1})},
+    setup=_setup_projects,
+    steps=[Step(["finish", "shop", "all shipped"]), Step(["projects"], run_before=g1_after_finish)],
+    checks=[
+        ("and it is off the crew's list",
+         lambda r: r.code(0) == 0 and "✓ shop is done." in r.out(0) and r.code(1) == 0
+         and re.search(r"^shop ", r.out(1), re.M) is None and "Links App" in r.out(1)),
+    ],
+    covers=["and it is off the crew's list"],
+))
+
+
+# --- a hand-made crew.json -------------------------------------------------------------------------------------
+
+def g1_hand_made(r: Run) -> None:
+    r.trust(r.crew)
+    r.crew.mkdir(parents=True, exist_ok=True)
+    (r.crew / "crew.json").write_text('{"stations": {"reviewer": {"model": "sonnet"}}}\n', encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crew_g1_hand_made_crewjson",
+    ignore_calls=LSP_PROBE,
+    suite="crew",
+    about="a crew.json written by hand keeps its choice, gains the template's defaults, and a crew without a releaser starts two stations",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    prepare=g1_hand_made,
+    steps=[Step(["crew", "up", "--yes"], stdin="")],
+    checks=[
+        ("hand-made crew.json keeps its choice",
+         lambda r: r.crew_json()["stations"]["reviewer"].get("model") == "sonnet"
+         and r.crew_json()["stations"]["reviewer"].get("effort") == "high"),
+        ("hand-made crew.json gains defaults",
+         lambda r: r.crew_json()["stations"]["orchestrator"].get("model") == "opus"
+         and r.crew_json()["limits"]["autocompact_tokens"] == 200000),
+        ("no releaser unless asked for", lambda r: r.launches() == 2 and r.station("crew-releaser", "status") == ""),
+    ],
+    covers=["hand-made crew.json keeps its choice", "hand-made crew.json gains defaults", "no releaser unless asked for"],
+))
+
+
+# --- an unrecorded builder in the second repo of a project -------------------------------------------------------
+
+def g1_setup_adopt(tmp: Path, env: dict) -> None:
+    _setup_views(tmp, env)
+    for repo in ("core", "charts"):
+        (tmp / "argus" / repo).mkdir(parents=True, exist_ok=True)
+    agents = tmp / "claude" / "agents.json"
+    rows = json.loads(agents.read_text(encoding="utf-8"))
+    rows.append(_row("working", "0000beef", "argus-build-m2-charts", cwd="%s/argus/charts" % tmp, sessionId="s-beef"))  # the route's spelling ("{tmp}/argus/charts"): the engines compare the two as text
+    agents.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crew_g1_adopt_second_repo",
+    suite="crew",
+    about="roster records a live builder that stations.json lacks, with its project and the repo it runs in",
+    tares={"GET /api/crew/projects": (200, {"projects": [
+        {"id": "p_argus", "name": "argus", "tickets_done": 0, "tickets_total": 2, "milestone": None,
+         "repos": [{"path": "{tmp}/argus/core"}, {"path": "{tmp}/argus/charts"}]}]})},
+    setup=g1_setup_adopt,
+    steps=[Step(["roster"])],
+    checks=[
+        ("multi: an unrecorded builder in the second repo is adopted with its project",
+         lambda r: r.station("argus-build-m2-charts", "project") == "argus"
+         and r.station("argus-build-m2-charts", "repo") == "%s/argus/charts" % r.tmp),
+    ],
+    covers=["multi: an unrecorded builder in the second repo is adopted with its project"],
+))
+
+
+# --- no MCP server at the endpoint -----------------------------------------------------------------------------
+
+G1_NOMCP = "http://127.0.0.1:9/mcp"
+G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations"]})}
+
+scenario(Scenario(
+    name="crew_g1_no_mcp",
+    ignore_calls=LSP_PROBE,
+    suite="crew",
+    about="crew up stops and names the URL and the command when no MCP server answers; taresd itself is not one",
+    tares=G1_HEALTH,
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": G1_NOMCP}, stdin=""),
+           Step(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": "{tares}/mcp"}, stdin="")],
+    checks=[
+        ("no MCP server: crew up stops", lambda r: r.code(0) != 0 and r.launches() == 0),
+        ("no MCP server: it names the URL and the command",
+         lambda r: "no MCP server answers at %s" % G1_NOMCP in r.out(0) and "tares mcp --transport streamable-http" in r.out(0)),
+        ("no MCP server: no token, so no token placeholder", lambda r: "TARES_AUTH_TOKEN=" not in r.out(0)),
+        ("taresd itself is not an MCP server",
+         lambda r: "no MCP server answers at %s/mcp" % r.tares.url in r.out(1) and r.launches() == 0),
+    ],
+    covers=["no MCP server: crew up stops", "no MCP server: it names the URL and the command",
+            "no MCP server: no token, so no token placeholder", "taresd itself is not an MCP server"],
+))
+# end group g1
+
+
+# group g2
+# crew_test.sh, the middle of its story: roster, retire, revive and the watch, halt and resume, the guard and the
+# session start. Each scenario builds its own small crew (the stations of _cc_setup, a fake Tares for the routes the
+# commands read) and runs the real commands on both engines.
+
+G2_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L3-review", "releaser": True, "release_profile": "kind",
+                                                           "challenger": False, "builders_max": 3}}),
+            "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+G2_QUIET = ("GET ",)                           # reads of Tares are made in a different number and order
+G2_CALLS = (("agents",), ("--version",))       # so are the reads of the session list and the version
+G2_SETUP = _cc_setup(have="1.0.0", installed="1.0.0")
+
+
+def g2_agent(station: str, fn):
+    """A `before`: change the station's row in the fake Claude Code's session list (fn edits the row)."""
+    def before(tmp: Path) -> None:
+        sid = _agent_of(tmp, station)
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for row in rows:
+            if row.get("id") == sid:
+                fn(row)
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_stopped(station: str):
+    def edit(row):
+        row["state"] = "stopped"
+        row.pop("pid", None)
+    return g2_agent(station, edit)
+
+
+def g2_done(station: str, pid=None):
+    def edit(row):
+        row["state"] = "done"
+        row.pop("pid", None)
+        if pid is not None:
+            row["pid"] = pid
+    return g2_agent(station, edit)
+
+
+def g2_chain(*fns):
+    def before(tmp: Path) -> None:
+        for fn in fns:
+            fn(tmp)
+    return before
+
+
+def g2_earlier(r: Run, station: str) -> list:
+    return _stations_now(r)[station].get("earlier") or []
+
+
+def g2_resumes(r: Run) -> int:
+    return sum(1 for c in r.calls() if "--resume" in c["args"])
+
+
+def g2_all_done(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        row["state"] = "done"
+        row.pop("pid", None)
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def g2_sessions_resumed(tmp: Path) -> int:
+    try:
+        lines = (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and "--resume" in json.loads(x)["args"])
+
+
+def g2_mark_launches(name: str):
+    def run_before(r: Run) -> None:
+        r.marks[name] = r.launches()
+    return run_before
+
+
+def g2_scenario(name: str, about: str, steps: list, checks: list, covers: list, setup=None, **kw) -> None:
+    kw.setdefault("tares", G2_TARES)
+    scenario(Scenario(name=name, suite="crew", about=about, setup=setup or G2_SETUP, ignore_asked=G2_QUIET,
+                      ignore_calls=G2_CALLS, steps=steps, checks=checks, covers=covers, **kw))
+
+
+def g2_sid(station: str, field: str = "id"):
+    """An `after`: the station's field (its session id by default) in stations.json when the step ended."""
+    def after(tmp: Path):
+        return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8")).get(station, {}).get(field)
+    return after
+
+
+def g2_after(*fns):
+    def after(tmp: Path):
+        return [fn(tmp) for fn in fns]
+    return after
+
+
+g2_scenario(
+    "crew_g2_revive",
+    "the watch revives a stopped station under a new id in its own conversation; a finished session that still runs is left, "
+    "one with no process is revived, and with no process anywhere every finished station is revived",
+    [Step(["crew", "watch", "--once"], before=g2_stopped("crew-reviewer"),
+          after=g2_after(g2_sid("crew-reviewer"), lambda tmp: g2_sessions_resumed(tmp))),
+     Step(["crew", "watch", "--once"], before=g2_done("crew-reviewer", pid=4242), after=g2_sid("crew-reviewer")),
+     Step(["crew", "watch", "--once"], before=g2_done("crew-reviewer"),
+          after=g2_after(g2_sid("crew-reviewer"), lambda tmp: len(g2_sid("crew-reviewer", "earlier")(tmp) or []))),
+     Step(["crew", "watch", "--once"], before=g2_all_done, run_before=g2_mark_launches("before"))],
+    [("reviewer revived with a new id", lambda r: r.snap(0)[0] not in (None, "", "bbbb0002")),
+     ("revive resumed the conversation",
+      lambda r: any(c["args"][:1] == ["--bg"] and c["args"][2] == "crew-reviewer" and arg_after(c["args"], "--resume") == "old-reviewer"
+                    for c in r.calls())),
+     ("earlier session kept in history", lambda r: g2_earlier(r, "crew-reviewer")[0]["id"] == "bbbb0002"),
+     ("revived env unchanged", lambda r: env_of(r, "crew-reviewer", "FACTORY_STATION") == "crew-reviewer"),
+     ("other stations untouched", lambda r: r.snap(0)[1] == 1),
+     ("a done session still running is left alone", lambda r: r.snap(1) == r.snap(0)[0]),
+     ("a done session with no process is revived",
+      lambda r: r.snap(2)[0] != r.snap(1) and r.snap(2)[1] == 2),
+     ("with no process left anywhere, every finished station is revived",
+      lambda r: r.launches() - r.marks["before"] == 3)],
+    ["reviewer revived with a new id", "revive resumed the conversation", "earlier session kept in history",
+     "revived env unchanged", "other stations untouched", "a done session still running is left alone",
+     "a done session with no process is revived", "with no process left anywhere, every finished station is revived"])
+
+def g2_stops(r: Run) -> int:
+    return sum(1 for c in r.calls() if c["args"][:1] == ["stop"])
+
+
+def g2_mark(key: str):
+    def run_before(r: Run) -> None:
+        r.marks[key] = (r.launches(), g2_stops(r))
+    return run_before
+
+
+G2_FAIL = {"FAKE_CLAUDE_AGENTS_FAIL": "1"}
+
+g2_scenario(
+    "crew_g2_unreadable",
+    "a session list that cannot be read is never taken for an empty one: the watch, revive, restart and status say so and change nothing; "
+    "read again, the next round revives the station",
+    [Step(["crew", "watch", "--once"], env=G2_FAIL, before=g2_stopped("crew-reviewer"), run_before=g2_mark("start")),
+     Step(["revive", "crew-reviewer"], env=G2_FAIL),
+     Step(["restart", "crew-orchestrator"], env=G2_FAIL),
+     Step(["crew", "status"], env=G2_FAIL),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("failed"))],
+    [("unreadable session list: the watch starts nothing and carries on",
+      lambda r: r.code(0) == 0 and r.marks["failed"] == r.marks["start"] and "could not read" in r.out(0)),
+     ("unreadable session list: revive refuses to guess",
+      lambda r: r.code(1) != 0 and r.marks["failed"] == r.marks["start"] and "could not read" in r.out(1)),
+     ("unreadable session list: restart stops nothing",
+      lambda r: r.code(2) != 0 and r.marks["failed"] == r.marks["start"] and "could not read" in r.out(2)),
+     ("unreadable session list: status says so instead of showing every station gone",
+      lambda r: "could not read" in r.out(3) and " gone " not in r.out(3)),
+     ("readable again: the next round revives it", lambda r: r.launches() - r.marks["failed"][0] == 1)],
+    ["unreadable session list: the watch starts nothing and carries on", "unreadable session list: revive refuses to guess",
+     "unreadable session list: restart stops nothing",
+     "unreadable session list: status says so instead of showing every station gone",
+     "readable again: the next round revives it"])
+
+def g2_setup_roster(tmp: Path, env: dict) -> None:
+    """The lifecycle seed plus a builder of the project "Links App" and a helper of it, both with a working session."""
+    _setup_life(tmp, env)
+    f = tmp / "crew" / "stations.json"
+    stations = json.loads(f.read_text(encoding="utf-8"))
+    base = {"status": "active", "repo": "", "cwd": "", "model": "opus", "effort": "high", "project": "Links App"}
+    stations["links-app-build-m1"] = {**base, "role": "builder", "id": "ffff0006"}
+    stations["links-app-build-m1-rebase"] = {**base, "role": "helper", "id": "ffff0007"}
+    f.write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    a = tmp / "claude" / "agents.json"
+    agents = json.loads(a.read_text(encoding="utf-8"))
+    agents += [_row("working", "ffff0006", "links-app-build-m1", version="2.1.310"),
+               _row("working", "ffff0007", "links-app-build-m1-rebase", version="2.1.310")]
+    a.write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+
+
+G2_HELPER = "links-app-build-m1-rebase"
+
+g2_scenario(
+    "crew_g2_roster_retire",
+    "roster lists a station with its project; retire tells Tares which crew's station ended, and a retired station is not revived",
+    [Step(["roster"]),
+     Step(["retire", G2_HELPER], run_before=g2_mark("start")),
+     Step(["revive", G2_HELPER])],
+    [("roster lists project",
+      lambda r: any(x.startswith("links-app-build-m1\tbuilder\tLinks App\tworking") for x in r.out(0).splitlines())),
+     ("retire marks the station ended on Tares",
+      lambda r: r.code(1) == 0 and r.tares.asked(f"POST /api/crew/{G2_HELPER}/end?crew=crew") != []
+      and "could not tell Tares" not in r.out(1)),
+     ("and says which crew's station it is",
+      lambda r: len(r.tares.asked(f"POST /api/crew/{G2_HELPER}/end?crew=crew")) == 1),
+     ("a retired station is not revived",
+      lambda r: r.launches() == r.marks["start"][0] and "was retired" in r.out(2)
+      and not (r.crew / "stations" / f"{G2_HELPER}.lock").exists())],
+    ["roster lists project", "retire marks the station ended on Tares", "and says which crew's station it is",
+     "a retired station is not revived"],
+    setup=g2_setup_roster,
+    tares={**_ended(G2_HELPER, 200)})
+
+# A command held in the background (the bash suite's `cmd &`): it runs the same engine as the step, in its own
+# process group so a kill takes its whole tree down, and the scenario waits until it has started a session.
+G2_ENVS: dict = {}
+G2_PROCS: dict = {}
+G2_NOT_WINDOWS = "the held commands and their kill are POSIX process groups"
+
+
+def g2_setup(tmp: Path, env: dict) -> None:
+    G2_ENVS[str(tmp)] = env
+    G2_SETUP(tmp, env)
+
+
+def g2_bg_launches(tmp: Path, kind: str = "bg") -> int:
+    """Calls to the fake Claude Code so far: sessions started (--bg) or stopped (stop)."""
+    try:
+        lines = (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and (("--bg" in json.loads(x)["args"]) if kind == "bg"
+                                                  else json.loads(x)["args"][:1] == ["stop"]))
+
+
+def g2_hold(name: str, argv: list, extra=None, hold: bool = False, wait_for: int = 1, kind: str = "bg"):
+    """A before: start `tares factory <argv>` in the background and wait until it has asked Claude Code for
+    `wait_for` sessions. hold: the fake keeps registering the session until g2_release removes the hold file."""
+    def before(tmp: Path) -> None:
+        env = {**G2_ENVS[str(tmp)], **{k: v.replace("{tmp}", str(tmp)) for k, v in (extra or {}).items()}}
+        if hold:
+            (tmp / f"{name}.hold").write_text("", encoding="utf-8")
+            env["FAKE_CLAUDE_BG_HOLD"] = str(tmp / f"{name}.hold")
+        base = g2_bg_launches(tmp, kind)
+        out = open(tmp / f"{name}.out", "w", encoding="utf-8")
+        G2_PROCS[(str(tmp), name)] = subprocess.Popen(
+            [sys.executable, "-m", "tares.crew"] + argv, cwd=str(ROOT), env=env, stdout=out, stderr=subprocess.STDOUT,
+            start_new_session=True)
+        for _ in range(300):
+            if g2_bg_launches(tmp, kind) - base >= wait_for:
+                return
+            time.sleep(0.05)
+        raise RuntimeError(f"{name} did not start a session")
+    return before
+
+
+def g2_release(name: str):
+    """A before: let the held command finish and wait for it."""
+    def before(tmp: Path) -> None:
+        (tmp / f"{name}.hold").unlink(missing_ok=True)
+        G2_PROCS[(str(tmp), name)].wait(timeout=60)
+    return before
+
+
+def g2_kill(name: str):
+    """A before: kill the held command and everything it started, as the bash suite's killtree does."""
+    def before(tmp: Path) -> None:
+        import signal
+        p = G2_PROCS[(str(tmp), name)]
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.wait(timeout=60)
+    return before
+
+
+def g2_held_out(r: Run, name: str) -> str:
+    return (r.tmp / f"{name}.out").read_text(encoding="utf-8", errors="replace")
+
+
+def g2_cut_off_lock(station: str):
+    """A before: a lock folder and its takeover folder left behind by a command that died."""
+    def before(tmp: Path) -> None:
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        lock = tmp / "crew" / "stations" / f"{station}.lock"
+        lock.mkdir(parents=True)
+        Path(str(lock) + ".takeover").mkdir()
+        (lock / "pid").write_text(f"{dead.pid}\n", encoding="utf-8")
+    return before
+
+
+def g2_lock_left(r: Run, station: str) -> bool:
+    lock = r.crew / "stations" / f"{station}.lock"
+    return lock.exists() or Path(str(lock) + ".takeover").exists()
+
+
+g2_scenario(
+    "crew_g2_lock",
+    "one command at a time starts a station: revive and the watch leave a station another command is starting alone; a killed holder "
+    "or a cut-off takeover does not block the next command",
+    [Step(["revive", "crew-reviewer"], run_before=g2_mark("s0"),
+          before=g2_chain(g2_stopped("crew-reviewer"), g2_hold("holder", ["revive", "crew-reviewer"], hold=True))),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("after_revive")),
+     Step(["roster"], run_before=g2_mark("held"), before=g2_release("holder")),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("s1"),
+          before=g2_chain(g2_stopped("crew-reviewer"),
+                          g2_hold("killed", ["revive", "crew-reviewer"], {"FAKE_CLAUDE_BG_DELAY": "60"}), g2_kill("killed"))),
+     Step(["revive", "crew-reviewer"], run_before=g2_mark("killed_done"), before=g2_stopped("crew-reviewer")),
+     Step(["revive", "crew-reviewer"], run_before=g2_mark("free"),
+          before=g2_chain(g2_stopped("crew-reviewer"), g2_cut_off_lock("crew-reviewer")))],
+    [("revive leaves a station another command is starting alone",
+      lambda r: r.marks["after_revive"][0] - r.marks["s0"][0] == 1 and "another factory command" in r.out(0)),
+     ("so does the watch", lambda r: r.marks["held"][0] - r.marks["s0"][0] == 1),
+     ("the command that held the station started it, once",
+      lambda r: r.marks["held"][0] - r.marks["s0"][0] == 1 and "started crew-reviewer" in g2_held_out(r, "holder")),
+     ("a command killed while it held a station does not block the next one",
+      lambda r: r.marks["killed_done"][0] - r.marks["s1"][0] == 2),
+     ("and the station is free again afterwards",
+      lambda r: r.marks["free"][0] - r.marks["killed_done"][0] == 1 and "another factory command" not in r.out(4)),
+     ("so is one whose takeover was cut off by a kill",
+      lambda r: r.launches() - r.marks["free"][0] == 1 and not g2_lock_left(r, "crew-reviewer"))],
+    ["revive leaves a station another command is starting alone", "so does the watch",
+     "the command that held the station started it, once",
+     "a command killed while it held a station does not block the next one", "and the station is free again afterwards",
+     "so is one whose takeover was cut off by a kill"],
+    setup=g2_setup, not_windows=G2_NOT_WINDOWS)
+
+def g2_race_agents(r: Run) -> int:
+    rows = json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    return sum(1 for x in rows if x.get("name") == "crew-reviewer" and "pid" in x)
+
+
+def g2_cron_armed(station: str):
+    """A before: the station is listed as working with no process (a schedule is armed)."""
+    def edit(row):
+        row["state"] = "working"
+        row.pop("pid", None)
+        row.pop("status", None)
+    return g2_agent(station, edit)
+
+
+def g2_waiting(station: str):
+    def edit(row):
+        row["state"] = "blocked"
+        row.pop("pid", None)
+        row.pop("status", None)
+    return g2_agent(station, edit)
+
+
+G2_SLOW = {"FAKE_CLAUDE_BG_DELAY": "3", "FACTORY_STOP_WAIT": "2"}
+
+g2_scenario(
+    "crew_g2_race",
+    "a restart and the watch's revive both find the station down: the restart keeps the station, the watch is turned away and one "
+    "session runs under the name; a second restart is turned away while the first stops the station",
+    [Step(["crew", "watch", "--once"], env={"FAKE_CLAUDE_BG_DELAY": "3"}, run_before=g2_mark("start"),
+          before=g2_hold("racer", ["restart", "crew-reviewer"], G2_SLOW, kind="stop")),
+     Step(["roster"], run_before=g2_mark("raced"), before=g2_release("racer")),
+     Step(["restart", "crew-reviewer"], env={"FACTORY_STOP_WAIT": "4"},
+          before=g2_hold("first", ["restart", "crew-reviewer"], {"FAKE_CLAUDE_STOP_DELAY": "2", "FACTORY_STOP_WAIT": "4"},
+                         kind="stop")),
+     Step(["roster"], before=g2_release("first"))],
+    [("a restart racing the watch: one session under the name",
+      lambda r: g2_race_agents(r) == 1 and r.marks["raced"][0] - r.marks["start"][0] == 1),
+     ("restart and watch: the restart started it, the watch was turned away",
+      lambda r: "started crew-reviewer" in g2_held_out(r, "racer") and "another factory command" in r.out(0)),
+     ("restart holds the station while it stops it", lambda r: "another factory command" in r.out(2))],
+    ["a restart racing the watch: one session under the name",
+     "restart and watch: the restart started it, the watch was turned away",
+     "restart holds the station while it stops it"],
+    setup=g2_setup, not_windows=G2_NOT_WINDOWS)
+
+def g2_twin(station: str, new_id: str):
+    """A before: a second row in the session list with the station's id changed (a duplicate session under one name)."""
+    def before(tmp: Path) -> None:
+        sid = _agent_of(tmp, station)
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        rows.append({**next(x for x in rows if x.get("id") == sid), "id": new_id})
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_twin_gone(new_id: str):
+    def before(tmp: Path) -> None:
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for x in rows:
+            if x.get("id") == new_id:
+                x.pop("pid", None)
+                x.pop("status", None)
+                x["state"] = "working"
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_no_twin(new_id: str):
+    def before(tmp: Path) -> None:
+        p = tmp / "claude" / "agents.json"
+        rows = [x for x in json.loads(p.read_text(encoding="utf-8")) if x.get("id") != new_id]
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_line_has(text: str, prefix: str) -> bool:
+    return any(x.startswith(prefix) for x in text.splitlines())
+
+
+g2_scenario(
+    "crew_g2_gone",
+    "a finished station with no process reads as gone; two live sessions under one name are said and the started one is kept, a gone row "
+    "is not a second session; a schedule armed keeps a stopped station listed as working: it restarts, reads as gone and is revived, "
+    "one waiting on a person is left alone",
+    [Step(["roster"], before=g2_done("crew-reviewer")),
+     Step(["revive", "crew-reviewer"], after=g2_sid("crew-reviewer")),
+     Step(["crew", "status"], before=g2_twin("crew-reviewer", "0000dup1"), after=g2_sid("crew-reviewer")),
+     Step(["crew", "status"], before=g2_twin_gone("0000dup1")),
+     Step(["restart", "crew-orchestrator"], env={"FAKE_CLAUDE_STOP_KEEPS_STATE": "1", "FACTORY_STOP_WAIT": "2"},
+          run_before=g2_mark("cron"), before=g2_no_twin("0000dup1")),
+     Step(["roster"], before=g2_cron_armed("crew-orchestrator")),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("armed")),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("revived"), before=g2_waiting("crew-orchestrator"))],
+    [("roster shows a finished station with no process as gone",
+      lambda r: g2_line_has(r.out(0), "crew-reviewer\treviewer\t\tgone")),
+     ("status shows two live sessions under one name",
+      lambda r: re.search(r"TWO SESSIONS named crew-reviewer: .*0000dup1", r.out(2)) is not None),
+     ("and keeps the one it started", lambda r: r.snap(2) == r.snap(1)),
+     ("a gone row under the same name is not a second session", lambda r: "TWO SESSIONS" not in r.out(3)),
+     ("restart of a station with a schedule armed goes through",
+      lambda r: r.marks["armed"][0] - r.marks["cron"][0] == 1 and "did not stop" not in r.out(4)),
+     ("listed as working with no process: roster says gone",
+      lambda r: g2_line_has(r.out(5), "crew-orchestrator\torchestrator\t\tgone")),
+     ("listed as working with no process: revived", lambda r: r.marks["revived"][0] - r.marks["armed"][0] == 1),
+     ("waiting on a person with no process: left alone", lambda r: r.launches() == r.marks["revived"][0])],
+    ["roster shows a finished station with no process as gone", "status shows two live sessions under one name",
+     "and keeps the one it started", "a gone row under the same name is not a second session",
+     "restart of a station with a schedule armed goes through",
+     "listed as working with no process: roster says gone", "listed as working with no process: revived",
+     "waiting on a person with no process: left alone"],
+    )
+
+def g2_earlier_n(r: Run, *stations: str) -> int:
+    return sum(len(g2_earlier(r, x)) for x in stations)
+
+
+def g2_mark_earlier(key: str, *stations: str):
+    def run_before(r: Run) -> None:
+        r.marks[key] = (r.launches(), g2_earlier_n(r, *stations), [g2_earlier_n(r, x) for x in stations])
+    return run_before
+
+
+def g2_runs(*fns):
+    def run_before(r: Run) -> None:
+        for fn in fns:
+            fn(r)
+    return run_before
+
+
+def g2_stop_many(*stations: str):
+    return g2_chain(*[g2_stopped(x) for x in stations])
+
+
+def g2_finish(station: str):
+    """A before: the builder has finished (it leaves stations/<name>.done)."""
+    def before(tmp: Path) -> None:
+        (tmp / "crew" / "stations").mkdir(parents=True, exist_ok=True)
+        (tmp / "crew" / "stations" / f"{station}.done").write_text("", encoding="utf-8")
+    return before
+
+
+G2_B = "links-app-build-m1"
+G2_EXTRA = (
+    (G2_B, {"role": "builder", "project": "Links App", "id": "dddd0004", "sessionId": "old-b"}),
+    ("shop-build-m1", {"role": "builder", "project": "shop", "id": "eeee0005", "sessionId": "old-shop"}),
+    (G2_B + "-probe", {"role": "helper", "parent": G2_B, "project": "Links App", "id": "ffff0006", "sessionId": "old-probe"}),
+)
+
+g2_scenario(
+    "crew_g2_revive_fails",
+    "a revive that fails is reported and the watcher carries on, the next round revives them; only the unfinished builder is revived; "
+    "restart resumes the reviewer",
+    [Step(["crew", "watch", "--once"], env={"FAKE_CLAUDE_FAIL_RESUME": "1"},
+          run_before=g2_mark_earlier("fail", "crew-orchestrator", "crew-releaser"),
+          before=g2_stop_many("crew-orchestrator", "crew-releaser")),
+     Step(["crew", "watch", "--once"]),
+     Step(["crew", "watch", "--once"], run_before=g2_mark_earlier("round", G2_B, "shop-build-m1"),
+          before=g2_chain(g2_stop_many(G2_B, "shop-build-m1", G2_B + "-probe"), g2_finish(G2_B))),
+     Step(["restart", "reviewer"], env={"FACTORY_STOP_WAIT": "2"},
+          run_before=g2_runs(g2_mark_earlier("built", G2_B, "shop-build-m1"), g2_mark_earlier("rev0", "crew-reviewer")))],
+    [("watcher survives a failed revive",
+      lambda r: r.code(0) == 0 and r.out(0).count("could not revive") == 2),
+     ("next round revives them", lambda r: g2_earlier_n(r, "crew-orchestrator", "crew-releaser") == r.marks["fail"][1] + 2),
+     ("only the unfinished builder is revived",
+      lambda r: r.marks["built"][0] - r.marks["round"][0] == 1
+      and r.marks["built"][2][1] == r.marks["round"][2][1] + 1 and r.marks["built"][2][0] == r.marks["round"][2][0]),
+     ("restart resumes the reviewer", lambda r: g2_earlier_n(r, "crew-reviewer") == r.marks["rev0"][1] + 1)],
+    ["watcher survives a failed revive", "next round revives them", "only the unfinished builder is revived",
+     "restart resumes the reviewer"],
+    setup=_cc_setup(have="1.0.0", installed="1.0.0", extra=G2_EXTRA))
+
+G2_DOWN = {"TARESD_URL": "http://127.0.0.1:9"}
+G2_MERGE = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 3 --squash"}})
+
+
+def g2_hook(tmp: Path, name: str, stdin: str, extra: dict) -> str:
+    """`tares hook <name>` as Claude Code runs it: the payload on stdin, the station's environment, the plugin of the checkout."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("FACTORY_", "TARES_", "CLAUDE_"))}
+    env.update(HOME=str(tmp / "home"), USERPROFILE=str(tmp / "home"), PYTHONPATH=str(ROOT), TARES_HOME=str(tmp / "tares-home"),
+               PYTHONIOENCODING="utf-8", **extra)
+    shim = "import sys; sys.argv[0] = 'tares'; from tares.cli import main; main()"
+    p = subprocess.run([sys.executable, "-c", shim, "hook", name, "--plugin-root", str(ROOT / "claude-plugin")], input=stdin,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+    return p.stdout
+
+
+def g2_guard(tmp: Path) -> str:
+    return g2_hook(tmp, "guard", G2_MERGE, {"FACTORY_ROLE": "builder", "FACTORY_HOME": str(tmp / "crew")})
+
+
+def g2_station_env(tmp: Path, station: str) -> dict:
+    doc = json.loads((tmp / "crew" / "stations" / f"{station}.settings.json").read_text(encoding="utf-8"))
+    return {k: str(v).replace(" ", "_") for k, v in doc["env"].items()}
+
+
+g2_scenario(
+    "crew_g2_halt_down",
+    "halt, resume and the roster work while Tares is down; the halt file is written; the guard refuses a merge while halted and allows it "
+    "after resume",
+    [Step(["crew", "halt", "tares is down"], env=G2_DOWN),
+     Step(["crew", "resume"], env=G2_DOWN),
+     Step(["roster"], env=G2_DOWN),
+     Step(["crew", "halt", "testing"], after=lambda tmp: [(tmp / "crew" / "HALT").is_file(), g2_guard(tmp)]),
+     Step(["crew", "resume"], after=g2_guard)],
+    [("halt works while Tares is down", lambda r: r.code(0) == 0 and "no Tares answers" not in r.out(0)),
+     ("and resume", lambda r: r.code(1) == 0 and not (r.crew / "HALT").exists()),
+     ("roster works while Tares is down", lambda r: g2_line_has(r.out(2), "crew-orchestrator\torchestrator")),
+     ("halt file", lambda r: r.snap(3)[0] is True),
+     ("guard denies merge while halted", lambda r: "halted" in r.snap(3)[1]),
+     ("guard allows merge after resume", lambda r: r.snap(4) == "")],
+    ["halt works while Tares is down", "and resume", "roster works while Tares is down", "halt file",
+     "guard denies merge while halted", "guard allows merge after resume"])
+
+def g2_session_start(tmp: Path) -> str:
+    return g2_hook(tmp, "session-start", json.dumps({"source": "resume"}), g2_station_env(tmp, G2_B))
+
+
+g2_scenario(
+    "crew_g2_session_start",
+    "a revived builder's session start names its station and its project and says the session was resumed",
+    [Step(["revive", G2_B], before=g2_stopped(G2_B), after=g2_session_start)],
+    [("session start names the station and project",
+      lambda r: G2_B in r.snap(0) and "Links_App" in r.snap(0) and "resumed" in r.snap(0))],
+    ["session start names the station and project"],
+    setup=_cc_setup(have="1.0.0", installed="1.0.0", extra=G2_EXTRA))
+# end group g2
+
+
+# group g3
+# crew_test.sh: stuck stations (autocompact thrash) in `status` and in the watch, the kit each station records, and the
+# kit update that moves quiet stations one per round. A crew of three stations (and a helper where the case wants one)
+# on the fake Claude Code; every station runs the current kit and Claude Code, so only what the case sets is due.
+
+G3_COMPACT = '{"type":"system","subtype":"compact_boundary"}'
+G3_THRASH_OLD = ('{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Autocompact is '
+                 'thrashing: x"}]}}')
+G3_PROBE = ("crew-reviewer-probe", {"role": "helper", "parent": "crew-reviewer", "id": "dddd0004", "sessionId": "old-probe"})
+G3_O, G3_R, G3_L = "crew-orchestrator", "crew-reviewer", "crew-releaser"
+
+
+def g3_setup(transcripts: dict | None = None, extra=()):
+    """The three stations idle on the current kit and Claude Code, each with a job file holding its session id, and
+    these transcripts (station -> lines)."""
+    base = _cc_setup(have="1.0.0", installed="1.0.0", extra=extra)
+
+    def setup(tmp: Path, env: dict) -> None:
+        base(tmp, env)
+        rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+        for name, row in rows.items():
+            job = tmp / "home" / ".claude" / "jobs" / row["id"]
+            job.mkdir(parents=True, exist_ok=True)
+            (job / "state.json").write_text(json.dumps({"sessionId": row["sessionId"]}), encoding="utf-8")
+        for name, lines in (transcripts or {}).items():
+            _transcript(tmp, rows[name]["sessionId"], *lines)
+    return setup
+
+
+def g3_edit(path: Path, fn) -> None:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = {}
+    fn(doc)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def g3_id(tmp: Path, name: str) -> str:
+    return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[name]["id"]
+
+
+def g3_agent(name: str, drop: tuple = (), **fields):
+    """A step's before: set these fields on the station's row of the session list, and drop these."""
+    def before(tmp: Path) -> None:
+        sid = g3_id(tmp, name)
+
+        def edit(rows):
+            for row in rows:
+                if row.get("id") == sid:
+                    row.update(fields)
+                    for k in drop:
+                        row.pop(k, None)
+        g3_edit(tmp / "claude" / "agents.json", edit)
+    return before
+
+
+def g3_job(name: str, drop: tuple = (), **fields):
+    """A step's before: set these fields in the station's job file (state.json), and drop these."""
+    def before(tmp: Path) -> None:
+        def edit(doc):
+            doc.update(fields)
+            for k in drop:
+                doc.pop(k, None)
+        g3_edit(tmp / "home" / ".claude" / "jobs" / g3_id(tmp, name) / "state.json", edit)
+    return before
+
+
+def g3_row(name: str, **fields):
+    """A step's before: set these fields on the station's row in stations.json."""
+    def before(tmp: Path) -> None:
+        g3_edit(tmp / "crew" / "stations.json", lambda doc: doc[name].update(fields))
+    return before
+
+
+def g3_all(*fns):
+    def before(tmp: Path) -> None:
+        for f in fns:
+            f(tmp)
+    return before
+
+
+def g3_older(*names: str):
+    return g3_all(*[g3_row(n, kit="older") for n in names])
+
+
+def g3_transcript(name: str, session: str, *lines: str):
+    def before(tmp: Path) -> None:
+        _transcript(tmp, session, *lines)
+    return before
+
+
+def g3_moved(r: Run, name: str) -> bool:
+    """The station has another session than the one it began with."""
+    return _stn(r, name) != _CC_IDS.get(name, G3_PROBE[1]["id"])
+
+
+def g3_last(r: Run, name: str) -> list:
+    """The arguments of the station's last start with --bg."""
+    return _bg_of(r, name)[-1] if _bg_of(r, name) else []
+
+
+def g3_state_of(r: Run, i: int, name: str) -> str:
+    """The STATE column of the station's row in a status."""
+    for line in r.out(i).splitlines():
+        cols = line.split()
+        if cols and cols[0] == name and len(cols) > 3:
+            return cols[3]
+    return ""
+
+
+def g3_row_has(r: Run, i: int, name: str, text: str) -> bool:
+    return any(line.startswith(name + " ") and text in line for line in r.out(i).splitlines())
+
+
+def g3_scn(name: str, about: str, setup, steps: list, checks: list, covers: list) -> Scenario:
+    return scenario(Scenario(name=name, suite="crew", about=about, setup=setup, tares=_CC_TARES, steps=steps,
+                             checks=checks, covers=covers, ignore_asked=_CC_NOT_YET, ignore_calls=_CC_READS))
+
+
+def g3_snap(tmp: Path) -> dict:
+    """After a step: each station's session id and how many sessions were started so far."""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    try:
+        calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError:
+        calls = []
+    try:
+        agents = json.loads((tmp / "claude" / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        agents = []
+    return {"ids": {n: v.get("id") for n, v in rows.items()}, "launches": sum(1 for c in calls if "--bg" in c["args"]),
+            "up": sorted(x.get("name") for x in agents if x.get("state") != "stopped")}
+
+
+def g3_watch(before=None, env: dict | None = None) -> Step:
+    return _watch_once(before=before, env=env, after=g3_snap)
+
+
+def g3_was_moved(r: Run, i: int, name: str) -> bool:
+    """After step i the station had another session than the one it began with."""
+    return r.snap(i)["ids"][name] != _CC_IDS.get(name, G3_PROBE[1]["id"])
+
+
+def g3_now(ago: int = 0) -> str:
+    return datetime.fromtimestamp(time.time() - ago, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# status: the stuck station is told in the row; a list that fails mid-way never reads as stuck; a stopped row that kept
+# its status reads as gone; the state shown is where the turn is, not the list's working.
+g3_scn(
+    "crew_g3_stuck_status",
+    "status shows a station Claude Code stopped for thrashing, and reads its state from the turn, not from the list's working",
+    g3_setup({G3_O: [ORDINARY_LINE, G3_COMPACT, THRASH_LINE], G3_R: [G3_THRASH_OLD, ORDINARY_LINE]}),
+    [Step(["crew", "status"]),
+     Step(["crew", "status"], env={"FAKE_CLAUDE_AGENTS_FAIL_AFTER": "2"},
+          before=g3_all(g3_agent(G3_O, status="busy"), lambda tmp: (tmp / "claude" / "agents-reads").unlink(missing_ok=True))),
+     Step(["crew", "status"], before=g3_agent(G3_O, state="stopped", status="busy")),
+     Step(["crew", "status"], before=g3_agent(G3_O, state="working", status="idle"))],
+    [("status shows the stuck station",
+      lambda r: g3_row_has(r, 0, G3_O, "STUCK on autocompact")),
+     ("a list that fails mid-way never reads as stuck",
+      lambda r: not g3_row_has(r, 1, G3_O, "STUCK")),
+     ("a stopped row that kept its status reads as gone",
+      lambda r: g3_state_of(r, 2, G3_O) == "gone"),
+     ("status shows where its turn is, not the agent list's working",
+      lambda r: g3_state_of(r, 3, G3_O) == "done"),
+     ("status leaves a recovered station alone",
+      lambda r: not g3_row_has(r, 3, G3_R, "STUCK"))],
+    ["status shows the stuck station", "a list that fails mid-way never reads as stuck",
+     "a stopped row that kept its status reads as gone", "status shows where its turn is, not the agent list's working",
+     "status leaves a recovered station alone"])
+
+# the watch: the stuck station is stopped and started in a new conversation, once; the others are left.
+g3_scn(
+    "crew_g3_stuck_watch",
+    "the watch restarts a station stuck on autocompact in a new conversation, only that one, records it, and not again",
+    g3_setup({G3_O: [ORDINARY_LINE, G3_COMPACT, THRASH_LINE], G3_R: [G3_THRASH_OLD, ORDINARY_LINE]}),
+    [g3_watch(env={"FACTORY_STOP_WAIT": "2"}, before=g3_agent(G3_O, state="working", status="idle")), g3_watch()],
+    [("thrashing station restarted",
+      lambda r: g3_moved(r, G3_O) and "crew-orchestrator is stuck" in r.out(0)),
+     ("restarted in a new conversation",
+      lambda r: "--resume" not in g3_last(r, G3_O) and "in a new conversation" in json.dumps(g3_last(r, G3_O))),
+     ("only the stuck station restarted",
+      lambda r: r.launches() == 1 and not g3_moved(r, G3_R)),
+     ("thrash recorded",
+      lambda r: any('"event":"thrashing"' in x and G3_O in x for x in _events(r).replace(" ", "").splitlines())
+      and "restarted-fresh" in _events(r)),
+     ("the new conversation is not restarted again",
+      lambda r: "is stuck" not in r.out(1))],
+    ["thrashing station restarted", "restarted in a new conversation", "only the stuck station restarted",
+     "thrash recorded", "the new conversation is not restarted again"])
+
+# the watch leaves alone a station woken after the notice, one working on a new message, one busy by the list's
+# status, and one whose session was cleared; a stopped stuck one comes back fresh; a stuck helper is left to its parent.
+g3_scn(
+    "crew_g3_stuck_left_alone",
+    "a station woken after the thrash notice, working, busy by status or cleared is not restarted; a stopped one comes back fresh; a helper is left",
+    g3_setup({G3_L: [G3_THRASH_OLD, WOKEN_LINE], "crew-reviewer-probe": [G3_THRASH_OLD]},
+             extra=[("crew-reviewer-probe", {**G3_PROBE[1]})]),
+    [g3_watch(env={"FACTORY_STOP_WAIT": "2"},
+              before=g3_all(g3_agent(G3_L, drop=("status",), state="done"),
+                            g3_agent("crew-reviewer-probe", drop=("status",), state="done"))),
+     g3_watch(before=g3_all(g3_transcript(G3_L, "old-releaser", G3_THRASH_OLD), g3_agent(G3_L, state="working"))),
+     g3_watch(before=g3_agent(G3_L, state="done", status="busy")),
+     g3_watch(before=g3_all(g3_agent(G3_L, drop=("status",), state="done"), g3_job(G3_L, sessionId="session-cleared"))),
+     g3_watch(before=g3_all(g3_job(G3_L, sessionId="old-releaser", state="working"),
+                            g3_agent(G3_L, drop=("pid",), state="stopped")))],
+    [("a station woken after the notice is left alone", lambda r: not g3_was_moved(r, 0, G3_L) and r.snap(0)["launches"] == 0),
+     ("a station working on a new message is left alone", lambda r: not g3_was_moved(r, 1, G3_L) and r.snap(1)["launches"] == 0),
+     ("busy by the list's status: left alone, whatever its state says",
+      lambda r: not g3_was_moved(r, 2, G3_L) and r.snap(2)["launches"] == 0),
+     ("a cleared session is not restarted", lambda r: not g3_was_moved(r, 3, G3_L) and r.snap(3)["launches"] == 0),
+     ("a stopped stuck station comes back fresh",
+      lambda r: g3_was_moved(r, 4, G3_L) and "--resume" not in g3_last(r, G3_L) and r.snap(4)["launches"] == 1),
+     ("a stuck helper is not restarted", lambda r: not g3_was_moved(r, 4, "crew-reviewer-probe"))],
+    ["a station woken after the notice is left alone", "a station working on a new message is left alone",
+     "busy by the list's status: left alone, whatever its state says", "a cleared session is not restarted",
+     "a stopped stuck station comes back fresh", "a stuck helper is not restarted"])
+
+# the kit a station starts on is recorded in stations.json.
+scenario(Scenario(
+    name="crew_g3_kit_recorded",
+    suite="crew",
+    about="a station that is started has the kit it runs on in stations.json",
+    driver=LAUNCH_DRIVER,
+    steps=[_LIFE_LAUNCH],
+    checks=[("stations record the kit they run on", lambda r: r.code(0) == 0 and r.station("crew-reviewer", "kit") != "")],
+    covers=["stations record the kit they run on"],
+))
+
+# the kit update: status counts the stations on an older kit, and the watch moves one quiet station a round.
+g3_scn(
+    "crew_g3_kit_moves",
+    "stations on an older kit: status counts them; the watch moves one quiet station a round, in its conversation, told why; busy ones wait",
+    g3_setup(),
+    [Step(["crew", "status"], before=g3_older(G3_O, G3_R, G3_L)),
+     g3_watch(before=g3_all(
+         g3_agent(G3_O, state="working", status="busy"),
+         g3_agent(G3_R, state="working", status="idle"),
+         g3_job(G3_R, inFlight={"tasks": 2, "queued": 0, "kinds": ["local_agent", "session_cron"]}),
+         g3_agent(G3_L, state="working", status="waiting"),
+         g3_job(G3_L, state="working", updatedAt=g3_now()))),
+     g3_watch(before=g3_job(G3_R, inFlight={"tasks": 1, "queued": 0, "kinds": ["session_cron"],
+                                           "wake": {"at": 1, "keepalive": True}})),
+     g3_watch(before=lambda tmp: (g3_job(G3_R, inFlight={"tasks": 1, "queued": 0, "kinds": ["session_cron"]})(tmp),
+                                  g3_job(G3_L, updatedAt=g3_now(3600))(tmp))),
+     g3_watch()],
+    [("status counts stations on an older kit",
+      lambda r: any(x.startswith("plugin: 3 station(s) run an older version") for x in r.out(0).splitlines())),
+     ("a working station waits", lambda r: r.code(1) == 0 and not g3_was_moved(r, 1, G3_O)),
+     ("a station with a subagent running waits", lambda r: not g3_was_moved(r, 1, G3_R)),
+     ("a station waiting on a person waits", lambda r: not g3_was_moved(r, 1, G3_L) and r.snap(1)["launches"] == 0),
+     ("a station waiting for its own wake-up waits", lambda r: not g3_was_moved(r, 2, G3_R) and r.snap(2)["launches"] == 0),
+     ("one quiet station moves per round (a cron doesn't count)",
+      lambda r: int(g3_was_moved(r, 3, G3_R)) + int(g3_was_moved(r, 3, G3_L)) == 1),
+     ("then the next, after half an hour of waiting on a person",
+      lambda r: g3_was_moved(r, 4, G3_R) and g3_was_moved(r, 4, G3_L)),
+     ("in the same conversation, told why",
+      lambda r: arg_after(g3_last(r, G3_R), "--resume") == "old-reviewer"
+      and "Tares plugin was updated" in " ".join(g3_last(r, G3_L))),
+     ("the working station still waits", lambda r: not g3_was_moved(r, 4, G3_O))],
+    ["status counts stations on an older kit", "a working station waits", "a station with a subagent running waits",
+     "a station waiting on a person waits", "a station waiting for its own wake-up waits",
+     "one quiet station moves per round (a cron doesn't count)", "then the next, after half an hour of waiting on a person",
+     "in the same conversation, told why", "the working station still waits"])
+
+# Nothing moves while the crew is halted, and a station with no conversation to resume is not moved.
+g3_scn(
+    "crew_g3_kit_holds",
+    "a halted crew moves no station onto a newer kit; neither is one with no conversation to resume",
+    g3_setup(),
+    [Step(["crew", "halt", "testing"], before=g3_all(g3_older(G3_O), g3_agent(G3_O, state="working", status="idle"))),
+     g3_watch(),
+     Step(["crew", "resume"]),
+     g3_watch(before=g3_row(G3_O, sessionId=""))],
+    [("nothing moves while halted", lambda r: r.code(0) == 0 and not g3_was_moved(r, 1, G3_O) and r.snap(1)["launches"] == 0),
+     ("a station with no conversation to resume isn't moved",
+      lambda r: r.code(2) == 0 and not g3_was_moved(r, 3, G3_O) and r.snap(3)["launches"] == 0)],
+    ["nothing moves while halted", "a station with no conversation to resume isn't moved"])
+
+# A kit that cannot start a station takes down that one, not the crew; it comes back once the kit works.
+g3_scn(
+    "crew_g3_kit_failing",
+    "a kit that cannot resume a station takes down one station at most, and they come back once it works",
+    g3_setup(),
+    [g3_watch(env={"FAKE_CLAUDE_FAIL_RESUME": "1"},
+              before=g3_all(g3_older(G3_R, G3_L), g3_agent(G3_R, drop=("status",), state="done"),
+                            g3_agent(G3_L, drop=("status",), state="done"))),
+     g3_watch(env={"FAKE_CLAUDE_FAIL_RESUME": "1"}),
+     g3_watch(env={"FAKE_CLAUDE_FAIL_RESUME": "1"}),
+     g3_watch(),
+     Step(["roster"])],
+    [("a failing kit takes down one station at most",
+      lambda r: sum(1 for n in (G3_R, G3_L) if n in r.snap(2)["up"]) >= 1),
+     ("it comes back once the kit works",
+      lambda r: any(x.startswith(G3_R) for x in r.out(4).splitlines()) and any(x.startswith(G3_L) for x in r.out(4).splitlines()))],
+    ["a failing kit takes down one station at most", "it comes back once the kit works"])
+
+# end group g3
+
+
+# group g4
+# crew_test.sh, "crew up starts the watch in the background, once; status says so; crew down stops it": real
+# `crew up` runs on the stand-in Tares with the watch left on (FACTORY_NO_WATCH empty), a one second round and a short
+# nap tick so the Python watch sees its stop file at once.
+
+# FACTORY_PLAN_EVERY=0: the bash watch reads the plan's limits (/usage) between rounds and answers the console's /context asks;
+# the Python watch does not do that yet (no serve_readings in tares/crew/watch.py), so the scenarios here leave it out on both sides.
+G4_WATCH_ENV = {"FACTORY_NO_WATCH": "", "FACTORY_WATCH_INTERVAL": "1", "FACTORY_ASK_POLL": "0.2", "FACTORY_PLAN_EVERY": "0",
+                "TARES_FACTORY_MCP_URL": "{tares}/mcp"}
+
+
+def g4_alive(pid) -> bool:
+    try:
+        import psutil
+        return bool(pid) and psutil.pid_exists(int(pid)) and psutil.Process(int(pid)).status() != psutil.STATUS_ZOMBIE
+    except Exception:
+        return False
+
+
+def g4_pid(tmp: Path) -> int:
+    try:
+        return int((tmp / "crew" / "watch.pid").read_text(encoding="utf-8").split()[0])
+    except (OSError, IndexError, ValueError):
+        return 0
+
+
+def g4_wait(seconds: float, ok) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if ok():
+            return True
+        time.sleep(0.1)
+    return ok()
+
+
+def g4_up_after(tmp: Path) -> dict:
+    """After a crew up: the watch's pid, whether it runs, and whether its log has the banner (given up to 6 seconds)."""
+    pid = g4_pid(tmp)
+    log = tmp / "crew" / "watch.log"
+    banner = g4_wait(6, lambda: log.is_file() and "watching the crew" in log.read_text(encoding="utf-8", errors="replace"))
+    return {"pid": pid, "alive": g4_alive(pid), "log": banner}
+
+
+G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations"]}),
+               "GET /api/crew/settings": (200, {**SAVED, "releaser": False}),
+               "GET /api/people": (200, {"people": [{"id": "local", "name": "Local"}]}),
+               "GET /api/grants": (200, {"all": ""}),
+               "GET /api/crew/projects": (200, {"projects": []}), "GET /api/desk": (200, {"desk": []}),
+               "GET /api/desk?state=open": (200, {"desk": []}),
+               "POST /mcp": (200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "fake-tares"}}})}
+
+
+def g4_quiet(tmp: Path) -> None:
+    """After the last step, the watch is gone: its log is by design not the same (the Python watch is asked to stop with a
+    file and says so, the bash watch is killed), so the log leaves the comparison; what it said was read by an earlier step."""
+    try:
+        (tmp / "crew" / "watch.log").unlink()
+    except OSError:
+        pass
+
+
+scenario(Scenario(
+    name="crew_g4_up_watch",
+    suite="crew",
+    about="crew up starts the watch in the background and logs; a second crew up keeps it; crew down stops it; --no-watch starts none",
+    ignore_calls=LSP_PROBE + _CC_READS,
+    tares=G4_UP_TARES,
+    # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
+    ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_up_after),
+           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=lambda tmp: {"pid": g4_pid(tmp)}),
+           Step(["crew", "status"], env=G4_WATCH_ENV),
+           Step(["crew", "down"], env=G4_WATCH_ENV),
+           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV),
+           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    checks=[
+        ("crew up starts the watch in the background",
+         lambda r: "started the watch" in r.out(0) and bool(r.snap(0)["pid"]) and r.snap(0)["alive"]),
+        ("it writes to its log", lambda r: r.snap(0)["log"]),
+        ("a second crew up keeps the one watch",
+         lambda r: "already running, pid %s" % r.snap(0)["pid"] in r.out(1) and r.snap(1)["pid"] == r.snap(0)["pid"]),
+        # crew_test.sh puts this check after a `;` on its line, so the harness's line count (which wants `check "` first) skips it
+        ("status says the watch runs", lambda r: any(ln.startswith("watch: running (pid %s)" % r.snap(0)["pid"]) for ln in r.out(2).splitlines())),
+        ("crew down stops the watch",
+         lambda r: not g4_alive(r.snap(0)["pid"]) and not (r.crew / "watch.pid").exists() and "stopped the watch" in r.out(3)),
+        ("--no-watch starts none", lambda r: "the watch" not in r.out(4) and not (r.crew / "watch.pid").exists()),
+    ],
+    covers=["crew up starts the watch in the background", "it writes to its log", "a second crew up keeps the one watch",
+            "crew down stops the watch", "--no-watch starts none"],  # "status says the watch runs" is asserted too (not a counted line)
+))
+
+# crew_test.sh, "A permission the person allows in the console is a grant on Tares": one story on the launch driver,
+# a reviewer, an orchestrator and two builders of the project shop, each launched with the grants of the world, then
+# the world gets a project grant, a grant for a helper and a grant for every project.
+G4_MERGE = "shop-build-m1 may run gh pr merge 12 --squash in shop"
+G4_E2E = "shop-build-m1-e2e may run npm run e2e in shop"
+G4_PROJECT = '- "%s" (2026-02-04)\n' % G4_MERGE
+G4_HELPER = '- "%s" (2026-02-05)\n' % G4_E2E
+G4_BUSY = ("crew-orchestrator", "crew-reviewer", "shop-build-m1", "shop-build-m2")
+G4_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+G4_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": G4_PROJECT})
+G4_W2 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": G4_PROJECT + G4_HELPER})
+G4_W3 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": G4_PROJECT + G4_HELPER})
+
+
+def g4_recorded(tmp: Path) -> dict:
+    """What a station launched with is kept: the row's grants and the grants file."""
+    row = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["shop-build-m1"]
+    kept = (tmp / "crew" / "stations" / "shop-build-m1.grants").read_text(encoding="utf-8")
+    return {"row": bool(row.get("grants")), "file": "staging database" in kept, "session": row.get("sessionId")}
+
+
+def g4_recording(step: Step) -> Step:
+    step.after = g4_recorded
+    return step
+
+
+def g4_prompt(r: "Run", station: str) -> str:
+    """The prompt of a station's first restart (its second start)."""
+    return _bg_of(r, station)[1][-1]
+
+
+def g4_started_and_differs(tmp: Path) -> dict:
+    """The sessions started so far, and whether the busy orchestrator's grants differ from the reviewer's."""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    return {"started": _sessions_started(tmp), "differs": rows["crew-orchestrator"]["grants"] != rows["crew-reviewer"]["grants"]}
+
+
+scenario(Scenario(
+    name="crew_g4_regrant",
+    suite="crew",
+    about="a permission allowed in Tares reaches a station between turns, in its conversation, once; busy and attached stations wait; helpers and blocked stations get it",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("crew-orchestrator", "orchestrator", G4_W0),                                            # 0
+           _launch("crew-reviewer", "reviewer", G4_W0),                                                    # 1
+           g4_recording(_launch("shop-build-m1", "builder", G4_W0, parent="crew-orchestrator", project="shop")),   # 2
+           _launch("shop-build-m2", "builder", G4_W0, parent="crew-orchestrator", project="shop"),         # 3
+           wstep(G4_W1, before=_busy(*G4_BUSY)),                                                           # 4: busy: waits
+           wstep(G4_W1, before=_both(_idle("shop-build-m1", "crew-reviewer"), _busy("shop-build-m2")),
+                 after=_sessions_and("shop-build-m1")),                                                    # 5: m1 restarted
+           wstep(G4_W1, before=_idle("shop-build-m1")),                                                    # 6: once per change
+           _launch("shop-build-m1-e2e", "helper", G4_W1, parent="shop-build-m1", project="shop"),          # 7
+           wstep(G4_W2, before=_both(_idle("shop-build-m1-e2e", "shop-build-m2"), _attach("shop-build-m2"))),   # 8
+           wstep(G4_W2, before=_leave("shop-build-m2")),                                                   # 9: they left
+           wstep({**G4_W3, "grants_status": 500}, before=_idle("crew-reviewer")),                          # 10: unreadable
+           wstep(G4_W3, before=_both(_idle("crew-reviewer"), _halted)),                                    # 11: halted
+           wstep(G4_W3, before=_both(_resumed, _waiting("crew-reviewer")), after=g4_started_and_differs)],  # 12: blocked on a person
+    checks=[
+        ("stations record the grants they started with", lambda r: r.snap(2)["row"] is True and r.snap(2)["file"] is True),
+        ("a busy station waits for its new grant", lambda r: r.code(4) == 0 and r.snap(4) == 4 and "new permissions" not in r.out(4)),
+        ("between turns it is restarted with the grant",
+         lambda r: r.code(5) == 0 and r.snap(5)["started"] == 5 and "shop-build-m1 has new permissions from Tares" in r.out(5)
+         and '"event":"regranted"' in _events(r).replace(" ", "")),
+        ("in the same conversation", lambda r: bool(r.snap(2)["session"]) and arg_after(_bg_of(r, "shop-build-m1")[1], "--resume") == r.snap(2)["session"]),
+        ("its fresh settings have the grant",
+         lambda r: any(('"%s"' % G4_MERGE) in a and "for project shop, in their own words" in a for a in r.snap(5)["allow"])),
+        ("its prompt quotes the new grant and says to run the refused command again",
+         lambda r: "allowed new permissions in Tares" in g4_prompt(r, "shop-build-m1") and ('"%s"' % G4_MERGE) in g4_prompt(r, "shop-build-m1")
+         and "run it again now" in g4_prompt(r, "shop-build-m1")),
+        ("and only the new one", lambda r: "staging database" not in g4_prompt(r, "shop-build-m1")),
+        ("a busy builder of the same project still waits", lambda r: "shop-build-m2 has new permissions" not in r.out(5)),
+        ("a station whose grants did not change is left alone",
+         lambda r: "crew-reviewer has new permissions" not in r.out(5) and r.snap(5)["started"] == 5),
+        ("once per change", lambda r: r.code(6) == 0 and r.snap(6) == 5),
+        ("a live helper is restarted with its grant",
+         lambda r: "shop-build-m1-e2e has new permissions" in r.out(8) and any(G4_E2E in a for a in allow_of(r, "shop-build-m1-e2e"))),
+        ("a station open in a terminal waits", lambda r: "shop-build-m2 has new permissions" not in r.out(8)),
+        ("and gets it once they leave",
+         lambda r: "shop-build-m2 has new permissions" in r.out(9) and any(G4_E2E in a for a in allow_of(r, "shop-build-m2"))),
+        ("grants that can't be read restart nothing", lambda r: r.code(10) == 0 and r.snap(10) == r.snap(9) and "new permissions" not in r.out(10)),
+        ("nothing restarts while halted", lambda r: r.code(11) == 0 and r.snap(11) == r.snap(9) and "new permissions" not in r.out(11)),
+        ("a station blocked on a person gets the grant at once",
+         lambda r: "crew-reviewer has new permissions" in r.out(12)
+         and any('for all projects, in their own words: "the reviewer may label pull requests"' in a for a in allow_of(r, "crew-reviewer"))),
+        ("busy crew stations still wait", lambda r: r.snap(12)["differs"] and "crew-orchestrator has new permissions" not in r.out(12)),
+    ],
+    covers=["stations record the grants they started with", "a busy station waits for its new grant",
+            "between turns it is restarted with the grant", "in the same conversation", "its fresh settings have the grant",
+            "its prompt quotes the new grant and says to run the refused command again", "and only the new one",
+            "a busy builder of the same project still waits", "a station whose grants did not change is left alone",
+            "once per change", "a live helper is restarted with its grant", "a station open in a terminal waits",
+            "and gets it once they leave", "grants that can't be read restart nothing", "nothing restarts while halted",
+            "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
+))
+
+# crew_test.sh, the same story seen from the person's side: `crew desk` shows a refused command and where to allow it,
+# and `crew status` says a station has new permissions waiting, or waits for the person to leave its session.
+G4_ITEM = {"label": "D1", "blocking": False, "project_name": "shop", "station": "shop-build-m1", "command": "gh pr merge 12 --squash",
+           "question": "shop-build-m1 was refused a command. Allow it?", "recommendation": G4_MERGE, "why": "it merges its own pull request"}
+G4_VIEWS_TARES = {"GET /api/desk?state=open": (200, {"desk": [G4_ITEM]}),
+                  "GET /api/grants?project=shop": (200, {"all": "", "project": G4_PROJECT}),
+                  "GET /api/grants": (200, {"all": ""}),
+                  "GET /api/crew/projects": (200, {"projects": []})}
+
+
+def g4_setup_views(tmp: Path, env: dict) -> None:
+    """The views' crew with two shop builders, both idle, each with a conversation and the grants it started with."""
+    _setup_views(tmp, env)
+    p = tmp / "crew" / "stations.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for name in ("shop-build-m1", "shop-build-m2"):
+        rows[name].update(sessionId="sess-" + name[-2:], grants="1")
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    a = tmp / "claude" / "agents.json"
+    agents = [x for x in json.loads(a.read_text(encoding="utf-8")) if x["id"] != "cccc0003"]
+    agents += [_row("idle", "cccc0003", "shop-build-m1", version="2.1.310"), _row("idle", "dddd0004", "shop-build-m2", version="2.1.310")]
+    a.write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+
+
+def g4_line(r: "Run", i: int, station: str) -> str:
+    return next((x for x in r.out(i).splitlines() if x.startswith(station + " ")), "")
+
+
+scenario(Scenario(
+    name="crew_g4_views",
+    suite="crew",
+    about="crew desk shows the refused command and where to allow it; crew status says a station has new permissions waiting, or waits until someone leaves its session",
+    setup=g4_setup_views,
+    tares=G4_VIEWS_TARES,
+    steps=[Step(["crew", "desk"]),
+           Step(["crew", "status"], before=_attach("shop-build-m2")),
+           Step(["crew", "status"], before=_leave("shop-build-m2"))],
+    checks=[
+        ("crew desk shows the refused command and where to allow it",
+         lambda r: "shop-build-m1 was refused: gh pr merge 12 --squash" in r.out(0) and "allow it in Tares" in r.out(0)),
+        ("status says it has new permissions waiting",
+         lambda r: "NEW PERMISSIONS: the watch restarts it" in g4_line(r, 1, "shop-build-m1")
+         and "NEW PERMISSIONS" in g4_line(r, 2, "shop-build-m2")),
+        ("status says it waits for you to leave it", lambda r: "once you leave its session" in g4_line(r, 1, "shop-build-m2")),
+    ],
+    covers=["crew desk shows the refused command and where to allow it", "status says it has new permissions waiting",
+            "status says it waits for you to leave it"],
+))
+
+# crew_test.sh: a running watch whose plugin is updated starts again on the new version, once the update has settled.
+# The bash suite runs `crew watch` in the foreground from a copy of the kit; a step here cannot be left running, so the
+# watch is the one crew up starts, from a copy of the kit, and the update is a line added to a skill of the copy.
+def g4_setup_kit(tmp: Path, env: dict) -> None:
+    _cc_plugin(tmp, env)
+
+
+def g4_banners(tmp: Path) -> int:
+    try:
+        return (tmp / "crew" / "watch.log").read_text(encoding="utf-8", errors="replace").count("watching the crew")
+    except OSError:
+        return 0
+
+
+def g4_first_banner(tmp: Path) -> dict:
+    g4_wait(6, lambda: g4_banners(tmp) >= 1)
+    time.sleep(1.5)   # the first round has read the kit, so the line below is a change of it
+    return {"banners": g4_banners(tmp)}
+
+
+def g4_update_kit(tmp: Path) -> None:
+    with open(tmp / "kit" / "claude-plugin" / "skills" / "factory-protocol" / "SKILL.md", "a", encoding="utf-8") as f:
+        f.write("# updated\n")
+
+
+def g4_restarted(tmp: Path) -> dict:
+    g4_wait(25, lambda: g4_banners(tmp) >= 2)
+    log = (tmp / "crew" / "watch.log").read_text(encoding="utf-8", errors="replace")
+    return {"banners": g4_banners(tmp), "said": "the plugin was updated" in log, "pid": g4_pid(tmp), "alive": g4_alive(g4_pid(tmp))}
+
+
+scenario(Scenario(
+    name="crew_g4_watch_update",
+    suite="crew",
+    about="a watch that crew up started restarts itself on the new version when the plugin is updated",
+    ignore_calls=LSP_PROBE + _CC_READS,
+    tares=G4_UP_TARES,
+    ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
+    prepare=trust_crew,
+    setup=g4_setup_kit,
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_first_banner),
+           Step(["crew", "status"], env=G4_WATCH_ENV, before=g4_update_kit, after=g4_restarted),
+           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    checks=[
+        ("the watch restarts itself on an updated plugin",
+         lambda r: r.snap(0)["banners"] == 1 and r.snap(1)["said"] and r.snap(1)["banners"] >= 2 and r.snap(1)["alive"]),
+    ],
+    covers=["the watch restarts itself on an updated plugin"],
+))
+# end group g4
+# <<< TR-1159 crew_test.sh checks
 
 
 # settings_*: `settings <station> [role]` prints the settings file a station launches with (cmd_settings, TR-1122).
@@ -5441,6 +6874,123 @@ scenario(Scenario(
     checks=[("the run fails as it would, naming the station and the retry",
              lambda r: r.code(0) != 0 and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)
              and "the watch tries again in 10 min" in r.out(0) and len(r.tares.asked(CU_RETRY)) == 1)],
+    covers=[],
+))
+
+
+# usage_test.sh, the watch's readings (TR-1163)
+# The watch answers the Crew page's asks for a /context reading and reads the plan's limits between its rounds
+# (readings_support.py runs it and stops it once the fake Tares has served the asks route a number of times).
+# The fake Tares below does what Tares does: an ask goes away once the reading comes in.
+
+class _UsageWatchRoutes(dict):
+    """The routes of a fake Tares that lists the Crew page's asks; the reading that is posted answers the ask of the
+    orchestrator's own session, and /ticks says how many times the asks were listed."""
+
+    def __init__(self, routes, asks):
+        super().__init__(routes)
+        self.asks = list(asks)
+        self.listed = 0
+
+    def get(self, key, default=None):
+        if key == "GET /api/crew/context/asks":
+            self.listed += 1
+            return (200, {"asks": self.asks})
+        if key == "GET /ticks":
+            return (200, {"n": self.listed})
+        if key == "POST /ingest/claude_code":
+            self.asks = [a for a in self.asks if a["session"] != "sess-orch-1"]
+        return super().get(key, default)
+
+
+# What the rounds of the watch do around the readings (both engines do their own: pace, retry, settings) is left out
+# of the comparison; the asks listed and the readings posted are in it.
+_UW_ROUND = (("agents",), ("--version",))
+_UW_ASKED = ("GET /ticks", "GET /health", "GET /api/crew/settings", "GET /api/crew/pace", "PUT ")
+
+
+def _usage_watch_asks(*asks):
+    def prepare(r):
+        r.tares.routes = _UsageWatchRoutes(r.tares.routes, [{"station": s, "session": x} for s, x in asks])
+    return prepare
+
+
+def _usage_asks_left(r) -> list:
+    return [(a["station"], a["session"]) for a in r.tares.routes.asks]
+
+
+def _usage_calls_with(r, needle: str) -> list:
+    return [c for c in r.calls() if needle in c["args"]]
+
+
+def _usage_posted(r, kind: str) -> list:
+    return [b for b in (json.loads(q["body"]) for q in r.tares.asked("POST /ingest/claude_code")) if b.get("type") == kind]
+
+
+scenario(Scenario(
+    name="usage_watch_readings",
+    suite="usage",
+    about="the watch reads a station's /context when the Crew page asks, leaves an ask for another station alone, and reads no plan when told not to",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(("crew-orchestrator", "sess-orch-1"), ("foreign-station", "s-foreign")),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"], env={"FACTORY_PLAN_EVERY": "0"})],
+    checks=[
+        ("the watch reads what the Crew page asked for",
+         lambda r: r.code(0) == 0 and ("crew-orchestrator", "sess-orch-1") not in _usage_asks_left(r)
+         and len(_usage_calls_with(r, "/context")) == 1 and len(_usage_posted(r, "session_context")) == 1),
+        ("and leaves another crew's ask alone",
+         lambda r: _usage_asks_left(r) == [("foreign-station", "s-foreign")]
+         and not any("s-foreign" in c["args"] for c in r.calls())),
+        ("and reads no plan when told not to",
+         lambda r: not _usage_calls_with(r, "/usage") and not _usage_posted(r, "claude_plan")),
+    ],
+    covers=["the watch reads what the Crew page asked for", "and leaves another crew's ask alone",
+            "and reads no plan when told not to"],
+))
+
+scenario(Scenario(
+    name="usage_watch_other_crew",
+    suite="usage",
+    about="an ask for a station of the same name that another crew plays (another session) is not read",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(("crew-orchestrator", "s-other-crew")),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"], env={"FACTORY_PLAN_EVERY": "0"})],
+    checks=[
+        ("an ask for the same name in another crew is left alone",
+         lambda r: r.code(0) == 0 and _usage_asks_left(r) == [("crew-orchestrator", "s-other-crew")]
+         and not _usage_calls_with(r, "/context")),
+    ],
+    covers=["an ask for the same name in another crew is left alone"],
+))
+
+scenario(Scenario(
+    name="usage_watch_plan",
+    suite="usage",
+    about="the watch reads the plan's limits at its first tick and sends them; with no plan to read it says so once",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"]), Step(["watch", "6"], env={"FAKE_CLAUDE_NO_PLAN": "1"})],
+    checks=[
+        ("the first tick reads the plan and sends it once",
+         lambda r: r.code(0) == 0 and len(_usage_posted(r, "claude_plan")) == 1 and "could not read" not in r.out(0)),
+        ("with no plan to read it is said once, and said plainly",
+         lambda r: r.code(1) == 0 and r.out(1).count("could not read the plan's limits (") == 1
+         and "plan says why); trying again every 600s" in r.out(1)),
+        ("and each watch reads the plan once",
+         lambda r: len(_usage_calls_with(r, "/usage")) == 2),
+    ],
     covers=[],
 ))
 
