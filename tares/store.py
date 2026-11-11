@@ -3232,6 +3232,29 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             ).fetchone()
         return self._ticket_row(r) if r else None
 
+    def ticket_for_pr(self, repo: str, number: int) -> dict | None:
+        """The ticket whose pull request is `repo`#`number` (the ticket row, which names its
+        project), or None. A pull request linked to several tickets gives the one still open,
+        else the first."""
+        try:
+            number = int(number)
+        except (TypeError, ValueError):
+            return None
+        want = str(repo or "").strip().lower()
+        if not want or number <= 0:
+            return None
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT {self._TICKET_COLS} FROM tickets WHERE pr LIKE ? ORDER BY position, created_at",
+                [f'%"number": {number}%']).fetchall()
+        found = []
+        for r in rows:
+            t = self._ticket_row(r)
+            pr = t["pr"] or {}
+            if str(pr.get("repo") or "").lower() == want and pr.get("number") == number:
+                found.append(t)
+        return next((t for t in found if t["stage"] not in ("merged", "shipped")), found[0] if found else None)
+
     def delete_ticket(self, tid: str) -> None:
         """The ticket goes, and with it the other tickets' dependency on it."""
         with self._swrite:
