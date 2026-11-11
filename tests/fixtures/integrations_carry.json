@@ -68,14 +68,22 @@
       "slot": "tickets"
     },
     {
-      "available": [],
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "tares",
+          "settings_schema": [],
+          "title": "Tares reviewer"
+        }
+      ],
       "choice": null,
       "effective": {
         "integration": "tares",
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "tares"
+        "title": "Tares reviewer"
       },
       "slot": "review"
     },
@@ -206,7 +214,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "github",
@@ -260,7 +268,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "github",
@@ -314,7 +322,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "github",
@@ -368,7 +376,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "local",

@@ -41,6 +41,7 @@ BUILTINS: list[str] = [
     "tares.integrations.builtin.tickets_tares:TicketsTares",
     "tares.integrations.builtin.tickets_linear:TicketsLinear",
     "tares.integrations.builtin.tickets_github:TicketsGithub",
+    "tares.integrations.builtin.review_tares:TaresReview",
     "tares.integrations.builtin.ci_github:GithubCI",
 ]
 
