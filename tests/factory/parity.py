@@ -2128,7 +2128,8 @@ scenario(Scenario(
     about="a frozen crew's watch, a revive on the copy, the move after an unfreeze, the copy's life and a Tares that cannot give its settings",
     driver=FREEZE_DRIVER,
     # left out of the comparison: the session list and version reads, which the engines make in a different number,
-    # and the plan's /usage that bash's looping watch reads at its start (the Python watch does not read the plan yet)
+    # and the plan's /usage reading (claude -p --no-session-persistence), which the engines make from different folders
+    # (crewlink for bash, crew for Python) and a different number of times; no check here asserts it
     ignore_calls=(("agents",), ("--version",), ("-p", "--no-session-persistence")),
     setup=_fz_setup,
     steps=_FZ_STEPS,
@@ -2230,7 +2231,8 @@ scenario(Scenario(
     about="a watch started from the frozen copy outlives it and restarts on the checkout's CLI (TR-686)",
     driver=FREEZE_DRIVER,
     # left out of the comparison: the session list and version reads, which the engines make in a different number,
-    # and the plan's /usage that bash's looping watch reads at its start (the Python watch does not read the plan yet)
+    # and the plan's /usage reading (claude -p --no-session-persistence), which the engines make from different folders
+    # (crewlink for bash, crew for Python) and a different number of times; no check here asserts it
     ignore_calls=(("agents",), ("--version",), ("-p", "--no-session-persistence")),
     setup=_fz_setup,
     steps=[
@@ -4996,6 +4998,7 @@ scenario(Scenario(
             "(a builder that stopped at the limit is in the pace file)",
             "the stations a failed restart left stopped come back already on the stretched tick, with no second note",
             "a restart that fails midway is not marked told either", "and the note is sent once the failure is gone"],
+    not_windows=WIN_NO_MULTILINE,
 ))
 
 
@@ -5626,11 +5629,15 @@ def _iwd(r: Run, step: str) -> dict:
     return next(json.loads(x) for x in r.out(0).splitlines() if x.startswith("{") and json.loads(x).get("step") == step)
 
 
+_IWD_WIN = ("the real daemon takes a repo path only when it starts with a slash (tares/factory.py), so on Windows the "
+           "handover of the scenario's C:/ folder is refused; not the crew engine")
+
 scenario(Scenario(
     name="idle_wake_daemon",
     suite="idle_wake",
     about="the real daemon: the setting, the review queue with its head and verdict, and the desk's answered list",
     driver="idle_wake_daemon.py",
+    not_windows=_IWD_WIN,
     steps=[Step(["run"])],
     checks=[
         ("the daemon ran", lambda r: r.code(0) == 0),
@@ -5657,7 +5664,7 @@ scenario(Scenario(
 ))
 
 
-def _seen(r: Run, i: int, head: str) -> bool:
+def _pw_seen(r: Run, i: int, head: str) -> bool:
     return any(h.endswith("@" + head) for h in (r.snap(i)["wake"]["files"].get(_PW_R, {}).get("seen") or []))
 
 
@@ -5698,15 +5705,15 @@ scenario(Scenario(
     steps=_iwfs,
     checks=[
         ("a wake whose restart fails sends no wake event and marks nothing told",
-         lambda r: _pww_wakes(r, K_FAIL, _PW_R, "work") == 0 and not _seen(r, K_FAIL, _H7)
+         lambda r: _pww_wakes(r, K_FAIL, _PW_R, "work") == 0 and not _pw_seen(r, K_FAIL, _H7)
          and "could not wake crew-reviewer" in r.out(K_FAIL)),
         ("once it runs again the wake is delivered",
-         lambda r: _pww_wakes(r, K_SENT, _PW_R, "work") == 1 and _seen(r, K_SENT, _H7)),
+         lambda r: _pww_wakes(r, K_SENT, _PW_R, "work") == 1 and _pw_seen(r, K_SENT, _H7)),
         ("a restart that fails midway is not marked delivered either",
-         lambda r: _pww_wakes(r, K_MID, _PW_R, "work") == 1 and not _seen(r, K_MID, _H8)
+         lambda r: _pww_wakes(r, K_MID, _PW_R, "work") == 1 and not _pw_seen(r, K_MID, _H8)
          and "could not wake crew-reviewer" in r.out(K_MID)),
         ("and it is sent once the failure is gone",
-         lambda r: _pww_wakes(r, K_SENT2, _PW_R, "work") == 2 and _seen(r, K_SENT2, _H8)),
+         lambda r: _pww_wakes(r, K_SENT2, _PW_R, "work") == 2 and _pw_seen(r, K_SENT2, _H8)),
     ],
     covers=["a wake whose restart fails sends no wake event and marks nothing told",
             "once it runs again the wake is delivered", "a restart that fails midway is not marked delivered either",
