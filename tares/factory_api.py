@@ -2846,6 +2846,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         me = work_person(request)
         try:
             crew = crew_name_of(request, body.get("crew"))
+            if clash := factory_mod.project_name_clash(p["name"], crew):
+                raise ValueError(clash)
             new = factory_mod.handover_repos(body.get("repos"))
             if body.get("repo"):
                 new = factory_mod.merge_repos(new, factory_mod.handover_repos(body.get("repo")))

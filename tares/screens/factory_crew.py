@@ -143,58 +143,97 @@ def register(app, store, h, ctx):
                 if held:
                     doing = (f"Waiting for the review of {held['title']}" if held["stage"] == "review"
                              else f"Changes asked on {held['title']}")
-            return {"station": m["station"], "role_label": m["role_label"],
+            return {"station": m["station"], "crew": s.get("crew_id"), "role_label": m["role_label"],
                     "state": "waiting for you" if m["state"] == "waiting" else m["state"],
                     "state_text": m["state_text"], "doing": doing,
                     "heard": m["heard"] or None,
                     "memory_pct": None if ended else m["memory_pct"],
                     "memory_text": None if ended else m["memory_text"], "helpers": m["helpers"]}
 
-        shown = [s for s in stations if s.get("role") in _SHOWN_ROLES]
+        shown_all = [s for s in stations if s.get("role") in _SHOWN_ROLES]
 
-        def first(role: str):
-            s = next((x for x in shown if x["role"] == role), None)
-            return member(s) if s else None
+        def crew_view(shown: list[dict]) -> dict:
+            """One crew's members: its orchestrator, reviewer and releaser, its builders by project,
+            and the line that says whether it runs."""
+            def first(role: str):
+                s = next((x for x in shown if x["role"] == role), None)
+                return member(s) if s else None
 
-        groups: dict = {}
-        for s in sorted((x for x in shown if x["role"] == "builder"),
-                        key=lambda x: (x["state"] == "ended", x["name"])):   # running ones first
-            pid = s.get("project")
-            p = projects.get(pid)
-            if s["state"] == "ended" and p is not None and p["status"] == "done":
-                continue   # a finished project's builders are done, not on the crew
-            key = pid if p is not None else None
-            groups.setdefault(key, {"project": {"id": p["id"], "name": p["name"], "icon": p.get("icon")}
-                                    if p else _NO_PROJECT,
-                                    "members": []})["members"].append(member(s))
-        builders = sorted(groups.values(), key=lambda g: (g["project"]["id"] is None,
-                                                          str(g["project"]["name"]).lower()))
-
-        orch = next((s for s in shown if s["role"] == "orchestrator"), None)
-        if orch is None:
-            summary = "Not started"
-        elif orch["state"] == "ended":
-            summary = "Not running"
-        else:
-            silent = _minutes(orch.get("last_at"), now)
-            heard = heard_ago(orch.get("last_at"), now)
-            if orch["state"] == "quiet" or (silent is not None and silent > _STALE_MINUTES):
-                summary = "Not heard from in " + plain_wait(silent) if silent else "Not heard from"
-            elif orch["state"] == "working":
-                summary = f"Working, last heard {heard}" if heard else "Working"
+            groups: dict = {}
+            for s in sorted((x for x in shown if x["role"] == "builder"),
+                            key=lambda x: (x["state"] == "ended", x["name"])):   # running ones first
+                pid = s.get("project")
+                p = projects.get(pid)
+                if s["state"] == "ended" and p is not None and p["status"] == "done":
+                    continue   # a finished project's builders are done, not on the crew
+                key = pid if p is not None else None
+                groups.setdefault(key, {"project": {"id": p["id"], "name": p["name"], "icon": p.get("icon")}
+                                        if p else _NO_PROJECT,
+                                        "members": []})["members"].append(member(s))
+            builders = sorted(groups.values(), key=lambda g: (g["project"]["id"] is None,
+                                                              str(g["project"]["name"]).lower()))
+            orch = next((s for s in shown if s["role"] == "orchestrator"), None)
+            if orch is None:
+                summary = "Not started"
+            elif orch["state"] == "ended":
+                summary = "Not running"
             else:
-                summary = f"Running, last heard {heard}" if heard else "Running"
+                silent = _minutes(orch.get("last_at"), now)
+                heard = heard_ago(orch.get("last_at"), now)
+                if orch["state"] == "quiet" or (silent is not None and silent > _STALE_MINUTES):
+                    summary = "Not heard from in " + plain_wait(silent) if silent else "Not heard from"
+                elif orch["state"] == "working":
+                    summary = f"Working, last heard {heard}" if heard else "Working"
+                else:
+                    summary = f"Running, last heard {heard}" if heard else "Running"
+            releaser = None if settings.get("releaser") is False else first("releaser")
+            return {"summary": summary, "talk_to": first("orchestrator"), "reviewer": first("reviewer"),
+                    "releaser": releaser, "builders": builders}
+
+        # every crew on the cell (TR-1223): a crew is one person's on one machine; the caller's own
+        # come first, then the others by their person's name
+        me = (h.current_person(request) or {}).get("id") if request is not None else None
+        by_crew: dict = {}
+        for s in shown_all:
+            by_crew.setdefault(s.get("crew_id"), []).append(s)
+        persons_crews: dict = {}
+        for cid, ss in by_crew.items():
+            pid = (ss[0].get("person") or {}).get("id")
+            persons_crews.setdefault(pid, []).append(cid)
+        crews = []
+        for cid, ss in by_crew.items():
+            person = ss[0].get("person") or {}
+            pid = person.get("id")
+            crews.append({"id": cid, "person": {"id": pid, "name": person.get("name") or None},
+                          "machine": ss[0].get("machine") or "", "name": ss[0].get("crew") or "",
+                          "mine": bool(me) and pid == me,
+                          "machine_shown": len(persons_crews.get(pid, [])) > 1, **crew_view(ss)})
+        crews.sort(key=lambda c: (not c["mine"], str(c["person"]["name"] or "~").lower(), c["machine"],
+                                  str(c["id"])))
+        own = crews[0] if crews else {"summary": "Not started", "talk_to": None, "reviewer": None,
+                                      "releaser": None, "builders": []}
 
         plan = _plan(store, now, names)
         for lim in plan["limits"]:
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
         plan["by_project"] = by_project(names, now)
-        proposals = [{"id": r["id"], "text": r["text"], "from": "the reviewer",
-                      "when": ago(r["created_at"], now)} for r in store.list_rule_proposals("open")
-                     if r.get("project") not in hidden]
-        releaser = None if settings.get("releaser") is False else first("releaser")
-        return {"summary": summary, "talk_to": first("orchestrator"), "reviewer": first("reviewer"),
-                "releaser": releaser, "builders": builders, "how_far": _how(settings),
+        # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
+        # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
+        hidden_names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
+        all_names = {p["id"]: p["name"] for p in store.list_projects()}
+        proposals = []
+        for r in store.list_rule_proposals("open"):
+            if r.get("project") in hidden:
+                continue
+            tickets = [str(t) for t in r.get("tickets") or []
+                       if not any(str(t).startswith(n + " ") for n in hidden_names)]
+            where = ("For every project" if r.get("scope") != "project"
+                     else f"For {all_names.get(r.get('project'), 'its project')}")
+            proposals.append({"id": r["id"], "text": r["text"], "from": "the reviewer",
+                              "when": ago(r["created_at"], now), "for": where, "tickets": tickets})
+        return {"summary": own["summary"], "talk_to": own["talk_to"], "reviewer": own["reviewer"],
+                "releaser": own["releaser"], "builders": own["builders"], "crews": crews,
+                "how_far": _how(settings),
                 "pacing": _pacing(fx_.pace(), now), "plan": plan, "rule_proposals": proposals,
                 "standup": standup(now, hidden), "now": now.isoformat()}
 
@@ -207,5 +246,10 @@ def register(app, store, h, ctx):
         A member is {station, role_label, state (working, idle, waiting for you, not heard,
         ended), state_text, doing, heard, memory_pct, memory_text, helpers}; `station` is for the
         detail call and is never shown. `pacing` is a sentence while the plan presses on the crew,
-        else null. `rule_proposals` are the open ones, `standup` is null when nothing moved."""
+        else null. `rule_proposals` are the open ones, `standup` is null when nothing moved.
+        `crews` is every crew on the cell (TR-1223), the caller's own first, then by person: each
+        {id, person {id, name}, machine, name, mine, machine_shown, summary, talk_to, reviewer,
+        releaser, builders}; `machine_shown` is true when that person has more than one crew. A
+        member's `crew` is its crew's id, for the detail call. The top-level summary, talk_to,
+        reviewer, releaser and builders are the first crew's."""
         return build(request)

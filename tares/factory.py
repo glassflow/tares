@@ -848,6 +848,25 @@ def station_ok(name, role, parent) -> tuple[str, str, str]:
 CREW_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,30}$")
 
 
+def slugify(text: str) -> str:
+    """The station-name form of a name, as the crew makes it (tares.crew.state.slugify and bash's
+    slugify): lower-case ASCII letters and digits, every other run of characters one hyphen, no
+    hyphen at either end."""
+    lowered = "".join(chr(ord(c) + 32) if "A" <= c <= "Z" else c for c in text)
+    return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
+
+
+def project_name_clash(name: str, crew: str) -> str | None:
+    """Why the crew could never build a project called `name` (TR-1071): its station name would
+    be the crew's own name or start with `<crew>-`, and those names belong to the crew's stations,
+    so `factory spawn builder` refuses it. None when the name is fine."""
+    slug = slugify(name)
+    if slug != crew and not slug.startswith(crew + "-"):
+        return None
+    return (f'the project name "{name}" starts with "{crew}", the crew\'s name: station names '
+            f"starting {crew}- belong to the crew itself. Rename the project, then hand it over")
+
+
 def crew_station_role(station: str, role: str = "") -> str:
     """The crew role (orchestrator, reviewer, releaser) of a station named `<crew>-<role>`, for any
     crew name; "" for a builder, a helper or anything else. `role` is the role the station

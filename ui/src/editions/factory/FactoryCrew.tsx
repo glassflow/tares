@@ -8,10 +8,11 @@ import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
   crewMember, crewToolOutput, decideRule, factoryCrew, readMemoryAgain,
-  type ConvoItem, type CrewBuilders, type CrewMember, type CrewPage, type CrewProposal, type MemberDetail,
+  type ConvoItem, type CrewBuilders, type CrewMember, type CrewOfPerson, type CrewPage, type CrewProposal, type MemberDetail,
 } from "./FactoryCrew.api";
 import { Conversation } from "./CrewConversation";
 import { InlineIcon } from "./ProjectIcon";
+import { ChevronDown, ChevronRight } from "../../components/icons";
 import { isSample, sampleDetail, sampleLoad, sampleToolOutput } from "./crewSamples";
 
 // The factory Crew page: who is on the crew, what each member is doing, how far the crew may go,
@@ -34,9 +35,9 @@ const CODE = "mt-0.5 inline-block border border-border bg-muted px-1.5 py-0.5 fo
 
 export interface CrewActions {
   /** The member's session; `before` reads the lines before a point, `since` from a point to the newest. */
-  detail: (station: string, at?: { before?: number; since?: number }) => Promise<MemberDetail>;
-  toolOutput: (station: string, id: string) => Promise<string>;
-  ask: (station: string) => Promise<unknown>;
+  detail: (station: string, at?: { before?: number; since?: number }, crew?: string | null) => Promise<MemberDetail>;
+  toolOutput: (station: string, id: string, crew?: string | null) => Promise<string>;
+  ask: (station: string, crew?: string | null) => Promise<unknown>;
   decide: (id: string, decision: "accept" | "reject") => Promise<unknown>;
 }
 
@@ -74,8 +75,8 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
 
   const load = React.useCallback(() => {
     setFailed(false);
-    actions.detail(member.station).then(setDetail).catch(() => setFailed(true));
-  }, [actions, member.station]);
+    actions.detail(member.station, undefined, member.crew).then(setDetail).catch(() => setFailed(true));
+  }, [actions, member.station, member.crew]);
 
   // while open it follows the session: a fresh read every few seconds. Once earlier lines are loaded
   // the read starts where they end, so the lines between stay; when the session outgrew what one read
@@ -85,13 +86,13 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
     if (!open) return undefined;
     const id = setInterval(() => {
       const since = olderEnd.current;
-      actions.detail(member.station, since === null ? undefined : { since }).then((d) => {
+      actions.detail(member.station, since === null ? undefined : { since }, member.crew).then((d) => {
         if (since !== null && (d.conversation_from ?? 0) > since) { olderEnd.current = null; setOlder(null); }
         setDetail(d);
       }).catch(() => undefined);
     }, POLL_MS);
     return () => clearInterval(id);
-  }, [open, actions, member.station]);
+  }, [open, actions, member.station, member.crew]);
 
   const toggle = () => {
     if (!open && !detail) load();
@@ -99,18 +100,18 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
   };
   const ask = () => {
     setAsked("asked");
-    actions.ask(member.station)
+    actions.ask(member.station, member.crew)
       .then(() => { timer.current = setTimeout(load, ASKED_RELOAD_MS); })
       .catch(() => setAsked("failed"));
   };
   const from = older ? older.from : (detail?.conversation_from ?? 0);
   const earlier = async () => {
-    const d = await actions.detail(member.station, { before: from });
+    const d = await actions.detail(member.station, { before: from }, member.crew);
     if (olderEnd.current === null) olderEnd.current = detail?.conversation_from ?? 0;
     setOlder({ items: [...(d.conversation ?? []), ...(older?.items ?? [])], from: d.conversation_from ?? 0 });
   };
   const items = React.useMemo(() => [...(older?.items ?? []), ...(detail?.conversation ?? [])], [older, detail]);
-  const loadFull = React.useCallback((id: string) => actions.toolOutput(member.station, id), [actions, member.station]);
+  const loadFull = React.useCallback((id: string) => actions.toolOutput(member.station, id, member.crew), [actions, member.station, member.crew]);
 
   return (
     <div className="col-start-2 col-end-[-1] min-w-0">
@@ -193,6 +194,57 @@ function Single({ title, m, actions, empty }: { title: string; m: CrewMember | n
   );
 }
 
+/** Which crews the reader folded or opened, kept in this browser only (a convenience: without it the
+ *  reader's own crew opens and the others start folded). */
+const FOLD_KEY = "taresCrewFolds";
+function readFolds(): Record<string, boolean> {
+  try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
+}
+function writeFold(id: string, open: boolean) {
+  try { localStorage.setItem(FOLD_KEY, JSON.stringify({ ...readFolds(), [id]: open })); } catch { /* none */ }
+}
+
+/** One person's crew on a cell with several (TR-1223): their name, the machine when they have more
+ *  than one crew, whether it runs and how many builders are on it. It folds: the reader's own crew
+ *  starts open, the others folded, and the reader's choice is kept in this browser. */
+function PersonCrew({ c, actions }: { c: CrewOfPerson; actions: CrewActions }) {
+  const name = c.person.name ?? "A crew with no person";
+  const key = c.id ?? "none";
+  const [open, setOpen] = React.useState<boolean>(() => readFolds()[key] ?? c.mine);
+  const toggle = () => { setOpen(!open); writeFold(key, !open); };
+  const live = c.builders.reduce((n, g) => n + g.members.filter((m) => m.state !== "ended").length, 0);
+  const builders = live === 0 ? "no builder on it" : live === 1 ? "1 builder on it" : `${live} builders on it`;
+  return (
+    <section className="min-w-0 border border-border bg-card" data-testid="crew-of-person" aria-label={`${name}'s crew`}>
+      <h2 className="m-0!">
+        <button type="button" className="block w-full px-4 py-3 text-left" aria-expanded={open} onClick={toggle}
+                data-testid="crew-of-person-toggle">
+          <span className="flex w-full min-w-0 items-center gap-3">
+            {open ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+            <span className="min-w-0 flex-1">
+              <span className="text-lg font-semibold">
+                <span data-user-text>{name}</span>{c.mine && <span className="font-normal text-muted-foreground"> (you)</span>}
+                {c.machine_shown && c.machine && <span className="font-normal text-muted-foreground"> on <span data-user-text>{c.machine}</span></span>}
+              </span>
+              <span className="block text-sm font-normal text-muted-foreground" data-testid="crew-of-person-summary">{c.summary}, {builders}</span>
+            </span>
+          </span>
+        </button>
+      </h2>
+      {open && (
+        <div className="grid min-w-0 gap-5 border-t border-border bg-background px-4 py-4" data-testid="crew-of-person-body">
+          {c.talk_to ? <Single title="Orchestrator" m={c.talk_to} actions={actions} /> : (
+            <div className={cn(CARD, "px-4 py-3 text-muted-foreground")}>No orchestrator has reported for this crew.</div>
+          )}
+          {c.reviewer && <Single title="Reviewer" m={c.reviewer} actions={actions} />}
+          {c.releaser && <Single title="Releaser" m={c.releaser} actions={actions} />}
+          <Builders groups={c.builders} actions={actions} />
+        </div>
+      )}
+    </section>
+  );
+}
+
 function NotStarted() {
   return (
     <div className="px-4 py-5 text-muted-foreground" data-testid="crew-not-started">
@@ -265,7 +317,13 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
           <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-3.5 last:border-b-0" data-testid="crew-rule">
             <div className="min-w-0 flex-[1_1_320px]">
               <div data-user-text>{p.text}</div>
-              <div className={cn(MUTED, "mt-0.5")}>From {p.from}, {p.when}</div>
+              <div className={cn(MUTED, "mt-0.5")} data-testid="crew-rule-meta">
+                {p.for && <><b className="font-semibold text-foreground">{p.for}</b> · </>}
+                {p.tickets && p.tickets.length > 0 ? (
+                  <>came back in {p.tickets.length} {p.tickets.length === 1 ? "ticket" : "tickets"}
+                    {" "}(<span data-user-text>{p.tickets.slice(0, 4).join(", ")}{p.tickets.length > 4 ? ` and ${p.tickets.length - 4} more` : ""}</span>)</>
+                ) : <>from the reviews</>}, {p.when}
+              </div>
               {failed === p.id && <div className="mt-1 text-xs text-[color:var(--err)]" role="alert">It could not be saved. Try again.</div>}
             </div>
             <div className="flex gap-2">
@@ -349,14 +407,22 @@ export function FactoryCrewView({ data, error, reload, actions }: {
       {!data && !error && <Loading />}
       {data && (
         <div className="grid gap-5">
-          {data.summary && <p className="m-0! text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
+          {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0! text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
           {data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
-              <Single title="Orchestrator" m={data.talk_to} actions={actions} empty={<NotStarted />} />
-              {started && data.reviewer && <Single title="Reviewer" m={data.reviewer} actions={actions} />}
-              {started && data.releaser && <Single title="Releaser" m={data.releaser} actions={actions} />}
-              {started && <Builders groups={data.builders ?? []} actions={actions} />}
+              {(data.crews ?? []).length > 1 ? (
+                <div className="grid min-w-0 gap-3" data-testid="crew-people">
+                  {(data.crews ?? []).map((c) => <PersonCrew key={c.id ?? "none"} c={c} actions={actions} />)}
+                </div>
+              ) : (
+                <>
+                  <Single title="Orchestrator" m={data.talk_to} actions={actions} empty={<NotStarted />} />
+                  {started && data.reviewer && <Single title="Reviewer" m={data.reviewer} actions={actions} />}
+                  {started && data.releaser && <Single title="Releaser" m={data.releaser} actions={actions} />}
+                  {started && <Builders groups={data.builders ?? []} actions={actions} />}
+                </>
+              )}
               {started && <Proposals list={data.rule_proposals ?? []} actions={actions} reload={reload} />}
               {started && (
                 <section data-testid="crew-standup">
