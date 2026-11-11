@@ -817,7 +817,7 @@ ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
 CREW_ROLES = ("orchestrator", "reviewer", "releaser")
 AUTONOMY = {
     "L3-review": "you approve each merge",
-    "L4-ship": "a builder merges after the reviewer's pass and green CI",
+    "L4-ship": "Tares merges after the review gate passes and CI is green",
 }
 MAX_NAME = 120
 

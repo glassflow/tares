@@ -82,7 +82,7 @@ QUESTIONS = {
     "autonomy": {
         "text": "Who merges pull requests?", "kind": "choice",
         "choices": [("L4-ship", "The crew, once its reviewer approves and tests pass"), ("L3-review", "You, each one")],
-        "recommended": "L4-ship", "why": "Builders merge on their own; you answer only what the crew can't decide.",
+        "recommended": "L4-ship", "why": "Tares merges on its own; you answer only what the crew can't decide.",
     },
     "releaser": {
         "text": "Should the crew release and deploy finished work?", "kind": "bool",
