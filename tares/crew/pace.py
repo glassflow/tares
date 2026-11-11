@@ -146,6 +146,7 @@ def remember(paths: CrewPaths, reading: Reading) -> None:
 def forget() -> None:
     """Drop every remembered reading (tests, and a crew home that changed)."""
     _LAST.clear()
+    _ROUND.clear()
 
 
 def last(paths: CrewPaths) -> Reading:
@@ -153,6 +154,24 @@ def last(paths: CrewPaths) -> Reading:
     PACE_STATE is: a command that has not read the pace has none."""
     hit = _LAST.get(str(paths.home))
     return Reading() if hit is None else hit[1]
+
+
+_ROUND: dict = {}   # crew home -> the Reading the round started with, for the pace step to use once
+
+
+def round_start(paths: CrewPaths, env=None) -> None:
+    """The top of a watch round, as bash's `pace_read || true; pace_tidy || true`: read the pace afresh, remember
+    it for the whole round (the revive step asks `current`, the pace step takes it), and tidy the pace file. A
+    limit that fills later in the round is not acted on until the next one; only a move that restarts a station
+    onto a new Claude Code reads it again, just before it restarts."""
+    env = os.environ if env is None else env
+    client = TaresClient(paths, env)
+    try:
+        r = read(client)
+    finally:
+        client.close()
+    tidy(paths, r)
+    _ROUND[str(paths.home)] = r
 
 
 def current(paths: CrewPaths, env=None, *, round_start: bool = False) -> Reading:
@@ -466,14 +485,18 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     """One round of the pace: read the plan's limits, tidy the pace file, and tell every active, live station of a
     crew role that is between turns what the pace now asks of it."""
     env = os.environ if env is None else env
+    taken = _ROUND.pop(str(paths.home), None)   # the reading the round started with, when there was a round
     # Bash skips the whole round when the session list is unreadable; the revive step says so. Read it as
     # `watch_revive.last`: the revive step rebinds `last` every round.
     if watch_revive.last.unread:
         return
     client = TaresClient(paths, env)
     try:
-        reading = read(client)
-        tidy(paths, reading)
+        if taken is not None:
+            reading = taken
+        else:
+            reading = read(client)
+            tidy(paths, reading)
         names = [k for k, v in state.stations_load(paths).items()
                  if isinstance(v, dict) and v.get("status") == "active"]
         if not names or reading.state == "unknown":

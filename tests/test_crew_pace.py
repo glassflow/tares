@@ -568,6 +568,29 @@ with FakeTares(doc(99, 0, on=False)) as t:
        not seam.stopped(paths, "crew-reviewer"))
     ck("...and the pace file is gone", pace_json() is None)
 
+print("the round reads the pace once, at its top (TR-1157)")
+reset()
+del launched[:]
+with FakeTares(doc(10, 10, level=0)) as t:
+    pace.round_start(paths, dict(os.environ))
+    t.doc = doc(100, 10, level=2, at_limit=True)   # the limit fills in the middle of the round
+    n = len([x for x in t.requests if x == "GET /api/crew/pace"])
+    round_(t)
+    ck("the step uses the reading the round started with: nothing is told",
+       not launched and not told(), str((launched, told())))
+    ck("...and does not ask Tares again", len([x for x in t.requests if x == "GET /api/crew/pace"]) == n, str(t.requests))
+    ck("the round's reading is used once: the next step reads afresh and sees the limit",
+       (round_(t), bool(told()))[1], str(told()))
+ck("round_start remembers its reading for the revive step",
+   pace.last(paths).state == "active", str(pace.last(paths)))
+reset({})
+paths.pace_file.write_text(json.dumps({"limit_since": "", "until": "", "said": True, "stopped": ["crew-reviewer"], "tried": []}),
+                           encoding="utf-8")
+with FakeTares(doc(99, 0, on=False)) as t:
+    pace.round_start(paths, dict(os.environ))
+    ck("round_start tidies the pace file, as bash does at the top of a round", pace_json() is None)
+ck("a round of the watch starts with it", watch._STEPS.get(watch.ROUND_NAME) is pace.round_start)
+
 print("the watch runs it as a step")
 ck("pace is a step of the watch", "pace" in watch.STEP_NAMES)
 ck("and the step is this one", watch._STEPS.get("pace") is pace.step)

@@ -1,6 +1,6 @@
 # Tests CI runs, one per line, in sorted order. Add your test's name on its own line in its sorted place. On a merge conflict keep both sides.
 claude_update
-claude_update_mixed
+claude_update_python
 compat
 crew
 crew_python
