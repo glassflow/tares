@@ -27,7 +27,8 @@ from . import merge_ready as merge_ready_mod
 from . import team as team_mod
 from .integrations import registry as integrations_registry
 from .integrations import resolve as integrations_resolve
-from .integrations.types import Status
+from .integrations.review import CREW_REVIEWED_GATES
+from .integrations.types import PRRef, Status
 from .envelope import now_utc
 from .factory_store import MapChanged
 from .host import Host
@@ -266,6 +267,84 @@ def _reread_only(cur: dict, fields: dict) -> bool:
     return {**cur["pr"], **volatile} == {**fields["pr"], **volatile}
 
 
+def outside_gate(store, uid: str, cache: dict | None = None) -> tuple[str, str] | None:
+    """(name, title) of the project's review gate when it is an outside tool, None when the crew
+    reviewer (or no usable choice: the default is the Tares reviewer) gives the verdict (TR-857).
+    `cache` lets a caller that asks for many tickets resolve each project once."""
+    if cache is not None and uid in cache:
+        return cache[uid]
+    found = None
+    try:
+        name = integrations_resolve.effective("review", uid, store=store).integration
+        if name not in CREW_REVIEWED_GATES:
+            cls = integrations_registry.get("review", name)
+            found = (name, (getattr(cls, "title", "") or name)) if cls is not None else None
+    except Exception as e:  # noqa: BLE001 - a gate that cannot be resolved is the crew's
+        print(f"[tares] review gate of {uid} not resolved: {type(e).__name__}: {e}", flush=True)
+    if cache is not None:
+        cache[uid] = found
+    return found
+
+
+async def _outside_verdict(store, uid: str, t: dict, pr: dict, gate: tuple[str, str]) -> None:
+    """A ticket in review whose project's gate is an outside tool: ask the gate for its verdict on
+    the pull request's current head and keep it as a review record, once per head and verdict
+    (TR-857). `approved` stays in review with a pass on record; `changes` records the gate's
+    findings and moves the ticket to `changes` (the rule in `_refresh` moves it back to review
+    when new commits land); `pending`, `stale` and `none` change nothing."""
+    name, title = gate
+    head = str(pr.get("head") or "").strip().lower()
+    cls = integrations_registry.get("review", name)
+    if cls is None or not head or not re.match(r"^[0-9a-f]{7,64}$", head):
+        return
+    if any(r["by"] == name and r["head"] and factory_mod.same_commit(r["head"], head)
+           for r in store.ticket_reviews(t["id"])):
+        return                  # the gate has its say on this head: no second call to it
+    try:
+        v = await cls(store).verdict(PRRef(
+            repo=pr.get("repo") or "", number=int(pr.get("number") or 0), head=head,
+            base=pr.get("base") or "", url=pr.get("url") or "", ticket=t["id"], project_uid=uid))
+    except Exception as e:  # noqa: BLE001 - a gate that cannot be reached leaves the ticket as it is
+        print(f"[tares] review gate {name} for {t['id']} failed: {type(e).__name__}: {e}", flush=True)
+        return
+    state = getattr(v, "state", "")
+    vhead = str(getattr(v, "head", "") or "").strip()
+    if state not in ("approved", "changes") or (vhead and not factory_mod.same_commit(vhead, head)):
+        return
+    verdict = "pass" if state == "approved" else "changes"
+
+    def write() -> bool:
+        cur = store.get_ticket(uid, t["id"])
+        if cur is None or cur["stage"] != "review" or not cur["pr"] or (
+                cur["pr"].get("repo"), cur["pr"].get("number")) != (pr.get("repo"), pr.get("number")):
+            return False        # moved meanwhile: this read is out of date
+        for r in store.ticket_reviews(cur["id"]):
+            if (r["by"] == name and r["verdict"] == verdict and r["head"]
+                    and factory_mod.same_commit(r["head"], head)):
+                return False    # recorded already for this head
+        summary = " ".join(str(getattr(v, "summary", "") or "").split())[:500]
+        if verdict == "pass":
+            resolved = {f["label"]: "fixed" for r in store.ticket_reviews(cur["id"])
+                        if r["by"] == name for f in r["findings"] if f["state"] == "open"}
+            store.add_review(uid, cur["id"], cur["pr"].get("url"), head, "pass",
+                             f"{title} approved this commit", "", name, [], resolved,
+                             factory_mod.finding_kind, now_utc())
+            return False
+        findings = [{"severity": "P2", "file": "", "line": 0, "blocking": True, "text": text}
+                    for text in (" ".join(str(x).split())[:2000] for x in (v.findings or [])) if text]
+        store.add_review(uid, cur["id"], cur["pr"].get("url"), head, "changes",
+                         f"{title} asked for changes on this commit", "", name, findings, {},
+                         factory_mod.finding_kind, now_utc())
+        reason = summary or f"{title} asked for changes"
+        store.update_ticket(cur["id"], stage="changes", stage_reason=reason)
+        store.add_ticket_history(cur["id"], uid, "stage", "changes", reason, name, "github",
+                                 now_utc())
+        return True
+
+    if await asyncio.to_thread(write):
+        await write_status(store, uid, store.get_ticket(uid, t["id"]) or t, "changes")
+
+
 async def _refresh(store, uid: str) -> None:
     """A linked PR read again when its last read is stale; a ticket in the work with no PR linked
     by a `factory/<ref>` branch in the project's repos, only when no other project has a ticket
@@ -287,12 +366,16 @@ async def _refresh(store, uid: str) -> None:
     sem = asyncio.Semaphore(_READS_AT_ONCE)
     linked = [t for t in tickets if t["pr"] and t["pr"].get("repo")]
     lasts = store.last_reviews([t["id"] for t in linked])
+    gate = outside_gate(store, uid)    # an outside review tool: its verdict is read (TR-857)
 
     async def one(t: dict) -> None:
         pr = t["pr"]
+        watch = bool(gate) and t["stage"] == "review"
+        reread = False
         if factory_github.stale(pr):
             async with sem:
                 pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
+            reread = True
         elif not _follows(t, pr, lasts.get(t["id"])):
             return               # not read again and nothing to write: skip the re-read below
         cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
@@ -316,6 +399,10 @@ async def _refresh(store, uid: str) -> None:
                                      "GitHub shows the pull request merged", "github", "github",
                                      now_utc())
             await write_status(store, uid, cur, "merged")
+        elif (watch and reread and (fields.get("stage") or cur["stage"]) == "review"
+              and pr.get("state") == "open"):
+            async with sem:      # the gate is asked when the PR was read again, as many at once
+                await _outside_verdict(store, uid, cur, pr, gate)
 
     await asyncio.gather(*(one(t) for t in linked), return_exceptions=True)
 
@@ -1182,7 +1269,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The `c` of the team interface (tares/team.py): what the team hooks read of this module
         (TR-739). Also `h.team_reader`."""
         return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
-                               work_person=work_person, my_projects=my_projects, queue=queue,
+                               work_person=work_person, my_projects=my_projects, queue=queue_all,
                                settings=settings,
                                desk_is_mine=desk_is_mine, is_mine=is_mine, leads=leads,
                                stored=stored, crews_of=crews_of, mirror_in=mirror_in,
@@ -1668,12 +1755,17 @@ def register(app, store, h: Host) -> SimpleNamespace:
         rv = next(x for x in store.ticket_reviews(t["id"]) if x["id"] == r["id"])
         return {**rv, "open": [f["label"] for f in store.open_findings(t["id"])]}
 
-    def queue(keep=None) -> list[dict]:
+    def queue(keep=None, outside=False) -> list[dict]:
         # the tickets in review, their milestones' other tickets, when each went to review and
         # its last review: one query each, however many are waiting (TR-648). `keep` narrows them.
+        # A ticket whose project's review gate is an outside tool is not the crew reviewer's to
+        # review (TR-857): it is left out, unless `outside` (the pages that show who has it) asks
+        # for it too; its row then names the gate in `outside_gate`.
         hidden = h.hidden_ids()
+        gates: dict = {}
         waiting = [(n, t) for n, t in store.review_tickets()
-                   if t["project"] not in hidden and (keep is None or keep(t))]
+                   if t["project"] not in hidden and (keep is None or keep(t))
+                   and (outside or outside_gate(store, t["project"], gates) is None)]
         ids = [t["id"] for _, t in waiting]
         siblings = store.milestone_statuses(sorted({t["milestone"] for _, t in waiting
                                                     if t["milestone"]}))
@@ -1708,6 +1800,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
                         "waiting_since": since,
                         "blocks_milestone": blocks,
                         "layer1_clean": layer["clean"],
+                        "outside_gate": (outside_gate(store, uid, gates) or (None, None))[1],
                         "verdict": v})
         now = now_utc()
         for q in out:
@@ -1715,6 +1808,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                     if isinstance(q["waiting_since"], datetime) else None)
         out.sort(key=lambda q: (not q["blocks_milestone"], -(q["waiting_minutes"] or 0)))
         return out
+
+    def queue_all(keep=None) -> list[dict]:
+        """The queue with the pull requests an outside review tool has too: what the Reviews and
+        Home pages split by who has each one (factory_waiting.review_split)."""
+        return queue(keep, outside=True)
 
     @app.get("/api/review-queue")
     def review_queue(request: Request, mine: bool = False):
@@ -2828,7 +2926,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         rows = repo_rows(uid, ho.get("repos") or [])
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
-    fx = SimpleNamespace(stations=stations, queue=queue, pace=pace, settings=settings,
+    fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
                          team_home=team_home, team_projects=team_projects, own_stations=own_stations,
                          own_desk=own_desk, own_tickets=own_tickets,
                          hidden_ids=lambda: h.hidden_ids(),
