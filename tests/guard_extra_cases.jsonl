@@ -13,3 +13,15 @@
 {"role":"builder","tool":"Bash","command":"factory finish\u001c","expect":"deny"}
 {"role":"builder","tool":"Bash","command":"ls x/factory\rspawn y","expect":"deny"}
 {"role":"builder","tool":"Bash","command":"ls x/factory\fspawn y","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"tares factory spawn builder x \"y\"","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"tares factory spawn builder m1 \"do T1\"","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory revive some-station","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"tares factory revive some-station","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory retire some-station","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"tares factory retire some-station","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory crew halt","expect":"deny"}
+{"role":"orchestrator","tool":"Bash","command":"tares factory crew halt","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory roster","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory tidy /tmp/x","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"cd /opt/glass0/tares && tares factory crew freeze","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"/opt/venv/bin/tares factory crew unfreeze","expect":"deny"}

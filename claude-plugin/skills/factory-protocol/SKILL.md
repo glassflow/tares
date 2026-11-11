@@ -22,7 +22,7 @@ You are one station in the **tares-factory crew**: one team of Claude Code sessi
 
 **Your person** is the human this crew belongs to: the one `whoami` on Tares names for your crew. Other people on the cell have crews of their own, on their own machines.
 
-Run `factory roster` (or `list_crew` on Tares) to see every station's name, role, project and state, and `crew_projects` for the projects handed to the crew with their repos. Your role's manual is the skill `station-<role>` (a helper loads its parent's); load it after this one.
+Run `tares factory roster` (or `list_crew` on Tares) to see every station's name, role, project and state, and `crew_projects` for the projects handed to the crew with their repos. Your role's manual is the skill `station-<role>` (a helper loads its parent's); load it after this one.
 
 **GitHub from the crew home.** Crew stations run in `$FACTORY_HOME`, not in a repo, so `gh` can't infer the repo there: pass `-R <owner>/<repo>` (from the PR URL, or a repo's `name` in `crew_projects`) and spell out `repos/<owner>/<repo>/...` in `gh api` paths. Never leave `{owner}/{repo}` placeholders for `gh` to fill outside a repo.
 
@@ -77,7 +77,7 @@ One Tares cell serves many people, each with a crew of their own. These rules ke
 
 ## Messages
 
-Send with `SendMessage` to a station's exact name (`$FACTORY_ORCHESTRATOR`, `$FACTORY_CREW-reviewer`, `$FACTORY_CREW-releaser`, a builder's name from `factory roster`). The orchestrator's name is in FACTORY_ORCHESTRATOR (default crew-orchestrator). If a name doesn't resolve, run `factory roster`; never guess and never use socket addresses or auto-generated titles.
+Send with `SendMessage` to a station's exact name (`$FACTORY_ORCHESTRATOR`, `$FACTORY_CREW-reviewer`, `$FACTORY_CREW-releaser`, a builder's name from `tares factory roster`). The orchestrator's name is in FACTORY_ORCHESTRATOR (default crew-orchestrator). If a name doesn't resolve, run `tares factory roster`; never guess and never use socket addresses or auto-generated titles.
 
 The first line is what your person sees in the preview, so it carries the type, the gist and the ticket ref (Tares shows a message on the ticket it names):
 
@@ -129,7 +129,7 @@ Rules for receiving:
 | checks and learnings | `add_check`, `remember_for_project` |
 | reviews | `record_review`, plus GitHub |
 | desk and decisions | `desk_add`, `desk_answer`, `list_decisions` |
-| stations | `list_crew`, `factory roster` |
+| stations | `list_crew`, `tares factory roster` |
 | your notes for the next session of your station | `$FACTORY_HOME/reports/<station>.md` |
 
 A ticket's stage is one of `todo`, `doing`, `review`, `changes`, `blocked`, `merged`, `shipped`. Never write a record another station owns (rule 1). To change one, message its owner.
@@ -141,6 +141,6 @@ A ticket's stage is one of `todo`, `doing`, `review`, `changes`, `blocked`, `mer
 - With the crew setting `pace` on, the watch slows the crew before the plan's limit. A note from the factory saying the crew is pacing means: put your tick at 45 minutes (`CronList`, `CronDelete`, `CronCreate` again) and keep it there; a later note saying the pacing stopped means: put it back as your manual says. A builder told to finish its step does so, pushes, writes in its report where it is and what comes next, and waits until the factory says the plan has room again. A station revived after a limit reset carries on from its report.
 - A frozen crew (`crew freeze`) keeps its kit: the watch only reports a newer one, and a station it revives starts on the frozen kit (a running station keeps reading the checkout until it restarts).
 - Keep each step's input small: read big files, logs and diffs in parts (Read with offset and limit; `gh pr diff <n> --name-only`, then the files you need). If your context refills right after each compaction, three times running, Claude Code stops you as thrashing, and the watch starts you fresh under the same name. Only your report and the records on Tares carry over, so keep the report current.
-- **Clean up with `factory tidy <path>`**: a worktree, a scratch folder or a file. It deletes only inside the crew's own folders, removes a worktree through git, and never follows a link out. It refuses a worktree with uncommitted changes or commits no remote has; add `--force` only for your own worktree, once its work is merged or your review is posted. Don't `rm -rf`, don't `rm` a `node_modules` link, and don't `git worktree remove --force` yourself. Claude Code's delete check can stop you on those until a person approves; the reviewer once waited 57 minutes. Leave your job's scratch folder alone, since Claude Code deletes it with the job.
+- **Clean up with `tares factory tidy <path>`**: a worktree, a scratch folder or a file. It deletes only inside the crew's own folders, removes a worktree through git, and never follows a link out. It refuses a worktree with uncommitted changes or commits no remote has; add `--force` only for your own worktree, once its work is merged or your review is posted. Don't `rm -rf`, don't `rm` a `node_modules` link, and don't `git worktree remove --force` yourself. Claude Code's delete check can stop you on those until a person approves; the reviewer once waited 57 minutes. Leave your job's scratch folder alone, since Claude Code deletes it with the job.
 - If a peer is unreachable, write your message into your report under `## Undelivered` and tell the orchestrator. If the orchestrator itself is unreachable, keep working and put it in your report; it reads reports on boot.
 - `tares factory crew halt` makes the guard refuse merges, pushes, deploys, tags and new sessions until `tares factory crew resume`. Finish your current step safely and wait.

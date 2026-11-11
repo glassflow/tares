@@ -1100,7 +1100,7 @@
       "dropped": false,
       "python": "tares.crew.up:cmd_crew_up",
       "ported": true,
-      "note": "Ported as tares.crew.up:cmd_crew_up, reached only with TARES_FACTORY_ENGINE=python (entry_crew_up): bash stays the default engine until the watch (TR-958) and the language server offer (TR-970) are ported. On Python it skips the lsp_offer and prints \"watch: not ported yet\" instead of starting the watch, and starts the stations through the bash `_start-stations` bridge until launch is ported (TR-953)."
+      "note": "Ported as tares.crew.up:cmd_crew_up and the default for `crew up` since TR-1069 (the gate behind TARES_FACTORY_ENGINE=python is gone; engine=bash still runs bash). It makes the language server offer (lsp_offer, TR-970), starts the Python watch (TR-958) and starts the stations through the bash `_start-stations` bridge until launch is ported (TR-953)."
     },
     {
       "name": "cmd_spawn",
@@ -1177,7 +1177,7 @@
       "dropped": false,
       "python": "tares.crew.watch:cmd_watch",
       "ported": true,
-      "note": "The loop skeleton. Its steps (revive, regrant, idle wake, pace, updates) and the readings tick are registered by later tickets; with none registered a round does nothing, so the bash watch stays the default and TARES_FACTORY_WATCH=python opts in (always on Windows)."
+      "note": "The loop skeleton. Its steps (revive, regrant, idle wake, pace, updates) and the readings tick are registered by later tickets; with none registered a round does nothing, so a Python watch of that era did nothing; since TR-1069 the Python watch is the default and TARES_FACTORY_WATCH=bash (or the bash engine) keeps the bash one (Python only on Windows)."
     },
     {
       "name": "grants_now",
@@ -2486,7 +2486,7 @@
       "dropped": false,
       "python": "tares.crew.doctor_lsp:offer",
       "ported": true,
-      "note": "Ported as an injectable function; crew up (TR-956) only calls it. Unit-tested in tests/test_crew_doctor_lsp.py (--yes, a closed input, no, yes, once per plugin, unknown); the bash lsp_test.sh crew up cases need crew up in Python."
+      "note": "Ported as an injectable function; crew up (TR-956) only calls it. Unit-tested in tests/test_crew_doctor_lsp.py (--yes, a closed input, no, yes, once per plugin, unknown); crew up calls it since TR-1069, and the bash lsp_test.sh crew up cases pass on the Python engine."
     },
     {
       "name": "doctor_keys",
@@ -2673,7 +2673,7 @@
       "dropped": false,
       "python": "tares.crew.watch:cmd_watch",
       "ported": true,
-      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python by default since TR-1069; TARES_FACTORY_WATCH=bash or the bash engine keeps bash (Python only on Windows)."
     },
     {
       "name": "halt",
@@ -3093,7 +3093,7 @@
       "dropped": false,
       "python": "tares.crew.watch:cmd_watch",
       "ported": true,
-      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python by default since TR-1069; TARES_FACTORY_WATCH=bash or the bash engine keeps bash (Python only on Windows)."
     },
     {
       "name": "crew halt",
@@ -3526,6 +3526,18 @@
       "note": "Read by restart (seconds to wait for the stop; default 10)."
     },
     {
+      "name": "FACTORY_TARES",
+      "kind": "env",
+      "reads": false,
+      "writes": true,
+      "what": "path of the `tares` that started the crew, written for a later release to read",
+      "ticket": "TR-1069",
+      "dropped": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
+      "note": "Written into each station's settings env (bash and Python alike); nothing reads it yet."
+    },
+    {
       "name": "FACTORY_UPDATE_POLL",
       "kind": "env",
       "reads": true,
@@ -3656,6 +3668,18 @@
       "python": "",
       "ported": false,
       "note": ""
+    },
+    {
+      "name": "TARES_FACTORY_ENGINE",
+      "kind": "env",
+      "reads": true,
+      "writes": false,
+      "what": "which engine runs `tares factory`: unset is Python with bash for commands not ported yet, `python` is Python only, `bash` is bash for every command",
+      "ticket": "TR-1069",
+      "dropped": false,
+      "python": "tares.crew.dispatch:engine_setting",
+      "ported": true,
+      "note": "`\"engine\": \"bash\"` in ~/factory/crew.json is the same when the variable is unset; `tares factory doctor` shows the active engine."
     },
     {
       "name": "TARES_FACTORY_KEY_SOURCE",
@@ -4558,7 +4582,7 @@
       "dropped": false,
       "python": "tests.factory.parity:SCENARIOS",
       "ported": true,
-      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py until crew up is ported (TR-956); lsp_test.sh itself still passes them only through bash crew up."
+      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py, and lsp_test.sh passes them through the Python crew up since TR-1069."
     },
     {
       "name": "pace_test.sh",
