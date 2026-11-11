@@ -6002,6 +6002,26 @@ def _without_calls(text: str, prefixes: tuple) -> str:
     return "\n".join(keep) + ("\n" if keep else "")
 
 
+def _kit_files(root: Path) -> dict:
+    return {p.relative_to(root).as_posix(): p for p in sorted(root.rglob("*"))
+            if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
+
+
+def kit_copy_diff(copy: Path, edited: Path) -> str:
+    """A copy of the kit (the frozen kit) as how it differs from the kit it was copied from: the scenario's own
+    edited kit when it made one, else the checkout's. Printing the whole copy would tie the expected result to every
+    file of the plugin."""
+    src = _kit_files(edited if edited.is_dir() else Path(KIT))
+    got = _kit_files(copy)
+    if not got:
+        return "empty\n"
+    rows = [f"only in the copy: {n}" for n in sorted(got.keys() - src.keys())]
+    rows += [f"missing from the copy: {n}" for n in sorted(src.keys() - got.keys())]
+    rows += [f"differs from the kit: {n}" for n in sorted(got.keys() & src.keys())
+             if got[n].read_bytes() != src[n].read_bytes()]
+    return "\n".join(rows) + "\n" if rows else "same as the kit\n"
+
+
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
@@ -6014,6 +6034,8 @@ def snapshot(run: Run) -> dict:
         for p in sorted(base.rglob("*")):
             if p.is_file() and (only is None or p.name in only):
                 rel = prefix + p.relative_to(base).as_posix()
+                if rel.startswith("crew/frozen-kit/"):
+                    continue    # a copy of the kit: shown as its difference from the kit it came from, below
                 try:
                     text = p.read_text(encoding="utf-8", errors="replace")
                     if p.name == "calls.jsonl" and run.ignore_calls:
@@ -6023,6 +6045,8 @@ def snapshot(run: Run) -> dict:
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
+    if (run.crew / "frozen-kit").is_dir():
+        files["crew/frozen-kit"] = kit_copy_diff(run.crew / "frozen-kit", run.tmp / "kit" / "claude-plugin")
     t = run.tmp / "tares" / "writes.jsonl"   # what the stand-in Tares was asked to save
     if t.is_file():
         files["tares/writes.jsonl"] = norm_file(t.read_text(encoding="utf-8", errors="replace"), t.name, run.tmp)

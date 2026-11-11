@@ -1,0 +1,273 @@
+== step: session Notes app ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/elsewhere",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "p_notes",
+    "TARES_PROJECT_NAME": "Notes app",
+    "TARES_SESSION_NAME": "notes-app-session",
+    "TARES_SESSION_TAKEOVER": ""
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: session notes-app ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/elsewhere",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "p_notes",
+    "TARES_PROJECT_NAME": "Notes app",
+    "TARES_SESSION_NAME": "notes-app-session",
+    "TARES_SESSION_TAKEOVER": ""
+  },
+  "has_auth_token": false,
+  "n": 2,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: session a tiny url shortener ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: opening Claude as a-tiny-url-shortener-session in <TMP>/shop.
+         It plans "a tiny url shortener" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         session; if it turns out big, it offers the full spec and the hand-over to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_SESSION_NAME": "a-tiny-url-shortener-session"
+  },
+  "has_auth_token": false,
+  "n": 3,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: session --new Shop ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: opening Claude as shop-session in <TMP>/shop.
+         It plans "Shop" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         session; if it turns out big, it offers the full spec and the hand-over to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_SESSION_NAME": "shop-session"
+  },
+  "has_auth_token": false,
+  "n": 4,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: session Widgets ==
+exit: 1
+-- stdout --
+
+-- stderr --
+
+No project named Widgets on Tares. Plan and build "Widgets" as a new project?
+  1) yes, a new project
+  2) no, I meant an existing one   (recommended)
+  Choice [2]: tares factory: the open projects: Shop, Notes app
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_SESSION_NAME": "shop-session"
+  },
+  "has_auth_token": false,
+  "n": 4,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: session Widgets ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+No project named Widgets on Tares. Plan and build "Widgets" as a new project?
+  1) yes, a new project
+  2) no, I meant an existing one   (recommended)
+  Choice [2]: tares factory: opening Claude as widgets-session in <TMP>/elsewhere.
+         It plans "Widgets" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         session; if it turns out big, it offers the full spec and the hand-over to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/elsewhere",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_SESSION_NAME": "widgets-session"
+  },
+  "has_auth_token": false,
+  "n": 5,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== file crew/stations/session.settings.json ==
+{
+  "enabledPlugins": {
+    "tares@inline": true
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-n", "notes-app-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session Notes app"], "cwd": "<TMP>/elsewhere"}
+{"args": ["-n", "notes-app-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session Notes app"], "cwd": "<TMP>/elsewhere"}
+{"args": ["-n", "a-tiny-url-shortener-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: a tiny url shortener"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "shop-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: Shop"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "widgets-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: Widgets"], "cwd": "<TMP>/elsewhere"}
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 
+GET /api/crew/projects key=no 
+GET /api/projects/p_notes/crew key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 
+GET /api/crew/projects key=no 
+GET /api/projects/p_notes/crew key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 

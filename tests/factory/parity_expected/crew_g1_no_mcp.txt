@@ -1,0 +1,27 @@
+== step: crew up --yes ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no MCP server answers at http://127.0.0.1:9/mcp. Stations reach Tares through it. Start one in another terminal: tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL to where yours runs).
+== step: crew up --yes ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no MCP server answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp. Stations reach Tares through it. Start one in another terminal: tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL to where yours runs).
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}

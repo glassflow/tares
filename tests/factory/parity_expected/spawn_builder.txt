@@ -1,0 +1,303 @@
+== step: spawn builder Links App m1 {TMP}/links work T1 and T2 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+  ✓ started links-app-build-m1 (sonnet, high)
+== step: spawn builder Links App m1 {TMP}/links again ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: links-app-build-m1 is already running; message it instead
+== step: spawn builder Nobody's m1 {TMP}/links x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: Nobody's is not handed to the crew on Tares; the spec session hands it over (hand_over), or run /tares:ship in its repo
+== step: spawn builder Links App m2 {TMP}/other x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/other is not one of Links App's repos on Tares (<TMP>/links); a repo joins the project at its hand-over
+== step: spawn builder Links App m3 {TMP}/nowhere x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/nowhere is not a git repository
+== step: spawn builder Links App m4 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"
+== step: spawn helper links-app-build-m1 rebase rebase T2 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+  ✓ started links-app-build-m1-rebase (sonnet, high)
+== step: spawn helper nobody probe x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: nobody is not a recorded station
+== step: spawn helper links-app-build-m1 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
+== step: spawn sprite ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: spawn takes builder or helper
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "links-app-build-m1"}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "links-app-build-m1-rebase"}
+== file crew/stations/links-app-build-m1-rebase.grants ==
+
+@project 
+== file crew/stations/links-app-build-m1-rebase.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project Links App: <TMP>/links or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repository of project Links App, checked out at <TMP>/links, and opening pull requests there, is expected work that Pat authorized.",
+      "Merging a pull request in the repository of project Links App, checked out at <TMP>/links, that this crew opened from a `factory/*` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) and the orchestrator has relayed Pat's yes for that pull request, quoted verbatim from the desk."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the helper station `links-app-build-m1-rebase` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `links-app-build-m1`. Pat chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "links-app-build-m1",
+    "FACTORY_PROJECT": "links-app",
+    "FACTORY_REPO": "<TMP>/links",
+    "FACTORY_ROLE": "helper",
+    "FACTORY_STATION": "links-app-build-m1-rebase",
+    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/links/.factory/worktrees",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "uc_links",
+    "TARES_PROJECT_NAME": "Links App"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/links-app-build-m1.grants ==
+
+@project 
+== file crew/stations/links-app-build-m1.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project Links App: <TMP>/links or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repository of project Links App, checked out at <TMP>/links, and opening pull requests there, is expected work that Pat authorized.",
+      "Merging a pull request in the repository of project Links App, checked out at <TMP>/links, that this crew opened from a `factory/*` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) and the orchestrator has relayed Pat's yes for that pull request, quoted verbatim from the desk."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `links-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Pat chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "links-app",
+    "FACTORY_REPO": "<TMP>/links",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "links-app-build-m1",
+    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/links/.factory/worktrees",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "uc_links",
+    "TARES_PROJECT_NAME": "Links App"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "links-app-build-m1": {
+    "autonomy": "",
+    "cwd": "<TMP>/links",
+    "effort": "high",
+    "grants": "2980329244",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "1604412445",
+    "model": "sonnet",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "Links App",
+    "project_id": "uc_links",
+    "repo": "<TMP>/links",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/links-app-build-m1.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "links-app-build-m1-rebase": {
+    "cwd": "<TMP>/links",
+    "effort": "high",
+    "grants": "2980329244",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "1604412445",
+    "model": "sonnet",
+    "parent": "links-app-build-m1",
+    "plugin": "<TMP>/kit",
+    "project": "Links App",
+    "project_id": "uc_links",
+    "repo": "<TMP>/links",
+    "role": "helper",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/links-app-build-m1-rebase.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/links",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  },
+  {
+    "cwd": "<TMP>/links",
+    "id": "<ID>",
+    "name": "links-app-build-m1-rebase",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--bg", "-n", "links-app-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1 and T2"], "cwd": "<TMP>/links"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--bg", "-n", "links-app-build-m1-rebase", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name links-app-build-m1-rebase, project Links App, repo <TMP>/links, started by links-app-build-m1. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station links-app-build-m1: load the skills factory-protocol and station-builder, do only the task below, write results to your report, and send links-app-build-m1 DONE when it is finished.\n\nYour task:\nrebase T2"], "cwd": "<TMP>/links"}

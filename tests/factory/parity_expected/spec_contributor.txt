@@ -1,0 +1,258 @@
+== step: spec --project Acme web ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: opening Claude as acme-web-spec in <TMP>/plain, as a contributor to Acme web, which Ashish leads.
+         It asks you the questions for you and shows the tickets in your repos.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/plain",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "Acme web",
+    "TARES_SESSION_KIND": "contributor"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec acme web ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: opening Claude as acme-web-spec in <TMP>/shop, as a contributor to Acme web, which Ashish leads.
+         It asks you the questions for you and shows the tickets in your repos.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "Acme web",
+    "TARES_SESSION_KIND": "contributor"
+  },
+  "has_auth_token": false,
+  "n": 2,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec --project No such project ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as no-such-project-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 3,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec --project Nobody leads ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as nobody-leads-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 4,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec --project Plain notes ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as plain-notes-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 5,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec --project Secret plan ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as secret-plan-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 6,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== file crew/stations/spec.settings.json ==
+{
+  "enabledPlugins": {
+    "tares@inline": true
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-n", "acme-web-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."], "cwd": "<TMP>/plain"}
+{"args": ["-n", "acme-web-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."], "cwd": "<TMP>/shop"}
+{"args": ["-n", "no-such-project-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: No such project)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "nobody-leads-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Nobody leads)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "plain-notes-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Plain notes)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "secret-plan-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Secret plan)"], "cwd": "<TMP>/shop"}
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /api/whoami key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /api/whoami key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 

@@ -1,0 +1,577 @@
+== step: crew up --yes ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+Starting the crew
+  ✓ started crew-orchestrator (sonnet, xhigh)
+  ✓ started crew-reviewer (sonnet, high)
+
+The crew takes a few minutes to check in. Next:
+  Watch it              http://<TARES>/crew
+  Answer its questions  tares factory crew attach orchestrator   (← to leave it running)
+  Give it a project     tares factory spec "what to build"   (in the project's repo)
+  Stop it               tares factory crew down
+-- after --
+{
+  "installs": [],
+  "plugin_installs": 0,
+  "plugins": []
+}
+== step: crew up --yes ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+Code intelligence: Claude Code can find a definition, its references and its callers through a language server,
+so builders and the reviewer search less and read less. These repos have none wired in yet:
+  Python in <TMP>/api
+      npm install -g pyright
+      claude plugin install pyright-lsp@claude-plugins-official
+  TypeScript in <TMP>/api
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+  Go in <TMP>/gw
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  Rust in <TMP>/engine
+      rustup component add rust-analyzer
+      claude plugin install rust-analyzer-lsp@claude-plugins-official
+  Go in <TMP>/gw2
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  JavaScript in <TMP>/site
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+tares factory: not installing language servers without a yes: run the commands above yourself, or run crew up without --yes
+
+Starting the crew
+  ✓ crew-orchestrator is already running
+  ✓ crew-reviewer is already running
+
+The crew takes a few minutes to check in. Next:
+  Watch it              http://<TARES>/crew
+  Answer its questions  tares factory crew attach orchestrator   (← to leave it running)
+  Give it a project     tares factory spec "what to build"   (in the project's repo)
+  Stop it               tares factory crew down
+-- after --
+{
+  "installs": [],
+  "plugin_installs": 0,
+  "plugins": []
+}
+== step: crew up ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+Code intelligence: Claude Code can find a definition, its references and its callers through a language server,
+so builders and the reviewer search less and read less. These repos have none wired in yet:
+  Python in <TMP>/api
+      npm install -g pyright
+      claude plugin install pyright-lsp@claude-plugins-official
+  TypeScript in <TMP>/api
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+  Go in <TMP>/gw
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  Rust in <TMP>/engine
+      rustup component add rust-analyzer
+      claude plugin install rust-analyzer-lsp@claude-plugins-official
+  Go in <TMP>/gw2
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  JavaScript in <TMP>/site
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+Run these now?
+  recommended: yes
+  press enter to take it, or type no
+> tares factory: no language servers installed; tares factory doctor lists what is missing
+
+Starting the crew
+  ✓ crew-orchestrator is already running
+  ✓ crew-reviewer is already running
+
+The crew takes a few minutes to check in. Next:
+  Watch it              http://<TARES>/crew
+  Answer its questions  tares factory crew attach orchestrator   (← to leave it running)
+  Give it a project     tares factory spec "what to build"   (in the project's repo)
+  Stop it               tares factory crew down
+-- after --
+{
+  "installs": [],
+  "plugin_installs": 0,
+  "plugins": []
+}
+== step: crew up ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+Code intelligence: Claude Code can find a definition, its references and its callers through a language server,
+so builders and the reviewer search less and read less. These repos have none wired in yet:
+  Python in <TMP>/api
+      npm install -g pyright
+      claude plugin install pyright-lsp@claude-plugins-official
+  TypeScript in <TMP>/api
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+  Go in <TMP>/gw
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  Rust in <TMP>/engine
+      rustup component add rust-analyzer
+      claude plugin install rust-analyzer-lsp@claude-plugins-official
+  Go in <TMP>/gw2
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  JavaScript in <TMP>/site
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+Run these now?
+  recommended: yes
+  press enter to take it, or type no
+> tares factory: no language servers installed; tares factory doctor lists what is missing
+
+Starting the crew
+  ✓ crew-orchestrator is already running
+  ✓ crew-reviewer is already running
+
+The crew takes a few minutes to check in. Next:
+  Watch it              http://<TARES>/crew
+  Answer its questions  tares factory crew attach orchestrator   (← to leave it running)
+  Give it a project     tares factory spec "what to build"   (in the project's repo)
+  Stop it               tares factory crew down
+-- after --
+{
+  "installs": [],
+  "plugin_installs": 0,
+  "plugins": []
+}
+== step: crew up ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+Code intelligence: Claude Code can find a definition, its references and its callers through a language server,
+so builders and the reviewer search less and read less. These repos have none wired in yet:
+  Python in <TMP>/api
+      npm install -g pyright
+      claude plugin install pyright-lsp@claude-plugins-official
+  TypeScript in <TMP>/api
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+  Go in <TMP>/gw
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  Rust in <TMP>/engine
+      rustup component add rust-analyzer
+      claude plugin install rust-analyzer-lsp@claude-plugins-official
+  Go in <TMP>/gw2
+      go install golang.org/x/tools/gopls@latest
+      claude plugin install gopls-lsp@claude-plugins-official
+  JavaScript in <TMP>/site
+      npm install -g typescript-language-server typescript
+      claude plugin install typescript-lsp@claude-plugins-official
+Run these now?
+  recommended: yes
+  press enter to take it, or type no
+> tares factory: installing pyright-langserver: npm install -g pyright
+tares factory: installing the pyright-lsp plugin
+tares factory: installing typescript-language-server: npm install -g typescript-language-server typescript
+tares factory: installing the typescript-lsp plugin
+tares factory: installing gopls: go install golang.org/x/tools/gopls@latest
+tares factory: installing the gopls-lsp plugin
+tares factory: installing rust-analyzer: rustup component add rust-analyzer
+tares factory: installing the rust-analyzer-lsp plugin
+
+Starting the crew
+  ✓ crew-orchestrator is already running
+  ✓ crew-reviewer is already running
+
+The crew takes a few minutes to check in. Next:
+  Watch it              http://<TARES>/crew
+  Answer its questions  tares factory crew attach orchestrator   (← to leave it running)
+  Give it a project     tares factory spec "what to build"   (in the project's repo)
+  Stop it               tares factory crew down
+-- after --
+{
+  "installs": [
+    "npm install -g pyright",
+    "npm install -g typescript-language-server typescript",
+    "go install golang.org/x/tools/gopls@latest",
+    "rustup component add rust-analyzer"
+  ],
+  "plugin_installs": 4,
+  "plugins": [
+    "gopls-lsp@claude-plugins-official",
+    "pyright-lsp@claude-plugins-official",
+    "rust-analyzer-lsp@claude-plugins-official",
+    "typescript-lsp@claude-plugins-official"
+  ]
+}
+== step: doctor ==
+exit: 0
+-- stdout --
+tares factory doctor
+  ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
+  ok    crew home: <TMP>/crew
+  ok    Tares answers at http://<TARES> (from the environment)
+  ok    Tares lets this crew in
+  ok    Claude Code's session list reads (2 active)
+  ok    Claude Code trusts <TMP>/crew
+  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  ok    MCP endpoint answers at http://<TARES>/mcp
+  ok    crew settings on Tares: {"autonomy":"L3-review","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
+  ok    the kit follows the plugin checkout (not frozen)
+  ok    project Mix: <TMP>/api trusted
+  ok    project Mix: <TMP>/api is o/api on GitHub (WRITE)
+  ok    project Mix: <TMP>/gw trusted
+  ok    project Mix: <TMP>/gw is o/gw on GitHub (WRITE)
+  ok    project Mix: <TMP>/docs trusted
+  ok    project Mix: <TMP>/docs is o/docs on GitHub (WRITE)
+  ok    project Mix: <TMP>/engine trusted
+  ok    project Mix: <TMP>/engine is o/engine on GitHub (WRITE)
+  ok    project Mix: <TMP>/gw2 trusted
+  ok    project Mix: <TMP>/gw2 is o/gw2 on GitHub (WRITE)
+  ok    project Mix: <TMP>/site trusted
+  ok    project Mix: <TMP>/site is o/site on GitHub (WRITE)
+  ok    project Mix: Python in <TMP>/api has a language server for Claude Code (pyright-lsp plugin, pyright-langserver on PATH)
+  ok    project Mix: TypeScript in <TMP>/api has a language server for Claude Code (typescript-lsp plugin, typescript-language-server on PATH)
+  ok    project Mix: Go in <TMP>/gw has a language server for Claude Code (gopls-lsp plugin, gopls on PATH)
+  ok    project Mix: Rust in <TMP>/engine has a language server for Claude Code (rust-analyzer-lsp plugin, rust-analyzer on PATH)
+  ok    project Mix: Go in <TMP>/gw2 has a language server for Claude Code (gopls-lsp plugin, gopls on PATH)
+  ok    project Mix: JavaScript in <TMP>/site has a language server for Claude Code (typescript-lsp plugin, typescript-language-server on PATH)
+  ok    gh signed in
+  warn  could not tell which Claude Code crew-orchestrator runs
+  warn  could not tell which Claude Code crew-reviewer runs
+all good
+-- stderr --
+
+-- after --
+{
+  "installs": [
+    "npm install -g pyright",
+    "npm install -g typescript-language-server typescript",
+    "go install golang.org/x/tools/gopls@latest",
+    "rustup component add rust-analyzer"
+  ],
+  "plugin_installs": 4,
+  "plugins": [
+    "gopls-lsp@claude-plugins-official",
+    "pyright-lsp@claude-plugins-official",
+    "rust-analyzer-lsp@claude-plugins-official",
+    "typescript-lsp@claude-plugins-official"
+  ]
+}
+== step: crew up --yes ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+Starting the crew
+  ✓ crew-orchestrator is already running
+  ✓ crew-reviewer is already running
+
+The crew takes a few minutes to check in. Next:
+  Watch it              http://<TARES>/crew
+  Answer its questions  tares factory crew attach orchestrator   (← to leave it running)
+  Give it a project     tares factory spec "what to build"   (in the project's repo)
+  Stop it               tares factory crew down
+-- after --
+{
+  "installs": [
+    "npm install -g pyright",
+    "npm install -g typescript-language-server typescript",
+    "go install golang.org/x/tools/gopls@latest",
+    "rustup component add rust-analyzer"
+  ],
+  "plugin_installs": 4,
+  "plugins": [
+    "gopls-lsp@claude-plugins-official",
+    "pyright-lsp@claude-plugins-official",
+    "rust-analyzer-lsp@claude-plugins-official",
+    "typescript-lsp@claude-plugins-official"
+  ]
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
+== file crew/stations/crew-orchestrator.grants ==
+
+== file crew/stations/crew-orchestrator.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/api, <TMP>/docs, <TMP>/engine, <TMP>/gw, <TMP>/gw2, <TMP>/site or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crew/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that the user authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "orchestrator",
+    "FACTORY_STATION": "crew-orchestrator",
+    "FACTORY_TARES": "<TMP>/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://<TARES>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://<TARES>/mcp",
+    "TARES_FACTORY_URL": "http://<TARES>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)",
+      "Bash(factory spawn *)",
+      "Bash(tares factory spawn *)",
+      "Bash(factory revive *)",
+      "Bash(tares factory revive *)",
+      "Bash(factory restart *)",
+      "Bash(tares factory restart *)",
+      "Bash(factory retire *)",
+      "Bash(tares factory retire *)",
+      "Bash(factory roster)",
+      "Bash(tares factory roster)",
+      "Bash(factory projects)",
+      "Bash(tares factory projects)",
+      "Bash(factory crew status)",
+      "Bash(tares factory crew status)",
+      "Bash(factory crew halt)",
+      "Bash(tares factory crew halt)",
+      "Bash(factory crew halt *)",
+      "Bash(tares factory crew halt *)",
+      "Bash(factory crew resume)",
+      "Bash(tares factory crew resume)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-reviewer.grants ==
+
+== file crew/stations/crew-reviewer.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/api, <TMP>/docs, <TMP>/engine, <TMP>/gw, <TMP>/gw2, <TMP>/site or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/api, <TMP>/docs, <TMP>/engine, <TMP>/gw, <TMP>/gw2, <TMP>/site, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "reviewer",
+    "FACTORY_STATION": "crew-reviewer",
+    "FACTORY_TARES": "<TMP>/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://<TARES>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://<TARES>/mcp",
+    "TARES_FACTORY_URL": "http://<TARES>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/crew",
+    "effort": "xhigh",
+    "grants": "3515105045",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "4076195382",
+    "model": "sonnet",
+    "parent": "",
+    "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-orchestrator.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "grants": "3515105045",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "4076195382",
+    "model": "sonnet",
+    "parent": "",
+    "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-reviewer.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "sonnet", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "install", "pyright-lsp@claude-plugins-official"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "install", "typescript-lsp@claude-plugins-official"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "install", "gopls-lsp@claude-plugins-official"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "install", "rust-analyzer-lsp@claude-plugins-official"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+== file tares/writes.jsonl ==
+

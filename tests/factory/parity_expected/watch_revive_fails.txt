@@ -1,0 +1,277 @@
+== step: once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: shop-build-m1 stopped; reviving it under the same name
+resume failed (fake)
+tares factory: could not start shop-build-m1
+tares factory: could not revive shop-build-m1; will try again next round
+tares factory: shop-build-m2 stopped; reviving it under the same name
+resume failed (fake)
+tares factory: could not start shop-build-m2
+tares factory: could not revive shop-build-m2; will try again next round
+== step: once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: shop-build-m1 stopped; reviving it under the same name
+  ✓ started shop-build-m1 (opus, high)
+tares factory: shop-build-m2 stopped; reviving it under the same name
+  ✓ started shop-build-m2 (opus, high)
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "00000001", "event": "revived", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "shop-build-m2"}
+{"at": "<TS>", "detail": "00000002", "event": "revived", "station": "shop-build-m2"}
+== file crew/stations/shop-build-m1.grants ==
+
+@project 
+== file crew/stations/shop-build-m1.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop:  or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that Pat authorized.",
+      "Merging a pull request in the repositories of the projects handed to this crew on Tares (crew_projects), that this crew opened from a `factory/*` branch is expected work that Pat pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Pat chose to rely on. Deleting the merged `factory/*` branch is expected."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `shop-build-m1` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project shop in . It was started by the station `crew-orchestrator`. Pat chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "shop",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "shop-build-m1",
+    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "shop",
+    "TARES_PROJECT_NAME": "shop"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/shop-build-m2.grants ==
+
+@project 
+== file crew/stations/shop-build-m2.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop:  or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that Pat authorized.",
+      "Merging a pull request in the repositories of the projects handed to this crew on Tares (crew_projects), that this crew opened from a `factory/*` branch is expected work that Pat pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Pat chose to rely on. Deleting the merged `factory/*` branch is expected."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `shop-build-m2` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project shop in . It was started by the station `crew-orchestrator`. Pat chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "shop",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "shop-build-m2",
+    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_PROJECT": "shop",
+    "TARES_PROJECT_NAME": "shop"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "shop-build-m1": {
+    "cwd": "<TMP>/work",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-1"
+      }
+    ],
+    "effort": "high",
+    "grants": "2980329244",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "1604412445",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/shop-build-m1.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "cwd": "<TMP>/work",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-2"
+      }
+    ],
+    "effort": "high",
+    "grants": "2980329244",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "1604412445",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/shop-build-m2.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "name": "shop-build-m1",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  },
+  {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "name": "shop-build-m2",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["--bg", "-n", "shop-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-1", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "shop-build-m2", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m2, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-2", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
+{"args": ["--bg", "-n", "shop-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-1", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
+{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--bg", "-n", "shop-build-m2", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m2, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-2", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
+{"args": ["rm", "aaaa0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}

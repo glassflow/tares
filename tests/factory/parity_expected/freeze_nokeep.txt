@@ -1,0 +1,64 @@
+== step: crew freeze ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: Tares at http://127.0.0.1:127.0.0.1:<PORT> did not keep the freeze; it needs a newer version
+-- after --
+{
+  "at": null,
+  "binary": false,
+  "by": null,
+  "copy": false,
+  "extra": false,
+  "frozen": false,
+  "keys": [],
+  "same": false
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}

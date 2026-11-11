@@ -1,0 +1,138 @@
+== step: spec an order form for the bakery shop ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as an-order-form-for-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec --project Bakery orders ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as bakery-orders-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 2,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec with a token ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as with-a-token-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_CRED_FILE": "<TMP>/crew/.tares-token",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_TOKEN_FILE": "<TMP>/crew/.tares-token",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 3,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== file crew/.tares-token ==
+spec-tok
+== file crew/stations/spec.settings.json ==
+{
+  "enabledPlugins": {
+    "tares@inline": true
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-n", "an-order-form-for-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec an order form for the bakery shop"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "bakery-orders-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Bakery orders)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "with-a-token-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec with a token"], "cwd": "<TMP>/shop"}
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+GET /api/crew/settings key=yes 
+POST /mcp key=yes {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=yes 

@@ -1,0 +1,196 @@
+== step: roster ==
+exit: 0
+-- stdout --
+crew: crew (orchestrator: crew-orchestrator)
+crew-orchestrator	orchestrator		working	2.1.310
+crew-reviewer	reviewer		done	2.1.310
+shop-build-m1	builder	shop	blocked	2.1.100 (older than 2.1.310)
+shop-build-m2	builder	shop	gone	
+links-app-build-m1	builder	Links App	working	2.1.310
+links-app-build-m1-rebase	helper	Links App	working	2.1.310
+-- stderr --
+
+== step: retire links-app-build-m1-rebase ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: retired links-app-build-m1-rebase
+== step: revive links-app-build-m1-rebase ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: links-app-build-m1-rebase was retired; factory spawn starts it again
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "ffff0007", "event": "retired", "station": "links-app-build-m1-rebase"}
+== file crew/stations/crew-reviewer.pace ==
+{"stretched":true,"held":false}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "Links App",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  },
+  "links-app-build-m1-rebase": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "Links App",
+    "repo": "",
+    "role": "helper",
+    "status": "retired"
+  },
+  "old-helper": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "helper",
+    "status": "stopped"
+  },
+  "shop-build-m1": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== file crew/watch.pid ==
+999999
+== file claude/agents.json ==
+[
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "busy",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "shop-build-m1",
+    "pid": "<PID>",
+    "state": "blocked",
+    "status": "waiting",
+    "version": "2.1.100"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "busy",
+    "version": "2.1.310"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["stop", "ffff0007"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "ffff0007"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+== asked of Tares ==
+POST /api/crew/links-app-build-m1-rebase/end?crew=crew key=no {
+  "reason": "retired"
+}

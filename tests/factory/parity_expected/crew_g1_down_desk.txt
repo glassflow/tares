@@ -1,0 +1,195 @@
+== step: crew desk ==
+exit: 0
+-- stdout --
+D1 (blocks work) · finishing: No project is left. Stop the crew?
+  recommended: yes, since nothing to build
+
+D2: No project is left. Stop the crew? Run `tares factory crew down` in your terminal.
+  recommended: yes, since nothing to build
+
+D3: Nothing left to build. Stop the crew?
+  recommended: yes, since shorter words
+
+D4: Keep nightly dependency bumps?
+  recommended: yes, since cheap
+
+Answer in the orchestrator's session, one at a time: tares factory crew attach orchestrator
+-- stderr --
+
+== step: crew down ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: retired crew-orchestrator
+tares factory: retired crew-reviewer
+tares factory: retired shop-build-m1
+tares factory: retired shop-build-m2
+tares factory: all stations stopped. Tares keeps the projects, tickets and the desk; tares factory crew up starts fresh sessions.
+== step: crew status ==
+exit: 0
+-- stdout --
+no stations running; tares factory crew up starts them
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer in the orchestrator's session):
+  D4: Keep nightly dependency bumps?
+    recommended: yes, since cheap
+Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "aaaa0001", "event": "retired", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "bbbb0002", "event": "retired", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "cccc0003", "event": "retired", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "dddd0004", "event": "retired", "station": "shop-build-m2"}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "status": "retired"
+  },
+  "crew-reviewer": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "status": "retired"
+  },
+  "old-helper": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "helper",
+    "status": "stopped"
+  },
+  "shop-build-m1": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "retired"
+  },
+  "shop-build-m2": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "retired"
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/desk?state=open key=no 
+GET /health key=no 
+POST /api/crew/crew-orchestrator/end?crew=crew key=no {
+  "reason": "retired"
+}
+POST /api/crew/crew-reviewer/end?crew=crew key=no {
+  "reason": "retired"
+}
+POST /api/crew/shop-build-m1/end?crew=crew key=no {
+  "reason": "retired"
+}
+POST /api/crew/shop-build-m2/end?crew=crew key=no {
+  "reason": "retired"
+}
+GET /api/desk?state=open key=no 
+POST /api/desk/d1/withdraw key=no {
+  "reason": "the crew stopped and the project is finished"
+}
+GET /api/desk?state=open key=no 
+POST /api/desk/d1/withdraw key=no {
+  "reason": "the person stopped the crew"
+}
+POST /api/desk/d2/withdraw key=no {
+  "reason": "the person stopped the crew"
+}
+POST /api/desk/d3/withdraw key=no {
+  "reason": "the person stopped the crew"
+}
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects key=no 

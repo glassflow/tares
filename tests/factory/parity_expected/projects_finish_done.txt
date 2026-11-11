@@ -1,0 +1,110 @@
+== step: finish Links App all shipped ==
+exit: 0
+-- stdout --
+✓ Links App is done. It is off the crew's work list; http://127.0.0.1:127.0.0.1:<PORT>/projects/p1 shows it.
+  The crew holds no other project. Stop it with: tares factory crew down
+-- stderr --
+
+== step: finish shop ==
+exit: 0
+-- stdout --
+✓ shop is done. It is off the crew's work list; http://127.0.0.1:127.0.0.1:<PORT>/projects/p2 shows it.
+-- stderr --
+
+== step: finish nothing ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: nothing is not a project the crew holds (open projects: Links App, shop, A very long project name that is cut)
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "name": "crew",
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-reviewer": {
+    "role": "reviewer",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "project": "Links App",
+    "role": "builder",
+    "status": "active"
+  },
+  "links-app-build-m2": {
+    "project": "Links App",
+    "role": "builder",
+    "status": "retired"
+  },
+  "shop-build-m1": {
+    "project": "shop",
+    "role": "builder",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "project": "shop",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/projects key=no 
+POST /api/projects/p1/finish key=no {
+  "words": "all shipped"
+}
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/projects key=no 
+POST /api/projects/p2/finish key=no {
+  "words": ""
+}
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/projects key=no 

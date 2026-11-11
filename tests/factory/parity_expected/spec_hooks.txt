@@ -1,0 +1,36 @@
+== step: hook startup TARES_PROJECT=Acme web TARES_SESSION_KIND=contributor ==
+exit: 0
+-- stdout --
+This session contributes to the Tares project `Acme web` led by someone else, on the Tares through the Tares MCP tools. Follow the `spec-project` skill, section Contributor. Do not build tickets.
+-- stderr --
+
+== step: hook compact TARES_PROJECT=Acme web TARES_SESSION_KIND=contributor ==
+exit: 0
+-- stdout --
+This session contributes to the Tares project `Acme web` led by someone else, on the Tares through the Tares MCP tools. Follow the `spec-project` skill, section Contributor. Do not build tickets. This session was resumed or compacted: load the `spec-project` skill again, section Contributor, and carry on from its steps.
+-- stderr --
+
+== step: hook resume TARES_PROJECT=Acme web TARES_SESSION_KIND=contributor ==
+exit: 0
+-- stdout --
+This session contributes to the Tares project `Acme web` led by someone else, on the Tares through the Tares MCP tools. Follow the `spec-project` skill, section Contributor. Do not build tickets. This session was resumed or compacted: load the `spec-project` skill again, section Contributor, and carry on from its steps.
+-- stderr --
+
+== step: hook startup TARES_PROJECT=Acme web ==
+exit: 0
+-- stdout --
+This session works on the Tares project `Acme web` (id `Acme web`) by itself (tares factory session), on the Tares through the Tares MCP tools. Follow the `session` skill.
+-- stderr --
+
+== step: hook compact TARES_PROJECT=Acme web ==
+exit: 0
+-- stdout --
+This session works on the Tares project `Acme web` (id `Acme web`) by itself (tares factory session), on the Tares through the Tares MCP tools. Follow the `session` skill. This session was resumed or compacted: load the `session` skill again, re-read the project's tickets and the working doc of the one in progress, then carry on where you left off (a takeover you already asked for is not asked again).
+-- stderr --
+
+== step: bare startup TARES_SESSION_KIND=contributor CLAUDE_PLUGIN_ROOT={tmp} ==
+exit: 0
+-- stdout --
+
+-- stderr --
+

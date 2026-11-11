@@ -1,0 +1,126 @@
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the kit is not frozen
+-- after --
+{
+  "at": null,
+  "binary": false,
+  "by": null,
+  "copy": false,
+  "extra": false,
+  "frozen": false,
+  "keys": [],
+  "same": false
+}
+== step: crew freeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit frozen since <TS> by kiran: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+-- after --
+{
+  "at": "<TS>",
+  "binary": true,
+  "by": "kiran",
+  "copy": true,
+  "extra": false,
+  "frozen": true,
+  "keys": [
+    "at",
+    "by",
+    "version"
+  ],
+  "same": true
+}
+== step: crew freeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the kit is already frozen since <TS> by kiran; tares factory crew unfreeze lifts it
+-- after --
+{
+  "at": "<TS>",
+  "binary": true,
+  "by": "kiran",
+  "copy": true,
+  "extra": false,
+  "frozen": true,
+  "keys": [
+    "at",
+    "by",
+    "version"
+  ],
+  "same": true
+}
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit unfrozen: the watch moves each station onto the checkout's kit when it's idle
+-- after --
+{
+  "at": null,
+  "binary": false,
+  "by": null,
+  "copy": false,
+  "extra": false,
+  "frozen": false,
+  "keys": [],
+  "same": false
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "4076195382", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}

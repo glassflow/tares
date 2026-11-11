@@ -1,0 +1,21 @@
+== step: doctor ==
+exit: 1
+-- stdout --
+tares factory doctor
+  ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
+  ok    crew home: <TMP>/crew
+  FIX   no Tares answers at http://127.0.0.1:9 (from the environment): start one with `tares up`, connect to your Tares Cloud workspace with `tares login`, or set TARESD_URL to where yours runs
+  ok    Claude Code's session list reads (0 active)
+  FIX   Claude Code has not trusted the crew home <TMP>/crew (the crew's own folder, whichever folder you run from; its stations run there). tares factory crew up offers to open Claude Code there to trust it, or: mkdir -p <TMP>/crew && cd <TMP>/crew && claude, accept the trust prompt, /exit
+  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  FIX   no MCP server answers at http://127.0.0.1:8788/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
+  warn  no crew yet in <TMP>/crew: tares factory crew up creates it
+  ok    gh signed in
+fix the items marked FIX
+-- stderr --
+
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}

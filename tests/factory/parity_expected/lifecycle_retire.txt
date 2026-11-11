@@ -1,0 +1,154 @@
+== step: retire reviewer ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: retired crew-reviewer
+== step: retire shop-build-m1 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: retired shop-build-m1
+== step: retire crew-orchestrator ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: could not tell Tares at http://127.0.0.1:127.0.0.1:<PORT> that crew-orchestrator ended; mark it ended on the Crew page
+tares factory: retired crew-orchestrator
+== step: retire nobody ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: nobody is not a recorded station
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "bbbb0002", "event": "retired", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "cccc0003", "event": "retired", "station": "shop-build-m1"}
+{"at": "<TS>", "detail": "aaaa0001", "event": "retired", "station": "crew-orchestrator"}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "status": "retired"
+  },
+  "crew-reviewer": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "status": "retired"
+  },
+  "old-helper": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "helper",
+    "status": "stopped"
+  },
+  "shop-build-m1": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "retired"
+  },
+  "shop-build-m2": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== file crew/watch.pid ==
+999999
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+== asked of Tares ==
+GET /health key=no 
+POST /api/crew/crew-reviewer/end?crew=crew key=no {
+  "reason": "retired"
+}
+GET /health key=no 
+POST /api/crew/shop-build-m1/end?crew=crew key=no {
+  "reason": "retired"
+}
+GET /health key=no 
+POST /api/crew/crew-orchestrator/end?crew=crew key=no {
+  "reason": "retired"
+}
+GET /health key=no 

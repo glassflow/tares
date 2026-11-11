@@ -1,0 +1,36 @@
+== step: session Shop ==
+exit: 0
+-- stdout --
+
+-- stderr --
+Shop is with the crew: 1 of 2 tickets done.
+
+Take it over? The crew stops working on it: its builders push what they have and write their progress, then this session carries on from there.
+  1) yes, take it over and build it in this session
+  2) no, leave it with the crew   (recommended)
+  Choice [2]: Left with the crew. Talk to it with: tares factory crew attach orchestrator
+-- after --
+{
+  "env": {},
+  "has_auth_token": false,
+  "n": 0,
+  "settings": null
+}
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/crew/projects key=no 
+GET /api/projects key=no 
+GET /api/crew/projects key=no 

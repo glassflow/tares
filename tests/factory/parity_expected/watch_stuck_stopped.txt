@@ -1,0 +1,156 @@
+== step: once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-releaser stopped; reviving it under the same name, in a new conversation since its last one thrashed
+  ✓ started crew-releaser (opus, high)
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000001", "event": "restarted-fresh", "station": "crew-releaser"}
+== file crew/stations/crew-releaser.grants ==
+
+== file crew/stations/crew-releaser.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Building container images, loading them into the local kind cluster `factory`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in the repositories of the projects handed to this crew on Tares (crew_projects), are expected work that Pat authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the releaser station `crew-releaser` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. Pat chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "releaser",
+    "FACTORY_STATION": "crew-releaser",
+    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-releaser": {
+    "cwd": "<TMP>/work",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-1"
+      }
+    ],
+    "effort": "high",
+    "grants": "3515105045",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "1604412445",
+    "model": "opus",
+    "parent": "",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-releaser.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "You were started again under the same name, in a new conversation: the last one kept refilling its context right after each compaction, so Claude Code stopped it. Nothing from it carries over except your report and what is on Tares. Reload the skills factory-protocol and station-releaser, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off. Read big files, logs and diffs in parts."], "cwd": "<TMP>/work"}
+{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
