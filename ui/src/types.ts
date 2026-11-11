@@ -589,6 +589,8 @@ export interface CrewSettings {
   idle_wake?: boolean | null;
   pace?: boolean | null;
   claude_update: boolean | null;
+  docker_cleanup?: boolean | null;
+  docker_keep?: string[] | null;
 }
 /** The crew's pace before the plan's limits (/api/crew/pace, TR-674). */
 export interface CrewPace {

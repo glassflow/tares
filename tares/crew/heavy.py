@@ -178,6 +178,8 @@ def cmd_heavy(argv: list[str], env: dict) -> int:
                 pass
     proc = None
     try:
+        from . import docker_cleanup   # TR-700: low on disk, clean up Docker first (the lock is held)
+        docker_cleanup.before_heavy(env)
         try:
             proc = subprocess.Popen(command, env=env)
         except OSError as e:

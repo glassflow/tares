@@ -269,7 +269,8 @@ async def main():
         ck("settings start unset", s == {"autonomy": None, "releaser": None, "release_profile": None,
                                          "prod_pattern": None, "challenger": None,
                                          "builders_max": None, "idle_wake": None, "pace": None,
-                                         "kit": {"frozen": None}, "claude_update": None}, s)
+                                         "kit": {"frozen": None}, "claude_update": None,
+                                         "docker_cleanup": None, "docker_keep": None}, s)
         s = json.loads(await mf.set_crew_settings(claude_update=False))
         ck("the Claude Code update switch is a setting of its own", s["claude_update"] is False
            and s["autonomy"] is None, s)

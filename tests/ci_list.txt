@@ -32,6 +32,7 @@ test_crew_claude
 test_crew_client
 test_crew_contract
 test_crew_dispatch
+test_crew_docker_cleanup
 test_crew_doctor
 test_crew_doctor_lsp
 test_crew_fake_claude

@@ -681,6 +681,10 @@ def _crew_up(argv: list, env: dict) -> int:
         return code
     if watch:
         watch_mod.start(up.paths, env)   # FACTORY_NO_WATCH is read there, as in bash
+        from . import docker_cleanup   # TR-700: say once that the watch cleans up Docker
+        line = docker_cleanup.onboarding_note(env) if not env.get("FACTORY_NO_WATCH") else None
+        if line:
+            _err(line + "\n")
     _err(f"\nThe crew takes a few minutes to check in. Next:\n"
          f"  Watch it              {c.tares}/crew\n"
          f"  Answer its questions  {ME} crew attach orchestrator   (← to leave it running)\n"
