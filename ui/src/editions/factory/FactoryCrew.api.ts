@@ -78,18 +78,38 @@ export interface MemberLine {
   text: string;
 }
 
+/** One item of a member's session as a conversation (tares/crew_conversation.py, TR-1177). */
+export interface ConvoSaid { kind: "said"; at: string | null; text: string }
+export interface ConvoAsked { kind: "asked"; at: string | null; text: string; from: string; quiet: boolean }
+export interface ConvoDivider { kind: "divider"; at: string | null; text: string }
+export interface ConvoTool {
+  kind: "tool"; at: string | null; id: string; name: string; summary: string;
+  /** The call's input as JSON text, and its result's text (null while no result came back); both cut
+   *  in the list, `more` true when the output was: GET /api/crew/{station}/tool/{id} has it whole. */
+  input: string; output: string | null; failed: boolean; ms: number | null; more: boolean;
+}
+export type ConvoItem = ConvoSaid | ConvoAsked | ConvoDivider | ConvoTool;
+
 /** The part of GET /api/crew/{station} the fold reads. */
 export interface MemberDetail {
   /** The command that opens the member's session in a terminal. */
   attach: string;
   recent: MemberLine[];
+  /** The session's last lines as a conversation, oldest first, and the line it starts at. */
+  conversation?: ConvoItem[];
+  conversation_from?: number;
 }
 
 export const factoryCrew = () => request<CrewPage>("/api/factory/crew");
 
 /** What a member did lately, read only when its fold is opened. */
-export const crewMember = (station: string) =>
-  request<MemberDetail>(`/api/crew/${encodeURIComponent(station)}?recent=30`);
+export const crewMember = (station: string, before?: number) =>
+  request<MemberDetail>(`/api/crew/${encodeURIComponent(station)}?recent=0&conversation=200${before !== undefined ? `&before=${before}` : ""}`);
+
+/** One tool call's whole output, for a card whose output the list cut. */
+export const crewToolOutput = (station: string, id: string) =>
+  request<{ output: string; failed: boolean }>(`/api/crew/${encodeURIComponent(station)}/tool/${encodeURIComponent(id)}`)
+    .then((r) => r.output);
 
 /** Asks for a new reading of the member's memory; the crew's machine answers within seconds. */
 export const readMemoryAgain = (station: string) =>

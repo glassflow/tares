@@ -168,15 +168,18 @@ async function waitFor(url, tries = 100) {
     // 5. the fold
     const fold = m1.getByTestId("member-fold");
     ck("the fold is closed, its button says Show what it did", (await fold.innerText()) === "Show what it did" && (await fold.getAttribute("aria-expanded")) === "false");
-    const detailRead = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\?recent=30$/.test(r.url()));
+    const detailRead = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\?recent=0&conversation=200$/.test(r.url()));
     await fold.click();
     ck("opening it reads that member's lines, once", (await detailRead).status() === 200);
-    await m1.getByTestId("member-detail").locator("pre").waitFor();
-    const lines = await m1.getByTestId("member-detail").locator("pre").innerText();
-    ck("its lines are text, markup included", lines.includes("<script>alert(1)</script> & more") && (await m1.locator("pre script").count()) === 0, lines);
-    ck("the lines are exempt from the words rule", (await m1.locator("pre").getAttribute("data-words-exempt")) !== null);
+    await m1.getByTestId("member-conversation").waitFor();
+    const lines = await m1.getByTestId("member-conversation").innerText();
+    ck("it reads as a conversation, its text as text, markup included (TR-1177)",
+       lines.includes("<script>alert(1)</script> & more") && (await m1.getByTestId("member-conversation").locator("script").count()) === 0, lines);
+    ck("what it said is the person-facing text of the member, exempt from the words rule",
+       (await m1.getByTestId("bubble-said").count()) > 0
+       && (await m1.getByTestId("bubble-said").first().locator("[data-user-text]").count()) > 0);
     ck("it says how to open the member in a terminal", /Open in a terminal/.test(await m1.getByTestId("member-detail").innerText())
-       && (await m1.getByTestId("member-detail").locator("code").innerText()) === "tares factory crew attach project-x-build-m1");
+       && (await m1.getByTestId("member-attach").innerText()) === "tares factory crew attach project-x-build-m1");
     ck("the button says Hide what it did", (await fold.innerText()) === "Hide what it did");
     await checkWords(page, ck, "live, fold open");
     await shot(page, "live-fold-1440.png");
@@ -250,7 +253,7 @@ async function waitFor(url, tries = 100) {
       });
       ck("390: heard sits under the title", pos.sameLeft && pos.below, JSON.stringify(pos));
       await p.getByTestId("member-fold").first().click();
-      await p.getByTestId("member-detail").first().locator("pre").waitFor();
+      await p.getByTestId("member-conversation").first().waitFor();
       ck("390: an open fold does not scroll sideways", (await overflow(p)) <= 0, `${await overflow(p)}px`);
       await checkWords(p, ck, "390 live");
       await shot(p, "live-390.png");
@@ -293,9 +296,31 @@ async function waitFor(url, tries = 100) {
         }
         if (name === "fold") {
           await p.getByTestId("member-fold").nth(3).click();
-          await p.getByTestId("member-detail").locator("pre").waitFor();
-          ck(`${tag}: the lines show as text`, /<b>not markup<\/b>/.test(await p.getByTestId("member-detail").locator("pre").innerText()) && (await p.locator("pre b").count()) === 0);
-          ck(`${tag}: the attach command shows`, /tares factory crew attach /.test(await p.getByTestId("member-detail").locator("code").innerText()));
+          await p.getByTestId("member-conversation").waitFor();
+          const convo = p.getByTestId("member-conversation");
+          ck(`${tag}: the conversation shows text as text`, /<b>not markup<\/b>/.test(await convo.innerText()) && (await convo.locator("b").count()) === 0);
+          ck(`${tag}: messages on both sides, tool cards, a failed one, a group and dividers (TR-1177)`,
+             (await convo.getByTestId("bubble-said").count()) > 0 && (await convo.getByTestId("bubble-asked").count()) === 2
+             && (await convo.getByTestId("bubble-factory").count()) === 1 && (await convo.locator("[data-failed=true]").count()) === 1
+             && (await convo.getByTestId("tool-group").count()) === 1 && (await convo.getByTestId("conversation-divider").count()) === 2);
+          ck(`${tag}: it opens at the newest and says it follows`,
+             (await convo.getByTestId("conversation-following").count()) === 1
+             && (await convo.getByTestId("conversation-scroll").evaluate((e) => e.scrollHeight - e.scrollTop - e.clientHeight < 48)));
+          await convo.getByTestId("tool-head").nth(1).click();
+          ck(`${tag}: a card opens to its input and output, each with Copy`,
+             (await convo.getByTestId("tool-input").count()) === 1 && /unknown flag --known/.test(await convo.getByTestId("tool-output").innerText())
+             && (await convo.getByTestId("tool-copy").count()) === 2);
+          await convo.getByTestId("group-head").click();
+          await convo.getByTestId("tool-group").getByTestId("tool-head").nth(1).click();
+          await p.waitForFunction(() => /case 120/.test(document.querySelector("[data-testid=tool-group] [data-testid=tool-output]")?.textContent || ""));
+          ck(`${tag}: an output the list cut loads whole when its card opens`, true);
+          await convo.getByTestId("conversation-open-all").click();
+          ck(`${tag}: Open all tools opens every card`, (await convo.getByTestId("tool-body").count()) === 6);
+          await convo.getByTestId("conversation-scroll").evaluate((e) => { e.scrollTop = 0; e.dispatchEvent(new Event("scroll")); });
+          await p.waitForTimeout(100);
+          ck(`${tag}: scrolled up, it stops following and offers the newest`, (await convo.getByTestId("conversation-newest").count()) === 1);
+          ck(`${tag}: open, no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+          ck(`${tag}: the attach command shows`, /tares factory crew attach /.test(await p.getByTestId("member-attach").innerText()));
           await checkWords(p, ck, `${tag} open`);
           await shot(p, `crew-fold-open-${width}.png`);
         }
