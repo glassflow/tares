@@ -319,7 +319,8 @@ if HAVE_BASH:
 else:   # no bash (Windows): the stations cannot be started yet (TR-953), so it stops before the watch line
     ck("without bash it says the stations cannot be started here and exits 2",
        r.returncode == 2 and "cannot start the stations here" in out and "started the watch" not in out, (r.returncode, out[-400:]))
-ck("never asks Claude Code for the language server list", ["plugin", "list", "--json"] not in c.calls(), c.calls())
+ck("asks Claude Code for the language server list, as bash does, and offers nothing when no project has a repo",
+   ["plugin", "list", "--json"] in c.calls() and "Code intelligence" not in out, c.calls())
 if HAVE_BASH:
     ck("exits 0 and starts the three stations", r.returncode == 0 and sum(1 for a in c.calls() if a[:1] == ["--bg"]) == 3,
        (r.returncode, out[-400:]))
@@ -340,40 +341,23 @@ ck("--yes with nothing saved: the recommended answers are used and saved, nothin
 c.close()
 
 # ====================================================================================
-print("routing: bash stays the default engine")
+print("routing: crew up runs in Python by default (TR-1069)")
 ck("crew up and crew setup are in the ported table", dispatch.find(["crew", "up"]) is not None and dispatch.find(["crew", "setup"]) is not None)
 calls = []
 
 
-class Exec(BaseException):
-    """What the fake execve raises: the real one never returns."""
-
-
 def fake_execve(path, args, env):
     calls.append((path, args))
-    raise Exec()
-
-
-def entry(argv, env):
-    try:
-        up.entry_crew_up(argv, env)
-    except Exec:
-        pass
+    raise AssertionError("crew up must not exec bash from the Python entry")
 
 
 with mock.patch.object(os, "execve", fake_execve), \
         mock.patch.object(up, "cmd_crew_up", lambda argv, env: calls.append(("python", argv)) or 0):
     base = {k: v for k, v in os.environ.items() if not k.startswith("TARES_FACTORY_ENGINE")}
-    if os.name != "nt":
-        entry(["crew", "up", "--yes"], dict(base))
-        ck("engine unset: crew up is exec'd to the bash script, with its arguments",
-           len(calls) == 1 and calls[0][0] == "/bin/bash" and calls[0][1][-3:] == ["crew", "up", "--yes"]
-           and calls[0][1][1].endswith(os.path.join("bin", "factory")), calls)
-        calls.clear()
-        entry(["crew", "up"], {**base, "TARES_FACTORY_ENGINE": "bash"})
-        ck("engine=bash: bash too", len(calls) == 1 and calls[0][0] == "/bin/bash", calls)
-        calls.clear()
-    entry(["crew", "up"], {**base, "TARES_FACTORY_ENGINE": "python"})
+    up.entry_crew_up(["crew", "up", "--yes"], dict(base))
+    ck("engine unset: the Python crew up runs, with its arguments", calls == [("python", ["crew", "up", "--yes"])], calls)
+    calls.clear()
+    up.entry_crew_up(["crew", "up"], {**base, "TARES_FACTORY_ENGINE": "python"})
     ck("engine=python: the Python crew up runs", calls == [("python", ["crew", "up"])], calls)
 
 # ====================================================================================

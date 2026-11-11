@@ -80,7 +80,7 @@ print("the cases that pin a branch of guard.py (tests/guard_extra_cases.jsonl)")
 # claude anchor, the `.factory` folder) and two pin ASCII-only \w and \s. The expected decision is
 # guard.sh's: they were taken from it before it was removed.
 extra = [json.loads(line) for line in EXTRA.read_text(encoding="utf-8").splitlines() if line.strip()]
-ck("the extra case file has 15 cases", len(extra) == 15, len(extra))
+ck("the extra case file has 27 cases", len(extra) == 27, len(extra))
 bad = 0
 for c in extra:
     env = {"FACTORY_ROLE": c["role"], "FACTORY_HOME": "/nonexistent", "FACTORY_STATION": "test"}

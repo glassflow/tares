@@ -62,6 +62,7 @@ today=$(date -u +%Y-%m-%d)
 check "grant saved on Tares as the person said it" 'api GET /api/grants | jq -r .all | grep -qx -- "- \"the releaser may restart the staging database\" ($today)"'
 check "grant quoted in the allow rules" 'allow_has crew-releaser "granted this on $today for all projects, in their own words: \"the releaser may restart the staging database\". Acting"'
 check "orchestrator may spawn" 'jq -e ".permissions.allow | index(\"Bash(factory spawn *)\")" "$FACTORY_CREW_HOME/stations/crew-orchestrator.settings.json" >/dev/null'
+check "orchestrator may spawn as tares factory" 'jq -e ".permissions.allow | index(\"Bash(tares factory spawn *)\")" "$FACTORY_CREW_HOME/stations/crew-orchestrator.settings.json" >/dev/null'
 check "stations launch with a 200k autocompact window" 'jq -e "select(.args[2] == \"crew-orchestrator\") | .args | index(\"--autocompact\") as \$i | .[\$i+1] == \"200000\"" "$FAKE_CLAUDE_STATE/calls.jsonl" >/dev/null'
 check "nothing goes to production without the person" 'jq -e "(.autoMode.soft_deny | any(contains(\"needs\") and contains(\"prod\"))) and ([.autoMode.environment, .autoMode.soft_deny] | flatten | map(strings) | length > 0 and (any(contains(\"L5\")) | not))" "$FACTORY_CREW_HOME/stations/crew-releaser.settings.json" >/dev/null'
 check "crew up points at the Crew page" 'grep -q "$TARESD_URL/crew" "$T/up.out"'
@@ -408,11 +409,13 @@ agent crew-releaser 'del(.status)'
 # After /clear the live session has a new transcript: the old one's notice no longer counts.
 agent crew-releaser '.state = "done"'
 jq '.sessionId = "session-cleared"' "$HOME/.claude/jobs/$rel/state.json" > "$T/js" && mv "$T/js" "$HOME/.claude/jobs/$rel/state.json"
+agent crew-releaser '.sessionId = "session-cleared"' # the Python engine reads the session from the list, bash from the job file
 "$F" crew watch --once >/dev/null 2>&1
 check "a cleared session is not restarted" '[ "$(st crew-releaser .id)" = "$rel" ]'
 
 # A stuck station that stopped before the watch saw it comes back in a new conversation, not resumed.
 jq --arg s "$(st crew-releaser .sessionId)" '.sessionId = $s' "$HOME/.claude/jobs/$rel/state.json" > "$T/js" && mv "$T/js" "$HOME/.claude/jobs/$rel/state.json"
+agent crew-releaser ".sessionId = \"$(st crew-releaser .sessionId)\""
 agent crew-releaser '.state = "stopped" | del(.pid)'
 jq '.state = "working"' "$HOME/.claude/jobs/$rel/state.json" > "$T/js" && mv "$T/js" "$HOME/.claude/jobs/$rel/state.json" # frozen when it died
 "$F" crew watch --once >/dev/null 2>&1
