@@ -20,6 +20,7 @@ test_challenger_workflow
 test_check_ledger
 test_ci_check
 test_ci_e2e
+test_ci_github
 test_ci_list
 test_ci_local
 test_ci_windows
