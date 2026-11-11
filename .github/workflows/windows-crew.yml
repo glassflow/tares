@@ -7,8 +7,24 @@ name: windows-crew
 
 on:
   pull_request:
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
 
 concurrency:
