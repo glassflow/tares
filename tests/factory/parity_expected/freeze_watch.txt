@@ -1175,7 +1175,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   }
 }
 == file crew/events.jsonl ==
-{"at": "<TS>", "detail": "2299798679", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "3924665536", "event": "kit-newer", "station": ""}
 {"at": "<TS>", "detail": "3804381130", "event": "kit-newer", "station": ""}
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
@@ -1183,25 +1183,25 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-orchestrator"}
-{"at": "<TS>", "detail": "3804381130", "event": "upgraded", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000003", "event": "revived", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "3804381130", "event": "upgraded", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "3804381130", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
 {"at": "<TS>", "detail": "00000005", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000005", "event": "revived", "station": "crew-orchestrator"}
-{"at": "<TS>", "detail": "3804381130", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
 {"at": "<TS>", "detail": "00000006", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000006", "event": "revived", "station": "crew-orchestrator"}
-{"at": "<TS>", "detail": "1483295536", "event": "upgraded", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000007", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000007", "event": "revived", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "1483295536", "event": "upgraded", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "1483295536", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
 == file crew/stations/crew-orchestrator.grants ==
 
@@ -1360,7 +1360,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1483295536",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -1400,7 +1400,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1483295536",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -1440,20 +1440,20 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 ]
 == file claude/calls.jsonl ==
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/crew/frozen-kit", "--resume", "old-reviewer", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "ee5f1a02"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "ee5f1a01"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "ee5f1a02"], "cwd": "<REPO>"}
+{"args": ["stop", "ee5f1a01"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-orchestrator", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-orchestrator (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "ee5f1a01"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "ee5f1a01"], "cwd": "<REPO>"}
+{"args": ["stop", "00000001"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000001"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/crew/frozen-kit", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000003"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-orchestrator, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000005"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000002"], "cwd": "<REPO>"}
+{"args": ["stop", "00000005"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-orchestrator (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000005"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000005"], "cwd": "<REPO>"}
+{"args": ["stop", "00000004"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000004"], "cwd": "<REPO>"}

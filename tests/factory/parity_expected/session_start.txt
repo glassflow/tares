@@ -165,11 +165,11 @@ No project named Widgets on Tares. Plan and build "Widgets" as a new project?
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["-n", "notes-app-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session Notes app"], "cwd": "<TMP>/elsewhere"}
-{"args": ["-n", "notes-app-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session Notes app"], "cwd": "<TMP>/elsewhere"}
-{"args": ["-n", "a-tiny-url-shortener-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: a tiny url shortener"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "shop-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: Shop"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "widgets-session", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: Widgets"], "cwd": "<TMP>/elsewhere"}
+{"args": ["-n", "notes-app-session", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session Notes app"], "cwd": "<TMP>/elsewhere"}
+{"args": ["-n", "notes-app-session", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session Notes app"], "cwd": "<TMP>/elsewhere"}
+{"args": ["-n", "a-tiny-url-shortener-session", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: a tiny url shortener"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "shop-session", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: Shop"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "widgets-session", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:session new: Widgets"], "cwd": "<TMP>/elsewhere"}
 == asked of Tares ==
 GET /health key=no 
 POST /mcp key=no {

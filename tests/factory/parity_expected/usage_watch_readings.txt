@@ -65,7 +65,7 @@ the watch served 3 ticks
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["-p", "--no-session-persistence", "--settings", "<SETTINGS-FILE>", "--output-format", "stream-json", "--verbose", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--resume", "sess-orch-1", "--fork-session", "/context"], "cwd": "<TMP>/work"}
+{"args": ["-p", "--no-session-persistence", "--settings", "<SETTINGS-FILE>", "--output-format", "stream-json", "--verbose", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-orch-1", "--fork-session", "/context"], "cwd": "<TMP>/work"}
 == asked of Tares ==
 GET /api/crew/context/asks key=no 
 POST /ingest/claude_code key=no {

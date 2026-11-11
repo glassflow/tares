@@ -145,18 +145,18 @@ Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["rm", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["stop", "dddd0004"], "cwd": "<REPO>"}
+{"args": ["rm", "dddd0004"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 

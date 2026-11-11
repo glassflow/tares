@@ -109,7 +109,7 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
     "FACTORY_PROJECT": "shop",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "shop-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -170,7 +170,7 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
     "FACTORY_PROJECT": "shop",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "shop-build-m2",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -209,7 +209,7 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -234,7 +234,7 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -272,6 +272,6 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
 {"args": ["--bg", "-n", "shop-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-1", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
 {"args": ["--bg", "-n", "shop-build-m2", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m2, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-2", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
 {"args": ["--bg", "-n", "shop-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-1", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "shop-build-m2", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m2, project shop, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-2", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/work"}
-{"args": ["rm", "aaaa0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0002"], "cwd": "<REPO>"}

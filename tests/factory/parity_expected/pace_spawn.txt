@@ -530,7 +530,7 @@ exit: 0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "orchestrator",
     "FACTORY_STATION": "crew-orchestrator",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -606,7 +606,7 @@ exit: 0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "releaser",
     "FACTORY_STATION": "crew-releaser",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -662,7 +662,7 @@ exit: 0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -722,7 +722,7 @@ exit: 0
     "FACTORY_REPO": "<TMP>/links",
     "FACTORY_ROLE": "helper",
     "FACTORY_STATION": "links-app-build-m1-probe",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/links/.factory/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -784,7 +784,7 @@ exit: 0
     "FACTORY_REPO": "<TMP>/links",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "links-app-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/links/.factory/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -846,7 +846,7 @@ exit: 0
     "FACTORY_REPO": "<TMP>/links",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "links-app-build-m2",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/links/.factory/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -878,7 +878,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -903,7 +903,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -928,7 +928,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -947,7 +947,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -966,7 +966,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "links-app-build-m1",
     "plugin": "<TMP>/kit",
@@ -986,7 +986,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -1061,39 +1061,39 @@ exit: 0
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the orchestrator station"], "cwd": "<TMP>/crew"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the reviewer station"], "cwd": "<TMP>/crew"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the releaser station"], "cwd": "<TMP>/crew"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T9"], "cwd": "<TMP>/links"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m2, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T9"], "cwd": "<TMP>/links"}
-{"args": ["stop", "00000005"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "00000005"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "00000005"], "cwd": "<REPO>"}
+{"args": ["rm", "00000005"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "00000002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m1-probe", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name links-app-build-m1-probe, project Links App, repo <TMP>/links, started by links-app-build-m1. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station links-app-build-m1: load the skills factory-protocol and station-builder, do only the task below, write results to your report, and send links-app-build-m1 DONE when it is finished.\n\nYour task:\nlook at T1"], "cwd": "<TMP>/links"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "00000003"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-releaser, re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "00000003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000003"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m2, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T9"], "cwd": "<TMP>/links"}
-{"args": ["stop", "00000009"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "00000009"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "00000009"], "cwd": "<REPO>"}
+{"args": ["rm", "00000009"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m2, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T9"], "cwd": "<TMP>/links"}
-{"args": ["stop", "0000000a"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "0000000a"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "0000000a"], "cwd": "<REPO>"}
+{"args": ["rm", "0000000a"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m2, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T9"], "cwd": "<TMP>/links"}
-{"args": ["stop", "0000000b"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "0000000b"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "0000000b"], "cwd": "<REPO>"}
+{"args": ["rm", "0000000b"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m2, project Links App, repo <TMP>/links, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T9"], "cwd": "<TMP>/links"}

@@ -157,12 +157,12 @@ tares factory: opening Claude as secret-plan-spec in <TMP>/shop, with /tares:spe
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["-n", "acme-web-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."], "cwd": "<TMP>/plain"}
-{"args": ["-n", "acme-web-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."], "cwd": "<TMP>/shop"}
-{"args": ["-n", "no-such-project-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: No such project)"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "nobody-leads-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Nobody leads)"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "plain-notes-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Plain notes)"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "secret-plan-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Secret plan)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "acme-web-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."], "cwd": "<TMP>/plain"}
+{"args": ["-n", "acme-web-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "You are contributing to Acme web led by Ashish. Load the spec-project skill, section Contributor."], "cwd": "<TMP>/shop"}
+{"args": ["-n", "no-such-project-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: No such project)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "nobody-leads-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Nobody leads)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "plain-notes-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Plain notes)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "secret-plan-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Secret plan)"], "cwd": "<TMP>/shop"}
 == asked of Tares ==
 GET /health key=no 
 POST /mcp key=no {

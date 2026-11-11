@@ -160,7 +160,7 @@ exit: 0
     "FACTORY_PARENT": "crew-orchestrator",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -221,7 +221,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -280,6 +280,6 @@ exit: 0
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0002", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}

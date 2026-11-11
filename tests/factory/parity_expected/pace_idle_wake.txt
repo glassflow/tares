@@ -171,7 +171,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "orchestrator",
     "FACTORY_STATION": "crew-orchestrator",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -249,7 +249,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "FACTORY_PARENT": "crew-orchestrator",
     "FACTORY_ROLE": "releaser",
     "FACTORY_STATION": "crew-releaser",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -307,7 +307,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "FACTORY_PARENT": "crew-orchestrator",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -368,7 +368,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "FACTORY_PROJECT": "links-app",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "links-app-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -407,7 +407,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -432,7 +432,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -457,7 +457,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -482,7 +482,7 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -536,51 +536,51 @@ tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversa
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-aaaa0001", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0002", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "bbbb0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0003"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0003", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "bbbb0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0003"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0004"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project links-app, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-cccc0004", "Pacing: the 5-hour window is at 85%, so no new builder starts and every station ticks every 45 minutes until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "cccc0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "cccc0004"], "cwd": "<REPO>"}

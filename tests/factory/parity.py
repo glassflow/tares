@@ -5828,8 +5828,37 @@ TIME_KEY = re.compile(r"(^(ts|time|at|since|until)$)|(_at$)|(At$)|(_ts$)|(_time$
 TARES_ADDR: list = []   # the stand-in Tares' "127.0.0.1:<port>" while a side runs: its port changes every run
 
 
+# `crew up` says once that the Python watch cleans up Docker (TR-700), where Docker is installed: a line bash never had,
+# and one that depends on the machine, so it is not compared.
+DOCKER_NOTE = re.compile(r"^  \u2713 once a day the watch also removes Docker's leftovers[^\n]*\n", re.M)
+
+
+def plugin_version() -> str:
+    """The version of the plugin in this checkout: it moves with every release, so no expected result may hold it."""
+    try:
+        return json.loads((ROOT / "claude-plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version", "")
+    except (OSError, ValueError):
+        return ""
+
+
+def repo_forms() -> list:
+    """Every spelling of the checkout's folder: where the repo is checked out differs between machines and CI."""
+    forms = {str(ROOT), os.path.realpath(ROOT), ROOT.as_posix(), Path(os.path.realpath(ROOT)).as_posix()}
+    forms |= {f.replace("\\", "\\\\") for f in forms if "\\" in f}
+    return sorted(forms, key=len, reverse=True)
+
+
+def tares_bin_forms() -> list:
+    """Where the `tares` command is on this machine (stations get it as FACTORY_TARES): not the same everywhere."""
+    found = shutil.which("tares")
+    forms = {found, os.path.realpath(found), Path(found).as_posix(), Path(os.path.realpath(found)).as_posix()} if found else set()
+    forms |= {f.replace("\\", "\\\\") for f in forms if "\\" in f}
+    return sorted(forms, key=len, reverse=True)
+
+
 def norm_text(s: str, tmp: Path | None = None) -> str:
-    """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids."""
+    """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids, the checkout's
+    folder and the plugin's version."""
     s = s.replace("\r\n", "\n")
     for addr in TARES_ADDR:
         s = s.replace(addr, "<TARES>")
@@ -5840,6 +5869,14 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         flags = re.IGNORECASE if is_windows() else 0
         for p in sorted(forms, key=len, reverse=True):
             s = re.sub(re.escape(p), "<TMP>", s, flags=flags)
+    s = DOCKER_NOTE.sub("", s)
+    for p in repo_forms():
+        s = s.replace(p, "<REPO>")
+    for p in tares_bin_forms():
+        s = s.replace(p, "<TARES-BIN>")
+    ver = plugin_version()
+    if ver:
+        s = re.sub(r"(version\s+)" + re.escape(ver) + r"(?![\w.])", r"\1<PLUGIN-VERSION>", s)
     s = PORT.sub("127.0.0.1:<PORT>", s)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
@@ -5855,10 +5892,15 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
     """A parsed JSON value with its strings normalised and numbers under pid or time keys replaced.
     Key order does not matter: it is sorted when rendered."""
     if isinstance(v, dict):
-        return {k: norm_json(x, tmp, k) for k, x in v.items()}
+        out = {k: norm_json(x, tmp, k) for k, x in v.items()}
+        if v.get("event") in ("freeze", "upgraded") and isinstance(v.get("detail"), str) and v["detail"].isdigit():
+            out["detail"] = "<KIT>"     # these events hold the kit's fingerprint
+        return out
     if isinstance(v, list):
         return [norm_json(x, tmp, key) for x in v]
     if isinstance(v, str):
+        if key == "kit" and v.isdigit():
+            return "<KIT>"      # the fingerprint of the kit a station runs on: it moves with every change to the plugin
         if key in ID_KEYS and HEX8.fullmatch(v):
             return "<ID>"
         if TIME_KEY.search(key) and EPOCH_VALUE.fullmatch(v):
@@ -6046,7 +6088,7 @@ def snapshot(run: Run) -> dict:
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
-    if (run.crew / "frozen-kit").is_dir():
+    if (run.crew / "frozen-kit").is_dir() and any((run.crew / "frozen-kit").rglob("*")):
         files["crew/frozen-kit"] = kit_copy_diff(run.crew / "frozen-kit", run.tmp / "kit" / "claude-plugin")
     t = run.tmp / "tares" / "writes.jsonl"   # what the stand-in Tares was asked to save
     if t.is_file():
@@ -7988,13 +8030,13 @@ def _cu_is(got, want) -> bool:
 
 
 def _cu_wait():
-    """An `after` hook: seconds from now to the station's retry time, to the nearest ten (the two engines run a moment
-    apart), and its failed moves."""
+    """An `after` hook: seconds from now to the station's retry time, up to the next whole minute (a run on a busy
+    machine is a few seconds later than a quiet one), and its failed moves."""
     def after(tmp: Path):
         import time
         s = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["crew-reviewer"]
         at = s.get("cc_retry_at")
-        return {"in": int(round(int(at) - time.time(), -1)) if at else None, "fails": s.get("cc_fails")}
+        return {"in": -(-(int(at) - int(time.time())) // 60) * 60 if at else None, "fails": s.get("cc_fails")}
     return after
 
 
@@ -8290,9 +8332,9 @@ scenario(Scenario(
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
            for _ in range(3)],
     checks=[
-        ("the first wait is FACTORY_CC_BACKOFF", lambda r: r.snap(0)["fails"] == 1 and 90 < r.snap(0)["in"] <= 100),
-        ("the second doubles, up to the cap", lambda r: r.snap(1)["fails"] == 2 and 140 < r.snap(1)["in"] <= 150),
-        ("the third stays at the cap", lambda r: r.snap(2)["fails"] == 3 and 140 < r.snap(2)["in"] <= 150),
+        ("the first wait is FACTORY_CC_BACKOFF", lambda r: r.snap(0)["fails"] == 1 and r.snap(0)["in"] == 120),
+        ("the second doubles, up to the cap", lambda r: r.snap(1)["fails"] == 2 and r.snap(1)["in"] == 180),
+        ("the third stays at the cap", lambda r: r.snap(2)["fails"] == 3 and r.snap(2)["in"] == 180),
         ("the Tares list follows", lambda r: [p["stations"]["crew-reviewer"]["fails"] for p in _cu_puts(r)] == [1, 2, 3]),
     ],
     covers=[],

@@ -143,10 +143,10 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "4076195382", "event": "upgraded", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-releaser"}
-{"at": "<TS>", "detail": "4076195382", "event": "upgraded", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-releaser"}
 == file crew/stations/crew-releaser.grants ==
 
 == file crew/stations/crew-releaser.settings.json ==
@@ -181,7 +181,7 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "releaser",
     "FACTORY_STATION": "crew-releaser",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -237,7 +237,7 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -286,7 +286,7 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -311,7 +311,7 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -357,12 +357,12 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-reviewer", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0003"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-releaser", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-releaser (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "cccc0003"], "cwd": "<REPO>"}
 == asked of Tares ==
 PUT /api/crew/claude-retry?crew=crew key=no {
   "stations": {}

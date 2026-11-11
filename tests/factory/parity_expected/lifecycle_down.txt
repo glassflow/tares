@@ -122,14 +122,14 @@ tares factory: all stations stopped. Tares keeps the projects, tickets and the d
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["rm", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["stop", "dddd0004"], "cwd": "<REPO>"}
+{"args": ["rm", "dddd0004"], "cwd": "<REPO>"}
 == asked of Tares ==
 GET /health key=no 
 POST /api/crew/crew-orchestrator/end?crew=crew key=no {

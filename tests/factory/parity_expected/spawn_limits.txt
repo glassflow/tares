@@ -117,7 +117,7 @@ exit: 0
     "FACTORY_REPO": "<TMP>/blog",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "blog-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/blog/.factory/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -179,7 +179,7 @@ exit: 0
     "FACTORY_REPO": "<TMP>/shop",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "shop-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/shop/.factory/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -241,7 +241,7 @@ exit: 0
     "FACTORY_REPO": "<TMP>/shop",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "shop-build-m2",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/shop/.factory/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -274,7 +274,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -294,7 +294,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -314,7 +314,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -359,9 +359,9 @@ exit: 0
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "shop-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m1, project shop, repo <TMP>/shop, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/shop"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "shop-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name shop-build-m2, project shop, repo <TMP>/shop, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T2"], "cwd": "<TMP>/shop"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "blog-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name blog-build-m1, project blog, repo <TMP>/blog, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nwork T1"], "cwd": "<TMP>/blog"}

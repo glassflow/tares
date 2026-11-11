@@ -1,2 +1,0 @@
-# Tares enterprise licence, see ee/LICENSE
-# Tests CI runs, one per line, in sorted order. Add your test's name on its own line in its sorted place. On a merge conflict keep both sides.

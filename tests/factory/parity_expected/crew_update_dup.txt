@@ -112,15 +112,15 @@ tares factory: every station runs Claude Code 2.1.200, one session each
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 == asked of Tares ==
 

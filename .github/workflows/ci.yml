@@ -47,7 +47,7 @@ jobs:
           npm run build
         working-directory: ui
 
-  # The tests named in tests/ci_list.txt and tests/factory/ci_list.txt, split into shards that run
+  # The tests named in tests/ci_list.txt, split into shards that run
   # in parallel (tests/ci_run.py balances them). Once with each cell's state in DuckDB, once with it in
   # Postgres as a cloud cell keeps it: tests/pg_harness gives each Store its own schema.
   test:
@@ -91,7 +91,7 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: pyproject.toml
-      - name: Backend + factory CLI — tests
+      - name: Backend — tests
         run: |
           pip install -e ".[postgres-state]"
           if [ "${{ matrix.suite }}" = mit ]; then
@@ -99,7 +99,6 @@ jobs:
           fi
           export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
           bash tests/check_ci_list.sh tests/ci_list.txt
-          bash tests/check_ci_list.sh tests/factory/ci_list.txt
           if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
           python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
 
@@ -143,7 +142,6 @@ jobs:
         run: |
           pip install -e ".[postgres-state]"
           bash tests/check_ci_list.sh ee/tests/ci_list.txt
-          bash tests/check_ci_list.sh ee/tests/factory/ci_list.txt
           if [ "${{ matrix.db }}" = postgres ]; then
             export TARES_TEST_PG=postgresql://postgres:pg@localhost:5432/postgres
             export PYTHONPATH="$PWD/tests/pg_harness"

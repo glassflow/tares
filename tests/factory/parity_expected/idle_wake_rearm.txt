@@ -677,7 +677,7 @@ exit: 0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "orchestrator",
     "FACTORY_STATION": "crew-orchestrator",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -755,7 +755,7 @@ exit: 0
     "FACTORY_PARENT": "crew-orchestrator",
     "FACTORY_ROLE": "releaser",
     "FACTORY_STATION": "crew-releaser",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -813,7 +813,7 @@ exit: 0
     "FACTORY_PARENT": "crew-orchestrator",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -874,7 +874,7 @@ exit: 0
     "FACTORY_PROJECT": "links-app",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "links-app-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -920,7 +920,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -960,7 +960,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -990,7 +990,7 @@ exit: 0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -1015,7 +1015,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-orchestrator",
     "plugin": "<TMP>/kit",
@@ -1069,30 +1069,30 @@ exit: 0
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-aaaa0001", "idle_wake was switched on. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0002", "idle_wake was switched on. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "bbbb0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0003"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0003", "idle_wake was switched on. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
-{"args": ["rm", "bbbb0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0003"], "cwd": "<REPO>"}
+{"args": ["stop", "00000001"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "idle_wake is off again: re-arm your tick as your manual says."], "cwd": "<TMP>"}
-{"args": ["rm", "00000001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000001"], "cwd": "<REPO>"}
+{"args": ["stop", "00000002"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "idle_wake is off again: re-arm your tick as your manual says."], "cwd": "<TMP>"}
-{"args": ["rm", "00000002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000002"], "cwd": "<REPO>"}
+{"args": ["stop", "00000003"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "idle_wake is off again: re-arm your tick as your manual says."], "cwd": "<TMP>"}
-{"args": ["rm", "00000003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000003"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0004"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "links-app-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project links-app, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-cccc0004", "idle_wake is off again: re-arm your tick as your manual says."], "cwd": "<TMP>"}
-{"args": ["rm", "cccc0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000006"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "cccc0004"], "cwd": "<REPO>"}
+{"args": ["stop", "00000006"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-releaser, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>"}
-{"args": ["rm", "00000006"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "00000008"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000006"], "cwd": "<REPO>"}
+{"args": ["stop", "00000008"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-releaser, re-read your report and your work on Tares, arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds your tick; if you hold one, delete it with CronList and CronDelete), then carry on where your report left off."], "cwd": "<TMP>"}
-{"args": ["rm", "00000008"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "00000008"], "cwd": "<REPO>"}

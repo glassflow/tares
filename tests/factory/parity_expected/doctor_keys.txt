@@ -10,7 +10,7 @@ tares factory doctor
   ok    stations use a token with no key id from <TMP>/crew/.tares-token, and Tares accepts it
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
-  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  ok    stations load the plugin at <REPO>/claude-plugin
   FIX   no MCP server answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
 -- stderr --
 tares factory: warning: Tares at http://127.0.0.1:127.0.0.1:<PORT> refuses key dead0000 from the environment; the crew keeps the key it has
@@ -27,7 +27,7 @@ tares factory doctor
   FIX   the stations have no key in <TMP>/crew/.tares-token: run tares login (for a Tares of your own, run tares factory doctor with TARES_AUTH_TOKEN set)
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
-  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  ok    stations load the plugin at <REPO>/claude-plugin
   FIX   no MCP server answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
 -- stderr --
 
@@ -83,7 +83,7 @@ tares factory doctor
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}

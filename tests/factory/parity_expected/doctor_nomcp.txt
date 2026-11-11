@@ -8,7 +8,7 @@ tares factory doctor
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
-  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  ok    stations load the plugin at <REPO>/claude-plugin
   FIX   no MCP server answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
   warn  no crew yet in <TMP>/crew: tares factory crew up creates it
   ok    gh signed in
@@ -18,5 +18,5 @@ fix the items marked FIX
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}

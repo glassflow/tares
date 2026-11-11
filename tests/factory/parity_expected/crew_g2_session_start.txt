@@ -93,7 +93,7 @@ exit: 0
     "FACTORY_PROJECT": "links-app",
     "FACTORY_ROLE": "builder",
     "FACTORY_STATION": "links-app-build-m1",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -123,7 +123,7 @@ exit: 0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -135,7 +135,7 @@ exit: 0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -147,7 +147,7 @@ exit: 0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -168,7 +168,7 @@ exit: 0
     "grants": "2980329244",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -184,7 +184,7 @@ exit: 0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "links-app-build-m1",
     "project": "Links App",
@@ -197,7 +197,7 @@ exit: 0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "shop",
     "repo": "",
@@ -266,6 +266,6 @@ exit: 0
 ]
 == file claude/calls.jsonl ==
 {"args": ["--bg", "-n", "links-app-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project Links App, repo . Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-b", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-builder, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "dddd0004"], "cwd": "<REPO>"}
 == asked of Tares ==
 

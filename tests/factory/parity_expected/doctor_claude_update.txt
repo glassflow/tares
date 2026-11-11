@@ -8,7 +8,7 @@ tares factory doctor
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
-  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  ok    stations load the plugin at <REPO>/claude-plugin
   ok    MCP endpoint answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":false}
   ok    the kit follows the plugin checkout (not frozen)
@@ -67,5 +67,5 @@ all good
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}

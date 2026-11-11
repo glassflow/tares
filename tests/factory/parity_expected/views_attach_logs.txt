@@ -153,5 +153,5 @@ tares factory: unknown station nobody
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["attach", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["logs", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["attach", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["logs", "cccc0003"], "cwd": "<REPO>"}

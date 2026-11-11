@@ -69,7 +69,7 @@ tares factory doctor
   ok    stations use a token with no key id from <TMP>/crew/.tares-token, and Tares accepts it
   ok    Claude Code's session list reads (2 active)
   ok    Claude Code trusts <TMP>/crew
-  ok    stations load the plugin at /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin
+  ok    stations load the plugin at <REPO>/claude-plugin
   ok    MCP endpoint answers at http://<TARES>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":true,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
   ok    the kit follows the plugin checkout (not frozen)
@@ -218,7 +218,7 @@ stub-token
     ]
   },
   "statusLine": {
-    "command": "tares hook statusline --plugin-root /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "command": "tares hook statusline --plugin-root <REPO>/claude-plugin",
     "padding": 0,
     "type": "command"
   },
@@ -277,7 +277,7 @@ stub-token
     ]
   },
   "statusLine": {
-    "command": "tares hook statusline --plugin-root /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "command": "tares hook statusline --plugin-root <REPO>/claude-plugin",
     "padding": 0,
     "type": "command"
   },
@@ -293,10 +293,10 @@ stub-token
     "grants": "3932637151",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
-    "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "plugin": "<REPO>/claude-plugin",
     "project": "",
     "repo": "",
     "role": "orchestrator",
@@ -311,10 +311,10 @@ stub-token
     "grants": "3932637151",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
-    "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "plugin": "<REPO>/claude-plugin",
     "project": "",
     "repo": "",
     "role": "reviewer",
@@ -447,7 +447,7 @@ stub-token
     ]
   },
   "statusLine": {
-    "command": "tares hook statusline --plugin-root /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "command": "tares hook statusline --plugin-root <REPO>/claude-plugin",
     "padding": 0,
     "type": "command"
   },
@@ -506,7 +506,7 @@ stub-token
     ]
   },
   "statusLine": {
-    "command": "tares hook statusline --plugin-root /opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "command": "tares hook statusline --plugin-root <REPO>/claude-plugin",
     "padding": 0,
     "type": "command"
   },
@@ -522,10 +522,10 @@ stub-token
     "grants": "3932637151",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
-    "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "plugin": "<REPO>/claude-plugin",
     "project": "",
     "repo": "",
     "role": "orchestrator",
@@ -540,10 +540,10 @@ stub-token
     "grants": "3932637151",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
-    "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
+    "plugin": "<REPO>/claude-plugin",
     "project": "",
     "repo": "",
     "role": "reviewer",
@@ -593,19 +593,19 @@ stub-token
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["plugin", "list", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew-two"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew-two"}
+{"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "xhigh", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY."], "cwd": "<TMP>/crew-two"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set."], "cwd": "<TMP>/crew-two"}
 == file tares/writes.jsonl ==
 {"body": {"autonomy": "L4-ship", "builders_max": 2, "challenger": true, "releaser": false}, "method": "PUT", "path": "/api/crew/settings"}
 {"body": {"scope": "all", "words": "the reviewer may comment on draft PRs"}, "method": "POST", "path": "/api/grants"}

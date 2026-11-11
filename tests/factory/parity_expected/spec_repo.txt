@@ -86,9 +86,9 @@ spec-tok
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["-n", "an-order-form-for-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec an order form for the bakery shop"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "bakery-orders-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Bakery orders)"], "cwd": "<TMP>/shop"}
-{"args": ["-n", "with-a-token-spec", "--plugin-dir", "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec with a token"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "an-order-form-for-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec an order form for the bakery shop"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "bakery-orders-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Bakery orders)"], "cwd": "<TMP>/shop"}
+{"args": ["-n", "with-a-token-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec with a token"], "cwd": "<TMP>/shop"}
 == asked of Tares ==
 GET /health key=no 
 POST /mcp key=no {

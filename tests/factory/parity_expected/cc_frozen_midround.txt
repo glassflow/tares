@@ -109,7 +109,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   }
 }
 == file crew/events.jsonl ==
-{"at": "<TS>", "detail": "2299798679", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
 == file crew/stations.json ==
 {
@@ -117,7 +117,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -129,7 +129,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -141,7 +141,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "project": "",
     "repo": "",

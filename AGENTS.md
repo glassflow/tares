@@ -17,15 +17,15 @@ https://docs.glassflow.ai/tares; this file is about the repo itself.
 ## Tests
 
 Tests are plain Python scripts, not pytest. Run one with `python tests/test_x.py`; it exits
-non-zero on failure. CI runs the tests named in `tests/ci_list.txt` (Python) and
-`tests/factory/ci_list.txt` (bash), in parallel shards (`tests/ci_run.py`). A new test adds its line
+non-zero on failure. CI runs the tests named in `tests/ci_list.txt`
+in parallel shards (`tests/ci_run.py`). A new test adds its line
 there, in its sorted place (byte order, `LC_ALL=C sort`); never list tests in ci.yml.
 The console's browser suites (`ui/tests/*.e2e.cjs`) are named in `ui/tests/e2e_suites.txt`, same rule (sorted,
 one name per line); the `e2e` job runs them in shards (`tests/ci_e2e.py`, one port per suite). Run one by hand with
 `cd ui && npm run build && TARES_E2E_PORT=<free port> node tests/<name>.e2e.cjs`.
 Browser suites locally: `cd ui && npm ci && npm run build && npx playwright install chromium`, then from the repo root
 `python tests/ci_e2e.py` (all) or `python tests/ci_e2e.py --list` (names).
-ee tests: `python tests/ci_run.py --suite ee` (Python in `ee/tests/ci_list.txt`, bash in `ee/tests/factory/ci_list.txt`).
+ee tests: `python tests/ci_run.py --suite ee` (the list is `ee/tests/ci_list.txt`).
 A licensed scratch daemon: `python ee/tests/licensed.py serve --port 8799 --data-dir $(mktemp -d) [--edition factory] [--auth] [--licence expired]`.
 A Python test CI should not run goes in `tests/ci_skip.txt` as `name: reason`; `test_ci_list` fails for a
 `tests/test_*.py` in neither file.
@@ -92,6 +92,13 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 
 ## Crew engine port
+
+The crew checks are parity scenarios (`tests/factory/parity.py`, run by `tests/test_parity.py`): each one runs the Python
+engine and compares what it prints and writes with the result recorded once from the bash engine, stored in
+`tests/factory/parity_expected/<scenario>.txt`. A deliberate change to what a crew command prints or writes fails its
+scenario; re-record it with `python tests/factory/parity.py --record <scenario>` and say why in the PR.
+`python tests/factory/parity.py --python-only '*'` runs them all; `--python-only --coverage --require-full` checks that every
+recorded check label has a scenario.
 
 Once a crew command is ported to Python, change both engines in the same PR: CI (`port-drift`, its own workflow) fails a PR that edits a ported bash function without touching its Python module file. It looks at the file, not the function: any edit to `tares/crew/client.py` satisfies every function ported there, so the reviewer still checks that the matching Python changed. It also fails when it cannot find a ported function at all. The `port-drift-ok` label skips it; add or remove the label and the job runs again.
 

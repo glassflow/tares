@@ -108,6 +108,6 @@ tares factory: no stations recorded
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["--version"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["--version"], "cwd": "<REPO>"}
 == asked of Tares ==
 

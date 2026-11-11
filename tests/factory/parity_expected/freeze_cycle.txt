@@ -122,5 +122,5 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   }
 }
 == file crew/events.jsonl ==
-{"at": "<TS>", "detail": "4076195382", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}

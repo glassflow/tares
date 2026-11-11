@@ -132,12 +132,12 @@ tares factory: nobody is not a recorded station
 == file claude/agents.json ==
 []
 == file claude/calls.jsonl ==
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["rm", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
 == asked of Tares ==
 GET /health key=no 
 POST /api/crew/crew-reviewer/end?crew=crew key=no {

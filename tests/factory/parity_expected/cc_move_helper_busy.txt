@@ -158,7 +158,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "orchestrator",
     "FACTORY_STATION": "crew-orchestrator",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -234,7 +234,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "releaser",
     "FACTORY_STATION": "crew-releaser",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -290,7 +290,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "FACTORY_PARENT": "crew-reviewer",
     "FACTORY_ROLE": "helper",
     "FACTORY_STATION": "crew-reviewer-probe",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -346,7 +346,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -387,7 +387,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -416,7 +416,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -445,7 +445,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -474,7 +474,7 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "2299798679",
+    "kit": "<KIT>",
     "model": "opus",
     "parent": "crew-reviewer",
     "plugin": "<TMP>/kit/claude-plugin",
@@ -534,18 +534,18 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["stop", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-reviewer", "Claude Code was updated to 1.1.0, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "bbbb0002"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0003"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-releaser", "Claude Code was updated to 1.1.0, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-releaser, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "cccc0003"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "cccc0003"], "cwd": "<REPO>"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-orchestrator", "Claude Code was updated to 1.1.0, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-orchestrator, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "aaaa0001"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["stop", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["stop", "dddd0004"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer-probe", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name crew-reviewer-probe, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-probe", "Claude Code was updated to 1.1.0, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
-{"args": ["rm", "dddd0004"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["rm", "dddd0004"], "cwd": "<REPO>"}
 == asked of Tares ==
 PUT /api/crew/claude-retry?crew=crew key=no {
   "stations": {}

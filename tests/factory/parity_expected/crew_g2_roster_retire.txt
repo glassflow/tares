@@ -188,8 +188,8 @@ tares factory: links-app-build-m1-rebase was retired; factory spawn starts it ag
   }
 ]
 == file claude/calls.jsonl ==
-{"args": ["stop", "ffff0007"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["rm", "ffff0007"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["stop", "ffff0007"], "cwd": "<REPO>"}
+{"args": ["rm", "ffff0007"], "cwd": "<REPO>"}
 == asked of Tares ==
 POST /api/crew/links-app-build-m1-rebase/end?crew=crew key=no {
   "reason": "retired"

@@ -128,7 +128,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "FACTORY_PARENT": "crew-releaser",
     "FACTORY_ROLE": "helper",
     "FACTORY_STATION": "crew-releaser-deploy",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -185,7 +185,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "releaser",
     "FACTORY_STATION": "crew-releaser",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -242,7 +242,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "FACTORY_PARENT": "crew-reviewer",
     "FACTORY_ROLE": "helper",
     "FACTORY_STATION": "crew-reviewer-probe",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -299,7 +299,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "FACTORY_PARENT": "crew-reviewer",
     "FACTORY_ROLE": "helper",
     "FACTORY_STATION": "crew-reviewer-second",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -356,7 +356,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "FACTORY_PARENT": "",
     "FACTORY_ROLE": "reviewer",
     "FACTORY_STATION": "crew-reviewer",
-    "FACTORY_TARES": "/opt/glass0/tares/.venv/bin/tares",
+    "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
     "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
@@ -386,7 +386,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "grants": "1173605558",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -404,7 +404,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "grants": "1173605558",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-releaser",
     "plugin": "<TMP>/kit",
@@ -422,7 +422,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "grants": "1173605558",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "",
     "plugin": "<TMP>/kit",
@@ -440,7 +440,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "grants": "1173605558",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-reviewer",
     "plugin": "<TMP>/kit",
@@ -458,7 +458,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
     "grants": "1173605558",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "1604412445",
+    "kit": "<KIT>",
     "model": "sonnet",
     "parent": "crew-reviewer",
     "plugin": "<TMP>/kit",
@@ -522,10 +522,10 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
 == file claude/calls.jsonl ==
 {"args": ["--bg", "-n", "crew-reviewer", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the reviewer station"], "cwd": "<TMP>/crew"}
 {"args": ["--bg", "-n", "crew-releaser", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the releaser station"], "cwd": "<TMP>/crew"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer-probe", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name crew-reviewer-probe, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook at PR 9"], "cwd": "<TMP>/crew"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-reviewer-second", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name crew-reviewer-second, started by crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station crew-reviewer: load the skills factory-protocol and station-reviewer, do only the task below, write results to your report, and send crew-reviewer DONE when it is finished.\n\nYour task:\nlook at PR 11"], "cwd": "<TMP>/crew"}
-{"args": ["agents", "--json"], "cwd": "/opt/glass0/tares/.factory/worktrees/TR-1172"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-releaser-deploy", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role helper, session name crew-releaser-deploy, started by crew-releaser. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as a helper of the station crew-releaser: load the skills factory-protocol and station-releaser, do only the task below, write results to your report, and send crew-releaser DONE when it is finished.\n\nYour task:\nship it"], "cwd": "<TMP>/crew"}
