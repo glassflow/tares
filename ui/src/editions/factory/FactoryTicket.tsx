@@ -13,6 +13,7 @@ import {
   type FactoryTicketData, type TicketCall, type TicketFinding, type TicketLink, type TicketReview, type TicketStateKey,
 } from "./FactoryTicket.api";
 import { isSample, sampleLoad } from "./ticketSamples";
+import { InlineIcon } from "./ProjectIcon";
 
 // One ticket, from one read (GET /api/factory/projects/{id}/tickets/{ref}): its state, where it
 // lives, who works on it, what it depends on and what waits for it, its pull request, every
@@ -378,10 +379,10 @@ function Facts({ d }: { d: FactoryTicketData }) {
 
 // ── the page ──────────────────────────────────────────────────────────────────
 
-function Back({ href, name }: { href: string; name?: string }) {
+function Back({ href, name, icon }: { href: string; name?: string; icon?: string | null }) {
   return (
     <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-[color:var(--accent-deep)]! no-underline! hover:underline!">
-      {"←"} {name !== undefined ? <span data-user-text>{name}</span> : "Back to the project"}
+      {"←"} {name !== undefined ? <span data-user-text><InlineIcon icon={icon} className="mr-1" />{name}</span> : "Back to the project"}
     </Link>
   );
 }
@@ -456,7 +457,7 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
           <b>This page did not refresh.</b> Check your connection, then try again.
         </Banner>
       )}
-      <Back href={d.project.href} name={d.project.name} />
+      <Back href={d.project.href} name={d.project.name} icon={d.project.icon} />
       <div className="grid min-w-0 gap-2.5">
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="border border-border bg-muted px-2 py-0.5 font-mono text-[13px] font-medium" data-testid="ticket-ref">{d.ref}</span>

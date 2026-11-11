@@ -6,6 +6,7 @@ import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { factoryProject, type FactoryProjectData } from "./FactoryProject.api";
 import { DecisionRow } from "./FactoryProject";
+import { InlineIcon } from "./ProjectIcon";
 
 // /projects/:id/decisions: every decision of one project on its own page, newest first. The
 // project page shows the newest few and links here.
@@ -20,7 +21,7 @@ export default function FactoryDecisions() {
   const crumb = (
     <div className={MUTED} data-testid="crumb">
       <Link to="/projects" className={LINK}>Projects</Link>
-      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text>{data.name}</Link></>}
+      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text><InlineIcon icon={data.icon} className="mr-1" />{data.name}</Link></>}
       {" / "}Decisions
     </div>
   );

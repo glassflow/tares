@@ -185,7 +185,7 @@ async def main():
                "project-n" not in by and {"project-d", "project-e"} <= set(by) and len(by) == 8, names)
             ck("the cell's Default project is left out too",
                all(p["name"] != "Default" for p in a["projects"]), names)
-            ck("every key of a row", all(set(p) == {"id", "name", "goal", "state", "state_label", "milestone",
+            ck("every key of a row", all(set(p) == {"id", "name", "icon", "goal", "state", "state_label", "milestone",
                "tickets", "repos", "builders", "last_activity_at", "last_activity", "meta", "can_close",
                "repo_names"} for p in a["projects"]), sorted(a["projects"][0]))
             ck("the answer's keys", set(a) == {"projects", "counts", "now"}, sorted(a))

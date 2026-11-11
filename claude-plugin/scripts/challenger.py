@@ -25,6 +25,7 @@ session gate and the Tares record.
 
 `challenger.py waive [n|all]` (the /tares:challenger-waive command) suppresses a disputed finding.
 """
+import glob
 import json
 import os
 import re
@@ -33,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import grok
@@ -110,6 +112,42 @@ def sandbox_args() -> list:
 
 # ── Codex ────────────────────────────────────────────────────────────────────
 
+INTERRUPTED = "Review was interrupted"
+# Reviews cannot run again until someone acts: out of quota, or signed out.
+STOPPED_RE = re.compile(r"usage[_ ]limit|insufficient_quota|quota|not logged in|unauthorized|"
+                        r"authentication", re.I)
+
+
+def rollout_error(since: float) -> str:
+    """Codex can exit saying only that the review was interrupted, with the real reason in its
+    session log. The usage-limit line from a log written since `since`, or "". Best effort."""
+    home = os.environ.get("CODEX_HOME") or os.path.expanduser("~/.codex")
+    logs = glob.glob(os.path.join(home, "sessions", "*", "*", "*", "rollout-*"))
+    try:
+        for path in sorted((p for p in logs if os.path.getmtime(p) >= since - 1),
+                           key=os.path.getmtime, reverse=True)[:5]:
+            with open(path, errors="replace") as f:
+                hits = [l for l in f if "usage_limit" in l or "usage limit" in l]
+            if hits:
+                m = re.search(r"You've hit your usage limit[^\"]*", hits[-1])
+                return m.group(0) if m else "usage limit reached"
+    except OSError:
+        pass
+    return ""
+
+
+def tell_reviews_stopped(cfg: dict, reason: str) -> None:
+    """One item on the person's desk saying reviews have stopped and why. The cell keeps it to
+    one however many commits report it. Best effort: the review result is already on its way."""
+    try:
+        body = json.dumps({"reviewer": who(), "reason": reason}).encode()
+        req = urllib.request.Request(cfg["base"] + "/api/factory/challenger/stopped", data=body, method="POST",
+                                     headers={**cfg["headers"], "Content-Type": "application/json"})
+        urllib.request.urlopen(req, timeout=5).read()
+    except Exception:
+        pass
+
+
 def run_codex(args: list, cwd: str) -> dict:
     """Run the Codex CLI; return {prose, findings, verdict, exit, duration_seconds, activity}.
     Parses the JSONL event stream (`--json`); falls back to the raw text of older CLIs."""
@@ -126,7 +164,7 @@ def run_codex(args: list, cwd: str) -> dict:
                 "verdict": "ERROR", "exit": 1, "duration_seconds": round(time.time() - started, 1),
                 "activity": False}
     duration = round(time.time() - started, 1)
-    prose, activity, jsonl = "", False, False
+    prose, activity, jsonl, failed_turn, error_said = "", False, False, False, ""
     for line in stdout.splitlines():
         try:
             ev = json.loads(line)
@@ -135,6 +173,11 @@ def run_codex(args: list, cwd: str) -> dict:
         if not isinstance(ev, dict) or "type" not in ev:
             continue
         jsonl = True
+        if ev.get("type") in ("error", "turn.failed"):
+            # a plain `error` can be a retry that then succeeds, so alone it decides nothing
+            failed_turn = failed_turn or ev.get("type") == "turn.failed"
+            err = ev.get("error") if isinstance(ev.get("error"), dict) else {}
+            error_said = str(err.get("message") or ev.get("message") or error_said)
         item = ev.get("item") if isinstance(ev.get("item"), dict) else {}
         if ev.get("type") == "item.completed":
             if item.get("type") == "agent_message" and item.get("text"):
@@ -147,8 +190,11 @@ def run_codex(args: list, cwd: str) -> dict:
         m = re.search(r"^codex$", text, re.M)
         prose = text[m.end():].strip() if m else text.strip()
         activity = True   # the legacy text path cannot tell; do not call it inconclusive
-    if exit_code != 0 and not prose:
-        return {"prose": f"(codex exited {exit_code}; stderr: {stderr.strip()[:1500] or '<empty>'})",
+    # A review that did not finish is never a verdict on the code, whatever it managed to say first.
+    if exit_code != 0 or failed_turn or INTERRUPTED in prose:
+        why = (error_said or stderr.strip() or rollout_error(started) or prose
+               or "<no message>")[:1500]
+        return {"prose": f"(codex did not finish, exit {exit_code}: {why})",
                 "findings": [], "verdict": "ERROR", "exit": exit_code,
                 "duration_seconds": duration, "activity": activity}
     if not prose:
@@ -443,9 +489,12 @@ def review_commit(hook: dict, cfg: dict, session_id: str) -> dict:
                        "skipped. You are not blocked. Mention the timeout to the user.")
     if verdict == "ERROR":
         clear_state(gd, session_id)
+        if STOPPED_RE.search(r["prose"]):
+            tell_reviews_stopped(cfg, r["prose"])
+            return context("PostToolUse", f"{who()} could not review commit {short}, so it is NOT reviewed. "
+                           f"You are not blocked and the person has been told.\n\n{r['prose']}")
         return context("PostToolUse", f"{who()} review of commit {short} errored and produced no verdict. "
-                       f"You are not blocked.\n\n{r['prose']}\n\nMention the error to the user; likely a "
-                       f"{who()} auth or rate-limit issue.")
+                       f"You are not blocked.\n\n{r['prose']}\n\nMention the error to the user.")
     if verdict == "INCONCLUSIVE":
         clear_state(gd, session_id)
         return context("PostToolUse", f"{who()} review of commit {short} was INCONCLUSIVE: it returned no "

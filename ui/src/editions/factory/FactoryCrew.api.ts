@@ -25,7 +25,7 @@ export interface CrewMember {
 
 export interface CrewBuilders {
   /** `id` is null for builders that are not on a project the cell knows. */
-  project: { id: string | null; name: string };
+  project: { id: string | null; name: string; icon?: string | null };
   members: CrewMember[];
 }
 

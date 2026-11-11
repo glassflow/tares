@@ -2,7 +2,7 @@
 // address may name a tab of the old All settings page or a section of the old page; those still land.
 
 export type SettingId =
-  | "crew" | "allowed"
+  | "crew" | "allowed" | "morning"
   | "github" | "linear" | "slack" | "claude_code"
   | "providers" | "budget"
   | "people" | "keys"
@@ -13,7 +13,7 @@ export interface SettingItem { id: string; label: string; to?: string }
 export interface SettingGroup { id: string; label: string; items: SettingItem[] }
 
 export const SETTING_GROUPS: SettingGroup[] = [
-  { id: "crew", label: "Crew", items: [{ id: "crew", label: "How it works" }, { id: "allowed", label: "What you allowed" }] },
+  { id: "crew", label: "Crew", items: [{ id: "crew", label: "How it works" }, { id: "allowed", label: "What you allowed" }, { id: "morning", label: "Morning status" }] },
   { id: "tools", label: "Tools", items: [
     { id: "github", label: "GitHub" }, { id: "linear", label: "Linear" }, { id: "slack", label: "Slack" }, { id: "claude_code", label: "Claude Code" },
   ] },
