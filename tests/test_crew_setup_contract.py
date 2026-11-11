@@ -30,6 +30,7 @@ import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the re
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "factory"))
+_crew_guard.scratch_home()   # the probes below inherit this process's HOME: not the real one (TR-1164)
 _crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
 
 import parity  # noqa: E402  (the harness: crew_env and the stand-in Tares)

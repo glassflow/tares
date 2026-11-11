@@ -37,7 +37,7 @@ def fake_crew_env(tmp: Path, base: dict | None = None) -> dict:
            if not k.startswith(("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_"))
            and k not in ("TARESD_URL", "NAVFLOW_DB")}
     env.update(
-        HOME=str(home), FACTORY_HOME=str(fhome), FACTORY_CREW_HOME=str(crew),
+        HOME=str(home), USERPROFILE=str(home), FACTORY_HOME=str(fhome), FACTORY_CREW_HOME=str(crew),
         FAKE_CLAUDE_STATE=str(state), CLAUDE_BIN=str(FACTORY_DIR / "fake-claude"),
         FACTORY_PAUSE="0", FACTORY_NO_WATCH="1",
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",

@@ -15,7 +15,14 @@ The refusal raises RealHomeReached and is also written down, and an exit hook th
 broad `except Exception` in the code under test cannot hide it. A test that replaces os.execve or the spawn with a
 recorder calls check_exec() from it, so the environment it would have started is checked too.
 
-Import this module before the test changes HOME: the real home is read once, here.
+Import this module before the test changes HOME: the real home is read once, here (on POSIX from the password file; on
+Windows from USERPROFILE, so the guard is blind to a real home if USERPROFILE was already scratch when it was imported).
+
+A test that builds no scratch home of its own and only runs `python -c` probes with os.environ calls scratch_home() first:
+it pins HOME, USERPROFILE, FACTORY_HOME and FACTORY_CREW_HOME of this process to a throwaway folder, removed at exit.
+
+What counts as the crew is textual (see crew_like): `python -m tares.crew`, a program named `factory`, `tares factory`.
+A start by the file (`python .../tares/crew/__main__.py`) is not recognised, though the real-home checks still apply to it.
 
 Use: sys.path.insert(0, os.path.dirname(__file__)); import _crew_guard; _crew_guard.install()
 """
@@ -29,6 +36,24 @@ try:
     REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
 except (ImportError, KeyError):   # Windows: the profile folder as the process was started with it
     REAL_HOME = os.path.expanduser("~")
+
+
+_scratch = None
+
+
+def scratch_home() -> str:
+    """Point this process's HOME, USERPROFILE, FACTORY_HOME and FACTORY_CREW_HOME at a throwaway folder (once); returns it."""
+    global _scratch
+    if _scratch is None:
+        import shutil
+        import tempfile
+        _scratch = tempfile.mkdtemp(prefix="tares-crew-guard-")
+        atexit.register(shutil.rmtree, _scratch, True)
+        home, crew = os.path.join(_scratch, "home"), os.path.join(_scratch, "crew")
+        os.makedirs(home)
+        os.makedirs(crew)
+        os.environ.update(HOME=home, USERPROFILE=home, FACTORY_HOME=crew, FACTORY_CREW_HOME=crew)
+    return _scratch
 
 
 def _norm(path) -> str:

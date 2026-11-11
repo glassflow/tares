@@ -128,6 +128,16 @@ r = subprocess.run([sys.executable, "-c",
                     str(ROOT / "tests"), str(ROOT)], env=SCRATCH_ENV, capture_output=True, text=True)
 ck("a run that swallowed a refusal ends non-zero and says so", r.returncode == 1 and "reached the real home" in r.stderr, str((r.returncode, r.stderr[-200:])))
 
+r = subprocess.run([sys.executable, "-c",
+                    "import os, sys; sys.path.insert(0, sys.argv[1]); import _crew_guard as g; a = g.scratch_home(); b = g.scratch_home(); "
+                    "e = os.environ; print(a == b, e['HOME'] == e['USERPROFILE'], e['FACTORY_CREW_HOME'] == e['FACTORY_HOME'], "
+                    "g.problems([sys.executable, '-m', 'tares.crew']), a)", str(ROOT / "tests")],
+                   env={"PATH": os.environ.get("PATH", ""), "HOME": REAL, "USERPROFILE": REAL}, capture_output=True, text=True)
+out = r.stdout.split()
+ck("scratch_home() moves a process off the real home, once, and the guard is then content",
+   r.returncode == 0 and out[:4] == ["True", "True", "True", "[]"], str((r.returncode, r.stdout, r.stderr[-200:])))
+ck("...and the folder is gone when the process ends", len(out) >= 5 and not os.path.exists(out[-1]), str(out))
+
 print("every test that restarts or starts a watch, or runs crew up, installs the guard")
 TRIGGER = re.compile(r"restart_self\(|watch\.start\(|\"crew\", \"up\"|cmd_crew_up|cmd_crew_restart|watch_revive\.|\.revive\(|start_stations")
 INSTALLS = re.compile(r"_crew_guard\.install\(\)|from _crew_fake import|import _crew_fake")
