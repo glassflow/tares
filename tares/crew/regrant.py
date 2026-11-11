@@ -31,7 +31,7 @@ import os
 import re
 import sys
 
-from . import claude, launch, state, watch_revive
+from . import claude, launch, locks, state, watch_revive
 from .client import TaresClient, grants_sum
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -120,6 +120,7 @@ def _prompt(human: str, rules: str, rearm: str) -> str:
             f"report, {rearm}, then carry on where you were.")
 
 
+@locks.scoped   # the station's lock goes with its regrant, as with the end of bash's per-station subshell (TR-1171)
 def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None) -> None:
     """Restart the station with its new grants, in the same conversation, saying which. Tares and the settings
     are read afresh. Without Tares, or if the station started something meanwhile, nothing happens; a restart

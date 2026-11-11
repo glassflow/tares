@@ -27,7 +27,7 @@ import os
 import re
 import sys
 
-from . import claude, state
+from . import claude, locks, state
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
@@ -131,6 +131,7 @@ def _active(paths: CrewPaths) -> list:
             if isinstance(row, dict) and row.get("status") == "active"]
 
 
+@locks.scoped   # a revive or restart lets go of its station's lock when it ends, as bash's subshell does (TR-1171)
 def _run(cmd, argv: list, env: dict) -> int:
     """One revive or restart on its own: its refusal is printed and counted, and never ends the round. Tares and
     the crew's settings are read afresh by the command, as bash re-primes in a subshell for each."""

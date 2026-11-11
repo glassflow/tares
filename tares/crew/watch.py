@@ -445,6 +445,22 @@ def _on_term(signum, frame):
     raise SystemExit(0)   # leave through the loop's finally, so the pid file goes
 
 
+def _say_unreadable_settings(paths: CrewPaths, env: dict) -> None:
+    """Bash's prime asks Tares for the crew settings before the watch starts and, when it can't read them, says why
+    (TR-1171). Say the same, once, on stderr; the rounds go on with what each step can do without them. A Tares
+    that does not answer at all is left to the steps, as before."""
+    from .client import TaresClient   # here, not at the top: the client imports crew modules that import this one
+    if not paths.crew_cfg.is_file():
+        return
+    with TaresClient(paths, env) as client:
+        if not client.tares_on():
+            return
+        try:
+            client.crew_settings()
+        except CrewError as e:
+            print(e.line, file=sys.stderr, flush=True)
+
+
 def cmd_watch(argv: list, env: dict) -> int:
     """factory [crew] watch [--once] [--interval <seconds>]"""
     args = list(argv)
@@ -455,6 +471,7 @@ def cmd_watch(argv: list, env: dict) -> int:
     paths = CrewPaths.from_env()
     state.require_crew(paths)
     state.merge_crew_defaults(paths)   # bash primes before every command but a local one: the crew's defaults are filled in
+    _say_unreadable_settings(paths, env)
     once = False
     try:
         interval = float(env.get("FACTORY_WATCH_INTERVAL") or DEFAULT_INTERVAL)

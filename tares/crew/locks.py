@@ -11,6 +11,7 @@ file are what bash reads.
 """
 import atexit
 import contextlib
+import functools
 import os
 import time
 
@@ -199,6 +200,32 @@ def station_lock(station: str, paths=None) -> None:
     if not _REGISTERED:
         atexit.register(release_locks)
         _REGISTERED = True
+
+
+@contextlib.contextmanager
+def scope():
+    """`with locks.scope():` lets go, at the end of the block, of every lock this process took inside it (a lock held
+    before stays held). Bash's watch runs each station's step in a `( ... )` subshell, which releases the lock when
+    it ends; the Python watch is one process, so a step's per-station unit says where that end is (TR-1171)."""
+    me = os.getpid()
+    before = {lock for lock, owner in _HELD.items() if owner == me}
+    try:
+        yield
+    finally:
+        for lock, owner in list(_HELD.items()):
+            if owner == me and lock not in before:
+                _rm(os.path.join(lock, "pid"))
+                _rmdir(lock)
+                _HELD.pop(lock, None)
+
+
+def scoped(fn):
+    """A function that is one station's unit of work in the watch: its locks are let go when it returns or raises."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        with scope():
+            return fn(*args, **kwargs)
+    return run
 
 
 @contextlib.contextmanager

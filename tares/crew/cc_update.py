@@ -77,7 +77,7 @@ import time
 
 import psutil
 
-from . import claude, launch, lifecycle, state, watch_revive
+from . import claude, launch, lifecycle, locks, state, watch_revive
 from .client import TaresClient, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -429,6 +429,7 @@ def claude_move(paths: CrewPaths, client: TaresClient, station: str, target: str
             return 1
 
 
+@locks.scoped   # the station's lock goes when its move ends, as with bash's per-station subshell (TR-1171)
 def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin) -> int:
     if not client.tares_on():
         return 3   # without Tares there are no settings to restart it with
