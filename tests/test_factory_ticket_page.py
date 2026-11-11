@@ -152,7 +152,9 @@ async def main():
                           {"severity": "low", "file": LOOKS[3], "line": 1, "blocking": False,
                            "text": f"See {LOOKS[0]} and {LOOKS[1]}"},
                           {"severity": "low", "file": "a.ts", "line": 2, "blocking": False,
-                           "text": "Opened file:///Users/sam/proj/a.ts and file:///home/sam/proj/b.ts"}],
+                           "text": "Opened file:///Users/sam/proj/a.ts and file:///home/sam/proj/b.ts"},
+                          {"severity": "low", "file": "C:\\Users\\sam\\proj\\win.ts", "line": 4,
+                           "blocking": False, "text": "A Windows folder"}],
                          {}, factory_mod.finding_kind, ago(days=1))
 
         store.add_check(px, t2, f"cd {PATH} && npm test", "12 passed, 0 failed", "ccccccc3333", "",
@@ -324,6 +326,8 @@ async def main():
             t3f = (await cx.get(f"/api/factory/projects/{px}/tickets/T3")).json()["reviews"][0]["findings"]
             ck("a path outside the repo and outside a home folder shows its last name",
                t3f[0]["file"] == "footer.ts", t3f[0])
+            ck("a Windows path shows its last name too",
+               t3f[3]["file"] == "win.ts", t3f[3])
             ck("a file:// link to a home folder shows the last name, as a bare path does",
                t3f[2]["text"] == "Opened file://a.ts and file://b.ts", t3f[2])
             ck("a path or link that only looks like a home folder stays as written",

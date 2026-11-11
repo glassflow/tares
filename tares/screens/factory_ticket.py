@@ -85,6 +85,8 @@ def register(app, store, h, ctx):
             base = (r.get("path") or "").rstrip("/")
             if base:
                 hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
+                if factory_mod.is_windows_path(base):      # a title may spell the folder with backslashes
+                    hidden[base.replace("/", "\\")] = hidden[base]
 
         def by_words(station, role=None) -> str | None:
             name = str(station or "").strip()
@@ -141,8 +143,8 @@ def register(app, store, h, ctx):
             else:
                 state_text = {"fixed": "fixed"}.get(f["state"], f["state"])
             path = clean(f.get("file"))
-            if path.startswith(("/", "~")):                # a path that is not the repo's own
-                path = path.rsplit("/", 1)[-1]
+            if path.startswith(("/", "~")) or factory_mod.is_windows_path(path):   # a path that is not the repo's own
+                path = path.replace("\\", "/").rsplit("/", 1)[-1]
             return {"label": f["label"], "text": clean(f["text"]), "file": path or None,
                     "line": f.get("line"), "blocking": bool(f["blocking"]), "state_text": state_text}
 

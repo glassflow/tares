@@ -173,6 +173,8 @@ def hidden_paths(handover: dict | None) -> dict[str, str]:
             base = r["path"].rstrip("/")
             if base:                                  # with or without a trailing slash
                 hidden[base] = name
+                if factory_mod.is_windows_path(base):  # a title may spell the folder with backslashes
+                    hidden[base.replace("/", "\\")] = name
     return hidden
 
 

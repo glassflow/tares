@@ -112,6 +112,8 @@ def register(app, store, h, ctx):
                 base = (r.get("path") or "").rstrip("/")
                 if base:
                     hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
+                    if factory_mod.is_windows_path(base):      # a title may spell the folder with backslashes
+                        hidden[base.replace("/", "\\")] = hidden[base]
 
             def clean(text):
                 out = str(text or "")

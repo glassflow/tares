@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import posixpath
 import re
 from datetime import datetime, timezone
 
@@ -200,6 +201,37 @@ def norm_repo(repo) -> str:
     return r
 
 
+_WIN_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+_WIN_UNC = re.compile(r"^\\\\[^\\/\s]+[\\/]+[^\\/\s]+")   # \\server\share, always with backslashes at the front
+
+
+def is_windows_path(path: str) -> bool:
+    """A Windows absolute folder: a drive letter with a slash or backslash (C:\\x, C:/x), or a share
+    (\\\\server\\share). Said by its spelling, not by the daemon's own OS: the daemon may run on Linux
+    while the crew is on Windows. A path that starts with a slash is never one."""
+    return bool(_WIN_DRIVE.match(path) or _WIN_UNC.match(path))
+
+
+def windows_path(path: str) -> str:
+    """A Windows folder spelled one way, forward slashes, no `.`, `..` or trailing slash, so
+    C:\\x\\repo, C:/x/repo and C:/x/./repo/ are one repo. Windows takes forward slashes everywhere."""
+    p = path.replace("\\", "/")
+    if _WIN_DRIVE.match(p):
+        head, rest = p[:2], p[2:]
+    else:
+        m = re.match(r"^//+([^/]+)/+([^/]+)(.*)$", p)
+        head, rest = f"//{m.group(1)}/{m.group(2)}", m.group(3)
+    rest = posixpath.normpath("/" + rest.lstrip("/"))
+    return head + rest if _WIN_DRIVE.match(p) else head + ("" if rest == "/" else rest)
+
+
+def same_path(a: str, b: str) -> bool:
+    """Two repo folders are the same: Windows folders ignore case and slash direction, others compare as written."""
+    if is_windows_path(a) and is_windows_path(b):
+        return windows_path(a).lower() == windows_path(b).lower()
+    return a == b
+
+
 def handover_repos(repos) -> list[dict]:
     """The repos a project is handed over with, each {path, name}: the folder it is checked out
     in on the crew's machine and its GitHub name (owner/name, may be empty). Takes strings (a
@@ -214,21 +246,24 @@ def handover_repos(repos) -> list[dict]:
     for x in repos:
         if isinstance(x, str):
             x = x.strip()
-            x = ({"path": x, "name": None} if x.startswith(("/", "~", "."))
+            x = ({"path": x, "name": None} if x.startswith(("/", "~", ".")) or is_windows_path(x)
                  else {"path": None, "name": x})
         if not isinstance(x, dict):
             raise DocError("each repo is {path, name}")
         path = str(x.get("path") or "").strip()
         if path.startswith("~"):
             path = os.path.expanduser(path)
-        if path and not path.startswith("/"):
+        if path and not path.startswith("/") and not is_windows_path(path):
             raise DocError(f"repo path {path!r} is not absolute; give the full folder the repo "
                            "is cloned in on the crew's machine")
-        path = os.path.normpath(path)[:500] if path else None
+        if path:
+            path = (windows_path(path) if is_windows_path(path) else os.path.normpath(path))[:500]
+        else:
+            path = None
         name = repo_ok(x.get("name"))
         if not path and not name:
             continue
-        same = next((o for o in out if (path and o["path"] == path)
+        same = next((o for o in out if (path and o["path"] and same_path(o["path"], path))
                      or (name and (o["name"] or "").lower() == name.lower())), None)
         if same:
             same["path"] = same["path"] or path
