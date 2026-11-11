@@ -63,5 +63,12 @@ with tempfile.TemporaryDirectory() as t:
     r = daemon._serve_ui("")
     ck("with a console it serves index.html", r.status_code == 200 and Path(r.path) == built / "index.html", str(getattr(r, "path", r)))
 
+# The image builds from a hand-listed file set: the build hook must be in it, and the image requires the console.
+dockerfile = (Path(__file__).resolve().parent.parent / "deploy" / "docker" / "Dockerfile").read_text(encoding="utf-8")
+copies = [ln.split()[1:-1] for ln in dockerfile.splitlines() if ln.startswith("COPY ") and "--from" not in ln]
+ck("the Dockerfile copies hatch_build.py next to pyproject.toml", any("hatch_build.py" in c and "pyproject.toml" in c for c in copies), str(copies))
+ck("...and requires the console for the image build", "ENV TARES_REQUIRE_CONSOLE=1" in dockerfile and
+   dockerfile.index("ENV TARES_REQUIRE_CONSOLE=1") < dockerfile.index("RUN pip install"))
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
