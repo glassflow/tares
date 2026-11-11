@@ -19,6 +19,7 @@ import { AllowDialog } from "./FactoryHome";
 import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
 import { ProjectIconHeader } from "./ProjectIcon";
+import { ProjectSecrets } from "./ProjectSecrets";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
 
@@ -833,7 +834,7 @@ function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promi
   );
 }
 
-export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, onIcon, start }: {
+export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, onIcon, start, secrets }: {
   data: FactoryProjectData;
   /** Save a new icon, or null to remove it; answers when the cell has it. */
   onIcon?: (icon: string | null) => Promise<void>;
@@ -850,6 +851,8 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
   /** Keep the project for later (true) or start it again (false); answers when the cell has it. */
   onLater?: (later: boolean) => Promise<void>;
   start?: { open: boolean; error: string };
+  /** Show the project's secrets, read from the cell (never on a sample). */
+  secrets?: boolean;
 }) {
   const { toast } = useToast();
   const { hash } = useLocation();
@@ -986,6 +989,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
         </div>
         <div className="grid min-w-0 gap-6">
           {d.people && <People people={d.people} onLead={onLead} onAdd={onAdd} />}
+          {secrets && d.secrets && <ProjectSecrets project={d.id} initial={d.secrets} />}
           <Decisions id={d.id} items={d.decisions} />
           <Docs id={d.id} items={d.docs} total={d.docs_total ?? d.docs.length} />
           <Terminal items={d.terminal} />
@@ -1084,7 +1088,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAllowed={sample ? undefined : reload} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} onIcon={sample ? undefined : icon} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAllowed={sample ? undefined : reload} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} onIcon={sample ? undefined : icon} start={sample ? sampleClose(sample) : undefined} secrets={!sample} />
     </>
   );
 }

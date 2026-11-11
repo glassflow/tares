@@ -4686,6 +4686,36 @@
       "note": "Runs on Windows; standard library only."
     },
     {
+      "name": "pace_daemon.py",
+      "kind": "suite",
+      "what": "a driver that runs a real Tares on a throwaway database, feeds it fake usage readings and prints the pace it answers",
+      "ticket": "TR-1160",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the pace_daemon scenario of parity.py; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "freeze_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the looping watch of freeze_test.sh while the kit changes under it, on either engine",
+      "ticket": "TR-1160",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the freeze_watch and freeze_copywatch scenarios of parity.py; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "idle_wake_daemon.py",
+      "kind": "suite",
+      "what": "a driver that runs a real Tares on a throwaway database and prints the review queue, the setting and the desk the way idle_wake_test.sh checks them",
+      "ticket": "TR-1160",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the idle_wake_daemon scenario of parity.py; standard library only; it goes when the bash engine does."
+    },
+    {
       "name": "watch_support.py",
       "kind": "suite",
       "what": "a fake Tares and a driver that runs one round of the watch (watch --once) on either engine",

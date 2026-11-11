@@ -49,8 +49,6 @@ jobs:
       - name: Install
         shell: pwsh
         run: |
-          # The package forces ui/dist into the wheel and fails without it. The crew engine never serves the console, so an empty folder is enough here.
-          New-Item -ItemType Directory -Force -Path ui\dist | Out-Null
           uv venv
           uv pip install -e .
       # FACTORY_CREW_HOME is the crew's own folder under that profile, so every path the engine builds from it has the

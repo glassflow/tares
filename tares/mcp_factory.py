@@ -553,6 +553,27 @@ def _grant_line(g: dict) -> str:
 
 
 @mcp.tool()
+async def list_secrets(project: str) -> str:
+    """The names of a project's secrets (TR-775): who set each and when, never a value. To use them,
+    run the command that needs them as `tares factory with-secrets -- <command>`, which sets them as
+    environment variables for that command only. Never print a secret, write it to a file, or pass
+    it on a command line. Only the project's members see this list."""
+    from urllib.parse import quote
+    async with _cx(10) as cx:
+        r = await cx.get(f"{TARESD}/api/projects/{quote(project, safe='')}/secrets")
+    if r.status_code >= 400:
+        return _out(r)
+    d = r.json()
+    if not d.get("enabled"):
+        return d.get("off") or "secrets are off on this Tares"
+    rows = d.get("secrets") or []
+    if not rows:
+        return f"{project} has no secrets; a member adds them on the project's page in the console"
+    return "\n".join(f"{x['name']}: set by {x.get('set_by') or 'someone'} {str(x.get('set_at') or '')[:10]}"
+                     for x in rows) + "\nuse them with: tares factory with-secrets -- <command>"
+
+
+@mcp.tool()
 async def read_grants(project: str = "") -> str:
     """What the person allows the crew to do, in their own words with the date: the grants for
     every project, the project's own when `project` is given, and your personal ones. Those in

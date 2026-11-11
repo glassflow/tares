@@ -40,6 +40,7 @@ class Round:
     """What this step found in the last round, for the steps after it."""
 
     def __init__(self):
+        self.ran = False         # the revive step has run this round (bash's `down` is only ever set by its loop)
         self.down = False        # a station was down, or could not be told apart from down
         self.unread = False      # the session list could not be read: nothing was done
         self.started: set = set()   # stations this step revived or restarted
@@ -149,6 +150,7 @@ def step(paths: CrewPaths, env: dict | None = None) -> None:
     from . import lifecycle
     env = dict(os.environ if env is None else env)
     last = this = Round()
+    this.ran = True
     try:
         binary = claude.claude_bin(env)
         claude.active_json(binary)

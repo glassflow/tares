@@ -63,7 +63,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, integrations_api, morning_status as morning_mod, outbound, standup as standup_mod
+from . import claude_usage, factory_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -239,18 +239,7 @@ MAX_DB_SIZE = _parse_size(os.getenv("TARES_MAX_DB_SIZE"))
 # fills its disk and dies (glassflow-web, 2026-09-08). Reads, findings and the console keep working.
 INGEST_PAUSE_PCT = float(os.getenv("TARES_INGEST_PAUSE_PCT", "95"))
 
-
-def _ui_dist() -> Path:
-    """Where the built console SPA lives. Prefer the copy shipped inside the wheel
-    (tares/console, via hatch force-include); fall back to the source tree's ui/dist for
-    `npm run dev`-style local work. TARES_UI_DIST overrides both."""
-    if env := os.getenv("TARES_UI_DIST"):
-        return Path(env)
-    from importlib import resources
-    packaged = resources.files("tares") / "console"   # present in an installed wheel
-    if packaged.is_dir():
-        return Path(str(packaged))
-    return Path(__file__).resolve().parent.parent / "ui" / "dist"   # running from the source tree
+from ._ui import NO_CONSOLE_HINT, console_built, ui_dist as _ui_dist  # noqa: E402  (kept under this name: tests and callers read it here)
 
 
 UI_DIST = _ui_dist()
@@ -301,10 +290,8 @@ SLACK_ASK_TIMEOUT = float(os.getenv("TARES_SLACK_ASK_TIMEOUT", "120"))
 
 def _serve_ui(path: str):
     """The built console SPA: a real file if it exists, else index.html (client-side routing)."""
-    if not UI_DIST.exists():
-        return JSONResponse(
-            {"detail": "console not built; run `npm install && npm run build` in ui/"},
-            status_code=404)
+    if not console_built(UI_DIST):
+        return JSONResponse({"detail": f"console not built: {NO_CONSOLE_HINT}"}, status_code=404)
     f = (UI_DIST / path).resolve()
     if path and f.is_file() and f.is_relative_to(UI_DIST.resolve()):
         return FileResponse(f)
@@ -6052,6 +6039,7 @@ def make_app() -> FastAPI:
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)
+    project_secrets.register(app, store, h)   # TR-775
 
     @app.get("/api/home")
     async def home(request: Request):

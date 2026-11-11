@@ -286,7 +286,12 @@ def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> 
     sys.stdout.flush()
     sys.stderr.flush()
     # execve wants a path: the bash watch's argv[0] is "bash", so find it on the PATH the new watch will have
-    os.execve(shutil.which(argv[0], path=env.get("PATH")) or argv[0], argv, env)
+    held = locks.release_for_exec()   # exec runs no atexit: a station lock this image holds would stay, named for the same pid
+    try:
+        os.execve(shutil.which(argv[0], path=env.get("PATH")) or argv[0], argv, env)
+    except OSError:   # follow_engine keeps this watch running, so it keeps the locks it held
+        locks.retake_locks(held)
+        raise
 
 
 def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:

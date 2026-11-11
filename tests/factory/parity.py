@@ -1922,6 +1922,345 @@ scenario(Scenario(
 ))
 
 
+# freeze_test.sh, the watch's side of the freeze: a newer kit while frozen, a revive on the copy, the move after an
+# unfreeze, the copy's life, a Tares that cannot give its settings, and a watch that started from the copy. The
+# stations are written into the crew (as `crew up` leaves them), the fake Tares keeps the freeze, and a step that
+# is a looping watch goes through freeze_support.py (the steps that are not run the command as they are).
+FREEZE_DRIVER = "freeze_support.py"
+_FZ_SETTINGS = {"autonomy": "L3-review", "releaser": False, "challenger": False, "builders_max": 2, "claude_update": False}
+_FZ_WIN = "the looping watch is stopped by its process group and read through psutil, and the crew home is reached through a symbolic link"
+_FZ_O, _FZ_R = "crew-orchestrator", "crew-reviewer"
+
+
+def _fz_setup(tmp: Path, env: dict) -> None:
+    """A Tares that keeps the freeze, an orchestrator and a reviewer up and idle on the kit of a copy of the plugin
+    (outside any git checkout, as _cc_plugin makes it), and the crew home reached through a link."""
+    w = fake_tares.World(settings=_FZ_SETTINGS)
+    w.routes["/api/grants"] = {"all": ""}
+    _WORLDS[str(tmp)] = w
+    _doctor_world(w)(tmp, env)
+    _crew_json(tmp)
+    crew, state = tmp / "crew", tmp / "claude"
+    copy = _cc_plugin(tmp, env)
+    kit = _cc_kit(copy)
+    rows, agents = {}, []
+    for name, sid in ((_FZ_O, "aaaa0001"), (_FZ_R, "bbbb0002")):
+        role = name.split("-", 1)[1]
+        rows[name] = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high",
+                      "kit": kit, "plugin": str(copy), "role": role, "id": sid, "sessionId": f"old-{role}"}
+        agents.append(_row("idle", sid, name, cwd=str(crew), version="1.0.0"))
+    (crew / "stations.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+    (state / "version").write_text("1.0.0\n", encoding="utf-8")
+    (state / "stamp-version").write_text("1\n", encoding="utf-8")
+    (tmp / "crewlink").symlink_to(crew)
+    env["FACTORY_CREW_HOME"] = str(tmp / "crewlink")
+
+
+def _fz_marks(tmp: Path) -> dict:
+    """What the suite reads after a step: the stations, the calls to Claude Code, the events and the copy."""
+    crew, kit = tmp / "crew", tmp / "kit" / "claude-plugin"
+    rows = json.loads((crew / "stations.json").read_text(encoding="utf-8"))
+    try:
+        calls = [json.loads(x)["args"] for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError:
+        calls = []
+    events: dict = {}
+    try:
+        for x in (crew / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            if x.strip():
+                name = json.loads(x).get("event")
+                events[name] = events.get(name, 0) + 1
+    except OSError:
+        pass
+
+    def last(s: str):
+        found = [a for a in calls if len(a) > 2 and a[2] == s]
+        return found[-1] if found else []
+
+    def plugin_dir(s: str):
+        a = last(s)    # the suite's plugin_dir: the word after --plugin-dir, or the last word when there is none
+        return (a[a.index("--plugin-dir") + 1] if "--plugin-dir" in a else a[-1]) if a else None
+
+    def resumed(s: str):
+        a = last(s)
+        return a[a.index("--resume") + 1] if "--resume" in a else None
+
+    def line(s: str):
+        try:
+            return json.loads((crew / "stations" / f"{s}.settings.json").read_text(encoding="utf-8"))["statusLine"]["command"]
+        except (OSError, ValueError, KeyError):
+            return ""
+
+    snap = crew / "frozen-kit"
+    return {"launches": sum(1 for a in calls if "--bg" in a), "resumes": sum(1 for a in calls if "--resume" in a),
+            "id": {s: v.get("id") for s, v in rows.items()}, "session": {s: v.get("sessionId") for s, v in rows.items()},
+            "plugin": {s: v.get("plugin") for s, v in rows.items()}, "kit": {s: v.get("kit") for s, v in rows.items()},
+            "line": {s: line(s) for s in rows},
+            "plugin_arg": {s: plugin_dir(s) for s in rows}, "resume_arg": {s: resumed(s) for s in rows},
+            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "factory", os.X_OK),
+            "same": _same_tree(snap, kit), "kept": (snap / ".kept").exists(), "marker": (crew / "freezing").exists(),
+            "checkout_file": (crew / "kit-checkout").exists()}
+
+
+def _fz_agents(names: tuple, change):
+    def before(tmp: Path) -> None:
+        ids = [json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[n]["id"] for n in names]
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for row in rows:
+            if row.get("id") in ids:
+                change(row)
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def _fz_idle_row(row: dict) -> None:
+    row["state"], row["status"] = "working", "idle"
+
+
+def _fz_stop_row(row: dict) -> None:
+    row["state"] = "stopped"
+    row.pop("pid", None)
+    row.pop("status", None)
+
+
+def _fz_do(*befores):
+    def before(tmp: Path) -> None:
+        for b in befores:
+            b(tmp)
+    return before
+
+
+def _fz_idle(*names: str):
+    return _fz_agents(names, _fz_idle_row)
+
+
+def _fz_stop(*names: str):
+    return _fz_do(_fz_agents(names, _fz_idle_row), _fz_agents(names, _fz_stop_row))
+
+
+def _fz_kit(tag: str):
+    def before(tmp: Path) -> None:
+        with open(tmp / "kit" / "claude-plugin" / "skills" / "factory-protocol" / "SKILL.md", "a", encoding="utf-8", newline="\n") as f:
+            f.write(f"<!-- {tag} -->\n")
+    return before
+
+
+def _fz_touch(rel: str, old: bool = False):
+    def before(tmp: Path) -> None:
+        f = tmp / rel
+        f.touch()
+        if old:
+            os.utime(f, (946684800, 946684800))   # 2000-01-01
+    return before
+
+
+def _fz_rm(rel: str):
+    return lambda tmp: (tmp / rel).unlink(missing_ok=True)
+
+
+def _fz_broken(on: bool):
+    return lambda tmp: setattr(_WORLDS[str(tmp)], "broken", on)
+
+
+def _fz_user() -> str:
+    import getpass
+    return getpass.getuser()
+
+
+def _fz_has(r: Run, i: int, pattern: str) -> bool:
+    return re.search(pattern, r.out(i), re.M) is not None
+
+
+def _fz_facts(r: Run, i: int) -> dict:
+    return json.loads(r.out(i).strip().splitlines()[-1])
+
+
+def _fz_snap(r: Run) -> str:
+    return os.path.realpath(r.crew / "frozen-kit")
+
+
+def _fz_checkout(r: Run) -> str:
+    return os.path.realpath(r.tmp / "kit" / "claude-plugin")
+
+
+_FZ_STEPS = [
+    Step(["crew", "status"], drop=DOCTOR_DROP),                                                      # 0 not frozen
+    Step(["crew", "freeze"], after=_fz_marks),                                                       # 1
+    Step(["crew", "status"]),                                                                        # 2
+    Step(["doctor"], drop=DOCTOR_DROP),                                                              # 3
+    Step(["@frozen-loop"], after=_fz_marks),                                                         # 4 a looping watch, a newer kit
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 5
+    Step(["crew", "status"]),                                                                        # 6
+    Step(["crew", "watch", "--once"], before=_fz_kit("v2")),                                         # 7
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 8
+    Step(["crew", "watch", "--once"], before=_fz_stop(_FZ_R), after=_fz_marks),                      # 9 revive on the copy
+    Step(["crew", "unfreeze"], before=_fz_idle(_FZ_R), after=_fz_marks),                             # 10
+    Step(["crew", "status"]),                                                                        # 11
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 12 one station moves
+    Step(["crew", "watch", "--once"], before=_fz_idle(_FZ_O), after=_fz_marks),                      # 13 the other
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 14 the copy goes
+    Step(["crew", "freeze"]),                                                                        # 15
+    Step(["crew", "watch", "--once"], before=_fz_stop(_FZ_R), after=_fz_marks),                      # 16 revive on the new copy
+    Step(["crew", "status"], before=_fz_idle(_FZ_R)),                                                # 17
+    Step(["crew", "unfreeze"], after=_fz_marks),                                                     # 18
+    Step(["crew", "watch", "--once"], env={"TARES_PLUGIN_DIR": "{tmp}/crew/frozen-kit"},
+         before=_fz_stop(_FZ_O), after=_fz_marks),                                                   # 19 by the copy's own factory
+    Step(["crew", "freeze"], before=_fz_do(_fz_idle(_FZ_O), _fz_touch("crew/frozen-kit/.kept")), after=_fz_marks),   # 20 the copy is kept
+    Step(["crew", "unfreeze"]),                                                                      # 21
+    Step(["crew", "freeze"], before=_fz_kit("v3"), after=_fz_marks),                                 # 22 refused
+    Step(["crew", "watch", "--once"], before=_fz_idle(_FZ_O, _FZ_R)),                                # 23
+    Step(["crew", "watch", "--once"], before=_fz_idle(_FZ_O, _FZ_R), after=_fz_marks),               # 24 the stations left the copy
+    Step(["crew", "watch", "--once"], before=_fz_touch("crew/freezing"), after=_fz_marks),           # 25 a freeze under way
+    Step(["crew", "watch", "--once"], before=_fz_touch("crew/freezing", old=True), after=_fz_marks),  # 26 a marker that old
+    Step(["crew", "freeze"], before=_fz_rm("crew/freezing"), after=_fz_marks),                       # 27 a fresh copy
+    # 28 Tares cannot give its settings. Bash's round says so on stderr (curl's line and "could not read the crew
+    # settings", from a subshell that dies); the Python round says nothing. Neither line is in an assertion.
+    Step(["crew", "watch", "--once"], before=_fz_do(_fz_kit("v4"), _fz_idle(_FZ_O, _FZ_R), _fz_broken(True)),
+         drop=(r"^curl: \(22\)", r"^tares factory: could not read the crew settings")),
+    Step(["crew", "status"], drop=(r"^curl: \(22\)",)),                                              # 29 (curl names its failure; Python does not)
+    Step(["crew", "unfreeze"], before=_fz_broken(False)),                                            # 30
+]
+
+scenario(Scenario(
+    name="freeze_watch",
+    suite="freeze",
+    about="a frozen crew's watch, a revive on the copy, the move after an unfreeze, the copy's life and a Tares that cannot give its settings",
+    driver=FREEZE_DRIVER,
+    # left out of the comparison: the session list and version reads, which the engines make in a different number,
+    # and the plan's /usage reading (claude -p --no-session-persistence), which the engines make from different folders
+    # (crewlink for bash, crew for Python) and a different number of times; no check here asserts it
+    ignore_calls=(("agents",), ("--version",), ("-p", "--no-session-persistence")),
+    setup=_fz_setup,
+    steps=_FZ_STEPS,
+    not_windows=_FZ_WIN,
+    checks=[
+        ("an unfrozen crew's status has no FROZEN line", lambda r: not _fz_has(r, 0, r"^FROZEN")),
+        ("status shows the freeze, when and by whom",
+         lambda r: _fz_has(r, 2, rf"^FROZEN: the kit since .* by {re.escape(_fz_user())}; stations that start or revive use it, running ones keep "
+                                 r"reading the checkout until they restart; the watch moves no station onto a newer kit$")),
+        ("doctor shows the freeze",
+         lambda r: _fz_has(r, 3, rf"ok    the kit is frozen since .* by {re.escape(_fz_user())}; the checkout has nothing newer")),
+        ("the watch reports the newer kit", lambda r: _fz_facts(r, 4)["reported"] is True),
+        ("the watch says so once, not every round", lambda r: _fz_facts(r, 4)["events"] == 1 and _fz_facts(r, 4)["said"] == 1),
+        ("the watch does not restart onto the new kit", lambda r: _fz_facts(r, 4)["restart_said"] is False and _fz_facts(r, 4)["alive"] is True),
+        ("no station restarts for a kit while frozen",
+         lambda r: (lambda a, b: a["launches"] == b["launches"] and a["resumes"] == b["resumes"] and a["events"].get("upgraded", 0) == 0
+                    and a["id"] == b["id"])(r.snap(4), r.snap(1))),
+        ("the report names the kit and the way out", lambda r: _fz_facts(r, 4)["way_out"] is True),
+        ("a later round, even a new watch, does not report it again",
+         lambda r: r.snap(5)["events"].get("kit-newer") == 1 and r.snap(5)["id"][_FZ_O] == r.snap(1)["id"][_FZ_O]),
+        ("status says a newer kit is available", lambda r: _fz_has(r, 6, r"^FROZEN: .*\(a newer kit is available\)$")),
+        ("status says the stations are held by the freeze",
+         lambda r: _fz_has(r, 6, r"^plugin: 2 station\(s\) run an older version; the freeze holds them")),
+        ("another newer kit is reported once more", lambda r: r.snap(8)["events"].get("kit-newer") == 2),
+        ("still nothing restarted", lambda r: r.snap(8)["launches"] == r.snap(1)["launches"] and r.snap(8)["events"].get("upgraded", 0) == 0),
+        ("a stopped station is revived while frozen",
+         lambda r: r.snap(9)["id"][_FZ_R] != r.snap(1)["id"][_FZ_R] and r.snap(9)["launches"] == r.snap(1)["launches"] + 1),
+        ("its plugin is the frozen copy",
+         lambda r: r.snap(9)["plugin_arg"][_FZ_R] == _fz_snap(r) and r.snap(9)["plugin"][_FZ_R] == _fz_snap(r)),
+        ("its status line is the frozen copy's",
+         lambda r: r.snap(9)["line"][_FZ_R] == f"tares hook statusline --plugin-root {_fz_snap(r)}"),
+        ("it records the frozen kit as its own", lambda r: r.snap(9)["kit"][_FZ_R] == r.snap(1)["frozen"]["version"]),
+        ("the revive resumed its conversation, and nothing else moved",
+         lambda r: r.snap(9)["resumes"] == r.snap(1)["resumes"] + 1 and r.snap(9)["id"][_FZ_O] == r.snap(1)["id"][_FZ_O]),
+        ("the copy stays while a station runs from it",
+         lambda r: r.snap(10)["copy"] and "frozen-kit once none runs from it" in r.out(10)),
+        ("an unfrozen crew's status has no FROZEN line, and the watch moves the stations again",
+         lambda r: not _fz_has(r, 11, r"^FROZEN") and _fz_has(r, 11, r"^plugin: 2 station\(s\) run an older version; .*crew watch moves each onto this one")),
+        ("unfrozen: one station moves onto the new kit",
+         lambda r: r.snap(12)["events"].get("upgraded") == 1 and r.snap(12)["id"][_FZ_O] != r.snap(1)["id"][_FZ_O]
+         and r.snap(12)["id"][_FZ_R] not in ("", None)),
+        ("in the same conversation, from the checkout",
+         lambda r: r.snap(12)["resume_arg"][_FZ_O] == r.snap(10)["session"][_FZ_O] and r.snap(12)["plugin_arg"][_FZ_O] == _fz_checkout(r)),
+        ("the copy stays while another station still runs from it", lambda r: r.snap(12)["copy"]),
+        ("the next round moves the other, off the frozen copy",
+         lambda r: r.snap(13)["events"].get("upgraded") == 2 and r.snap(13)["plugin_arg"][_FZ_R] == _fz_checkout(r)),
+        ("the copy is removed once no station runs from it", lambda r: not r.snap(14)["copy"]),
+        ("frozen again: a station revived on the new copy",
+         lambda r: r.snap(16)["plugin"][_FZ_R] == _fz_snap(r) and r.snap(16)["kit"][_FZ_R] == r.snap(16)["frozen"]["version"]),
+        ("with nothing newer, the freeze holds no station back",
+         lambda r: _fz_has(r, 17, r"^FROZEN: the kit since ") and "newer kit is available" not in r.out(17)
+         and not _fz_has(r, 17, r"^plugin:")),
+        ("the copy stays for the station on it", lambda r: r.snap(18)["copy"] and r.snap(18)["plugin"][_FZ_R] == _fz_snap(r)),
+        ("a start by the copy's own factory uses the checkout, not the copy",
+         lambda r: r.snap(19)["plugin_arg"][_FZ_O] == _fz_checkout(r) and r.snap(19)["plugin"][_FZ_O] == _fz_checkout(r)),
+        ("freeze keeps a copy in use when it is still the checkout's kit",
+         lambda r: r.code(20) == 0 and r.snap(20)["kept"] and r.snap(20)["frozen"]["version"] == r.snap(16)["frozen"]["version"]
+         and not r.snap(20)["marker"]),
+        ("freeze refuses while a station runs from a copy that is not the checkout's kit",
+         lambda r: r.code(22) != 0 and "still run from the kit copy" in r.out(22) and r.snap(22)["kept"]
+         and r.snap(22)["frozen"] is None and not r.snap(22)["marker"]),
+        ("the stations left the copy", lambda r: r.snap(24)["plugin"][_FZ_R] == _fz_checkout(r)),
+        ("a copy nothing runs from stays while a freeze is under way", lambda r: r.snap(25)["copy"]),
+        ("a marker that old is ignored and the copy goes", lambda r: not r.snap(26)["copy"] and not r.snap(26)["checkout_file"]),
+        ("freeze after that takes a fresh copy", lambda r: r.snap(27)["copy_bin"] and not r.snap(27)["kept"] and r.snap(27)["same"]),
+        ("with the settings unreadable and the copy there, the watch does not try to move a station",
+         lambda r: "could not restart" not in r.out(28) and "moves onto the new version once it does" not in r.out(28)
+         and r.launches() == r.snap(27)["launches"]),
+        ("and status says frozen, without blank fields",
+         lambda r: _fz_has(r, 29, r"^FROZEN: the kit \(Tares does not say since when\);")),
+    ],
+    covers=["an unfrozen crew's status has no FROZEN line", "status shows the freeze, when and by whom", "doctor shows the freeze",
+            "the watch reports the newer kit", "the watch says so once, not every round", "the watch does not restart onto the new kit",
+            "no station restarts for a kit while frozen", "the report names the kit and the way out",
+            "a later round, even a new watch, does not report it again", "status says a newer kit is available",
+            "status says the stations are held by the freeze", "another newer kit is reported once more", "still nothing restarted",
+            "a stopped station is revived while frozen", "its plugin is the frozen copy", "its status line is the frozen copy's",
+            "it records the frozen kit as its own", "the revive resumed its conversation, and nothing else moved",
+            "the copy stays while a station runs from it",
+            "an unfrozen crew's status has no FROZEN line, and the watch moves the stations again",
+            "unfrozen: one station moves onto the new kit", "in the same conversation, from the checkout",
+            "the copy stays while another station still runs from it", "the next round moves the other, off the frozen copy",
+            "the copy is removed once no station runs from it", "frozen again: a station revived on the new copy",
+            "with nothing newer, the freeze holds no station back", "the copy stays for the station on it",
+            "a start by the copy's own factory uses the checkout, not the copy",
+            "freeze keeps a copy in use when it is still the checkout's kit",
+            "freeze refuses while a station runs from a copy that is not the checkout's kit", "the stations left the copy",
+            "a copy nothing runs from stays while a freeze is under way", "a marker that old is ignored and the copy goes",
+            "freeze after that takes a fresh copy",
+            "with the settings unreadable and the copy there, the watch does not try to move a station",
+            "and status says frozen, without blank fields"],
+))
+
+# A watch started from the frozen copy and left running past the unfreeze: once the copy is gone, a kit change
+# restarts it on the checkout's CLI, not on the copy it came from (TR-686).
+scenario(Scenario(
+    name="freeze_copywatch",
+    suite="freeze",
+    about="a watch started from the frozen copy outlives it and restarts on the checkout's CLI (TR-686)",
+    driver=FREEZE_DRIVER,
+    # left out of the comparison: the session list and version reads, which the engines make in a different number,
+    # and the plan's /usage reading (claude -p --no-session-persistence), which the engines make from different folders
+    # (crewlink for bash, crew for Python) and a different number of times; no check here asserts it
+    ignore_calls=(("agents",), ("--version",), ("-p", "--no-session-persistence")),
+    setup=_fz_setup,
+    steps=[
+        Step(["crew", "freeze"]),                                                                    # 0
+        Step(["crew", "watch", "--once"], before=_fz_stop(_FZ_R)),                                   # 1 the station is revived on the copy
+        Step(["crew", "unfreeze"], before=_fz_idle(_FZ_R), after=_fz_marks),                         # 2 the copy stays for it
+        Step(["@copy-loop"], before=_fz_idle(_FZ_R), after=_fz_marks),                               # 3
+    ],
+    not_windows=_FZ_WIN,
+    checks=[
+        ("setup: a station is on the copy, which is kept after the unfreeze",
+         lambda r: r.snap(2)["copy_bin"] and r.snap(2)["plugin"][_FZ_R] == _fz_snap(r)),
+        ("the watch moves the station off the copy and removes it", lambda r: _fz_facts(r, 3)["copy_gone"] is True),
+        ("setup: the watch still runs, from the copy it started on",
+         lambda r: _fz_facts(r, 3)["alive"] is True and _fz_facts(r, 3)["from_copy"] is True),
+        ("the watch restarts on the new version", lambda r: _fz_facts(r, 3)["restarted"] is True),
+        ("and it keeps running, on the checkout's CLI, not the copy that is gone",
+         lambda r: (lambda f: f["alive_after"] is True and f["from_checkout"] is True and f["from_copy_after"] is False
+                    and f["no_such_file"] is False)(_fz_facts(r, 3))),
+    ],
+    covers=["setup: a station is on the copy, which is kept after the unfreeze",
+            "the watch moves the station off the copy and removes it",
+            "setup: the watch still runs, from the copy it started on", "the watch restarts on the new version",
+            "and it keeps running, on the checkout's CLI, not the copy that is gone"],
+))
+
+
 def _settings(**kw):
     def setup(tmp: Path, env: dict) -> None:
         _doctor_world(fake_tares.World(settings=kw))(tmp, env)
@@ -1929,26 +2268,59 @@ def _settings(**kw):
     return setup
 
 
+def _settings_and_stations(**kw):
+    """The settings of `_settings`, and stations for `status` to list."""
+    def setup(tmp: Path, env: dict) -> None:
+        _settings(**kw)(tmp, env)
+        _setup_views(tmp, env)
+    return setup
+
+
+def _watching(tmp: Path) -> None:
+    """A watch that runs: a process whose command line says `crew watch`, named in watch.pid."""
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "tares", "factory", "crew", "watch"])
+    _WATCHING[str(tmp)] = p
+    (tmp / "crew").mkdir(parents=True, exist_ok=True)
+    (tmp / "crew" / "watch.pid").write_text(f"{p.pid}\n", encoding="utf-8")
+    time.sleep(0.5)
+
+
+def _unwatch(tmp: Path) -> bool:
+    p = _WATCHING.pop(str(tmp), None)
+    if p is not None:
+        p.terminate()
+        p.wait()
+    (tmp / "crew" / "watch.pid").unlink()
+    return p is not None
+
+
+_WATCHING: dict = {}
+
 scenario(Scenario(
     name="doctor_idle_wake",
     suite="idle_wake",
-    about="doctor: idle_wake off says nothing, on without a watch warns",
-    setup=_settings(),
-    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
-    checks=[("off: status and doctor have no wake line", lambda r: "idle_wake is on" not in r.out(0))],
+    about="status and doctor: idle_wake off says nothing",
+    setup=_settings_and_stations(),
+    steps=[Step(["status"], drop=DOCTOR_DROP), Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("off: status and doctor have no wake line",
+             lambda r: "idle_wake: on" not in r.out(0) and "idle_wake is on" not in r.out(1))],
     covers=["off: status and doctor have no wake line"],
 ))
 
 scenario(Scenario(
     name="doctor_idle_wake_on",
     suite="idle_wake",
-    about="doctor: idle_wake on without a running watch warns",
-    setup=_settings(idle_wake=True),
-    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
-    checks=[("on: doctor warns that no watch is running",
-             lambda r: "warn  idle_wake is on but the watch is not running" in r.out(0)
-             and "ok    idle_wake is on" not in r.out(0))],
-    covers=[],
+    about="status and doctor: idle_wake on says so, and doctor warns without a running watch and says ok with one",
+    setup=_settings_and_stations(idle_wake=True),
+    steps=[Step(["status"], drop=DOCTOR_DROP), Step(["doctor"], drop=DOCTOR_DROP),
+           Step(["doctor"], drop=DOCTOR_DROP, before=_watching, after=_unwatch)],
+    checks=[("on: status says so, and doctor warns that no watch is running",
+             lambda r: any(x.startswith("idle_wake: on") for x in r.out(0).splitlines())
+             and "warn  idle_wake is on but the watch is not running" in r.out(1)
+             and "ok    idle_wake is on" not in r.out(1)),
+            ("with the watch running, doctor says ok",
+             lambda r: r.snap(2) is True and "ok    idle_wake is on" in r.out(2) and "idle_wake is on but" not in r.out(2))],
+    covers=["on: status says so, and doctor warns that no watch is running", "with the watch running, doctor says ok"],
 ))
 
 scenario(Scenario(
@@ -3718,19 +4090,20 @@ def _pc_state(tmp: Path) -> dict:
     return {"events": events, "files": files, "pace": json.loads(pj.read_text(encoding="utf-8")) if pj.is_file() else None}
 
 
+PC_WEEK_UNTIL = "2033-05-20T05:00:00Z"
+
+
 def _pc_doc(session, weekly, reset=False, known=True, on=True) -> dict:
-    """The document GET /api/crew/pace gives for a reading: the levels (85% of the window or 90% of the week
-    slow the crew, 95% of the window holds builders, 100% of either limit closes the door), the words of the note."""
-    if not on:
-        return {"on": False, "known": False}
-    if not known:
-        return {"on": True, "known": False}
-    full = (session >= 100 or weekly >= 100) and not reset
-    level = 2 if session >= 95 else 1 if (session >= 85 or weekly >= 90) else 0
-    state = "limit" if full else "hold" if level == 2 else "slow" if level == 1 else "ok"
-    what = f"the 5-hour window is at {session}%" if session >= 85 else f"the weekly limit is at {weekly}%"
-    return {"on": True, "known": True, "level": level, "at_limit": full, "state": state, "until": PC_UNTIL,
-            "session_pct": session, "weekly_pct": weekly, "note": f"Pacing: {what}." if level else ""}
+    """The document GET /api/crew/pace gives for a reading: the daemon's own pace_now (the levels, the note, the
+    reset time) fed the plan's two limits, a stand-in for the reading /usage gave. `reset`: the 5-hour window
+    has reset since the reading (bash's `plan 100 10 -60`), `known=False`: a reading with no limit in it."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    from tares.factory import pace_now
+    limits = [{"kind": "session", "percent": session, "resets_at": PC_UNTIL, "reset": bool(reset)},
+              {"kind": "weekly_all", "percent": weekly, "resets_at": PC_WEEK_UNTIL}] if known else []
+    now = datetime.fromtimestamp(PC_N0, timezone.utc)
+    return pace_now({"pace": True if on else None}, {"limits": limits}, now)
 
 
 WIN_NO_PERCENT = ("a station is told through claude.cmd here, and cmd.exe cannot take a note that holds a percent sign ('the 5-hour window is at 85%'); "
@@ -3767,6 +4140,11 @@ def _pc_f(r: Run, i: int, station: str, key: str):
 def _pc_prompts(r: Run, station: str) -> list:
     """The prompts the station was started with, in order."""
     return [c["args"][-1] for c in r.calls() if c["args"][:1] == ["--bg"] and len(c["args"]) > 2 and c["args"][2] == station]
+
+
+def _pc_args(r: Run, station: str, n: int) -> list:
+    """The arguments of the n-th start of the station (--bg ...), in order."""
+    return [c["args"] for c in r.calls() if c["args"][:1] == ["--bg"] and len(c["args"]) > 2 and c["args"][2] == station][n]
 
 
 def _pc_resumed(r: Run, station: str) -> bool:
@@ -3830,6 +4208,29 @@ scenario(Scenario(
          and "wait" in _pc_prompts(r, PC_B)[3] and "Finish the step" not in _pc_prompts(r, "crew-reviewer")[-1]),
         ("a release says the tick goes back to its normal interval",
          lambda r: "stopped pacing the crew" in _pc_prompts(r, "crew-reviewer")[1] and "normal interval" in _pc_prompts(r, "crew-reviewer")[1]),
+        ("in the same conversation, with the note and what to do",
+         lambda r: "--resume" in _pc_args(r, "crew-reviewer", 0) and "Pacing: the 5-hour window is at 85%" in _pc_prompts(r, "crew-reviewer")[0]
+         and "Stretch your tick to 45 minutes" in _pc_prompts(r, "crew-reviewer")[0]
+         and "CronList, then CronDelete" in _pc_prompts(r, "crew-reviewer")[0]),
+        ("a builder at 85% is not told to hold",
+         lambda r: "Finish the step you are on" not in _pc_prompts(r, PC_B)[0] and _pc_f(r, 1, PC_B, "held") is False),
+        ("each station has a pace file saying it is stretched", lambda r: all(_pc_f(r, 1, s, "stretched") is True for s in PC_STATIONS)),
+        ("the note says so",
+         lambda r: "stopped pacing the crew" in _pc_prompts(r, "crew-reviewer")[1] and "normal interval" in _pc_prompts(r, "crew-reviewer")[1]
+         and "--resume" in _pc_args(r, "crew-reviewer", 1)),
+        ("90% of the week: slow, and each station is told again, once",
+         lambda r: _pc_doc(10, 90)["state"] == "slow" and all(_pc_n(r, 8, s, "stretch") == 2 for s in PC_STATIONS)
+         and len(r.snap(8)["events"]) == 12),
+        ("the builder is told, once, to finish its step, push, report where it is and wait",
+         lambda r: _pc_n(r, 11, PC_B, "hold") == 1 and "Finish the step you are on, push, write in your report where you are" in _pc_prompts(r, PC_B)[3]
+         and "wait" in _pc_prompts(r, PC_B)[3] and _pc_f(r, 11, PC_B, "held") is True and _pc_f(r, 11, PC_B, "stretched") is True),
+        ("and nobody else is",
+         lambda r: all(_pc_n(r, 11, s, "hold") == 0 and _pc_f(r, 11, s, "held") is False
+                       for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser")) and len(r.snap(11)["events"]) == 13),
+        ("back down to 90%: the builder is told it may carry on (once), the others hear nothing",
+         lambda r: _pc_n(r, 16, PC_B, "unhold") == 1 and "room for builders again" in _pc_prompts(r, PC_B)[6]
+         and _pc_f(r, 16, PC_B, "held") is False and _pc_f(r, 16, PC_B, "stretched") is True
+         and _pc_n(r, 16, "crew-reviewer", "unhold") == 0),
         ("next rounds: not again", lambda r: len(r.snap(2)["events"]) == 4 and len(r.snap(3)["events"]) == 4),
         ("back to 10%: each station is told once to go back, and the pace files are gone",
          lambda r: all(_pc_n(r, 4, s, "release") == 1 for s in PC_STATIONS) and r.snap(4)["files"] == {} and len(r.snap(4)["events"]) == 8),
@@ -3859,7 +4260,12 @@ scenario(Scenario(
             "and the pace files are gone", "once: nothing more is sent", "89% of the week: nothing",
             "94%: no hold", "once", "back to 10%: all four are told to go back, the builder once, and its hold is gone",
             "96% from nothing: the builder is told to stretch and to hold in one note",
-            "the others are only told to stretch"],
+            "the others are only told to stretch",
+            "in the same conversation, with the note and what to do", "a builder at 85% is not told to hold",
+            "each station has a pace file saying it is stretched", "the note says so",
+            "90% of the week: slow, and each station is told again, once",
+            "the builder is told, once, to finish its step, push, report where it is and wait", "and nobody else is",
+            "back down to 90%: the builder is told it may carry on (once), the others hear nothing"],
 ))
 
 
@@ -3948,9 +4354,12 @@ scenario(Scenario(
         ("(the stations are stretched)", lambda r: all(_pc_f(r, 0, s, "stretched") is True for s in PC_STATIONS)),
         ("off while stretched: each is told once to go back, and the files are gone",
          lambda r: all(_pc_n(r, 1, s, "release") == 1 for s in PC_STATIONS) and r.snap(1)["files"] == {}),
+        ("off while stretched: each is told once to go back",
+         lambda r: all(_pc_n(r, 1, s, "release") >= 1 for s in PC_STATIONS)
+         and _pc_n(r, 1, "crew-releaser", "release") == _pc_n(r, 0, "crew-releaser", "release") + 1 and r.snap(1)["files"] == {}),
         ("and then nothing", lambda r: len(r.snap(3)["events"]) == len(r.snap(1)["events"])),
     ],
-    covers=["(the stations are stretched)", "and then nothing"],
+    covers=["(the stations are stretched)", "and then nothing", "off while stretched: each is told once to go back"],
 ))
 
 scenario(Scenario(
@@ -4078,6 +4487,622 @@ scenario(Scenario(
 ))
 
 
+# The daemon's side of the pace: pace_test.sh runs a real Tares and asks it. pace_daemon.py runs the real daemon in
+# its own process on a throwaway database, feeds it the readings of the suite and prints what GET /api/crew/pace
+# says; no crew engine takes part, so it prints the same on both sides.
+def _pcd(r: Run, plan) -> dict:
+    """The pace the daemon gave for the reading [session, weekly, seconds to the reset] (None: a reading with no limit in it)."""
+    rows = [json.loads(x) for x in r.out(0).splitlines() if x.startswith("{")]
+    return next(x["pace"] for x in rows if "plan" in x and x["plan"] == plan)
+
+
+def _pcd_first(r: Run) -> dict:
+    return next(json.loads(x) for x in r.out(0).splitlines() if x.startswith("{") and '"settings"' in x)
+
+
+scenario(Scenario(
+    name="pace_daemon",
+    suite="pace",
+    about="the real daemon: the pace setting starts unset and reads off, reads back true, and the readings give the levels",
+    driver="pace_daemon.py",
+    steps=[Step(["readings"])],
+    checks=[
+        ("the daemon ran", lambda r: r.code(0) == 0),
+        ("the setting starts unset, and the pace reads off",
+         lambda r: _pcd_first(r)["settings"] is None and _pcd_first(r)["pace"]["state"] == "off"),
+        ("the setting reads back true", lambda r: any(json.loads(x).get("set") is True for x in r.out(0).splitlines() if x.startswith("{"))),
+        ("85% of the window: the pace is slow", lambda r: _pcd(r, [85, 89, 10800])["state"] == "slow"),
+        ("90% of the week: the pace is slow", lambda r: _pcd(r, [10, 90, 10800])["state"] == "slow"),
+        ("95%: the pace is hold", lambda r: _pcd(r, [95, 90, 10800])["state"] == "hold"),
+        ("100%: the pace is the limit",
+         lambda r: _pcd(r, [100, 10, 10800])["state"] == "limit" and _pcd(r, [100, 10, 10800])["at_limit"] is True),
+        ("the window has reset: the pace is ok", lambda r: _pcd(r, [100, 10, -60])["state"] == "ok"),
+        ("no limit in the reading: the pace is not known",
+         lambda r: _pcd(r, None)["on"] is True and _pcd(r, None)["known"] is False),
+    ],
+    covers=["the setting starts unset, and the pace reads off", "the setting reads back true",
+            "85% of the window: the pace is slow", "95%: the pace is hold", "100%: the pace is the limit",
+            "the window has reset: the pace is ok", "no limit in the reading: the pace is not known"],
+))
+
+
+# `crew status` and the pace line: a fake Tares answers GET /api/crew/pace with the document of each reading.
+def _pcs(session, weekly, **kw) -> Step:
+    doc = _pc_doc(session, weekly, **kw)
+
+    def put(run: Run) -> None:
+        run.tares.routes["GET /api/crew/pace"] = (200, doc)
+    return Step(["status"], run_before=put)
+
+
+def _pc_status(r: Run, i: int) -> list:
+    """The lines of status i, with the scenario's folder taken out (a path may hold the word)."""
+    return r.out(i).replace(str(r.tmp), "").splitlines()
+
+
+scenario(Scenario(
+    name="pace_status",
+    suite="pace",
+    about="status says nothing about the pace while it is off, and one line (the state, until when, the percents) while it is on",
+    setup=_setup_pace,
+    tares={"GET /api/desk?state=open": (200, {"desk": []})},
+    steps=[_pcs(99, 99, on=False), _pcs(84, 89), _pcs(85, 89), _pcs(95, 90), _pcs(100, 10), _pcs(0, 0, known=False)],
+    checks=[
+        ("off: status says nothing about the pace", lambda r: r.code(0) == 0 and "pace" not in "\n".join(_pc_status(r, 0)).lower()),
+        ("status says the pace is ok, with the percents", lambda r: "pace: ok (5-hour 84%, week 89%)" in _pc_status(r, 1)),
+        ("status says the crew is pacing, and until when",
+         lambda r: any(x.startswith("pace: slow, no new builders and the longest ticks, until 20") for x in _pc_status(r, 2))
+         and any("(5-hour 85%, week 89%)" in x for x in _pc_status(r, 2))),
+        ("status says builders wait",
+         lambda r: any(x.startswith("pace: hold, builders finish their step and wait, until 20") for x in _pc_status(r, 3))),
+        ("status says the plan is at its limit",
+         lambda r: any(x.startswith("pace: at the limit, stopped stations wait for the reset, until 20") for x in _pc_status(r, 4))),
+        ("status says there is no reading yet",
+         lambda r: any(x.startswith("pace: on, no reading of the plan limits yet") for x in _pc_status(r, 5))),
+    ],
+    covers=["off: status says nothing about the pace", "status says the pace is ok, with the percents",
+            "status says the crew is pacing, and until when", "status says builders wait",
+            "status says the plan is at its limit", "status says there is no reading yet"],
+))
+
+
+# spawn and restart under the pace: no new builder at the slow level, a helper still, the re-arm sentence of a
+# restart. The launch driver runs spawn, restart and retire on a fake Tares that answers GET /api/crew/pace with the
+# document of each step's reading. The crew is started by the first three steps, the builder by the fourth.
+def _pcsp_state(tmp: Path) -> dict:
+    """After a step: the bg starts so far, the last prompt of each station, and the stations that have an id."""
+    calls = []
+    f = tmp / "claude" / "calls.jsonl"
+    for line in (f.read_text(encoding="utf-8").splitlines() if f.is_file() else []):
+        try:
+            c = json.loads(line)
+        except ValueError:
+            continue
+        if c.get("args", [])[:1] == ["--bg"] and len(c["args"]) > 2:
+            calls.append(c["args"])
+    sj = tmp / "crew" / "stations.json"
+    stations = json.loads(sj.read_text(encoding="utf-8")) if sj.is_file() else {}
+    return {"launches": len(calls), "last": {a[2]: a[-1] for a in calls},
+            "ids": sorted(s for s, v in stations.items() if v.get("id"))}
+
+
+def _pcsp(op: str, *args: str, doc: dict | None = None, setup: dict | None = None, env: dict | None = None) -> Step:
+    d = doc if doc is not None else _pc_doc(99, 99, on=False)
+    world = {**lworld("L3-review", projects=[_LINKS], pace=bool(d.get("on"))), "routes": {"/api/crew/pace": [200, d]}}
+    s = lstep(op, *args, world=world, setup=setup, env={"FACTORY_STOP_WAIT": "3", **(env or {})})
+    s.after = _pcsp_state
+    return s
+
+
+def _pcsp_spawn(slug: str, doc: dict | None = None) -> Step:
+    return _pcsp("spawn", "builder", "Links App", slug, "{TMP}/links", "work T9", doc=doc)
+
+
+_PCSP_M2 = "links-app-build-m2"
+_PCSP_85 = _pc_doc(85, 89)
+
+scenario(Scenario(
+    name="pace_spawn",
+    suite="pace",
+    about="spawn and restart under the pace: a builder is refused at the slow level and the week's, a helper is not; a restart says when to re-arm",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
+    steps=[
+        _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
+              setup={"gitrepos": ["{TMP}/links"]}),                                                  # 0
+        *[_pcsp("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", "sonnet", "high", f"Boot as the {role} station")
+          for role in ("reviewer", "releaser")],                                                      # 1, 2
+        _pcsp_spawn("m1"),                                                                          # 3 the first builder
+        _pcsp_spawn("m2"),                                                                          # 4 off: spawned at 99%
+        _pcsp("retire", _PCSP_M2),                                                                  # 5
+        _pcsp("restart", "crew-reviewer"),                                                          # 6 off: no 45 minutes
+        _pcsp_spawn("m2", _PCSP_85),                                                                # 7 slow: refused
+        _pcsp("spawn", "helper", PC_B, "probe", "look at T1", doc=_PCSP_85),                        # 8 a helper still can be
+        _pcsp("restart", "crew-releaser", doc=_PCSP_85),                                            # 9 re-arm at 45 minutes
+        _pcsp_spawn("m2", _pc_doc(10, 10)),                                                         # 10 back down: spawned
+        _pcsp("retire", _PCSP_M2),                                                                  # 11
+        _pcsp_spawn("m2", _pc_doc(10, 90)),                                                         # 12 the week: refused
+        _pcsp_spawn("m2", _pc_doc(0, 0, known=False)),                                              # 13 unknown: spawned
+        _pcsp("retire", _PCSP_M2),                                                                  # 14
+        _pcsp_spawn("m2", _pc_doc(85, 10, on=False)),                                               # 15 off at 85%: spawned
+        _pcsp("retire", _PCSP_M2),                                                                  # 16
+        _pcsp_spawn("m2", _pc_doc(99, 99, on=False)),                                               # 17 a second builder while off
+    ],
+    checks=[
+        ("the crew and a builder are up", lambda r: r.code(3) == 0 and r.snap(3)["launches"] == 4 and PC_B in r.snap(3)["ids"]),
+        ("off: a builder can be spawned at 99%", lambda r: r.code(4) == 0 and _PCSP_M2 in r.snap(4)["ids"]),
+        ("off: a restart still says to re-arm the schedule, with no 45 minutes in it",
+         lambda r: r.code(6) == 0 and "re-arm your schedule if you have one" in r.snap(6)["last"]["crew-reviewer"]
+         and "45 minutes" not in r.snap(6)["last"]["crew-reviewer"]),
+        ("a builder is not spawned, and the refusal says why and until when",
+         lambda r: r.code(7) != 0 and "no new builder starts now" in r.out(7) and "the 5-hour window is at 85%" in r.out(7)
+         and " until 20" in r.out(7)),
+        ("a helper still can be", lambda r: r.code(8) == 0),
+        ("a restart now says to re-arm at 45 minutes",
+         lambda r: r.code(9) == 0 and "re-arm your schedule if you have one, at 45 minutes" in r.snap(9)["last"]["crew-releaser"]),
+        ("a builder can be spawned again", lambda r: r.code(10) == 0 and _PCSP_M2 in r.snap(10)["ids"]),
+        ("and a builder is refused, naming the week", lambda r: r.code(12) != 0 and "the weekly limit is at 90%" in r.out(12)),
+        ("unknown: a builder can be spawned", lambda r: r.code(13) == 0),
+        ("off: a builder can be spawned at 85%", lambda r: r.code(15) == 0),
+        ("(a second builder is up while the pace is off)", lambda r: r.code(17) == 0),
+    ],
+    covers=["the crew and a builder are up", "off: a builder can be spawned at 99%",
+            "off: a restart still says to re-arm the schedule, with no 45 minutes in it",
+            "a builder is not spawned, and the refusal says why and until when", "a helper still can be",
+            "a restart now says to re-arm at 45 minutes", "a builder can be spawned again",
+            "and a builder is refused, naming the week", "unknown: a builder can be spawned",
+            "off: a builder can be spawned at 85%", "(a second builder is up while the pace is off)"],
+))
+
+
+
+# The pace in the real watch (`crew watch --once`): a stopped station is not revived into a full limit and is
+# revived in its own conversation after the reset, the pace file forgets a station that will not be revived, a
+# note whose restart fails is not marked told. The Tares is a fake one that answers GET /api/crew/pace with the
+# document of each round's reading (`_pw_round`); the rounds are a minute apart, as in pace_test.sh, and every
+# session is idle again before a round (`idle_all` of the bash suite). The kit and the Claude Code version are the
+# installed ones, so no update step moves a station.
+PW_M2 = "links-app-build-m2"
+_PW_TARES = {"GET /api/crew/projects": (200, {"projects": [{"id": "p1", "name": "links-app", "repos": []}]}),
+             "GET /api/review-queue?mine=1": (200, {"queue": []}),
+             "GET /api/desk?state=answered&mine=1": (200, {"desk": []})}
+
+
+def _setup_pw(tmp: Path, env: dict) -> None:
+    _setup_pace(tmp, env)
+    kit = _cc_kit(_cc_plugin(tmp, env))
+    sj = tmp / "crew" / "stations.json"
+    stations = json.loads(sj.read_text(encoding="utf-8"))
+    for v in stations.values():
+        v["kit"] = kit
+    sj.write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    aj = tmp / "claude" / "agents.json"
+    rows = json.loads(aj.read_text(encoding="utf-8"))
+    for row in rows:
+        row["version"] = "2.1.310"
+    aj.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    (tmp / "claude" / "stamp-version").write_text("1\n", encoding="utf-8")
+
+
+def _pw_state(tmp: Path) -> dict:
+    """After a round: the pace state (events, pace files, pace.json), how often each station was started, and the
+    conversation each has now."""
+    starts = {}
+    f = tmp / "claude" / "calls.jsonl"
+    for line in (f.read_text(encoding="utf-8").splitlines() if f.is_file() else []):
+        try:
+            c = json.loads(line)
+        except ValueError:
+            continue
+        if c.get("args", [])[:1] == ["--bg"] and len(c["args"]) > 2:
+            starts[c["args"][2]] = starts.get(c["args"][2], 0) + 1
+    revives = {}
+    ev = tmp / "crew" / "events.jsonl"
+    for line in (ev.read_text(encoding="utf-8").splitlines() if ev.is_file() else []):
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        if e.get("event") in ("revived", "restarted-fresh"):
+            revives[e.get("station")] = revives.get(e.get("station"), 0) + 1
+    stations = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    return {**_pc_state(tmp), "starts": starts, "revives": revives, "sid": {n: v.get("sessionId") for n, v in stations.items()},
+            "stopped": sorted(json.loads((tmp / "crew" / "pace.json").read_text(encoding="utf-8")).get("stopped", []))
+            if (tmp / "crew" / "pace.json").is_file() else None}
+
+
+def _pw_stop(*names: str):
+    """Before a round: these stations have stopped (no process)."""
+    def fn(tmp: Path) -> None:
+        f = tmp / "claude" / "agents.json"
+        rows = json.loads(f.read_text(encoding="utf-8"))
+        ids = {json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[n]["id"] for n in names}
+        for row in rows:
+            if row["id"] in ids:
+                row["state"] = "stopped"
+                row.pop("pid", None)
+        f.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return fn
+
+
+def _pw_done(station: str, on: bool = True):
+    """Before a round: the builder is (not) finished."""
+    def fn(tmp: Path) -> None:
+        f = tmp / "crew" / "stations" / f"{station}.done"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if on:
+            f.write_text("", encoding="utf-8")
+        else:
+            f.unlink(missing_ok=True)
+    return fn
+
+
+def _pw_m2(tmp: Path) -> None:
+    """Before a round: a second builder is up (what `spawn builder` leaves), idle."""
+    sj = tmp / "crew" / "stations.json"
+    stations = json.loads(sj.read_text(encoding="utf-8"))
+    stations[PW_M2] = {**stations[PC_B], "id": "cccc0005", "sessionId": "sess-cccc0005"}
+    sj.write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    aj = tmp / "claude" / "agents.json"
+    rows = [x for x in json.loads(aj.read_text(encoding="utf-8")) if x["name"] != PW_M2]
+    rows.append({"id": "cccc0005", "name": PW_M2, "cwd": str(tmp), "state": "done", "pid": 40000 + 0xcccc5 % 1000,
+                 "version": "2.1.310"})
+    aj.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    job = tmp / "home" / ".claude" / "jobs" / "cccc0005"
+    job.mkdir(parents=True, exist_ok=True)
+    (job / "state.json").write_text(json.dumps({"sessionId": "sess-cccc0005"}) + "\n", encoding="utf-8")
+
+
+class _PWRounds:
+    """The rounds of one scenario: each a minute after the one before (or `at` seconds on the clock)."""
+
+    def __init__(self, base: int = 0) -> None:
+        self.sec = 0
+        self.base = base   # seconds added to the clock of every round
+
+    def __call__(self, session, weekly, *mods, at: int | None = None, pace: bool = True, idle_wake=None, env=None,
+                 tickets=None, grants: str = "", idle=None, drop: tuple = (), after=None, **kw) -> Step:
+        self.sec = at if at is not None else self.sec + 60
+        doc = _pc_doc(session, weekly, on=pace, **kw)
+        settings = {"autonomy": "L3-review", "releaser": True, "release_profile": "kind", "challenger": False,
+                    "builders_max": 2, "pace": pace}
+        if idle_wake is not None:
+            settings["idle_wake"] = idle_wake
+
+        def put(run: Run) -> None:
+            run.tares.routes.update({"GET /api/crew/settings": (200, {"settings": settings}),
+                                     "GET /api/crew/pace": (200, doc), "GET /api/grants": (200, {"all": grants}),
+                                     "GET /api/projects/p1/tickets": (200, {"tickets": tickets or []})})
+
+        def pre(tmp: Path) -> None:
+            if idle is None:
+                _pc_idle(tmp)
+            else:   # only these sessions are idle again; the others are still in the turn their start began
+                _pw_idle(*idle)(tmp)
+            for m in mods:
+                m(tmp)
+        return Step(["crew", "watch", "--once"], env={"FACTORY_NOW": str(PC_N0 + self.base + self.sec), **(env or {})},
+                    before=pre, run_before=put, after=after or _pw_state, drop=drop)
+
+
+def _pw_retire(name: str = PW_M2) -> Step:
+    return Step(["retire", name], after=_pw_state)
+
+
+def _pw_ran(r: Run, i: int, station: str) -> int:
+    return r.snap(i)["starts"].get(station, 0)
+
+
+def _pw_said(r: Run, first: int, last: int, text: str = "the plan's limit is full") -> int:
+    return sum(r.out(i).count(text) for i in range(first, last + 1))
+
+
+def _pw_resumed(r: Run, station: str, sid: str) -> bool:
+    args = [c["args"] for c in r.calls() if c["args"][:1] == ["--bg"] and len(c["args"]) > 2 and c["args"][2] == station][-1]
+    return "--resume" in args and args[args.index("--resume") + 1] == sid
+
+
+def _pw_work(*names: str):
+    """Before a round: these stations are in a turn, so the pace waits for them (and the revive step does not
+    mind). A round that revives and a round that paces are kept apart this way: the Python watch runs the revive
+    step for every station before the pace step, the bash watch goes station by station."""
+    def fn(tmp: Path) -> None:
+        f = tmp / "claude" / "agents.json"
+        rows = json.loads(f.read_text(encoding="utf-8"))
+        ids = {json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[n]["id"] for n in names}
+        for row in rows:
+            if row["id"] in ids:
+                row["state"] = "working"
+        f.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return fn
+
+
+def _pw_idle(*names: str):
+    """Before a round: these sessions are idle again."""
+    def fn(tmp: Path) -> None:
+        f = tmp / "claude" / "agents.json"
+        rows = json.loads(f.read_text(encoding="utf-8"))
+        ids = {json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[n]["id"] for n in names}
+        for row in rows:
+            if row["id"] in ids:
+                row["state"] = "done"
+        f.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return fn
+
+
+def _pw_grants_in_the_way(station: str, on: bool = True):
+    """Before a round: the station's grants file is a folder (a start of it fails midway), or is a file again."""
+    def fn(tmp: Path) -> None:
+        g = tmp / "crew" / "stations" / f"{station}.grants"
+        if g.is_dir():
+            g.rmdir()
+        if on:
+            g.unlink(missing_ok=True)
+            g.mkdir(parents=True)
+    return fn
+
+
+def _pw_stopped(r: Run, i: int) -> list:
+    return r.snap(i)["stopped"] or []
+
+
+def _pw_last_prompt(r: Run, station: str) -> str:
+    return _pc_prompts(r, station)[-1]
+
+
+_pws: list = []
+
+
+def _pw_add(step: Step) -> int:
+    _pws.append(step)
+    return len(_pws) - 1
+
+
+_pw = _PWRounds()
+_PW_FAIL = {"FAKE_CLAUDE_FAIL_RESUME": "1"}
+_PW_R, _PW_L, _PW_O = "crew-reviewer", "crew-releaser", "crew-orchestrator"
+_PW_ALL = (_PW_O, _PW_R, _PW_L, PC_B)
+
+# the limit: a stopped station is not revived into it, and is revived in its own conversation after the reset
+I_FULL = _pw_add(_pw(100, 10))                                                  # every station is stretched
+_pw_add(_pw(100, 10, _pw_stop(_PW_R, _PW_L)))                                   # two stopped
+I_WAIT = _pw_add(_pw(100, 10))
+I_RESET = _pw_add(_pw(100, 10, _pw_work(_PW_O, PC_B), at=180, reset=True))      # both are revived
+# the two that were revived are still in the turn that began with it (the bash suite does not idle them here)
+I_QUIET = _pw_add(_pw(100, 10, idle=(_PW_O, PC_B), reset=True))                  # the others are told to go back; no more revives
+# a resume that fails: the next round starts it fresh
+_pw_add(_pw(100, 10, _pw_done(PC_B)))                                           # the builder is out of this
+_pw_add(_pw(100, 10, _pw_stop(_PW_R)))                                          # the limit again: the stopped station waits
+I_AGAIN = len(_pws) - 1
+I_F1 = _pw_add(_pw(100, 90, env=_PW_FAIL, reset=True))
+I_F2 = _pw_add(_pw(100, 90, env=_PW_FAIL, reset=True))
+I_FRESH = _pw_add(_pw(100, 90, reset=True))
+# a reading that is missing changes nothing
+I_NONE = _pw_add(_pw(0, 0, _pw_done(PC_B, False), _pw_stop(_PW_R), known=False))
+# a builder the pace file forgets
+I_M2 = _pw_add(_pw(85, 10, _pw_m2))
+I_M2_GONE = _pw_add(_pw_retire())
+_pw_add(_pw(10, 10, pace=False))
+_pw_add(_pw(100, 10, _pw_m2))
+I_M2_STOP = _pw_add(_pw(100, 10, _pw_stop(PW_M2)))
+I_M2_RETIRED = _pw_add(_pw_retire())
+I_M2_FORGOT = _pw_add(_pw(100, 10))
+_pw_add(_pw(10, 10))
+_pw_add(_pw(100, 10, _pw_m2))
+I_M2_STOP2 = _pw_add(_pw(100, 10, _pw_stop(PW_M2)))
+I_M2_OFF = _pw_add(_pw(100, 10, _pw_work(*_PW_ALL), pace=False))                 # off: dropped, and revived as today
+_pw_add(_pw(100, 10, pace=False))
+_pw_add(_pw_retire())
+# the tidy
+_pw_add(_pw(100, 10))
+I_EP = _pw_add(_pw(100, 10, _pw_stop(_PW_R)))
+I_EP_FAIL = _pw_add(_pw(100, 90, env=_PW_FAIL, reset=True))
+I_EP_AGAIN = _pw_add(_pw(100, 10))
+I_EP_OVER = _pw_add(_pw(100, 90, reset=True))
+_pw_add(_pw(100, 10))
+I_B_STOP = _pw_add(_pw(100, 10, _pw_stop(PC_B)))
+_pw_add(_pw(10, 10, _pw_work(_PW_O, _PW_R, _PW_L)))                              # the builder is revived (this round only)
+_pw_add(_pw(10, 10))                                                            # and everyone is told to go back
+# a note whose restart fails
+I_QUIET2 = len(_pws) - 1
+_pw_add(_pw(85, 10, env=_PW_FAIL))
+_pw_add(_pw(85, 10))
+I_BACK = _pw_add(_pw(85, 10))
+_pw_add(_pw(10, 10))
+_pw_add(_pw(10, 10, grants="the reviewer may label pull requests"))
+_pw_add(_pw(10, 10, grants="the reviewer may label pull requests"))
+# (the shell's own words for the failure, and Python's, are left out of the comparison)
+I_MID = _pw_add(_pw(85, 10, _pw_grants_in_the_way(_PW_R), grants="the reviewer may label pull requests",
+                    drop=(r"Is a directory",)))
+_pw_add(_pw(85, 10, _pw_grants_in_the_way(_PW_R, False), grants="the reviewer may label pull requests"))
+I_SENT = _pw_add(_pw(85, 10, grants="the reviewer may label pull requests"))
+
+
+def _pw_no_note(r: Run) -> bool:
+    return (_pc_n(r, I_BACK, _PW_R, "stretch") == _pc_n(r, I_QUIET2, _PW_R, "stretch")
+            and len(r.snap(I_BACK)["events"]) == len(r.snap(I_QUIET2)["events"])
+            and all(_pc_f(r, I_BACK, s, "stretched") is True for s in _PW_ALL))
+
+
+scenario(Scenario(
+    name="pace_watch",
+    suite="pace",
+    about="the watch under the pace: a stopped station waits for the limit's reset and is revived in its own conversation, a failed resume is tried again and then starts fresh, the pace file forgets a station that will not be revived, a note whose restart fails is not marked told",
+    setup=_setup_pw,
+    tares=_PW_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=_pws,
+    checks=[
+        ("two stopped stations are not revived",
+         lambda r: r.code(I_WAIT) == 0 and _pw_ran(r, I_WAIT, _PW_R) == _pw_ran(r, I_FULL, _PW_R)
+         and _pw_ran(r, I_WAIT, _PW_L) == _pw_ran(r, I_FULL, _PW_L)),
+        ("the stations that run were still paced (the builder told to hold)",
+         lambda r: _pc_n(r, I_WAIT, _PW_O, "stretch") >= 1
+         and (_pc_n(r, I_WAIT, PC_B, "hold") >= 1 or _pc_n(r, I_WAIT, PC_B, "stretch") >= 1)),
+        ("both are revived, once each",
+         lambda r: _pw_ran(r, I_RESET, _PW_R) == _pw_ran(r, I_WAIT, _PW_R) + 1
+         and _pw_ran(r, I_RESET, _PW_L) == _pw_ran(r, I_WAIT, _PW_L) + 1),
+        ("in their own conversation",
+         lambda r: all("--resume" in (a := _pc_args(r, s, _pw_ran(r, I_WAIT, s)))
+                       and a[a.index("--resume") + 1] == r.snap(I_WAIT)["sid"][s] for s in (_PW_R, _PW_L))),
+        ("no more revives",
+         lambda r: _pw_ran(r, I_QUIET, _PW_R) == _pw_ran(r, I_RESET, _PW_R)
+         and _pw_ran(r, I_QUIET, _PW_L) == _pw_ran(r, I_RESET, _PW_L)),
+        ("the limit again: the stopped station waits",
+         lambda r: r.snap(I_AGAIN)["revives"].get(_PW_R, 0) == r.snap(I_AGAIN - 1)["revives"].get(_PW_R, 0) and _pw_said(r, I_AGAIN, I_AGAIN) == 1
+         and _PW_R in _pw_stopped(r, I_AGAIN)),
+        ("the next round, after two failures in a row, starts it fresh, not in the old conversation",
+         lambda r: "--resume" not in _pc_args(r, _PW_R, _pw_ran(r, I_F2, _PW_R))
+         and _pw_ran(r, I_FRESH, _PW_R) == _pw_ran(r, I_F2, _PW_R) + 1
+         and r.snap(I_FRESH)["sid"][_PW_R] != r.snap(I_AGAIN)["sid"][_PW_R]),
+        ("then nothing is left to carry out", lambda r: r.snap(I_FRESH)["pace"] is None),
+        ("unknown: a stopped station is revived as today",
+         lambda r: _pc_prompts(r, _PW_R)[_pw_ran(r, I_NONE, _PW_R) - 1].startswith("You were revived by the factory under the same name.")
+         and _pw_ran(r, I_NONE, _PW_R) == _pw_ran(r, I_FRESH, _PW_R) + 1),
+        ("(it was told to stretch its tick, so it has a pace file)", lambda r: _pc_f(r, I_M2, PW_M2, "stretched") is True),
+        ("retiring a station removes the pace file it had", lambda r: PW_M2 not in r.snap(I_M2_GONE)["files"]),
+        ("a builder that stopped at the limit is remembered", lambda r: PW_M2 in _pw_stopped(r, I_M2_STOP)),
+        ("retiring it removes what the pace told it", lambda r: PW_M2 not in r.snap(I_M2_RETIRED)["files"]),
+        ("the next round forgets it", lambda r: PW_M2 not in _pw_stopped(r, I_M2_FORGOT)),
+        ("(a builder stopped at the limit again)", lambda r: PW_M2 in _pw_stopped(r, I_M2_STOP2)),
+        ("turning the pace off drops the pace file, so it is revived as today", lambda r: r.snap(I_M2_OFF)["pace"] is None),
+        ("(and revived with the usual prompt)",
+         lambda r: _pc_prompts(r, PW_M2)[_pw_ran(r, I_M2_OFF, PW_M2) - 1].startswith("You were revived by the factory under the same name.")),
+        ("(a limit episode with a station waiting: said once)",
+         lambda r: _pw_said(r, I_EP, I_EP) == 1 and _PW_R in _pw_stopped(r, I_EP)),
+        ("(the window reset but the resume failed: the station is still in the pace file)",
+         lambda r: _PW_R in _pw_stopped(r, I_EP_FAIL)),
+        ("a new limit episode says the limit is full again", lambda r: _pw_said(r, I_EP, I_EP_AGAIN) == 2),
+        ("(and once it is over the station is revived and the pace file goes)", lambda r: r.snap(I_EP_OVER)["pace"] is None),
+        ("(a builder that stopped at the limit is in the pace file)", lambda r: PC_B in _pw_stopped(r, I_B_STOP)),
+        ("the stations a failed restart left stopped come back already on the stretched tick, with no second note", _pw_no_note),
+        ("a restart that fails midway is not marked told either",
+         lambda r: _pc_n(r, I_MID, _PW_R, "stretch") == _pc_n(r, I_MID - 1, _PW_R, "stretch") and _PW_R not in r.snap(I_MID)["files"]),
+        ("and the note is sent once the failure is gone",
+         lambda r: _pc_n(r, I_SENT, _PW_R, "stretch") == _pc_n(r, I_MID - 1, _PW_R, "stretch") + 1
+         and _pc_f(r, I_SENT, _PW_R, "stretched") is True),
+    ],
+    covers=["two stopped stations are not revived", "the stations that run were still paced (the builder told to hold)",
+            "both are revived, once each", "in their own conversation", "no more revives",
+            "the limit again: the stopped station waits",
+            "the next round, after two failures in a row, starts it fresh, not in the old conversation",
+            "then nothing is left to carry out", "unknown: a stopped station is revived as today",
+            "(it was told to stretch its tick, so it has a pace file)", "retiring a station removes the pace file it had",
+            "a builder that stopped at the limit is remembered", "retiring it removes what the pace told it",
+            "the next round forgets it", "(a builder stopped at the limit again)",
+            "turning the pace off drops the pace file, so it is revived as today", "(and revived with the usual prompt)",
+            "(a limit episode with a station waiting: said once)",
+            "(the window reset but the resume failed: the station is still in the pace file)",
+            "a new limit episode says the limit is full again",
+            "(and once it is over the station is revived and the pace file goes)",
+            "(a builder that stopped at the limit is in the pace file)",
+            "the stations a failed restart left stopped come back already on the stretched tick, with no second note",
+            "a restart that fails midway is not marked told either", "and the note is sent once the failure is gone"],
+    not_windows=WIN_NO_MULTILINE,
+))
+
+
+# The idle wake under the pace (pace_test.sh): with idle_wake on the liveness wake waits 45 minutes at once, a
+# builder at the hold gets no work wake, and the pace sends no note. The rounds are the bash suite's, thinned: a
+# round where nothing is due changes nothing, so the 40 minutes of "no liveness wake" are looked at where the
+# wakes would fall (the reviewer's at 15, the orchestrator's at 20, the releaser's at 30 minutes) and the
+# 45-minute wake is looked for on the first round after it.
+def _pww_state(tmp: Path) -> dict:
+    return {**_pw_state(tmp), "wake": _wakes(tmp)}
+
+
+_PW_TICKETS = [{"label": "T1", "holder": PC_B, "stage": "changes", "pr": {"head": "", "ci": ""}},
+               {"label": "T2", "holder": PC_B, "stage": "changes", "pr": {"head": "", "ci": ""}}]
+_pww = _PWRounds(base=100000)
+_pwws: list = []
+_PWW_BASE = PC_N0 + 100000
+
+
+def _pww_add(*a, **kw) -> int:
+    _pwws.append(_pww(*a, after=_pww_state, idle_wake=kw.pop("idle_wake", True), **kw))
+    return len(_pwws) - 1
+
+
+J_FIRST = _pww_add(85, 10, at=0)                                   # idle_wake on at 85%
+for _t in (960, 1320, 1920):
+    _pww_add(85, 10, at=_t)
+J_40 = _pww_add(85, 10, at=2400)                                   # 40 minutes: nothing woken
+_pww_add(85, 10, at=2640)
+J_45 = _pww_add(85, 10, at=2760)                                   # 45 minutes: the liveness wake
+J_WORK = _pww_add(85, 10, at=3100, tickets=_PW_TICKETS[:1])        # a ticket with changes asked for
+_pww_add(95, 10, at=3160, tickets=_PW_TICKETS)                     # the hold: T2 is held back
+_pww_add(95, 10, at=3220, tickets=_PW_TICKETS)
+J_HOLD = _pww_add(95, 10, at=3280, tickets=_PW_TICKETS)
+J_LIFT = _pww_add(85, 10, at=3340, tickets=_PW_TICKETS)            # the hold lifts
+_pww_add(10, 10, at=3400, tickets=_PW_TICKETS, idle_wake=False)    # idle_wake off again
+J_OFF = _pww_add(10, 10, at=3460, tickets=_PW_TICKETS, idle_wake=False)
+
+
+def _pww_wakes(r: Run, i: int, station: str, word: str) -> int:
+    return sum(1 for s, d in r.snap(i)["wake"]["events"] if s == station and d.startswith(word))
+
+
+def _pww_prompt(r: Run, i: int) -> str:
+    """The builder's latest prompt as of round i: its n-th work wake carries the n-th "tickets changed" prompt."""
+    n = _pww_wakes(r, i, PC_B, "work")
+    return ([p for p in _pc_prompts(r, PC_B) if p.startswith("Your tickets changed")] or [""] * n)[n - 1] if n else ""
+
+
+def _pww_times(r: Run, first: int, last: int, station: str) -> list:
+    """The seconds at which a station's last_wake changed over rounds first..last (the round before is the start)."""
+    out, seen = [], r.snap(first - 1)["wake"]["files"].get(station, {}).get("last_wake")
+    for i in range(first, last + 1):
+        lw = r.snap(i)["wake"]["files"].get(station, {}).get("last_wake")
+        if lw is not None and lw != seen:
+            out.append(lw - _PWW_BASE)
+            seen = lw
+    return out
+
+
+_PWW_QUIET = (_PW_O, _PW_R, _PW_L)
+
+scenario(Scenario(
+    name="pace_wake",
+    suite="pace",
+    about="the idle wake under the pace: the stations drop their tick, the liveness wake waits 45 minutes, a builder at the hold gets no work wake until it lifts, and the pace sends no note",
+    setup=_setup_pw,
+    tares=_PW_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=_pwws,
+    checks=[
+        ("idle_wake on under pace: each station that holds a tick is told to drop it (the idle wake's release), and no pace note is sent",
+         lambda r: all(_pww_wakes(r, J_FIRST, s, "release") == 1 for s in _PWW_QUIET) and not r.snap(J_FIRST)["events"]
+         and not r.snap(J_FIRST)["files"] and r.snap(J_FIRST)["pace"] is None),
+        ("85%: no liveness wake in 40 minutes (the reviewer's is at 15, the orchestrator's at 20, the releaser's at 30)",
+         lambda r: all(_pww_times(r, J_FIRST + 1, J_40, s) == [] for s in _PWW_QUIET)),
+        ("it comes at 45 minutes, for each of them",
+         lambda r: all(_pww_times(r, J_40 + 1, J_45, s) == [2760] for s in _PWW_QUIET)),
+        ("and is a liveness wake, still in the same conversation",
+         lambda r: _pww_wakes(r, J_45, _PW_R, "liveness") == 1 and _pc_resumed(r, _PW_R)),
+        ("85%: a work wake still happens (the builder's ticket needs it)",
+         lambda r: _pww_wakes(r, J_WORK, PC_B, "work") == _pww_wakes(r, J_45, PC_B, "work") + 1
+         and "Your tickets changed: T1 (changes asked for)" in _pww_prompt(r, J_WORK)),
+        ("95%: a builder with a work item is not woken for it",
+         lambda r: _pww_wakes(r, J_HOLD, PC_B, "work") == _pww_wakes(r, J_WORK, PC_B, "work")
+         and _pc_doc(95, 10)["state"] == "hold"),
+        ("(and no pace note under idle_wake)", lambda r: not r.snap(J_HOLD)["events"]),
+        ("when the hold lifts the item it missed is delivered",
+         lambda r: _pww_wakes(r, J_LIFT, PC_B, "work") == _pww_wakes(r, J_HOLD, PC_B, "work") + 1
+         and "T2 (changes asked for)" in _pww_prompt(r, J_LIFT) and "T1 (changes asked for)" not in _pww_prompt(r, J_LIFT)),
+        ("idle_wake off again: the stations get their tick back (the idle wake's), and nothing of the pace",
+         lambda r: _pww_wakes(r, J_OFF, _PW_R, "rearm") == 1 and not r.snap(J_OFF)["events"]),
+    ],
+    covers=["idle_wake on under pace: each station that holds a tick is told to drop it (the idle wake's release), and no pace note is sent",
+            "85%: no liveness wake in 40 minutes (the reviewer's is at 15, the orchestrator's at 20, the releaser's at 30)",
+            "it comes at 45 minutes, for each of them", "and is a liveness wake, still in the same conversation",
+            "85%: a work wake still happens (the builder's ticket needs it)",
+            "95%: a builder with a work item is not woken for it", "(and no pace note under idle_wake)",
+            "when the hold lifts the item it missed is delivered",
+            "idle_wake off again: the stations get their tick back (the idle wake's), and nothing of the pace"],
+))
+
 # ---------------------------------------------------------------------------------------------
 # The idle wake (TR-961): `crew watch --once` is one round of the watch, and with the crew setting idle_wake
 # on it wakes a station only when Tares has work for it. idle_wake_test.sh is the bash suite these come from;
@@ -4091,23 +5116,24 @@ IW_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-re
 IW_PROJECTS = {"projects": [{"id": "p1", "name": "links-app", "repos": []}]}
 
 
-def _setup_wake(tmp: Path, env: dict) -> None:
+def _setup_wake(tmp: Path, env: dict, ids: dict | None = None) -> None:
+    ids = ids or IW_IDS
     crew = tmp / "crew"
     crew.mkdir(parents=True, exist_ok=True)
     shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", crew / "crew.json")
     base = {"status": "active", "repo": "", "cwd": str(tmp), "model": "opus", "effort": "high"}
     roles = {"crew-orchestrator": ("orchestrator", ""), "crew-reviewer": ("reviewer", ""),
              "crew-releaser": ("releaser", ""), "links-app-build-m1": ("builder", "links-app")}
-    stations = {n: {**base, "role": r, "project": pr, "id": IW_IDS[n], "sessionId": f"sess-{IW_IDS[n]}",
+    stations = {n: {**base, "role": r, "project": pr, "id": ids[n], "sessionId": f"sess-{ids[n]}",
                     "parent": "crew-orchestrator" if n != "crew-orchestrator" else ""} for n, (r, pr) in roles.items()}
     (crew / "stations.json").write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
-    agents = [{"id": IW_IDS[n], "name": n, "cwd": str(tmp), "state": "done", "pid": 40000 + int(IW_IDS[n][-4:], 16)}
+    agents = [{"id": ids[n], "name": n, "cwd": str(tmp), "state": "done", "pid": 40000 + int(ids[n][-4:], 16)}
               for n in stations]
     state = tmp / "claude"
     state.mkdir(parents=True, exist_ok=True)
     (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
     (state / "version").write_text("2.1.310\n", encoding="utf-8")
-    for n, sid in IW_IDS.items():
+    for n, sid in ids.items():
         job = tmp / "home" / ".claude" / "jobs" / sid
         job.mkdir(parents=True, exist_ok=True)
         (job / "state.json").write_text(json.dumps({"sessionId": f"sess-{sid}"}) + "\n", encoding="utf-8")
@@ -4135,7 +5161,9 @@ def _wakes(tmp: Path) -> dict:
             continue
         if e.get("event") == "idle_wake":
             events.append((e.get("station"), str(e.get("detail", ""))))
-    return {"files": files, "events": events}
+    urls = tmp / "urls"   # the addresses of the two scans asked of the fake Tares so far (the launch driver notes every GET, as the suite's curl shim does); the rest differ between the engines
+    return {"files": files, "events": events, "urls": sorted({u for u in (urls.read_text(encoding="utf-8").splitlines() if urls.is_file() else [])
+                                    if u.startswith(("/api/review-queue", "/api/desk"))})}
 
 
 def _n(r: Run, i: int = -1, station: str = "", word: str = "") -> int:
@@ -4213,7 +5241,7 @@ def _quiet_world(setting) -> dict:
 
 
 def _head(h: str, verdict=None) -> list:
-    return [{"project": "p1", "project_name": "links-app", "ticket": "T1", "head": h, "verdict": verdict}]
+    return [{"project": "p1", "project_name": "Links App", "ticket": "T1", "head": h, "verdict": verdict}]
 
 
 B1 = "links-app-build-m1"
@@ -4235,23 +5263,33 @@ scenario(Scenario(
     suite="idle_wake",
     about="with the setting unset, and then false, rounds hours apart wake no one and write no wake state",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
-    steps=[_round(t, _quiet_world(None)) for t in (600, 1800, 3600, 7200, 14400)] + [_round(21600, _quiet_world(False))],
+    steps=[_round(t, _quiet_world(None)) for t in (600, 1800, 3600, 7200, 14400)] + [_round(21600, _quiet_world(False)),
+           lstep("restart", "crew-reviewer", world=_quiet_world(False), env={"FACTORY_STOP_WAIT": "3"})],
     checks=[
         ("unset: five rounds, hours apart, with an unreviewed PR: no wake",
-         lambda r: all(r.code(i) == 0 for i in range(6)) and _n(r) == 0 and r.launches() == 0),
+         lambda r: all(r.code(i) == 0 for i in range(6)) and _n(r, 5) == 0 and r.launches() == 1),
         ("unset: no wake state is written", lambda r: all(r.snap(i)["files"] == {} for i in range(5))),
-        ("false: the same", lambda r: r.snap(5)["files"] == {} and _n(r) == 0 and r.launches() == 0),
+        ("false: the same", lambda r: r.snap(5)["files"] == {} and _n(r, 5) == 0 and r.launches() == 1),
+        ("off: a restart still says to re-arm the schedule",
+         lambda r: r.code(6) == 0 and "re-arm your schedule if you have one" in _pc_prompts(r, "crew-reviewer")[-1]
+         and "idle_wake" not in _pc_prompts(r, "crew-reviewer")[-1]),
     ],
-    covers=["unset: five rounds, hours apart, with an unreviewed PR: no wake", "unset: no wake state is written", "false: the same"],
+    covers=["unset: five rounds, hours apart, with an unreviewed PR: no wake", "unset: no wake state is written", "false: the same",
+            "off: a restart still says to re-arm the schedule"],
 ))
 
-_LIVE_AT = [0, 840, 900, 1260, 1800, 2700, 3060, 3600, 5400, 5760, 6300]
+_LIVE_AT = [0, 840, 900, 1260, 1800, 2700, 3060, 3600, 5400, 5760, 6300, 7200,
+            # on from there: a round just before each wake is due, and one at it (the gap stays at 45 minutes)
+            8040, 8100, 8400, 8460, 8940, 9000, 10740, 10800, 11100, 11160, 11640, 11700, 12600]
+_LIVE_2H = 11   # the round at two hours
 scenario(Scenario(
     name="idle_wake_liveness",
     suite="idle_wake",
     about="with the setting on and nothing to do: a release wake, then liveness wakes backing off 15/30/45 minutes",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(t, _world()) for t in _LIVE_AT],
     checks=[
@@ -4262,16 +5300,35 @@ scenario(Scenario(
          lambda r: _times(r, 1, 10, "crew-reviewer") == [900, 2700, 5400]),
         ("orchestrator: 20, then 30, then 45 later", lambda r: _times(r, 1, 10, "crew-orchestrator") == [1260, 3060, 5760]),
         ("releaser: 30, then 30, then 45 later", lambda r: _times(r, 1, 10, "crew-releaser") == [1800, 3600, 6300]),
-        ("a builder with no ticket in review is not woken", lambda r: _n(r, -1, B1) == 0 and _times(r, 1, 10, B1) == []),
+        ("a builder with no ticket in review is not woken", lambda r: _n(r, _LIVE_2H, B1) == 0 and _times(r, 1, _LIVE_2H, B1) == []),
+        ("and the release prompt says to arm no tick and to delete the one it holds",
+         lambda r: _pc_prompts(r, "crew-reviewer")[0].startswith("idle_wake was switched on.")
+         and "CronList, then CronDelete" in _pc_prompts(r, "crew-reviewer")[0]),
+        ("no station is woken more than 3 times in two hours (reviewer: 8 ticks of 15 minutes before)",
+         lambda r: all(_n(r, _LIVE_2H, s, "liveness") <= 3 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))
+         and _n(r, _LIVE_2H, "crew-reviewer", "liveness") == 3),
         ("every one of them is a liveness wake",
-         lambda r: _n(r, -1, "crew-reviewer", "liveness") == 3 and _n(r) == 12),
+         lambda r: _n(r, _LIVE_2H, "crew-reviewer", "liveness") == 3 and _n(r, _LIVE_2H) == 12),
+        ("the liveness prompt says nothing is pending, and not to arm a tick",
+         lambda r: _pc_prompts(r, "crew-reviewer")[-1].startswith(
+             "Liveness check, nothing is known to be pending: check your queue once, then end the turn.")
+         and "do not arm a CronCreate tick" in _pc_prompts(r, "crew-reviewer")[-1]),
+        ("the gap stays at 45 minutes: reviewer next at 135 and 180 minutes, orchestrator 141 and 186, releaser 150 and 195",
+         lambda r: _times(r, _LIVE_2H + 1, len(_LIVE_AT) - 1, "crew-reviewer") == [8100, 10800]
+         and _times(r, _LIVE_2H + 1, len(_LIVE_AT) - 1, "crew-orchestrator") == [8460, 11160]
+         and _times(r, _LIVE_2H + 1, len(_LIVE_AT) - 1, "crew-releaser") == [9000, 11700]),
         ("each wake is a restart in the same conversation",
          lambda r: any("--resume" in c["args"] for c in r.calls()) and r.launches() >= 12),
     ],
     covers=["switched on under running stations: the first round tells each one that holds a tick to drop it, once (the builder has no ticket in review, so no tick)",
+            "and the release prompt says to arm no tick and to delete the one it holds",
             "reviewer: woken at 15, then 30 later, then 45 later (minutes 15, 45, 90)", "orchestrator: 20, then 30, then 45 later",
             "releaser: 30, then 30, then 45 later", "a builder with no ticket in review is not woken",
-            "every one of them is a liveness wake", "each wake is a restart in the same conversation"],
+            "no station is woken more than 3 times in two hours (reviewer: 8 ticks of 15 minutes before)",
+            "every one of them is a liveness wake",
+            "the liveness prompt says nothing is pending, and not to arm a tick",
+            "the gap stays at 45 minutes: reviewer next at 135 and 180 minutes, orchestrator 141 and 186, releaser 150 and 195",
+            "each wake is a restart in the same conversation"],
 ))
 
 scenario(Scenario(
@@ -4279,6 +5336,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="activity after a wake and its settle time pushes the liveness clock back; the session's own turn does not",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()), _round(600, _world()), _round(840, _world()), _round(900, _world()),
            _round(1700, _world(), _touch("crew-reviewer", 1600)), _round(2400, _world()), _round(2500, _world()),
@@ -4306,6 +5364,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="a PR without a current verdict wakes the reviewer once per head, and not in the middle of a turn",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(60, _world(queue=_head(_H1))), _round(120, _world(queue=_head(_H1))), _round(180, _world(queue=_head(_H1))),
@@ -4316,17 +5375,25 @@ scenario(Scenario(
     checks=[
         ("an unreviewed PR wakes the reviewer", lambda r: _n(r, 1, "crew-reviewer", "work") == 1),
         ("and only the reviewer", lambda r: _n(r, 1) == 4),
+        ("the prompt names the work and says not to arm a tick",
+         lambda r: any("There is work in the review queue: Links App T1 at 1111111 have no current verdict" in p
+                       and "idle_wake is on: the factory wakes you when there is work and holds your tick" in p
+                       for p in _pc_prompts(r, "crew-reviewer")[1:2])),
         ("the same head wakes it once, not every round", lambda r: _n(r, 3, "crew-reviewer", "work") == 1),
         ("a new head wakes it again", lambda r: _n(r, 4, "crew-reviewer", "work") == 2 and _n(r, 4) == 5),
         ("a reviewer in the middle of a turn is not woken", lambda r: _n(r, 5, "crew-reviewer", "work") == 2),
         ("the next round, once it is idle, wakes it", lambda r: _n(r, 6, "crew-reviewer", "work") == 3),
         ("the wake marks that head as told", lambda r: len(_wf(r, 6, "crew-reviewer", "seen")) == 1),
         ("a PR with a current verdict is no work for the reviewer", lambda r: _n(r, 7, "crew-reviewer", "work") == 3),
+        # two crews share a cell: the scans ask only for their own person's work (the bash suite reads the URLs its curl shim noted)
+        ("the reviewer's scan asked for its own tickets only",
+         lambda r: "/api/review-queue?mine=1" in r.snap(7)["urls"] and "/api/review-queue" not in r.snap(7)["urls"]),
     ],
-    covers=["an unreviewed PR wakes the reviewer", "and only the reviewer", "the same head wakes it once, not every round",
+    covers=["an unreviewed PR wakes the reviewer", "and only the reviewer",
+            "the prompt names the work and says not to arm a tick", "the same head wakes it once, not every round",
             "a new head wakes it again", "a reviewer in the middle of a turn is not woken",
             "the next round, once it is idle, wakes it", "the wake marks that head as told",
-            "a PR with a current verdict is no work for the reviewer"],
+            "a PR with a current verdict is no work for the reviewer", "the reviewer's scan asked for its own tickets only"],
 ))
 
 
@@ -4342,6 +5409,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="a builder is woken once for a verdict, changes asked for or failed CI on a ticket it holds",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(60, _world(tickets=[_ticket("T1", "review", _H3, "success", "changes")])),
@@ -4382,6 +5450,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="a desk answer or a new project wakes the orchestrator once, a RELEASE line under Undelivered wakes the releaser once",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(60, _world(), _report("# crew-orchestrator\n\n## Undelivered\n- T4 done, waiting on nothing\n\n## Notes\n- RELEASE later maybe\n")),
@@ -4403,6 +5472,8 @@ scenario(Scenario(
         ("the first look only sets the baseline",
          lambda r: _n(r, 0, "crew-orchestrator", "work") == 0 and bool(_wf(r, 0, "crew-orchestrator", "baseline"))),
         ("a RELEASE line outside Undelivered, or none inside it, wakes nobody", lambda r: _n(r, 1, "crew-releaser", "work") == 0),
+        # the daemon half (an open question is not in the answered list) is in idle_wake_daemon
+        ("an open question is not an answer", lambda r: _n(r, 1, "crew-orchestrator", "work") == 0),
         ("a desk answer wakes the orchestrator, and only it",
          lambda r: _n(r, 2, "crew-orchestrator", "work") == 1 and _n(r, 2) == _n(r, 1) + 1),
         ("once", lambda r: _n(r, 3, "crew-orchestrator", "work") == 1),
@@ -4414,9 +5485,12 @@ scenario(Scenario(
          lambda r: _n(r, 7, "crew-releaser", "work") == 1 and _n(r, 7) == _n(r, 6) + 1),
         ("once per line", lambda r: _n(r, 8, "crew-releaser", "work") == 1),
         ("a second line is a second wake", lambda r: _n(r, 9, "crew-releaser", "work") == 2),
+        ("the orchestrator's scan asked for its own desk answers only",
+         lambda r: "/api/desk?state=answered&mine=1" in r.snap(9)["urls"] and "/api/desk?state=answered" not in r.snap(9)["urls"]),
     ],
-    covers=["the first look only sets the baseline", "a RELEASE line outside Undelivered, or none inside it, wakes nobody",
-            "a desk answer wakes the orchestrator, and only it", "once",
+    covers=["the orchestrator's scan asked for its own desk answers only",
+            "the first look only sets the baseline", "a RELEASE line outside Undelivered, or none inside it, wakes nobody",
+            "an open question is not an answer", "a desk answer wakes the orchestrator, and only it", "once",
             "an answer the orchestrator recorded itself is no news to it",
             "an allowed permission request is the watch's to act on, not a wake for the orchestrator",
             "a project handed over wakes the orchestrator", "a RELEASE line under Undelivered wakes the releaser, and only it",
@@ -4440,65 +5514,229 @@ def _undone(tmp: Path) -> None:
     (tmp / "crew" / "stations" / f"{B1}.done").unlink()
 
 
-def _add_helper(tmp: Path) -> None:
-    f = tmp / "crew" / "stations.json"
-    doc = json.loads(f.read_text(encoding="utf-8"))
-    doc[f"{B1}-probe"] = {**doc[B1], "role": "helper", "parent": B1, "id": "dddd0005", "sessionId": "sess-dddd0005"}
-    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    ag = tmp / "claude" / "agents.json"
-    rows = json.loads(ag.read_text(encoding="utf-8"))
-    rows.append({"id": "dddd0005", "name": f"{B1}-probe", "cwd": str(tmp), "state": "done", "pid": 40005})
-    ag.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
-    job = tmp / "home" / ".claude" / "jobs" / "dddd0005"
-    job.mkdir(parents=True, exist_ok=True)
-    (job / "state.json").write_text('{"sessionId":"sess-dddd0005"}\n', encoding="utf-8")
-
-
 _V6 = "6666666ffffffff"
+
+
+def _spawn_helper_step() -> Step:
+    """`spawn helper` under the builder, on a Tares that has the builder's project."""
+    st = lstep("spawn", "helper", B1, "probe", "look at T1", world=_world(), env={"FACTORY_STOP_WAIT": "3"})
+    st.after = lambda tmp: sorted(k for k, v in json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8")).items()
+                                  if v.get("role") == "helper")
+    return st
+
+
+# The process this scenario starts says `attach <id>`, and every process on the machine can see it, so the reviewer
+# has an id of its own here: with the shared one, a scenario running at the same time (or another crew's run of this
+# harness) would find the reviewer "open in a terminal" and not wake it.
+def _setup_guards(tmp: Path, env: dict) -> None:
+    _setup_wake(tmp, env, {**IW_IDS, "crew-reviewer": "ee5a0b02"})
+
+
 scenario(Scenario(
     name="idle_wake_guards",
     suite="idle_wake",
-    about="a halted crew, a finished builder and a helper are never woken; a head with a current verdict is no work",
+    about="a halted crew, a station open in a terminal, a finished builder and a helper are never woken; a head with a current verdict is no work",
     driver=LAUNCH_DRIVER,
-    setup=_setup_wake,
+    ignore_calls=_CC_READS,
+    not_windows=WIN_NO_MULTILINE,
+    setup=_setup_guards,
     steps=[_round(0, _world()),
            _round(3600, _world(), _halt), _round(7200, _world()),
-           _round(10800, _world(), _resume),
-           _round(11400, _world(), _done_mark),
+           _round(10800, _world(), _resume, _attach("crew-reviewer")),
+           _round(11400, _world(), _leave("crew-reviewer")),
            _round(12000, _world(queue=_head(_V6, {"current": True, "verdict": "changes"}),
                                 tickets=[_ticket("T1", "review", _V6, "success", "changes")]), _done_mark),
            _round(12060, _world(tickets=[_ticket("T1", "review", _V6, "success", "changes")]), _undone),
-           _round(40000, _world(), _add_helper)],
+           _spawn_helper_step(),
+           _round(40000, _world())],
     checks=[
         ("a halted crew is not woken", lambda r: _n(r, 2) == _n(r, 0) and _n(r, 1) == _n(r, 0)),
-        ("a crew that is not halted any more is woken", lambda r: _n(r, 3, "crew-reviewer", "liveness") == 1),
+        ("a station someone has open in a terminal is not woken, the others are",
+         lambda r: _n(r, 3, "crew-reviewer") == _n(r, 2, "crew-reviewer")
+         and _n(r, 3, "crew-orchestrator") == _n(r, 2, "crew-orchestrator") + 1),
+        ("it is, once they leave", lambda r: _n(r, 4, "crew-reviewer") == _n(r, 3, "crew-reviewer") + 1),
         ("a builder that is done is not woken, whatever its ticket says", lambda r: _n(r, 5, B1) == _n(r, 4, B1)),
         ("a head that already has a current verdict is no work for the reviewer, even though it was never seen",
-         lambda r: _n(r, 5, "crew-reviewer", "work") == 0),
-        ("(the ticket was real work: once it is not done, the builder is woken for it)", lambda r: _n(r, 6, B1) == _n(r, 4, B1) + 1),
-        ("a helper is never woken", lambda r: _n(r, 7, B1 + "-probe") == 0),
+         lambda r: _n(r, 5, "crew-reviewer", "work") == _n(r, 4, "crew-reviewer", "work")),
+        ("(the ticket was real work: once it is not done, the builder is woken for it)",
+         lambda r: _n(r, 6, B1) == _n(r, 4, B1) + 1 and "T1 (verdict changes)" in _pc_prompts(r, B1)[-1]),
+        ("setup: a helper is running", lambda r: r.code(7) == 0 and len(r.snap(7)) == 1),
+        ("a helper is never woken", lambda r: _n(r, 8, r.snap(7)[0]) == 0),
     ],
-    covers=["a halted crew is not woken", "a builder that is done is not woken, whatever its ticket says",
+    covers=["a halted crew is not woken", "a station someone has open in a terminal is not woken, the others are",
+            "it is, once they leave", "a builder that is done is not woken, whatever its ticket says",
             "a head that already has a current verdict is no work for the reviewer, even though it was never seen",
-            "(the ticket was real work: once it is not done, the builder is woken for it)", "a helper is never woken"],
+            "(the ticket was real work: once it is not done, the builder is woken for it)",
+            "setup: a helper is running", "a helper is never woken"],
 ))
+
+def _wakes_started(tmp: Path) -> dict:
+    """The wake state (see _wakes) and how many sessions have been started so far."""
+    f = tmp / "claude" / "calls.jsonl"
+    lines = f.read_text(encoding="utf-8").splitlines() if f.is_file() else []
+    return {**_wakes(tmp), "launches": sum(1 for x in lines if '"--bg"' in x)}
+
+
+def _round_started(sec: int, world: dict) -> Step:
+    st = _round(sec, world)
+    st.after = _wakes_started
+    return st
+
+
+def _restart_step(station: str, setting) -> Step:
+    """`restart <station>` on a Tares whose idle_wake is `setting`, with the wake files read after it."""
+    s = lstep("restart", station, world=_world(setting), env={"FACTORY_STOP_WAIT": "3", "FACTORY_NOW": str(IW_N0 + 140000)})
+    s.after = _wakes
+    return s
+
 
 scenario(Scenario(
     name="idle_wake_rearm",
     suite="idle_wake",
-    about="switched off again, each station that gave up its tick is woken once to take it back",
+    about="switched off again, each station that gave up its tick is woken once to take it back; a restart says to re-arm, or to arm no tick",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
-    steps=[_round(0, _world()), _round(100, _world(False)), _round(200, _world(False)), _round(90000, _world(False)),
-           _round(130000, _world(False))],
+    steps=[_round(0, _world()), _round(100, _world(False)), _round(200, _world(False)), _round_started(90000, _world(False)),
+           _round_started(130000, _world(False)),
+           _restart_step("crew-releaser", False), _restart_step("crew-releaser", True)],
     checks=[
         ("off again: every station that gave up its tick is woken to re-arm it",
-         lambda r: all(_n(r, 1, s, "rearm") == 1 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))),
+         lambda r: all(_n(r, 1, s, "rearm") == 1 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser", B1))),
+        ("the prompt tells it to re-arm as its manual says",
+         lambda r: _pc_prompts(r, "crew-releaser")[1].startswith("idle_wake is off again: re-arm your tick as your manual says.")),
         ("and once: nothing more is sent",
-         lambda r: _n(r, 3) == _n(r, 1) and _wf(r, 3, "crew-reviewer", "released") is False),
-        ("off: the watch is back to doing nothing", lambda r: _n(r, 4) == _n(r, 1)),
+         lambda r: _n(r, 3) == _n(r, 1) and _n(r, 3) == _n(r, 0) + 4 and _wf(r, 3, "crew-reviewer", "released") is False),
+        ("off: the watch is back to doing nothing",
+         lambda r: _n(r, 4) == _n(r, 1) and r.snap(4)["launches"] == r.snap(3)["launches"]),
+        ("a restart now says to re-arm the schedule",
+         lambda r: r.code(5) == 0 and "re-arm your schedule if you have one" in _pc_prompts(r, "crew-releaser")[-2]),
+        ("on: a restart says to arm no tick",
+         lambda r: r.code(6) == 0 and "arm no tick of your own" in _pc_prompts(r, "crew-releaser")[-1]
+         and "re-arm your schedule if you have one" not in _pc_prompts(r, "crew-releaser")[-1]
+         and _wf(r, 6, "crew-releaser", "released") is True),
     ],
-    covers=["and once: nothing more is sent", "off: the watch is back to doing nothing"],
+    covers=["off again: every station that gave up its tick is woken to re-arm it",
+            "the prompt tells it to re-arm as its manual says", "and once: nothing more is sent",
+            "off: the watch is back to doing nothing", "a restart now says to re-arm the schedule",
+            "on: a restart says to arm no tick"],
+))
+
+
+# The daemon's side of the idle wake: idle_wake_test.sh runs a real Tares and looks at what it says between the rounds
+# (the review queue, the setting, the desk). idle_wake_daemon.py runs the real daemon in its own process and prints
+# that, so no crew engine takes part and the two sides must print the same.
+def _iwd(r: Run, step: str) -> dict:
+    return next(json.loads(x) for x in r.out(0).splitlines() if x.startswith("{") and json.loads(x).get("step") == step)
+
+
+_IWD_WIN = ("the real daemon takes a repo path only when it starts with a slash (tares/factory.py), so on Windows the "
+           "handover of the scenario's C:/ folder is refused; not the crew engine")
+
+scenario(Scenario(
+    name="idle_wake_daemon",
+    suite="idle_wake",
+    about="the real daemon: the setting, the review queue with its head and verdict, and the desk's answered list",
+    driver="idle_wake_daemon.py",
+    not_windows=_IWD_WIN,
+    steps=[Step(["run"])],
+    checks=[
+        ("the daemon ran", lambda r: r.code(0) == 0),
+        ("setup: a ticket waits in the review queue", lambda r: _iwd(r, "waiting")["queue"] == 1),
+        ("the setting starts unset", lambda r: _iwd(r, "unset")["idle_wake"] is None),
+        ("setup: the queue is empty", lambda r: _iwd(r, "emptied")["queue"] == 0),
+        ("the setting reads back true", lambda r: _iwd(r, "on")["idle_wake"] is True),
+        ("setup: the queue has the PR at its head", lambda r: _iwd(r, "head")["head"] == "1111111aaaaaaaa"),
+        ("setup: a current verdict is recorded", lambda r: _iwd(r, "verdict")["current"] is True),
+        ("an open question is not an answer",
+         lambda r: _iwd(r, "open_question")["answered"] == 0 and _iwd(r, "open_question")["open"] == 1),
+        ("setup: the question is answered", lambda r: _iwd(r, "answered")["answered"] == 1),
+        ("setup: a second question is answered", lambda r: _iwd(r, "answered_two")["answered"] == 2),
+        ("setup: a permission request is allowed in the console", lambda r: _iwd(r, "allowed")["permissions"] == 1),
+        ("setup: a head nobody has seen yet, with a current verdict",
+         lambda r: _iwd(r, "unseen")["head"] == "6666666ffffffff" and _iwd(r, "unseen")["current"] is True),
+    ],
+    covers=["setup: a ticket waits in the review queue", "the setting starts unset", "setup: the queue is empty",
+            "an open question is not an answer",
+            "the setting reads back true", "setup: the queue has the PR at its head", "setup: a current verdict is recorded",
+            "setup: the question is answered", "setup: a second question is answered",
+            "setup: a permission request is allowed in the console",
+            "setup: a head nobody has seen yet, with a current verdict"],
+))
+
+
+def _pw_seen(r: Run, i: int, head: str) -> bool:
+    return any(h.endswith("@" + head) for h in (r.snap(i)["wake"]["files"].get(_PW_R, {}).get("seen") or []))
+
+
+_iwf = _PWRounds(base=200000)
+_iwfs: list = []
+_H7, _H8 = "7777777aaaaaaaa", "8888888bbbbbbbb"
+
+
+def _iwf_add(at: int, head: str = "", *mods, env=None, grants: str = "", drop: tuple = ()) -> int:
+    """A full round of the watch at `at` seconds on a Tares whose review queue holds a PR at `head` (none: empty)."""
+    st = _iwf(10, 10, *mods, at=at, pace=False, idle_wake=True, env=env, grants=grants, after=_pww_state, drop=drop)
+    put = st.run_before
+
+    def put_queue(run: Run) -> None:
+        put(run)
+        run.tares.routes["GET /api/review-queue?mine=1"] = (200, {"queue": _head(head) if head else []})
+    st.run_before = put_queue
+    _iwfs.append(st)
+    return len(_iwfs) - 1
+
+
+K_FRESH = _iwf_add(0)
+K_FAIL = _iwf_add(50, _H7, env=_PW_FAIL)                  # the restart of the wake fails
+_iwf_add(60, _H7)                                         # the first of these revives the station the failed restart left stopped
+K_SENT = _iwf_add(120, _H7)
+K_MID = _iwf_add(200, _H8, _pw_grants_in_the_way(_PW_R), drop=(r"Is a directory",))   # a restart fails deep inside
+_iwf_add(260, _H8, _pw_grants_in_the_way(_PW_R, on=False))
+K_SENT2 = _iwf_add(320, _H8)
+
+scenario(Scenario(
+    name="idle_wake_failed",
+    suite="idle_wake",
+    about="a wake whose restart fails, or fails midway, sends no wake event and marks nothing told; it is sent once the failure is gone",
+    setup=_setup_pw,
+    tares=_PW_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=_iwfs,
+    checks=[
+        ("a wake whose restart fails sends no wake event and marks nothing told",
+         lambda r: _pww_wakes(r, K_FAIL, _PW_R, "work") == 0 and not _pw_seen(r, K_FAIL, _H7)
+         and "could not wake crew-reviewer" in r.out(K_FAIL)),
+        ("once it runs again the wake is delivered",
+         lambda r: _pww_wakes(r, K_SENT, _PW_R, "work") == 1 and _pw_seen(r, K_SENT, _H7)),
+        ("a restart that fails midway is not marked delivered either",
+         lambda r: _pww_wakes(r, K_MID, _PW_R, "work") == 1 and not _pw_seen(r, K_MID, _H8)
+         and "could not wake crew-reviewer" in r.out(K_MID)),
+        ("and it is sent once the failure is gone",
+         lambda r: _pww_wakes(r, K_SENT2, _PW_R, "work") == 2 and _pw_seen(r, K_SENT2, _H8)),
+    ],
+    covers=["a wake whose restart fails sends no wake event and marks nothing told",
+            "once it runs again the wake is delivered", "a restart that fails midway is not marked delivered either",
+            "and it is sent once the failure is gone"],
+))
+
+
+scenario(Scenario(
+    name="idle_wake_up",
+    suite="idle_wake",
+    about="the crew's three stations and a builder are started: four sessions, the builder among the stations",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
+    steps=[
+        _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
+              setup={"gitrepos": ["{TMP}/links"]}),
+        *[_pcsp("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", "sonnet", "high", f"Boot as the {role} station")
+          for role in ("reviewer", "releaser")],
+        _pcsp_spawn("m1"),
+    ],
+    checks=[("the crew and a builder are up", lambda r: r.code(3) == 0 and r.snap(3)["launches"] == 4 and PC_B in r.snap(3)["ids"])],
+    covers=["the crew and a builder are up"],
 ))
 
 
@@ -4886,6 +6124,7 @@ CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
 WRAPPERS = {
     "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
     "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
+    "idle_wake_python": ("idle_wake", "runs idle_wake_test.sh on Python; its checks count under idle_wake"),
 }
 
 

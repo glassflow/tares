@@ -36,8 +36,6 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: |
-          # The package forces ui/dist into the wheel and fails without it. The crew engine never serves the console, so an empty folder is enough here.
-          mkdir -p ui/dist
           python -m venv .venv
           .venv/bin/pip install -e .
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

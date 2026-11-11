@@ -368,6 +368,18 @@ FACTORY_SCHEMA = [
       updated_by  TEXT,
       PRIMARY KEY (project_uid, slot)
     )""",
+    # A project's secrets (TR-775): the value sealed with the cell's TARES_SECRETS_KEY, never in
+    # the clear; who set it and when; who last fetched it for a command and when.
+    """CREATE TABLE IF NOT EXISTS project_secrets (
+      project     TEXT,
+      name        TEXT,
+      value       TEXT,
+      set_by      TEXT,
+      set_at      TIMESTAMPTZ,
+      used_by     TEXT,
+      used_at     TIMESTAMPTZ,
+      PRIMARY KEY (project, name)
+    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -486,6 +498,8 @@ class FactoryStore:
         self.sc.execute("DELETE FROM spec_questions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", [uid])
+        self.sc.execute("DELETE FROM project_secrets WHERE project = ?", [uid])
+        self._secrets_changed()
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
     _MS_COLS = "id, project, owner, external_id, name, goal, checks, position, created_at, updated_at"
@@ -1807,6 +1821,59 @@ class FactoryStore:
                 "settings = excluded.settings, updated_at = excluded.updated_at, "
                 "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
         return self._integration_view(slot, name, merged, at, by)
+
+    # ── a project's secrets (TR-775): sealed values; tares/project_secrets.py seals and opens them ──
+    _SECRET_COLS = "project, name, value, set_by, set_at, used_by, used_at"
+    _secrets_gen = 0
+
+    def _secrets_changed(self) -> None:
+        FactoryStore._secrets_gen += 1
+
+    def secrets_version(self) -> int:
+        """A number that changes whenever a secret is set or removed (for a cache of the values)."""
+        return FactoryStore._secrets_gen
+
+    def _secret_row(self, r) -> dict:
+        return dict(zip(self._SECRET_COLS.split(", "), r))
+
+    def secret_rows(self, uid: str) -> list[dict]:
+        """The project's secrets by name, the sealed value included: never return it from a route."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._SECRET_COLS} FROM project_secrets WHERE project = ? "
+                                   "ORDER BY name", [uid]).fetchall()
+        return [self._secret_row(r) for r in rows]
+
+    def all_secret_rows(self) -> list[dict]:
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._SECRET_COLS} FROM project_secrets").fetchall()
+        return [self._secret_row(r) for r in rows]
+
+    def set_secret(self, uid: str, name: str, sealed: str, by: str) -> None:
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO project_secrets (project, name, value, set_by, set_at, used_by, used_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL, NULL) ON CONFLICT (project, name) DO UPDATE SET "
+                "value = excluded.value, set_by = excluded.set_by, set_at = excluded.set_at",
+                [uid, name, sealed, by, now_utc()])
+        self._secrets_changed()
+
+    def delete_secret(self, uid: str, name: str) -> bool:
+        with self._swrite:
+            had = self.sc.execute("SELECT 1 FROM project_secrets WHERE project = ? AND name = ?",
+                                  [uid, name]).fetchone()
+            if had:
+                self.sc.execute("DELETE FROM project_secrets WHERE project = ? AND name = ?", [uid, name])
+        self._secrets_changed()
+        return bool(had)
+
+    def secrets_used(self, uid: str, names: list[str], by: str) -> None:
+        if not names:
+            return
+        at = now_utc()
+        with self._swrite:
+            for n in names:
+                self.sc.execute("UPDATE project_secrets SET used_by = ?, used_at = ? WHERE project = ? "
+                                "AND name = ?", [by, at, uid, n])
 
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, secrets redacted, as get_choice; None when it

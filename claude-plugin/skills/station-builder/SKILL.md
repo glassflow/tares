@@ -65,6 +65,10 @@ A note from the factory that the plan's limit is nearly full and builders hold m
 - Something you learned about this project that the next builder needs (a command that works, a trap in the code): `remember_for_project(line)`.
 - A rule worth keeping for every project: send the orchestrator an `FYI` with the evidence; it decides and records it. Never write shared docs yourself.
 
+## Secrets
+
+The project's members keep the keys a build or test needs (an API key, another cell's read-only key) as the project's secrets on Tares. `list_secrets(project)` gives their names. A command that needs them runs as `tares factory with-secrets -- <command>` (`--only NAME,...` for some of them): they are set as environment variables for that one command, and nothing else sees them. Never print a secret, echo it, write it to a file (a `.env` included) or put it on a command line; read it by its name, as `$NAME`, inside the command. A secret the project lacks is an `ASK` to the orchestrator naming it; the person adds it in the console.
+
 ## When you're stuck
 
 - Missing information the plan should have had: `ASK` the orchestrator with your recommendation. If it's not blocking, assume and continue.

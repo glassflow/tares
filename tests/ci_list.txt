@@ -63,6 +63,7 @@ test_crew_unicode_home
 test_crew_views
 test_crew_watch_process
 test_crew_watch_revive
+test_crew_with_secrets
 test_crews_single
 test_decision_answers
 test_degraded
@@ -147,6 +148,7 @@ test_milestone_checks
 test_model_provider
 test_model_providers
 test_morning_status
+test_no_console
 test_normalize
 test_openai_provider
 test_otlp
