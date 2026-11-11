@@ -5467,16 +5467,23 @@ def make_app() -> FastAPI:
             "github": store.get_project_github(uid)})
 
     @app.post("/api/projects/{uid}/tickets", status_code=201)
-    def create_project_ticket(uid: str, request: Request, body: dict = Body(...)):
+    async def create_project_ticket(uid: str, request: Request, body: dict = Body(...)):
         """{title, status?, position?, working_doc?, milestone?, depends_on?, repo?, assignee?}: a
         ticket Tares owns. `repo` is the GitHub repo (owner/name) it changes, for a project that
         spans several. `assignee` is a person id or an email (an email nobody on the cell has is
-        kept as written, and the ticket shows as unowned). Refused when the project's tickets live in Linear or GitHub."""
-        project = _project_or_404(uid)
-        home = store.project_ticket_home(uid)
+        kept as written, and the ticket shows as unowned). When the project's tickets live in
+        Linear or GitHub the ticket is created there, through the tickets integration, and Tares
+        keeps the one row for it (TR-851): it takes title, body, milestone (a milestone already
+        written), depends_on (tickets already written), working_doc and repo; its status, assignee
+        and position come from Linear or GitHub (409). A repeat of the same title finds the issue
+        again."""
+        project = await asyncio.to_thread(_project_or_404, uid)
+        home = await asyncio.to_thread(store.project_ticket_home, uid)
         if home:
-            _err(ValueError(f"this project's tickets live in {_home_title(home)}; add the ticket "
-                            "there and it shows up here on the next sync"), 409)
+            return await _create_foreign_ticket(uid, home, body)
+        return await asyncio.to_thread(_create_tares_ticket, uid, project, request, body)
+
+    def _create_tares_ticket(uid: str, project: dict, request: Request, body: dict) -> dict:
         try:
             title = docs_mod.title_ok(body.get("title"))
             status = docs_mod.status_ok(body.get("status"))
@@ -5496,6 +5503,51 @@ def make_app() -> FastAPI:
         if joins:
             team_mod.get().assignee_join(store, project, who, _added_by(request))
         return _ticket_out(uid, _ticket_or_404(uid, tid))
+
+    def _foreign_ticket_plan(uid: str, home: str, body: dict):
+        """What creating a ticket in Linear or GitHub needs, checked before anything is made:
+        (the integration class, the item for its `create`, the milestone's Tares id, the
+        dependencies' Tares ids, repo, working doc). Every 4xx is raised here."""
+        held = sorted({"status", "assignee", "position"} & set(body))
+        if held:
+            _err(ValueError(f"this project's tickets live in {_home_title(home)}: a ticket's "
+                            + ", ".join(held) + " changes in " + _home_title(home)
+                            + ", not when it is created"), 409)
+        cls = integrations_registry.get("tickets", home)
+        if cls is None:
+            _err(ValueError(f"this project's tickets live in {_home_title(home)}; add the ticket "
+                            "there and it shows up here on the next sync"), 409)
+        try:
+            title = docs_mod.title_ok(body.get("title"))
+        except docs_mod.DocError as e:
+            _err(e)
+        mid = _milestone_ref(uid, body.get("milestone"))
+        m = store.get_milestone(uid, mid) if mid else None
+        deps = _depends_ref(uid, None, body.get("depends_on"))
+        item = {"title": title, "body": str(body.get("body") or ""),
+                "milestone": m["name"] if m else "", "depends_on": deps}
+        return cls, item, mid, deps, _repo_ok(body.get("repo")), \
+            _working_doc_ok(uid, body.get("working_doc"))
+
+    async def _create_foreign_ticket(uid: str, home: str, body: dict) -> dict:
+        cls, item, mid, deps, repo, doc = await asyncio.to_thread(_foreign_ticket_plan, uid,
+                                                                  home, body)
+        try:
+            refs = await cls(store).create(uid, [], [item])
+        except (_linear.LinearError, _gh_tickets.GitHubTicketsError) as e:
+            (_linear_err if home == "linear" else _gh_err)(e)
+        except (ValueError, KeyError) as e:
+            _err(e)
+        if len(refs) != 1:
+            _err(ValueError(f"{_home_title(home)} did not answer with the ticket"), 502)
+        ref = refs[0]
+
+        def _adopt() -> dict:
+            tid = store.adopt_ticket(uid, home, ref.id, item["title"], ref.status or "todo",
+                                     ref.identifier, ref.url, milestone=mid, depends_on=deps,
+                                     repo=repo, working_doc=doc)
+            return _ticket_out(uid, _ticket_or_404(uid, tid))
+        return await asyncio.to_thread(_adopt)
 
     @app.get("/api/projects/{uid}/tickets/{ref}")
     async def get_project_ticket(uid: str, ref: str):
@@ -5766,31 +5818,54 @@ def make_app() -> FastAPI:
         return next(x for x in _milestones_out(uid) if x["id"] == m["id"])
 
     @app.post("/api/projects/{uid}/milestones", status_code=201)
-    def create_project_milestone(uid: str, body: dict = Body(...)):
+    async def create_project_milestone(uid: str, body: dict = Body(...)):
         """{name, goal?, checks?: [{check, expect}], position?}. A milestone with the same name
-        is changed instead of added twice, keeping the goal and checks the body leaves out."""
-        _project_or_404(uid)
+        is changed instead of added twice, keeping the goal and checks the body leaves out. When
+        the project's tickets live in Linear or GitHub, a new milestone is created there through
+        the tickets integration (TR-851), and one that exists only in Tares takes its place; its
+        name and order change there afterwards (`position` is ignored)."""
+        await asyncio.to_thread(_project_or_404, uid)
         try:
             name, goal, checks = factory_mod.milestone_ok(body.get("name"), body.get("goal"),
                                                           body.get("checks"))
         except docs_mod.DocError as e:
             _err(e)
-        cur = store.get_milestone(uid, name)
-        pos = body.get("position")
-        if cur:
-            fields = {k: v for k, v in (("goal", goal), ("checks", checks)) if k in body}
-            if pos is not None and cur["owner"] == "tares":
-                fields["position"] = float(pos)
-            store.update_milestone(cur["id"], **fields)
-            mid = cur["id"]
-        else:
-            home = store.project_ticket_home(uid)
-            if home:
+        home = await asyncio.to_thread(store.project_ticket_home, uid)
+        cur = await asyncio.to_thread(store.get_milestone, uid, name)
+        if home and (cur is None or cur["owner"] == "tares"):
+            cls = integrations_registry.get("tickets", home)
+            if cls is None:
                 _err(ValueError(f"this project's milestones live in {_home_title(home)}: add it "
                                 "there, then write its checks here"), 409)
-            mid = store.create_milestone(uid, name, goal, checks,
-                                         float(pos) if pos is not None else None)
-        return next(m for m in _milestones_out(uid) if m["id"] == mid)
+            try:
+                refs = await cls(store).create(uid, [{"name": name, "goal": goal}], [])
+            except (_linear.LinearError, _gh_tickets.GitHubTicketsError) as e:
+                (_linear_err if home == "linear" else _gh_err)(e)
+            except (ValueError, KeyError) as e:
+                _err(e)
+            if len(refs) != 1:
+                _err(ValueError(f"{_home_title(home)} did not answer with the milestone"), 502)
+            # a sync may have mirrored it meanwhile: the row is found by its external id, else the
+            # Tares milestone of the name takes it over
+            mid = await asyncio.to_thread(
+                store.adopt_milestone, uid, home, refs[0].id, name,
+                goal if "goal" in body else None, checks if "checks" in body else None)
+            return await asyncio.to_thread(
+                lambda: next(m for m in _milestones_out(uid) if m["id"] == mid))
+
+        def _write() -> dict:
+            pos = body.get("position")
+            if cur:
+                fields = {k: v for k, v in (("goal", goal), ("checks", checks)) if k in body}
+                if pos is not None and cur["owner"] == "tares":
+                    fields["position"] = float(pos)
+                store.update_milestone(cur["id"], **fields)
+                mid = cur["id"]
+            else:
+                mid = store.create_milestone(uid, name, goal, checks,
+                                             float(pos) if pos is not None else None)
+            return next(m for m in _milestones_out(uid) if m["id"] == mid)
+        return await asyncio.to_thread(_write)
 
     @app.put("/api/projects/{uid}/milestones/{ref}")
     def update_project_milestone(uid: str, ref: str, body: dict = Body(...)):
@@ -6456,7 +6531,7 @@ def make_app() -> FastAPI:
                 "linear": store.get_project_linear(uid)}
 
     @app.delete("/api/projects/{uid}/linear")
-    def unlink_linear_project(uid: str):
+    def unlink_linear(uid: str):
         """The project stops using Linear. Its tickets stay, now owned by Tares, with their
         working docs."""
         _project_or_404(uid)
@@ -6501,7 +6576,7 @@ def make_app() -> FastAPI:
         return {"tickets": _tickets_out(uid), "github": store.get_project_github(uid)}
 
     @app.delete("/api/projects/{uid}/github")
-    def unlink_github_issues(uid: str):
+    def unlink_github(uid: str):
         """The project stops using GitHub Issues. Its tickets stay, now owned by Tares, with their
         working docs."""
         _project_or_404(uid)

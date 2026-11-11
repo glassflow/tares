@@ -55,7 +55,8 @@ class TicketBackend(Integration):
         """Create milestones or tickets in the ticket system. Called with one item per call:
         either one milestone and no tickets, or one ticket and no milestones. A retry of the
         same item must not create a second copy. Returns one TicketRef per item created or
-        found. Raises when the system refuses the item or cannot be reached."""
+        found; a ticket's ref carries its identifier (ENG-12, GH-7), a milestone's does not. Raises when
+        the system refuses the item or cannot be reached."""
         raise NotImplementedError
 
     async def update(self, ticket, fields: dict) -> None:

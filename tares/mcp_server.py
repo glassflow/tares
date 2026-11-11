@@ -693,8 +693,8 @@ def _out(r: httpx.Response, keys: tuple[str, ...] | None = None) -> str:
 async def create_project(name: str, goal: str = "") -> str:
     """Create an empty Tares project for a piece of work you are about to spec, and tie this
     session to it. `name` is the project's handle (unique on Tares); `goal` is one line saying
-    what it is for. Then write its docs with write_doc and its tickets (write_ticket, or
-    link_linear_project or link_github_issues when the tickets live in Linear or GitHub).
+    what it is for. Then write its docs with write_doc and its tickets (write_ticket; when they
+    live in Linear or GitHub, link_tickets first).
     Returns the project's id and name."""
     body = {"template": "custom", "kind": "software_factory", "name": name.strip(), "objects": [],
             **({"goal": goal.strip()} if goal.strip() else {})}
@@ -982,20 +982,23 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
                        id: str = "", project: str = "", repo: str | None = None,
                        assignee: str | None = None) -> str:
     """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
-    New tickets are for a project whose tickets live in Tares: when they live in Linear or GitHub,
-    create them there (milestones and "blocks" or "blocked by" relations included; `gh` for
-    GitHub) and Tares picks them up on its next sync; an existing one can be retitled, reordered
-    or moved to a milestone here, as said below. `status` is todo, in_progress, done or
-    canceled; `position` orders the list (a new ticket goes to the end); `milestone` is the name of a milestone written with
-    write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
-    id) that must be done first ([] clears them); `repo` is the GitHub repo the ticket changes
-    (owner/name), for a project that spans several repos ("" clears it; a Linear or GitHub ticket
-    also takes title, milestone and, for Linear, position: they are written to Linear or GitHub,
-    and attach_working_doc; its status, assignee and dependencies change there); `assignee` is the person it is for (a person id or
-    an email; an email nobody on the cell has is kept as written and the ticket shows as unowned;
-    "" clears it). Assigning someone to a ticket of a private project adds them to it. Naming an
-    assignee needs an enterprise licence; without one, leave it out. Returns the ticket with its
-    label (T<n>)."""
+    When the project's tickets live in Linear or GitHub (link_tickets), a new ticket is created
+    there, one per call: write the milestones first, then the tickets in dependency order. A repeat
+    of the same title finds the issue again instead of making a second. `depends_on` is resolved
+    to the tickets already written; `milestone` must be one already written. Its `status`,
+    `assignee` and `position` come from Linear or GitHub, so naming them on a new ticket is
+    refused. An existing Linear or GitHub ticket can be retitled, moved to a milestone and, for
+    Linear, reordered here (`position`); its status, assignee and dependencies change there, and
+    attach_working_doc links its working doc. For a project whose tickets live in Tares: `status`
+    is todo, in_progress, done or canceled; `position` orders the list (a new ticket goes to the
+    end); `milestone` is the name of a milestone written with write_milestone ("" takes it out of
+    its milestone); `depends_on` lists the tickets (T<n> or id) that must be done first ([] clears
+    them); `assignee` is the person it is for (a person id or an email; an email nobody on the cell
+    has is kept as written and the ticket shows as unowned; "" clears it), and assigning someone
+    to a ticket of a private project adds them to it; naming an assignee needs an enterprise
+    licence, without one leave it out. `repo` is the GitHub repo the ticket changes (owner/name),
+    for a project that spans several repos ("" clears it). Returns the ticket with its label
+    (T<n>)."""
     body: dict = {"title": title}
     if repo is not None:
         body["repo"] = repo
@@ -1038,49 +1041,27 @@ async def attach_working_doc(ticket: str, doc: str, project: str = "") -> str:
 
 
 @writable()
-async def link_linear_project(linear_project: str, project: str = "") -> str:
-    """Tie the project to the Linear project its tickets live in, by the Linear project's id,
-    URL or name. Tares then keeps its ticket list in sync with Linear (about once a minute) and
-    runs a first sync now. Needs Linear connected on Tares (Settings). Returns the tickets
-    found."""
+async def link_tickets(integration: str, link_fields: dict | None = None,
+                       project: str = "") -> str:
+    """Tie the project to where its tickets live, `integration` "linear" or "github" (Jira is
+    not covered). `link_fields` holds only non-secret fields: for Linear `project`, the Linear
+    project's id, URL or name; for GitHub `repo` (owner/name or URL) and `issue_label` (default
+    `tares:<project name>`). The cell's own Linear or GitHub connection is used, so never pass a
+    key or a token (it is refused). Tares then keeps its ticket list in sync (about once a
+    minute) and reads it once now. After it, write_milestone and write_ticket create the
+    milestones and tickets in Linear or GitHub. Returns the link and the tickets found."""
     async with _cx(60) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
         r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/link",
-                         json={"integration": "linear",
-                               "link_fields": {"project": linear_project}})
+                         json={"integration": integration, "link_fields": link_fields or {}})
     if r.status_code >= 400:
         return _out(r)
     data = r.json()
-    return json.dumps({"linear": {k: (data.get("linear") or {}).get(k)
-                                  for k in ("name", "url", "synced_at", "error")},
-                       "tickets": [{k: t.get(k) for k in ("identifier", "title", "status")}
-                                   for t in data.get("tickets") or []]}, default=str)
-
-
-@writable()
-async def link_github_issues(repo: str, issue_label: str = "", project: str = "") -> str:
-    """Tie the project to the GitHub repo (owner/name or URL) whose issues carrying `issue_label`
-    are its tickets (default `tares:<project name>`). Tares then keeps its ticket list in sync
-    (about once a minute): the GitHub milestones its issues sit in become the project's milestones, "blocked by"
-    becomes depends_on, and status follows the issues. Uses the GitHub credentials stored on
-    Tares (Settings, GitHub); one of them must read the repo's issues. Create and change the
-    issues with `gh`. Returns the tickets found."""
-    async with _cx(60) as cx:
-        uid, why = await _project_id(cx, project)
-        if uid is None:
-            return why
-        fields = {"repo": repo}
-        if issue_label:
-            fields["issue_label"] = issue_label
-        r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/link",
-                         json={"integration": "github", "link_fields": fields})
-    if r.status_code >= 400:
-        return _out(r)
-    data = r.json()
-    return json.dumps({"github": {k: (data.get("github") or {}).get(k)
-                                  for k in ("repo", "issue_label", "url", "synced_at", "error")},
+    keys = ("name", "url", "synced_at", "error") if integration == "linear" else \
+        ("repo", "issue_label", "url", "synced_at", "error")
+    return json.dumps({integration: {k: (data.get(integration) or {}).get(k) for k in keys},
                        "tickets": [{k: t.get(k) for k in ("identifier", "title", "status")}
                                    for t in data.get("tickets") or []]}, default=str)
 

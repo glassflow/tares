@@ -1012,6 +1012,8 @@ s, b = quiet_world()
 r = run(b.create("p1", [], [{"title": "Add refunds", "body": "Refund a paid invoice"}]))
 ck("a ticket is made: one ref with its Linear id, url and status", len(r) == 1 and isinstance(r[0], TicketRef)
    and (r[0].id, r[0].url, r[0].status) == ("n1", "https://linear.app/acme/issue/FAC-4", "todo"), r)
+ck("the ref carries the issue's identifier, found again too", r[0].identifier == "FAC-4"
+   and run(b.create("p1", [], [{"title": "Add refunds"}]))[0].identifier == "FAC-4", r)
 ck("it goes to the Linear project and its team, with title and body, and no milestone",
    ops("issueCreate")[0][2] == {"teamId": "tm1", "projectId": PROJECT["id"], "title": "Add refunds",
                                 "description": "Refund a paid invoice"}, ops("issueCreate"))

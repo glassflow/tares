@@ -474,7 +474,8 @@ class TicketsGithub(tickets.TicketBackend):
                 except gt.GitHubTicketsError as e:
                     if "already" not in str(e).lower():     # linked a moment ago: that is the goal
                         raise
-        return TicketRef(node, str(issue.get("html_url") or ""), gt.status_of(_shape(issue)))
+        return TicketRef(node, str(issue.get("html_url") or ""), gt.status_of(_shape(issue)),
+                         gt.identifier_of(issue) if issue.get("number") else "")
 
     def _dep_ids(self, uid: str, refs) -> list[str]:
         """The node ids of what an issue is blocked by. A ref is a ticket of the project (its
