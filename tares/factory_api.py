@@ -1250,15 +1250,19 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                                      if t["holder"]})})
         return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
 
+    SINCE_MAX = 1000   # lines a refresh from `since` reads at most (TR-1177)
     @app.get("/api/crew/{name}")
     def get_station(name: str, request: Request, recent: int = 30,
-                          crew: str | None = None, conversation: int = 0, before: int | None = None):
+                          crew: str | None = None, conversation: int = 0, before: int | None = None,
+                          since: int | None = None):
         """One station: its row as in /api/crew, the tickets it holds in every project, its
         current session's last lines (`recent`, at most 200), and the command that opens it.
         Crews can repeat a station name: `crew` (id or name) says which; without it the caller's
         own crew's station comes back. `conversation` (at most 500) adds the session's last lines as a
         conversation (tares/crew_conversation.py, TR-1177), oldest first; `before` (a `conversation_from`
-        from an earlier answer) reads the lines before that point instead, for "Show earlier"."""
+        from an earlier answer) reads the lines before that point instead, for "Show earlier". `since`
+        reads from that line to the newest, at most SINCE_MAX lines (the newest when there are more), so a
+        reader who loaded earlier lines refreshes without a gap; `conversation_from` says where it starts."""
         st = pick_station(name, request, crew)
         held = []
         hidden = h.hidden_ids()
@@ -1280,6 +1284,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         if c and st["session"]:
             end = (st["lines"] or 0) if before is None else max(min(before, st["lines"] or 0), 0)
             start = max(end - c, 0)
+            if since is not None and before is None:
+                start = max(min(since, end), end - SINCE_MAX, 0)
             rows = store.key_payload_rows(h.cc_source(), st["session"], limit=end - start, offset=start)
             convo = {"conversation": crew_conversation.build(rows)[0], "conversation_from": start}
         return {**st, "tickets": held, **convo,

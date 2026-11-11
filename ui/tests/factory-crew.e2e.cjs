@@ -191,6 +191,47 @@ async function waitFor(url, tries = 100) {
     ck("closing the fold hides the lines", (await m1.getByTestId("member-detail").count()) === 0);
     ck("the lines were read once for the one fold that was opened", detailCalls.filter((c) => c.startsWith("GET")).length === 1, detailCalls.join(", "));
 
+    // 5b. review of PR 602: a full output that does not load is tried once; Show earlier and the live
+    // refresh leave no gap (the member's answers are replaced with controlled ones)
+    {
+      const c = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+      const p = await c.newPage();
+      const at = (m) => `2026-11-11T10:${String(m % 60).padStart(2, "0")}:00+00:00`;
+      const said = (n) => ({ kind: "said", at: at(n), text: `line ${n}` });
+      let toolCalls = 0;
+      await p.route(/\/api\/crew\/[^/?]+\/tool\//, (r) => { toolCalls++; r.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"no tool call"}' }); });
+      let total = 200;
+      const asked = [];
+      await p.route(/\/api\/crew\/[^/?]+\?/, async (r) => {
+        const u = new URL(r.request().url());
+        const before = u.searchParams.get("before"), since = u.searchParams.get("since");
+        asked.push(before !== null ? `before=${before}` : since !== null ? `since=${since}` : "live");
+        const real = await (await r.fetch()).json();
+        const end = before !== null ? Number(before) : total;
+        const start = since !== null ? Number(since) : Math.max(end - 100, 0);
+        const conversation = Array.from({ length: end - start }, (_, i) => said(start + i));
+        if (before === null && since === null) conversation.push({ kind: "tool", at: at(1), id: "big1", name: "Bash", summary: "cmd big1", input: "{}", output: "short", failed: false, ms: 100, more: true });
+        r.fulfill({ json: { ...real, conversation, conversation_from: start } });
+      });
+      await p.goto(`${BASE}/crew`, { waitUntil: "load" });
+      await p.getByTestId("member-fold").first().click();
+      await p.getByText("cmd big1").first().click();
+      await p.getByTestId("tool-output-missed").waitFor();
+      await p.waitForTimeout(1500);
+      ck("a full output that does not load is asked for once, and says so", toolCalls === 1, `${toolCalls} requests`);
+      await p.getByTestId("conversation-earlier").click();
+      await p.getByText("line 0", { exact: true }).waitFor();
+      total = 250;
+      await p.waitForTimeout(11000);
+      const shown = await p.getByTestId("conversation-scroll").innerText();
+      const missing = [];
+      for (let n = 0; n < 250; n++) if (!new RegExp(`\\bline ${n}\\b`).test(shown)) missing.push(n);
+      ck("Show earlier then a refresh: every line is there, none twice", missing.length === 0
+         && (shown.match(/\bline 150\b/g) || []).length === 1, `missing ${missing.slice(0, 5).join(",")}; asked ${asked.join(", ")}`);
+      ck("the refresh after Show earlier reads from where the earlier lines end", asked.includes("since=100"), asked.join(", "));
+      await c.close();
+    }
+
     // 6. an error, then Retry
     await page.route("**/api/factory/crew", (r) => r.abort());
     await page.goto(`${BASE}/crew`, { waitUntil: "load" });

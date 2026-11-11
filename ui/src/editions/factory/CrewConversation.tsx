@@ -112,7 +112,10 @@ function Copy({ text }: { text: string }) {
   const [done, setDone] = React.useState(false);
   return (
     <button type="button" className="h-auto! min-h-0! border border-border bg-card px-1.5! py-0.5! text-[11px]! leading-tight! text-foreground"
-            onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }); }}
+            onClick={() => {
+              const w = navigator.clipboard?.writeText(text);
+              if (w) w.then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => undefined);
+            }}
             data-testid="tool-copy">
       {done ? "Copied" : "Copy"}
     </button>
@@ -139,12 +142,13 @@ function ToolCard({ t, open, onToggle, loadFull }: {
 }) {
   const [full, setFull] = React.useState<string | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [missed, setMissed] = React.useState(false);   // one try: a fetch that failed is not repeated
   React.useEffect(() => {
-    if (open && t.more && full === null && !loading) {
+    if (open && t.more && full === null && !loading && !missed) {
       setLoading(true);
-      loadFull(t.id).then(setFull).catch(() => setFull(null)).finally(() => setLoading(false));
+      loadFull(t.id).then(setFull).catch(() => setMissed(true)).finally(() => setLoading(false));
     }
-  }, [open, t.more, t.id, full, loading, loadFull]);
+  }, [open, t.more, t.id, full, loading, missed, loadFull]);
   const output = full ?? t.output;
   const meta = [took(t.ms), hm(t.at)].filter(Boolean).join(" · ");
   return (
@@ -171,8 +175,13 @@ function ToolCard({ t, open, onToggle, loadFull }: {
       {open && (
         <div className="border-t border-border pt-2" data-testid="tool-body">
           <Block label="Input" text={t.input} testid="tool-input" />
-          {t.output !== null && (
-            <Block label={loading ? "Output (loading the rest...)" : "Output"} text={output ?? ""} testid="tool-output" />
+          {t.output !== null ? (
+            <>
+              <Block label={loading ? "Output (loading the rest...)" : "Output"} text={output ?? ""} testid="tool-output" />
+              {missed && <p className="m-0 px-3 pb-3 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the output did not load.</p>}
+            </>
+          ) : (
+            <p className="m-0 px-3 pb-3 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
           )}
         </div>
       )}
@@ -187,7 +196,8 @@ function Group({ tools, openAll, opened, toggle, loadFull }: {
   const names = [...new Set(tools.map((t) => toolName(t.name)))];
   const failed = tools.filter((t) => t.failed).length;
   const span = [hm(tools[0].at), hm(tools[tools.length - 1].at)].filter(Boolean);
-  const shown = open || openAll;
+  // a card the reader opened keeps its group open when a refresh folds it into one
+  const shown = open || openAll || tools.some((t) => opened.has(t.id));
   return (
     <div className={cn("border bg-card", failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-group">
       <button type="button" className="block w-full min-w-0 px-2.5 py-2 text-left" aria-expanded={shown}

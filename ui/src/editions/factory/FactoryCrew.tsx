@@ -33,7 +33,8 @@ const FOLD_BTN = "linklike text-[13px]";
 const CODE = "mt-0.5 inline-block border border-border bg-muted px-1.5 py-0.5 font-mono";
 
 export interface CrewActions {
-  detail: (station: string, before?: number) => Promise<MemberDetail>;
+  /** The member's session; `before` reads the lines before a point, `since` from a point to the newest. */
+  detail: (station: string, at?: { before?: number; since?: number }) => Promise<MemberDetail>;
   toolOutput: (station: string, id: string) => Promise<string>;
   ask: (station: string) => Promise<unknown>;
   decide: (id: string, decision: "accept" | "reject") => Promise<unknown>;
@@ -76,11 +77,18 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
     actions.detail(member.station).then(setDetail).catch(() => setFailed(true));
   }, [actions, member.station]);
 
-  // while open it follows the session: a fresh read every few seconds
+  // while open it follows the session: a fresh read every few seconds. Once earlier lines are loaded
+  // the read starts where they end, so the lines between stay; when the session outgrew what one read
+  // holds, the earlier lines no longer join on and are let go
+  const olderEnd = React.useRef<number | null>(null);
   React.useEffect(() => {
     if (!open) return undefined;
     const id = setInterval(() => {
-      actions.detail(member.station).then(setDetail).catch(() => undefined);
+      const since = olderEnd.current;
+      actions.detail(member.station, since === null ? undefined : { since }).then((d) => {
+        if (since !== null && (d.conversation_from ?? 0) > since) { olderEnd.current = null; setOlder(null); }
+        setDetail(d);
+      }).catch(() => undefined);
     }, POLL_MS);
     return () => clearInterval(id);
   }, [open, actions, member.station]);
@@ -97,7 +105,8 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
   };
   const from = older ? older.from : (detail?.conversation_from ?? 0);
   const earlier = async () => {
-    const d = await actions.detail(member.station, from);
+    const d = await actions.detail(member.station, { before: from });
+    if (olderEnd.current === null) olderEnd.current = detail?.conversation_from ?? 0;
     setOlder({ items: [...(d.conversation ?? []), ...(older?.items ?? [])], from: d.conversation_from ?? 0 });
   };
   const items = React.useMemo(() => [...(older?.items ?? []), ...(detail?.conversation ?? [])], [older, detail]);

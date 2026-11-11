@@ -169,6 +169,15 @@ async def main():
                earlier["conversation_from"] == 0 and earlier["conversation"][0]["text"] == "Session started"
                and not any(i.get("text") == "Done. Opened #12." for i in earlier["conversation"]), earlier.get("conversation_from"))
 
+        async with mk() as cx:
+            whole = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200})).json()
+            tail = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200, "since": 5})).json()
+            ck("since reads from that line to the newest, whatever the window, and says where it starts",
+               tail["conversation_from"] == 5 and tail["conversation"][-1]["text"] == "Done. Opened #12."
+               and len(tail["conversation"]) < len(whole["conversation"]), tail.get("conversation_from"))
+            beyond = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200, "since": 999})).json()
+            ck("a since past the newest line reads nothing new", beyond["conversation"] == [], beyond.get("conversation"))
+
     print(f"{P} passed, {F} failed")
     return F
 

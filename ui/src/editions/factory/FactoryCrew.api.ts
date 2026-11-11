@@ -103,8 +103,10 @@ export interface MemberDetail {
 export const factoryCrew = () => request<CrewPage>("/api/factory/crew");
 
 /** What a member did lately, read only when its fold is opened. */
-export const crewMember = (station: string, before?: number) =>
-  request<MemberDetail>(`/api/crew/${encodeURIComponent(station)}?recent=0&conversation=200${before !== undefined ? `&before=${before}` : ""}`);
+export const crewMember = (station: string, at?: { before?: number; since?: number }) => {
+  const extra = at?.before !== undefined ? `&before=${at.before}` : at?.since !== undefined ? `&since=${at.since}` : "";
+  return request<MemberDetail>(`/api/crew/${encodeURIComponent(station)}?recent=0&conversation=200${extra}`);
+};
 
 /** One tool call's whole output, for a card whose output the list cut. */
 export const crewToolOutput = (station: string, id: string) =>
