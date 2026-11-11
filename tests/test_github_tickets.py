@@ -915,7 +915,7 @@ async def api():
            and r.json()["detail"] == "Alpha lives in GitHub: remove it there"
            and store.get_milestone(own, alpha["id"]) is not None, r.text)
 
-        print("== (F) the stage never sets a GitHub ticket's status ==")
+        print("== (F) the stage does not write a GitHub ticket's status in Tares (TR-848: GitHub does, through the integration) ==")
         from tares import factory_api
         status31 = store.get_ticket(own, "GH-31")["status"]
         r = await cx.post(f"/api/projects/{own}/tickets/GH-31/stage", json={"stage": "doing"})
@@ -930,13 +930,13 @@ async def api():
         ck("(F) a Tares ticket's status still follows its stage", r.status_code == 200
            and r.json()["stage"] == "merged" and r.json()["status"] == "done", r.text)
         merged_pr = {"merged": True, "repo": "acme/app", "number": 5}
-        ck("(F) merged_fields: a GitHub ticket is marked merged, its status left alone",
+        ck("(F) merged_fields: a GitHub ticket is marked merged",
            factory_api.merged_fields({"owner": "github", "stage": "doing"}, merged_pr) == {"stage": "merged"})
         ck("(F) merged_fields: a Linear ticket the same",
            factory_api.merged_fields({"owner": "linear", "stage": "doing"}, merged_pr) == {"stage": "merged"})
-        ck("(F) merged_fields: a Tares ticket is set done",
+        ck("(F) merged_fields: a Tares ticket the same, the status follows through the integration",
            factory_api.merged_fields({"owner": "tares", "stage": "doing"}, merged_pr)
-           == {"stage": "merged", "status": "done"})
+           == {"stage": "merged"})
 
         async def fake_read_pr(_store, repo, number, prev=None):
             return {**(prev or {}), "repo": repo, "number": number, "merged": True, "state": "closed",
