@@ -8901,18 +8901,20 @@ def tares_keyed(**kw) -> dict:
 
 
 def _fake_codex(tmp: Path) -> None:
-    """A `codex` on PATH that does nothing: doctor only asks whether the Codex CLI is installed (the machine's own may not be)."""
-    if sys.platform == "win32":
-        (tmp / "bin" / "codex.cmd").write_bytes(b"@exit /b 0\r\n")
-    else:
-        (tmp / "bin" / "codex").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        (tmp / "bin" / "codex").chmod(0o755)
+    """A `codex`, `docker`, `kind` and `kubectl` on PATH that do nothing: doctor only asks whether the Codex CLI and the
+    kind release profile's tools are installed (the machine's own may not have them)."""
+    for name in ("codex", "docker", "kind", "kubectl"):
+        if sys.platform == "win32":
+            (tmp / "bin" / f"{name}.cmd").write_bytes(b"@exit /b 0\r\n")
+        else:
+            (tmp / "bin" / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (tmp / "bin" / name).chmod(0o755)
 
 
 def tares_setup_tools(tmp: Path, env: dict) -> None:
     _fake_tool(tmp, "gh")
     _fake_tool(tmp, "tares")
-    _fake_codex(tmp)    # challenger is on in this world: doctor wants the Codex CLI
+    _fake_codex(tmp)    # challenger is on and the release profile is kind in this world: doctor wants these tools
     env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
 
 
