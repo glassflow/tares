@@ -212,6 +212,14 @@ def upgrades_frozen(paths: CrewPaths, client: TaresClient, *, fresh: bool = Fals
     return Frozen(paths, client).on
 
 
+def round_start(paths: CrewPaths, env: Mapping | None = None) -> None:
+    """The top of a watch round, as bash's `SETTINGS=""; tares_on`: read the crew settings once. The kit part and the
+    Claude Code part of the round go by this reading, so a freeze that lands later in the round is not acted on until
+    the next one; a move that restarts a station reads the settings again, just before it restarts."""
+    with TaresClient(paths, os.environ if env is None else env, lambda _m: None) as client:
+        _watch.round_frozen = Frozen(paths, client)
+
+
 def kit_dir(paths: CrewPaths, client: TaresClient, checkout) -> str:
     """The kit a station starts on: the frozen copy while the crew is frozen and the copy is there, else this
     checkout (`checkout`, mapped back from the frozen copy when this factory runs from it)."""
@@ -451,6 +459,7 @@ class _Watch:
         self.seen: str | None = None    # the kit the last round saw
         self.said_dirty = False  # the dirty checkout was said
         self.root: Path | None = None   # the plugin the watch started on (bash maps KIT_PLUGIN once, at its start)
+        self.round_frozen: "Frozen | None" = None   # the settings read at the top of this round (bash caches SETTINGS for the round)
 
 
 _watch = _Watch()
@@ -546,7 +555,7 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
             client.say(f"the plugin checkout at {root} has uncommitted changes; no station moves onto a new version until it is clean")
             _watch.said_dirty = True
         _watch.seen = kit
-        frozen = Frozen(paths, client)
+        frozen = _watch.round_frozen or Frozen(paths, client)
         if frozen.on:
             if settled:
                 tell_newer_kit(paths, client, frozen, kit)

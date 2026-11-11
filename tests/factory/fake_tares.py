@@ -32,6 +32,7 @@ class World:
         self.keep = True                    # False: a PUT of the settings is answered but not kept
         self.broken = False                 # True: a Tares that is up but cannot answer, every GET but /health is a 500
         self.routes = {}                    # more GETs: path -> answer (200); /api/grants is one the watch asks
+        self.retry = {}                     # the stations a PUT of /api/crew/claude-retry last listed (GET /api/crew shows it)
         self.log = []
 
 
@@ -71,6 +72,15 @@ def _handler(world: World):
                 return self._json(200, {"settings": world.settings})
             if path == "/api/crew/projects":
                 return self._json(200, {"projects": world.projects})
+            if path == "/api/crew/claude-retry" and self.command == "PUT":
+                world.retry = json.loads(raw.decode("utf-8") or "{}").get("stations", {})
+                return self._json(200, {"ok": True})
+            if path == "/fake/routes" and self.command == "PUT":   # a test changes a route's answer while a command runs
+                body = json.loads(raw.decode("utf-8") or "{}")
+                world.routes[body["path"]] = body["answer"]
+                return self._json(200, {"ok": True})
+            if path == "/api/crew" and self.command == "GET":
+                return self._json(200, {"claude_retry": world.retry})
             if self.command == "GET" and path in world.routes:
                 return self._json(200, world.routes[path])
             self._json(404, {})
