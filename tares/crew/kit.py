@@ -63,7 +63,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import NoReturn
 
-from . import claude, state, tidy
+from . import claude, locks, state, tidy
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -468,6 +468,7 @@ def movable(paths: CrewPaths, station: str, kit: str, frozen: Frozen, binary: st
             and claude.quiet(station, None, binary, paths))
 
 
+@locks.scoped   # the station's lock goes when its upgrade ends, as with bash's per-station subshell (TR-1171)
 def upgrade_station(paths: CrewPaths, client: TaresClient, station: str, kit: str, *, claude_bin: str) -> int:
     """Restart it on the new version, in the same conversation. 0 it did, 3 Tares does not answer, 4 it is not
     idle any more or the crew froze since the round began, 1 it could not be restarted. Says what happened."""
