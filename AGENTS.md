@@ -100,7 +100,7 @@ scenario; re-record it with `python tests/factory/parity.py --record <scenario>`
 (`tests/factory/parity_labels.json`) has a scenario. The spare-session scenarios (`cc_*`) list the machine's real Claude
 processes, so on a machine with real spare sessions they can differ; run them alone (`PARITY_JOBS=1`).
 
-The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test); it is advisory for now, so a red run does not block a merge, but read it: a Windows break shows up in the PR that causes it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason.
+The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test), split over 4 shards (`--shard N --of 4`) to stay inside the job limit. Its `windows-crew` job is green only when every shard is, and a red run is a real break: read it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason.
 
 ## Release
 
