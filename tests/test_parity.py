@@ -77,6 +77,13 @@ ck("the login of whoever froze the kit is a placeholder, in text and in JSON",
    and parity.norm_json({"by": _me}) == {"by": "<USER>"})
 ck("...but the same word elsewhere, or a longer login, is data",
    parity.norm_text(f"{_me} went by {_me}x and bye {_me}") == f"{_me} went by {_me}x and bye {_me}")
+with mock.patch.object(parity, "is_windows", lambda: True):
+    _wp = parity.norm_text('"cwd": "<TMP>\\\\crew\\\\a", and <REPO>\\sub\\f.py, plain <TMP>/x')
+ck("on Windows a path under a placeholder has its backslashes (single or doubled) read as slashes",
+   _wp == '"cwd": "<TMP>/crew/a", and <REPO>/sub/f.py, plain <TMP>/x')
+with mock.patch.object(parity, "is_windows", lambda: False):
+    _np = parity.norm_text("a\\b <TMP>\\c")
+ck("...and elsewhere a backslash is kept", _np == "a\\b <TMP>\\c", _np)
 ck("a uuid is replaced", parity.norm_text("id 123e4567-e89b-12d3-a456-426614174000") == "id <ID>")
 ck("words and small numbers are kept", parity.norm_text("started 3 stations, port 8788") == "started 3 stations, port 8788")
 ck("CRLF becomes LF", parity.norm_text("a\r\nb") == "a\nb")
@@ -88,7 +95,7 @@ ck("a Windows temp folder is replaced as a plain path and with its backslashes d
    nw == '{"cwd": "<TMP>\\\\crew"} and <TMP>\\home', nw)
 with mock.patch.object(parity, "is_windows", lambda: True):
     nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
-ck("...and on Windows the drive letter and folder case do not matter", nc == "in <TMP>\\crew", nc)
+ck("...and on Windows the drive letter and folder case do not matter", nc == "in <TMP>/crew", nc)
 with mock.patch.object(parity, "is_windows", lambda: False):
     nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
 ck("...elsewhere case still matters", "<TMP>" not in nc, nc)

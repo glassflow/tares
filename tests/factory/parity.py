@@ -5873,7 +5873,13 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     s = PID_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}<PID>", s)
     s = SESSION.sub("<ID>", s)
     s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
+    if is_windows():    # the results were recorded from bash with `/` in paths: a Windows path under a placeholder reads the same
+        s = WIN_PATH_TAIL.sub(lambda m: m.group(1) + re.sub(r"\\+", "/", m.group(2)), s)
     return s
+
+
+# what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
+WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 
 
 def user_by():
