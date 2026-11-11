@@ -36,7 +36,7 @@ from pathlib import Path
 
 class FakeTares:
     def __init__(self, directory, settings=None, people=None, grants=None, capabilities=None,
-                 token="", projects=None, project_grants=None):
+                 token="", projects=None, project_grants=None, health=None):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.writes = self.dir / "writes.jsonl"
@@ -46,6 +46,7 @@ class FakeTares:
         self.grants = list(grants or [])
         # what /health lists: crew up wants "integrations" (need_capability); capabilities=[] is an old Tares
         self.capabilities = list(["integrations"] if capabilities is None else capabilities)
+        self.health = health                # None: the short /health body; a dict: that whole body (an old cell, or the real daemon's)
         self.token = token                  # "": no auth
         self.mcp_auth: list = []            # the Authorization header (or None) of each POST /mcp
         self.projects = json.loads(json.dumps(projects or []).replace("{tmp}", json.dumps(str(self.dir.parent))[1:-1]))
@@ -88,6 +89,8 @@ class FakeTares:
                     return
                 with outer.lock:
                     if path == "/health":
+                        if outer.health is not None:
+                            return self._send(200, dict(outer.health))
                         return self._send(200, {"status": "ok", "capabilities": list(outer.capabilities)})
                     if path == "/api/crew/settings":
                         return self._send(200, dict(outer.settings))
