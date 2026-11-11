@@ -446,7 +446,10 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         "TARES_AUTH_TOKEN": "",
     }
     # the `tares` that started the crew, so a station whose PATH lacks it still runs `tares factory` (TR-1069)
-    tares_bin = shutil.which("tares")
+    try:
+        tares_bin = shutil.which("tares")
+    except (AttributeError, OSError):  # a lookup that cannot run never stops a launch
+        tares_bin = None
     if tares_bin:
         env["FACTORY_TARES"] = _forward(tares_bin)
     if tok_file:
