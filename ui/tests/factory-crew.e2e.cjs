@@ -151,7 +151,7 @@ async function waitFor(url, tries = 100) {
     ck("two rules the reviewer proposes", (await rules.count()) === 2 && /^Rules the crew proposes\s*2$/m.test(await page.getByTestId("crew-rules").innerText()), `${await rules.count()}`);
     const markup = rules.filter({ hasText: "on a red check" });
     ck("markup in a rule shows as text", /<i>on a red check<\/i>/.test(await markup.innerText()) && (await markup.locator("i").count()) === 0);
-    ck("each rule says who and when", /From the reviewer, 6 hours ago/.test(await markup.innerText()));
+    ck("each rule says where it goes and when (TR-1223)", /For (every project|\S+) · .*6 hours ago/.test(await markup.innerText()), await markup.innerText());
     await checkWords(page, ck, "live");
     await shot(page, "live-1440.png");
     const rejected = page.waitForResponse((r) => /\/api\/rule-proposals\/.+\/reject$/.test(r.url()) && r.request().method() === "POST");
@@ -383,6 +383,12 @@ async function waitFor(url, tries = 100) {
         if (name === "quiet") ck(`${tag}: everybody is not heard from, with no standup yet`, (await p.getByTestId("crew-member").and(p.locator("[data-state='not heard']")).count()) === 4 && /Nothing moved in the last day\./.test(text), text);
         if (name === "none") ck(`${tag}: not started, how to start it, no other section`, /The crew is not started\./.test(text) && (await p.getByTestId("crew-not-started").locator("code").innerText()) === "tares factory crew up"
            && JSON.stringify(await heads(p)) === JSON.stringify(["Orchestrator", "Autonomy"]) && (await p.getByTestId("crew-member").count()) === 0, JSON.stringify(await heads(p)));
+        if (name === "busy") {
+          const metas = await p.getByTestId("crew-rule-meta").allInnerTexts();
+          ck(`${tag}: each rule says where it goes and the tickets it came back in (TR-1223)`,
+             /^For project-x · came back in 3 tickets \(project-x T3, project-x T5, project-x T9\), 2 days ago$/.test(metas[0] || "")
+             && /^For every project · came back in 6 tickets \(.* and 2 more\), 6 hours ago$/.test(metas[1] || ""), JSON.stringify(metas));
+        }
         if (name === "team") {
           const crews = p.getByTestId("crew-of-person");
           ck(`${tag}: one section per person's crew, the caller's first, each with its own state (TR-1223)`,

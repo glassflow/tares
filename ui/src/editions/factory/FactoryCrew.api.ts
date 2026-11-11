@@ -70,6 +70,10 @@ export interface CrewProposal {
   /** Always "the reviewer" today. */
   from: string;
   when: string;
+  /** Where accepting it writes the rule: "For shop" (that project's AGENTS.md) or "For every project". */
+  for?: string;
+  /** The tickets the finding came back in, as "shop T3". A rule belongs to no crew. */
+  tickets?: string[];
 }
 
 export interface CrewPage {

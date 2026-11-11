@@ -59,8 +59,10 @@ const PLAN: CrewPlan = {
 };
 
 const PROPOSALS: CrewProposal[] = [
-  { id: "p1", text: "Put the milestone check in the ticket before asking for review.", from: "the reviewer", when: "2 days ago" },
-  { id: "p2", text: "Never merge on a red check, even when the change looks small.", from: "the reviewer", when: "6 hours ago" },
+  { id: "p1", text: "Put the milestone check in the ticket before asking for review.", from: "the reviewer", when: "2 days ago",
+    for: "For project-x", tickets: ["project-x T3", "project-x T5", "project-x T9"] },
+  { id: "p2", text: "Never merge on a red check, even when the change looks small.", from: "the reviewer", when: "6 hours ago",
+    for: "For every project", tickets: ["project-x T2", "project-y T4", "project-y T6", "project-z T1", "project-z T8", "project-x T11"] },
 ];
 const STANDUP = { text: "In the last day: 4 tickets done, 2 in review. Projects that moved: project-x, project-y.", when: "The last 24 hours" };
 const L4 = { text: "The crew merges after its review and green CI.", detail: "No releases. Up to 4 builders at once.", settings_href: "/settings#crew" };

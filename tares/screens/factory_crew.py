@@ -217,9 +217,20 @@ def register(app, store, h, ctx):
         for lim in plan["limits"]:
             lim["text"] = f"{lim['pct']}% used" + (f", resets {lim['resets']}" if lim["resets"] else "")
         plan["by_project"] = by_project(names, now)
-        proposals = [{"id": r["id"], "text": r["text"], "from": "the reviewer",
-                      "when": ago(r["created_at"], now)} for r in store.list_rule_proposals("open")
-                     if r.get("project") not in hidden]
+        # a rule belongs to no crew (TR-1223): the cell offers it when a finding comes back across
+        # tickets, whoever's reviewer found it, and accepting it changes what every crew reads there
+        hidden_names = [p["name"] for p in store.list_projects() if p["id"] in hidden]
+        all_names = {p["id"]: p["name"] for p in store.list_projects()}
+        proposals = []
+        for r in store.list_rule_proposals("open"):
+            if r.get("project") in hidden:
+                continue
+            tickets = [str(t) for t in r.get("tickets") or []
+                       if not any(str(t).startswith(n + " ") for n in hidden_names)]
+            where = ("For every project" if r.get("scope") != "project"
+                     else f"For {all_names.get(r.get('project'), 'its project')}")
+            proposals.append({"id": r["id"], "text": r["text"], "from": "the reviewer",
+                              "when": ago(r["created_at"], now), "for": where, "tickets": tickets})
         return {"summary": own["summary"], "talk_to": own["talk_to"], "reviewer": own["reviewer"],
                 "releaser": own["releaser"], "builders": own["builders"], "crews": crews,
                 "how_far": _how(settings),

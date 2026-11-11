@@ -317,9 +317,15 @@ async def main():
             a = await page(cx)
             props = a["rule_proposals"]
             ck("the open ones, each with who proposed it and when",
-               len(props) == 2 and all(set(p) == {"id", "text", "from", "when"} for p in props)
+               len(props) == 2 and all(set(p) == {"id", "text", "from", "when", "for", "tickets"} for p in props)
                and all(p["from"] == "the reviewer" for p in props)
                and sorted(p["when"] for p in props) == ["2 days ago", "6 hours ago"], props)
+            by_text = {p["text"][:5]: p for p in props}
+            ck("each says where it goes: its project's, or every project's (TR-1223)",
+               by_text["In ex"]["for"].startswith("For ") and by_text["In ex"]["for"] != "For every project"
+               and by_text["Never"]["for"] == "For every project", [(p["for"]) for p in props])
+            ck("and the tickets it came back in, so nobody reads it as one crew's",
+               by_text["In ex"]["tickets"] == ["T1", "T2"] and by_text["Never"]["tickets"] == ["T9"], props)
             ck("text with markup comes through as it was written", any("<i>on a red check</i>" in p["text"]
                                                                        for p in props), props)
             first = props[0]["id"]

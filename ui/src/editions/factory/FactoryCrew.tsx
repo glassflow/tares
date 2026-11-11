@@ -317,7 +317,13 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
           <div key={p.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-4 py-3.5 last:border-b-0" data-testid="crew-rule">
             <div className="min-w-0 flex-[1_1_320px]">
               <div data-user-text>{p.text}</div>
-              <div className={cn(MUTED, "mt-0.5")}>From {p.from}, {p.when}</div>
+              <div className={cn(MUTED, "mt-0.5")} data-testid="crew-rule-meta">
+                {p.for && <><b className="font-semibold text-foreground">{p.for}</b> · </>}
+                {p.tickets && p.tickets.length > 0 ? (
+                  <>came back in {p.tickets.length} {p.tickets.length === 1 ? "ticket" : "tickets"}
+                    {" "}(<span data-user-text>{p.tickets.slice(0, 4).join(", ")}{p.tickets.length > 4 ? ` and ${p.tickets.length - 4} more` : ""}</span>)</>
+                ) : <>from the reviews</>}, {p.when}
+              </div>
               {failed === p.id && <div className="mt-1 text-xs text-[color:var(--err)]" role="alert">It could not be saved. Try again.</div>}
             </div>
             <div className="flex gap-2">
