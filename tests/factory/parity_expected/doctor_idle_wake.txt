@@ -10,7 +10,7 @@ plugin: 4 station(s) run an older version; tares factory crew watch moves each o
 claude code: 1 station(s) run an older Claude Code than 2.1.310; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: doctor ==
@@ -19,12 +19,12 @@ exit: 0
 tares factory doctor
   ok    claude: <TMP>/bin/claude (2.1.310 (Claude Code))
   ok    crew home: <TMP>/crew
-  ok    Tares answers at http://127.0.0.1:127.0.0.1:<PORT> (from the environment)
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (3 active)
   ok    Claude Code trusts <TMP>/crew
   ok    stations load the plugin at <REPO>/claude-plugin
-  ok    MCP endpoint answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
   ok    the kit follows the plugin checkout (not frozen)
   ok    gh signed in

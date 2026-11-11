@@ -15,7 +15,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: could not tell Tares at http://127.0.0.1:127.0.0.1:<PORT> that crew-orchestrator ended; mark it ended on the Crew page
+tares factory: could not tell Tares at http://127.0.0.1:<PORT> that crew-orchestrator ended; mark it ended on the Crew page
 tares factory: retired crew-orchestrator
 == step: retire nobody ==
 exit: 1

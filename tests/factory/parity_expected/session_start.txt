@@ -8,9 +8,9 @@ exit: 0
 {
   "env": {
     "PWD": "<TMP>/elsewhere",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "p_notes",
     "TARES_PROJECT_NAME": "Notes app",
     "TARES_SESSION_NAME": "notes-app-session",
@@ -34,9 +34,9 @@ exit: 0
 {
   "env": {
     "PWD": "<TMP>/elsewhere",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "p_notes",
     "TARES_PROJECT_NAME": "Notes app",
     "TARES_SESSION_NAME": "notes-app-session",
@@ -56,15 +56,15 @@ exit: 0
 
 -- stderr --
 tares factory: opening Claude as a-tiny-url-shortener-session in <TMP>/shop.
-         It plans "a tiny url shortener" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         It plans "a tiny url shortener" lightly into a new project on Tares (http://127.0.0.1:<PORT>) and builds it in the same
          session; if it turns out big, it offers the full spec and the hand-over to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_SESSION_NAME": "a-tiny-url-shortener-session"
   },
   "has_auth_token": false,
@@ -81,15 +81,15 @@ exit: 0
 
 -- stderr --
 tares factory: opening Claude as shop-session in <TMP>/shop.
-         It plans "Shop" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         It plans "Shop" lightly into a new project on Tares (http://127.0.0.1:<PORT>) and builds it in the same
          session; if it turns out big, it offers the full spec and the hand-over to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_SESSION_NAME": "shop-session"
   },
   "has_auth_token": false,
@@ -114,9 +114,9 @@ No project named Widgets on Tares. Plan and build "Widgets" as a new project?
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_SESSION_NAME": "shop-session"
   },
   "has_auth_token": false,
@@ -137,15 +137,15 @@ No project named Widgets on Tares. Plan and build "Widgets" as a new project?
   1) yes, a new project
   2) no, I meant an existing one   (recommended)
   Choice [2]: tares factory: opening Claude as widgets-session in <TMP>/elsewhere.
-         It plans "Widgets" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         It plans "Widgets" lightly into a new project on Tares (http://127.0.0.1:<PORT>) and builds it in the same
          session; if it turns out big, it offers the full spec and the hand-over to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/elsewhere",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_SESSION_NAME": "widgets-session"
   },
   "has_auth_token": false,

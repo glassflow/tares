@@ -3,7 +3,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: no MCP server answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp. Stations reach Tares through it. Start one in another terminal: tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL to where yours runs).
+tares factory: no MCP server answers at http://127.0.0.1:<PORT>/mcp. Stations reach Tares through it. Start one in another terminal: tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL to where yours runs).
 == step: spawn builder Links App m1 {TMP}/links x ==
 exit: 1
 -- stdout --

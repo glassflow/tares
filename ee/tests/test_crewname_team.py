@@ -99,7 +99,7 @@ def start_licensed_tares(d: Path, env: dict):
 
 
 def run(T: Path):
-    env = parity.crew_env(T, "python")
+    env = parity.crew_env(T)
     (T / "gitconfig").write_text("[user]\n\tname = Ashish Bagri\n")
     for k in ("FACTORY_CREW_NAME", "FACTORY_CREW", "FACTORY_ORCHESTRATOR", "TARES_URL", "TARES_AUTH_TOKEN"):
         env.pop(k, None)

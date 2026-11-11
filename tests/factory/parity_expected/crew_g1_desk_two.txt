@@ -15,7 +15,7 @@ desk: 2 waiting for you; the next one (tares factory crew desk shows all; answer
     B) drop it now
     recommended: keep it until v2 ships, since two callers still use it
     blocks: T7
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew desk ==

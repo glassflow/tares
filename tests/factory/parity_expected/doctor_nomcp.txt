@@ -4,12 +4,12 @@ exit: 1
 tares factory doctor
   ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
   ok    crew home: <TMP>/crew
-  ok    Tares answers at http://127.0.0.1:127.0.0.1:<PORT> (from the environment)
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
   ok    stations load the plugin at <REPO>/claude-plugin
-  FIX   no MCP server answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
+  FIX   no MCP server answers at http://127.0.0.1:<PORT>/mcp; start one with tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL)
   warn  no crew yet in <TMP>/crew: tares factory crew up creates it
   ok    gh signed in
 fix the items marked FIX

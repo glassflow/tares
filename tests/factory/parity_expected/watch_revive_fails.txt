@@ -82,7 +82,7 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
       "$defaults",
       "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop:  or under <TMP>/crew/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that Pat authorized.",
       "Merging a pull request in the repositories of the projects handed to this crew on Tares (crew_projects), that this crew opened from a `factory/*` branch is expected work that Pat pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Pat chose to rely on. Deleting the merged `factory/*` branch is expected."
     ],
@@ -111,10 +111,10 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
     "FACTORY_STATION": "shop-build-m1",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
     "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "shop",
     "TARES_PROJECT_NAME": "shop"
   },
@@ -143,7 +143,7 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
       "$defaults",
       "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop:  or under <TMP>/crew/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that Pat authorized.",
       "Merging a pull request in the repositories of the projects handed to this crew on Tares (crew_projects), that this crew opened from a `factory/*` branch is expected work that Pat pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Pat chose to rely on. Deleting the merged `factory/*` branch is expected."
     ],
@@ -172,10 +172,10 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
     "FACTORY_STATION": "shop-build-m2",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
     "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "shop",
     "TARES_PROJECT_NAME": "shop"
   },

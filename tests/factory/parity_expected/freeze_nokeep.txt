@@ -3,7 +3,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: Tares at http://127.0.0.1:127.0.0.1:<PORT> did not keep the freeze; it needs a newer version
+tares factory: Tares at http://127.0.0.1:<PORT> did not keep the freeze; it needs a newer version
 -- after --
 {
   "at": null,

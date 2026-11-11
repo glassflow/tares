@@ -24,7 +24,7 @@ desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer
     recommended: shop-build-m1 may run gh pr merge 12 --squash in shop, since it merges its own pull request
     shop-build-m1 was refused: gh pr merge 12 --squash
     allow it in Tares, on the project page or the Crew page: the watch restarts shop-build-m1 with it
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew status ==
@@ -42,7 +42,7 @@ desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer
     recommended: shop-build-m1 may run gh pr merge 12 --squash in shop, since it merges its own pull request
     shop-build-m1 was refused: gh pr merge 12 --squash
     allow it in Tares, on the project page or the Crew page: the watch restarts shop-build-m1 with it
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == file crew/crew.json ==

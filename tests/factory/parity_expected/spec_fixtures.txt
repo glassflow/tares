@@ -6,14 +6,14 @@ exit: 0
 tares factory: planning in the repo <TMP>/shop
 tares factory: opening Claude as secret-plan-spec in <TMP>/shop, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
-         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "has_auth_token": false,
   "n": 1,

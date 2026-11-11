@@ -8,9 +8,9 @@ Shop was taken over from the crew; the session checks its builders have stopped,
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "p_shop",
     "TARES_PROJECT_NAME": "Shop",
     "TARES_SESSION_NAME": "shop-session",
@@ -39,9 +39,9 @@ Which project?
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "p_shop",
     "TARES_PROJECT_NAME": "Shop",
     "TARES_SESSION_NAME": "shop-session",
@@ -70,9 +70,9 @@ Which project?
 {
   "env": {
     "PWD": "<TMP>/elsewhere",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "p_notes",
     "TARES_PROJECT_NAME": "Notes app",
     "TARES_SESSION_NAME": "notes-app-session",
@@ -99,15 +99,15 @@ Which project?
   Choice [1]: 
 What do you want to build?
 > tares factory: opening Claude as a-habit-tracker-session in <TMP>/elsewhere.
-         It plans "a habit tracker" lightly into a new project on Tares (http://127.0.0.1:127.0.0.1:<PORT>) and builds it in the same
+         It plans "a habit tracker" lightly into a new project on Tares (http://127.0.0.1:<PORT>) and builds it in the same
          session; if it turns out big, it offers the full spec and the hand-over to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/elsewhere",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_SESSION_NAME": "a-habit-tracker-session"
   },
   "has_auth_token": false,

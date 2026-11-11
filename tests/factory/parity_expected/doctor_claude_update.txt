@@ -4,12 +4,12 @@ exit: 0
 tares factory doctor
   ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
   ok    crew home: <TMP>/crew
-  ok    Tares answers at http://127.0.0.1:127.0.0.1:<PORT> (from the environment)
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
   ok    stations load the plugin at <REPO>/claude-plugin
-  ok    MCP endpoint answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":false}
   ok    the kit follows the plugin checkout (not frozen)
   warn  crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); tares factory crew update moves them

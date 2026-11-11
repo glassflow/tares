@@ -9,9 +9,9 @@ tares factory: opening Claude as acme-web-spec in <TMP>/plain, as a contributor 
 {
   "env": {
     "PWD": "<TMP>/plain",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "Acme web",
     "TARES_SESSION_KIND": "contributor"
   },
@@ -34,9 +34,9 @@ tares factory: opening Claude as acme-web-spec in <TMP>/shop, as a contributor t
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "Acme web",
     "TARES_SESSION_KIND": "contributor"
   },
@@ -56,14 +56,14 @@ exit: 0
 tares factory: planning in the repo <TMP>/shop
 tares factory: opening Claude as no-such-project-spec in <TMP>/shop, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
-         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "has_auth_token": false,
   "n": 3,
@@ -81,14 +81,14 @@ exit: 0
 tares factory: planning in the repo <TMP>/shop
 tares factory: opening Claude as nobody-leads-spec in <TMP>/shop, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
-         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "has_auth_token": false,
   "n": 4,
@@ -106,14 +106,14 @@ exit: 0
 tares factory: planning in the repo <TMP>/shop
 tares factory: opening Claude as plain-notes-spec in <TMP>/shop, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
-         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "has_auth_token": false,
   "n": 5,
@@ -131,14 +131,14 @@ exit: 0
 tares factory: planning in the repo <TMP>/shop
 tares factory: opening Claude as secret-plan-spec in <TMP>/shop, with /tares:spec.
          It interviews you, one question at a time, and writes the spec, milestones and tickets
-         into a project on Tares (http://127.0.0.1:127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
 -- after --
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "has_auth_token": false,
   "n": 6,

@@ -80,7 +80,7 @@ exit: 0
       "$defaults",
       "Creating and editing files under <TMP>/crew-a (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop or under <TMP>/crew-a/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized."
     ],
     "environment": [
@@ -107,10 +107,10 @@ exit: 0
     "FACTORY_STATION": "a-reviewer",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew-a/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [
@@ -335,7 +335,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop or under <TMP>/crew/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized."
     ],
     "environment": [
@@ -362,10 +362,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "crew-reviewer-probe",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [
@@ -448,7 +448,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop: <TMP>/shop or under <TMP>/crew/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project shop, checked out at <TMP>/shop, and opening pull requests there, is expected work that Test Crew authorized.",
       "Merging a pull request in the repository of project shop, checked out at <TMP>/shop, that this crew opened from a `factory/*` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) and the orchestrator has relayed Test Crew's yes for that pull request, quoted verbatim from the desk."
     ],
@@ -478,10 +478,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "shop-build-m1",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/shop/.factory/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "uc_shop",
     "TARES_PROJECT_NAME": "shop"
   },
@@ -731,7 +731,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew-a (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop or under <TMP>/crew-a/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Building container images, loading them into the local kind cluster `factory`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop, are expected work that Test Crew authorized."
     ],
     "environment": [
@@ -758,10 +758,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "a-releaser-probe",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew-a/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [
@@ -787,7 +787,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew-a (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop or under <TMP>/crew-a/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized."
     ],
     "environment": [
@@ -814,10 +814,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "a-reviewer-probe",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew-a/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [
@@ -843,7 +843,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew-a (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop or under <TMP>/crew-a/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), today: <TMP>/shop, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized."
     ],
     "environment": [
@@ -870,10 +870,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "a-reviewer",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/crew-a/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [
@@ -900,7 +900,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew-a (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop: <TMP>/shop or under <TMP>/crew-a/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project shop, checked out at <TMP>/shop, and opening pull requests there, is expected work that Test Crew authorized.",
       "Merging a pull request in the repository of project shop, checked out at <TMP>/shop, that this crew opened from a `factory/*` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) and the orchestrator has relayed Test Crew's yes for that pull request, quoted verbatim from the desk."
     ],
@@ -930,10 +930,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "a-shop-build-m1",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/shop/.factory/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "uc_shop",
     "TARES_PROJECT_NAME": "shop"
   },
@@ -1265,7 +1265,7 @@ shop-build-m5	builder	shop	working
       "$defaults",
       "Creating and editing files under <TMP>/crew-b (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project shop: <TMP>/shop or under <TMP>/crew-b/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project shop, checked out at <TMP>/shop, and opening pull requests there, is expected work that Test Crew authorized.",
       "Merging a pull request in the repository of project shop, checked out at <TMP>/shop, that this crew opened from a `factory/*` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) and the orchestrator has relayed Test Crew's yes for that pull request, quoted verbatim from the desk."
     ],
@@ -1295,10 +1295,10 @@ shop-build-m5	builder	shop	working
     "FACTORY_STATION": "b-shop-build-m1",
     "FACTORY_TARES": "<TARES-BIN>",
     "FACTORY_WORKTREES": "<TMP>/shop/.factory/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "uc_shop",
     "TARES_PROJECT_NAME": "shop"
   },

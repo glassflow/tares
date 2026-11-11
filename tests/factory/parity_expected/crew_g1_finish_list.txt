@@ -1,7 +1,7 @@
 == step: finish shop all shipped ==
 exit: 0
 -- stdout --
-✓ shop is done. It is off the crew's work list; http://127.0.0.1:127.0.0.1:<PORT>/projects/p2 shows it.
+✓ shop is done. It is off the crew's work list; http://127.0.0.1:<PORT>/projects/p2 shows it.
 -- stderr --
 
 == step: projects ==

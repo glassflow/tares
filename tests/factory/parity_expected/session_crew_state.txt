@@ -33,9 +33,9 @@ In a few words, why (kept on Tares with the takeover; Enter to skip)
 {
   "env": {
     "PWD": "<TMP>/shop",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
     "TARES_PROJECT": "p_shop",
     "TARES_PROJECT_NAME": "Shop",
     "TARES_SESSION_NAME": "shop-session",

@@ -188,6 +188,8 @@ stub.write_text(
     "if mode == 'file1': write('x.json', '{\"a\": 1}')\n"
     "if mode == 'file2': write('x.json', '{\"a\": 2}')\n"
     "if mode == 'file3': write('y.txt', 'hello')\n"
+    "if mode == 'unported':\n"
+    "    sys.stderr.write('\"x\" is not yet ported to the Python engine\\n'); sys.exit(2)\n"
     "if mode == 'callv': subprocess.run([os.environ['CLAUDE_BIN'], '--version'], capture_output=True)\n"
     "if mode == 'calla': subprocess.run([os.environ['CLAUDE_BIN'], 'agents', '--json'], capture_output=True)\n"
     "sys.exit(1)\n")
@@ -315,22 +317,44 @@ ck("a failing check exits 1", code == 1 and "FAIL python" in text, f"{code}\n{te
 unported = parity.Scenario(name="fx_unported", suite="a", steps=[parity.Step(["no-such-command"])],
                            checks=[("it ran", lambda r: True)], covers=["x"], about="fixture")
 lines = []
-with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith(("PARITY_", "TARES_FACTORY_"))}):
+with mock.patch.dict(os.environ, stubbed("unported")):
     code, passes = parity.evaluate_python(unported, out=lines.append)
 ck("an unported command skips: SKIP python: not ported, exit 0, not counted as passing",
    any("SKIP python: not ported" in x for x in lines) and code == 0 and passes is False, "\n".join(lines))
 
-# One full run (it evaluates every scenario, in a pool of worker processes), asked for the strict form: below 100%
-# it exits 1 and says why; at 100% it exits 0.
-code, text = run("--coverage", "--require-full")
+# The strict coverage count, without running the scenarios (--static: each counts as passing). CI runs every scenario in
+# the `parity` job's shards (ci.yml), so this checks only that each recorded label has a scenario that names it.
+code, text = run("--coverage", "--require-full", "--static")
 last = [ln for ln in text.strip().splitlines() if ln.startswith("coverage: ")]
 last = last[-1] if last else ""
 full = last.startswith("coverage: ") and " of " in last and last.split()[1] == last.split()[3]
-ck("--coverage prints a percentage and --require-full exits 1 below 100% (0 at 100%)",
-   last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last
-   and code == (0 if full else 1) and (full or "--require-full" in text), f"{code}\n{text[-400:]}")
+ck("--coverage --require-full --static prints a percentage and exits 0 at 100%",
+   last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last and code == (0 if full else 1),
+   f"{code}\n{text[-400:]}")
 ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
-ck("every scenario passes, so the count is full", full, last)
+ck("every recorded check label has a scenario, so the count is full", full, last)
+code, text = run("--static")
+ck("--static alone exits 2", code == 2, f"{code} {text}")
+
+# --shard=I/N: every Nth scenario of the sorted list, so N shards run each scenario once (main, with the run stubbed).
+def shard_run(*argv):
+    seen = []
+    with mock.patch.object(parity, "evaluate_python", lambda sc, out=print: (seen.append(sc.name), (0, True))[1]):
+        rc = parity.main(list(argv))
+    return rc, seen
+
+
+parts = [shard_run(f"--shard={i}/4") for i in range(1, 5)]
+every = sorted(parity.SCENARIOS)
+ck("four shards are disjoint and together every scenario", all(rc == 0 for rc, _ in parts)
+   and sorted(x for _, p in parts for x in p) == every, str([len(p) for _, p in parts]))
+ck("a shard is every Nth scenario of the sorted list", parts[1][1] == every[1::4], str(parts[1][1][:3]))
+ck("a shard and a pattern run the union once each", sorted(shard_run("--shard=1/4", every[1])[1]) == sorted(every[0::4] + [every[1]]))
+for bad in ("--shard=0/4", "--shard=5/4", "--shard=a/b", "--shard=1"):
+    code, text = run(bad)
+    ck(f"{bad} exits 2", code == 2 and "--shard=I/N" in text, f"{code} {text}")
+code, text = run("--shard=1/%d" % len(every), "--list")
+ck("--list wins over a shard", code == 0 and "crew_basic" in text.split(), text)
 
 shutil.rmtree(work, ignore_errors=True)
 print(f"{P} passed, {F} failed")

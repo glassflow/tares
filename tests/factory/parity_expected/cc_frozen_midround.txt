@@ -52,7 +52,7 @@ claude code: 3 station(s) run an older Claude Code than 1.10.5; the freeze stops
 FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew unfreeze ==

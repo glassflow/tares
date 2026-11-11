@@ -7,6 +7,9 @@ bash engine printed and wrote when the scenario was recorded.
     python tests/factory/parity.py --coverage            every check label recorded in parity_labels.json, and how
                                                          many of them a passing scenario covers
     python tests/factory/parity.py --coverage --require-full   the same, exit 1 below 100%
+    python tests/factory/parity.py --coverage --require-full --static   the same without running the scenarios (each
+                                                         counts as passing): CI runs them in shards and checks the labels once
+    python tests/factory/parity.py --shard=I/N           every Nth scenario of the sorted list, from the Ith (CI's shards)
     python tests/factory/parity.py --record <scenario>   run the scenario on Python and store what it printed and wrote as
                                                          the expected result (parity_expected/<scenario>.txt)
 
@@ -5795,8 +5798,6 @@ ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\
 EPOCH = re.compile(r"(?P<pre>(?<![\w.])(?:at|since|until|epoch|ts|time|\w*_at|\w*_ts|\w*_time|\w*At)[\"']?\s*[=:]?\s*[\"']?)"
                    r"1[5-9]\d{8}(?:\d{3})?(?![\d.])")
 EPOCH_VALUE = re.compile(r"1[5-9]\d{8}(?:\d{3})?")
-# A fake Tares listens on a free port, a different one on each side
-PORT = re.compile(r"127\.0\.0\.1:\d{4,5}\b")
 UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 SESSION = re.compile(r"\bsession-\d+\b")
 # A job id (eight hex digits) is replaced only where a job id is printed: after `backgrounded ·`, or after
@@ -5804,7 +5805,7 @@ SESSION = re.compile(r"\bsession-\d+\b")
 JOB_ID = re.compile(r"(?P<pre>\bbackgrounded[^0-9a-f\n]+|\b(?:job|session|id|stop|rm)[ =:]+[\"']?)[0-9a-f]{8}\b")
 HEX8 = re.compile(r"[0-9a-f]{8}")
 PID_TEXT = re.compile(r"\b(pid|PID)([ =:]+)\d+")
-# The port of a throwaway fake Tares (an ephemeral port: five digits); 8787, 8788 and the like stay.
+# The port of a throwaway fake Tares, a different one on each run (an ephemeral port: five digits); 8787, 8788 and the like stay.
 PORT = re.compile(r"(?<=127\.0\.0\.1:)\d{5}\b")
 PID_KEYS = {"pid", "ppid", "watch_pid", "watchPid"}
 ID_KEYS = {"sessionId", "session_id", "id"}
@@ -5863,13 +5864,12 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     ver = plugin_version()
     if ver:
         s = re.sub(r"(version\s+)" + re.escape(ver) + r"(?![\w.])", r"\1<PLUGIN-VERSION>", s)
-    s = PORT.sub("127.0.0.1:<PORT>", s)
+    s = PORT.sub("<PORT>", s)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
     s = PID_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}<PID>", s)
     s = SESSION.sub("<ID>", s)
-    s = PORT.sub("<PORT>", s)
     s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
     return s
 
@@ -6260,11 +6260,13 @@ def passes_now() -> dict:
         return dict(zip(names, pool.map(passes_one, names)))
 
 
-def coverage(require_full: bool, out=print) -> int:
+def coverage(require_full: bool, out=print, run: bool = True) -> int:
+    """run=False (--static) does not run the scenarios and counts each as passing: the sharded CI runs
+    them, and this checks that every recorded label has a scenario that names it."""
     found = recorded_labels()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
-    results = passes_now()
+    results = passes_now() if run else {n: True for n in SCENARIOS}
     for sc in SCENARIOS.values():
         ok = results[sc.name]
         for label in sc.covers:
@@ -10376,19 +10378,24 @@ def main(argv: list) -> int:
                 pass
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
-    if flags - {"--coverage", "--require-full", "--list", "--record"}:
+    shard = next((f for f in flags if f.startswith("--shard=")), None)
+    flags.discard(shard)
+    if flags - {"--coverage", "--require-full", "--list", "--record", "--static"}:
         print(__doc__)
+        return 2
+    if "--static" in flags and "--coverage" not in flags:
+        print("parity: --static goes with --coverage", file=sys.stderr)
         return 2
     if "--list" in flags:
         print("\n".join(SCENARIOS))
         return 0
     if "--coverage" in flags:
-        return coverage("--require-full" in flags)
+        return coverage("--require-full" in flags, run="--static" not in flags)
     if "--require-full" in flags:
         print("parity: --require-full goes with --coverage", file=sys.stderr)
         return 2
-    if not args:
-        print("usage: parity.py <scenario>... | --list | --coverage [--require-full]", file=sys.stderr)
+    if not args and not shard:
+        print("usage: parity.py <scenario>... | --shard=I/N | --list | --coverage [--require-full] [--static]", file=sys.stderr)
         return 2
     names: list = []
     for pattern in args:  # `tidy_*` runs every tidy scenario; several patterns run the union, once each
@@ -10397,6 +10404,12 @@ def main(argv: list) -> int:
             print(f"parity: no scenario {pattern!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
             return 2
         names += [n for n in found if n not in names]
+    if shard:  # --shard=I/N: every Nth scenario of the sorted list, from the Ith, so N runners split them
+        m = re.fullmatch(r"--shard=([1-9]\d*)/([1-9]\d*)", shard)
+        if not m or int(m[1]) > int(m[2]):
+            print(f"parity: {shard} is not --shard=I/N with 1 <= I <= N", file=sys.stderr)
+            return 2
+        names += [n for n in sorted(SCENARIOS)[int(m[1]) - 1::int(m[2])] if n not in names]
     if "--record" in flags:
         return max(record_scenario(SCENARIOS[n]) for n in names)
     return max(evaluate_python(SCENARIOS[n])[0] for n in names)

@@ -34,7 +34,7 @@ watch: not running; tares factory crew up starts it (or run tares factory crew w
 desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer in the orchestrator's session):
   D4: Keep nightly dependency bumps?
     recommended: yes, since cheap
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == file crew/crew.json ==

@@ -102,6 +102,34 @@ jobs:
           if [ "${{ matrix.suite }}" = postgres ]; then export PYTHONPATH="$PWD/tests/pg_harness"; fi
           python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5
 
+  # The crew's parity scenarios (tests/factory/parity.py) on the Python engine alone, on Linux and on macOS: each runs
+  # in a throwaway crew and must print and write what the bash engine did when its result was recorded
+  # (tests/factory/parity_expected). Split into shards, one scenario at a time per runner (PARITY_JOBS=1: the cc_*
+  # scenarios share session ids). The 43 scenarios marked not_windows run only here. tests/test_parity.py (in the
+  # test job) checks that every recorded check label (parity_labels.json) has a scenario, without running them again.
+  parity:
+    name: parity (${{ matrix.os }} ${{ matrix.shard }}/6)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3, 4, 5, 6]
+    env:
+      PARITY_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: pip install -e .
+      - name: Parity scenarios
+        run: python tests/factory/parity.py --shard=${{ matrix.shard }}/6
+
   # The enterprise code's own tests, ee/tests/ci_list.txt (tests/ci_run.py --suite ee), with the
   # state in DuckDB and in Postgres. They run with a test licence the test root signed.
   test-ee:

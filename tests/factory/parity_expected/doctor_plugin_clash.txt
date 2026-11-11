@@ -4,12 +4,12 @@ exit: 0
 tares factory doctor
   ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
   ok    crew home: <TMP>/crew
-  ok    Tares answers at http://127.0.0.1:127.0.0.1:<PORT> (from the environment)
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
   warn  another version of the tares plugin is installed from a marketplace (tares@tares 0.2.1 project (/w/main)). Where Claude Code loads it, it takes the place of this one (<REPO>/claude-plugin, version <PLUGIN-VERSION>) and stations run without the factory skills. If they report missing skills, remove it: claude plugin uninstall tares@tares --scope project (run it in /w/main)
-  ok    MCP endpoint answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   warn  no crew yet in <TMP>/crew: tares factory crew up creates it
   ok    gh signed in
 all good
@@ -21,12 +21,12 @@ exit: 0
 tares factory doctor
   ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
   ok    crew home: <TMP>/crew
-  ok    Tares answers at http://127.0.0.1:127.0.0.1:<PORT> (from the environment)
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (0 active)
   ok    Claude Code trusts <TMP>/crew
   ok    stations load the plugin at <REPO>/claude-plugin
-  ok    MCP endpoint answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   warn  no crew yet in <TMP>/crew: tares factory crew up creates it
   ok    gh signed in
 all good

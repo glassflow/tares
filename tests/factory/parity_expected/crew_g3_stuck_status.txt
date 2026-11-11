@@ -7,7 +7,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 crew-releaser                  releaser     opus/high      done     -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew status ==
@@ -19,7 +19,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 crew-releaser                  releaser     opus/high      done     -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew status ==
@@ -31,7 +31,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 crew-releaser                  releaser     opus/high      done     -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew status ==
@@ -43,7 +43,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 crew-releaser                  releaser     opus/high      done     -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == file crew/crew.json ==

@@ -53,9 +53,9 @@ d = fresh()
 rc, out = run(d, "ee/tests/ci_list.txt")
 ck("another list is checked by its own path", rc != 0 and "ee/tests/ci_list.txt is missing" in out, f"{rc} {out!r}")
 
-# The real lists pass.
+# The real lists pass. The mit run of CI deletes every ee directory, so the ee list is checked only where it exists.
 rc1, o1 = run(ROOT, "tests/ci_list.txt")
-rc2, o2 = run(ROOT, "ee/tests/ci_list.txt")
+rc2, o2 = run(ROOT, "ee/tests/ci_list.txt") if (ROOT / "ee" / "tests" / "ci_list.txt").exists() else (0, "")
 ck("the real lists pass", rc1 == 0 and rc2 == 0, o1 + o2)
 
 for p in MADE:

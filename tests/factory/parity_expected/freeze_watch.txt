@@ -6,7 +6,7 @@ crew-orchestrator              orchestrator opus/high      done     -
 crew-reviewer                  reviewer     opus/high      done     -        
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew freeze ==
@@ -71,7 +71,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: doctor ==
@@ -80,12 +80,12 @@ exit: 1
 tares factory doctor
   ok    claude: <TMP>/bin/claude (1.0.0 (Claude Code))
   ok    crew home: <TMP>/crewlink
-  ok    Tares answers at http://127.0.0.1:127.0.0.1:<PORT> (from the environment)
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
   ok    Tares lets this crew in
   ok    Claude Code's session list reads (2 active)
   FIX   Claude Code has not trusted the crew home <TMP>/crewlink (the crew's own folder, whichever folder you run from; its stations run there). tares factory crew up offers to open Claude Code there to trust it, or: mkdir -p <TMP>/crewlink && cd <TMP>/crewlink && claude, accept the trust prompt, /exit
   ok    stations load the plugin at <TMP>/kit/claude-plugin
-  ok    MCP endpoint answers at http://127.0.0.1:127.0.0.1:<PORT>/mcp
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L3-review","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":false}
   ok    the kit is frozen since <TS> by kiran; the checkout has nothing newer
   warn  crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); tares factory crew update moves them
@@ -221,7 +221,7 @@ plugin: 2 station(s) run an older version; the freeze holds them (tares factory 
 FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew watch --once ==
@@ -403,7 +403,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 plugin: 2 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew watch --once ==
@@ -644,7 +644,7 @@ crew-reviewer                  reviewer     opus/high      done     -
 FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == step: crew unfreeze ==
@@ -1107,7 +1107,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: could not read the crew settings from Tares at http://127.0.0.1:127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
+tares factory: could not read the crew settings from Tares at http://127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
 == step: crew status ==
 exit: 0
 -- stdout --
@@ -1118,9 +1118,9 @@ plugin: 2 station(s) run an older version; the freeze holds them (tares factory 
 FROZEN: the kit (Tares does not say since when); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
-tares factory: could not read the crew settings from Tares at http://127.0.0.1:127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
+tares factory: could not read the crew settings from Tares at http://127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
 == step: crew unfreeze ==
 exit: 0
 -- stdout --
@@ -1212,7 +1212,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
       "$defaults",
       "Creating and editing files under <TMP>/crewlink (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crewlink/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crewlink/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that the user authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
     ],
     "environment": [
@@ -1239,10 +1239,10 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "FACTORY_STATION": "crew-orchestrator",
     "FACTORY_TARES": "<TMP>/bin/tares",
     "FACTORY_WORKTREES": "<TMP>/crewlink/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [
@@ -1288,7 +1288,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
       "$defaults",
       "Creating and editing files under <TMP>/crewlink (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crewlink/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
-      "Reading and writing this crew's records on Tares at http://127.0.0.1:127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that the user authorized."
     ],
     "environment": [
@@ -1315,10 +1315,10 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
     "FACTORY_STATION": "crew-reviewer",
     "FACTORY_TARES": "<TMP>/bin/tares",
     "FACTORY_WORKTREES": "<TMP>/crewlink/worktrees",
-    "TARESD_URL": "http://127.0.0.1:127.0.0.1:<PORT>",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
     "TARES_AUTH_TOKEN": "",
-    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:127.0.0.1:<PORT>/mcp",
-    "TARES_FACTORY_URL": "http://127.0.0.1:127.0.0.1:<PORT>"
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
   },
   "permissions": {
     "allow": [

@@ -16,7 +16,7 @@ plugin: 4 station(s) run an older version; tares factory crew watch moves each o
 claude code: 1 station(s) run an older Claude Code than 2.1.310; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
-Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+Crew page: http://127.0.0.1:<PORT>/crew
 -- stderr --
 
 == file crew/crew.json ==
