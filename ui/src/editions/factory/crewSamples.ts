@@ -172,7 +172,7 @@ export function sampleDetail(): Promise<MemberDetail> {
         text: "Approved #595. One nit: name the variable KNOWN_DIFFERENCES so it matches the docs." },
       { kind: "divider", at: at("10:02"), text: "Memory compacted" },
       { kind: "asked", at: at("10:05"), from: "The factory", quiet: true,
-        text: "Builder tick: follow the Tick section of the station-builder skill." },
+        text: "Builder tick: follow the Tick section of your skill." },
       { kind: "said", at: at("10:06"), text: "Renaming it now." },
       { kind: "said", at: at("10:07"), text: "Told the reviewer: pull request ready <b>not markup</b>" },
     ],
