@@ -13,7 +13,7 @@ Every Tares call names its project (`project=`).
 
 1. Load `factory-protocol` if you haven't.
 2. Read the global docs (`read_global_docs`, which now include your own rules), the crew settings (`get_crew_settings`, yours) and grants (`read_grants`: the project and team grants, and your person's own). Note whether the crew has a releaser (`releaser: true`). Read the newest entries of every `$FACTORY_HOME/reports/*.md`.
-3. Run `factory roster` (and `list_crew`). Expect `READY` from `$FACTORY_CREW-reviewer` (and `$FACTORY_CREW-releaser` when the crew has one), and from any builder still recorded as active.
+3. Run `tares factory roster` (and `list_crew`). Expect `READY` from `$FACTORY_CREW-reviewer` (and `$FACTORY_CREW-releaser` when the crew has one), and from any builder still recorded as active.
 4. **Your work list is `my_work`**: the tickets of your person (the person this crew belongs to), not of everyone on the cell. `ready` are their tickets that can start, `in_progress` the ones a station holds, `desk` the open items addressed to them, `led_projects` the projects they lead. Start builders for `ready` tickets as in "Starting a project" below. `crew_projects` (every project handed to the crew, with its repos: `path` on this machine, GitHub `name`) is for context only: where a repo is cloned, what a project spans. Other people's tickets in it are not yours. On an older Tares with no `my_work` (factory-protocol), your work list is every project in `crew_projects`: its ready tickets come from `list_tickets` (`ready: true`, no holder), the in-progress ones from the tickets a station holds, and the desk from `desk_list`.
 5. **Re-ask the desk.** The `desk` of `my_work` (`desk_list` on an older Tares) (items addressed to your person): if items are open, ask the one your report says you were asking (else the top one) now, as in "The desk" below. The person may be attached right after a revive.
 6. Arm your schedule with `CronCreate`: every 20 minutes, with the prompt `Orchestrator tick: follow the Tick section of the station-orchestrator skill.` Check `CronList` first so you never hold two. If `get_crew_settings` shows `idle_wake` true, arm no tick: the factory wakes you.
@@ -27,11 +27,11 @@ A project reaches you two ways: a `[TF:SHIP]` message from the spec session (sta
 3. Start builders for the first milestone with work left: **one builder per repo** that your own `ready` tickets of that milestone change (the `ready` list of `my_work`, never the whole milestone). A ticket's `repo` (owner/name) matches a repo's `name` in `crew_projects`; a ticket with no `repo` belongs to the first repo. For each:
 
    ```
-   factory spawn builder "<project>" m<k>-<repo folder name> <repo path> "<TASK message: project, repo, ticket refs, definition of done>"
+   tares factory spawn builder "<project>" m<k>-<repo folder name> <repo path> "<TASK message: project, repo, ticket refs, definition of done>"
    ```
 
    With one repo, the slug is just `m<k>`. It starts `<project>-build-<slug>` in that repo with `TARES_PROJECT` set. The project's autonomy (from its hand-over) sticks to its builders by itself; pass `--autonomy L3-review` only when the person asked for a stricter one after the hand-over. A looser one needs the person to change the crew setting. Never more than `builders_max` builders across all projects: start the rest when one finishes.
-   While the factory paces the crew (a note from it, or `factory crew status` saying `pace: slow` or `pace: hold`), start no new builder: `factory spawn builder` refuses until the plan has room. Helpers are fine. Leave the tickets ready and spawn the builder after.
+   While the factory paces the crew (a note from it, or `tares factory crew status` saying `pace: slow` or `pace: hold`), start no new builder: `tares factory spawn builder` refuses until the plan has room. Helpers are fine. Leave the tickets ready and spawn the builder after.
 4. Give each builder its tickets: `assign_ticket(ticket, holder="<project>-build-<slug>", project=...)`, only the tickets of its repo that are in your `ready` list. `assign_ticket` does not check whose ticket it is, so you do: never assign a ticket `my_work` does not list for your person.
 5. Reply to the sender (if it was a message) with one line: what you started, for which tickets. Write it to your report.
 
@@ -39,7 +39,7 @@ A project reaches you two ways: a `[TF:SHIP]` message from the spec session (sta
 
 - **One milestone at a time per project.** When a milestone's last ticket merges, run its crew checks (`list_milestones`: `crew_to_run`) and record each with `record_milestone_check` (pass or fail, the last lines it showed). A fail is the crew's work: open a ticket for it in that milestone, where the project's tickets live. Checks `for` person are not yours: the person tries them in the console. A person's "something's wrong" shows as `person_wrong`: open the ticket with `write_ticket`, which creates it in the system the project's tickets live in. A milestone is done when its tickets are merged and its checks pass (with a releaser: also shipped to the dev or staging target and verified). The checks and the finish are yours only for a project in `led_projects`; for any other project you only watch your own tickets. Then start builders for your next `ready` tickets, or give the same builder the next of its repo. Tell your person in one line when a milestone is done.
 - **Across repos.** Give a builder a ticket only once every ticket it `depends_on` is merged, even when that ticket is in another repo and held by another builder or by another person's crew. Start a repo's builder when its first ticket is in your `ready` list; until then, say in your report which ticket it waits on. When the waited-on ticket merges it shows in `ready` on the next tick: assign it then and, if needed, start its builder.
-- **Builders.** `factory retire <station>` a builder once all its tickets are merged and nothing more in its repo is ready for it.
+- **Builders.** `tares factory retire <station>` a builder once all its tickets are merged and nothing more in its repo is ready for it.
 - **Ledger.** Tares holds it: you set holders with `assign_ticket`; each holder moves its own stage with `set_stage`; GitHub fills PR, CI and the `factory/review` verdict. You read it all with `get_ticket`, and `list_tickets` for context; what is yours to act on is in `my_work`.
 - **Release**, only when the crew has a releaser: when the tickets of a milestone that you lead (or that are all yours) are merged, send `$FACTORY_CREW-releaser` a `RELEASE` with the project, repo, refs and those tickets. Without one, nobody tags or deploys: the milestone is done at merged.
 - **Check a station's claims from the record.** When a station has stalled, or a `DONE` is something Tares or GitHub can't confirm, read its ticket (`get_ticket`: checks against the recording, messages, history) and its report, then ask it one line. Once per stall, not every tick.
@@ -56,8 +56,8 @@ person agrees. Then:
 2. Record their answer with `desk_answer`, their words as typed. On a yes, call
    `finish_project(project, decision="D<n>")`. Tares keeps their words, marks the project done and
    takes it off `crew_projects`. On a no, ask what is missing and write it as tickets.
-3. Retire the project's builders still recorded (`factory retire <station>`), and check it left
-   no worktrees (`factory tidy` any that remain).
+3. Retire the project's builders still recorded (`tares factory retire <station>`), and check it left
+   no worktrees (`tares factory tidy` any that remain).
 4. If `finish_project` says the crew holds no other project, ask on the desk whether to stop the
    crew, with `project` set to the project you just finished and these words: "No project is left.
    Stop the crew? Run `tares factory crew down` in your terminal." Recommend yes: idle stations
@@ -76,7 +76,7 @@ session <project>` in their terminal). Tares records it with their words and tak
 Release it gracefully; nothing the builders did is thrown away:
 
 1. Assign nothing more in that project and start no builder for it.
-2. Send each of its builders (the `holders`, and any `<project>-build-*` in `factory roster`)
+2. Send each of its builders (the `holders`, and any `<project>-build-*` in `tares factory roster`)
    `[TF:STOP]` with the project: finish the current step, commit and push what they have to their
    branch, write their progress in the working doc of each ticket they hold, then reply `DONE`
    with the branch and pull request of each ticket.
@@ -137,7 +137,7 @@ On routine work your word is the person's: routing, relays, go-aheads on decisio
 
 On each scheduled tick, and whenever you wake with nothing queued:
 
-1. `factory roster`. A station that should exist is missing or `gone`: `factory revive <station>` with a prompt that carries any pending hand-off. Don't revive a builder whose tickets are all merged.
+1. `tares factory roster`. A station that should exist is missing or `gone`: `tares factory revive <station>` with a prompt that carries any pending hand-off. Don't revive a builder whose tickets are all merged.
 2. `my_work`, first (on an older Tares, the ready tickets of `crew_projects` as in Boot). Assign each `ready` ticket to a builder (start it, as above). Watch `in_progress`: a ticket in `doing`, `review` or `changes` with nothing new for 45 minutes: read the holder's report and the ticket's record, then ask it one line; unreachable, revive it. When Tares has no PR link for a ticket in review, check `gh pr list -R <owner>/<repo>` (you run in the crew home, so always name the repo). A project under `releasing` was taken over by the person: release it (above), even without a `TAKEOVER` message. Do not walk the tickets of every project in `crew_projects`: the others are other people's.
 3. Only for the `led_projects`: a milestone whose tickets are all delivered (`milestones_ready_to_check`) gets its checks run and is finished (above): tell the person, and start the next (with a releaser, `RELEASE` first). The last milestone complete: finish the project (above). A project you do not lead is finished by its lead's crew.
 4. A ticket merged that another of yours waits on (`depends_on`, any repo): it shows in `ready` now; assign it, starting its builder if needed.
@@ -151,4 +151,4 @@ When the person asks "status" (or attaches after a while), answer in under ten l
 
 ## Stopping
 
-On the person saying stop, run `factory crew halt "<their words>"` and send `HALT` to every station; start nothing new. On resume, `factory crew resume` and `RESUME`. You may stop, retire or revive only stations recorded in `$FACTORY_HOME/stations.json`.
+On the person saying stop, run `tares factory crew halt "<their words>"` and send `HALT` to every station; start nothing new. On resume, `tares factory crew resume` and `RESUME`. You may stop, retire or revive only stations recorded in `$FACTORY_HOME/stations.json`.

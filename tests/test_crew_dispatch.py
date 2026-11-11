@@ -56,6 +56,11 @@ def short(x, n=300):
 
 
 T = Path(tempfile.mkdtemp(prefix="tares crew dispatch "))
+# The dispatcher reads "engine" from ~/factory/crew.json when nothing else says; a person's real one must not
+# change what these checks route (TR-1069). The checks that pass an env of {} read the home of this process.
+(T / "home").mkdir()
+os.environ["HOME"] = os.environ["USERPROFILE"] = str(T / "home")
+os.environ.pop("FACTORY_CREW_HOME", None)
 HAVE_BASH = os.name != "nt" and Path("/bin/bash").exists()
 # A bare environment is enough for Python on Mac and Linux. On Windows the interpreter will not start
 # without SYSTEMROOT ("failed to get random numbers"), so a probe's environment carries it.
@@ -181,6 +186,51 @@ with ported(TABLE):
        short(err))
     ck("...and runs nothing", not execs and calls == [], short((execs, calls)))
     ck("an invalid value fails even for a command that would go to bash", call_run([UNPORTED], {ENGINE: "x"})[0] == 2)
+# ---------- "engine" in crew.json (TR-1069) ----------
+print("engine in crew.json")
+
+
+def crew_json_env(text, name="cj"):
+    """An env whose crew home holds a crew.json with this text (None: no file)."""
+    home = T / name
+    home.mkdir(parents=True, exist_ok=True)
+    f = home / "crew.json"
+    f.unlink(missing_ok=True)
+    if text is not None:
+        f.write_text(text, encoding="utf-8")
+    return {"FACTORY_CREW_HOME": str(home)}
+
+
+with ported(TABLE):
+    ck("no crew.json: the default", dispatch.engine_setting(crew_json_env(None)) == ("", ""))
+    ck("an empty crew.json object: the default", dispatch.engine_setting(crew_json_env("{}")) == ("", ""))
+    ck('"engine": "bash" is bash, from crew.json', dispatch.engine_setting(crew_json_env('{"engine": "bash"}')) == ("bash", "crew.json"))
+    ck('"engine": "python" in crew.json is the default, not Python alone', dispatch.engine_setting(crew_json_env('{"engine": "python"}')) == ("", "crew.json"))
+    ck("the variable wins over crew.json", dispatch.engine_setting({**crew_json_env('{"engine": "bash"}'), ENGINE: "python"}) == ("python", ENGINE))
+    for text in ("not json", "[]", '{"engine": 3}', '{"engine": null}', '{"engine": ""}', ""):
+        ck(f"a crew.json of {text!r} is ignored", dispatch.engine_setting(crew_json_env(text)) == ("", ""))
+    e = crew_json_env('{"engine": "bash"}')
+    ck("crew.json bash: a ported command goes to bash", dispatch.route(["zz"], e)[0] == "bash")
+    ck("...and an unported one", dispatch.route([UNPORTED], e)[0] == "bash")
+    ck("...and the watch", dispatch.route(["crew", "watch"], e)[0] == "bash" or dispatch.is_windows())
+    ck("TARES_FACTORY_ENGINE=python beats crew.json bash", dispatch.route(["zz"], {**e, ENGINE: "python"})[0] == "python")
+    ck("...and TARES_FACTORY_ENGINE=bash beats crew.json python",
+       dispatch.route(["zz"], {**crew_json_env('{"engine": "python"}'), ENGINE: "bash"})[0] == "bash")
+    ck("crew.json python: a ported command runs in Python", dispatch.route(["zz"], crew_json_env('{"engine": "python"}'))[0] == "python")
+    ck("...an unported one still goes to bash until it is ported", dispatch.route([UNPORTED], crew_json_env('{"engine": "python"}'))[0] == "bash")
+    code, out, err, execs = call_run(["zz"], crew_json_env('{"engine": "perl"}'))
+    ck("an unknown crew.json engine exits 2, naming crew.json", code == 2 and 'engine" in crew.json must be' in err and not execs, short((code, err)))
+    code, out, err, execs = call_run(["zz"], crew_json_env('{"engine": "bash"}'), windows=True)
+    ck("crew.json bash on Windows exits 2: no bash there", code == 2 and "needs bash, which is not available on Windows" in err and not execs, short((code, err)))
+    calls.clear()
+    code, out, err, execs = call_run(["zz"], crew_json_env('{"engine": "bash"}'), "/x/factory")
+    ck("crew.json bash through run: one execve of bash, no Python command", len(execs) == 1 and not calls, short((execs, calls)))
+    ck("the crew home comes from HOME when FACTORY_CREW_HOME is not set",
+       dispatch.engine_setting({"HOME": str(T / "cjhome"), "USERPROFILE": str(T / "cjhome")}) == ("", ""))
+    (T / "cjhome" / "factory").mkdir(parents=True, exist_ok=True)
+    (T / "cjhome" / "factory" / "crew.json").write_text('{"engine": "bash"}', encoding="utf-8")
+    ck("...and then ~/factory/crew.json is read",
+       dispatch.engine_setting({"HOME": str(T / "cjhome"), "USERPROFILE": str(T / "cjhome")}) == ("bash", "crew.json"))
 ck("the old fallback variable is not read", "TARES_FACTORY_BASH_FALLBACK" not in
    (ROOT / "tares" / "crew" / "dispatch.py").read_text(encoding="utf-8") + (ROOT / "tares" / "cli.py").read_text(encoding="utf-8"))
 
@@ -291,6 +341,30 @@ with ported(TABLE):
     ck("...and execs nothing, runs nothing", not execs and not calls, short((execs, calls)))
     code, out, err, execs = call_run([UNPORTED], {ENGINE: "weird"}, windows=True)
     ck("an invalid value is still an invalid value on Windows", code == 2 and "must be" in err and not execs, short(err))
+# ---------- a Mac or Linux with no bash: the platform is detected, the message says so (TR-1069, D73) ----------
+print("no bash on this system")
+
+
+def call_run_nobash(argv, env=None):
+    with mock.patch.object(dispatch, "bash_exe", lambda e: None):
+        return call_run(argv, env)
+
+
+with ported(TABLE):
+    code, out, err, execs = call_run_nobash([UNPORTED], {})
+    ck("an unported command with no bash exits 2, no traceback", code == 2 and execs == [] and "Traceback" not in err, short((code, err)))
+    ck("...naming the command and that bash was not found", err == f'tares factory: "{UNPORTED}" is not yet ported to the Python engine, and bash was not found on this system (PATH)\n',
+       short(err))
+    calls.clear()
+    code, out, err, execs = call_run_nobash(["zz"], {})
+    ck("a ported command still runs", calls == [("a", ["zz"])] and code == 0 and not execs, short((calls, code, err)))
+    code, out, err, execs = call_run_nobash(["zz"], {ENGINE: "bash"})
+    ck("engine=bash with no bash exits 2 with a message of its own", code == 2 and "needs bash, which is not available on this system" in err and not execs, short((code, err)))
+with mock.patch.object(dispatch, "bash_exe", lambda e: None):
+    ck("TARES_FACTORY_WATCH=bash still gets the Python watch when there is no bash", dispatch.route(["crew", "watch"], {"TARES_FACTORY_WATCH": "bash"})[0] == "python")
+ck("bash_exe finds a bash on this machine (or says None)", dispatch.bash_exe({"PATH": os.environ.get("PATH", "")}) in (None, "/bin/bash") or os.path.basename(dispatch.bash_exe({"PATH": os.environ.get("PATH", "")})) == "bash")
+with mock.patch.object(os.path, "exists", lambda p: False), mock.patch.object(shutil, "which", lambda *a, **k: None):
+    ck("bash_exe is None when /bin/bash and PATH have none", dispatch.bash_exe({}) is None)
 ck("is_windows is true only for win32", dispatch.is_windows() == (sys.platform == "win32"))
 with mock.patch.object(sys, "platform", "win32"):
     ck("...patching sys.platform flips it", dispatch.is_windows() is True)

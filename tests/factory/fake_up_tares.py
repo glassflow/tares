@@ -9,9 +9,16 @@ It answers what crew up and the station launches ask, from memory, on one free p
     GET  /api/grants                {"all": "- \\"<words>\\" (<date>)\\n..."}
     POST /api/grants                {words, scope: "all"}: one more line
     GET  /api/people                {"people": [...]}
-    GET  /api/crew/projects         {"projects": []}
+    GET  /api/crew/projects         {"projects": [...]} (none unless the scenario hands some over)
     GET  /api/desk                  {"desk": []}
     POST /mcp                       an MCP `initialize` answer (it has serverInfo)
+
+With `token` set it is a Tares with auth on: every route but /health and /mcp answers 401 without `Authorization: Bearer <token>`.
+/mcp is the shared MCP endpoint, a server of its own that answers `initialize` to anyone; `mcp_auth` keeps the
+Authorization header of each probe it got, for a scenario to see that the probe carried the key.
+With `projects` (the documents GET /api/crew/projects lists; "{tmp}" in a repo path is the folder the scenario runs in)
+it also answers GET /api/projects/<id> and GET /api/grants?project=<id>, and keeps a project grant (POST /api/grants
+with scope "project"). `project_grants` is {project id: [grant lines]}.
 
 Every write (PUT, POST except /mcp) is kept in order in <dir>/writes.jsonl as {method, path, body}, so a
 scenario can compare what two engines saved. Anything else answers 404. Standard library only; it runs in a
@@ -28,7 +35,8 @@ from pathlib import Path
 
 
 class FakeTares:
-    def __init__(self, directory, settings=None, people=None, grants=None, capabilities=None):
+    def __init__(self, directory, settings=None, people=None, grants=None, capabilities=None,
+                 token="", projects=None, project_grants=None):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.writes = self.dir / "writes.jsonl"
@@ -38,6 +46,10 @@ class FakeTares:
         self.grants = list(grants or [])
         # what /health lists: crew up wants "integrations" (need_capability); capabilities=[] is an old Tares
         self.capabilities = list(["integrations"] if capabilities is None else capabilities)
+        self.token = token                  # "": no auth
+        self.mcp_auth: list = []            # the Authorization header (or None) of each POST /mcp
+        self.projects = json.loads(json.dumps(projects or []).replace("{tmp}", json.dumps(str(self.dir.parent))[1:-1]))
+        self.project_grants = {k: list(v) for k, v in (project_grants or {}).items()}
         self.lock = threading.Lock()
         outer = self
 
@@ -63,19 +75,42 @@ class FakeTares:
                 except ValueError:
                     return raw
 
+            def _refused(self, path):
+                """True (after answering 401) when auth is on and the request carries another key."""
+                if outer.token and path != "/health" and self.headers.get("Authorization") != f"Bearer {outer.token}":
+                    self._send(401, {"detail": "unauthorized"})
+                    return True
+                return False
+
             def do_GET(self):
                 path = self.path.split("?", 1)[0]
+                if self._refused(path):
+                    return
                 with outer.lock:
                     if path == "/health":
                         return self._send(200, {"status": "ok", "capabilities": list(outer.capabilities)})
                     if path == "/api/crew/settings":
                         return self._send(200, dict(outer.settings))
                     if path == "/api/grants":
-                        return self._send(200, {"all": "".join(line + "\n" for line in outer.grants).rstrip("\n")})
+                        allg = "".join(line + "\n" for line in outer.grants).rstrip("\n")
+                        if "project=" in self.path:
+                            from urllib.parse import unquote
+                            ref = unquote(self.path.split("project=", 1)[1].split("&", 1)[0])
+                            found = [p for p in outer.projects if ref in (p.get("id"), p.get("name"))]
+                            if not found:
+                                return self._send(404, {"detail": "unknown project"})
+                            pid = found[0]["id"]
+                            mine = outer.project_grants.get(pid, [])
+                            return self._send(200, {"all": allg, "project": "".join(line + "\n" for line in mine).rstrip("\n")})
+                        return self._send(200, {"all": allg})
                     if path == "/api/people":
                         return self._send(200, {"people": outer.people})
                     if path == "/api/crew/projects":
-                        return self._send(200, {"projects": []})
+                        return self._send(200, {"projects": outer.projects})
+                    if path.startswith("/api/projects/"):
+                        for p in outer.projects:
+                            if path == "/api/projects/" + p.get("id", ""):
+                                return self._send(200, p)
                     if path == "/api/desk":
                         return self._send(200, {"desk": []})
                 self._send(404, {"error": "not found"})
@@ -83,6 +118,8 @@ class FakeTares:
             def do_PUT(self):
                 body = self._body()
                 path = self.path.split("?", 1)[0]
+                if self._refused(path):
+                    return
                 with outer.lock:
                     outer._log("PUT", path, body)
                     if path == "/api/crew/settings" and isinstance(body, dict):
@@ -94,14 +131,21 @@ class FakeTares:
                 body = self._body()
                 path = self.path.split("?", 1)[0]
                 if path.startswith("/mcp"):
+                    outer.mcp_auth.append(self.headers.get("Authorization"))
                     return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {
                         "protocolVersion": "2025-03-26", "capabilities": {},
                         "serverInfo": {"name": "fake-tares", "version": "0"}}})
+                if self._refused(path):
+                    return
                 with outer.lock:
                     outer._log("POST", path, body)
                     if path == "/api/grants" and isinstance(body, dict) and body.get("words"):
                         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-                        outer.grants.append(f'- "{body["words"]}" ({today})')
+                        line = f'- "{body["words"]}" ({today})'
+                        if body.get("scope") == "project" and body.get("project"):
+                            outer.project_grants.setdefault(body["project"], []).append(line)
+                        else:
+                            outer.grants.append(line)
                         return self._send(200, {"ok": True})
                 self._send(404, {"error": "not found"})
 

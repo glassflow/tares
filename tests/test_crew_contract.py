@@ -368,6 +368,9 @@ else:
         ck(f"settings {who}: no schema_version key (Claude Code reads this file)", "schema_version" not in doc)
         if role == "builder":
             ck("settings builder: its project is set", doc["env"].get("TARES_PROJECT_NAME") == "shop", doc["env"])
+            # FACTORY_TARES is the path of the `tares` on this machine's PATH (TR-1069): not part of the sample
+            bin_ = doc["env"].pop("FACTORY_TARES", None)
+            ck("settings builder: FACTORY_TARES, when set, is an absolute path", bin_ is None or os.path.isabs(bin_), bin_)
             fixture("settings.json", stable(pretty(doc), tmp))
     ck("settings: a settings file without its env fails the schema", problems("settings", {"permissions": {"allow": []}}) != [])
     ck("settings: a token in TARES_AUTH_TOKEN fails the schema", problems("settings", dict(doc, env=dict(doc["env"], TARES_AUTH_TOKEN="secret"))) != [])
