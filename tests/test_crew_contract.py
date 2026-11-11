@@ -35,6 +35,9 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 sys.path.insert(0, str(ROOT / "tests" / "factory"))
 
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
+
+_crew_guard.scratch_home()   # the probes below inherit this process's HOME: not the real one (TR-1164)
 import fake_claude  # noqa: E402
 from _crew_fake import fake_crew_env  # noqa: E402
 

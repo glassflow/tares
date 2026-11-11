@@ -7,8 +7,24 @@ name: windows-crew
 
 on:
   pull_request:
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
 
 concurrency:
@@ -49,8 +65,6 @@ jobs:
       - name: Install
         shell: pwsh
         run: |
-          # The package forces ui/dist into the wheel and fails without it. The crew engine never serves the console, so an empty folder is enough here.
-          New-Item -ItemType Directory -Force -Path ui\dist | Out-Null
           uv venv
           uv pip install -e .
       # FACTORY_CREW_HOME is the crew's own folder under that profile, so every path the engine builds from it has the

@@ -8,8 +8,24 @@ name: factory-engine
 
 on:
   pull_request:
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
   workflow_dispatch:
 
 concurrency:
@@ -36,8 +52,6 @@ jobs:
           python-version: "3.12"
       - name: Install
         run: |
-          # The package forces ui/dist into the wheel and fails without it. The crew engine never serves the console, so an empty folder is enough here.
-          mkdir -p ui/dist
           python -m venv .venv
           .venv/bin/pip install -e .
           echo "$PWD/.venv/bin" >> "$GITHUB_PATH"

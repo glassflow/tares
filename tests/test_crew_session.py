@@ -22,6 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "factory"))
 
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
+
+_crew_guard.scratch_home()   # the probes below inherit this process's HOME: not the real one (TR-1164)
 from _crew_fake import fake_crew_env  # noqa: E402
 from parity import FakeTares  # noqa: E402
 from tares.crew import dispatch, person  # noqa: E402

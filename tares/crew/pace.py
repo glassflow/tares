@@ -143,6 +143,16 @@ def remember(paths: CrewPaths, reading: Reading) -> None:
     _LAST[str(paths.home)] = (time.monotonic(), reading)
 
 
+def has_read(paths: CrewPaths) -> bool:
+    """bash's PACE_READ: this process has read the pace (in its main shell, not in a command substitution)."""
+    return str(paths.home) in _LAST
+
+
+def unremember(paths: CrewPaths) -> None:
+    """Drop the reading of one crew home (a reading taken in a command substitution leaves nothing behind)."""
+    _LAST.pop(str(paths.home), None)
+
+
 def forget() -> None:
     """Drop every remembered reading (tests, and a crew home that changed)."""
     _LAST.clear()
@@ -418,9 +428,9 @@ def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> 
         client.say(f"pacing: telling {s} ({want}) in the same conversation")
         try:
             lifecycle.restart(fresh, paths, [s, p["prompt"]], claude_bin=claude_bin)
-        except CrewError as e:
+        except (CrewError, OSError) as e:   # bash: any failure of the restart (a file it cannot write) is the same
             sys.stdout.flush()
-            print(e.line, file=sys.stderr)
+            print(e.line if isinstance(e, CrewError) else e, file=sys.stderr)
             client.say(f"could not tell {s} about the pace; will try again next round")
             return
         state.event("pace", s, want, paths=paths)

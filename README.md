@@ -1,8 +1,8 @@
 # Tares
 
-**The open-source platform for always-on AI agents.**
+**Always-on AI agents, as a Software Factory or an AI SRE.**
 
-Most agents wait for a prompt and forget everything when the session ends. Tares gives agents a place to work from: events from your systems land on one timeline per thing, agents wake when something happens, and what they decide (findings, plans, tickets, reviews, your answers) is kept for the next reader, human or agent. Works with Claude Code, Cursor, Codex and your own agents over MCP.
+Tares comes in two editions, and each Tares you create is one of them. As a **Software Factory**, a crew of Claude Code sessions takes your projects from a spec to pull requests merged on main. As an **AI SRE**, agents watch your services and tell you what broke and why. Both keep what they decide (plans, tickets, reviews, incident notes, your answers) for the next reader, human or agent.
 
 [![PyPI](https://img.shields.io/pypi/v/tares)](https://pypi.org/project/tares/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -13,76 +13,60 @@ Most agents wait for a prompt and forget everything when the session ends. Tares
 
 <!-- mcp-name: ai.glassflow/tares -->
 
-## What you can build with it
+## Software Factory
 
-### Agents that watch your systems
+You plan a project with Claude Code. A crew of Claude Code sessions on your machine builds it: an orchestrator hands out the tickets, builders open pull requests, a reviewer holds every change to a fixed bar, and a change merges once it passes review and CI. You talk to one session, and only for the decisions that are yours.
 
-Connect anything that emits events: logs, metrics, alerts, deploys, commits, database rows, webhooks. Tares merges them into one time-ordered timeline per service, repo, customer or job, and a trigger wakes an agent the moment something matters, with that timeline already in hand. The agent writes its conclusion back onto the timeline.
+- **Plan once**: a spec, milestones with acceptance checks, and tickets with a working doc each, kept on Tares, Linear or GitHub Issues.
+- **Build in parallel**: one crew serves every project, with a builder per milestone and repo.
+- **See it all in one place**: the console shows what waits for you, each project's progress, the tickets, the pull requests in review and the crew at work.
+- **Nothing is lost**: tickets, reviews, the crew's calls and your answers live on Tares, so the crew carries on after a restart and you can check every choice it made.
+- **Work as a team**: each person runs their own crew on the same Tares, with project leads, private projects and repo owners the spec asks instead of guessing.
 
-- **An AI SRE**: an alert fires, the agent reads the service's whole history and writes the diagnosis before anyone opens a dashboard.
-- **Shared code context**: when a change matters, an agent updates the team's context repository with a pull request.
-- **Anything with a failure mode**: failed jobs, sandbox runs, voice calls, each with a timeline, a trigger and a finding that says what broke.
+```bash
+uv tool install tares                         # or: brew install glassflow/tap/tares
+tares login                                   # sign in to your Tares Cloud workspace (or run `tares up`)
+tares factory crew up                         # start the crew; the first run asks how far it may go
+tares factory spec "what you want to build"   # in your repo: plan the project and hand it over
+```
 
-→ [Build an AI SRE](https://docs.glassflow.ai/tares/guides/ai-sre), [Projects](https://docs.glassflow.ai/tares/projects)
+Needs Claude Code (signed in, on a plan with background sessions) and `gh` with write access to your repos.
 
-### A software factory
+→ [Get started](https://docs.glassflow.ai/tares/software-factory/get-started), [The console](https://docs.glassflow.ai/tares/software-factory/console), [Teams](https://docs.glassflow.ai/tares/software-factory/teams), [A project, end to end](https://docs.glassflow.ai/tares/software-factory/a-project-end-to-end)
 
-One crew of Claude Code sessions on your machine builds every project you hand it. You plan a project with Claude; an orchestrator hands out the tickets, builders open pull requests, a reviewer holds every change to a fixed bar, and builders merge once it passes and CI is green. You talk to one session, and only for decisions that are yours.
+## AI SRE
 
-- **Plan once**: a spec, milestones with acceptance checks, and tickets with a working doc each.
-- **Build in parallel**: one crew serves every project, a builder per milestone and repo.
-- **Nothing is lost**: tickets, reviews, the crew's assumptions and your answers live on Tares, so the crew carries on after a restart and you can check every choice it made.
+Connect your logs, metrics, alerts, traces and deploys. Tares puts every event about a service on one timeline, a watcher checks every service on a schedule, and when something looks wrong an investigator writes an incident note: what is failing, the likely cause, the evidence and the next step. The note lands in Slack, where your team takes it, resolves it, or says whether it was worth raising.
 
-→ [Software factory](https://docs.glassflow.ai/tares/software-factory/get-started), [A project, end to end](https://docs.glassflow.ai/tares/software-factory/a-project-end-to-end)
+```bash
+uv tool install tares     # or: brew install glassflow/tap/tares
+tares up                  # choose 2) AI SRE; console on http://127.0.0.1:8787
+```
+
+→ [Get started](https://docs.glassflow.ai/tares/ai-sre/get-started), [Tutorial: build an AI SRE](https://docs.glassflow.ai/tares/ai-sre/tutorial)
+
+## Tares Cloud or your own machine
+
+**[Tares Cloud](https://console.tares-glassflow.com/)** is the managed version: create a Software Factory or AI SRE workspace, and it is ready in about a minute. Team features are included.
+
+On your own machine, `tares up` runs the same open source Tares: one daemon and one DuckDB file, with no external database, no broker and no telemetry. To run it on your private cloud for a team, use the enterprise version: write to [help@glassflow.ai](mailto:help@glassflow.ai).
 
 ## Why Tares
 
-- **One read instead of ten tool calls.** An agent asks about a thing once and gets its correlated history across every source.
-- **Agents that run on events, not prompts.** Triggers wake your agent over MCP or a webhook, or run a Tares agent in-process.
-- **A record that outlives the session.** Findings, plans, tickets, reviews and decisions stay on Tares for the next reader.
+- **A record that outlives the session.** Plans, tickets, reviews, findings and decisions stay on Tares for the next reader.
+- **Agents that run on events, not prompts.** Work continues while you are away, and you are asked only what is yours to decide.
+- **One read instead of ten tool calls.** An agent asks about a service once and gets its correlated history across every source.
 - **Bring your own agent.** Claude Code, Cursor, Codex or your own loop, over MCP. Any model provider for Tares's own agents.
-- **Yours to run.** MIT licensed, one daemon and one DuckDB file on your machine or server. No external database, no broker, no telemetry.
-
-## Quickstart
-
-```bash
-uv tool install tares                    # or: brew install glassflow/tap/tares
-tares up                                 # daemon + console on http://127.0.0.1:8787
-tares mcp --transport streamable-http    # in a second terminal: the MCP endpoint, :8788/mcp
-```
-
-Then pick what you came for.
-
-**Give an agent your systems.** Add a source under **Sources → Add source** in the console (or start the [demo stack](demo/) to break something on purpose), and connect your agent:
-
-```bash
-claude mcp add --transport http tares http://localhost:8788/mcp
-```
-
-Ask it: *"Use tares: what happened to api-server in the last 15 minutes?"* → [Quickstart](https://docs.glassflow.ai/tares/quickstart)
-
-**Build software with a crew.** Needs Claude Code (signed in, on a plan with background sessions) and `gh` with write access to your repos:
-
-```bash
-tares factory crew up                         # start the crew; the first run asks how far it may go
-tares factory spec "what you want to build"   # in your repo: plan the project and hand it over
-tares factory crew attach orchestrator        # answer the crew's questions
-```
-
-Watch it on the **Crew** page of the console. → [Software factory](https://docs.glassflow.ai/tares/software-factory/get-started)
-
-Prefer not to run it yourself? **[Tares Cloud](https://console.tares-glassflow.com/)** is the managed version, with the MCP endpoint already running.
 
 ## Learn more
 
 | | |
 |---|---|
-| [Concepts](https://docs.glassflow.ai/tares/concepts) | sources, timelines, triggers, agents and projects |
-| [Connectors](https://docs.glassflow.ai/tares/connectors) | Prometheus, OTLP, GitHub, Vercel, Postgres, webhooks, Claude Code sessions and more |
-| [Agents](https://docs.glassflow.ai/tares/agents) | connect any MCP client, or run Tares agents on a trigger |
-| [Software factory](https://docs.glassflow.ai/tares/software-factory/get-started) | the crew, its commands, and a project from spec to merged |
+| [Software Factory](https://docs.glassflow.ai/tares/software-factory) | the crew, planning, tickets, the console, teams and commands |
+| [AI SRE](https://docs.glassflow.ai/tares/ai-sre) | connecting your data, watching, incidents, services and runbooks |
+| [Platform](https://docs.glassflow.ai/tares/platform) | the engine underneath: connectors, timelines, triggers, agents and projects |
 | [Deployment](https://docs.glassflow.ai/tares/reference/deployment) | Docker, servers, TLS and auth |
-| [AI resources](https://docs.glassflow.ai/tares/agents/ai-resources) | for coding assistants: Markdown endpoints and instructions to paste |
+| [AI resources](https://docs.glassflow.ai/tares/platform/agents/ai-resources) | for coding assistants: Markdown endpoints and instructions to paste |
 
 ## Feedback
 
@@ -90,4 +74,4 @@ Bug reports and ideas are welcome via [GitHub issues](https://github.com/glassfl
 
 ## License
 
-[MIT](LICENSE). This licence covers everything in this repository except directories named `ee`, which are under the licence in [ee/LICENSE](ee/LICENSE).
+[MIT](LICENSE). This licence covers everything in this repository except directories named `ee`, which are under the licence in [ee/LICENSE](ee/LICENSE). Without an enterprise licence key, a self-hosted Tares runs for one person; see [Enterprise licence](https://docs.glassflow.ai/tares/enterprise).

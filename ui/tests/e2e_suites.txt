@@ -17,6 +17,7 @@ factory-project
 factory-project-controls
 factory-projects
 factory-reviews
+factory-secrets
 factory-settings
 factory-start
 factory-start-show

@@ -145,11 +145,11 @@ ck("each scenario covers checks that exist", all(label in found[sc.suite] for sc
 
 # The wrapper suites (A39) run another suite on Python and have no check line of their own; coverage leaves them
 # out of the total. The set is pinned here, so a real suite cannot be added to it to lift the percentage.
-ck("the wrapper suites are exactly crew_python and claude_update_python",
-   set(parity.WRAPPERS) == {"crew_python", "claude_update_python"}, str(sorted(parity.WRAPPERS)))
+ck("the wrapper suites are exactly crew_python, claude_update_python and idle_wake_python",
+   set(parity.WRAPPERS) == {"crew_python", "claude_update_python", "idle_wake_python"}, str(sorted(parity.WRAPPERS)))
 ck("...each names the suite it runs and says why",
    all(of in found and isinstance(why, str) and why for of, why in parity.WRAPPERS.values() if of in found)
-   and {of for of, _ in parity.WRAPPERS.values()} == {"crew", "claude_update"}, str(parity.WRAPPERS))
+   and {of for of, _ in parity.WRAPPERS.values()} == {"crew", "claude_update", "idle_wake"}, str(parity.WRAPPERS))
 ck("...and a wrapper that is a suite today has no check line, so it is one whole-suite scenario",
    all(found[s] == [f"(the whole {s} suite)"] for s in parity.WRAPPERS if s in found), str({s: found[s] for s in parity.WRAPPERS if s in found}))
 ck("...and no suite with checks of its own is a wrapper",
