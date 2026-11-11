@@ -206,24 +206,10 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 ]
 == file claude/calls.jsonl ==
 {"args": ["--version"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-o", "Claude Code was updated to 2.1.200, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-orchestrator, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/work"}
 {"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
 == asked of Tares ==
 PUT /api/crew/claude-retry?crew=crew key=no {
   "stations": {}

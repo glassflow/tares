@@ -21,9 +21,9 @@ it also answers GET /api/projects/<id> and GET /api/grants?project=<id>, and kee
 with scope "project"). `project_grants` is {project id: [grant lines]}.
 
 Every write (PUT, POST except /mcp) is kept in order in <dir>/writes.jsonl as {method, path, body}, so a
-scenario can compare what two engines saved. Anything else answers 404. Standard library only; it runs in a
+scenario can compare what was saved. Anything else answers 404. Standard library only; it runs in a
 thread of the process that starts it, so it works on Windows too. This is a test double, not the product:
-the milestone runs of tests/factory/crew_test.sh still use a real daemon.
+the milestone runs still use a real daemon.
 """
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
 """Ids of their own for the idle_wake and freeze scenarios that start stations.
 
 A process that says `attach <id>` is visible to every process on the machine, and `claude.attached` looks at all of
-them (bash: pgrep -f, Python: psutil). The scenarios that attach the shared fake ids (aaaa0001, bbbb0002, bbbb0003,
+them (psutil). The scenarios that attach the shared fake ids (aaaa0001, bbbb0002, bbbb0003,
 cccc0004), or another crew's run of this harness, make a station that is idle here look "open in a terminal", and it is
 not woken, restarted or upgraded. These scenarios keep their assertions as they are and run with ids nobody else uses.
 """

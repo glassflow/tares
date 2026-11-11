@@ -1,4 +1,4 @@
-"""Parity scenarios for compat_test.sh (a Tares that lacks a capability) and the one check of crew_test.sh
+"""Parity scenarios for a Tares that lacks a capability, and the one crew check
 that no other scenario stands for ("orchestrator may spawn as tares factory"). See parity.py for the machinery."""
 from parity import *  # noqa
 import parity as P  # noqa  (underscore-prefixed helpers)
@@ -6,10 +6,9 @@ import parity as P  # noqa  (underscore-prefixed helpers)
 import ast
 
 
-# --- compat_test.sh -------------------------------------------------------------------------------------------
-# The bash suite starts a fake /health for an old cell and for one with other capabilities, and a real daemon for
-# the cell that has the capability. Here one stand-in Tares (fake_up_tares.py) plays all three in turn, its /health
-# body swapped between the steps. The "real" body has the shape tares/daemon.py gives /health (status,
+# --- a Tares that lacks a capability -------------------------------------------------------------------------------------------
+# One stand-in Tares (fake_up_tares.py) plays an old cell, one with other capabilities and one that has the
+# capability, in turn, its /health body swapped between the steps. The "real" body has the shape tares/daemon.py gives /health (status,
 # auth_required, sources, pct_used, version, capabilities, uptime_seconds) and its capabilities are read from
 # CAPABILITIES in tares/daemon.py itself, so the stand-in lists what a real cell lists.
 
@@ -48,12 +47,6 @@ def _health_of_real_cell(r):
     r.marks["after_other"] = r.launches()
 
 
-def _body(source: str, name: str) -> str:
-    """The text of the bash function `name` (from `name() {` to the closing `}` at the start of a line)."""
-    m = re.search(r"^" + name + r"\(\) \{\n.*?^\}", source, re.M | re.S)
-    return m.group(0) if m else ""
-
-
 def _python_body(path: str, name: str) -> str:
     text = (ROOT / "tares" / "crew" / path).read_text(encoding="utf-8")
     for node in ast.walk(ast.parse(text)):
@@ -63,11 +56,8 @@ def _python_body(path: str, name: str) -> str:
 
 
 def _never_asks_for_a_capability(r) -> bool:
-    """The bash check greps cmd_status and cmd_down of the script for need_capability; the Python engine's
-    counterparts are views.cmd_status and lifecycle.down. Both must exist, and neither may call it."""
-    bash = (ROOT / "claude-plugin" / "bin" / "factory").read_text(encoding="utf-8")
-    parts = [_body(bash, "cmd_status"), _body(bash, "cmd_down"),
-             _python_body("views.py", "cmd_status"), _python_body("lifecycle.py", "down")]
+    """views.cmd_status and lifecycle.down must exist, and neither may call need_capability."""
+    parts = [_python_body("views.py", "cmd_status"), _python_body("lifecycle.py", "down")]
     return all(parts) and not any("need_capability" in p for p in parts)
 
 
@@ -119,9 +109,9 @@ scenario(Scenario(
 ))
 
 
-# --- crew_test.sh: the orchestrator's permission to run `tares factory spawn` --------------------------------------
-# parity.py's launch_settings_crew checks it under a longer label ("... too (TR-1069)"); the bash suite's own label
-# is the shorter one, so this scenario stands for it, on the same driver and the same assertion.
+# --- the orchestrator's permission to run `tares factory spawn` --------------------------------------
+# parity.py's launch_settings_crew checks it under a longer label ("... too (TR-1069)"); this scenario keeps the
+# shorter label, on the same driver and the same assertion.
 
 scenario(Scenario(
     name="launch_settings_spawn",

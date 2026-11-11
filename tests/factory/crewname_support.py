@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Support for the crewname hook scenarios of parity.py: runs the plugin's guard and session-start hooks for a helper, as
-crewname_test.sh does with `tares hook guard` and `tares hook session-start`.
+"""Support for the crewname hook scenarios of parity.py: runs the plugin's guard and session-start hooks for a helper, with
+`tares hook guard` and `tares hook session-start`.
 
-    crewname_support.py <bash|python> guard <parent> <command> <crew>   prints deny or allow
-    crewname_support.py <bash|python> start <parent> <crew>             prints the station skill a helper is told to load
+    crewname_support.py guard <parent> <command> <crew>   prints deny or allow
+    crewname_support.py start <parent> <crew>             prints the station skill a helper is told to load
 
-The hooks are Python scripts of the plugin that both engines share, so the engine word changes nothing here.
 Standard library only.
 """
 from __future__ import annotations
@@ -33,13 +32,13 @@ def hook(name: str, payload: dict, parent: str, crew: str, station: str = "") ->
 
 
 def main(argv: list) -> int:
-    kind = argv[2] if len(argv) > 2 else ""
-    if kind == "guard" and len(argv) == 6:
-        out = hook("guard", {"tool_name": "Bash", "tool_input": {"command": argv[4]}}, argv[3], argv[5])
+    kind = argv[1] if len(argv) > 1 else ""
+    if kind == "guard" and len(argv) == 5:
+        out = hook("guard", {"tool_name": "Bash", "tool_input": {"command": argv[3]}}, argv[2], argv[4])
         print("deny" if '"deny"' in out else "allow")
         return 0
-    if kind == "start" and len(argv) == 5:
-        out = hook("session-start", {"source": "startup"}, argv[3], argv[4], station="h")
+    if kind == "start" and len(argv) == 4:
+        out = hook("session-start", {"source": "startup"}, argv[2], argv[3], station="h")
         try:
             text = json.loads(out)["hookSpecificOutput"]["additionalContext"]
         except (ValueError, KeyError):
@@ -47,7 +46,7 @@ def main(argv: list) -> int:
         m = re.search(r"station-[a-z]*", text)
         print(m.group(0) if m else "")
         return 0
-    print("usage: crewname_support.py <bash|python> guard <parent> <command> <crew> | start <parent> <crew>", file=sys.stderr)
+    print("usage: crewname_support.py guard <parent> <command> <crew> | start <parent> <crew>", file=sys.stderr)
     return 2
 
 

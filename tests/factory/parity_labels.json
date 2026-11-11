@@ -113,9 +113,6 @@
   "a mark for an older version: the next settled round drops it from Tares",
   "crew update, a helper that could not be restarted: the watch is not said to revive it"
  ],
- "claude_update_python": [
-  "(the whole claude_update_python suite)"
- ],
  "compat": [
   "crew up against a cell with no capabilities stops with the upgrade message",
   "it starts nothing",
@@ -349,9 +346,6 @@
   "doctor without an MCP server says how to start one",
   "doctor without Tares says how to start one"
  ],
- "crew_python": [
-  "(the whole crew_python suite)"
- ],
  "crewname": [
   "default crew: roster names it",
   "FACTORY_CREW_NAME=a: roster names a-orchestrator",
@@ -560,9 +554,6 @@
   "off: the watch is back to doing nothing",
   "a restart now says to re-arm the schedule",
   "on: a restart says to arm no tick"
- ],
- "idle_wake_python": [
-  "(the whole idle_wake_python suite)"
  ],
  "lsp": [
   "doctor names Python and TypeScript for the repo and says neither has a server",

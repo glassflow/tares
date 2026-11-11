@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-"""The Tares side of the pace, for the `pace_daemon` scenario of parity.py: pace_test.sh feeds a real Tares
-fake /usage readings and asks it what the pace is. The crew engines do not take part (the harness runs this on
-both sides and compares the two printouts, which must be the same); the daemon is the real one, run in this
-process on a throwaway database.
+"""The Tares side of the pace, for the `pace_daemon` scenario of parity.py: it feeds a real Tares fake /usage
+readings and asks it what the pace is. The crew engine does not take part; the daemon is the real one, run in
+this process on a throwaway database.
 
-    pace_daemon.py <bash|python>
+    pace_daemon.py
 
-Prints one JSON object per line, in the order of the bash suite: first {"settings": ..., "pace": ...} for the
+Prints one JSON object per line, in the order of the readings: first {"settings": ..., "pace": ...} for the
 crew settings the way they start, then {"set": ...} once the pace is switched on, then one {"plan": [session,
 weekly, seconds until the window resets], "pace": <GET /api/crew/pace, without the note and the reset time>} for each reading, and a last one for a
 reading with no limit in it. Standard library, httpx and the package itself.
@@ -30,7 +29,7 @@ os.environ["TARES_CATALOG"] = os.path.join(TMP, "none.yaml")
 os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-pace"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
-# the readings of pace_test.sh, in its order: session %, weekly %, seconds until the window resets (negative: it has)
+# the readings, in order: session %, weekly %, seconds until the window resets (negative: it has)
 READINGS = [(84, 89, 10800), (85, 89, 10800), (10, 10, 10800), (10, 89, 10800), (10, 90, 10800), (94, 90, 10800),
             (95, 90, 10800), (100, 10, 10800), (100, 10, -60)]
 
@@ -40,7 +39,7 @@ def iso(seconds: float) -> str:
 
 
 def plan_line(session: int, weekly: int, reset_in: int, nonce: int) -> dict:
-    """What `plan` of pace_test.sh posts: the two limits /usage reads, as a claude_plan line."""
+    """What a reading posts: the two limits /usage reads, as a claude_plan line."""
     return {"type": "claude_plan", "timestamp": iso(0), "nonce": nonce, "usage_report": {"rate_limits": {"limits": [
         {"kind": "session", "percent": session, "resets_at": iso(reset_in), "scope": None, "is_active": True},
         {"kind": "weekly_all", "percent": weekly, "resets_at": iso(259200), "scope": None, "is_active": False}]}}}

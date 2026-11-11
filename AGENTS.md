@@ -85,20 +85,21 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
 | `TARES_FACTORY_ENGINE` | which engine runs `tares factory`: unset runs Python, and a command not yet ported falls back to bash; `python` allows Python only (an unported command exits 2); `bash` runs bash for every command. `"engine": "bash"` in `~/factory/crew.json` is the same as `bash` when the variable is not set. `tares factory doctor` shows the active engine |
 | `TARES_SECRETS_KEY` | turns on project secrets (TR-775): any long random string, from the cell's environment only; the values are sealed with a key made from it, so a changed one leaves stored secrets unreadable until they are set again |
-| `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` hand to bash, instead of the one in the install or checkout; the factory suites set it to their edited copy of the kit when `FACTORY_BIN` is set |
-| `TARES_FAKE_PS_DIR` | test hook: a folder a suite's fake `ps` (`tests/factory/fake-ps`) answers from, with `ps/<pid>.<field>` files and a `ps-list` file; the Python engine reads processes with psutil, which cannot see a fake `ps` on PATH, so with this set it reads those files instead of the machine's processes, and runs the `sort-hook` file once between `crew update`'s two spare checks, where bash's fake `sort` would |
-| `TARES_URL_LOG` | test hook: a file the Python crew engine appends each Tares request URL to, one per line; the suites' curl shim does the same for bash, and `tests/factory/idle_wake_test.sh` reads the file to check which addresses the watch asked for |
+| `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` hand to bash, instead of the one in the install or checkout |
+| `TARES_FAKE_PS_DIR` | test hook: a folder a suite's fake `ps` (`tests/factory/fake-ps`) answers from, with `ps/<pid>.<field>` files and a `ps-list` file; the Python engine reads processes with psutil, which cannot see a fake `ps` on PATH, so with this set it reads those files instead of the machine's processes, and runs the `sort-hook` file once between `crew update`'s two spare checks |
+| `TARES_URL_LOG` | test hook: a file the Python crew engine appends each Tares request URL to, one per line; the idle wake scenarios read the file to check which addresses the watch asked for |
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 
 ## Crew engine port
 
 The crew checks are parity scenarios (`tests/factory/parity.py`, run by `tests/test_parity.py`): each one runs the Python
-engine and compares what it prints and writes with the result recorded once from the bash engine, stored in
+engine alone and compares what it prints and writes with the result recorded once from the bash engine, stored in
 `tests/factory/parity_expected/<scenario>.txt`. A deliberate change to what a crew command prints or writes fails its
 scenario; re-record it with `python tests/factory/parity.py --record <scenario>` and say why in the PR.
-`python tests/factory/parity.py --python-only '*'` runs them all; `--python-only --coverage --require-full` checks that every
-recorded check label has a scenario.
+`python tests/factory/parity.py '*'` runs them all; `--coverage --require-full` checks that every recorded check label
+(`tests/factory/parity_labels.json`) has a scenario. The spare-session scenarios (`cc_*`) list the machine's real Claude
+processes, so on a machine with real spare sessions they can differ; run them alone (`PARITY_JOBS=1`).
 
 Once a crew command is ported to Python, change both engines in the same PR: CI (`port-drift`, its own workflow) fails a PR that edits a ported bash function without touching its Python module file. It looks at the file, not the function: any edit to `tares/crew/client.py` satisfies every function ported there, so the reviewer still checks that the matching Python changed. It also fails when it cannot find a ported function at all. The `port-drift-ok` label skips it; add or remove the label and the job runs again.
 

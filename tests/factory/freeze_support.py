@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""Runs the looping watch of freeze_test.sh for the `freeze_*` scenarios of parity.py: a watch that keeps
+"""Runs the looping watch of the freeze checks for the `freeze_*` scenarios of parity.py: a watch that keeps
 running while the kit changes under it, which a step that waits for its command to end cannot do.
 
-    freeze_support.py <bash|python> <crew command and arguments>     the command itself, as `python -m tares.crew`
-    freeze_support.py <bash|python> @frozen-loop                     a frozen crew's watch meets a newer kit
-    freeze_support.py <bash|python> @copy-loop                       a watch started from the frozen copy outlives it
+    freeze_support.py <crew command and arguments>     the command itself, as `python -m tares.crew`
+    freeze_support.py @frozen-loop                     a frozen crew's watch meets a newer kit
+    freeze_support.py @copy-loop                       a watch started from the frozen copy outlives it
 
 The two @ words start `crew watch --interval 1` as a process of its own (in the scenario's crew and Tares), change the
-kit the way freeze_test.sh's change_kit does, wait as the suite does, stop the watch, and print what the suite looked
-at as one JSON object, so the scenario's checks read it and the two engines can be compared.
+kit (a line appended to a skill file), wait, stop the watch, and print what it looked at as one JSON object, so the
+scenario's checks read it.
 
-"Runs from" is the plugin folder a watch was started on. The bash watch is `bash <plugin>/bin/factory crew watch`, and
-the suite reads it from `ps`. The Python watch is `python -m tares.crew crew watch` whatever the plugin, so it is read
-from the TARES_PLUGIN_DIR the process runs with (psutil), which is where the Python engine takes its plugin from.
+"Runs from" is the plugin folder a watch was started on. The watch is `python -m tares.crew crew watch` whatever the
+plugin, so it is read from the TARES_PLUGIN_DIR the process runs with (psutil), which is where the engine takes its
+plugin from.
 
 Standard library and psutil (the engine's own dependency).
 """
@@ -76,22 +76,17 @@ def stop_watch(p: subprocess.Popen) -> None:
             continue
 
 
-def runs_from(p: subprocess.Popen, engine: str) -> str:
+def runs_from(p: subprocess.Popen) -> str:
     """The plugin folder the watch runs from ("" when it cannot be told)."""
     import psutil
     try:
         proc = psutil.Process(p.pid)
-        if engine == "bash":
-            for arg in proc.cmdline():
-                if arg.endswith("/bin/factory"):
-                    return arg[:-len("/bin/factory")]
-            return ""
         return proc.environ().get("TARES_PLUGIN_DIR", "")
     except psutil.Error:
         return ""
 
 
-def frozen_loop(engine: str, env: dict) -> dict:
+def frozen_loop(env: dict) -> dict:
     """A frozen crew, every station up and idle on the old kit, and a watch that is running: the kit changes."""
     from tares.crew import kit as kitmod
     crew, kit = Path(env["FACTORY_CREW_HOME"]).resolve(), Path(env["TARES_PLUGIN_DIR"])
@@ -119,7 +114,7 @@ def frozen_loop(engine: str, env: dict) -> dict:
     return facts
 
 
-def copy_loop(engine: str, env: dict) -> dict:
+def copy_loop(env: dict) -> dict:
     """A watch started from the frozen copy of the kit, left running past the unfreeze (TR-686)."""
     crew, kit = Path(env["FACTORY_CREW_HOME"]).resolve(), Path(env["TARES_PLUGIN_DIR"])
     snap = crew / "frozen-kit"
@@ -129,13 +124,13 @@ def copy_loop(engine: str, env: dict) -> dict:
     try:
         gone = wait_for(lambda: not snap.exists(), SLOW)
         alive = p.poll() is None
-        before = runs_from(p, engine) if alive else ""
+        before = runs_from(p) if alive else ""
         change_kit(kit, "v5")
         restarted = wait_for(lambda: "the watch restarts on the new version"
                              in out.read_text(encoding="utf-8", errors="replace"), SLOW)
         time.sleep(2)
         after_alive = p.poll() is None
-        after = runs_from(p, engine) if after_alive else ""
+        after = runs_from(p) if after_alive else ""
         text = out.read_text(encoding="utf-8", errors="replace")
         facts = {
             "copy_gone": gone,
@@ -148,7 +143,7 @@ def copy_loop(engine: str, env: dict) -> dict:
             "no_such_file": "No such file" in text,
         }
         # The restarted watch moves a station onto the new kit. Let that move end before the watch is stopped, so a
-        # station lock is not left behind by a stop that comes in the middle of it (the engines differ in speed).
+        # station lock is not left behind by a stop that comes in the middle of it.
         wait_for(lambda: count_events(crew, "upgraded") >= 1, SLOW)
         wait_for(lambda: not list((crew / "stations").glob("*.lock")), SLOW)
         time.sleep(1)
@@ -158,15 +153,15 @@ def copy_loop(engine: str, env: dict) -> dict:
 
 
 def main(argv: list) -> int:
-    if len(argv) < 2 or argv[0] not in ("bash", "python"):
+    if not argv:
         print(__doc__, file=sys.stderr)
         return 2
-    engine, rest = argv[0], argv[1:]
+    rest = argv
     if rest[0] == "@frozen-loop":
-        print(json.dumps(frozen_loop(engine, dict(os.environ)), sort_keys=True))
+        print(json.dumps(frozen_loop(dict(os.environ)), sort_keys=True))
         return 0
     if rest[0] == "@copy-loop":
-        print(json.dumps(copy_loop(engine, dict(os.environ)), sort_keys=True))
+        print(json.dumps(copy_loop(dict(os.environ)), sort_keys=True))
         return 0
     return subprocess.run(ENGINE_CMD + rest, env=dict(os.environ), cwd=os.getcwd()).returncode
 

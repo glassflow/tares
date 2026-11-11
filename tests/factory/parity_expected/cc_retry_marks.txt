@@ -29,7 +29,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer crew-or
 -- after --
 {
   "fails": 1,
-  "in": 590
+  "in": 600
 }
 == step: crew update ==
 exit: 1

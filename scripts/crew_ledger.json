@@ -4387,96 +4387,6 @@
   ],
   "test_suites": [
     {
-      "name": "ci_list.txt",
-      "kind": "suite",
-      "what": "names of the bash tests CI runs",
-      "ticket": "TR-952",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "The parity harness reads it to run the same list against both engines."
-    },
-    {
-      "name": "claude_update_test.sh",
-      "kind": "suite",
-      "what": "Claude Code move and crew update",
-      "ticket": "TR-964",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
-    },
-    {
-      "name": "claude_update_python_test.sh",
-      "kind": "suite",
-      "what": "claude_update_test.sh on the Python engine alone (TARES_FACTORY_ENGINE=python); any FAIL fails it",
-      "ticket": "TR-1157",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "CI wrapper: sets FACTORY_BIN and the engine; the suite sets TARES_FAKE_PS_DIR. Replaces the mixed-mode wrapper (TR-1156)."
-    },
-    {
-      "name": "compat_test.sh",
-      "kind": "suite",
-      "what": "crew up refuses a cell without the integrations capability; status and down still work",
-      "ticket": "TR-952",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
-    },
-    {
-      "name": "crew_test.sh",
-      "kind": "suite",
-      "what": "the broad crew test: up, status, spawn, revive, halt, settings, doctor, cmux",
-      "ticket": "TR-952",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Umbrella suite: run against both engines by the parity harness; its doctor part is ported by TR-969 (the cmux part rides with TR-970)."
-    },
-    {
-      "name": "crew_python_test.sh",
-      "kind": "suite",
-      "what": "crew_test.sh on the Python engine; only the 3 kit-update scenarios (TR-965) may fail until that port merges",
-      "ticket": "TR-1155",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "CI wrapper: sets FACTORY_BIN and TARES_FACTORY_ENGINE=python. Empty KNOWN_FAIL once TR-965 merges."
-    },
-    {
-      "name": "crew_view_seed.sh",
-      "kind": "suite",
-      "what": "scratch Tares with a known Crew view, for looking by eye",
-      "ticket": "TR-975",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Not a CI test. Port it or drop it when bash is removed."
-    },
-    {
-      "name": "crewname_test.sh",
-      "kind": "suite",
-      "what": "crew naming at crew up",
-      "ticket": "TR-956",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Ported in parts (TR-956): parity scenarios crewname_two_crews (the names, crew.json, the refusals) and crewname_roster_title. The roster, builder, helper, adoption and hook checks ride with TR-957, TR-953 and TR-969."
-    },
-    {
-      "name": "factory-bin",
-      "kind": "suite",
-      "what": "runs the factory CLI under test as the command in FACTORY_BIN",
-      "ticket": "TR-952",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Lets the unchanged bash suites run against the Python engine: FACTORY_BIN=\"tares factory\"."
-    },
-    {
       "name": "fake-claude",
       "kind": "suite",
       "what": "stand-in claude binary for the tests",
@@ -4514,177 +4424,37 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Test double (settings, grants, people, MCP initialize) the parity harness and test_crew_setup_contract.py start in a thread; the bash suites still use a real daemon."
-    },
-    {
-      "name": "freeze_test.sh",
-      "kind": "suite",
-      "what": "kit freeze and unfreeze",
-      "ticket": "TR-965",
-      "dropped": false,
-      "python": "tests.factory.parity:SCENARIOS",
-      "ported": true,
-      "note": "tests/test_crew_kit.py and the freeze_* parity scenarios; freeze_test.sh takes TARES_FACTORY_ENGINE=python (TR-965)."
-    },
-    {
-      "name": "guard_test.sh",
-      "kind": "suite",
-      "what": "the guard hook",
-      "ticket": "TR-971",
-      "dropped": false,
-      "python": "tests.test_crew_guard_hook:guard",
-      "ported": true,
-      "note": "tests/test_crew_guard_hook.py runs the same 154 cases (tests/guard_cases.jsonl) and 15 more that pin branches (tests/guard_extra_cases.jsonl) against guard.py; guard_test.sh takes TARES_FACTORY_ENGINE=python."
-    },
-    {
-      "name": "heavy_test.sh",
-      "kind": "suite",
-      "what": "factory-heavy",
-      "ticket": "TR-972",
-      "dropped": false,
-      "python": "tests.test_crew_heavy:run",
-      "ported": true,
-      "note": "tests/test_crew_heavy.py checks the Python port (including the lock shared with bash); heavy_test.sh stays for the bash helper."
-    },
-    {
-      "name": "idle_wake_test.sh",
-      "kind": "suite",
-      "what": "idle wake",
-      "ticket": "TR-961",
-      "dropped": false,
-      "python": "tests.factory.parity:SCENARIOS",
-      "ported": true,
-      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases; the bash suite stays for them. The curl URL checks run on the Python engine too (TR-1158): the client notes each URL in the file TARES_URL_LOG names."
-    },
-    {
-      "name": "idle_wake_python_test.sh",
-      "kind": "suite",
-      "what": "idle_wake_test.sh on the Python engine (TARES_FACTORY_ENGINE=python); any FAIL fails it",
-      "ticket": "TR-1158",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "CI wrapper: sets FACTORY_BIN and TARES_FACTORY_ENGINE=python; the suite sets TARES_URL_LOG."
+      "note": "Test double (settings, grants, people, MCP initialize) the parity harness and test_crew_setup_contract.py start in a thread;  a real daemon."
     },
     {
       "name": "route_proxy.py",
       "kind": "suite",
-      "what": "a pass-through proxy in front of a test Tares that fails one route on purpose, so both engines see the failed lookup",
+      "what": "a pass-through proxy in front of a test Tares that fails one route on purpose",
       "ticket": "TR-1123",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by spec_test.sh through start_failing_route in lib.sh; standard library only."
+      "note": "Used by the spec_* parity scenarios; standard library only."
     },
     {
       "name": "launch_support.py",
       "kind": "suite",
-      "what": "a fake Tares, a copy of the kit and a driver that runs one launch function on either engine",
+      "what": "a fake Tares, a copy of the kit and a driver that runs one launch function",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the launch_* scenarios of parity.py and by test_crew_launch.py; it goes when the bash engine does."
-    },
-    {
-      "name": "lib.sh",
-      "kind": "suite",
-      "what": "shared test helpers: a real Tares on a free port",
-      "ticket": "TR-952",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Python tests need their own equivalent."
-    },
-    {
-      "name": "lsp_test.sh",
-      "kind": "suite",
-      "what": "language server checks in doctor and crew up",
-      "ticket": "TR-970",
-      "dropped": false,
-      "python": "tests.factory.parity:SCENARIOS",
-      "ported": true,
-      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py, and lsp_test.sh passes them through the Python crew up since TR-1069."
-    },
-    {
-      "name": "pace_test.sh",
-      "kind": "suite",
-      "what": "the pace",
-      "ticket": "TR-962",
-      "dropped": false,
-      "python": "tests.factory.parity:SCENARIOS",
-      "ported": true,
-      "note": "Scenarios pace_off, pace_levels, pace_idle_wake, pace_unknown, pace_turn_off, pace_restart_fails, pace_limit, pace_tried and pace_tidy cover the pace step and what revive asks of it (33 of the 101 checks), through the drivers pace_round and pace_down in tests/factory/launch_support.py. Not in the harness yet: the status line (views, TR-957), the builder spawn gate (stations, TR-961 and spawn), the idle_wake wake timings under pace (TR-961), retiring a station, and the revive launches themselves (TR-959); pace_test.sh still checks those through bash and through TARES_FACTORY_ENGINE=python. Unit checks: tests/test_crew_pace.py."
+      "note": "Used by the launch_* scenarios of parity.py and by test_crew_launch.py."
     },
     {
       "name": "parity.py",
       "kind": "suite",
-      "what": "runs a scenario against both engines and counts the scenarios that pass against Python",
+      "what": "runs each scenario on the Python engine and compares it with the result recorded once from bash",
       "ticket": "TR-952",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "The module docstring defines a scenario; --coverage lists them all."
-    },
-    {
-      "name": "parse_test.sh",
-      "kind": "suite",
-      "what": "reading the session id from claude --bg output",
-      "ticket": "TR-950",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Calls the hidden _parse-bg-id command."
-    },
-    {
-      "name": "session_test.sh",
-      "kind": "suite",
-      "what": "the session command",
-      "ticket": "TR-966",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
-    },
-    {
-      "name": "spec_test.sh",
-      "kind": "suite",
-      "what": "the spec command",
-      "ticket": "TR-966",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
-    },
-    {
-      "name": "tares_test.sh",
-      "kind": "suite",
-      "what": "the Tares client: address, key, MCP address",
-      "ticket": "TR-949",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
-    },
-    {
-      "name": "tidy_test.sh",
-      "kind": "suite",
-      "what": "tidy",
-      "ticket": "TR-968",
-      "dropped": false,
-      "python": "tests.factory.parity:SCENARIOS",
-      "ported": true,
-      "note": "Scenarios tidy_worktrees, tidy_links_scratch, tidy_refusals. The three \"may run factory tidy\" cases need settings (TR-957)."
-    },
-    {
-      "name": "usage_test.sh",
-      "kind": "suite",
-      "what": "context and plan readings, status line",
-      "ticket": "TR-967",
-      "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "note": "Python alone (TR-1172). The module docstring defines a scenario; --coverage lists them all; --record re-records one."
     },
     {
       "name": "fake_tares.py",
@@ -4704,47 +4474,47 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the pace_daemon scenario of parity.py; standard library only; it goes when the bash engine does."
+      "note": "Used by the pace_daemon scenario of parity.py; standard library only."
     },
     {
       "name": "freeze_support.py",
       "kind": "suite",
-      "what": "a driver that runs the looping watch of freeze_test.sh while the kit changes under it, on either engine",
+      "what": "a driver that runs the looping watch while the kit changes under it",
       "ticket": "TR-1160",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the freeze_watch and freeze_copywatch scenarios of parity.py; standard library only; it goes when the bash engine does."
+      "note": "Used by the freeze_watch and freeze_copywatch scenarios of parity.py; standard library only."
     },
     {
       "name": "idle_wake_daemon.py",
       "kind": "suite",
-      "what": "a driver that runs a real Tares on a throwaway database and prints the review queue, the setting and the desk the way idle_wake_test.sh checks them",
+      "what": "a driver that runs a real Tares on a throwaway database and prints the review queue, the setting and the desk",
       "ticket": "TR-1160",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the idle_wake_daemon scenario of parity.py; standard library only; it goes when the bash engine does."
+      "note": "Used by the idle_wake_daemon scenario of parity.py; standard library only."
     },
     {
       "name": "watch_support.py",
       "kind": "suite",
-      "what": "a fake Tares and a driver that runs one round of the watch (watch --once) on either engine",
+      "what": "a fake Tares and a driver that runs one round of the watch (watch --once)",
       "ticket": "TR-959",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the watch_* scenarios of parity.py; it goes when the bash engine does."
+      "note": "Used by the watch_* scenarios of parity.py."
     },
     {
       "name": "readings_support.py",
       "kind": "suite",
-      "what": "a driver that runs the watch between its rounds on either engine and waits until a fake Tares has answered the asks route N times",
+      "what": "a driver that runs the watch between its rounds and waits until a fake Tares has answered the asks route N times",
       "ticket": "TR-1163",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the usage_watch_* scenarios of parity.py; standard library only; it goes when the bash engine does."
+      "note": "Used by the usage_watch_* scenarios of parity.py; standard library only."
     },
     {
       "name": "usage_support.py",
@@ -4754,47 +4524,77 @@
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the usage_statusline scenario of parity.py; standard library only; it goes when the bash engine does."
+      "note": "Used by the usage_statusline scenario of parity.py; standard library only."
     },
     {
       "name": "guard_support.py",
       "kind": "suite",
-      "what": "a driver that runs the guard cases of guard_test.sh in one process on either engine",
+      "what": "a driver that runs the guard cases in one process",
       "ticket": "TR-1162",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the guard scenario of parity.py; both engines run the same tares.crew.hooks code; standard library only; it goes when the bash engine does."
+      "note": "Used by the guard scenario of parity.py; standard library only."
     },
     {
       "name": "heavy_support.py",
       "kind": "suite",
-      "what": "a driver that runs heavy_test.sh against the bash factory-heavy or the Python port",
+      "what": "a driver that runs the factory-heavy port",
       "ticket": "TR-1162",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the heavy scenario of parity.py; standard library only; it goes when the bash engine does."
+      "note": "Used by the heavy scenario of parity.py; standard library only."
     },
     {
       "name": "crewname_support.py",
       "kind": "suite",
-      "what": "a driver that runs the plugin's guard and session-start hooks for a helper, as crewname_test.sh does",
+      "what": "a driver that runs the plugin's guard and session-start hooks for a helper",
       "ticket": "TR-1162",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the crewname_* scenarios of parity.py; the hooks are shared by both engines; standard library only; it goes when the bash engine does."
+      "note": "Used by the crewname_* scenarios of parity.py; standard library only."
     },
     {
       "name": "spec_hook_support.py",
       "kind": "suite",
-      "what": "a driver that runs the plugin's session-start hook the way spec_test.sh does",
+      "what": "a driver that runs the plugin's session-start hook",
       "ticket": "TR-1162",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Used by the spec_hooks scenario of parity.py; the hook is shared by both engines; standard library only; it goes when the bash engine does."
+      "note": "Used by the spec_hooks scenario of parity.py; standard library only."
+    },
+    {
+      "name": "parity_labels.json",
+      "what": "every check label of the retired bash suites, by suite, for the coverage report",
+      "note": "parity.py --coverage --require-full fails when a label has no scenario.",
+      "kind": "suite",
+      "ticket": "TR-1172",
+      "dropped": false,
+      "python": "",
+      "ported": false
+    },
+    {
+      "name": "parity_scn_idle.py",
+      "what": "the idle wake parity scenarios",
+      "note": "Loaded by parity.py.",
+      "kind": "suite",
+      "ticket": "TR-1172",
+      "dropped": false,
+      "python": "",
+      "ported": false
+    },
+    {
+      "name": "parity_scn_misc.py",
+      "what": "the remaining parity scenarios",
+      "note": "Loaded by parity.py.",
+      "kind": "suite",
+      "ticket": "TR-1172",
+      "dropped": false,
+      "python": "",
+      "ported": false
     }
   ],
   "cmux_touchpoints": [
@@ -4903,17 +4703,17 @@
       "note": ""
     },
     {
-      "name": "crew_test cmux cases",
+      "name": "parity labels cmux cases",
       "kind": "touchpoint",
-      "file": "tests/factory/crew_test.sh",
+      "file": "tests/factory/parity_labels.json",
       "match": "(?i)cmux",
-      "line": 97,
-      "what": "doctor cmux cases, plus a check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED)",
+      "line": 172,
+      "what": "the doctor cmux check labels, and the check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED)",
       "ticket": "TR-970",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "The settings check belongs to TR-953: the Python write_settings must not set that variable."
+      "note": "The labels come from crew_test.sh; the settings check belongs to TR-953: the Python write_settings must not set that variable."
     },
     {
       "name": "parity launch cmux case",
@@ -4921,12 +4721,12 @@
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
       "line": 901,
-      "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
+      "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED)",
       "ticket": "TR-953",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "Same words as the crew_test.sh check, so the coverage report can match them."
+      "note": "Same words as the label in parity_labels.json, so the coverage report can match them."
     }
   ],
   "hook_entries": []

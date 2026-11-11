@@ -1,48 +1,36 @@
 #!/usr/bin/env python3
-"""The parity harness: a factory scenario runs against the bash engine and against the Python engine,
-and what they print and write must be the same.
+"""The parity harness: a crew scenario runs on the Python engine and what it prints and writes must be what the
+bash engine printed and wrote when the scenario was recorded.
 
-    python tests/factory/parity.py <scenario>            run one scenario on both engines (a name with * or ?, such as tidy_*, runs every match)
+    python tests/factory/parity.py <scenario>            run one scenario (a name with * or ?, such as tidy_*, runs every match)
     python tests/factory/parity.py --list                the scenarios defined here
-    python tests/factory/parity.py --coverage            every scenario of every bash suite, and how
-                                                         many of them pass against Python
+    python tests/factory/parity.py --coverage            every check label recorded in parity_labels.json, and how
+                                                         many of them a passing scenario covers
     python tests/factory/parity.py --coverage --require-full   the same, exit 1 below 100%
-    python tests/factory/parity.py --python-only <scenario>    Python alone: its checks pass and what it prints and writes is
-                                                         what bash printed and wrote when it was recorded (parity_expected/)
-    python tests/factory/parity.py --python-only --coverage [--require-full]   the same for every scenario, against the
-                                                         labels of the bash suites recorded in parity_labels.json
-    python tests/factory/parity.py --record <scenario>   run the bash side and store what it printed and wrote as the
-                                                         expected result; --record-labels stores the suites' check labels
+    python tests/factory/parity.py --record <scenario>   run the scenario on Python and store what it printed and wrote as
+                                                         the expected result (parity_expected/<scenario>.txt)
 
-A scenario is defined here, in Python (steps to run, checks on the result), so it runs on Windows too,
-where the bash suites cannot. It is run twice, each time in a throwaway crew with the Python fake
-Claude Code (tests/factory/fake_claude.py): with TARES_FACTORY_ENGINE=bash and with =python, through
-`python -m tares.crew`. The bash suites in this folder stay the reference; a scenario here is one of
-their checks moved over, with the same assertions.
+A scenario is defined here, in Python (steps to run, checks on the result), so it runs on Windows too. It runs in
+a throwaway crew with the Python fake Claude Code (tests/factory/fake_claude.py), through `python -m tares.crew`.
+Its checks must pass, and its normalised record must equal the expected one. The expected results were recorded
+once from the bash engine (TR-1172); a change to what a crew command prints or writes fails the scenario until
+it is recorded again, and the PR says why.
 
-What is compared, after normalising: the exit code, stdout and stderr of every step; every file in the
+What is recorded, after normalising: the exit code, stdout and stderr of every step; every file in the
 crew home; the calls made to Claude Code and the sessions it lists. Normalised away: the temp folder,
 timestamps, pids, session ids and the key order of JSON. Ids and epoch times are only replaced where they
 appear as such (after `backgrounded ·`, `job`, `at`, `since`, under an id or time key in JSON): a plain
 eight-digit or ten-digit number is data and is compared as it is.
 
-Result, per side: PASS, FAIL, or SKIP. The Python engine answers exit 2 with "is not yet ported" for a
-command that has not moved over; that side prints `SKIP python: not ported`. Without bash (Windows)
-the bash side prints `SKIP bash: ...`. Exit 0 when the bash side passes and the Python side passes
-(same normalised output as bash) or is skipped. Exit 1 when the bash side fails, or when Python runs
-and fails a check or differs from bash. On Windows a skipped bash side is expected and the Python side
-stands alone; anywhere else a skipped bash side (no bash or jq) is an error: exit 1, and the scenario
-does not count in --coverage.
+Result: PASS, FAIL, or SKIP (the Python engine answers exit 2 with "is not yet ported", or the scenario cannot
+run on this platform). Exit 0 when the scenario passes or is skipped, 1 when a check fails or the record differs.
 
-Coverage. A "scenario" of a bash suite (the suites named in tests/factory/ci_list.txt) is one `check
-"<label>"` call: a source line that starts, after any indentation, with `check "`. A check in a loop
-counts once. A suite with no such line (guard, heavy, parse) counts as one scenario, named after the
-suite, except a wrapper (WRAPPERS below): a suite that runs another suite on Python only, has no check line of
-its own and counts for nothing, since its checks belong to the suite it runs. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
-when its run passes on the Python side (a SKIP does not count). Percentage = passing / all scenarios.
+Coverage. A "check" is one label of the bash suites the scenarios replaced, kept in tests/factory/parity_labels.json
+(suite -> labels; a suite that was one script counts as one, named "(the whole <suite> suite)"). A scenario lists
+the labels it covers (`covers`), and counts as passing when its run passes. Percentage = passing / all labels.
 
-Test hooks (for tests/test_parity.py): PARITY_CMD_BASH and PARITY_CMD_PYTHON replace the command a side
-runs (default `python -m tares.crew`); PARITY_FAIL=bash|python|both adds a failing check to that side.
+Test hooks (for tests/test_parity.py): PARITY_CMD_PYTHON replaces the command a step runs (default
+`python -m tares.crew`); PARITY_FAIL=python adds a failing check.
 
 Standard library only.
 """
@@ -69,8 +57,6 @@ ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
 sys.path.insert(0, str(HERE))
 from fake_up_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
-CI_LIST = HERE / "ci_list.txt"
-ENGINES = ("bash", "python")
 STEP_TIMEOUT = 180
 NOT_PORTED = "not yet ported"
 
@@ -94,7 +80,7 @@ class Step:
 @dataclass
 class Scenario:
     name: str
-    suite: str           # the bash suite it comes from (tests/factory/<suite>_test.sh)
+    suite: str           # the suite it comes from (the key in parity_labels.json)
     steps: list
     checks: list         # (label, fn(Run) -> bool), the assertions of the bash suite, kept as they are
     covers: list         # labels of the suite's `check` calls this scenario stands for
@@ -5964,25 +5950,16 @@ def norm_output(text: str, tmp: Path | None = None) -> str:
 # ---------------------------------------------------------------------------------------------
 # Running one side
 
-def command_for(engine: str, sc: "Scenario | None" = None) -> list:
+def command_for(sc: "Scenario | None" = None) -> list:
     if sc is not None and sc.driver:
-        return [sys.executable, str(HERE / sc.driver), engine]
-    override = os.environ.get("PARITY_CMD_" + engine.upper())
+        return [sys.executable, str(HERE / sc.driver)]
+    override = os.environ.get("PARITY_CMD_PYTHON")
     return shlex.split(override) if override else [sys.executable, "-m", "tares.crew"]
 
 
 def is_windows() -> bool:
     """A function so a test can patch it."""
     return sys.platform == "win32"
-
-
-def bash_available() -> str:
-    """"" when the bash engine can run here, else the reason it cannot."""
-    if is_windows():
-        return "needs bash, which is not available on Windows"
-    if not shutil.which("bash") or not shutil.which("jq"):
-        return "needs bash and jq on PATH"
-    return ""
 
 
 def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
@@ -6008,7 +5985,7 @@ STRIPPED_PREFIXES = ("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_", "PARITY_", "
                      "CLAUDE_CONFIG_DIR", "CLAUDE_JOB_DIR", "XDG_", "GH_")
 
 
-def crew_env(tmp: Path, engine: str) -> dict:
+def crew_env(tmp: Path) -> dict:
     """The environment of a throwaway crew: everything under tmp, the Python fake for Claude Code, no
     station or Tares settings from the person's own shell."""
     home, crew, state, bindir = (tmp / n for n in ("home", "crew", "claude", "bin"))
@@ -6024,7 +6001,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
         FACTORY_DOCKER=str(tmp / "no-docker"),  # the Python watch's Docker upkeep (TR-700) finds no Docker, whatever the machine has
         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
-        PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8", TARES_FACTORY_ENGINE=engine,
+        PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8",
         TARES_HOME=str(tmp / "tares-home"),
         PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),  # `claude` by name finds the fake first
     )
@@ -6098,7 +6075,6 @@ def snapshot(run: Run) -> dict:
 
 @dataclass
 class Side:
-    engine: str
     skip: str = ""                  # why it did not run ("" when it did)
     passed: list = field(default_factory=list)
     failed: list = field(default_factory=list)
@@ -6106,21 +6082,16 @@ class Side:
     raw: str = ""                   # the first failing step's output, for the person reading
 
 
-def run_side(sc: Scenario, engine: str) -> Side:
-    side = Side(engine)
-    if engine == "bash" and not os.environ.get("PARITY_CMD_BASH"):
-        why = bash_available()
-        if why:
-            side.skip = why
-            return side
-    if engine == "python" and sc.not_windows and is_windows():
+def run_side(sc: Scenario) -> Side:
+    side = Side()
+    if sc.not_windows and is_windows():
         side.skip = sc.not_windows
         return side
-    tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-{engine}-")).resolve()
+    tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-")).resolve()
     stand_in = None
     fake = None
     try:
-        env = crew_env(tmp, engine)
+        env = crew_env(tmp)
         if sc.stand_in is not None:
             stand_in = StandInTares(tmp / "tares", **sc.stand_in).start()
             env.update(TARESD_URL=stand_in.url, TARES_FACTORY_MCP_URL=stand_in.mcp_url)
@@ -6145,7 +6116,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
             step_env = step.env(run) if callable(step.env) else step.env
             senv = {**env, **{k: here(v) for k, v in step_env.items()}}
             try:
-                p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv],
+                p = subprocess.run(command_for(sc) + [here(a) for a in step.argv],
                                    cwd=here(step.cwd) or str(ROOT), env=senv,
                                    input=step.stdin, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=STEP_TIMEOUT)
@@ -6154,7 +6125,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 results.append({"code": 124, "stdout": "", "stderr": f"parity: step timed out after {STEP_TIMEOUT}s\n"})
             if step.after:
                 results[-1]["snap"] = step.after(tmp)
-            if engine == "python" and results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
+            if results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
                 side.skip = "not ported"
                 return side
         for label, fn in sc.checks:
@@ -6164,7 +6135,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 ok = False
                 label = f"{label} ({type(e).__name__}: {e})"
             (side.passed if ok else side.failed).append(label)
-        if os.environ.get("PARITY_FAIL") in (engine, "both"):
+        if os.environ.get("PARITY_FAIL") in ("python", "both"):
             side.failed.append(f"deliberate failure (PARITY_FAIL={os.environ['PARITY_FAIL']})")
         blocks = []
         for step, r in zip(sc.steps, results):
@@ -6175,8 +6146,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 blocks.append(f"-- after --\n{render_json(norm_json(r['snap'], tmp))}")
         for rel, content in snapshot(run).items():
             blocks.append(f"== file {rel} ==\n{content}")
-        if fake is not None:  # what each engine asked Tares, and whether it sent a key (never the key)
-            # A read asked twice in a row counts once: bash asks again from a subshell that lost its cache.
+        if fake is not None:  # what the engine asked Tares, and whether it sent a key (never the key)
+            # A read asked twice in a row counts once: the bash engine asked again from a subshell that lost its cache.
             asked = []
             for q in fake.requests:
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
@@ -6186,7 +6157,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                     asked.append(line)
             blocks.append("== asked of Tares ==\n" + "\n".join(asked))
         side.text = "\n".join(blocks) + "\n"
-        if fake is not None:  # the fake's port is different on each side
+        if fake is not None:  # the fake's port is different on each run
             side.text = side.text.replace(fake.url, "<TARES>")
         side.raw = "\n".join(f"$ tares factory {' '.join(s.argv)}  (exit {r['code']})\n{r['stdout']}{r['stderr']}"
                              for s, r in zip(sc.steps, results))
@@ -6200,46 +6171,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def run_scenario(sc: Scenario, out=print) -> int:
-    """Run sc on both engines, print the result, return the exit code (0 or 1)."""
-    return evaluate(sc, out)[0]
-
-
-def evaluate(sc: Scenario, out=print) -> tuple:
-    """Run sc on both engines and print the result: (exit code, whether it passes on the Python side)."""
-    out(f"== {sc.name}: {sc.about or sc.suite} ==")
-    sides = {e: run_side(sc, e) for e in ENGINES}
-    code = 0
-    for e in ENGINES:
-        s = sides[e]
-        if s.skip:
-            out(f"SKIP {e}: {s.skip}")
-        elif s.failed:
-            code = 1
-            out(f"FAIL {e}: {len(s.failed)} of {len(s.failed) + len(s.passed)} checks failed")
-            for label in s.failed:
-                out(f"  FAIL {label}")
-            out(s.raw.rstrip("\n"))
-        else:
-            out(f"PASS {e}: {len(s.passed)} checks")
-    b, p = sides["bash"], sides["python"]
-    if b.skip and not is_windows():
-        # Bash is the reference. Only Windows has none: elsewhere a missing bash or jq must not turn
-        # "matches bash" into "the Python engine ran".
-        code = 1
-        out(f"ERROR bash: the bash side cannot run on this host ({b.skip}); there is nothing to compare "
-            "the Python side with")
-    if not b.skip and not p.skip and not b.failed and not p.failed and b.text != p.text:
-        code = 1
-        out("FAIL python: output differs from bash (normalised), bash first")
-        out("".join(difflib.unified_diff(b.text.splitlines(True), p.text.splitlines(True), "bash", "python")).rstrip("\n"))
-    elif not b.skip and not p.skip and not b.failed and not p.failed:
-        out("MATCH: bash and python print and write the same")
-    return code, (not p.skip and not p.failed and code == 0)
-
-
 # ---------------------------------------------------------------------------------------------
-# Python alone: the expected result is what the bash engine printed and wrote, recorded once
+# The expected result: what the bash engine printed and wrote, recorded once
 
 EXPECTED = HERE / "parity_expected"
 LABELS = HERE / "parity_labels.json"
@@ -6254,13 +6187,13 @@ def _lf(text: str) -> str:
 
 
 def record_scenario(sc: Scenario, out=print) -> int:
-    """Run the bash side of sc and store its normalised record as the expected result."""
-    side = run_side(sc, "bash")
+    """Run sc on Python and store its normalised record as the expected result. Its checks must pass."""
+    side = run_side(sc)
     if side.skip:
-        out(f"ERROR {sc.name}: the bash side cannot run here ({side.skip})")
+        out(f"ERROR {sc.name}: it cannot run here ({side.skip})")
         return 1
     if side.failed:
-        out(f"ERROR {sc.name}: the bash side fails {len(side.failed)} checks, nothing recorded")
+        out(f"ERROR {sc.name}: it fails {len(side.failed)} checks, nothing recorded")
         for label in side.failed:
             out(f"  FAIL {label}")
         return 1
@@ -6274,7 +6207,7 @@ def evaluate_python(sc: Scenario, out=print) -> tuple:
     """Run sc on the Python engine alone: (exit code, whether it passes). Its checks must pass and its normalised
     record must equal the one recorded from bash."""
     out(f"== {sc.name}: {sc.about or sc.suite} ==")
-    side = run_side(sc, "python")
+    side = run_side(sc)
     if side.skip:
         out(f"SKIP python: {side.skip}")
         return 0, False
@@ -6307,41 +6240,9 @@ def recorded_labels() -> dict:
 # ---------------------------------------------------------------------------------------------
 # Coverage
 
-CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
-
-# Suites that only run another suite on the Python engine. They have no `check "` line of their own, so
-# --coverage leaves them out of the total and prints "wrapper of <suite>"; the suite they run counts their
-# checks. suite -> (the suite it runs, why). Pinned in tests/test_parity.py: a suite with checks of its own
-# cannot be listed here (coverage fails on it), so a real suite cannot drop out of the count.
-WRAPPERS = {
-    "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
-    "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
-    "idle_wake_python": ("idle_wake", "runs idle_wake_test.sh on Python; its checks count under idle_wake"),
-}
-
-
-def suites() -> list:
-    return [ln.strip() for ln in CI_LIST.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-
-
-def suite_scenarios() -> dict:
-    """suite -> its scenarios: the labels of its `check "<label>"` lines (see the module docstring)."""
-    out = {}
-    for suite in suites():
-        labels = []
-        for line in (HERE / f"{suite}_test.sh").read_text(encoding="utf-8").splitlines():
-            m = CHECK_LINE.match(line)
-            if m:
-                labels.append(m.group(1))
-        out[suite] = labels or [f"(the whole {suite} suite)"]
-    return out
-
-
 def passes_one(name: str) -> bool:
     """Whether scenario `name` passes against Python now (a worker of passes_now)."""
-    if os.environ.get("PARITY_PYTHON_ONLY"):
-        return evaluate_python(SCENARIOS[name], out=lambda _line: None)[1]
-    return evaluate(SCENARIOS[name], out=lambda _line: None)[1]
+    return evaluate_python(SCENARIOS[name], out=lambda _line: None)[1]
 
 
 def passes_now() -> dict:
@@ -6360,29 +6261,21 @@ def passes_now() -> dict:
 
 
 def coverage(require_full: bool, out=print) -> int:
-    found = recorded_labels() if os.environ.get("PARITY_PYTHON_ONLY") else suite_scenarios()
+    found = recorded_labels()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
-    for suite in found:
-        if suite in WRAPPERS and not found[suite][0].startswith("(the whole"):
-            out(f"ERROR {suite} is listed as a wrapper but has checks of its own: {len(found[suite])}")
-            bad = 1
     results = passes_now()
     for sc in SCENARIOS.values():
         ok = results[sc.name]
         for label in sc.covers:
             if label not in found.get(sc.suite, []):
-                out(f"ERROR scenario {sc.name} covers a check that is not in {sc.suite}_test.sh: {label}")
+                out(f"ERROR scenario {sc.name} covers a check that is not in parity_labels.json under {sc.suite}: {label}")
                 bad = 1
             elif ok:
                 passing[(sc.suite, label)] = sc.name
     total = done = 0
     counted = 0
     for suite, labels in found.items():
-        if suite in WRAPPERS and labels[0].startswith("(the whole"):
-            of, why = WRAPPERS[suite]
-            out(f"{suite}: wrapper of {of} ({why})")
-            continue
         counted += 1
         n = sum(1 for label in labels if (suite, label) in passing)
         total += len(labels)
@@ -8190,6 +8083,7 @@ scenario(Scenario(
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
+    ignore_calls=(("agents",),),  # how often the wait polls depends on the machine's speed
     steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
     checks=[
         ("it says it waits, once", lambda r: r.out(0).count("waiting for crew-reviewer to be idle (it is working)") == 1),
@@ -10482,16 +10376,9 @@ def main(argv: list) -> int:
                 pass
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
-    if flags - {"--coverage", "--require-full", "--list", "--python-only", "--record", "--record-labels"}:
+    if flags - {"--coverage", "--require-full", "--list", "--record"}:
         print(__doc__)
         return 2
-    if "--record-labels" in flags:
-        LABELS.write_text(json.dumps(suite_scenarios(), indent=1, ensure_ascii=False, sort_keys=True) + "\n",
-                          encoding="utf-8", newline="\n")
-        print(f"recorded the labels of {len(suite_scenarios())} suites")
-        return 0
-    if "--python-only" in flags:
-        os.environ["PARITY_PYTHON_ONLY"] = "1"
     if "--list" in flags:
         print("\n".join(SCENARIOS))
         return 0
@@ -10512,9 +10399,7 @@ def main(argv: list) -> int:
         names += [n for n in found if n not in names]
     if "--record" in flags:
         return max(record_scenario(SCENARIOS[n]) for n in names)
-    if "--python-only" in flags:
-        return max(evaluate_python(SCENARIOS[n])[0] for n in names)
-    return max(run_scenario(SCENARIOS[n]) for n in names)
+    return max(evaluate_python(SCENARIOS[n])[0] for n in names)
 
 
 if __name__ == "__main__":

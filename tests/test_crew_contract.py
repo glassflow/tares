@@ -354,7 +354,7 @@ else:
 
     print("== settings")
     env, tmp = world(crew_of(), sessions())
-    env["TARES_FACTORY_ENGINE"] = "bash"  # settings is still a bash command; Python's own takes over with TR-953
+    env["TARES_FACTORY_ENGINE"] = "python"
     for who, role in (("crew-orchestrator", "orchestrator"), ("shop-build-m1", "builder"), ("crew-reviewer", "reviewer")):
         p = subprocess.run([sys.executable, "-m", "tares.crew", "settings", who], cwd=str(ROOT), capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=120,

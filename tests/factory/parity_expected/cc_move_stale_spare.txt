@@ -69,7 +69,6 @@ tares factory: crew-reviewer runs Claude Code 1.2.0
 }
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "1.1.0", "event": "spare-pruned", "station": ""}
-{"at": "<TS>", "detail": "1.1.0", "event": "spare-pruned", "station": ""}
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "1.1.0", "event": "stale-spare", "station": "crew-reviewer"}

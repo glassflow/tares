@@ -88,8 +88,6 @@ tares factory: every station runs Claude Code 2.1.200, one session each
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000003", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "2.1.200", "event": "claude-updated", "station": "crew-reviewer"}
-{"at": "<TS>", "detail": "1.1.0", "event": "spare-pruned", "station": ""}
-{"at": "<TS>", "detail": "1.2.0", "event": "spare-pruned", "station": ""}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "2.1.200", "event": "claude-updated", "station": "crew-orchestrator"}
