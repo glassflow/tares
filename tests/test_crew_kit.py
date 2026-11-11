@@ -46,7 +46,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FACTORY_DIR))
 
 import fake_claude  # noqa: E402
-from tares.crew import cc_update, claude, dispatch, kit, launch as L, lifecycle, state, watch, watch_revive  # noqa: E402
+from tares.crew import cc_update, claude, dispatch, kit, launch as L, lifecycle, locks, state, watch, watch_revive  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
@@ -748,6 +748,31 @@ ck("on a platform with exec the process becomes the new watch", len(execs) == 1 
 ck("...an absolute program, the watch command and the interval it ran with", os.path.isabs(execs[0][1][0])
    and execs[0][1][1:] == ["-m", "tares.crew", "crew", "watch", "--interval", "7"], str(execs))
 ck("...with the environment it was given", execs[0][2] == env_, str(execs[0][2]))
+
+world()
+locks.station_lock("crew-reviewer", CP)
+lock_pid = CP.lock_dir("crew-reviewer") / "pid"
+seen: list = []
+with patched(watch, "os", _OS("posix", lambda path, argv, env: seen.append(lock_pid.exists()))):
+    real_restart_self(CP, 7, env_)
+ck("a station lock is let go before the exec, which runs no atexit", seen == [False], str(seen))
+locks.station_lock("crew-reviewer", CP)
+
+
+def failing_execve(path, argv, env):
+    raise OSError("no such program")
+
+
+try:
+    with patched(watch, "os", _OS("posix", failing_execve)):
+        real_restart_self(CP, 7, env_)
+    failed = None
+except OSError as e:
+    failed = e
+ck("a failed exec raises, so follow_engine keeps this watch", failed is not None, str(failed))
+back = lock_pid.read_text().strip() if lock_pid.exists() else "no pid file"
+ck("...and the watch takes back the lock it let go", back == str(os.getpid()), back)
+locks.release_locks()
 
 spawned: list = []
 world()
