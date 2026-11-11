@@ -355,6 +355,41 @@ async def main():
            and row["stages"] == {"merged": 2, "review": 1, "todo": 2, "done": 1, "blocked": 1}
            and row["milestone"] == {"name": "API", "done": 1, "total": 2}, row)
 
+        print("== a project name the crew's stations own is refused at hand-over (TR-1071) ==")
+
+        async def handover(name, crew=None):
+            uid = json.loads(await m.create_project(name, "x"))["id"]
+            body = {"repos": [{"path": "/w/x"}]} | ({"crew": crew} if crew else {})
+            async with mk() as cx:
+                r = await cx.post(f"/api/projects/{uid}/handover", json=body)
+                ho = (await cx.get(f"/api/projects/{uid}/crew")).json().get("handover")
+            return r, ho
+
+        for name, crew in (("crew", None), ("crew-engine-in-python", None), ("Crew Engine", None),
+                           ("alpha", "alpha"), ("alpha-tools", "alpha")):
+            r, ho = await handover(name, crew)
+            said = r.json().get("detail", "") if r.status_code >= 400 else ""
+            who = crew or "crew"
+            ck(f"{name!r} for crew {who!r} is refused", r.status_code == 400
+               and f'starts with "{who}", the crew\'s name' in said
+               and f"station names starting {who}- belong to the crew itself" in said
+               and "Rename the project, then hand it over" in said
+               and "\u2014" not in said, (r.status_code, r.text))
+            ck(f"and {name!r} records nothing", ho is None, ho)
+        for name, crew in (("crewmate", None), ("my-crew-app", None), ("crew-engine", "alpha"),
+                           ("alphabet", "alpha")):
+            r, ho = await handover(name, crew)
+            ck(f"{name!r} for crew {crew or 'crew'!r} is handed over", r.status_code == 200
+               and ho and ho.get("crew") == (crew or "crew"), (r.status_code, r.text, ho))
+        uid = json.loads(await m.create_project("crew-tools", "x"))["id"]
+        out = await mf.hand_over(uid, repos=[{"path": "/w/x"}])
+        ck("the MCP tool passes the reason on", "Rename the project, then hand it over" in out, out)
+        from tares.crew import state as crew_state
+        names = ["crew-engine-in-python", "Crew Engine!", "  --A_b.C--  ", "\u00e9t\u00e9 crew", "x"]
+        ck("the server's slugify matches the crew's",
+           all(factory_mod.slugify(n) == crew_state.slugify(n) for n in names),
+           [(factory_mod.slugify(n), crew_state.slugify(n)) for n in names])
+
 
 rules()
 progress_rules()
