@@ -585,7 +585,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
     def settings(request: Request | None = None) -> dict:
         """The cell's default, with the caller's own settings over it where they set one."""
         person = h.current_person(request) if request is not None else None
-        return crew_settings(store, person, system=request is not None and h.is_system(request))
+        # is_system is asked only for a person who could have settings of their own, as before
+        mine = bool(person and person.get("id") and person.get("id") != "local")
+        return crew_settings(store, person, system=mine and h.is_system(request))
 
     @app.get("/api/crew/settings")
     def get_crew_settings(request: Request):
