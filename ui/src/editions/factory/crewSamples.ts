@@ -3,7 +3,7 @@
 
 import type { CrewBuilders, CrewMember, CrewPage, CrewPlan, CrewProposal, MemberDetail, MemberState } from "./FactoryCrew.api";
 
-export const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "load", "err"] as const;
+export const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "team", "load", "err"] as const;
 export const isSample = (s: string | null): s is string => !!s && (SAMPLES as readonly string[]).includes(s);
 
 const NOW = "2026-11-02T10:00:00+00:00";
@@ -124,6 +124,18 @@ export function sampleLoad(name: string): Promise<CrewPage> {
       }));
     case "finished": return Promise.resolve(page({ builders: FINISHED() }));
     case "many": return Promise.resolve(page({ builders: MANY }));
+    case "team": {
+      // two people's crews with the same station names (TR-1223): the caller's runs, Adam's ended
+      const ended = (m: CrewMember): CrewMember => ({ ...m, state: "ended", state_text: "Ended 1 hour ago", doing: "Finished its work.",
+        heard: "1 hour ago", memory_pct: null, memory_text: null });
+      const mine = { id: "c1", person: { id: "p1", name: "Ashish" }, machine: "ashish-mbp", machine_shown: false, mine: true,
+        summary: "Working, last heard 12 seconds ago", talk_to: LEAD(), reviewer: REVIEWER(), releaser: null,
+        builders: [group("factory-is-modular", X())] };
+      const theirs = { id: "c2", person: { id: "p2", name: "Adam" }, machine: "adam-mbp", machine_shown: false, mine: false,
+        summary: "Not running", talk_to: ended(LEAD()), reviewer: ended(REVIEWER()), releaser: null, builders: [] };
+      return Promise.resolve(page({ crews: [mine, theirs], summary: mine.summary, talk_to: mine.talk_to, reviewer: mine.reviewer,
+        builders: mine.builders }));
+    }
     case "long":
       return Promise.resolve(page({
         builders: [group("customer-connectors-for-the-enterprise-edition-2026",

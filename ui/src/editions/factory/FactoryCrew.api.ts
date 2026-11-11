@@ -21,6 +21,23 @@ export interface CrewMember {
   /** "Memory 82% full", or null when there is no reading. */
   memory_text: string | null;
   helpers: number;
+  /** The id of the member's crew, for the detail call: crews repeat station names. */
+  crew?: string | null;
+}
+
+/** One crew on the cell, under the person it belongs to (TR-1223). */
+export interface CrewOfPerson {
+  id: string | null;
+  person: { id: string | null; name: string | null };
+  machine: string;
+  /** True when the person has more than one crew: then the machine tells them apart. */
+  machine_shown: boolean;
+  mine: boolean;
+  summary: string;
+  talk_to: CrewMember | null;
+  reviewer: CrewMember | null;
+  releaser: CrewMember | null;
+  builders: CrewBuilders[];
 }
 
 export interface CrewBuilders {
@@ -62,6 +79,8 @@ export interface CrewPage {
   reviewer: CrewMember | null;
   releaser: CrewMember | null;
   builders: CrewBuilders[];
+  /** Every crew on the cell, the caller's own first; the fields above are the first one's. */
+  crews?: CrewOfPerson[];
   how_far: { text: string; detail: string; settings_href: string };
   /** A sentence while the plan's limits press on the crew, else null. */
   pacing: string | null;
@@ -103,19 +122,21 @@ export interface MemberDetail {
 export const factoryCrew = () => request<CrewPage>("/api/factory/crew");
 
 /** What a member did lately, read only when its fold is opened. */
-export const crewMember = (station: string, at?: { before?: number; since?: number }) => {
+const crewQ = (crew?: string | null) => (crew ? `crew=${encodeURIComponent(crew)}` : "");
+
+export const crewMember = (station: string, at?: { before?: number; since?: number }, crew?: string | null) => {
   const extra = at?.before !== undefined ? `&before=${at.before}` : at?.since !== undefined ? `&since=${at.since}` : "";
-  return request<MemberDetail>(`/api/crew/${encodeURIComponent(station)}?recent=0&conversation=200${extra}`);
+  return request<MemberDetail>(`/api/crew/${encodeURIComponent(station)}?recent=0&conversation=200${extra}${crew ? `&${crewQ(crew)}` : ""}`);
 };
 
 /** One tool call's whole output, for a card whose output the list cut. */
-export const crewToolOutput = (station: string, id: string) =>
-  request<{ output: string; failed: boolean }>(`/api/crew/${encodeURIComponent(station)}/tool/${encodeURIComponent(id)}`)
+export const crewToolOutput = (station: string, id: string, crew?: string | null) =>
+  request<{ output: string; failed: boolean }>(`/api/crew/${encodeURIComponent(station)}/tool/${encodeURIComponent(id)}${crew ? `?${crewQ(crew)}` : ""}`)
     .then((r) => r.output);
 
 /** Asks for a new reading of the member's memory; the crew's machine answers within seconds. */
-export const readMemoryAgain = (station: string) =>
-  request<unknown>(`/api/crew/${encodeURIComponent(station)}/context`, { method: "POST" });
+export const readMemoryAgain = (station: string, crew?: string | null) =>
+  request<unknown>(`/api/crew/${encodeURIComponent(station)}/context${crew ? `?${crewQ(crew)}` : ""}`, { method: "POST" });
 
 /** A person decides a rule the reviewer proposed. */
 export const decideRule = (id: string, decision: "accept" | "reject") =>

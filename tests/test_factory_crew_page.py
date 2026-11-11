@@ -35,7 +35,7 @@ from tares.screens import factory_crew as fc
 P = F = 0
 
 MEMBER_KEYS = {"station", "role_label", "state", "state_text", "doing", "heard", "memory_pct",
-               "memory_text", "helpers"}
+               "memory_text", "helpers", "crew"}
 
 
 def ck(label, cond, detail=""):
@@ -155,7 +155,7 @@ async def main():
             a = r.json()
             ck("the page answers", r.status_code == 200, r.text)
             ck("every key of the shape", set(a) == {"summary", "talk_to", "reviewer", "releaser", "builders",
-               "how_far", "pacing", "plan", "rule_proposals", "standup", "now"}, sorted(a))
+               "how_far", "pacing", "plan", "rule_proposals", "standup", "now", "crews"}, sorted(a))
             ck("nobody on the crew, and the summary says it was never started",
                a["summary"] == "Not started" and a["talk_to"] is None and a["reviewer"] is None
                and a["releaser"] is None and a["builders"] == [], a)
