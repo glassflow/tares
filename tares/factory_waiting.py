@@ -110,17 +110,21 @@ NOBODY = {
 def _crew_has(q: dict, level: str) -> str | None:
     """Who in the crew has a pull request next, in words, or None when nobody in the crew does.
     Checked, never assumed: the reviewer for a commit not reviewed yet, the builder for changes
-    asked or failing CI, CI while it runs, the crew's merge at L4-ship."""
+    asked or failing CI, CI while it runs, the crew's merge at L4-ship. When the project's review
+    gate is an outside tool (`outside_gate` on the row, TR-857) the crew reviewer is not waited
+    for: the wait is for that tool, by its name."""
     v = q.get("verdict") or {}
     kind, current = v.get("verdict"), bool(v.get("current"))
+    outside = q.get("outside_gate")
     if kind == "block" and current:
         return None
     if kind == "changes" and current:
-        return "The builder works on the changes the reviewer asked for"
+        return (f"The builder works on the changes {outside} asked for" if outside
+                else "The builder works on the changes the reviewer asked for")
     if q.get("ci") == "failure":
         return "The builder fixes the failing CI"
     if not (kind == "pass" and current):
-        return "The reviewer reviews it"
+        return f"Waiting for {outside}" if outside else "The reviewer reviews it"
     if q.get("ci") == "pending":
         return "CI is still running; the crew merges it when CI passes"
     if level != DEFAULT_AUTONOMY:
