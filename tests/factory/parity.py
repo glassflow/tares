@@ -2014,12 +2014,8 @@ class FakeTares:
 def routes_in(routes: dict, tmp: Path) -> dict:
     """The routes with "{tmp}" in an answer replaced by the scenario's folder (a path inside a document)."""
     folder = json.dumps(str(tmp))[1:-1]  # as it reads inside a JSON string
-    # {tmp_posix}: the same folder with forward slashes. On Windows a backslash path is escaped by the engine's
-    # @tsv-style text (views._tsv), as jq does, so a scenario that compares a Claude Code row's cwd with a repo
-    # path from this route as text needs both spelled without backslashes. Same as {tmp} on Mac and Linux.
-    posix = tmp.as_posix()
-    return {k: (st, doc.replace("{tmp}", str(tmp)).replace("{tmp_posix}", posix) if isinstance(doc, str)
-                else json.loads(json.dumps(doc).replace("{tmp}", folder).replace("{tmp_posix}", posix)))
+    return {k: (st, doc.replace("{tmp}", str(tmp)) if isinstance(doc, str)
+                else json.loads(json.dumps(doc).replace("{tmp}", folder)))
             for k, (st, doc) in routes.items()}
 
 
@@ -5193,7 +5189,7 @@ def g1_setup_adopt(tmp: Path, env: dict) -> None:
         (tmp / "argus" / repo).mkdir(parents=True, exist_ok=True)
     agents = tmp / "claude" / "agents.json"
     rows = json.loads(agents.read_text(encoding="utf-8"))
-    rows.append(_row("working", "0000beef", "argus-build-m2-charts", cwd="%s/argus/charts" % tmp.as_posix(), sessionId="s-beef"))  # the route's spelling ("{tmp_posix}/argus/charts"): the engines compare the two as text
+    rows.append(_row("working", "0000beef", "argus-build-m2-charts", cwd="%s/argus/charts" % tmp, sessionId="s-beef"))  # the route's spelling ("{tmp}/argus/charts"): the engines compare the two as text
     agents.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
 
@@ -5203,13 +5199,13 @@ scenario(Scenario(
     about="roster records a live builder that stations.json lacks, with its project and the repo it runs in",
     tares={"GET /api/crew/projects": (200, {"projects": [
         {"id": "p_argus", "name": "argus", "tickets_done": 0, "tickets_total": 2, "milestone": None,
-         "repos": [{"path": "{tmp_posix}/argus/core"}, {"path": "{tmp_posix}/argus/charts"}]}]})},
+         "repos": [{"path": "{tmp}/argus/core"}, {"path": "{tmp}/argus/charts"}]}]})},
     setup=g1_setup_adopt,
     steps=[Step(["roster"])],
     checks=[
         ("multi: an unrecorded builder in the second repo is adopted with its project",
          lambda r: r.station("argus-build-m2-charts", "project") == "argus"
-         and r.station("argus-build-m2-charts", "repo") == "%s/argus/charts" % r.tmp.as_posix()),
+         and r.station("argus-build-m2-charts", "repo") == "%s/argus/charts" % r.tmp),
     ],
     covers=["multi: an unrecorded builder in the second repo is adopted with its project"],
 ))
