@@ -4227,6 +4227,34 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return [{"event_type": r[0], "text": r[1], "event_time": r[2],
                  "labels": json.loads(r[3]) if r[3] else {}} for r in rows]
 
+    def key_payload_rows(self, source: str, key: str, limit: int = 200, offset: int = 0) -> list[dict]:
+        """One entity's events with their lossless payload, oldest first (TR-1177: a session as a
+        conversation). The payload is the transcript line as it came in."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT event_type, text, event_time, payload FROM events WHERE source = ? AND "
+                "key_value = ? ORDER BY event_time, ingest_time LIMIT ? OFFSET ?",
+                [source, key, int(limit), int(offset)]).fetchall()
+        return [{"event_type": r[0], "text": r[1], "event_time": r[2], "payload": r[3]} for r in rows]
+
+    def key_tool_result(self, source: str, key: str, tool_use_id: str) -> dict | None:
+        """The stored line that holds one tool call's result in this entity's events, or None."""
+        with self._lock:
+            rows = self.con.execute(
+                "SELECT payload FROM events WHERE source = ? AND key_value = ? AND event_type = 'tool_result' "
+                "AND payload LIKE ? ORDER BY event_time DESC LIMIT 5",
+                [source, key, f"%{tool_use_id}%"]).fetchall()
+        for (pj,) in rows:
+            try:
+                o = json.loads(pj) if isinstance(pj, str) else (pj or {})
+            except ValueError:
+                continue
+            msg = o.get("message") if isinstance(o.get("message"), dict) else {}
+            for b in msg.get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_result" and str(b.get("tool_use_id")) == tool_use_id:
+                    return b
+        return None
+
     def last_finding(self, source: str, agent: str, key: str) -> str | None:
         """The newest delivered finding this agent wrote for this key, or None. Feeds the next
         run's opening message so it builds on the earlier conclusion instead of rediscovering."""
