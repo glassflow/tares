@@ -128,6 +128,14 @@ def _mcp_url(argv: list[str], env: dict) -> int:
 
 
 PORTED[("_mcp-url",)] = _mcp_url
+
+
+def _parse_bg_id(argv: list[str], env: dict) -> int:
+    from .claude import cmd_parse_bg_id  # imported when used
+    return cmd_parse_bg_id(argv, env)
+
+
+PORTED[("_parse-bg-id",)] = _parse_bg_id
 WATCH_VAR = "TARES_FACTORY_WATCH"  # "python" opts the watch in; bash stays the default one
 
 
