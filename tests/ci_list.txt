@@ -180,6 +180,7 @@ test_rca_callback_anchor
 test_recording_person
 test_release_block
 test_resources
+test_review_gate
 test_rius_rca
 test_run_results
 test_schedule_trigger
@@ -200,8 +201,8 @@ test_slack_ask
 test_slack_finding_post
 test_slack_incident_buttons
 test_slack_verify
-test_spec_tickets_create
 test_smoke_script
+test_spec_tickets_create
 test_sre_home
 test_sre_home_note_link
 test_sre_home_read_key
