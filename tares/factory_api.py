@@ -296,6 +296,9 @@ async def _outside_verdict(store, uid: str, t: dict, pr: dict, gate: tuple[str, 
     cls = integrations_registry.get("review", name)
     if cls is None or not head or not re.match(r"^[0-9a-f]{7,64}$", head):
         return
+    if any(r["by"] == name and r["head"] and factory_mod.same_commit(r["head"], head)
+           for r in store.ticket_reviews(t["id"])):
+        return                  # the gate has its say on this head: no second call to it
     try:
         v = await cls(store).verdict(PRRef(
             repo=pr.get("repo") or "", number=int(pr.get("number") or 0), head=head,
@@ -320,7 +323,8 @@ async def _outside_verdict(store, uid: str, t: dict, pr: dict, gate: tuple[str, 
                 return False    # recorded already for this head
         summary = " ".join(str(getattr(v, "summary", "") or "").split())[:500]
         if verdict == "pass":
-            resolved = {f["label"]: "fixed" for f in store.open_findings(cur["id"])}
+            resolved = {f["label"]: "fixed" for r in store.ticket_reviews(cur["id"])
+                        if r["by"] == name for f in r["findings"] if f["state"] == "open"}
             store.add_review(uid, cur["id"], cur["pr"].get("url"), head, "pass",
                              f"{title} approved this commit", "", name, [], resolved,
                              factory_mod.finding_kind, now_utc())
@@ -366,10 +370,12 @@ async def _refresh(store, uid: str) -> None:
     async def one(t: dict) -> None:
         pr = t["pr"]
         watch = bool(gate) and t["stage"] == "review"
+        reread = False
         if factory_github.stale(pr):
             async with sem:
                 pr = await factory_github.read_pr(store, pr["repo"], int(pr["number"]), pr)
-        elif not watch and not _follows(t, pr, lasts.get(t["id"])):
+            reread = True
+        elif not _follows(t, pr, lasts.get(t["id"])):
             return               # not read again and nothing to write: skip the re-read below
         cur = store.get_ticket(uid, t["id"])   # re-read: a set_stage may have run meanwhile
         if cur is None or not cur["pr"] or (cur["pr"].get("repo"), cur["pr"].get("number")) != (
@@ -392,8 +398,10 @@ async def _refresh(store, uid: str) -> None:
                                      "GitHub shows the pull request merged", "github", "github",
                                      now_utc())
             await write_status(store, uid, cur, "merged")
-        elif watch and (fields.get("stage") or cur["stage"]) == "review" and pr.get("state") == "open":
-            await _outside_verdict(store, uid, cur, pr, gate)
+        elif (watch and reread and (fields.get("stage") or cur["stage"]) == "review"
+              and pr.get("state") == "open"):
+            async with sem:      # the gate is asked when the PR was read again, as many at once
+                await _outside_verdict(store, uid, cur, pr, gate)
 
     await asyncio.gather(*(one(t) for t in linked), return_exceptions=True)
 

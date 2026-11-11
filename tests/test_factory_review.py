@@ -36,6 +36,7 @@ os.environ["TARES_AUTH_TOKEN"] = TOKEN = "root-token-review"
 os.environ["TARES_OTLP_GRPC_PORT"] = "off"
 
 import httpx
+from types import SimpleNamespace
 
 import tares.mcp_server as m
 import tares.mcp_factory as mf
@@ -52,13 +53,14 @@ def ck(label, cond, detail=""):
 
 
 HEAD = {"value": "aaaaaaa1111"}
+STATE = {"value": "open"}
 
 
 def fake_github(request: httpx.Request) -> httpx.Response:
     parts = request.url.path.strip("/").split("/")
     if parts[3] == "pulls":
         return httpx.Response(200, json={
-            "number": int(parts[4]), "title": "PR", "state": "open", "merged": False,
+            "number": int(parts[4]), "title": "PR", "state": STATE["value"], "merged": False,
             "html_url": f"https://github.com/acme/shop/pull/{parts[4]}",
             "head": {"sha": HEAD["value"], "ref": "factory/T1"}})
     if parts[5] == "status":
@@ -100,6 +102,7 @@ _register = factory_api.register
 
 def _register_keeping_fx(app, store, h):
     FX["fx"] = _register(app, store, h)
+    FX["h"] = h
     return FX["fx"]
 
 
@@ -331,6 +334,14 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
     await mf.set_stage("T1", "review", pr="acme/shop#21", project="Gated")
     gated = store.get_ticket(uid, "T1")
     HEAD["value"] = "d0d0d0d0001"
+    statuses = []
+    real_write_status = factory_api.write_status
+
+    async def spy_status(store_, uid_, t_, stage_):
+        statuses.append((t_.get("id"), stage_))
+        return await real_write_status(store_, uid_, t_, stage_)
+
+    factory_api.write_status = spy_status
 
     async def refresh():
         t = store.get_ticket(uid, "T1")
@@ -356,6 +367,17 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
     ck("the crew reviewer's queue leaves the ticket out", not any(x["project_name"] == "Gated" for x in q), q)
     rows = [x for x in factory_api_queue_all(store) if x["project_name"] == "Gated"]
     ck("the pages' queue has it, naming the gate", rows and rows[0]["outside_gate"] == "FakeBot", rows)
+    team = [x for x in FX["h"].team_reader().queue() if x["project_name"] == "Gated"]
+    ck("the team pages read the queue with the outside tool's pull requests too",
+       team and team[0]["outside_gate"] == "FakeBot", team)
+    real_effective = factory_api.integrations_resolve.effective
+    factory_api.integrations_resolve.effective = lambda slot, uid_, store=None: (
+        SimpleNamespace(integration="ghostgate") if uid_ == "ghost-project" else real_effective(slot, uid_, store=store))
+    try:
+        ghost = factory_api.outside_gate(store, "ghost-project")
+    finally:
+        factory_api.integrations_resolve.effective = real_effective
+    ck("a gate that is not installed is not an outside gate (the crew reviewer keeps it)", ghost is None, ghost)
     ck("another project's rows carry no gate",
        all(x["outside_gate"] is None for x in factory_api_queue_all(store) if x["project_name"] != "Gated"))
     ck("the wait is for the tool, by name",
@@ -371,6 +393,12 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
         FakeGate.answer = Verdict(state=state, head="d0d0d0d0001", by="FakeBot", summary="x")
         t = await refresh()
         ck(f"{state}: nothing recorded, still in review", t["stage"] == "review" and records() == [], t["stage"])
+    FakeGate.answer = Verdict(state="pending", head="d0d0d0d0001", by="FakeBot", summary="x")
+    await refresh()
+    asked = len(FakeGate.calls)
+    await factory_api._refresh(store, uid)     # read a moment ago: not read again
+    ck("a pull request that was not read again does not ask the tool", len(FakeGate.calls) == asked,
+       (asked, len(FakeGate.calls)))
     FakeGate.answer = RuntimeError("the tool is down")
     t = await refresh()
     ck("a gate that raises changes nothing", t["stage"] == "review" and records() == [], t["stage"])
@@ -399,8 +427,11 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
     ck("approved: stays in review, one pass on record for the commit",
        t["stage"] == "review" and len(rec) == 1 and rec[0]["verdict"] == "pass"
        and rec[0]["head"] == "d0d0d0d0001" and "FakeBot approved" in rec[0]["verified"], rec)
+    asked = len(FakeGate.calls)
     await refresh()
     ck("a second read of the same commit adds none", len(records()) == 1, records())
+    ck("and does not ask the tool about a commit it has answered", len(FakeGate.calls) == asked,
+       (asked, len(FakeGate.calls)))
     q = factory_api_queue_all(store)
     row = [x for x in q if x["project_name"] == "Gated"][0]
     ck("the row's verdict is the pass", row["verdict"] and row["verdict"].get("verdict") == "pass", row["verdict"])
@@ -415,6 +446,10 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
        and len(store.open_findings(gated["id"])) == 2, rec)
     ck("the ticket moves to changes with the tool's words", t["stage"] == "changes" and t["stage_reason"] == "Two problems",
        (t["stage"], t.get("stage_reason")))
+    hist = [x for x in store.ticket_history(gated["id"])
+            if x["field"] == "stage" and x["value"] == "changes" and x["by"] == "fakegate"]
+    ck("the move is in the ticket's history, by the tool", len(hist) == 1 and hist[0]["reason"] == "Two problems", hist)
+    ck("the status is written for it", (gated["id"], "changes") in statuses, statuses)
     ck("the findings are the tool's, blocking",
        {f["text"] for f in store.open_findings(gated["id"])} >= {"the cart total is wrong", "no test for an empty cart"},
        store.open_findings(gated["id"]))
@@ -429,6 +464,41 @@ async def outside_gate_cases(store, mf, m, as_station, shop):
     t = await refresh()
     ck("changes with no findings and no words still moves it, with the tool's name",
        t["stage"] == "changes" and "FakeBot" in (t.get("stage_reason") or ""), (t["stage"], t.get("stage_reason")))
+
+    print("  -- approval clears the tool's findings only --")
+    from tares.envelope import now_utc
+    store.add_review(uid, gated["id"], None, "d0d0d0d0004", "changes", "x", "", "crew-reviewer",
+                     [{"severity": "P2", "file": "", "line": 0, "blocking": True, "text": "crew finding"}],
+                     {}, factory.finding_kind, now_utc())
+    HEAD["value"] = "d0d0d0d0005"
+    FakeGate.answer = Verdict(state="pending", head="d0d0d0d0005", by="FakeBot", summary="")
+    t = await refresh()
+    ck("back in review on new commits", t["stage"] == "review", t["stage"])
+    FakeGate.answer = Verdict(state="approved", head="d0d0d0d0005", by="FakeBot", summary="Fixed")
+    t = await refresh()
+    left = {f["text"] for f in store.open_findings(gated["id"])}
+    ck("approved: the tool's findings are fixed and the reviewer's stay open", left == {"crew finding"}, left)
+    ck("approval writes no status", (gated["id"], "review") not in statuses, statuses)
+
+    print("  -- a ticket that moved, a pull request that closed --")
+    HEAD["value"] = "d0d0d0d0006"
+    STATE["value"] = "closed"
+    asked = len(FakeGate.calls)
+    FakeGate.answer = Verdict(state="changes", head="d0d0d0d0006", by="FakeBot", summary="late", findings=["x"])
+    t = await refresh()
+    ck("a closed pull request is not asked about",
+       t["stage"] == "review" and len(FakeGate.calls) == asked
+       and not [r for r in records() if r["head"] == "d0d0d0d0006"], (t["stage"], len(FakeGate.calls), asked))
+    STATE["value"] = "open"
+    store.update_ticket(gated["id"], stage="changes")
+    cur = store.get_ticket(uid, "T1")
+    before = len(records())
+    FakeGate.answer = Verdict(state="changes", head="d0d0d0d0007", by="FakeBot", summary="late", findings=["x"])
+    await factory_api._outside_verdict(store, uid, cur, {**cur["pr"], "head": "d0d0d0d0007"}, ("fakegate", "FakeBot"))
+    ck("a ticket that left review meanwhile gets no record from a read that was already out",
+       len(records()) == before and store.get_ticket(uid, "T1")["stage"] == "changes",
+       (before, len(records())))
+    factory_api.write_status = real_write_status
 
 
 def factory_api_queue_all(store):
