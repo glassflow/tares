@@ -19,6 +19,9 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from unittest import mock
+
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,6 +34,9 @@ CREW.mkdir()
 os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"), FACTORY_CREW_HOME=str(CREW),
                   PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring", TARES_HOME=str(SCRATCH / "tares-home"))
 (SCRATCH / "home").mkdir()
+_crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
+SCRATCH_ENV = {"HOME": os.environ["HOME"], "USERPROFILE": os.environ["HOME"], "FACTORY_HOME": str(CREW),
+               "FACTORY_CREW_HOME": str(CREW)}   # what an env handed to a restart or a start carries
 
 sys.path.insert(0, str(ROOT))
 
@@ -56,7 +62,7 @@ paths = CrewPaths.at(str(CREW))
 
 def child_env(**more):
     env = {**os.environ, "PYTHONPATH": str(ROOT), "TARES_FACTORY_WATCH": "python", "FACTORY_WATCH_INTERVAL": "1",
-           "FACTORY_ASK_POLL": "0.1", "PYTHONUNBUFFERED": "1", **more}
+           "FACTORY_ASK_POLL": "0.1", "PYTHONUNBUFFERED": "1", **SCRATCH_ENV, **more}
     return env
 
 
@@ -134,6 +140,28 @@ try:
        watch.nap(paths, 60, 0.05) is True and time.monotonic() - started < 2)
     (CREW / "watch.stop").unlink()
     ck("a nap with no stop file waits its time and says no", watch.nap(paths, 0.2, 0.05) is False)
+
+    print("every round looks at the engine setting (TR-1164)")
+    order = []
+    rounds = []
+
+    def fake_nap(p, interval, poll):
+        order.append("nap")
+        rounds.append(1)
+        return len(rounds) >= 3   # the third nap ends the watch
+    with mock.patch.object(watch, "claim_pidfile", lambda p: order.append("claim")), \
+            mock.patch.object(watch, "follow_engine", lambda p, i, env=None: order.append(("follow", i))), \
+            mock.patch.object(watch, "run_steps", lambda p: order.append("steps")), \
+            mock.patch.object(watch, "nap", fake_nap):
+        watch.watch(paths, 2.5)
+    ck("watch() calls follow_engine in every round, with its interval, after the pid file claim and before the steps",
+       order == ["claim", ("follow", 2.5), "steps", "nap"] * 3, str(order))
+    order.clear()
+    with mock.patch.object(watch, "claim_pidfile", lambda p: order.append("claim")), \
+            mock.patch.object(watch, "follow_engine", lambda p, i, env=None: order.append("follow")), \
+            mock.patch.object(watch, "run_steps", lambda p: order.append("steps")):
+        watch.watch(paths, 2.5, once=True)
+    ck("--once runs the steps and looks at no engine setting (no running watch to switch)", order == ["steps"], str(order))
 
     print("the pid file and who is the watch")
     ck("no pid file: no watch", watch.running_pid(paths) is None)
@@ -326,7 +354,6 @@ try:
     argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
     ck("TARES_FACTORY_ENGINE=bash alone: bash on POSIX, Python on Windows",
        engine == ("python" if WINDOWS else "bash") and (WINDOWS or argv[0] == "bash"), str(argv))
-    from unittest import mock
     with mock.patch.object(dispatch, "bash_exe", lambda e: None):
         argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
         ck("TARES_FACTORY_ENGINE=bash with no bash on the system: the watch is Python (nothing to run it with)",
@@ -357,8 +384,11 @@ try:
         ck("...but with no bash on the system it stays Python", not switched)
     if not WINDOWS:
         execs = []
-        with mock.patch.object(os, "execve", lambda *a: execs.append(a)):
-            watch.restart_self(paths, 3, {"TARES_FACTORY_ENGINE": "bash", "PATH": os.environ.get("PATH", "")})
+        def record_exec(path, argv, env):
+            _crew_guard.check_exec([path, *argv], env)   # the environment it would exec with must not reach the real home
+            execs.append((path, argv, env))
+        with mock.patch.object(os, "execve", record_exec):
+            watch.restart_self(paths, 3, {**SCRATCH_ENV, "TARES_FACTORY_ENGINE": "bash", "PATH": os.environ.get("PATH", "")})
         ck("restart_self onto the bash watch execs bash by its path (a bare \"bash\" is not an execve path)",
            len(execs) == 1 and os.path.isabs(execs[0][0]) and os.path.basename(execs[0][0]) == "bash"
            and execs[0][1][0] == "bash" and execs[0][1][-2:] == ["--interval", "3"], str(execs))
@@ -368,7 +398,7 @@ try:
             raise FileNotFoundError(2, "No such file or directory", "bash")
         watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
         with mock.patch.object(os, "execve", no_exec):
-            watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})   # must not raise
+            watch.follow_engine(paths, 7, {**SCRATCH_ENV})   # must not raise
         ck("an exec that fails leaves the Python watch running and its pid file naming python",
            watch.read_pidfile(paths)[2] == "python", str(watch.read_pidfile(paths)))
     (CREW / "crew.json").write_text(json.dumps({"crew_name": "t"}), encoding="utf-8")

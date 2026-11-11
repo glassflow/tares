@@ -25,9 +25,12 @@ import tempfile
 from pathlib import Path
 from unittest import mock
 
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "factory"))
+_crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
 
 import parity  # noqa: E402  (the harness: crew_env and the stand-in Tares)
 from fake_up_tares import FakeTares  # noqa: E402
@@ -347,13 +350,15 @@ calls = []
 
 
 def fake_execve(path, args, env):
+    _crew_guard.check_exec([path, *args], env)   # even a refused exec must not carry the real home
     calls.append((path, args))
     raise AssertionError("crew up must not exec bash from the Python entry")
 
 
 with mock.patch.object(os, "execve", fake_execve), \
         mock.patch.object(up, "cmd_crew_up", lambda argv, env: calls.append(("python", argv)) or 0):
-    base = {k: v for k, v in os.environ.items() if not k.startswith("TARES_FACTORY_ENGINE")}
+    scratch = Path(tempfile.mkdtemp(prefix="setup-contract-route-"))   # a scratch home, not this process's own (TR-1164)
+    base = {k: v for k, v in parity.crew_env(scratch, "python").items() if not k.startswith("TARES_FACTORY_ENGINE")}
     up.entry_crew_up(["crew", "up", "--yes"], dict(base))
     ck("engine unset: the Python crew up runs, with its arguments", calls == [("python", ["crew", "up", "--yes"])], calls)
     calls.clear()

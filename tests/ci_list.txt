@@ -48,6 +48,7 @@ test_crew_packaging
 test_crew_person
 test_crew_readings
 test_crew_regrant
+test_crew_scratch_home
 test_crew_session
 test_crew_session_start
 test_crew_setup_contract
