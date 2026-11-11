@@ -7776,6 +7776,184 @@ scenario(Scenario(
 ))
 
 
+# lsp_test.sh (TR-1162): the crew up part, the offer of the language servers and the install on a yes. The doctor
+# part of that suite is lsp_missing and lsp_servers above. The installers a yes runs (npm, go, rustup) are stand-ins
+# that log the call and make the binary they would install, in the one folder the servers are looked up in
+# (FACTORY_LSP_PATH), as in the bash suite; they are shell scripts, so the Python side is not run on Windows.
+
+LSP_INSTALLER = """#!/bin/sh
+echo "$(basename "$0") $*" >> "$(dirname "$0")/installs.log"
+for a in "$@"; do
+  case "$a" in
+    pyright) touch "$(dirname "$0")/pyright-langserver" ;;
+    typescript-language-server) touch "$(dirname "$0")/typescript-language-server" ;;
+    golang.org/x/tools/gopls@latest) touch "$(dirname "$0")/gopls" ;;
+    rust-analyzer) touch "$(dirname "$0")/rust-analyzer" ;;
+  esac
+done
+chmod +x "$(dirname "$0")"/* 2>/dev/null
+exit 0
+"""
+LSP_REPOS = ("api", "gw", "docs", "engine", "site", "gw2")
+
+
+def lsp_prepare(r: "Run") -> None:
+    """Claude Code trusts the crew home and every repo; Tares has one project with all six repos."""
+    r.trust(r.crew, *[r.tmp / n for n in LSP_REPOS])
+    r.stand_in.projects.append({"name": "Mix", "repos": [{"path": str(r.tmp / n)} for n in
+                                                         ("api", "gw", "docs", "engine", "gw2", "site")]})
+
+
+def lsp_setup(tmp: Path, env: dict) -> None:
+    _lsp_repos(tmp)
+    folder = tmp / "lspbin"
+    folder.mkdir(parents=True, exist_ok=True)
+    for tool in ("npm", "go", "rustup"):
+        f = folder / tool
+        f.write_text(LSP_INSTALLER, encoding="utf-8", newline="\n")
+        f.chmod(0o755)
+    _crew_json(tmp)
+    _lsp_plugins(tmp, [])
+    _fake_tool(tmp, "gh")
+    _fake_tool(tmp, "tares")
+    env["FACTORY_LSP_PATH"] = str(folder)
+    env["PATH"] = str(folder) + os.pathsep + env.get("PATH", "")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+
+
+def lsp_after(tmp: Path) -> dict:
+    """What the installers and Claude Code were asked so far: the log of installs, the plugins on."""
+    try:
+        log = (tmp / "lspbin" / "installs.log").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log = []
+    calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    plugins = json.loads((tmp / "claude" / "plugins.json").read_text(encoding="utf-8"))
+    return {"installs": log, "plugin_installs": sum(1 for c in calls if c["args"][:2] == ["plugin", "install"]),
+            "plugins": sorted(p["id"] for p in plugins)}
+
+
+def lsp_crew_up_checks() -> list:
+    def api(r):
+        return str(r.tmp / "api")
+
+    def installs(r, i):
+        return len(r.snap(i)["installs"])
+
+    def nothing_installed(r, i):
+        return installs(r, i) == 0 and r.snap(i)["plugin_installs"] == 0
+
+    def log(r):
+        return "\n".join(r.snap(4)["installs"]) + "\n"
+    return [
+        ("when claude cannot list its plugins crew up offers no install",
+         lambda r: "Code intelligence" not in r.out(0)),
+        ("crew up --yes recommends and installs nothing",
+         lambda r: "Code intelligence" in r.out(1) and f"Python in {api(r)}" in r.out(1)
+         and "not installing language servers without a yes" in r.out(1) and nothing_installed(r, 1)),
+        ("a closed input is a no",
+         lambda r: "no language servers installed" in r.out(2) and nothing_installed(r, 2)),
+        ("answering no installs nothing",
+         lambda r: "no language servers installed" in r.out(3) and nothing_installed(r, 3)),
+        ("a yes installs each binary",
+         lambda r: re.search(r"^npm install -g pyright", log(r), re.M) is not None
+         and re.search(r"^npm install -g typescript-language-server typescript", log(r), re.M) is not None
+         and re.search(r"^go install golang.org/x/tools/gopls@latest", log(r), re.M) is not None),
+        ("a yes installs each binary once, however many repos need it",
+         lambda r: len(re.findall(r"^go install", log(r), re.M)) == 1
+         and len(re.findall(r"^npm install -g typescript-language-server", log(r), re.M)) == 1),
+        ("a yes installs each plugin once",
+         lambda r: all(r.snap(4)["plugins"].count(f"{p}@claude-plugins-official") == 1
+                       for p in ("pyright-lsp", "typescript-lsp", "gopls-lsp", "rust-analyzer-lsp"))),
+        ("doctor finds Python, TypeScript and Go ready after the yes",
+         lambda r: re.search(r"ok .*Python in " + re.escape(api(r)) + " has a language server", r.out(5)) is not None
+         and re.search(r"ok .*TypeScript in " + re.escape(api(r)) + " has a language server", r.out(5)) is not None
+         and re.search(r"ok .*Go in " + re.escape(str(r.tmp / "gw")) + " has a language server", r.out(5)) is not None),
+        ("crew up offers nothing for languages that have a server",
+         lambda r: "Python in" not in r.out(6) and f"Go in {r.tmp / 'gw'}" not in r.out(6)),
+    ]
+
+
+scenario(Scenario(
+    name="lsp_crew_up",
+    suite="lsp",
+    about="crew up offers the missing language servers, installs only on a yes, and offers nothing once they are there",
+    ignore_calls=LSP_PROBE,
+    stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
+    prepare=lsp_prepare,
+    setup=lsp_setup,
+    not_windows="the installers a yes runs are shell scripts",
+    steps=[Step(["crew", "up", "--yes"], env={"FAKE_CLAUDE_PLUGIN_FAIL": "1"}, stdin="", after=lsp_after),     # 0
+           Step(["crew", "up", "--yes"], stdin="", after=lsp_after),                                       # 1
+           Step(["crew", "up"], stdin="", after=lsp_after),                                                # 2 a closed input
+           Step(["crew", "up"], stdin="no\n", after=lsp_after),                                            # 3
+           Step(["crew", "up"], stdin="yes\n", after=lsp_after),                                           # 4
+           Step(["doctor"], drop=DOCTOR_DROP, after=lsp_after),                                            # 5
+           Step(["crew", "up", "--yes"], stdin="", after=lsp_after)],                                      # 6
+    checks=lsp_crew_up_checks(),
+    covers=["when claude cannot list its plugins crew up offers no install",
+            "crew up --yes recommends and installs nothing",
+            "a closed input is a no",
+            "answering no installs nothing",
+            "a yes installs each binary",
+            "a yes installs each binary once, however many repos need it",
+            "a yes installs each plugin once",
+            "doctor finds Python, TypeScript and Go ready after the yes",
+            "crew up offers nothing for languages that have a server"],
+))
+
+
+# guard_test.sh (TR-1162): the whole suite. The guard has one implementation (hooks/guard.sh is a shim for
+# `tares hook guard`), so both sides run the same code; guard_support.py runs the 154 cases of
+# tests/guard_cases.jsonl in one process, after checking the file still holds the suite's own cases.
+
+scenario(Scenario(
+    name="guard_all",
+    suite="guard",
+    about="every case of guard_test.sh: what each role may run, the halted crew, a session without a role",
+    driver="guard_support.py",
+    steps=[Step(["run"])],
+    checks=[("(the whole guard suite)", lambda r: r.code(0) == 0 and r.out(0).strip() == "guard: all cases pass")],
+    covers=["(the whole guard suite)"],
+))
+
+
+# heavy_test.sh (TR-1162): the whole suite. factory-heavy is its own script on the bash side and
+# `tares factory heavy` on the Python side; heavy_support.py runs the suite against the one it is given.
+
+scenario(Scenario(
+    name="heavy_all",
+    suite="heavy",
+    about="two heavy commands never overlap, a command past its timeout is killed (142) and the lock is released",
+    driver="heavy_support.py",
+    steps=[Step(["run"])],
+    checks=[("(the whole heavy suite)", lambda r: r.code(0) == 0
+             and r.out(0).strip() == "factory-heavy: serialises and times out")],
+    covers=["(the whole heavy suite)"],
+))
+
+
+# parse_test.sh (TR-1162): the whole suite. The session id is read from the output of `claude --bg`, with and without
+# colour codes, and is empty when Claude Code did not start a session.
+
+PARSE_CASES = [
+    ("backgrounded · feb401c6 · tfspike-alpha\n", "feb401c6"),
+    ("backgrounded · \033[36m3bd5cd67\033[39m · vetme-build-t1\n\033[2m  claude agents   list sessions\033[22m\n",
+     "3bd5cd67"),
+    ("Workspace not trusted. Run `claude` in /x once\n", ""),
+]
+
+scenario(Scenario(
+    name="parse_all",
+    suite="parse",
+    about="the session id is read from `claude --bg` output, with and without colour codes",
+    steps=[Step(["_parse-bg-id"], stdin=text) for text, _want in PARSE_CASES],
+    checks=[("(the whole parse suite)",
+             lambda r: all(r.out(i).strip() == want for i, (_text, want) in enumerate(PARSE_CASES)))],
+    covers=["(the whole parse suite)"],
+))
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)

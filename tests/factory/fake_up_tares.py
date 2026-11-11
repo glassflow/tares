@@ -9,7 +9,7 @@ It answers what crew up and the station launches ask, from memory, on one free p
     GET  /api/grants                {"all": "- \\"<words>\\" (<date>)\\n..."}
     POST /api/grants                {words, scope: "all"}: one more line
     GET  /api/people                {"people": [...]}
-    GET  /api/crew/projects         {"projects": []}
+    GET  /api/crew/projects         {"projects": [...]} (none unless the scenario hands some over)
     GET  /api/desk                  {"desk": []}
     POST /mcp                       an MCP `initialize` answer (it has serverInfo)
 
