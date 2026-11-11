@@ -31,7 +31,7 @@ const PORT = Number(process.env.TARES_E2E_PORT || 8855);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
 const TOKEN = "e2e-admin-token-settings";
-const SAMPLES = ["busy", "newc", "ro", "rel", "long", "many", "load", "err"];
+const SAMPLES = ["busy", "newc", "ro", "rel", "long", "many", "load", "err", "morning", "morningoff", "morningemail", "morningself", "morningblocked"];
 const GROUPS = ["Crew", "Tools", "Models", "Team", "Workspace", "Advanced"];
 
 let pass = 0, fail = 0;
@@ -55,6 +55,11 @@ const api = async (token, method, route, body) => {
 };
 
 // waits until the cell says what a change should have made it say
+const api2 = async (base, token, method, route, body) => {
+  const r = await fetch(base + route, { method, headers: { "content-type": "application/json", authorization: `Bearer ${token}` }, body: body ? JSON.stringify(body) : undefined });
+  return { status: r.status, body: await r.json().catch(() => null) };
+};
+
 const until = async (fn, tries = 40) => {
   for (; tries > 0; tries--) {
     if (await fn()) return true;
@@ -81,8 +86,8 @@ const until = async (fn, tries = 40) => {
   try {
     ck("daemon up", await waitFor(`${BASE}/health`));
     browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
-    const newPage = async (width, { sampleFlag = false, token = TOKEN } = {}) => {
-      const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 } });
+    const newPage = async (width, { sampleFlag = false, token = TOKEN, dark = false } = {}) => {
+      const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 844 : 900 }, ...(dark ? { colorScheme: "dark" } : {}) });
       await ctx.addInitScript(([flag, t]) => {
         try { if (flag) localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", t); } catch (e) { /* none */ }
       }, [sampleFlag, token]);
@@ -352,6 +357,170 @@ const until = async (fn, tries = 40) => {
       await n.ctx.close();
     }
 
+    // 13b. Morning status: the samples in dark mode, then the real cell, self-hosted and on Tares Cloud
+    {
+      const CHANNELS = { channels: [{ id: "C1", name: "factory-status", is_private: false }], reason: null };
+      const morningPage = async (width, name) => {
+        const n = await newPage(width, { sampleFlag: true, dark: true });
+        await n.page.route("**/api/slack/channels*", (r) => r.fulfill({ json: CHANNELS }));
+        await n.page.goto(`${BASE}/settings?sample=${name}&tab=morning`, { waitUntil: "load" });
+        await n.page.getByTestId("morning-status").waitFor();
+        await settle(n.page);
+        return n;
+      };
+      const SHOTNAME = { morning: "both", morningemail: "email-only", morningself: "selfhosted", morningblocked: "blocked", morningoff: "off" };
+      for (const width of [1440, 390]) {
+        for (const name of ["morning", "morningoff", "morningemail", "morningself", "morningblocked"]) {
+          const { ctx: c, page: p } = await morningPage(width, name);
+          const tag = `morning ${name} at ${width}`;
+          ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+          await checkWords(p, ck, tag);
+          await shot(p, `morning-${SHOTNAME[name]}-${width}.png`);
+          if (name === "morning") {
+            ck(`${tag}: Slack and Email are ticked`, (await p.getByTestId("morning-to-slack").getAttribute("data-state")) === "checked" && (await p.getByTestId("morning-to-email").getAttribute("data-state")) === "checked");
+            ck(`${tag}: the channel picker shows`, (await p.locator(".slack-pick").count()) === 1);
+            const boxes = p.getByTestId("morning-recipient");
+            ck(`${tag}: people with an email are listed, Lee (none) is not`, (await boxes.count()) === 3, `${await boxes.count()}`);
+            ck(`${tag}: two are ticked`, (await p.locator('[data-testid="morning-recipient"][data-state="checked"]').count()) === 2);
+            const unticked = p.locator('[data-testid="morning-recipient"][data-state="unchecked"]').first();
+            const bg = await unticked.evaluate((e) => { const a = document.createElement("div"); a.style.background = "var(--input-bg)"; document.body.appendChild(a); const want = getComputedStyle(a).backgroundColor; a.remove(); return [getComputedStyle(e).backgroundColor, want]; });
+            ck(`${tag}: an unticked box uses the field background`, bg[0] === bg[1], bg.join(" vs "));
+            ck(`${tag}: it is not white`, bg[0] !== "rgb(255, 255, 255)", bg[0]);
+            const box = p.getByTestId("morning-to-slack");
+            const gap = await box.evaluate((e) => Math.round(e.nextElementSibling.getBoundingClientRect().left - e.getBoundingClientRect().right));
+            ck(`${tag}: the box sits apart from its label`, gap >= 8, `${gap}px`);
+            ck(`${tag}: the last result is shown`, (await text(p, "morning-last-result")) === "Last sent Tuesday 09:00 to Slack and 2 people.", await text(p, "morning-last-result"));
+            ck(`${tag}: no missing message`, (await p.getByTestId("morning-missing").count()) === 0);
+            ck(`${tag}: Save and Send one now are live`, await p.getByTestId("morning-save").isEnabled() && await p.getByTestId("morning-send-now").isEnabled());
+            const writes = [];
+            p.on("request", (r) => { if (r.url().includes("/api/factory/settings/morning")) writes.push(r.method()); });
+            await p.getByTestId("morning-save").click();
+            await p.getByTestId("morning-note").waitFor();
+            ck(`${tag}: a sample's Save writes nothing and says so`, writes.length === 0 && (await text(p, "morning-note")) === "Saved. It goes out every weekday at 09:00.", writes.join(","));
+            await p.getByTestId("morning-send-now").click();
+            await settle(p);
+            ck(`${tag}: a sample's Send one now calls nothing`, writes.length === 0, writes.join(","));
+          }
+          if (name === "morningemail") {
+            ck(`${tag}: Slack is not connected but the page still works`, (await p.getByTestId("morning-no-slack").count()) === 1 && (await p.getByTestId("morning-to-slack").isDisabled()) && (await p.getByTestId("morning-toggle").isEnabled()));
+            ck(`${tag}: Email is ticked with its people`, (await p.getByTestId("morning-to-email").getAttribute("data-state")) === "checked" && (await p.getByTestId("morning-recipient").count()) === 3);
+            ck(`${tag}: no channel picker for an unconnected Slack`, (await p.locator(".slack-pick").count()) === 0);
+            ck(`${tag}: Save is live`, await p.getByTestId("morning-save").isEnabled());
+          }
+          if (name === "morningself") {
+            ck(`${tag}: Email cannot be ticked and says why`, (await p.getByTestId("morning-to-email").isDisabled()) && /Not available on this cell/.test(await text(p, "morning-send-to")), await text(p, "morning-send-to"));
+            ck(`${tag}: no list of people`, (await p.getByTestId("morning-recipients").count()) === 0);
+            ck(`${tag}: Slack still works`, await p.getByTestId("morning-to-slack").isEnabled());
+          }
+          if (name === "morningblocked") {
+            ck(`${tag}: says what is missing`, (await text(p, "morning-missing")) === "Pick at least one person to email.", await p.getByTestId("morning-missing").count() ? await text(p, "morning-missing") : "none");
+            ck(`${tag}: Save and Send one now wait`, await p.getByTestId("morning-save").isDisabled() && await p.getByTestId("morning-send-now").isDisabled());
+          }
+          if (name === "morningoff") {
+            ck(`${tag}: off says nothing is sent`, (await text(p, "morning-summary")) === "Off. Nothing is sent.", await text(p, "morning-summary"));
+            ck(`${tag}: turning it on with nowhere to send says so`, await (async () => {
+              await p.getByTestId("morning-toggle").click();
+              return (await text(p, "morning-missing")) === "Choose where to send it: Slack, Email, or both." && await p.getByTestId("morning-save").isDisabled();
+            })());
+          }
+          await c.close();
+        }
+      }
+
+      // the real self-hosted cell: email is not available, and without Slack nothing can be sent
+      {
+        const n = await newPage(1440, { dark: true });
+        await go(n.page, "morning");
+        ck("self-hosted: Email is off and says it is not available", (await n.page.getByTestId("morning-to-email").isDisabled()) && /Not available on this cell/.test(await text(n.page, "morning-send-to")));
+        ck("self-hosted: Slack not connected says so", (await n.page.getByTestId("morning-no-slack").count()) === 1);
+        ck("self-hosted without Slack: the switch and Save wait", (await n.page.getByTestId("morning-toggle").isDisabled()) && (await n.page.getByTestId("morning-save").isDisabled()));
+        ck("the page says the feature is off", (await api(TOKEN, "GET", "/api/factory/settings")).body.morning.enabled === false);
+        await checkWords(n.page, ck, "morning self-hosted");
+        await n.ctx.close();
+      }
+
+      // a read key is refused the settings page already, and the routes too
+      {
+        const r = await api(ids.read_key, "PUT", "/api/factory/settings/morning", { enabled: false });
+        ck("a read key cannot save Morning status", r.status === 403, r.status);
+        const r2 = await api(ids.read_key, "POST", "/api/factory/settings/morning/send", {});
+        ck("a read key cannot send one", r2.status === 403, r2.status);
+      }
+
+      // a real Tares Cloud cell against a local stand-in for the control plane: no mail is sent
+      const FAKE_PORT = PORT + 5;
+      const asks = [];
+      const fake = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (d) => body += d);
+        req.on("end", () => {
+          asks.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body || "{}") });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ accepted: true, sent: 1, total: 1, failed: [] }));
+        });
+      });
+      await new Promise((r) => fake.listen(FAKE_PORT, "127.0.0.1", r));
+      const home2 = fs.mkdtempSync(path.join(os.tmpdir(), "tares-factory-settings-cloud-"));
+      const PORT2 = PORT + 2;
+      const BASE2 = `http://127.0.0.1:${PORT2}`;
+      execFileSync(python, ["-c", `
+import sys, os
+sys.path.insert(0, os.getcwd())
+from tares.store import Store
+s = Store(os.path.join(sys.argv[1], "tares.duckdb"))
+s.create_person("Alex", "alex@example.com")
+s.create_person("Kim", "kim@example.com")
+s.con.close()
+`, home2], { cwd: REPO, encoding: "utf8", env: { ...env, TARES_HOME: home2 } });
+      const cloudEnv = { ...env, TARES_HOME: home2, TARES_PORT: String(PORT2), TARES_MCP_PORT: String(PORT2 + 1),
+                         TARES_WORKSPACE_API_URL: `http://127.0.0.1:${FAKE_PORT}/api/workspaces/demo` };
+      const daemon2 = spawn(tares, ["up", "--port", String(PORT2), "--data-dir", home2], { cwd: REPO, stdio: "ignore", env: cloudEnv });
+      try {
+        ck("cloud daemon up", await waitFor(`${BASE2}/health`));
+        for (const width of [1440, 390]) {
+          const tag = `morning cloud at ${width}`;
+          const n = await newPage(width, { dark: true });
+          const p = n.page;
+          await p.goto(`${BASE2}/settings?tab=morning`, { waitUntil: "load" });
+          await p.getByTestId("morning-status").waitFor();
+          await settle(p);
+          if (width === 1440) {
+            ck(`${tag}: no Slack here, Email is live`, (await p.getByTestId("morning-to-slack").isDisabled()) && (await p.getByTestId("morning-to-email").isEnabled()));
+            ck(`${tag}: the switch is live`, await p.getByTestId("morning-toggle").isEnabled());
+            await p.getByTestId("morning-to-email").click();
+            await p.getByTestId("morning-recipients").waitFor();
+            await checkWords(p, ck, tag);
+            ck(`${tag}: the people with email`, (await p.getByTestId("morning-recipient").count()) >= 2, `${await p.getByTestId("morning-recipient").count()}`);
+            await p.getByTestId("morning-recipient").first().click();
+            await p.getByTestId("morning-toggle").click();
+            await p.getByTestId("morning-save").click();
+            await p.getByTestId("morning-note").waitFor();
+            const saved = (await api2(BASE2, TOKEN, "GET", "/api/factory/settings")).body.morning;
+            ck(`${tag}: saved and read back`, saved.enabled === true && saved.to_email === true && saved.recipients.length === 1 && !saved.to_slack, JSON.stringify(saved));
+            await p.getByTestId("morning-send-now").click();
+            await p.getByTestId("morning-last-result").waitFor();
+            await until(async () => /Last sent/.test(await text(p, "morning-last-result")));
+            const last = await text(p, "morning-last-result");
+            ck(`${tag}: the result line says it went`, /^Last sent \w+ \d\d:\d\d to 1 person\.$/.test(last), last);
+            ck(`${tag}: the cell asked the control plane once, with its own token, to the workspace address`,
+               asks.length === 1 && asks[0].auth === `Bearer ${TOKEN}` && asks[0].url === "/api/workspaces/demo/status-email" && asks[0].body.recipients.length === 1, JSON.stringify(asks.map((a) => a.url)));
+            ck(`${tag}: the email is plain text with a top line`, /Nothing is waiting for you\./.test(asks[0].body.text) && !asks[0].body.text.includes("**") && asks[0].body.subject.startsWith("Morning status"), asks[0].body.subject);
+            ck(`${tag}: saved settings keep the send out of the scheduled date`, (await api2(BASE2, TOKEN, "GET", "/api/factory/settings")).body.morning.enabled === true);
+          } else {
+            await until(async () => (await p.getByTestId("morning-last-result").count()) > 0);
+            ck(`${tag}: the result is shown`, /^Last sent /.test(await text(p, "morning-last-result")), "");
+            ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
+          }
+          await shot(p, `morning-after-send-${width}.png`);
+          await n.ctx.close();
+        }
+      } finally {
+        daemon2.kill();
+        fake.close();
+        fs.rmSync(home2, { recursive: true, force: true });
+      }
+    }
+
     // 14. every sample state at 1440 and 390: its words, no sideways scroll, a screenshot
     for (const width of [1440, 390]) {
       for (const name of SAMPLES) {
@@ -359,7 +528,7 @@ const until = async (fn, tries = 40) => {
         const tag = `sample ${name} at ${width}`;
         let reads = 0;
         p.on("request", (r) => { if (r.url().includes("/api/factory/settings")) reads++; });
-        const pane = ["busy", "newc", "long", "many"].includes(name) ? "allowed" : "crew";
+        const pane = name.startsWith("morning") ? "morning" : ["busy", "newc", "long", "many"].includes(name) ? "allowed" : "crew";
         await p.goto(`${BASE}/settings?sample=${name}&tab=${pane}`, { waitUntil: "load" });
         if (name === "load") await p.getByTestId("settings-loading").waitFor();
         else if (name === "err") await p.getByText("Settings did not load.").waitFor();

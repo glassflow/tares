@@ -37,10 +37,9 @@ Untested on real Windows
 Differences from bash
   * claude_bin also looks in the known install folders after PATH, and on Windows for claude.exe and
     claude.cmd. It skips empty PATH entries (bash's `which` reads one as the current folder).
-  * transcript_of takes the session id from `claude agents --json` (the station's row), then the
-    station's recorded sessionId. Bash asks the job's state.json first; the state.json fallback is kept
-    to quiet and station_updated. After a /clear of a session that is no longer listed, the recorded id
-    may be the older one.
+  * transcript_of takes the session id from the job's state.json first, as bash does (TR-1155: after a
+    /clear it names the new session, and the list may still show the old one), then from the station's
+    row of `claude agents --json`, then from the station's recorded sessionId.
   * active_json and job_state raise instead of returning non-zero; station_updated gives None, not "",
     for an unknown time; the other values are the same text bash prints.
   * attached and running_version read process command lines with psutil, not pgrep and ps: a process
@@ -333,6 +332,19 @@ def parse_bg_id(text: str) -> str:
     return ""
 
 
+def cmd_parse_bg_id(argv: list, env: dict) -> int:
+    """The hidden `_parse-bg-id`: read `claude --bg` output on stdin and print the session id (bash's
+    `parse_bg_id`, which tests and scripts call). Like bash it checks no crew name, merges the crew.json
+    defaults and prints nothing when there is no id."""
+    from .paths import default_home
+    from .state import merge_crew_defaults
+    merge_crew_defaults(CrewPaths(env.get("FACTORY_CREW_HOME") or default_home(env)))
+    found = parse_bg_id(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
+    if found:
+        print(found)
+    return 0
+
+
 def _jq_order(v):
     """A sort key in jq's order: null, false, true, numbers, strings, arrays, objects."""
     if v is None:
@@ -380,7 +392,7 @@ def job_state(job_id: str) -> dict:
     """~/.claude/jobs/<id>/state.json as a dict; {} when the job has no file.
 
     # STATE.JSON FALLBACK: fields claude agents --json does not give (updatedAt, inFlight)
-    Only quiet() and station_updated() call this. Raises JobStateUnreadableError for a file that is there
+    quiet(), station_updated() and transcript_of() call this. Raises JobStateUnreadableError for a file that is there
     but is not a JSON object, so a half-written file is never read as "nothing in flight"."""
     if not job_id or job_id in (".", "..") or "/" in job_id or "\\" in job_id:
         return {}
@@ -398,12 +410,17 @@ def job_state(job_id: str) -> dict:
 
 def transcript_of(station: str, claude=None, paths=None, agents=None) -> str:
     """The station's conversation transcript, ~/.claude/projects/*/<session>.jsonl; "" when there is none.
-    The session id is the one on the station's row of `claude agents --json`, else the one recorded for
-    the station. `agents` is that list when the caller already has it (status asks once, not per station)."""
+    The session id is the one in the job's state.json, else the one on the station's row of
+    `claude agents --json`, else the one recorded for the station. `agents` is that list when the caller already has it (status asks once, not per station)."""
     paths = paths or CrewPaths.from_env()
     sid = stations_get(station, "id", paths=paths)
     s = ""
     if sid:
+        try:   # the job's own state.json comes first, as in bash: after a /clear it names the new session
+            s = jq_raw(_val(job_state(sid).get("sessionId"), ""))
+        except JobStateUnreadableError:
+            pass
+    if sid and not s:
         try:
             for row in (agents if agents is not None else active_json(claude)):
                 if row.get("id") == sid:
@@ -514,8 +531,65 @@ def station_updated(station: str, paths=None):
 # ---------- processes ----------
 
 
+def _fake_ps_file(pid, field: str):
+    """Test hook TARES_FAKE_PS_DIR: the folder a suite's fake `ps` answers from (tests/factory/fake-ps), where
+    <dir>/ps/<pid>.<field> holds what `ps -o <field>= -p <pid>` prints. None when the hook is off or the file
+    is not there, so the real process is read, as the fake `ps` hands such a pid to the real one."""
+    d = os.environ.get("TARES_FAKE_PS_DIR")
+    if not d:
+        return None
+    try:
+        return (Path(d) / "ps" / f"{int(pid)}.{field}").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def fake_ps_step(version: str) -> None:
+    """Test hook, with TARES_FAKE_PS_DIR set: run the folder's `sort-hook` file once (a shell command) when a spare
+    of version 0.9.9 is looked at. The bash engine orders versions with `sort -V`, and the suite puts a fake `sort`
+    on PATH that runs that command at this step, so something happens between reading the listing and acting on
+    it; Python orders them itself, so it takes the step here."""
+    d = os.environ.get("TARES_FAKE_PS_DIR")
+    if not d or "0.9.9" not in version:
+        return
+    hook = Path(d) / "sort-hook"
+    try:
+        cmd = hook.read_text(encoding="utf-8")
+        hook.unlink()
+    except OSError:
+        return
+    subprocess.run(["bash", "-c", cmd], check=False)
+
+
+def process_listing() -> list:
+    """[(pid, command line)] of the processes this user can see; the command line joined by spaces, as
+    `ps -axo pid=,command=` shows it. With TARES_FAKE_PS_DIR set it is the folder's ps-list file (empty when
+    there is none), so a test never reads the machine's real processes."""
+    d = os.environ.get("TARES_FAKE_PS_DIR")
+    out = []
+    if d:
+        try:
+            text = (Path(d) / "ps-list").read_text(encoding="utf-8")
+        except OSError:
+            return out
+        for line in text.splitlines():
+            pid, _, cmd = line.strip().partition(" ")
+            if pid.isdigit():
+                out.append((int(pid), cmd.strip()))
+        return out
+    for pid in psutil.pids():
+        try:   # one process at a time: psutil on macOS can raise SystemError for one that is just ending
+            out.append((pid, " ".join(psutil.Process(pid).cmdline())))
+        except (psutil.Error, OSError, SystemError):
+            continue
+    return out
+
+
 def _command_line(pid) -> str:
     """A process's command line as `ps -o command=` shows it; "" when it is gone or may not be read."""
+    fake = _fake_ps_file(pid, "command")
+    if fake is not None:
+        return fake
     try:
         return " ".join(psutil.Process(int(pid)).cmdline())
     except (psutil.Error, ValueError, TypeError, OSError):
@@ -565,10 +639,14 @@ def running_version(session_id: str, agents=None, claude=None) -> str:
     pid = _val(row.get("pid"), "")
     if pid == "":
         return ""
-    try:
-        ppid = psutil.Process(int(pid)).ppid()
-    except (psutil.Error, ValueError, TypeError, OSError):
-        ppid = None
+    fake = _fake_ps_file(pid, "ppid")
+    if fake is not None and fake.isdigit():
+        ppid = int(fake)
+    else:
+        try:
+            ppid = psutil.Process(int(pid)).ppid()
+        except (psutil.Error, ValueError, TypeError, OSError):
+            ppid = None
     for p in (ppid, pid):
         if p is None:
             continue

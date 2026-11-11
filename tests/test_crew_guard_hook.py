@@ -1,14 +1,14 @@
-"""The guard hook in Python decides what the bash guard decides (TR-971).
+"""The guard hook (`tares hook guard`, claude-plugin/hooks/guard.py) refuses what guard.sh refused (TR-971, TR-1103).
 
 Runs every case of tests/factory/guard_test.sh (kept as tests/guard_cases.jsonl: role, tool,
 command, expected allow or deny) against claude-plugin/hooks/guard.py in a subprocess, the way Claude
 Code starts a hook: the payload on stdin, FACTORY_ROLE in the environment. Then 15 more cases
-(tests/guard_extra_cases.jsonl, decided by guard.sh) that each pin a branch of guard.py, and the parts
+(tests/guard_extra_cases.jsonl, decisions taken from guard.sh before it was removed) that each pin a branch of guard.py, and the parts
 that file does not cover: the halted crew, the deny output and the events log, a payload that is not JSON,
 UTF-8 text, commands that make the scan slow, and the start time.
 
-It needs neither bash nor jq, so it runs on Windows too. The same cases run against guard.sh in
-tests/factory/guard_test.sh, which also takes the Python guard (TARES_FACTORY_ENGINE=python).
+It needs neither bash nor jq, so it runs on Windows too. tests/factory/guard_test.sh runs the same cases
+through `tares hook guard`, the way hooks.json starts it.
 
 Run: python tests/test_crew_guard_hook.py
 """
@@ -71,16 +71,16 @@ for c in cases:
     if got != c["expect"] or r.returncode != 0 or r.stderr:
         bad += 1
         print(f"  FAIL {c['role']} | {c['command']!r} | expected {c['expect']}, got {got} (exit {r.returncode}) {r.stderr[-200:]!r}")
-ck(f"all {len(cases)} cases decide as guard.sh does", bad == 0, f"{bad} differ")
+ck(f"all {len(cases)} cases decide as guard.sh decided", bad == 0, f"{bad} differ")
 
 print("the cases that pin a branch of guard.py (tests/guard_extra_cases.jsonl)")
 # Each one fails against a guard.py with the branch broken (the heredoc delimiter backreference, the
 # reader lookahead, the factory-heavy anchor, the helper's crew-owner prefix, `-` ending a factory verb,
 # `git tag -x`, the per-line grep, the trailing newline of the tool name, the Slack full match, the
 # claude anchor, the `.factory` folder) and two pin ASCII-only \w and \s. The expected decision is
-# guard.sh's: they were taken from it.
+# guard.sh's: they were taken from it before it was removed.
 extra = [json.loads(line) for line in EXTRA.read_text(encoding="utf-8").splitlines() if line.strip()]
-ck("the extra case file has 15 cases", len(extra) == 15, len(extra))
+ck("the extra case file has 27 cases", len(extra) == 27, len(extra))
 bad = 0
 for c in extra:
     env = {"FACTORY_ROLE": c["role"], "FACTORY_HOME": "/nonexistent", "FACTORY_STATION": "test"}
@@ -91,7 +91,7 @@ for c in extra:
     if got != c["expect"] or r.returncode != 0 or r.stderr:
         bad += 1
         print(f"  FAIL {c['role']} | {c['command']!r} | expected {c['expect']}, got {got} (exit {r.returncode}) {r.stderr[-200:]!r}")
-ck(f"all {len(extra)} extra cases decide as guard.sh does", bad == 0, f"{bad} differ")
+ck(f"all {len(extra)} extra cases decide as guard.sh decided", bad == 0, f"{bad} differ")
 
 print("a session without FACTORY_ROLE is never touched")
 r = guard(bash("gh pr merge 1"))

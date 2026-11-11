@@ -20,7 +20,7 @@ edits the bash is therefore not counted as this PR's change, which is what keeps
 commit it did not make. In CI <head> is the PR's merge commit and <base> is origin/<target branch>.
 
 Which functions: those of claude-plugin/bin/factory and of the helper scripts the ledger's `helpers`
-section lists (claude-plugin/bin/factory-heavy, mcp-headers, hooks/guard.sh, hooks/session-start.sh). A
+section lists (claude-plugin/bin/factory-heavy, since TR-1103 the only one). A
 function starts at a line `name() {` (at the start of the line; a comment or a command may follow the
 brace) and runs to the next line that is `}` (a trailing comment is fine), the style of these files. A line
 like `name() { cmd; }` is a one-line function, even when its command goes on over a backslash. Braces are never counted otherwise, because `${x}`, heredocs

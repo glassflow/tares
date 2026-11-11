@@ -25,6 +25,7 @@ import type {
 import { HOME_SAMPLES } from "./homeSamples";
 import { Detail, DetailLines } from "./HomeDetail";
 import { AnswerPanel, type AnswerGiven } from "./WaitingActions";
+import { InlineIcon, ItemIcon } from "./ProjectIcon";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 
 // The factory home: what waits for the person, the projects, the crew, the Claude plan and the
@@ -127,7 +128,7 @@ function WaitingRow({ item, onAction, state }: { item: HomeItem; onAction?: OnAc
     <ListRow data-testid="waiting-row" className="justify-between gap-y-3">
       <div className="min-w-0 flex-[1_1_280px]">
         <div className={KIND}>{item.label}</div>
-        <div className="my-0.5 font-bold" data-user-text>{item.title}</div>
+        <div className="my-0.5 font-bold" data-user-text><ItemIcon project={item.project} title={item.title} />{item.title}</div>
         <div className="line-clamp-3" title={item.detail} data-user-text><Detail text={item.detail} /></div>
         <DetailLines lines={item.lines} />
         <div className={cn(MUTED, "mt-0.5")} data-user-text>{item.meta}</div>
@@ -206,7 +207,7 @@ function ProjectRow({ p, team, me }: { p: HomeProject; team?: boolean; me?: stri
              className="block! text-foreground! py-3.5">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         {team && p.scope === "private" && <Slot name="home.projectLock" />}
-        <span className={cn("min-w-0 font-bold", team && "[overflow-wrap:anywhere]")} data-user-text>{p.name}</span>
+        <span className={cn("min-w-0 font-bold", team && "[overflow-wrap:anywhere]")} data-user-text><InlineIcon icon={p.icon} />{p.name}</span>
         <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", CHIP_TONES[p.state])}>
           {p.state_label}
         </span>

@@ -15,6 +15,7 @@ seconds to connect, N to write and N to read the headers (3N at worst), where cu
 A `TaresClient` is one command's view of Tares: like bash, it asks once whether Tares answers, and keeps
 the project list and the settings it read, so later calls reuse them.
 """
+import json
 import os
 import re
 import socket
@@ -166,6 +167,7 @@ class TaresClient:
         self.tares = ""            # TARES: set by tares_on (or on first use)
         self.tares_state = ""      # TARES_STATE: "on", "off" or "" (not asked yet)
         self.mcp_state = ""        # MCP_STATE
+        self._caps = None          # CAPS: what /health lists, read once per command
         self._projects = None      # CREW_PROJECTS
         self.projects_err = ""     # CREW_PROJECTS_ERR
         self._settings = None      # SETTINGS
@@ -194,11 +196,24 @@ class TaresClient:
             self._http = httpx.Client(follow_redirects=False)
         return self._http
 
+    def _log_url(self, url: str) -> None:
+        """Test hook TARES_URL_LOG: a file each request's URL is appended to, one per line, as the suites' curl shim
+        does for bash (a Python request never goes through curl). Off when unset; a write that fails is ignored."""
+        path = self._e("TARES_URL_LOG")
+        if not path:
+            return
+        try:
+            with open(path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(url + "\n")
+        except OSError:
+            pass
+
     def _request(self, method: str, url: str, headers: dict, content, seconds: float):
         """One request: the response, or TaresHTTPError with curl's text for a transport failure. A status
         of 400 or more is left to the caller (curl's -f). `seconds` limits each step and, while the body
         comes in, the whole request (see the module docstring)."""
         deadline = time.monotonic() + seconds
+        self._log_url(url)
         try:
             with self._client().stream(method, url, headers=headers, content=content,
                                        timeout=httpx.Timeout(seconds)) as r:
@@ -283,6 +298,24 @@ class TaresClient:
             raise CrewError(f"no Tares answers at {self.tares}. Start one with `tares up` in another terminal, "
                             "connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where "
                             "yours runs), then try again.")
+
+    def need_capability(self, name: str) -> None:
+        """Stop with an upgrade message when the cell's /health does not list the capability. /health is
+        read once per command and kept. Only commands that start or change something call it: `crew status`
+        and `crew down` never do, and no later ticket may add it to them, because a version mismatch must
+        never stop someone seeing or stopping their crew."""
+        self.require_tares()
+        if self._caps is None:
+            self._caps = []
+            try:
+                r = self._request("GET", f"{self.tares}/health", {}, None, 5)
+                if r.status_code < 400:
+                    caps = json.loads(r.text).get("capabilities") or []
+                    self._caps = [c for c in caps if isinstance(c, str)]
+            except (TaresHTTPError, ValueError, AttributeError, TypeError):
+                pass
+        if name not in self._caps:
+            raise CrewError(f"This needs a newer Tares on the cell (missing {name}). Upgrade Tares, then run this again.")
 
     def mcp_on(self) -> bool:
         """Does an MCP server answer `initialize` at mcp_url (asked once)? Only an MCP server's answer
@@ -396,14 +429,14 @@ class TaresClient:
         return None
 
     def project_repo_rows(self) -> list:
-        """(project name, repo path) for every repo that has a path."""
+        """(project name, repo path) for every repo that has a path (a repo that is not an object has none)."""
         return [(p.get("name"), r["path"]) for p in self.crew_projects()
-                for r in (p.get("repos") or []) if r.get("path") is not None]
+                for r in (p.get("repos") or []) if isinstance(r, dict) and r.get("path") is not None]
 
     def all_repos(self) -> list:
         """Every repo path of every project, sorted, once each."""
         return sorted({r["path"] for p in self.crew_projects()
-                       for r in (p.get("repos") or []) if r.get("path") is not None})
+                       for r in (p.get("repos") or []) if isinstance(r, dict) and r.get("path") is not None})
 
     # -- crew settings and grants --
 
@@ -497,3 +530,15 @@ class TaresClient:
                 self.crew_settings()
             except CrewError as e:
                 self.say(e.message)
+
+
+def cmd_mcp_url(argv: list, env: dict) -> int:
+    """The hidden `_mcp-url`: print where stations reach Tares's MCP server (bash's `mcp_url`, which
+    tests and scripts call). Like bash it checks no crew name, merges the crew.json defaults and prints one
+    line. Bash also asks whether Tares answers, and reads the key; neither changes the line, so
+    this does not: it works with Tares down and sends no request."""
+    from .paths import default_home
+    paths = CrewPaths(env.get("FACTORY_CREW_HOME") or default_home(env))
+    state.merge_crew_defaults(paths)
+    print(TaresClient(paths, env).mcp_url())
+    return 0

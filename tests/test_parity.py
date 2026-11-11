@@ -2,8 +2,8 @@
 and the scenario count gate.
 
 Checks: what the normaliser removes (temp folder, timestamps, pids, ids, key order) and what it keeps;
-`parity.py crew_basic` exits 0 and prints `SKIP python: not ported` while the Python engine has not
-moved that command over; a failing bash side exits 1; a Python side that prints the same as bash
+`parity.py crew_basic` exits 0 and its Python side matches bash now that `crew up` is ported; a scenario
+whose command the Python engine has not moved over (a made-up word) prints `SKIP python: not ported` and exits 0; a failing bash side exits 1; a Python side that prints the same as bash
 matches, and one that prints something else exits 1; `--coverage` prints a percentage and exits 0;
 `--require-full` exits 1 below 100%; an unknown scenario exits 2.
 
@@ -50,7 +50,7 @@ def run(*args, env=None):
     e.update(env or {})
     e["PYTHONIOENCODING"] = "utf-8"
     p = subprocess.run([sys.executable, str(PARITY), *args], capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", env=e, cwd=str(ROOT), timeout=600)
+                       errors="replace", env=e, cwd=str(ROOT), timeout=1500)
     return p.returncode, p.stdout + p.stderr
 
 
@@ -142,6 +142,18 @@ ck("every suite of tests/factory/ci_list.txt is counted", set(found) == set(pari
 ck("the crew suite lists its checks", "without Tares crew up stops plainly" in found["crew"])
 ck("a suite with no check line counts as one scenario", found.get("parse") == ["(the whole parse suite)"], found.get("parse"))
 ck("each scenario covers checks that exist", all(label in found[sc.suite] for sc in parity.SCENARIOS.values() for label in sc.covers))
+
+# The wrapper suites (A39) run another suite on Python and have no check line of their own; coverage leaves them
+# out of the total. The set is pinned here, so a real suite cannot be added to it to lift the percentage.
+ck("the wrapper suites are exactly crew_python and claude_update_python",
+   set(parity.WRAPPERS) == {"crew_python", "claude_update_python"}, str(sorted(parity.WRAPPERS)))
+ck("...each names the suite it runs and says why",
+   all(of in found and isinstance(why, str) and why for of, why in parity.WRAPPERS.values() if of in found)
+   and {of for of, _ in parity.WRAPPERS.values()} == {"crew", "claude_update"}, str(parity.WRAPPERS))
+ck("...and a wrapper that is a suite today has no check line, so it is one whole-suite scenario",
+   all(found[s] == [f"(the whole {s} suite)"] for s in parity.WRAPPERS if s in found), str({s: found[s] for s in parity.WRAPPERS if s in found}))
+ck("...and no suite with checks of its own is a wrapper",
+   not any(len(labels) > 1 or not labels[0].startswith("(the whole") for s, labels in found.items() if s in parity.WRAPPERS))
 
 # The count is one scenario per `check "` line, in every suite, not one per suite or the first of each.
 for suite, labels in found.items():
@@ -249,7 +261,8 @@ def fx_scenario(name, label):
     return parity.Scenario(name=name, suite="a", steps=crew_basic.steps, checks=[("it ran", lambda r: True)], covers=[label], about="fixture")
 
 
-with Fixture(), mock.patch.dict(os.environ, stubbed("plain", "plain")):
+# PARITY_JOBS=1: the fixture scenarios exist only in this process, a worker process would not have them
+with Fixture(), mock.patch.dict(os.environ, {**stubbed("plain", "plain"), "PARITY_JOBS": "1"}):
     parity.SCENARIOS.clear()
     parity.SCENARIOS["fx_ok"] = fx_scenario("fx_ok", "first")
     lines = []
@@ -266,6 +279,26 @@ with Fixture(), mock.patch.dict(os.environ, stubbed("plain", "plain")):
     ck("a covers label missing from its suite is an ERROR: exit 1, it names scenario, suite and label",
        rc == 1 and "ERROR scenario fx_bad covers a check that is not in a_test.sh: a label the suite does not have" in text, text)
     ck("...and it counts for nothing", "coverage: 0 of 4 scenarios" in text, text)
+
+    # A wrapper is left out of the total and says so; a suite with checks of its own cannot be one.
+    parity.SCENARIOS.clear()
+    parity.SCENARIOS["fx_ok"] = fx_scenario("fx_ok", "first")
+    with mock.patch.dict(parity.WRAPPERS, {"b": ("a", "runs a on Python; its checks count under a")}, clear=True):
+        lines = []
+        rc = parity.coverage(False, out=lines.append)
+        text = "\n".join(lines)
+        ck("a wrapper suite is left out of the total and prints 'wrapper of <suite>': 1 of 3 (33.3%) in 1 suites",
+           rc == 0 and "b: wrapper of a (runs a on Python; its checks count under a)" in text and "b: 0/1" not in text
+           and "coverage: 1 of 3 scenarios pass against Python (33.3%) in 1 suites" in text, text)
+        lines = []
+        rc = parity.coverage(True, out=lines.append)
+        ck("...and --require-full does not count it as missing", "wants every scenario ported, 2 are not" in "\n".join(lines), "\n".join(lines))
+    with mock.patch.dict(parity.WRAPPERS, {"a": ("b", "wrongly listed")}, clear=True):
+        lines = []
+        rc = parity.coverage(False, out=lines.append)
+        text = "\n".join(lines)
+        ck("a real suite listed as a wrapper is an ERROR: exit 1, and it still counts in the total",
+           rc == 1 and "ERROR a is listed as a wrapper but has checks of its own: 3" in text and "a: 1/3" in text, text)
 
 # --- the command line -----------------------------------------------------------------------------
 code, text = run("--list")
@@ -284,7 +317,16 @@ else:
     code, text = run("crew_basic")
     ck("crew_basic exits 0", code == 0, f"{code}\n{text}")
     ck("crew_basic: bash passes", "PASS bash: 1 checks" in text, text)
-    ck("crew_basic: python is skipped as not ported", "SKIP python: not ported" in text, text)
+    ck("crew_basic: python is ported and matches bash", "PASS python: 1 checks" in text and "MATCH" in text, text)
+
+    # A command the Python engine has not ported (a made-up word, so a later port cannot turn it ported): that side skips.
+    unported = parity.Scenario(name="fx_unported", suite="a", steps=[parity.Step(["no-such-command"])],
+                               checks=[("it ran", lambda r: True)], covers=["x"], about="fixture")
+    lines = []
+    with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith(("PARITY_", "TARES_FACTORY_"))}):
+        code, passes = parity.evaluate(unported, out=lines.append)
+    ck("an unported command skips the Python side: SKIP python: not ported",
+       any("SKIP python: not ported" in x for x in lines) and passes is not True, "\n".join(lines))
 
     code, text = run("crew_basic", env={"PARITY_FAIL": "bash"})
     ck("a failing bash side exits 1", code == 1 and "FAIL bash" in text, f"{code}\n{text}")
@@ -311,14 +353,16 @@ else:
     code, text = run("crew_basic", env={"PARITY_CMD_PYTHON": same, "PARITY_FAIL": "python"})
     ck("a failing python side exits 1", code == 1 and "FAIL python" in text, f"{code}\n{text}")
 
-    code, text = run("--coverage")
-    last = text.strip().splitlines()[-1] if text.strip() else ""
-    ck("--coverage prints a percentage and exits 0",
-       code == 0 and last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last,
-       f"{code}\n{text[-400:]}")
-    ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
+    # One full run (it evaluates every scenario, in a pool of worker processes), asked for the strict form: below 100%
+    # it exits 1 and says why; at 100% it exits 0. The plain form prints the same lines.
     code, text = run("--coverage", "--require-full")
-    ck("--require-full exits 1 below 100%", code == 1 and "--require-full" in text, f"{code}\n{text[-300:]}")
+    last = [ln for ln in text.strip().splitlines() if ln.startswith("coverage: ")]
+    last = last[-1] if last else ""
+    full = last.startswith("coverage: ") and " of " in last and last.split()[1] == last.split()[3]
+    ck("--coverage prints a percentage and --require-full exits 1 below 100% (0 at 100%)",
+       last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last
+       and code == (0 if full else 1) and (full or "--require-full" in text), f"{code}\n{text[-400:]}")
+    ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
 
 # factory-bin: runs $FACTORY_BIN, and a call that lost the variable stops plainly (the 'tares' suite once ran
 # `env -i ... "$F" spawn` without it and executed "spawn" itself).

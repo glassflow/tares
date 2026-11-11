@@ -60,7 +60,7 @@ def ck(label, cond, detail=""):
 TOKEN = "stub-token"
 SETTINGS = {"autonomy": "L4-ship", "releaser": False, "challenger": True, "builders_max": 2}
 PROJECTS = [
-    {"id": "p-1", "name": "Links App", "repos": [{"path": "/r/links"}, {"path": "/r/shared"}, {"path": None}]},
+    {"id": "p-1", "name": "Links App", "repos": [{"path": "/r/links"}, {"path": "/r/shared"}, {"path": None}, "glassflow/plain"]},
     {"id": "p-2", "name": "🔄 Emoji App", "repos": [{"path": "/r/emoji"}, {"path": "/r/shared"}]},
 ]
 GRANTS = {"all": '- "the reviewer may comment on draft PRs" (2026-01-02)', "projects": {
@@ -467,7 +467,7 @@ ck("project_row by name, id and slug",
    c.project_row("Links App")["id"] == "p-1" and c.project_row("p-2")["name"] == "🔄 Emoji App"
    and c.project_row("links-app")["id"] == "p-1" and c.project_row("LINKS   app!")["id"] == "p-1", c.project_row("links-app"))
 ck("project_row of an unknown project is None", c.project_row("nope") is None)
-ck("project_repo_rows skips repos with no path", c.project_repo_rows() == [("Links App", "/r/links"), ("Links App", "/r/shared"),
+ck("project_repo_rows skips repos with no path, and repos that are plain strings (TR-1130)", c.project_repo_rows() == [("Links App", "/r/links"), ("Links App", "/r/shared"),
                                                                         ("🔄 Emoji App", "/r/emoji"), ("🔄 Emoji App", "/r/shared")], c.project_repo_rows())
 ck("all_repos is sorted and unique", c.all_repos() == ["/r/emoji", "/r/links", "/r/shared"], c.all_repos())
 ck("crew_projects_or_die passes when Tares answered", len(c.crew_projects_or_die()) == 2)
@@ -590,6 +590,20 @@ ck("a body that keeps trickling in is cut at the limit in total, with curl's tex
 ck("...after about a second, not when the ten-second trickle ends", 0.9 <= took < 4, took)
 drip.shutdown()
 dc.close()
+
+print("test hook TARES_URL_LOG: each request's URL is noted, nothing else")
+ulog = Path(ROOT) / "urls.log"
+cu, _ = machine({"TARES_URL_LOG": str(ulog)})
+cu.tares_http("GET", "/api/crew/projects")
+cu.tares_http("GET", "/api/crew/settings")
+ck("one line per request, the full address", ulog.read_text(encoding="utf-8").splitlines() ==
+   [f"{BASE}/api/crew/projects", f"{BASE}/api/crew/settings"], ulog.read_text(encoding="utf-8"))
+ck("no key in the file", TOKEN not in ulog.read_text(encoding="utf-8"))
+cn, _ = machine()
+cn.tares_http("GET", "/api/crew/projects")
+ck("off when unset: the file is not touched", len(ulog.read_text(encoding="utf-8").splitlines()) == 2)
+cb, _ = machine({"TARES_URL_LOG": str(Path(ROOT) / "no-such-dir" / "urls.log")})
+ck("a file that cannot be written does not fail the request", cb.tares_http("GET", "/api/crew/projects") is not None)
 
 print("the key is in no log line and no process was started")
 ck("no header but Authorization (and no URL or body) ever carried the key",

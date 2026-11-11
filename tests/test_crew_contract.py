@@ -189,7 +189,7 @@ def fixture(name, text):
 
 
 def stable(text, tmp):
-    text = text.replace(str(tmp), "<T>").replace(str(tmp.resolve()), "<T>").replace(f":{PORT}", ":<PORT>")
+    text = text.replace(str(ROOT), "<ROOT>").replace(str(ROOT.resolve()), "<ROOT>").replace(str(tmp), "<T>").replace(str(tmp.resolve()), "<T>").replace(f":{PORT}", ":<PORT>")
     return re.sub(r"/private<T>", "<T>", text)
 
 
@@ -200,17 +200,32 @@ def pretty(doc):
 # ---------- schemas themselves ----------
 
 print("== the schemas")
-ck("a schema for status, roster, desk, events and error",
-   {"status", "roster", "desk", "events", "error"} <= set(VALIDATORS), sorted(VALIDATORS))
+ck("a schema for every --json output and for the error shape",
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "error"}
+   <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
-   all(v.schema["properties"]["schema_version"] == {"const": version} for v in VALIDATORS.values()))
+   all(v.schema["properties"]["schema_version"] == {"const": version} for n, v in VALIDATORS.items() if n != "settings"))
 readme = (SCHEMAS / "README.md").read_text(encoding="utf-8") if (SCHEMAS / "README.md").is_file() else ""
 ck("the README documents the exit codes", all(re.search(rf"^\|\s*{c}\s*\|", readme, re.M) for c in "012"), readme[:200])
+_GOOD_QUESTION = {"id": "q", "text": "t", "kind": "text", "choices": [], "default": "", "recommendation": "",
+                  "why": "w", "pattern": "", "when": None}
 ck("a document that is not the shape fails",
    problems("roster", {"schema_version": 1, "crew": "x", "orchestrator": "y"}) != []
    and problems("error", {"schema_version": 1, "error": {"code": "Bad Code", "message": "m"}}) != []
-   and problems("events", {"schema_version": 1, "cursor": "abc", "event": {}}) != [])
+   and problems("events", {"schema_version": 1, "cursor": "abc", "event": {}}) != []
+   and problems("doctor", {"schema_version": 1, "ok": True, "checks": [{"id": "x", "ok": True, "level": "bad", "message": "m", "fix": ""}]}) != []
+   and problems("doctor", [{"id": "x", "ok": True, "message": "m", "fix": "", "level": "ok"}]) != []
+   and problems("projects", {"schema_version": 1, "projects": [{"id": "p", "name": "n"}]}) != []
+   and problems("setup_questions", {"schema_version": 1, "questions": [{"id": "q", "kind": "number"}]}) != []
+   and problems("setup_questions", {"schema_version": 1}) != []
+   and problems("setup_questions", {"schema_version": 1, "questions": [dict(_GOOD_QUESTION, why=None)]}) != []
+   and all(problems("setup_questions", {"schema_version": 1, "questions": [{k: v for k, v in _GOOD_QUESTION.items() if k != drop}]}) != []
+           for drop in _GOOD_QUESTION)
+   and problems("setup_questions", {"schema_version": 1, "questions": [_GOOD_QUESTION]}) == []
+   and problems("projects", {"schema_version": 1, "projects": [{"name": "n"}]}) != []
+   and problems("projects", {"schema_version": 1, "projects": [{"name": "n", "builders": 0, "tickets_done": 1, "extra": True}]}) == []
+   and problems("setup_answers", {"schema_version": 1, "saved": "crew_name", "grants": 1}) != [])
 
 if NO_FAKE_CLAUDE:
     print("skip: the commands below run a fake Claude Code, a bash script, and bash is not here")
@@ -332,6 +347,78 @@ else:
     ck("desk, nothing waiting: an empty list", doc.get("items") == [], doc)
     WORLD["projects"] = []
 
+    # ---------- settings ----------
+
+    print("== settings")
+    env, tmp = world(crew_of(), sessions())
+    env["TARES_FACTORY_ENGINE"] = "bash"  # settings is still a bash command; Python's own takes over with TR-953
+    for who, role in (("crew-orchestrator", "orchestrator"), ("shop-build-m1", "builder"), ("crew-reviewer", "reviewer")):
+        p = subprocess.run([sys.executable, "-m", "tares.crew", "settings", who], cwd=str(ROOT), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=120,
+                           env=dict(env, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8"))
+        try:
+            doc = json.loads(p.stdout)
+        except ValueError as e:
+            ck(f"settings {who}: stdout is JSON", False, f"{e}: {p.stdout[:200]!r} {p.stderr[-200:]}")
+            continue
+        bad = problems("settings", doc)
+        ck(f"settings {who}: validates against settings.json", p.returncode == 0 and not bad, (p.returncode, bad, p.stderr[-200:]))
+        ck(f"settings {who}: the station and role are its own",
+           doc.get("env", {}).get("FACTORY_STATION") == who and doc.get("env", {}).get("FACTORY_ROLE") == role, doc.get("env"))
+        ck(f"settings {who}: no schema_version key (Claude Code reads this file)", "schema_version" not in doc)
+        if role == "builder":
+            ck("settings builder: its project is set", doc["env"].get("TARES_PROJECT_NAME") == "shop", doc["env"])
+            # FACTORY_TARES is the path of the `tares` on this machine's PATH (TR-1069): not part of the sample
+            bin_ = doc["env"].pop("FACTORY_TARES", None)
+            ck("settings builder: FACTORY_TARES, when set, is an absolute path", bin_ is None or os.path.isabs(bin_), bin_)
+            fixture("settings.json", stable(pretty(doc), tmp))
+    ck("settings: a settings file without its env fails the schema", problems("settings", {"permissions": {"allow": []}}) != [])
+    ck("settings: a token in TARES_AUTH_TOKEN fails the schema", problems("settings", dict(doc, env=dict(doc["env"], TARES_AUTH_TOKEN="secret"))) != [])
+
+    # ---------- projects ----------
+
+    print("== projects --json")
+    WORLD["projects"] = [{"id": "p1", "name": "shop", "tickets_total": 4, "tickets_done": 1,
+                          "milestone": {"name": "M1", "done": 1, "total": 3}, "repos": [{"name": "acme/shop", "path": "/w/shop"}]},
+                         {"id": "p2", "name": "docs", "tickets_total": 2, "tickets_done": 2, "milestone": None,
+                          "repos": [{"path": "/w/docs"}]}]
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["projects", "--json"])
+    doc = one_document("projects", code, out, err, "projects")
+    rows = {r["name"]: r for r in doc.get("projects", [])}
+    ck("projects: every project, with its active builders", sorted(rows) == ["docs", "shop"]
+       and (rows["shop"]["builders"], rows["docs"]["builders"]) == (2, 0), rows)
+    ck("projects: Tares's own fields are kept", rows["shop"]["milestone"]["name"] == "M1" and rows["shop"]["repos"][0]["path"] == "/w/shop", rows)
+    fixture("projects.json", stable(out, tmp))
+    WORLD["projects"] = []
+    doc = one_document("projects, none handed to the crew", *tares(env, ["projects", "--json"]), "projects")
+    ck("projects, none: an empty list", doc.get("projects") == [], doc)
+    env, tmp = world(crew_of(), sessions(), url=DOWN)
+    doc = one_document("projects, no Tares", *tares(env, ["projects", "--json"]), "error", want_code=1)
+
+    # ---------- doctor ----------
+
+    print("== doctor --json")
+    env, tmp = world(crew_of(), sessions(), url=DOWN)
+    code, out, err = tares(env, ["doctor", "--json"], {"PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring"})
+    ck("doctor: one line on stdout, LF ended", len(out.splitlines()) == 1 and out.endswith("\n") and "\r" not in out, repr(out[:200]))
+    try:
+        doc = json.loads(out)
+    except ValueError as e:
+        doc = {}
+        ck("doctor: stdout is JSON", False, f"{e}: {out[:200]!r} {err[-200:]}")
+    bad = problems("doctor", doc)
+    ck("doctor: validates against doctor.json", not bad, bad)
+    ck("doctor: schema_version 1 first", doc.get("schema_version") == 1 and next(iter(doc), "") == "schema_version")
+    ck("doctor: no Tares answers, so a FIX and exit 1, the document still on stdout",
+       code == 1 and doc.get("ok") is False and any(c.get("id") == "tares" and c.get("level") == "fix" for c in doc.get("checks", [])),
+       (code, [c for c in doc.get("checks", []) if c.get("level") == "fix"]))
+    ck("doctor: ok is false exactly when a check is FIX", doc.get("ok") == (not any(c.get("level") == "fix" for c in doc.get("checks", []))))
+    doc = one_document("doctor, an unknown argument", *tares(env, ["doctor", "--json", "--nope"]), "error", want_code=2)
+    ck("doctor, an unknown argument: usage", doc.get("error", {}).get("code") == "usage", doc)
+    code, out, err = tares(env, ["doctor", "--nope"])
+    ck("doctor without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory doctor" in err, (code, out, err))
+
     # ---------- the error shape ----------
 
     print("== the error shape")
@@ -391,7 +478,7 @@ def append(path, *objs, raw=None):
 
 
 GUARD_DENY = {"at": "2026-11-09T10:00:09Z", "station": "shop-build-m1", "event": "guard-deny",
-              "tool": "Bash", "reason": "git push is held"}  # what claude-plugin/hooks/guard.sh writes
+              "tool": "Bash", "reason": "git push is held"}  # what claude-plugin/hooks/guard.py writes
 
 
 def names(items):
@@ -712,7 +799,8 @@ finally:
 # ---------- the samples ----------
 
 print("== the samples")
-for name in ("status.json", "roster.json", "desk.json", "error.json"):
+for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
+             "setup_questions.json", "setup_answers.json", "error.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))

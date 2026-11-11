@@ -51,7 +51,8 @@ Extra fields by list, all informational unless said:
     cmux_touchpoints  file, match (a regular expression), line, what. Every line of the scanned files that
                       mentions cmux must match one row, and every row must match at least one line.
     hook_entries      name = "<event>: <matcher or *>: <command and args>" of each entry in
-                      claude-plugin/hooks/hooks.json that runs python3 or bash.
+                      claude-plugin/hooks/hooks.json that runs python3 or bash (none since TR-1103: every
+                      entry is `tares hook <name>`, so a new python3 or bash entry fails the check).
 
 What the check compares:
     functions         every `name() {` or `function name {` in claude-plugin/bin/factory, nested ones too
@@ -78,9 +79,6 @@ LEDGER = ROOT / "scripts" / "crew_ledger.json"
 FACTORY_REL = "claude-plugin/bin/factory"
 HELPER_RELS = [
     "claude-plugin/bin/factory-heavy",
-    "claude-plugin/bin/mcp-headers",
-    "claude-plugin/hooks/guard.sh",
-    "claude-plugin/hooks/session-start.sh",
 ]
 HOOKS_REL = "claude-plugin/hooks/hooks.json"
 CLI_REL = "tares/cli.py"

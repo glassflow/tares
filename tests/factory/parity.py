@@ -31,7 +31,8 @@ does not count in --coverage.
 Coverage. A "scenario" of a bash suite (the suites named in tests/factory/ci_list.txt) is one `check
 "<label>"` call: a source line that starts, after any indentation, with `check "`. A check in a loop
 counts once. A suite with no such line (guard, heavy, parse) counts as one scenario, named after the
-suite. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
+suite, except a wrapper (WRAPPERS below): a suite that runs another suite on Python only, has no check line of
+its own and counts for nothing, since its checks belong to the suite it runs. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
 when its run passes on the Python side (a SKIP does not count). Percentage = passing / all scenarios.
 
 Test hooks (for tests/test_parity.py): PARITY_CMD_BASH and PARITY_CMD_PYTHON replace the command a side
@@ -42,6 +43,7 @@ Standard library only.
 from __future__ import annotations
 
 import difflib
+from concurrent.futures import ProcessPoolExecutor
 import fnmatch
 import json
 import os
@@ -53,11 +55,14 @@ import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
+sys.path.insert(0, str(HERE))
+from fake_up_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
 CI_LIST = HERE / "ci_list.txt"
 ENGINES = ("bash", "python")
 STEP_TIMEOUT = 180
@@ -71,11 +76,12 @@ NOT_PORTED = "not yet ported"
 class Step:
     argv: list           # everything after `tares factory`; "{tmp}" in an argument or env value is the scenario's folder,
                          # "{tares}" in an env value is the address of the scenario's fake Tares
-    env: dict = field(default_factory=dict)
+    env: object = field(default_factory=dict)   # a dict, or fn(Run) -> dict when it names the throwaway folders
     stdin: str = ""
     cwd: str = ""        # the folder the command runs in ("{tmp}" works); default the repo root
     before: object = None   # fn(tmp) run before the step: change files between two commands
     after: object = None    # fn(tmp) -> anything, run after the step; Run.snap(i) gives it back to a check
+    run_before: object = None   # fn(Run) run just before the step: files the suite writes between its commands
     drop: tuple = ()        # regexes: printed lines that match one are left out of the comparison (not of the checks)
 
 
@@ -87,24 +93,66 @@ class Scenario:
     checks: list         # (label, fn(Run) -> bool), the assertions of the bash suite, kept as they are
     covers: list         # labels of the suite's `check` calls this scenario stands for
     about: str = ""
+    stand_in: object = None  # None: no stand-in. A dict (settings, people, grants): a stand-in Tares (fake_up_tares.py)
+                             # on a free port, TARESD_URL and TARES_FACTORY_MCP_URL point at it
+    prepare: object = None   # fn(Run) run once before the first step: ~/.claude.json, crew.json, ...
     setup: object = None    # fn(tmp, env) run once before the first step: build files, a repo, a link
     tares: dict | None = None   # routes of a fake Tares to run for the scenario (see FakeTares); None: no Tares
     not_windows: str = ""   # why the Python side is skipped on Windows (the reason is printed), e.g. a claude.cmd cannot take a prompt of several lines
     driver: str = ""     # a script of this folder that runs a function of the engine instead of a command
                          # (`<driver> <engine> <argv...>`), for code that has no command yet
     ignore_calls: tuple = ()  # argument prefixes of calls to Claude Code that are left out of the comparison
+    ignore_asked: tuple = ()  # routes left out of the "asked of Tares" comparison: "PUT /api/x" itself, or every route
+                              # that starts with an entry ending in a space ("GET ": the reads, which the engines make
+                              # in a different number and order)
 
 
 class Run:
     """What a scenario's checks can look at: the steps' output and the crew's state on disk."""
 
-    def __init__(self, tmp: Path, results: list, tares=None):
+    def __init__(self, tmp: Path, results: list, tares=None, stand_in=None):
         self.tmp = tmp
-        self.tares = tares
+        self.tares = tares      # the route table (FakeTares) of the read commands, or None
         self.crew = tmp / "crew"
         self.state = tmp / "claude"
+        self.home = tmp / "home"
         self.results = results
+        self.stand_in = stand_in    # the stand-in Tares (fake_up_tares.py) of `crew up`, or None
         self.ignore_calls: tuple = ()
+        self.marks: dict = {}   # what a step's `before` kept for the checks (see mark())
+
+    def station(self, name: str, key: str, home=None):
+        """A field of a station in stations.json (the suites' `st`); "" when it is not there. `home`: another
+        crew's home folder than the default crew's."""
+        try:
+            v = json.loads(((home or self.crew) / "stations.json").read_text(encoding="utf-8")).get(name, {}).get(key)
+        except (OSError, ValueError, AttributeError):
+            return ""
+        return "" if v is None or v is False else v
+
+    def station_settings(self, name: str, home=None) -> dict:
+        try:
+            return json.loads(((home or self.crew) / "stations" / f"{name}.settings.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def crew_json(self, home=None) -> dict:
+        try:
+            return json.loads(((home or self.crew) / "crew.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def trust(self, *folders) -> None:
+        """Claude Code's trust of a folder, recorded as its trust prompt does ($HOME/.claude.json)."""
+        f = self.home / ".claude.json"
+        try:
+            doc = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            doc = {}
+        for d in folders:
+            Path(d).mkdir(parents=True, exist_ok=True)
+            doc.setdefault("projects", {}).setdefault(str(d), {})["hasTrustDialogAccepted"] = True
+        f.write_text(json.dumps(doc), encoding="utf-8")
 
     def out(self, i: int = -1) -> str:
         """stdout and stderr of step i together, as the bash suites capture them (`>out 2>&1`)."""
@@ -149,6 +197,355 @@ scenario(Scenario(
              lambda r: "no Tares answers at http://127.0.0.1:9" in r.out(0)
              and "tares up" in r.out(0) and r.launches() == 0)],
     covers=["without Tares crew up stops plainly"],
+))
+
+
+# --- crew up (TR-956): crew_test.sh, the parts that run `crew up` -------------------------------------------------
+# Same assertions as the bash checks, on a stand-in Tares (fake_up_tares.py) instead of a daemon. The labels in
+# `covers` are the bash suite's own words, `$r` included, as `--coverage` matches them. The assertions on the
+# settings and the grant are read from what the stand-in kept; the milestone runs of crew_test.sh itself use
+# a real daemon.
+
+TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+GRANT = "the releaser may restart the staging database"
+KIT = os.path.realpath(ROOT / "claude-plugin")
+PROD = "(^|[-_.])(prod|production)([-_.]|$)"
+SAVED = {"autonomy": "L3-review", "releaser": True, "release_profile": "kind", "prod_pattern": PROD,
+         "challenger": False, "builders_max": 3}
+ROLES = ("orchestrator", "reviewer", "releaser")
+
+
+def mark(name):
+    """A step's `before`: keep the launches so far under `name`, for a check to read."""
+    def before(r):
+        r.marks[name] = r.launches()
+    return before
+
+
+def before_all(*fns):
+    def before(r):
+        for f in fns:
+            f(r)
+    return before
+
+
+def trust_crew(r):
+    r.trust(r.crew)
+
+
+def plugin_installed_elsewhere(r):
+    d = r.home / ".claude" / "plugins"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "installed_plugins.json").write_text(json.dumps(
+        {"version": 2, "plugins": {"tares@tares": [{"scope": "project", "projectPath": "/w/main", "version": "0.2.1"}]}}),
+        encoding="utf-8")
+
+
+def env_of(r, station, key):
+    v = r.station_settings(station).get("env", {}).get(key)
+    return "" if v is None or v is False else v
+
+
+def allow_has(r, station, text):
+    allow = r.station_settings(station).get("autoMode", {}).get("allow", [])
+    return any(isinstance(x, str) and text in x for x in allow)
+
+
+def started(r):
+    """The station names `claude --bg` was called for, in order."""
+    return [c["args"][2] for c in r.calls() if c["args"][:1] == ["--" + "bg"]]
+
+
+def role_checks():
+    out = []
+    for role in ROLES:
+        s = "crew-" + role
+        out += [
+            ("crew-$r recorded (%s)" % role, lambda r, s=s: r.station(s, "status") == "active"),
+            ("crew-$r runs in the crew home (%s)" % role, lambda r, s=s: r.station(s, "cwd") == str(r.crew)),
+            ("crew-$r env FACTORY_STATION (%s)" % role, lambda r, s=s: env_of(r, s, "FACTORY_STATION") == s),
+            ("crew-$r env FACTORY_ROLE (%s)" % role, lambda r, s=s, role=role: env_of(r, s, "FACTORY_ROLE") == role),
+            ("crew-$r env FACTORY_PARENT empty (%s)" % role,
+             lambda r, s=s: r.station_settings(s).get("env", {}).get("FACTORY_PARENT") == ""),
+            ("crew-$r has no TARES_PROJECT (%s)" % role, lambda r, s=s: env_of(r, s, "TARES_PROJECT") == ""),
+            ("crew-$r reaches the same Tares (%s)" % role,
+             lambda r, s=s: env_of(r, s, "TARES_FACTORY_URL") == r.stand_in.url),
+            ("crew-$r is told the shared MCP endpoint (%s)" % role,
+             lambda r, s=s: env_of(r, s, "TARES_FACTORY_MCP_URL") == r.stand_in.mcp_url),
+        ]
+    return out
+
+
+scenario(Scenario(
+    name="crew_up_basic",
+    suite="crew",
+    about="crew up stops plainly in an untrusted crew home, and warns of another installed tares plugin",
+    stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
+    steps=[
+        Step(["crew", "up", "--yes"], stdin=""),
+        Step(["crew", "up", "--yes"], stdin="",
+             run_before=before_all(mark("untrusted"), trust_crew, plugin_installed_elsewhere)),
+    ],
+    checks=[
+        ("an untrusted crew home stops crew up plainly",
+         lambda r: "Claude Code has not trusted the crew home %s yet" % r.crew in r.out(0)
+         and 'pick "Yes, I trust this folder"' in r.out(0) and r.code(0) != 0 and r.marks["untrusted"] == 0),
+        ("an installed older tares plugin is named with how to remove it",
+         lambda r: "warning: another version of the tares plugin is installed" in r.out(1)
+         and "claude plugin uninstall tares@tares --scope project (run it in /w/main)" in r.out(1)),
+        ("...and crew up still starts the crew", lambda r: r.code(1) == 0 and r.launches() == 2),
+    ],
+    covers=["an untrusted crew home stops crew up plainly",
+            "an installed older tares plugin is named with how to remove it"],
+))
+
+scenario(Scenario(
+    name="crew_up_yes",
+    suite="crew",
+    about="crew up --yes uses the answers saved on Tares and asks nothing; a second run starts nothing",
+    stand_in={"settings": dict(SAVED), "grants": ['- "%s" (%s)' % (GRANT, TODAY)]},
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], stdin=""), Step(["crew", "up"], stdin="")],
+    checks=[
+        ("crew up --yes exits 0 and asks nothing",
+         lambda r: r.code(0) == 0 and "Choice [" not in r.out(0)),
+        ("three crew stations started (a releaser was asked for)", lambda r: r.launches() == 3),
+        *role_checks(),
+        ("no Rius, no comms", lambda r: not any(w in (r.crew / "stations" / "crew-reviewer.settings.json").read_text(
+            encoding="utf-8").lower() for w in ("rius", "comms"))),
+        ("orchestrator started first", lambda r: started(r)[:1] == ["crew-orchestrator"]),
+        ("stations turn the plugin on, whatever the person's settings say",
+         lambda r: r.station_settings("crew-reviewer").get("enabledPlugins", {}).get("tares@inline") is True),
+        ("stations load this plugin", lambda r: {c["args"][c["args"].index("--plugin-dir") + 1]
+                                                 for c in r.calls() if c["args"][:1] == ["--" + "bg"]} == {KIT}),
+        ("settings not kept locally", lambda r: r.crew_json().get("settings") is None),
+        ("no local desk or grant files", lambda r: not (r.crew / "DESK.md").exists() and not (r.crew / "GRANTS.md").exists()),
+        ("grant quoted in the allow rules",
+         lambda r: allow_has(r, "crew-releaser", 'granted this on %s for all projects, in their own words: "%s". Acting' % (TODAY, GRANT))),
+        ("orchestrator may spawn",
+         lambda r: "Bash(factory spawn *)" in r.station_settings("crew-orchestrator").get("permissions", {}).get("allow", [])),
+        ("stations launch with a 200k autocompact window",
+         lambda r: any(c["args"][2] == "crew-orchestrator" and "--autocompact" in c["args"]
+                       and c["args"][c["args"].index("--autocompact") + 1] == "200000"
+                       for c in r.calls() if c["args"][:1] == ["--" + "bg"])),
+        ("nothing goes to production without the person",
+         lambda r: any("needs" in x and "prod" in x for x in r.station_settings("crew-releaser").get("autoMode", {}).get("soft_deny", []))
+         and "L5" not in (r.crew / "stations" / "crew-releaser.settings.json").read_text(encoding="utf-8")),
+        ("second crew up asks nothing", lambda r: "Choice [" not in r.out(1) and r.code(1) == 0),
+        ("second crew up starts nothing", lambda r: r.launches() == 3),
+        ("nothing is written to Tares: every answer was already there", lambda r: r.stand_in.written() == []),
+    ],
+    covers=["three crew stations started (a releaser was asked for)", "no Rius, no comms",
+            "orchestrator started first", "stations turn the plugin on, whatever the person's settings say",
+            "stations load this plugin", "settings not kept locally", "no local desk or grant files",
+            "grant quoted in the allow rules", "orchestrator may spawn",
+            "stations launch with a 200k autocompact window", "nothing goes to production without the person",
+            "second crew up asks nothing", "second crew up starts nothing"],
+))
+
+scenario(Scenario(
+    name="crew_up_questions",
+    suite="crew",
+    about="the first crew up asks the settings one at a time and keeps the answers and one grant on Tares",
+    stand_in={},
+    prepare=trust_crew,
+    steps=[Step(["crew", "up"], stdin="L3-review\nyes\n\nno\n3\n%s\n\n" % GRANT)],
+    checks=[
+        ("crew up exits 0", lambda r: r.code(0) == 0),
+        ("the settings are asked one at a time",
+         lambda r: all(q in r.out(0) for q in ("Who merges pull requests?", "Should the crew release and deploy finished work?",
+                                               "How does the releaser ship?", "Should a second AI (Codex) check every commit before review?",
+                                               "How many builders may work at the same time?"))),
+        ("settings saved on Tares", lambda r: [r.stand_in.settings.get(k) for k in
+                                               ("autonomy", "releaser", "release_profile", "challenger", "builders_max")]
+         == ["L3-review", True, "kind", False, 3]),
+        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, TODAY)]),
+        ("crew up points at the Crew page", lambda r: "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
+        ("three stations started, a releaser among them",
+         lambda r: r.launches() == 3 and r.station("crew-releaser", "status") == "active"),
+    ],
+    covers=["crew up exits 0", "settings saved on Tares", "grant saved on Tares as the person said it",
+            "crew up points at the Crew page"],
+))
+
+
+# --- crewname_test.sh (TR-541), the parts that run `crew up` -------------------------------------------------
+# Two crews and the default one on one machine and one Tares, one fake Claude Code. The roster and the builders
+# are not ported yet (TR-957, TR-953): the scenario with the roster's title warning runs on bash alone until then.
+
+def crew_at(name):
+    """A step's env: crew `name` in its own folder beside the default crew's."""
+    return lambda r: {"FACTORY_CREW_HOME": str(r.tmp / ("crew-" + name)), "FACTORY_CREW_NAME": name}
+
+
+def crew_at_as(name, as_name):
+    """Crew `name`'s folder, said to be named `as_name`."""
+    return lambda r: {"FACTORY_CREW_HOME": str(r.tmp / ("crew-" + name)), "FACTORY_CREW_NAME": as_name}
+
+
+def crew_at_unnamed(name):
+    return lambda r: {"FACTORY_CREW_HOME": str(r.tmp / ("crew-" + name))}
+
+
+def trust_all(r):
+    r.trust(r.crew, r.tmp / "crew-a", r.tmp / "crew-b")
+
+
+def home_of(r, name):
+    return r.tmp / ("crew-" + name)
+
+
+def second_person(r):
+    r.stand_in.people.extend([{"id": "p2", "name": "Two"}, {"id": "p3", "name": "Three"}])   # bash asks for a name above one
+
+
+def agent_names(r):
+    try:
+        rows = json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    return [x.get("name", "") for x in rows]
+
+
+def two_crew_checks():
+    out = []
+    for role in ("orchestrator", "reviewer"):
+        s = "crew-" + role
+        out += [
+            ("default crew: crew-$r is recorded (%s)" % role, lambda r, s=s: r.station(s, "status") == "active"),
+            ("default crew: crew-$r env FACTORY_CREW (%s)" % role, lambda r, s=s: env_of(r, s, "FACTORY_CREW") == "crew"),
+            ("default crew: crew-$r env FACTORY_ORCHESTRATOR (%s)" % role,
+             lambda r, s=s: env_of(r, s, "FACTORY_ORCHESTRATOR") == "crew-orchestrator"),
+        ]
+    for c in ("a", "b"):
+        for role in ("orchestrator", "reviewer"):
+            s = "%s-%s" % (c, role)
+            out += [
+                ("crew $c: $c-$r is recorded and active (%s)" % s,
+                 lambda r, c=c, s=s, role=role: r.station(s, "status", home_of(r, c)) == "active"
+                 and r.station(s, "role", home_of(r, c)) == role),
+                ("crew $c: $c-$r runs in its own crew home (%s)" % s,
+                 lambda r, c=c, s=s: r.station(s, "cwd", home_of(r, c)) == str(home_of(r, c))),
+                ("crew $c: $c-$r env FACTORY_STATION (%s)" % s,
+                 lambda r, c=c, s=s: env_of_in(r, home_of(r, c), s, "FACTORY_STATION") == s),
+                ("crew $c: $c-$r env FACTORY_CREW (%s)" % s,
+                 lambda r, c=c, s=s: env_of_in(r, home_of(r, c), s, "FACTORY_CREW") == c),
+                ("crew $c: $c-$r env FACTORY_ORCHESTRATOR (%s)" % s,
+                 lambda r, c=c, s=s: env_of_in(r, home_of(r, c), s, "FACTORY_ORCHESTRATOR") == c + "-orchestrator"),
+            ]
+        out += [
+            ("crew $c: the name is kept in crew.json (%s)" % c, lambda r, c=c: r.crew_json(home_of(r, c)).get("crew_name") == c),
+            ("crew $c: no station of the default crew is recorded (%s)" % c,
+             lambda r, c=c: r.station("crew-orchestrator", "status", home_of(r, c)) == ""
+             and r.station("crew-reviewer", "status", home_of(r, c)) == ""),
+        ]
+    return out
+
+
+scenario(Scenario(
+    name="crew_up_old_tares",
+    suite="crew",
+    about="a Tares that does not list the integrations capability: crew up stops with the upgrade message, starting nothing",
+    stand_in={"settings": {**SAVED, "releaser": False}, "capabilities": []},
+    prepare=trust_all,
+    steps=[Step(["crew", "up", "--yes"], stdin="")],
+    checks=[
+        ("crew up fails and names the missing capability",
+         lambda r: r.code(0) != 0 and "This needs a newer Tares on the cell (missing integrations)" in r.out(0)),
+        ("nothing was started and nothing was saved", lambda r: started(r) == [] and r.stand_in.written() == []),
+    ],
+    covers=[],
+))
+
+
+def env_of_in(r, home, station, key):
+    v = r.station_settings(station, home).get("env", {}).get(key)
+    return "" if v is None or v is False else v
+
+
+scenario(Scenario(
+    name="crewname_two_crews",
+    suite="crewname",
+    about="two named crews and the default crew side by side; the name comes from FACTORY_CREW_NAME, then crew.json",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    prepare=trust_all,
+    steps=[
+        Step(["crew", "up", "--yes"], stdin=""),                                   # 0 the default crew
+        Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),                 # 1
+        Step(["crew", "up", "--yes"], env=crew_at("b"), stdin=""),                 # 2
+        Step(["crew", "up", "--yes"], env=crew_at_unnamed("a"), stdin="",          # 3 crew.json alone names it
+             run_before=mark("before_again")),
+        Step(["crew", "up", "--yes"], env=crew_at_as("a", "zzz"), stdin=""),        # 4 refused, not quietly applied
+        Step(["crew", "up", "--yes"], stdin="", run_before=second_person),             # 5 the default crew, running
+        Step(["crew", "up", "--yes"], env={"FACTORY_CREW_NAME": "zzz"}, stdin=""), # 6 refused, nothing stored
+    ],
+    checks=[
+        ("default crew: up exits 0", lambda r: r.code(0) == 0 and "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
+        *two_crew_checks(),
+        ("default crew: no crew_name is stored, one person", lambda r: "crew_name" not in r.crew_json()),
+        ("default crew: orchestrator started first, under today's name", lambda r: started(r)[:1] == ["crew-orchestrator"]),
+        ("both crews and the default one run: no station was started twice",
+         lambda r: r.launches() == 6 and len(started(r)) == len(set(started(r)))),
+        ("the fake Claude holds six sessions with six different names",
+         lambda r: len({n for n in agent_names(r) if n in ("crew-orchestrator", "crew-reviewer", "a-orchestrator",
+                                                           "a-reviewer", "b-orchestrator", "b-reviewer")}) == 6),
+        ("crew a: up again starts nothing and keeps the name",
+         lambda r: r.code(3) == 0 and r.marks["before_again"] == 6 and r.crew_json(home_of(r, "a")).get("crew_name") == "a"),
+        ("crew a: another FACTORY_CREW_NAME is refused",
+         lambda r: r.code(4) != 0 and "this crew is named a" in r.out(4)
+         and r.crew_json(home_of(r, "a")).get("crew_name") == "a" and r.launches() == 6),
+        ("running default crew: crew up does not ask, rename or start anything",
+         lambda r: r.code(5) == 0 and "What should this crew be called" not in r.out(5)
+         and "crew_name" not in r.crew_json() and r.launches() == 6),
+        ("running default crew: another FACTORY_CREW_NAME is refused and nothing is stored",
+         lambda r: r.code(6) != 0 and "already running under the name crew" in r.out(6)
+         and "crew_name" not in r.crew_json() and r.launches() == 6),
+    ],
+    covers=["default crew: up exits 0",
+            "default crew: crew-$r is recorded", "default crew: crew-$r env FACTORY_CREW",
+            "default crew: crew-$r env FACTORY_ORCHESTRATOR",
+            "default crew: no crew_name is stored, one person",
+            "default crew: orchestrator started first, under today's name",
+            "crew $c: $c-$r is recorded and active", "crew $c: $c-$r runs in its own crew home",
+            "crew $c: $c-$r env FACTORY_STATION", "crew $c: $c-$r env FACTORY_CREW",
+            "crew $c: $c-$r env FACTORY_ORCHESTRATOR", "crew $c: the name is kept in crew.json",
+            "crew $c: no station of the default crew is recorded",
+            "both crews and the default one run: no station was started twice",
+            "the fake Claude holds six sessions with six different names",
+            "crew a: up again starts nothing and keeps the name", "crew a: another FACTORY_CREW_NAME is refused",
+            "running default crew: crew up does not ask, rename or start anything",
+            "running default crew: another FACTORY_CREW_NAME is refused and nothing is stored"],
+))
+
+
+def rename_orchestrator_session(r):
+    """The orchestrator's session carries another title than the name messages go to."""
+    f = r.state / "agents.json"
+    rows = json.loads(f.read_text(encoding="utf-8"))
+    for x in rows:
+        if x.get("name") == "a-orchestrator":
+            x["name"] = "orchestrator-of-a"
+    f.write_text(json.dumps(rows), encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crewname_roster_title",
+    suite="crewname",
+    about="the roster warns when the orchestrator's session title is not the name messages go to",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    prepare=trust_all,
+    steps=[
+        Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),
+        Step(["crew", "up", "--yes"], env=crew_at("b"), stdin=""),
+        Step(["roster"], env=crew_at_unnamed("a"), run_before=rename_orchestrator_session),
+        Step(["roster"], env=crew_at_unnamed("b")),
+    ],
+    checks=[
+        ("roster warns of a different orchestrator session title",
+         lambda r: "Orchestrator session title is orchestrator-of-a, expected a-orchestrator: messages to it will not arrive" in r.out(2)),
+        ("roster stays quiet when the title is the name", lambda r: "Orchestrator session title" not in r.out(3)),
+    ],
+    covers=["roster warns of a different orchestrator session title", "roster stays quiet when the title is the name"],
 ))
 
 
@@ -467,6 +864,11 @@ scenario(Scenario(
          lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
         ("orchestrator may spawn",
          lambda r: "Bash(factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
+        ("orchestrator may spawn as tares factory too (TR-1069)",
+         lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
+        ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
+         lambda r: station_json(r, "crew-reviewer")["env"].get("FACTORY_TARES", "").endswith("tares")
+         or shutil.which("tares") is None),
         ("nothing goes to production without the person",
          lambda r: any("needs" in x and "prod" in x for x in station_json(r, "crew-releaser")["autoMode"]["soft_deny"])
          and "L5" not in json.dumps(station_json(r, "crew-releaser"))),
@@ -1414,6 +1816,111 @@ scenario(Scenario(
 ))
 
 
+# freeze_test.sh, the part that needs no daemon of its own and no running station: the freeze and the
+# unfreeze against a fake Tares that keeps a settings PUT. (The watch's side of the freeze, a revive on the
+# copy and the move after an unfreeze, runs in the bash suite itself and in tests/test_crew_kit.py.)
+_WORLDS: dict = {}
+_KIT = ROOT / "claude-plugin"
+
+
+def _freeze_world(keep: bool = True):
+    def setup(tmp: Path, env: dict) -> None:
+        w = fake_tares.World()
+        w.keep = keep
+        _WORLDS[str(tmp)] = w
+        _doctor_world(w)(tmp, env)
+        _crew_json(tmp)
+    return setup
+
+
+def _frozen_of(tmp: Path):
+    return _WORLDS[str(tmp)].settings.get("kit", {}).get("frozen")
+
+
+def _kit_events(r: Run, name: str) -> int:
+    try:
+        lines = (r.crew / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and json.loads(x).get("event") == name)
+
+
+def _same_tree(a: Path, b: Path) -> bool:
+    """Both folders hold the same files with the same bytes (`diff -r`; compiled caches left out)."""
+    def files(root: Path) -> dict:
+        return {f.relative_to(root).as_posix(): f.read_bytes() for f in sorted(root.rglob("*"))
+                if f.is_file() and "__pycache__" not in f.parts}
+    return a.is_dir() and b.is_dir() and files(a) == files(b)
+
+
+def _freeze_state(tmp: Path) -> dict:
+    """What a freeze left: the setting on Tares and the copy on disk."""
+    frozen = _frozen_of(tmp) or {}
+    snap = tmp / "crew" / "frozen-kit"
+    return {"frozen": bool(frozen), "keys": sorted(frozen), "at": frozen.get("at"), "by": frozen.get("by"),
+            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "factory").exists(),
+            "extra": (tmp / "crew" / "frozen-kit.new").exists() or (tmp / "crew" / "freezing").exists()}
+
+
+scenario(Scenario(
+    name="freeze_cycle",
+    suite="freeze",
+    about="crew freeze keeps the freeze on Tares and a copy of the kit; freezing twice changes nothing; unfreeze clears both",
+    setup=_freeze_world(),
+    steps=[Step(["crew", "unfreeze"], after=_freeze_state),
+           Step(["crew", "freeze"], after=_freeze_state),
+           Step(["crew", "freeze"], after=_freeze_state),
+           Step(["crew", "unfreeze"], after=_freeze_state)],
+    checks=[("an unfrozen crew's setting is null", lambda r: r.snap(0)["frozen"] is False),
+            ("unfreeze when not frozen says so and exits 0",
+             lambda r: r.code(0) == 0 and "the kit is not frozen" in r.out(0) and not r.snap(0)["copy"]),
+            ("freeze exits 0", lambda r: r.code(1) == 0),
+            ("freeze keeps when, who and the kit version on Tares",
+             lambda r: r.snap(1)["keys"] == ["at", "by", "version"] and r.snap(1)["by"] not in (None, "")),
+            ("the copy is the kit as it was", lambda r: r.snap(1)["same"] and r.snap(1)["binary"]),
+            ("freeze is in the events", lambda r: _kit_events(r, "freeze") == 1),
+            ("freezing twice says so, exits 0 and keeps the first time and who",
+             lambda r: r.code(2) == 0 and "already frozen" in r.out(2) and r.snap(2)["at"] == r.snap(1)["at"]
+             and r.snap(2)["by"] == r.snap(1)["by"] and _kit_events(r, "freeze") == 1),
+            ("freezing again takes no second copy", lambda r: r.snap(2)["same"] and not r.snap(2)["extra"]),
+            ("unfreeze exits 0 and clears the setting",
+             lambda r: r.code(3) == 0 and r.snap(3)["frozen"] is False and _kit_events(r, "unfreeze") == 1),
+            ("unfreeze removes a copy nothing runs from", lambda r: not r.snap(3)["copy"])],
+    covers=["an unfrozen crew's setting is null", "unfreeze when not frozen says so and exits 0", "freeze exits 0",
+            "freeze keeps when, who and the kit version on Tares", "the copy is the kit as it was",
+            "freeze is in the events", "freezing twice says so, exits 0 and keeps the first time and who",
+            "freezing again takes no second copy", "unfreeze exits 0 and clears the setting",
+            "unfreeze removes a copy nothing runs from"],
+))
+
+scenario(Scenario(
+    name="freeze_nokeep",
+    suite="freeze",
+    about="a Tares that answers the freeze without keeping it: freeze dies and leaves nothing behind",
+    setup=_freeze_world(keep=False),
+    steps=[Step(["crew", "freeze"], after=_freeze_state)],
+    checks=[("freeze dies when Tares does not keep the setting",
+             lambda r: r.code(0) != 0 and "did not keep the freeze" in r.out(0)),
+            ("and leaves no copy, marker or setting behind",
+             lambda r: not r.snap(0)["copy"] and not r.snap(0)["extra"] and r.snap(0)["frozen"] is False
+             and not (r.crew / "kit-checkout").exists())],
+    covers=["freeze dies when Tares does not keep the setting", "and leaves no copy, marker or setting behind"],
+))
+
+scenario(Scenario(
+    name="freeze_notares",
+    suite="freeze",
+    about="freeze needs a Tares that answers",
+    setup=lambda tmp, env: (_doctor_world(fake_tares.World())(tmp, env), _crew_json(tmp)),
+    steps=[Step(["crew", "freeze"], env={"TARESD_URL": "http://127.0.0.1:9"},
+                after=lambda tmp: (tmp / "crew" / "frozen-kit").exists())],
+    checks=[("freeze needs Tares",
+             lambda r: r.code(0) != 0 and re.search(r"no Tares answers|could not read the crew settings", r.out(0)) is not None
+             and r.snap(0) is False)],
+    covers=["freeze needs Tares"],
+))
+
+
 def _settings(**kw):
     def setup(tmp: Path, env: dict) -> None:
         _doctor_world(fake_tares.World(settings=kw))(tmp, env)
@@ -2307,6 +2814,415 @@ scenario(Scenario(
     ],
     covers=[],
 ))
+
+
+# cc_move_*: the watch moves stations onto a newer Claude Code (claude_update_test.sh, TR-669 and TR-687), one idle
+# station a round, the orchestrator last. Each scenario runs `crew watch --once`, a round at a time, on a crew of
+# three stations (a builder or a helper where the case wants one) whose sessions the fake Claude Code lists. The
+# fake `claude --version` says the installed version (claude/version); a station's row says the version it runs
+# (`version`), and a restart's new row carries the installed one (claude/stamp-version), so neither engine needs
+# a process listing.
+# The fake versions are all below 2, so a real Claude Code spare on the host is never "older" and never stopped.
+# These scenarios read the machine's real process table (the spare-pruning ones start spare-like processes), so
+# run them alone: two runs at once, or one beside test_crew_cc_update.py, stop each other's spares.
+
+_CC_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind",
+                                                           "challenger": False, "builders_max": 3}}),
+             "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+# Left out of the comparison: every read of Tares (the other steps of a round read settings, health and pace in a
+# different order and number in each engine; the pace itself is real in Python since TR-962), and how often the session list and `--version` are read. What is written to Tares, started and stopped
+# is compared.
+_CC_NOT_YET = ("GET ",)
+_CC_READS = (("agents",), ("--version",))
+_CC_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-releaser": "cccc0003"}
+
+
+def _cc_kit(plugin: Path | None = None) -> str:
+    """The fingerprint of the kit both engines run on (a station of this kit is not due a plugin upgrade)."""
+    sys.path.insert(0, str(ROOT))
+    from tares.crew import launch
+    return launch.kit_version(plugin or ROOT / "claude-plugin")
+
+
+def _cc_plugin(tmp: Path, env: dict) -> Path:
+    """A copy of the plugin outside any git checkout, set as the run's TARES_PLUGIN_DIR: the kit step only
+    moves a station onto a new kit when the plugin's checkout is clean, and the real checkout is not
+    (edited files while one works, git's own line-ending settings on Windows). The copy is always clean."""
+    copy = tmp / "kit" / "claude-plugin"
+    shutil.copytree(ROOT / "claude-plugin", copy, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "node_modules"))
+    env["TARES_PLUGIN_DIR"] = str(copy)
+    return copy
+
+
+def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | None = None, extra=(), done=(), files=None):
+    """A setup: the three stations idle, each running `have` (versions overrides per station), `installed`
+    the version of `claude --version`. `extra` are (station, row fields) of more stations, and their sessions;
+    `done` names builders that are finished (stations/<s>.done); `files` are more files of the fake Claude Code."""
+    def setup(tmp: Path, env: dict) -> None:
+        _setup_views(tmp, env)
+        crew, state = tmp / "crew", tmp / "claude"
+        kit = _cc_kit(_cc_plugin(tmp, env))
+        base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
+        rows, agents = {}, []
+        for name, sid in _CC_IDS.items():
+            role = name.split("-", 1)[1]
+            rows[name] = {**base, "role": role, "id": sid, "sessionId": f"old-{role}"}
+            agents.append(_row("idle", sid, name, cwd=str(crew), version=(versions or {}).get(name, have)))
+        for name, fields in extra:
+            rows[name] = {**base, **fields}
+            agents.append(_row(fields.get("_state", "idle"), fields["id"], name, cwd=str(crew),
+                               version=fields.get("_version", have)))
+            rows[name].pop("_state", None)
+            rows[name].pop("_version", None)
+        (crew / "stations.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+        (state / "version").write_text(installed + "\n", encoding="utf-8")
+        (state / "stamp-version").write_text("1\n", encoding="utf-8")
+        for name in done:
+            (crew / "stations").mkdir(exist_ok=True)
+            (crew / "stations" / f"{name}.done").write_text("", encoding="utf-8")
+        for name, text in (files or {}).items():
+            (state / name).write_text(text, encoding="utf-8")
+    return setup
+
+
+def _all_idle(tmp: Path) -> None:
+    """Every session that runs is between turns again (a restarted one starts on its prompt, a busy turn)."""
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if "pid" in row:
+            row["state"], row["status"] = "working", "idle"
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cc_installed(version: str):
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / "version").write_text(version + "\n", encoding="utf-8")
+        _all_idle(tmp)
+    return before
+
+
+def _cc_busy(*names: str, flight=()):
+    """Sessions of these stations are in a turn; `flight` names stations with a subagent running."""
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        ids = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for row in rows:
+            if row.get("id") in [ids[n]["id"] for n in names]:
+                row["status"] = "busy"
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        for v in ids.values():   # no subagent runs, but where `flight` names one
+            shutil.rmtree(tmp / "home" / ".claude" / "jobs" / v["id"], ignore_errors=True)
+        for n in flight:
+            job = tmp / "home" / ".claude" / "jobs" / ids[n]["id"]
+            job.mkdir(parents=True, exist_ok=True)
+            (job / "state.json").write_text(json.dumps({"inFlight": {"tasks": 2, "queued": 0, "kinds": ["local_agent"]}}), encoding="utf-8")
+    return before
+
+
+def _watch_once(before=None, env: dict | None = None, after=None) -> Step:
+    s = Step(["crew", "watch", "--once"], env=env or {}, before=before, after=after)
+    return s
+
+
+def _stn(r: Run, name: str, field: str = "id"):
+    return _stations_now(r)[name].get(field)
+
+
+def _launched(r: Run) -> list:
+    """The names of the sessions started with --bg, in order."""
+    return [c["args"][2] for c in bg_calls(r)]
+
+
+def _bg_of(r: Run, name: str) -> list:
+    return [c["args"] for c in bg_calls(r) if c["args"][2] == name]
+
+
+def _cc_checks_moved(r: Run, name: str, old_session: str, version: str) -> bool:
+    """The last start of the station resumed its old conversation and told it Claude Code was updated."""
+    args = _bg_of(r, name)[-1]
+    return arg_after(args, "--resume") == old_session and f"Claude Code was updated to {version}" in args[-1]
+
+
+_CC_ORDER = ["crew-reviewer", "crew-releaser", "crew-orchestrator"]
+
+scenario(Scenario(
+    name="cc_move_order",
+    suite="claude_update",
+    about="a newer Claude Code: one idle station a round in its own conversation, the orchestrator last; then nothing is left to move",
+    setup=_cc_setup(),
+    tares=_CC_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=[_watch_once(), _watch_once(before=_all_idle), _watch_once(before=_all_idle), _watch_once(before=_all_idle)],
+    checks=[
+        ("a round moves one idle station: the reviewer first, in its own conversation, told why",
+         lambda r: r.code(0) == 0 and _launched(r)[:1] == ["crew-reviewer"] and _cc_checks_moved(r, "crew-reviewer", "old-reviewer", "1.1.0")),
+        ("the move is said and recorded",
+         lambda r: "crew-reviewer runs an older Claude Code than 1.1.0; restarting it on 1.1.0 now that it's idle, in the same conversation" in r.out(0)
+         and "crew-reviewer runs Claude Code 1.1.0" in r.out(0) and '"event":"claude-updated"' in _events(r).replace(" ", "")),
+        ("the orchestrator waits while the releaser is behind", lambda r: _launched(r)[:2] == ["crew-reviewer", "crew-releaser"]),
+        ("the orchestrator moves last", lambda r: _launched(r) == _CC_ORDER),
+        ("all on the new version: nothing more moves", lambda r: r.code(3) == 0 and len(_launched(r)) == 3 and r.out(3).strip() == ""),
+    ],
+    covers=["the orchestrator waits while others are behind", "the orchestrator still waits", "the orchestrator moves last",
+            "all on 1.1.5: nothing more moves"],
+))
+
+
+def _cc(name: str, about: str, steps: list, checks: list, covers: list, setup=None, tares=None, not_windows: str = "") -> Scenario:
+    return scenario(Scenario(name=name, suite="claude_update", about=about, setup=setup or _cc_setup(), tares=tares or _CC_TARES,
+                             steps=steps, checks=checks, covers=covers, not_windows=not_windows,
+                             ignore_asked=_CC_NOT_YET, ignore_calls=_CC_READS))
+
+
+def _cc_tares(**settings) -> dict:
+    """The fake Tares of these scenarios, with more crew settings."""
+    doc = dict(_CC_TARES["GET /api/crew/settings"][1]["settings"], **settings)
+    return {**_CC_TARES, "GET /api/crew/settings": (200, {"settings": doc})}
+
+
+def _runs(r: Run, name: str):
+    """The Claude Code version the station's current session shows in the list."""
+    sid = _stn(r, name)
+    rows = json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    return next((x.get("version") for x in rows if x.get("id") == sid), None)
+
+
+def _moved(r: Run, name: str, old_session: str, version: str) -> bool:
+    """The station was restarted on `version` in its old conversation, told why."""
+    return bool(_bg_of(r, name)) and _cc_checks_moved(r, name, old_session, version)
+
+
+_CC_PROCS: dict = {}   # (scenario folder, key) -> a process that stands for someone attached, or for a spare
+
+
+def _cc_process(tmp: Path, key: str, argv0: str) -> None:
+    """A process whose command line starts with argv0 (`exec -a`), for `attached` and the process listing to find."""
+    import time
+    _CC_PROCS[(str(tmp), key)] = subprocess.Popen(["bash", "-c", f"exec -a '{argv0}' sleep 120"],
+                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.4)   # until bash has exec'd
+
+
+def _cc_reap(tmp: Path) -> dict:
+    """End the processes of this scenario's folder; which of them were still running (key -> bool)."""
+    import time
+    time.sleep(0.2)
+    alive = {}
+    for (folder, key), p in list(_CC_PROCS.items()):
+        if folder != str(tmp):
+            continue
+        alive[key] = p.poll() is None
+        if alive[key]:
+            p.kill()
+            p.wait()
+        del _CC_PROCS[(folder, key)]
+    return alive
+
+
+def _cc_after(reap: bool = False):
+    """After a round: the sessions started so far (name, in order), and with `reap` the processes that were left."""
+    def after(tmp: Path) -> dict:
+        names = []
+        try:
+            for line in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines():
+                args = json.loads(line)["args"]
+                if "--bg" in args:
+                    names.append(args[2])
+        except OSError:
+            pass
+        return {"launched": names, "alive": _cc_reap(tmp) if reap else {}}
+    return after
+
+
+def _round(before=None, env: dict | None = None, reap: bool = False) -> Step:
+    """One `crew watch --once`; its snap says what had been started by then."""
+    return _watch_once(before=before, env=env, after=_cc_after(reap))
+
+
+def _seen(r: Run, i: int) -> list:
+    return r.snap(i)["launched"]
+
+
+def _cc_attach(name: str):
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        sid = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[name]["id"]
+        _cc_process(tmp, f"attach {name}", f"claude attach {sid}")
+    return before
+
+
+def _cc_detach(name: str):
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        p = _CC_PROCS.pop((str(tmp), f"attach {name}"), None)
+        if p:
+            p.kill()
+            p.wait()
+    return before
+
+
+_WIN_NO_EXEC_A = "a process is given its command line with bash `exec -a`, which Windows has no counterpart for"
+_R, _L, _O = "crew-reviewer", "crew-releaser", "crew-orchestrator"
+_NOTHING = "nothing is said and nothing is started"
+
+# A busy station and one with a subagent running wait, and the orchestrator with them; a busy station first in line
+# does not hold up an idle one behind it.
+_cc("cc_move_busy", "a busy station and one with a subagent running wait (the orchestrator too); the releaser moves once its subagent is done",
+    [_round(before=_cc_busy(_R, flight=(_L,))), _round(before=_cc_busy(_R))],
+    [("a busy station and one with a subagent running wait, and so does the orchestrator",
+      lambda r: r.code(0) == 0 and r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("the idle releaser behind the busy reviewer moves, in the same conversation, told why",
+      lambda r: _seen(r, 1) == [_L] and _moved(r, _L, "old-releaser", "1.1.0") and _runs(r, _L) == "1.1.0"),
+     ("the move is recorded, and the orchestrator still waits",
+      lambda r: '"event":"claude-updated"' in _events(r).replace(" ", "") and _stn(r, _O) == "aaaa0001")],
+    ["a busy station and one with a subagent running wait", "the orchestrator waits while others are behind",
+     "busy reviewer waits, the idle releaser behind it moves, in the same conversation, told why", "the move is recorded",
+     "the orchestrator still waits"])
+
+# Someone has a station open: it waits, the orchestrator with it; it moves once it is closed.
+_cc("cc_move_attached", "a station someone has open waits (the orchestrator too), the one behind it moves, and it moves once it is closed",
+    [_round(before=_cc_attach(_R)), _round(before=_all_idle), _round(before=_cc_detach(_R), reap=True)],
+    [("an attached station waits, the releaser behind it moves, in the same conversation, told why",
+      lambda r: _seen(r, 0) == [_L] and _runs(r, _L) == "1.1.0"
+      and _moved(r, _L, "old-releaser", "1.1.0")),
+     ("still attached: the reviewer waits, the orchestrator too",
+      lambda r: _seen(r, 1) == [_L] and r.out(1).strip() == ""),
+     ("no longer attached: the reviewer moves, not the orchestrator",
+      lambda r: _seen(r, 2) == [_L, _R] and _moved(r, _R, "old-reviewer", "1.1.0") and _runs(r, _R) == "1.1.0" and _stn(r, _O) == "aaaa0001")],
+    ["an attached station waits (the other one moves)", "the moved station runs 1.1.5, in the same conversation, told why",
+     "still attached: the reviewer waits, the orchestrator too", "no longer attached: the reviewer moves, not the orchestrator"],
+    not_windows=_WIN_NO_EXEC_A)
+
+# The setting off, a halted crew, a version that does not move anything.
+_cc("cc_move_off", "the claude_update setting off: nothing moves",
+    [_round()],
+    [("the setting off: nothing moves", lambda r: r.code(0) == 0 and r.out(0).strip() == "" and _seen(r, 0) == [] and r.launches() == 0)],
+    ["the setting off: nothing moves"], tares=_cc_tares(claude_update=False))
+
+_cc("cc_move_halted", "a halted crew moves nothing; resumed, a station moves",
+    [_round(before=lambda tmp: (tmp / "crew" / "HALT").write_text('{"at":1700000000,"reason":"testing"}\n', encoding="utf-8")),
+     _round(before=lambda tmp: ((tmp / "crew" / "HALT").unlink(), _all_idle(tmp)))],
+    [("halted: nothing moves", lambda r: r.code(0) == 0 and r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("resumed: a station moves again", lambda r: _seen(r, 1) == [_R])],
+    ["halted: nothing moves"])
+
+_cc("cc_move_same", "the same version, an installed one older than the stations' and no readable version move nothing",
+    [_round(), _round(before=_cc_installed("1.9.0")), _round(before=_cc_installed(""))],
+    [("the same version: nothing moves", lambda r: r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("a station on a newer version than installed is left (1.10.0 against 1.9.0)", lambda r: r.out(1).strip() == "" and _seen(r, 1) == []),
+     ("no readable version: nothing moves", lambda r: r.out(2).strip() == "" and _seen(r, 2) == [] and r.launches() == 0)],
+    ["the same version: nothing moves", "a station on a newer version than installed is left"],
+    setup=_cc_setup(have="1.10.0", installed="1.10.0"))
+
+# `claude --version` says a different thing each time it is asked (the installer swaps a symlink): no release.
+_cc("cc_move_flip", "a version that flips within a round moves nothing; once it holds still a station moves",
+    [_round(), _round(before=lambda tmp: [(tmp / "claude" / n).unlink(missing_ok=True) for n in ("version-flip", "version-calls")])],
+    [("a version that flips within a round moves nothing", lambda r: r.out(0).strip() == "" and _seen(r, 0) == []),
+     ("it holds still: a station moves", lambda r: _seen(r, 1) == [_R])],
+    ["a version that flips within a round moves nothing"],
+    setup=_cc_setup(files={"version-flip": "1.2.0\n"}))
+
+# Numbers compare as numbers: 1.10.0 is newer than 1.5.x (a plain sort puts it before them).
+_cc("cc_move_numbers", "1.10.0 is newer than the 1.5.x the stations run: the watch moves a station onto it",
+    [_round()],
+    [("1.10.0 is newer than 1.5.x: the watch moves a station onto it",
+      lambda r: _seen(r, 0) == [_R] and _runs(r, _R) == "1.10.0" and _moved(r, _R, "old-reviewer", "1.10.0"))],
+    ["1.10.0 is newer than 1.5.x: the watch moves a station onto it"],
+    setup=_cc_setup(have="1.5.4", installed="1.10.0"))
+
+# A helper follows its station: after the others, before the orchestrator, in the same conversation. A busy helper is left
+# alone and does not hold the orchestrator back. A finished builder is not moved and does not hold it back either.
+_HELPER = ("crew-reviewer-probe", {"role": "helper", "parent": "crew-reviewer", "id": "dddd0004", "sessionId": "old-probe"})
+_BUILDER = ("shop-build-m1", {"role": "builder", "project": "shop", "id": "eeee0005", "sessionId": "old-builder"})
+_H = _HELPER[0]
+_cc("cc_move_helper", "a helper moves after the other stations and before the orchestrator, in its conversation, told to load its parent's skill",
+    [_round(), _round(before=_all_idle), _round(before=_all_idle), _round(before=_all_idle)],
+    [("the helper moves with the watch: four restarts, the helper before the orchestrator, which is last",
+      lambda r: _seen(r, 3) == [_R, _L, _H, _O] and _runs(r, _H) == "1.1.0" and _runs(r, _O) == "1.1.0"),
+     ("the helper keeps its conversation and is told to load its parent role skill",
+      lambda r: _moved(r, _H, "old-probe", "1.1.0") and "station-reviewer" in _bg_of(r, _H)[-1][-1])],
+    ["the helper moves with the watch: four restarts, the helper before the orchestrator, which is last",
+     "the helper keeps its conversation and is told to load its parent role skill"],
+    setup=_cc_setup(extra=(_HELPER,)))
+
+_cc("cc_move_helper_busy", "a busy helper is left alone and does not hold the orchestrator back; once it is idle it moves too",
+    [_round(before=_cc_busy(_H)), _round(before=_cc_busy(_H)), _round(before=_cc_busy(_H)), _round(before=_all_idle)],
+    [("a busy helper is left alone, and does not hold the orchestrator back",
+      lambda r: _seen(r, 2) == [_R, _L, _O] and _runs(r, _O) == "1.1.0" and _runs(r, _R) == "1.1.0"),
+     ("once the helper is idle it moves too", lambda r: _seen(r, 3) == [_R, _L, _O, _H] and _runs(r, _H) == "1.1.0")],
+    ["a busy helper is left alone, and does not hold the orchestrator back", "once the helper is idle it moves too"],
+    setup=_cc_setup(extra=(_HELPER,)))
+
+_cc("cc_move_builder_done", "a finished builder is not moved and does not hold the orchestrator back",
+    [_round(), _round(before=_all_idle), _round(before=_all_idle), _round(before=_all_idle)],
+    [("the builder that is done stays as it is, the others move, the orchestrator last",
+      lambda r: _seen(r, 3) == [_R, _L, _O] and _stn(r, _BUILDER[0]) == "eeee0005" and _runs(r, _BUILDER[0]) == "1.0.0")],
+    [], setup=_cc_setup(extra=(_BUILDER,), done=(_BUILDER[0],)))
+
+
+# An older pre-warmed spare comes back from Claude Code's pool: the restart is tried again, and a spare nobody claimed is
+# stopped first. The spares are real processes the process listing finds (the same for both engines).
+def _cc_spares(tmp: Path) -> None:
+    _all_idle(tmp)
+    for sock in ("unclaimed", "new"):
+        (tmp / f"{sock}.claim.sock").write_text("", encoding="utf-8")   # not claimed yet
+    for key, sock, version in (("unclaimed", "unclaimed", "1.1.0"), ("claimed", "gone", "1.1.0"), ("fresh", "new", "1.2.0")):
+        _cc_process(tmp, key, f"claude bg-pty-host --bg-pty-host {tmp}/{sock}.pty.sock 200 50 -- /x/versions/{version} "
+                              f"--bg-spare {tmp}/{sock}.claim.sock")
+
+
+_cc("cc_move_stale_spare", "a restart that lands on an older spare is tried again; an unclaimed older spare is stopped, a claimed one and a new one are left",
+    [_round(before=_cc_spares, reap=True)],
+    [("a stale spare is noticed and the restart tried again",
+      lambda r: len(_bg_of(r, _R)) == 2 and _runs(r, _R) == "1.2.0" and "crew-reviewer came back on Claude Code 1.1.0, an older spare" in r.out(0)
+      and '"event":"stale-spare"' in _events(r).replace(" ", "")),
+     ("the move succeeded in the end", lambda r: "crew-reviewer runs Claude Code 1.2.0" in r.out(0)),
+     ("an unclaimed older spare was stopped, recorded", lambda r: r.snap(0)["alive"]["unclaimed"] is False and '"event":"spare-pruned"' in _events(r).replace(" ", "")),
+     ("a claimed one (a session runs in it) and a new one were left", lambda r: r.snap(0)["alive"]["claimed"] and r.snap(0)["alive"]["fresh"])],
+    ["a stale spare is noticed and the restart tried again", "an unclaimed older spare was stopped",
+     "a claimed one (a session runs in it) and a new one were left", "the move succeeded in the end"],
+    setup=_cc_setup(installed="1.2.0", files={"spawn-version": "1.1.0\n", "stale-left": "1\n"}), not_windows=_WIN_NO_EXEC_A)
+
+
+def _cc_resumed(r: Run, name: str) -> int:
+    return sum(1 for a in _bg_of(r, name) if "--resume" in a)
+
+
+def _cc_marks(r: Run, name: str) -> list:
+    return [_stn(r, name, k) for k in ("cc_failed", "cc_fails", "cc_retry_at", "cc_fresh")]
+
+
+# Three tries land on an old spare: the fourth starts the station again, in a new conversation, once for the version.
+_cc("cc_move_fresh", "three resumed tries land on old spares: the fourth starts the station again in a new conversation on the new version",
+    [_round()],
+    [("three resumed tries land on old spares, the fourth is a new conversation on 1.2.1",
+      lambda r: len(_bg_of(r, _R)) == 4 and _cc_resumed(r, _R) == 3 and "--resume" not in _bg_of(r, _R)[-1] and _runs(r, _R) == "1.2.1"),
+     ("it is told it was started again, and the event is recorded",
+      lambda r: "started you again under the same name, in a new conversation" in _bg_of(r, _R)[-1][-1]
+      and "starting it again in a new conversation on 1.2.1" in r.out(0) and '"event":"restarted-fresh"' in _events(r).replace(" ", "")),
+     ("a station that got there is not marked: no failure, no retry", lambda r: _cc_marks(r, _R) == [None, None, None, None])],
+    ["three resumed tries land on old spares, the fourth is a new conversation on 1.2.1",
+     "it is told it was started again, and the event is recorded", "a station that got there is not marked: no failure, no retry"],
+    setup=_cc_setup(installed="1.2.1", files={"spawn-version": "1.1.0\n", "stale-left": "3\n"}))
+
+# Old spares every time: three tries, the new conversation, then it stops and says it will retry (the backoff itself is TR-964).
+_cc("cc_move_old_spares", "old spares every time: three tries and the new conversation, then the station is marked with a retry time ten minutes on",
+    [_round()],
+    [("old spares every time: three tries, the new conversation, then it stops and says it will retry",
+      lambda r: len(_bg_of(r, _R)) == 4 and _cc_resumed(r, _R) == 3 and "keeps coming back on an older Claude Code than 1.2.1" in r.out(0)
+      and "the watch tries again in 10 min" in r.out(0) and _runs(r, _R) == "1.1.0"),
+     ("it is marked: the version, one failed move, a retry time ten minutes on, the new conversation done",
+      lambda r: _cc_marks(r, _R)[:2] == ["1.2.1", 1] and _cc_marks(r, _R)[3] == "1.2.1"
+      and 540 < int(_cc_marks(r, _R)[2]) - __import__("time").time() <= 600)],
+    ["old spares every time: three tries, the new conversation, then it stops and says it will retry",
+     "it is marked: the version, one failed move, a retry time ten minutes on, the new conversation done"],
+    setup=_cc_setup(installed="1.2.1", files={"spawn-version": "1.1.0\n", "stale-left": "all\n"}))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -3611,9 +4527,14 @@ ID_KEYS = {"sessionId", "session_id", "id"}
 TIME_KEY = re.compile(r"(^(ts|time|at|since|until)$)|(_at$)|(At$)|(_ts$)|(_time$)", re.I)
 
 
+TARES_ADDR: list = []   # the stand-in Tares' "127.0.0.1:<port>" while a side runs: its port changes every run
+
+
 def norm_text(s: str, tmp: Path | None = None) -> str:
     """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids."""
     s = s.replace("\r\n", "\n")
+    for addr in TARES_ADDR:
+        s = s.replace(addr, "<TARES>")
     if tmp is not None:
         forms = {str(tmp), os.path.realpath(tmp), tmp.as_posix(), Path(os.path.realpath(tmp)).as_posix()}
         # a Windows path inside JSON text has its backslashes doubled; and a drive letter may change case
@@ -3786,7 +4707,10 @@ def _without_calls(text: str, prefixes: tuple) -> str:
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
-    for base, prefix, only in ((run.crew, "crew/", None), (run.state, "claude/", {"calls.jsonl", "agents.json"})):
+    bases = [(run.crew, "crew/", None)]
+    bases += [(d, d.name + "/", None) for d in sorted(run.tmp.glob("crew-*")) if d.is_dir()]   # more crews, side by side
+    bases.append((run.state, "claude/", {"calls.jsonl", "agents.json"}))
+    for base, prefix, only in bases:
         if not base.is_dir():
             continue
         for p in sorted(base.rglob("*")):
@@ -3801,6 +4725,9 @@ def snapshot(run: Run) -> dict:
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
+    t = run.tmp / "tares" / "writes.jsonl"   # what the stand-in Tares was asked to save
+    if t.is_file():
+        files["tares/writes.jsonl"] = norm_file(t.read_text(encoding="utf-8", errors="replace"), t.name, run.tmp)
     return files
 
 
@@ -3825,21 +4752,33 @@ def run_side(sc: Scenario, engine: str) -> Side:
         side.skip = sc.not_windows
         return side
     tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-{engine}-")).resolve()
+    stand_in = None
     fake = None
     try:
         env = crew_env(tmp, engine)
+        if sc.stand_in is not None:
+            stand_in = StandInTares(tmp / "tares", **sc.stand_in).start()
+            env.update(TARESD_URL=stand_in.url, TARES_FACTORY_MCP_URL=stand_in.mcp_url)
+            TARES_ADDR[:] = [f"127.0.0.1:{stand_in.port}"]
         results = []
         if sc.tares is not None:
             fake = FakeTares(routes_in(sc.tares, tmp))
             env["TARESD_URL"] = fake.url
+        run = Run(tmp, results, fake, stand_in)
+        run.ignore_calls = sc.ignore_calls
+        if sc.prepare:
+            sc.prepare(run)
         if sc.setup:
             sc.setup(tmp, env)
         here = lambda text: (text.replace("{tmp}", str(tmp)).replace("{tares}", fake.url if fake else "")
                              if isinstance(text, str) else text)
         for step in sc.steps:
+            if step.run_before:
+                step.run_before(run)
             if step.before:
                 step.before(tmp)
-            senv = {**env, **{k: here(v) for k, v in step.env.items()}}
+            step_env = step.env(run) if callable(step.env) else step.env
+            senv = {**env, **{k: here(v) for k, v in step_env.items()}}
             try:
                 p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv],
                                    cwd=here(step.cwd) or str(ROOT), env=senv,
@@ -3853,8 +4792,6 @@ def run_side(sc: Scenario, engine: str) -> Side:
             if engine == "python" and results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
                 side.skip = "not ported"
                 return side
-        run = Run(tmp, results, fake)
-        run.ignore_calls = sc.ignore_calls
         for label, fn in sc.checks:
             try:
                 ok = bool(fn(run))
@@ -3877,6 +4814,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
             # A read asked twice in a row counts once: bash asks again from a subshell that lost its cache.
             asked = []
             for q in fake.requests:
+                if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
+                    continue
                 line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
                 if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
                     asked.append(line)
@@ -3888,6 +4827,9 @@ def run_side(sc: Scenario, engine: str) -> Side:
                              for s, r in zip(sc.steps, results))
         return side
     finally:
+        TARES_ADDR[:] = []
+        if stand_in is not None:
+            stand_in.stop()
         if fake is not None:
             fake.stop()
         shutil.rmtree(tmp, ignore_errors=True)
@@ -3936,6 +4878,15 @@ def evaluate(sc: Scenario, out=print) -> tuple:
 
 CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
 
+# Suites that only run another suite on the Python engine. They have no `check "` line of their own, so
+# --coverage leaves them out of the total and prints "wrapper of <suite>"; the suite they run counts their
+# checks. suite -> (the suite it runs, why). Pinned in tests/test_parity.py: a suite with checks of its own
+# cannot be listed here (coverage fails on it), so a real suite cannot drop out of the count.
+WRAPPERS = {
+    "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
+    "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
+}
+
 
 def suites() -> list:
     return [ln.strip() for ln in CI_LIST.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
@@ -3954,13 +4905,37 @@ def suite_scenarios() -> dict:
     return out
 
 
+def passes_one(name: str) -> bool:
+    """Whether scenario `name` passes against Python now (a worker of passes_now)."""
+    return evaluate(SCENARIOS[name], out=lambda _line: None)[1]
+
+
+def passes_now() -> dict:
+    """{scenario name: passes against Python}, every scenario run on both engines. Scenarios share nothing (each
+    has its own folder and its own fake Tares on a free port), so they run in PARITY_JOBS processes at once
+    (default: the CPUs, at most 4; 1 runs them one after the other in this process)."""
+    try:
+        jobs = int(os.environ.get("PARITY_JOBS") or min(os.cpu_count() or 1, 4))
+    except ValueError:
+        jobs = 1
+    names = list(SCENARIOS)
+    if jobs <= 1 or len(names) <= 1:
+        return {n: passes_one(n) for n in names}
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        return dict(zip(names, pool.map(passes_one, names)))
+
+
 def coverage(require_full: bool, out=print) -> int:
     found = suite_scenarios()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
+    for suite in found:
+        if suite in WRAPPERS and not found[suite][0].startswith("(the whole"):
+            out(f"ERROR {suite} is listed as a wrapper but has checks of its own: {len(found[suite])}")
+            bad = 1
+    results = passes_now()
     for sc in SCENARIOS.values():
-        quiet: list = []
-        ok = evaluate(sc, out=quiet.append)[1]
+        ok = results[sc.name]
         for label in sc.covers:
             if label not in found.get(sc.suite, []):
                 out(f"ERROR scenario {sc.name} covers a check that is not in {sc.suite}_test.sh: {label}")
@@ -3968,7 +4943,13 @@ def coverage(require_full: bool, out=print) -> int:
             elif ok:
                 passing[(sc.suite, label)] = sc.name
     total = done = 0
+    counted = 0
     for suite, labels in found.items():
+        if suite in WRAPPERS and labels[0].startswith("(the whole"):
+            of, why = WRAPPERS[suite]
+            out(f"{suite}: wrapper of {of} ({why})")
+            continue
+        counted += 1
         n = sum(1 for label in labels if (suite, label) in passing)
         total += len(labels)
         done += n
@@ -3977,11 +4958,1420 @@ def coverage(require_full: bool, out=print) -> int:
             mark = f"PASS python  ({passing[(suite, label)]})" if (suite, label) in passing else "todo"
             out(f"  {mark:<28} {label}")
     pct = 100.0 * done / total if total else 100.0
-    out(f"coverage: {done} of {total} scenarios pass against Python ({pct:.1f}%) in {len(found)} suites")
+    out(f"coverage: {done} of {total} scenarios pass against Python ({pct:.1f}%) in {counted} suites")
     if require_full and done < total:
         out(f"FAIL: --require-full wants every scenario ported, {total - done} are not")
         return 1
     return bad
+
+
+# >>> TR-1159 crew_test.sh checks, one scenario per group of checks (every `check "<label>"` of tests/factory/crew_test.sh)
+# group g1
+# crew_test.sh: the shared MCP endpoint, the desk and status, down and finish, a hand-made crew.json, an
+# unrecorded builder in a second repo, and the stops when no MCP server answers.
+
+def g1_json(r: Run, i: int):
+    return json.loads(r.results[i]["stdout"])
+
+
+def g1_line(r: Run, pattern: str, i: int = -1) -> bool:
+    """Whether a line of step i's output matches the pattern from its start (grep -q "^...")."""
+    return re.search(pattern, r.out(i), re.M) is not None
+
+
+# --- the shared MCP endpoint: `settings` and `_mcp-url` --------------------------------------------------------
+
+scenario(Scenario(
+    name="crew_g1_up_endpoints",
+    suite="crew",
+    about="crew up gives every crew station the same Tares address; `settings` shows the MCP endpoint too",
+    stand_in={"settings": dict(SAVED)},
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], stdin=""), Step(["settings", "crew-builder-x", "builder"])],
+    checks=[
+        ("crew-$r reaches the same Tares",
+         lambda r: all(env_of(r, "crew-" + role, "TARES_FACTORY_URL") == r.stand_in.url for role in ROLES)),
+        ("the settings command shows the MCP endpoint too",
+         lambda r: g1_json(r, 1)["env"]["TARES_FACTORY_MCP_URL"] == r.stand_in.mcp_url),
+    ],
+    covers=["crew-$r reaches the same Tares", "the settings command shows the MCP endpoint too"],
+))
+
+scenario(Scenario(
+    name="crew_g1_mcp_url",
+    suite="crew",
+    about="_mcp-url: a local Tares has its MCP on its own port, a remote one on its own host, TARES_FACTORY_MCP_URL wins",
+    steps=[
+        Step(["_mcp-url"], env={"TARESD_URL": "http://localhost:8787"}),
+        Step(["_mcp-url"], env={"TARESD_URL": "http://127.0.0.1:8787", "TARES_MCP_PORT": "9911"}),
+        Step(["_mcp-url"], env={"TARESD_URL": "https://cell.example.com/"}),
+        Step(["_mcp-url"], env={"TARES_FACTORY_MCP_URL": "http://mcp.example:1/mcp/", "TARESD_URL": "https://cell.example.com"}),
+    ],
+    checks=[
+        ("a local Tares: MCP on its own port", lambda r: r.out(0).strip() == "http://127.0.0.1:8788/mcp"),
+        ("a local Tares: TARES_MCP_PORT moves it", lambda r: r.out(1).strip() == "http://127.0.0.1:9911/mcp"),
+        ("a remote Tares: MCP on its own host", lambda r: r.out(2).strip() == "https://cell.example.com/mcp"),
+        ("TARES_FACTORY_MCP_URL wins", lambda r: r.out(3).strip() == "http://mcp.example:1/mcp"),
+    ],
+    covers=["a local Tares: MCP on its own port", "a local Tares: TARES_MCP_PORT moves it",
+            "a remote Tares: MCP on its own host", "TARES_FACTORY_MCP_URL wins"],
+))
+
+
+# --- the desk, read from Tares ---------------------------------------------------------------------------------
+
+G1_NO_PROJECTS = {"GET /api/crew/projects": (200, {"projects": []})}
+G1_D1 = {"id": "d1", "label": "D1", "question": "Keep the old endpoint?", "recommendation": "keep it until v2 ships",
+         "why": "two callers still use it", "options": ["keep it until v2 ships", "drop it now"], "blocks": "T7",
+         "blocking": True, "project": "p1", "project_name": "Links App"}
+G1_D2 = {"id": "d2", "label": "D2", "question": "Rename the bucket?", "recommendation": "leave it",
+         "why": "nothing reads the name", "options": ["rename now", "leave it"], "blocking": False}
+
+scenario(Scenario(
+    name="crew_g1_desk_empty",
+    suite="crew",
+    about="an empty desk: crew desk and status both say nothing waits",
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": []})},
+    setup=_setup_views,
+    steps=[Step(["crew", "desk"]), Step(["crew", "status"])],
+    checks=[
+        ("empty desk: crew desk says nothing waits", lambda r: "Nothing waits for you" in r.out(0)),
+        ("empty desk: status says nothing waits", lambda r: g1_line(r, r"^desk: nothing waits", 1)),
+    ],
+    covers=["empty desk: crew desk says nothing waits", "empty desk: status says nothing waits"],
+))
+
+scenario(Scenario(
+    name="crew_g1_desk_two",
+    suite="crew",
+    about="two questions: status shows the blocking one first with its options, crew desk shows both, desk is short for it",
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": [G1_D1, G1_D2]})},
+    setup=_setup_views,
+    steps=[Step(["crew", "status"]), Step(["crew", "desk"]), Step(["desk"])],
+    checks=[
+        ("status counts the questions", lambda r: g1_line(r, r"^desk: 2 waiting for you", 0)),
+        ("status shows the blocking one first, with its project",
+         lambda r: "D1 (blocks work) · Links App: Keep the old endpoint?" in r.out(0)),
+        ("status shows its options and recommendation",
+         lambda r: "A) keep it until v2 ships" in r.out(0) and "B) drop it now" in r.out(0)
+         and "recommended: keep it until v2 ships, since two callers still use it" in r.out(0)),
+        ("status leaves out the later question", lambda r: "Rename the bucket" not in r.out(0)),
+        ("crew desk shows every question",
+         lambda r: "Keep the old endpoint?" in r.out(1) and "D2: Rename the bucket?" in r.out(1) and "blocks: T7" in r.out(1)),
+        ("crew desk says where to answer", lambda r: "tares factory crew attach orchestrator" in r.out(1)),
+        ("factory desk is short for crew desk", lambda r: r.out(2).rstrip("\n") == r.out(1).rstrip("\n")),
+    ],
+    covers=["status counts the questions", "status shows the blocking one first, with its project",
+            "status shows its options and recommendation", "status leaves out the later question",
+            "crew desk shows every question", "crew desk says where to answer", "factory desk is short for crew desk"],
+))
+
+
+# --- a finished project's questions, crew down, and a stopped crew's status -------------------------------------
+
+G1_F1 = {"id": "d1", "label": "D1", "question": "No project is left. Stop the crew?", "recommendation": "yes",
+         "why": "nothing to build", "project": "p9", "project_name": "finishing", "project_finished": True,
+         "blocking": True, "blocks": ""}
+G1_F2 = {"id": "d2", "label": "D2", "recommendation": "yes", "why": "nothing to build",
+         "question": "No project is left. Stop the crew? Run `tares factory crew down` in your terminal."}
+G1_F3 = {"id": "d3", "label": "D3", "question": "Nothing left to build. Stop the crew?", "recommendation": "yes",
+         "why": "shorter words"}
+G1_F4 = {"id": "d4", "label": "D4", "question": "Keep nightly dependency bumps?", "recommendation": "yes", "why": "cheap"}
+G1_F5 = {"id": "d5", "label": "D5", "question": "Stop the crew now?", "recommendation": "yes", "why": "late",
+         "project": "p9", "project_name": "finishing", "project_finished": True, "blocking": True}
+G1_DESK = "GET /api/desk?state=open"
+
+
+def g1_later_desk(r: Run) -> None:
+    """The desk after crew down: the stop questions are withdrawn, and a new one of the finished project is asked."""
+    r.tares.routes[G1_DESK] = (200, {"desk": [G1_F4, G1_F5]})
+
+
+def g1_withdrawn(r: Run, qid: str, reason: str = "") -> bool:
+    asks = r.tares.asked(f"POST /api/desk/{qid}/withdraw")
+    return bool(asks) and (not reason or any(json.loads(a["body"]) == {"reason": reason} for a in asks))
+
+
+scenario(Scenario(
+    name="crew_g1_down_desk",
+    suite="crew",
+    about="a running crew sees a finished project's question, crew down retires all and withdraws the stop questions, "
+          "and a stopped crew's status leaves the finished project's question out",
+    tares={**G1_NO_PROJECTS, G1_DESK: (200, {"desk": [G1_F1, G1_F2, G1_F3, G1_F4]}),
+           **{f"POST /api/desk/d{n}/withdraw": (200, {"ok": True}) for n in (1, 2, 3, 4)}},
+    setup=_setup_views,
+    steps=[Step(["crew", "desk"]), Step(["crew", "down"]), Step(["crew", "status"], run_before=g1_later_desk)],
+    checks=[
+        ("a running crew sees a finished project's question", lambda r: "finishing: No project is left" in r.out(0)),
+        ("a question with nothing in blocks prints no empty blocks line",
+         lambda r: re.search(r"^  blocks: *$", r.out(0), re.M) is None),
+        ("stations that never reported to Tares retire without a warning", lambda r: "could not tell Tares" not in r.out(1)),
+        ("down retires all", lambda r: not [s for s in _stations_now(r).values() if s.get("status") == "active"]),
+        ("crew down withdraws it", lambda r: g1_withdrawn(r, "d1", "the crew stopped and the project is finished")),
+        ("and the stop-the-crew question asked with no project",
+         lambda r: g1_withdrawn(r, "d2", "the person stopped the crew")),
+        ("and one in other words that still asks to stop the crew",
+         lambda r: g1_withdrawn(r, "d3", "the person stopped the crew")),
+        ("a crew-wide question about something else stays open", lambda r: not r.tares.asked("POST /api/desk/d4/withdraw")),
+        ("a stopped crew's status leaves it out",
+         lambda r: g1_line(r, r"^desk: %d waiting" % (len(r.tares.routes[G1_DESK][1]["desk"]) - 1), 2)
+         and "Stop the crew now" not in r.out(2)),
+        ("and says no stations run instead of an empty table",
+         lambda r: g1_line(r, r"^no stations running; tares factory crew up starts them", 2)
+         and not g1_line(r, r"^STATION ", 2)),
+    ],
+    covers=["a running crew sees a finished project's question",
+            "a question with nothing in blocks prints no empty blocks line",
+            "stations that never reported to Tares retire without a warning", "down retires all",
+            "crew down withdraws it", "and the stop-the-crew question asked with no project",
+            "and one in other words that still asks to stop the crew",
+            "a crew-wide question about something else stays open", "a stopped crew's status leaves it out",
+            "and says no stations run instead of an empty table"],
+))
+
+
+# --- finish takes a project off the crew's list ----------------------------------------------------------------
+
+def g1_after_finish(r: Run) -> None:
+    r.tares.routes["GET /api/crew/projects"] = (200, {"projects": [p for p in PROJECTS if p["id"] != "p2"]})
+
+
+scenario(Scenario(
+    name="crew_g1_finish_list",
+    suite="crew",
+    about="a finished project is no longer on the crew's list",
+    tares={"GET /api/crew/projects": (200, {"projects": PROJECTS}), "POST /api/projects/p2/finish": (200, {"open_projects": 1})},
+    setup=_setup_projects,
+    steps=[Step(["finish", "shop", "all shipped"]), Step(["projects"], run_before=g1_after_finish)],
+    checks=[
+        ("and it is off the crew's list",
+         lambda r: r.code(0) == 0 and "✓ shop is done." in r.out(0) and r.code(1) == 0
+         and re.search(r"^shop ", r.out(1), re.M) is None and "Links App" in r.out(1)),
+    ],
+    covers=["and it is off the crew's list"],
+))
+
+
+# --- a hand-made crew.json -------------------------------------------------------------------------------------
+
+def g1_hand_made(r: Run) -> None:
+    r.trust(r.crew)
+    r.crew.mkdir(parents=True, exist_ok=True)
+    (r.crew / "crew.json").write_text('{"stations": {"reviewer": {"model": "sonnet"}}}\n', encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crew_g1_hand_made_crewjson",
+    suite="crew",
+    about="a crew.json written by hand keeps its choice, gains the template's defaults, and a crew without a releaser starts two stations",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    prepare=g1_hand_made,
+    steps=[Step(["crew", "up", "--yes"], stdin="")],
+    checks=[
+        ("hand-made crew.json keeps its choice",
+         lambda r: r.crew_json()["stations"]["reviewer"].get("model") == "sonnet"
+         and r.crew_json()["stations"]["reviewer"].get("effort") == "high"),
+        ("hand-made crew.json gains defaults",
+         lambda r: r.crew_json()["stations"]["orchestrator"].get("model") == "opus"
+         and r.crew_json()["limits"]["autocompact_tokens"] == 200000),
+        ("no releaser unless asked for", lambda r: r.launches() == 2 and r.station("crew-releaser", "status") == ""),
+    ],
+    covers=["hand-made crew.json keeps its choice", "hand-made crew.json gains defaults", "no releaser unless asked for"],
+))
+
+
+# --- an unrecorded builder in the second repo of a project -------------------------------------------------------
+
+def g1_setup_adopt(tmp: Path, env: dict) -> None:
+    _setup_views(tmp, env)
+    for repo in ("core", "charts"):
+        (tmp / "argus" / repo).mkdir(parents=True, exist_ok=True)
+    agents = tmp / "claude" / "agents.json"
+    rows = json.loads(agents.read_text(encoding="utf-8"))
+    rows.append(_row("working", "0000beef", "argus-build-m2-charts", cwd="%s/argus/charts" % tmp, sessionId="s-beef"))  # the route's spelling ("{tmp}/argus/charts"): the engines compare the two as text
+    agents.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crew_g1_adopt_second_repo",
+    suite="crew",
+    about="roster records a live builder that stations.json lacks, with its project and the repo it runs in",
+    tares={"GET /api/crew/projects": (200, {"projects": [
+        {"id": "p_argus", "name": "argus", "tickets_done": 0, "tickets_total": 2, "milestone": None,
+         "repos": [{"path": "{tmp}/argus/core"}, {"path": "{tmp}/argus/charts"}]}]})},
+    setup=g1_setup_adopt,
+    steps=[Step(["roster"])],
+    checks=[
+        ("multi: an unrecorded builder in the second repo is adopted with its project",
+         lambda r: r.station("argus-build-m2-charts", "project") == "argus"
+         and r.station("argus-build-m2-charts", "repo") == "%s/argus/charts" % r.tmp),
+    ],
+    covers=["multi: an unrecorded builder in the second repo is adopted with its project"],
+))
+
+
+# --- no MCP server at the endpoint -----------------------------------------------------------------------------
+
+G1_NOMCP = "http://127.0.0.1:9/mcp"
+G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations"]})}
+
+scenario(Scenario(
+    name="crew_g1_no_mcp",
+    suite="crew",
+    about="crew up stops and names the URL and the command when no MCP server answers; taresd itself is not one",
+    tares=G1_HEALTH,
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": G1_NOMCP}, stdin=""),
+           Step(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": "{tares}/mcp"}, stdin="")],
+    checks=[
+        ("no MCP server: crew up stops", lambda r: r.code(0) != 0 and r.launches() == 0),
+        ("no MCP server: it names the URL and the command",
+         lambda r: "no MCP server answers at %s" % G1_NOMCP in r.out(0) and "tares mcp --transport streamable-http" in r.out(0)),
+        ("no MCP server: no token, so no token placeholder", lambda r: "TARES_AUTH_TOKEN=" not in r.out(0)),
+        ("taresd itself is not an MCP server",
+         lambda r: "no MCP server answers at %s/mcp" % r.tares.url in r.out(1) and r.launches() == 0),
+    ],
+    covers=["no MCP server: crew up stops", "no MCP server: it names the URL and the command",
+            "no MCP server: no token, so no token placeholder", "taresd itself is not an MCP server"],
+))
+# end group g1
+
+
+# group g2
+# crew_test.sh, the middle of its story: roster, retire, revive and the watch, halt and resume, the guard and the
+# session start. Each scenario builds its own small crew (the stations of _cc_setup, a fake Tares for the routes the
+# commands read) and runs the real commands on both engines.
+
+G2_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L3-review", "releaser": True, "release_profile": "kind",
+                                                           "challenger": False, "builders_max": 3}}),
+            "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+G2_QUIET = ("GET ",)                           # reads of Tares are made in a different number and order
+G2_CALLS = (("agents",), ("--version",))       # so are the reads of the session list and the version
+G2_SETUP = _cc_setup(have="1.0.0", installed="1.0.0")
+
+
+def g2_agent(station: str, fn):
+    """A `before`: change the station's row in the fake Claude Code's session list (fn edits the row)."""
+    def before(tmp: Path) -> None:
+        sid = _agent_of(tmp, station)
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for row in rows:
+            if row.get("id") == sid:
+                fn(row)
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_stopped(station: str):
+    def edit(row):
+        row["state"] = "stopped"
+        row.pop("pid", None)
+    return g2_agent(station, edit)
+
+
+def g2_done(station: str, pid=None):
+    def edit(row):
+        row["state"] = "done"
+        row.pop("pid", None)
+        if pid is not None:
+            row["pid"] = pid
+    return g2_agent(station, edit)
+
+
+def g2_chain(*fns):
+    def before(tmp: Path) -> None:
+        for fn in fns:
+            fn(tmp)
+    return before
+
+
+def g2_earlier(r: Run, station: str) -> list:
+    return _stations_now(r)[station].get("earlier") or []
+
+
+def g2_resumes(r: Run) -> int:
+    return sum(1 for c in r.calls() if "--resume" in c["args"])
+
+
+def g2_all_done(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        row["state"] = "done"
+        row.pop("pid", None)
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def g2_sessions_resumed(tmp: Path) -> int:
+    try:
+        lines = (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and "--resume" in json.loads(x)["args"])
+
+
+def g2_mark_launches(name: str):
+    def run_before(r: Run) -> None:
+        r.marks[name] = r.launches()
+    return run_before
+
+
+def g2_scenario(name: str, about: str, steps: list, checks: list, covers: list, setup=None, **kw) -> None:
+    kw.setdefault("tares", G2_TARES)
+    scenario(Scenario(name=name, suite="crew", about=about, setup=setup or G2_SETUP, ignore_asked=G2_QUIET,
+                      ignore_calls=G2_CALLS, steps=steps, checks=checks, covers=covers, **kw))
+
+
+def g2_sid(station: str, field: str = "id"):
+    """An `after`: the station's field (its session id by default) in stations.json when the step ended."""
+    def after(tmp: Path):
+        return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8")).get(station, {}).get(field)
+    return after
+
+
+def g2_after(*fns):
+    def after(tmp: Path):
+        return [fn(tmp) for fn in fns]
+    return after
+
+
+g2_scenario(
+    "crew_g2_revive",
+    "the watch revives a stopped station under a new id in its own conversation; a finished session that still runs is left, "
+    "one with no process is revived, and with no process anywhere every finished station is revived",
+    [Step(["crew", "watch", "--once"], before=g2_stopped("crew-reviewer"),
+          after=g2_after(g2_sid("crew-reviewer"), lambda tmp: g2_sessions_resumed(tmp))),
+     Step(["crew", "watch", "--once"], before=g2_done("crew-reviewer", pid=4242), after=g2_sid("crew-reviewer")),
+     Step(["crew", "watch", "--once"], before=g2_done("crew-reviewer"),
+          after=g2_after(g2_sid("crew-reviewer"), lambda tmp: len(g2_sid("crew-reviewer", "earlier")(tmp) or []))),
+     Step(["crew", "watch", "--once"], before=g2_all_done, run_before=g2_mark_launches("before"))],
+    [("reviewer revived with a new id", lambda r: r.snap(0)[0] not in (None, "", "bbbb0002")),
+     ("revive resumed the conversation",
+      lambda r: any(c["args"][:1] == ["--bg"] and c["args"][2] == "crew-reviewer" and arg_after(c["args"], "--resume") == "old-reviewer"
+                    for c in r.calls())),
+     ("earlier session kept in history", lambda r: g2_earlier(r, "crew-reviewer")[0]["id"] == "bbbb0002"),
+     ("revived env unchanged", lambda r: env_of(r, "crew-reviewer", "FACTORY_STATION") == "crew-reviewer"),
+     ("other stations untouched", lambda r: r.snap(0)[1] == 1),
+     ("a done session still running is left alone", lambda r: r.snap(1) == r.snap(0)[0]),
+     ("a done session with no process is revived",
+      lambda r: r.snap(2)[0] != r.snap(1) and r.snap(2)[1] == 2),
+     ("with no process left anywhere, every finished station is revived",
+      lambda r: r.launches() - r.marks["before"] == 3)],
+    ["reviewer revived with a new id", "revive resumed the conversation", "earlier session kept in history",
+     "revived env unchanged", "other stations untouched", "a done session still running is left alone",
+     "a done session with no process is revived", "with no process left anywhere, every finished station is revived"])
+
+def g2_stops(r: Run) -> int:
+    return sum(1 for c in r.calls() if c["args"][:1] == ["stop"])
+
+
+def g2_mark(key: str):
+    def run_before(r: Run) -> None:
+        r.marks[key] = (r.launches(), g2_stops(r))
+    return run_before
+
+
+G2_FAIL = {"FAKE_CLAUDE_AGENTS_FAIL": "1"}
+
+g2_scenario(
+    "crew_g2_unreadable",
+    "a session list that cannot be read is never taken for an empty one: the watch, revive, restart and status say so and change nothing; "
+    "read again, the next round revives the station",
+    [Step(["crew", "watch", "--once"], env=G2_FAIL, before=g2_stopped("crew-reviewer"), run_before=g2_mark("start")),
+     Step(["revive", "crew-reviewer"], env=G2_FAIL),
+     Step(["restart", "crew-orchestrator"], env=G2_FAIL),
+     Step(["crew", "status"], env=G2_FAIL),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("failed"))],
+    [("unreadable session list: the watch starts nothing and carries on",
+      lambda r: r.code(0) == 0 and r.marks["failed"] == r.marks["start"] and "could not read" in r.out(0)),
+     ("unreadable session list: revive refuses to guess",
+      lambda r: r.code(1) != 0 and r.marks["failed"] == r.marks["start"] and "could not read" in r.out(1)),
+     ("unreadable session list: restart stops nothing",
+      lambda r: r.code(2) != 0 and r.marks["failed"] == r.marks["start"] and "could not read" in r.out(2)),
+     ("unreadable session list: status says so instead of showing every station gone",
+      lambda r: "could not read" in r.out(3) and " gone " not in r.out(3)),
+     ("readable again: the next round revives it", lambda r: r.launches() - r.marks["failed"][0] == 1)],
+    ["unreadable session list: the watch starts nothing and carries on", "unreadable session list: revive refuses to guess",
+     "unreadable session list: restart stops nothing",
+     "unreadable session list: status says so instead of showing every station gone",
+     "readable again: the next round revives it"])
+
+def g2_setup_roster(tmp: Path, env: dict) -> None:
+    """The lifecycle seed plus a builder of the project "Links App" and a helper of it, both with a working session."""
+    _setup_life(tmp, env)
+    f = tmp / "crew" / "stations.json"
+    stations = json.loads(f.read_text(encoding="utf-8"))
+    base = {"status": "active", "repo": "", "cwd": "", "model": "opus", "effort": "high", "project": "Links App"}
+    stations["links-app-build-m1"] = {**base, "role": "builder", "id": "ffff0006"}
+    stations["links-app-build-m1-rebase"] = {**base, "role": "helper", "id": "ffff0007"}
+    f.write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
+    a = tmp / "claude" / "agents.json"
+    agents = json.loads(a.read_text(encoding="utf-8"))
+    agents += [_row("working", "ffff0006", "links-app-build-m1", version="2.1.310"),
+               _row("working", "ffff0007", "links-app-build-m1-rebase", version="2.1.310")]
+    a.write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+
+
+G2_HELPER = "links-app-build-m1-rebase"
+
+g2_scenario(
+    "crew_g2_roster_retire",
+    "roster lists a station with its project; retire tells Tares which crew's station ended, and a retired station is not revived",
+    [Step(["roster"]),
+     Step(["retire", G2_HELPER], run_before=g2_mark("start")),
+     Step(["revive", G2_HELPER])],
+    [("roster lists project",
+      lambda r: any(x.startswith("links-app-build-m1\tbuilder\tLinks App\tworking") for x in r.out(0).splitlines())),
+     ("retire marks the station ended on Tares",
+      lambda r: r.code(1) == 0 and r.tares.asked(f"POST /api/crew/{G2_HELPER}/end?crew=crew") != []
+      and "could not tell Tares" not in r.out(1)),
+     ("and says which crew's station it is",
+      lambda r: len(r.tares.asked(f"POST /api/crew/{G2_HELPER}/end?crew=crew")) == 1),
+     ("a retired station is not revived",
+      lambda r: r.launches() == r.marks["start"][0] and "was retired" in r.out(2)
+      and not (r.crew / "stations" / f"{G2_HELPER}.lock").exists())],
+    ["roster lists project", "retire marks the station ended on Tares", "and says which crew's station it is",
+     "a retired station is not revived"],
+    setup=g2_setup_roster,
+    tares={**_ended(G2_HELPER, 200)})
+
+# A command held in the background (the bash suite's `cmd &`): it runs the same engine as the step, in its own
+# process group so a kill takes its whole tree down, and the scenario waits until it has started a session.
+G2_ENVS: dict = {}
+G2_PROCS: dict = {}
+G2_NOT_WINDOWS = "the held commands and their kill are POSIX process groups"
+
+
+def g2_setup(tmp: Path, env: dict) -> None:
+    G2_ENVS[str(tmp)] = env
+    G2_SETUP(tmp, env)
+
+
+def g2_bg_launches(tmp: Path, kind: str = "bg") -> int:
+    """Calls to the fake Claude Code so far: sessions started (--bg) or stopped (stop)."""
+    try:
+        lines = (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    return sum(1 for x in lines if x.strip() and (("--bg" in json.loads(x)["args"]) if kind == "bg"
+                                                  else json.loads(x)["args"][:1] == ["stop"]))
+
+
+def g2_hold(name: str, argv: list, extra=None, hold: bool = False, wait_for: int = 1, kind: str = "bg"):
+    """A before: start `tares factory <argv>` in the background and wait until it has asked Claude Code for
+    `wait_for` sessions. hold: the fake keeps registering the session until g2_release removes the hold file."""
+    def before(tmp: Path) -> None:
+        env = {**G2_ENVS[str(tmp)], **{k: v.replace("{tmp}", str(tmp)) for k, v in (extra or {}).items()}}
+        if hold:
+            (tmp / f"{name}.hold").write_text("", encoding="utf-8")
+            env["FAKE_CLAUDE_BG_HOLD"] = str(tmp / f"{name}.hold")
+        base = g2_bg_launches(tmp, kind)
+        out = open(tmp / f"{name}.out", "w", encoding="utf-8")
+        G2_PROCS[(str(tmp), name)] = subprocess.Popen(
+            [sys.executable, "-m", "tares.crew"] + argv, cwd=str(ROOT), env=env, stdout=out, stderr=subprocess.STDOUT,
+            start_new_session=True)
+        for _ in range(300):
+            if g2_bg_launches(tmp, kind) - base >= wait_for:
+                return
+            time.sleep(0.05)
+        raise RuntimeError(f"{name} did not start a session")
+    return before
+
+
+def g2_release(name: str):
+    """A before: let the held command finish and wait for it."""
+    def before(tmp: Path) -> None:
+        (tmp / f"{name}.hold").unlink(missing_ok=True)
+        G2_PROCS[(str(tmp), name)].wait(timeout=60)
+    return before
+
+
+def g2_kill(name: str):
+    """A before: kill the held command and everything it started, as the bash suite's killtree does."""
+    def before(tmp: Path) -> None:
+        import signal
+        p = G2_PROCS[(str(tmp), name)]
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.wait(timeout=60)
+    return before
+
+
+def g2_held_out(r: Run, name: str) -> str:
+    return (r.tmp / f"{name}.out").read_text(encoding="utf-8", errors="replace")
+
+
+def g2_cut_off_lock(station: str):
+    """A before: a lock folder and its takeover folder left behind by a command that died."""
+    def before(tmp: Path) -> None:
+        dead = subprocess.Popen([sys.executable, "-c", "pass"])
+        dead.wait()
+        lock = tmp / "crew" / "stations" / f"{station}.lock"
+        lock.mkdir(parents=True)
+        Path(str(lock) + ".takeover").mkdir()
+        (lock / "pid").write_text(f"{dead.pid}\n", encoding="utf-8")
+    return before
+
+
+def g2_lock_left(r: Run, station: str) -> bool:
+    lock = r.crew / "stations" / f"{station}.lock"
+    return lock.exists() or Path(str(lock) + ".takeover").exists()
+
+
+g2_scenario(
+    "crew_g2_lock",
+    "one command at a time starts a station: revive and the watch leave a station another command is starting alone; a killed holder "
+    "or a cut-off takeover does not block the next command",
+    [Step(["revive", "crew-reviewer"], run_before=g2_mark("s0"),
+          before=g2_chain(g2_stopped("crew-reviewer"), g2_hold("holder", ["revive", "crew-reviewer"], hold=True))),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("after_revive")),
+     Step(["roster"], run_before=g2_mark("held"), before=g2_release("holder")),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("s1"),
+          before=g2_chain(g2_stopped("crew-reviewer"),
+                          g2_hold("killed", ["revive", "crew-reviewer"], {"FAKE_CLAUDE_BG_DELAY": "60"}), g2_kill("killed"))),
+     Step(["revive", "crew-reviewer"], run_before=g2_mark("killed_done"), before=g2_stopped("crew-reviewer")),
+     Step(["revive", "crew-reviewer"], run_before=g2_mark("free"),
+          before=g2_chain(g2_stopped("crew-reviewer"), g2_cut_off_lock("crew-reviewer")))],
+    [("revive leaves a station another command is starting alone",
+      lambda r: r.marks["after_revive"][0] - r.marks["s0"][0] == 1 and "another factory command" in r.out(0)),
+     ("so does the watch", lambda r: r.marks["held"][0] - r.marks["s0"][0] == 1),
+     ("the command that held the station started it, once",
+      lambda r: r.marks["held"][0] - r.marks["s0"][0] == 1 and "started crew-reviewer" in g2_held_out(r, "holder")),
+     ("a command killed while it held a station does not block the next one",
+      lambda r: r.marks["killed_done"][0] - r.marks["s1"][0] == 2),
+     ("and the station is free again afterwards",
+      lambda r: r.marks["free"][0] - r.marks["killed_done"][0] == 1 and "another factory command" not in r.out(4)),
+     ("so is one whose takeover was cut off by a kill",
+      lambda r: r.launches() - r.marks["free"][0] == 1 and not g2_lock_left(r, "crew-reviewer"))],
+    ["revive leaves a station another command is starting alone", "so does the watch",
+     "the command that held the station started it, once",
+     "a command killed while it held a station does not block the next one", "and the station is free again afterwards",
+     "so is one whose takeover was cut off by a kill"],
+    setup=g2_setup, not_windows=G2_NOT_WINDOWS)
+
+def g2_race_agents(r: Run) -> int:
+    rows = json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    return sum(1 for x in rows if x.get("name") == "crew-reviewer" and "pid" in x)
+
+
+def g2_cron_armed(station: str):
+    """A before: the station is listed as working with no process (a schedule is armed)."""
+    def edit(row):
+        row["state"] = "working"
+        row.pop("pid", None)
+        row.pop("status", None)
+    return g2_agent(station, edit)
+
+
+def g2_waiting(station: str):
+    def edit(row):
+        row["state"] = "blocked"
+        row.pop("pid", None)
+        row.pop("status", None)
+    return g2_agent(station, edit)
+
+
+G2_SLOW = {"FAKE_CLAUDE_BG_DELAY": "3", "FACTORY_STOP_WAIT": "2"}
+
+g2_scenario(
+    "crew_g2_race",
+    "a restart and the watch's revive both find the station down: the restart keeps the station, the watch is turned away and one "
+    "session runs under the name; a second restart is turned away while the first stops the station",
+    [Step(["crew", "watch", "--once"], env={"FAKE_CLAUDE_BG_DELAY": "3"}, run_before=g2_mark("start"),
+          before=g2_hold("racer", ["restart", "crew-reviewer"], G2_SLOW, kind="stop")),
+     Step(["roster"], run_before=g2_mark("raced"), before=g2_release("racer")),
+     Step(["restart", "crew-reviewer"], env={"FACTORY_STOP_WAIT": "4"},
+          before=g2_hold("first", ["restart", "crew-reviewer"], {"FAKE_CLAUDE_STOP_DELAY": "2", "FACTORY_STOP_WAIT": "4"},
+                         kind="stop")),
+     Step(["roster"], before=g2_release("first"))],
+    [("a restart racing the watch: one session under the name",
+      lambda r: g2_race_agents(r) == 1 and r.marks["raced"][0] - r.marks["start"][0] == 1),
+     ("restart and watch: the restart started it, the watch was turned away",
+      lambda r: "started crew-reviewer" in g2_held_out(r, "racer") and "another factory command" in r.out(0)),
+     ("restart holds the station while it stops it", lambda r: "another factory command" in r.out(2))],
+    ["a restart racing the watch: one session under the name",
+     "restart and watch: the restart started it, the watch was turned away",
+     "restart holds the station while it stops it"],
+    setup=g2_setup, not_windows=G2_NOT_WINDOWS)
+
+def g2_twin(station: str, new_id: str):
+    """A before: a second row in the session list with the station's id changed (a duplicate session under one name)."""
+    def before(tmp: Path) -> None:
+        sid = _agent_of(tmp, station)
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        rows.append({**next(x for x in rows if x.get("id") == sid), "id": new_id})
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_twin_gone(new_id: str):
+    def before(tmp: Path) -> None:
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for x in rows:
+            if x.get("id") == new_id:
+                x.pop("pid", None)
+                x.pop("status", None)
+                x["state"] = "working"
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_no_twin(new_id: str):
+    def before(tmp: Path) -> None:
+        p = tmp / "claude" / "agents.json"
+        rows = [x for x in json.loads(p.read_text(encoding="utf-8")) if x.get("id") != new_id]
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def g2_line_has(text: str, prefix: str) -> bool:
+    return any(x.startswith(prefix) for x in text.splitlines())
+
+
+g2_scenario(
+    "crew_g2_gone",
+    "a finished station with no process reads as gone; two live sessions under one name are said and the started one is kept, a gone row "
+    "is not a second session; a schedule armed keeps a stopped station listed as working: it restarts, reads as gone and is revived, "
+    "one waiting on a person is left alone",
+    [Step(["roster"], before=g2_done("crew-reviewer")),
+     Step(["revive", "crew-reviewer"], after=g2_sid("crew-reviewer")),
+     Step(["crew", "status"], before=g2_twin("crew-reviewer", "0000dup1"), after=g2_sid("crew-reviewer")),
+     Step(["crew", "status"], before=g2_twin_gone("0000dup1")),
+     Step(["restart", "crew-orchestrator"], env={"FAKE_CLAUDE_STOP_KEEPS_STATE": "1", "FACTORY_STOP_WAIT": "2"},
+          run_before=g2_mark("cron"), before=g2_no_twin("0000dup1")),
+     Step(["roster"], before=g2_cron_armed("crew-orchestrator")),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("armed")),
+     Step(["crew", "watch", "--once"], run_before=g2_mark("revived"), before=g2_waiting("crew-orchestrator"))],
+    [("roster shows a finished station with no process as gone",
+      lambda r: g2_line_has(r.out(0), "crew-reviewer\treviewer\t\tgone")),
+     ("status shows two live sessions under one name",
+      lambda r: re.search(r"TWO SESSIONS named crew-reviewer: .*0000dup1", r.out(2)) is not None),
+     ("and keeps the one it started", lambda r: r.snap(2) == r.snap(1)),
+     ("a gone row under the same name is not a second session", lambda r: "TWO SESSIONS" not in r.out(3)),
+     ("restart of a station with a schedule armed goes through",
+      lambda r: r.marks["armed"][0] - r.marks["cron"][0] == 1 and "did not stop" not in r.out(4)),
+     ("listed as working with no process: roster says gone",
+      lambda r: g2_line_has(r.out(5), "crew-orchestrator\torchestrator\t\tgone")),
+     ("listed as working with no process: revived", lambda r: r.marks["revived"][0] - r.marks["armed"][0] == 1),
+     ("waiting on a person with no process: left alone", lambda r: r.launches() == r.marks["revived"][0])],
+    ["roster shows a finished station with no process as gone", "status shows two live sessions under one name",
+     "and keeps the one it started", "a gone row under the same name is not a second session",
+     "restart of a station with a schedule armed goes through",
+     "listed as working with no process: roster says gone", "listed as working with no process: revived",
+     "waiting on a person with no process: left alone"],
+    )
+
+def g2_earlier_n(r: Run, *stations: str) -> int:
+    return sum(len(g2_earlier(r, x)) for x in stations)
+
+
+def g2_mark_earlier(key: str, *stations: str):
+    def run_before(r: Run) -> None:
+        r.marks[key] = (r.launches(), g2_earlier_n(r, *stations), [g2_earlier_n(r, x) for x in stations])
+    return run_before
+
+
+def g2_runs(*fns):
+    def run_before(r: Run) -> None:
+        for fn in fns:
+            fn(r)
+    return run_before
+
+
+def g2_stop_many(*stations: str):
+    return g2_chain(*[g2_stopped(x) for x in stations])
+
+
+def g2_finish(station: str):
+    """A before: the builder has finished (it leaves stations/<name>.done)."""
+    def before(tmp: Path) -> None:
+        (tmp / "crew" / "stations").mkdir(parents=True, exist_ok=True)
+        (tmp / "crew" / "stations" / f"{station}.done").write_text("", encoding="utf-8")
+    return before
+
+
+G2_B = "links-app-build-m1"
+G2_EXTRA = (
+    (G2_B, {"role": "builder", "project": "Links App", "id": "dddd0004", "sessionId": "old-b"}),
+    ("shop-build-m1", {"role": "builder", "project": "shop", "id": "eeee0005", "sessionId": "old-shop"}),
+    (G2_B + "-probe", {"role": "helper", "parent": G2_B, "project": "Links App", "id": "ffff0006", "sessionId": "old-probe"}),
+)
+
+g2_scenario(
+    "crew_g2_revive_fails",
+    "a revive that fails is reported and the watcher carries on, the next round revives them; only the unfinished builder is revived; "
+    "restart resumes the reviewer",
+    [Step(["crew", "watch", "--once"], env={"FAKE_CLAUDE_FAIL_RESUME": "1"},
+          run_before=g2_mark_earlier("fail", "crew-orchestrator", "crew-releaser"),
+          before=g2_stop_many("crew-orchestrator", "crew-releaser")),
+     Step(["crew", "watch", "--once"]),
+     Step(["crew", "watch", "--once"], run_before=g2_mark_earlier("round", G2_B, "shop-build-m1"),
+          before=g2_chain(g2_stop_many(G2_B, "shop-build-m1", G2_B + "-probe"), g2_finish(G2_B))),
+     Step(["restart", "reviewer"], env={"FACTORY_STOP_WAIT": "2"},
+          run_before=g2_runs(g2_mark_earlier("built", G2_B, "shop-build-m1"), g2_mark_earlier("rev0", "crew-reviewer")))],
+    [("watcher survives a failed revive",
+      lambda r: r.code(0) == 0 and r.out(0).count("could not revive") == 2),
+     ("next round revives them", lambda r: g2_earlier_n(r, "crew-orchestrator", "crew-releaser") == r.marks["fail"][1] + 2),
+     ("only the unfinished builder is revived",
+      lambda r: r.marks["built"][0] - r.marks["round"][0] == 1
+      and r.marks["built"][2][1] == r.marks["round"][2][1] + 1 and r.marks["built"][2][0] == r.marks["round"][2][0]),
+     ("restart resumes the reviewer", lambda r: g2_earlier_n(r, "crew-reviewer") == r.marks["rev0"][1] + 1)],
+    ["watcher survives a failed revive", "next round revives them", "only the unfinished builder is revived",
+     "restart resumes the reviewer"],
+    setup=_cc_setup(have="1.0.0", installed="1.0.0", extra=G2_EXTRA))
+
+G2_DOWN = {"TARESD_URL": "http://127.0.0.1:9"}
+G2_MERGE = json.dumps({"tool_name": "Bash", "tool_input": {"command": "gh pr merge 3 --squash"}})
+
+
+def g2_hook(tmp: Path, name: str, stdin: str, extra: dict) -> str:
+    """`tares hook <name>` as Claude Code runs it: the payload on stdin, the station's environment, the plugin of the checkout."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("FACTORY_", "TARES_", "CLAUDE_"))}
+    env.update(HOME=str(tmp / "home"), USERPROFILE=str(tmp / "home"), PYTHONPATH=str(ROOT), TARES_HOME=str(tmp / "tares-home"),
+               PYTHONIOENCODING="utf-8", **extra)
+    shim = "import sys; sys.argv[0] = 'tares'; from tares.cli import main; main()"
+    p = subprocess.run([sys.executable, "-c", shim, "hook", name, "--plugin-root", str(ROOT / "claude-plugin")], input=stdin,
+                       capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, timeout=60)
+    return p.stdout
+
+
+def g2_guard(tmp: Path) -> str:
+    return g2_hook(tmp, "guard", G2_MERGE, {"FACTORY_ROLE": "builder", "FACTORY_HOME": str(tmp / "crew")})
+
+
+def g2_station_env(tmp: Path, station: str) -> dict:
+    doc = json.loads((tmp / "crew" / "stations" / f"{station}.settings.json").read_text(encoding="utf-8"))
+    return {k: str(v).replace(" ", "_") for k, v in doc["env"].items()}
+
+
+g2_scenario(
+    "crew_g2_halt_down",
+    "halt, resume and the roster work while Tares is down; the halt file is written; the guard refuses a merge while halted and allows it "
+    "after resume",
+    [Step(["crew", "halt", "tares is down"], env=G2_DOWN),
+     Step(["crew", "resume"], env=G2_DOWN),
+     Step(["roster"], env=G2_DOWN),
+     Step(["crew", "halt", "testing"], after=lambda tmp: [(tmp / "crew" / "HALT").is_file(), g2_guard(tmp)]),
+     Step(["crew", "resume"], after=g2_guard)],
+    [("halt works while Tares is down", lambda r: r.code(0) == 0 and "no Tares answers" not in r.out(0)),
+     ("and resume", lambda r: r.code(1) == 0 and not (r.crew / "HALT").exists()),
+     ("roster works while Tares is down", lambda r: g2_line_has(r.out(2), "crew-orchestrator\torchestrator")),
+     ("halt file", lambda r: r.snap(3)[0] is True),
+     ("guard denies merge while halted", lambda r: "halted" in r.snap(3)[1]),
+     ("guard allows merge after resume", lambda r: r.snap(4) == "")],
+    ["halt works while Tares is down", "and resume", "roster works while Tares is down", "halt file",
+     "guard denies merge while halted", "guard allows merge after resume"])
+
+def g2_session_start(tmp: Path) -> str:
+    return g2_hook(tmp, "session-start", json.dumps({"source": "resume"}), g2_station_env(tmp, G2_B))
+
+
+g2_scenario(
+    "crew_g2_session_start",
+    "a revived builder's session start names its station and its project and says the session was resumed",
+    [Step(["revive", G2_B], before=g2_stopped(G2_B), after=g2_session_start)],
+    [("session start names the station and project",
+      lambda r: G2_B in r.snap(0) and "Links_App" in r.snap(0) and "resumed" in r.snap(0))],
+    ["session start names the station and project"],
+    setup=_cc_setup(have="1.0.0", installed="1.0.0", extra=G2_EXTRA))
+# end group g2
+
+
+# group g3
+# crew_test.sh: stuck stations (autocompact thrash) in `status` and in the watch, the kit each station records, and the
+# kit update that moves quiet stations one per round. A crew of three stations (and a helper where the case wants one)
+# on the fake Claude Code; every station runs the current kit and Claude Code, so only what the case sets is due.
+
+G3_COMPACT = '{"type":"system","subtype":"compact_boundary"}'
+G3_THRASH_OLD = ('{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"Autocompact is '
+                 'thrashing: x"}]}}')
+G3_PROBE = ("crew-reviewer-probe", {"role": "helper", "parent": "crew-reviewer", "id": "dddd0004", "sessionId": "old-probe"})
+G3_O, G3_R, G3_L = "crew-orchestrator", "crew-reviewer", "crew-releaser"
+
+
+def g3_setup(transcripts: dict | None = None, extra=()):
+    """The three stations idle on the current kit and Claude Code, each with a job file holding its session id, and
+    these transcripts (station -> lines)."""
+    base = _cc_setup(have="1.0.0", installed="1.0.0", extra=extra)
+
+    def setup(tmp: Path, env: dict) -> None:
+        base(tmp, env)
+        rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+        for name, row in rows.items():
+            job = tmp / "home" / ".claude" / "jobs" / row["id"]
+            job.mkdir(parents=True, exist_ok=True)
+            (job / "state.json").write_text(json.dumps({"sessionId": row["sessionId"]}), encoding="utf-8")
+        for name, lines in (transcripts or {}).items():
+            _transcript(tmp, rows[name]["sessionId"], *lines)
+    return setup
+
+
+def g3_edit(path: Path, fn) -> None:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = {}
+    fn(doc)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def g3_id(tmp: Path, name: str) -> str:
+    return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[name]["id"]
+
+
+def g3_agent(name: str, drop: tuple = (), **fields):
+    """A step's before: set these fields on the station's row of the session list, and drop these."""
+    def before(tmp: Path) -> None:
+        sid = g3_id(tmp, name)
+
+        def edit(rows):
+            for row in rows:
+                if row.get("id") == sid:
+                    row.update(fields)
+                    for k in drop:
+                        row.pop(k, None)
+        g3_edit(tmp / "claude" / "agents.json", edit)
+    return before
+
+
+def g3_job(name: str, drop: tuple = (), **fields):
+    """A step's before: set these fields in the station's job file (state.json), and drop these."""
+    def before(tmp: Path) -> None:
+        def edit(doc):
+            doc.update(fields)
+            for k in drop:
+                doc.pop(k, None)
+        g3_edit(tmp / "home" / ".claude" / "jobs" / g3_id(tmp, name) / "state.json", edit)
+    return before
+
+
+def g3_row(name: str, **fields):
+    """A step's before: set these fields on the station's row in stations.json."""
+    def before(tmp: Path) -> None:
+        g3_edit(tmp / "crew" / "stations.json", lambda doc: doc[name].update(fields))
+    return before
+
+
+def g3_all(*fns):
+    def before(tmp: Path) -> None:
+        for f in fns:
+            f(tmp)
+    return before
+
+
+def g3_older(*names: str):
+    return g3_all(*[g3_row(n, kit="older") for n in names])
+
+
+def g3_transcript(name: str, session: str, *lines: str):
+    def before(tmp: Path) -> None:
+        _transcript(tmp, session, *lines)
+    return before
+
+
+def g3_moved(r: Run, name: str) -> bool:
+    """The station has another session than the one it began with."""
+    return _stn(r, name) != _CC_IDS.get(name, G3_PROBE[1]["id"])
+
+
+def g3_last(r: Run, name: str) -> list:
+    """The arguments of the station's last start with --bg."""
+    return _bg_of(r, name)[-1] if _bg_of(r, name) else []
+
+
+def g3_state_of(r: Run, i: int, name: str) -> str:
+    """The STATE column of the station's row in a status."""
+    for line in r.out(i).splitlines():
+        cols = line.split()
+        if cols and cols[0] == name and len(cols) > 3:
+            return cols[3]
+    return ""
+
+
+def g3_row_has(r: Run, i: int, name: str, text: str) -> bool:
+    return any(line.startswith(name + " ") and text in line for line in r.out(i).splitlines())
+
+
+def g3_scn(name: str, about: str, setup, steps: list, checks: list, covers: list) -> Scenario:
+    return scenario(Scenario(name=name, suite="crew", about=about, setup=setup, tares=_CC_TARES, steps=steps,
+                             checks=checks, covers=covers, ignore_asked=_CC_NOT_YET, ignore_calls=_CC_READS))
+
+
+def g3_snap(tmp: Path) -> dict:
+    """After a step: each station's session id and how many sessions were started so far."""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    try:
+        calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError:
+        calls = []
+    try:
+        agents = json.loads((tmp / "claude" / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        agents = []
+    return {"ids": {n: v.get("id") for n, v in rows.items()}, "launches": sum(1 for c in calls if "--bg" in c["args"]),
+            "up": sorted(x.get("name") for x in agents if x.get("state") != "stopped")}
+
+
+def g3_watch(before=None, env: dict | None = None) -> Step:
+    return _watch_once(before=before, env=env, after=g3_snap)
+
+
+def g3_was_moved(r: Run, i: int, name: str) -> bool:
+    """After step i the station had another session than the one it began with."""
+    return r.snap(i)["ids"][name] != _CC_IDS.get(name, G3_PROBE[1]["id"])
+
+
+def g3_now(ago: int = 0) -> str:
+    return datetime.fromtimestamp(time.time() - ago, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# status: the stuck station is told in the row; a list that fails mid-way never reads as stuck; a stopped row that kept
+# its status reads as gone; the state shown is where the turn is, not the list's working.
+g3_scn(
+    "crew_g3_stuck_status",
+    "status shows a station Claude Code stopped for thrashing, and reads its state from the turn, not from the list's working",
+    g3_setup({G3_O: [ORDINARY_LINE, G3_COMPACT, THRASH_LINE], G3_R: [G3_THRASH_OLD, ORDINARY_LINE]}),
+    [Step(["crew", "status"]),
+     Step(["crew", "status"], env={"FAKE_CLAUDE_AGENTS_FAIL_AFTER": "2"},
+          before=g3_all(g3_agent(G3_O, status="busy"), lambda tmp: (tmp / "claude" / "agents-reads").unlink(missing_ok=True))),
+     Step(["crew", "status"], before=g3_agent(G3_O, state="stopped", status="busy")),
+     Step(["crew", "status"], before=g3_agent(G3_O, state="working", status="idle"))],
+    [("status shows the stuck station",
+      lambda r: g3_row_has(r, 0, G3_O, "STUCK on autocompact")),
+     ("a list that fails mid-way never reads as stuck",
+      lambda r: not g3_row_has(r, 1, G3_O, "STUCK")),
+     ("a stopped row that kept its status reads as gone",
+      lambda r: g3_state_of(r, 2, G3_O) == "gone"),
+     ("status shows where its turn is, not the agent list's working",
+      lambda r: g3_state_of(r, 3, G3_O) == "done"),
+     ("status leaves a recovered station alone",
+      lambda r: not g3_row_has(r, 3, G3_R, "STUCK"))],
+    ["status shows the stuck station", "a list that fails mid-way never reads as stuck",
+     "a stopped row that kept its status reads as gone", "status shows where its turn is, not the agent list's working",
+     "status leaves a recovered station alone"])
+
+# the watch: the stuck station is stopped and started in a new conversation, once; the others are left.
+g3_scn(
+    "crew_g3_stuck_watch",
+    "the watch restarts a station stuck on autocompact in a new conversation, only that one, records it, and not again",
+    g3_setup({G3_O: [ORDINARY_LINE, G3_COMPACT, THRASH_LINE], G3_R: [G3_THRASH_OLD, ORDINARY_LINE]}),
+    [g3_watch(env={"FACTORY_STOP_WAIT": "2"}, before=g3_agent(G3_O, state="working", status="idle")), g3_watch()],
+    [("thrashing station restarted",
+      lambda r: g3_moved(r, G3_O) and "crew-orchestrator is stuck" in r.out(0)),
+     ("restarted in a new conversation",
+      lambda r: "--resume" not in g3_last(r, G3_O) and "in a new conversation" in json.dumps(g3_last(r, G3_O))),
+     ("only the stuck station restarted",
+      lambda r: r.launches() == 1 and not g3_moved(r, G3_R)),
+     ("thrash recorded",
+      lambda r: any('"event":"thrashing"' in x and G3_O in x for x in _events(r).replace(" ", "").splitlines())
+      and "restarted-fresh" in _events(r)),
+     ("the new conversation is not restarted again",
+      lambda r: "is stuck" not in r.out(1))],
+    ["thrashing station restarted", "restarted in a new conversation", "only the stuck station restarted",
+     "thrash recorded", "the new conversation is not restarted again"])
+
+# the watch leaves alone a station woken after the notice, one working on a new message, one busy by the list's
+# status, and one whose session was cleared; a stopped stuck one comes back fresh; a stuck helper is left to its parent.
+g3_scn(
+    "crew_g3_stuck_left_alone",
+    "a station woken after the thrash notice, working, busy by status or cleared is not restarted; a stopped one comes back fresh; a helper is left",
+    g3_setup({G3_L: [G3_THRASH_OLD, WOKEN_LINE], "crew-reviewer-probe": [G3_THRASH_OLD]},
+             extra=[("crew-reviewer-probe", {**G3_PROBE[1]})]),
+    [g3_watch(env={"FACTORY_STOP_WAIT": "2"},
+              before=g3_all(g3_agent(G3_L, drop=("status",), state="done"),
+                            g3_agent("crew-reviewer-probe", drop=("status",), state="done"))),
+     g3_watch(before=g3_all(g3_transcript(G3_L, "old-releaser", G3_THRASH_OLD), g3_agent(G3_L, state="working"))),
+     g3_watch(before=g3_agent(G3_L, state="done", status="busy")),
+     g3_watch(before=g3_all(g3_agent(G3_L, drop=("status",), state="done"), g3_job(G3_L, sessionId="session-cleared"))),
+     g3_watch(before=g3_all(g3_job(G3_L, sessionId="old-releaser", state="working"),
+                            g3_agent(G3_L, drop=("pid",), state="stopped")))],
+    [("a station woken after the notice is left alone", lambda r: not g3_was_moved(r, 0, G3_L) and r.snap(0)["launches"] == 0),
+     ("a station working on a new message is left alone", lambda r: not g3_was_moved(r, 1, G3_L) and r.snap(1)["launches"] == 0),
+     ("busy by the list's status: left alone, whatever its state says",
+      lambda r: not g3_was_moved(r, 2, G3_L) and r.snap(2)["launches"] == 0),
+     ("a cleared session is not restarted", lambda r: not g3_was_moved(r, 3, G3_L) and r.snap(3)["launches"] == 0),
+     ("a stopped stuck station comes back fresh",
+      lambda r: g3_was_moved(r, 4, G3_L) and "--resume" not in g3_last(r, G3_L) and r.snap(4)["launches"] == 1),
+     ("a stuck helper is not restarted", lambda r: not g3_was_moved(r, 4, "crew-reviewer-probe"))],
+    ["a station woken after the notice is left alone", "a station working on a new message is left alone",
+     "busy by the list's status: left alone, whatever its state says", "a cleared session is not restarted",
+     "a stopped stuck station comes back fresh", "a stuck helper is not restarted"])
+
+# the kit a station starts on is recorded in stations.json.
+scenario(Scenario(
+    name="crew_g3_kit_recorded",
+    suite="crew",
+    about="a station that is started has the kit it runs on in stations.json",
+    driver=LAUNCH_DRIVER,
+    steps=[_LIFE_LAUNCH],
+    checks=[("stations record the kit they run on", lambda r: r.code(0) == 0 and r.station("crew-reviewer", "kit") != "")],
+    covers=["stations record the kit they run on"],
+))
+
+# the kit update: status counts the stations on an older kit, and the watch moves one quiet station a round.
+g3_scn(
+    "crew_g3_kit_moves",
+    "stations on an older kit: status counts them; the watch moves one quiet station a round, in its conversation, told why; busy ones wait",
+    g3_setup(),
+    [Step(["crew", "status"], before=g3_older(G3_O, G3_R, G3_L)),
+     g3_watch(before=g3_all(
+         g3_agent(G3_O, state="working", status="busy"),
+         g3_agent(G3_R, state="working", status="idle"),
+         g3_job(G3_R, inFlight={"tasks": 2, "queued": 0, "kinds": ["local_agent", "session_cron"]}),
+         g3_agent(G3_L, state="working", status="waiting"),
+         g3_job(G3_L, state="working", updatedAt=g3_now()))),
+     g3_watch(before=g3_job(G3_R, inFlight={"tasks": 1, "queued": 0, "kinds": ["session_cron"],
+                                           "wake": {"at": 1, "keepalive": True}})),
+     g3_watch(before=lambda tmp: (g3_job(G3_R, inFlight={"tasks": 1, "queued": 0, "kinds": ["session_cron"]})(tmp),
+                                  g3_job(G3_L, updatedAt=g3_now(3600))(tmp))),
+     g3_watch()],
+    [("status counts stations on an older kit",
+      lambda r: any(x.startswith("plugin: 3 station(s) run an older version") for x in r.out(0).splitlines())),
+     ("a working station waits", lambda r: r.code(1) == 0 and not g3_was_moved(r, 1, G3_O)),
+     ("a station with a subagent running waits", lambda r: not g3_was_moved(r, 1, G3_R)),
+     ("a station waiting on a person waits", lambda r: not g3_was_moved(r, 1, G3_L) and r.snap(1)["launches"] == 0),
+     ("a station waiting for its own wake-up waits", lambda r: not g3_was_moved(r, 2, G3_R) and r.snap(2)["launches"] == 0),
+     ("one quiet station moves per round (a cron doesn't count)",
+      lambda r: int(g3_was_moved(r, 3, G3_R)) + int(g3_was_moved(r, 3, G3_L)) == 1),
+     ("then the next, after half an hour of waiting on a person",
+      lambda r: g3_was_moved(r, 4, G3_R) and g3_was_moved(r, 4, G3_L)),
+     ("in the same conversation, told why",
+      lambda r: arg_after(g3_last(r, G3_R), "--resume") == "old-reviewer"
+      and "Tares plugin was updated" in " ".join(g3_last(r, G3_L))),
+     ("the working station still waits", lambda r: not g3_was_moved(r, 4, G3_O))],
+    ["status counts stations on an older kit", "a working station waits", "a station with a subagent running waits",
+     "a station waiting on a person waits", "a station waiting for its own wake-up waits",
+     "one quiet station moves per round (a cron doesn't count)", "then the next, after half an hour of waiting on a person",
+     "in the same conversation, told why", "the working station still waits"])
+
+# Nothing moves while the crew is halted, and a station with no conversation to resume is not moved.
+g3_scn(
+    "crew_g3_kit_holds",
+    "a halted crew moves no station onto a newer kit; neither is one with no conversation to resume",
+    g3_setup(),
+    [Step(["crew", "halt", "testing"], before=g3_all(g3_older(G3_O), g3_agent(G3_O, state="working", status="idle"))),
+     g3_watch(),
+     Step(["crew", "resume"]),
+     g3_watch(before=g3_row(G3_O, sessionId=""))],
+    [("nothing moves while halted", lambda r: r.code(0) == 0 and not g3_was_moved(r, 1, G3_O) and r.snap(1)["launches"] == 0),
+     ("a station with no conversation to resume isn't moved",
+      lambda r: r.code(2) == 0 and not g3_was_moved(r, 3, G3_O) and r.snap(3)["launches"] == 0)],
+    ["nothing moves while halted", "a station with no conversation to resume isn't moved"])
+
+# A kit that cannot start a station takes down that one, not the crew; it comes back once the kit works.
+g3_scn(
+    "crew_g3_kit_failing",
+    "a kit that cannot resume a station takes down one station at most, and they come back once it works",
+    g3_setup(),
+    [g3_watch(env={"FAKE_CLAUDE_FAIL_RESUME": "1"},
+              before=g3_all(g3_older(G3_R, G3_L), g3_agent(G3_R, drop=("status",), state="done"),
+                            g3_agent(G3_L, drop=("status",), state="done"))),
+     g3_watch(env={"FAKE_CLAUDE_FAIL_RESUME": "1"}),
+     g3_watch(env={"FAKE_CLAUDE_FAIL_RESUME": "1"}),
+     g3_watch(),
+     Step(["roster"])],
+    [("a failing kit takes down one station at most",
+      lambda r: sum(1 for n in (G3_R, G3_L) if n in r.snap(2)["up"]) >= 1),
+     ("it comes back once the kit works",
+      lambda r: any(x.startswith(G3_R) for x in r.out(4).splitlines()) and any(x.startswith(G3_L) for x in r.out(4).splitlines()))],
+    ["a failing kit takes down one station at most", "it comes back once the kit works"])
+
+# end group g3
+
+
+# group g4
+# crew_test.sh, "crew up starts the watch in the background, once; status says so; crew down stops it": real
+# `crew up` runs on the stand-in Tares with the watch left on (FACTORY_NO_WATCH empty), a one second round and a short
+# nap tick so the Python watch sees its stop file at once.
+
+# FACTORY_PLAN_EVERY=0: the bash watch reads the plan's limits (/usage) between rounds and answers the console's /context asks;
+# the Python watch does not do that yet (no serve_readings in tares/crew/watch.py), so the scenarios here leave it out on both sides.
+G4_WATCH_ENV = {"FACTORY_NO_WATCH": "", "FACTORY_WATCH_INTERVAL": "1", "FACTORY_ASK_POLL": "0.2", "FACTORY_PLAN_EVERY": "0",
+                "TARES_FACTORY_MCP_URL": "{tares}/mcp"}
+
+
+def g4_alive(pid) -> bool:
+    try:
+        import psutil
+        return bool(pid) and psutil.pid_exists(int(pid)) and psutil.Process(int(pid)).status() != psutil.STATUS_ZOMBIE
+    except Exception:
+        return False
+
+
+def g4_pid(tmp: Path) -> int:
+    try:
+        return int((tmp / "crew" / "watch.pid").read_text(encoding="utf-8").split()[0])
+    except (OSError, IndexError, ValueError):
+        return 0
+
+
+def g4_wait(seconds: float, ok) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if ok():
+            return True
+        time.sleep(0.1)
+    return ok()
+
+
+def g4_up_after(tmp: Path) -> dict:
+    """After a crew up: the watch's pid, whether it runs, and whether its log has the banner (given up to 6 seconds)."""
+    pid = g4_pid(tmp)
+    log = tmp / "crew" / "watch.log"
+    banner = g4_wait(6, lambda: log.is_file() and "watching the crew" in log.read_text(encoding="utf-8", errors="replace"))
+    return {"pid": pid, "alive": g4_alive(pid), "log": banner}
+
+
+G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations"]}),
+               "GET /api/crew/settings": (200, {**SAVED, "releaser": False}),
+               "GET /api/people": (200, {"people": [{"id": "local", "name": "Local"}]}),
+               "GET /api/grants": (200, {"all": ""}),
+               "GET /api/crew/projects": (200, {"projects": []}), "GET /api/desk": (200, {"desk": []}),
+               "GET /api/desk?state=open": (200, {"desk": []}),
+               "POST /mcp": (200, {"jsonrpc": "2.0", "id": 1, "result": {"serverInfo": {"name": "fake-tares"}}})}
+
+
+def g4_quiet(tmp: Path) -> None:
+    """After the last step, the watch is gone: its log is by design not the same (the Python watch is asked to stop with a
+    file and says so, the bash watch is killed), so the log leaves the comparison; what it said was read by an earlier step."""
+    try:
+        (tmp / "crew" / "watch.log").unlink()
+    except OSError:
+        pass
+
+
+scenario(Scenario(
+    name="crew_g4_up_watch",
+    suite="crew",
+    about="crew up starts the watch in the background and logs; a second crew up keeps it; crew down stops it; --no-watch starts none",
+    ignore_calls=_CC_READS,
+    tares=G4_UP_TARES,
+    # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
+    ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
+    prepare=trust_crew,
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_up_after),
+           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=lambda tmp: {"pid": g4_pid(tmp)}),
+           Step(["crew", "status"], env=G4_WATCH_ENV),
+           Step(["crew", "down"], env=G4_WATCH_ENV),
+           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV),
+           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    checks=[
+        ("crew up starts the watch in the background",
+         lambda r: "started the watch" in r.out(0) and bool(r.snap(0)["pid"]) and r.snap(0)["alive"]),
+        ("it writes to its log", lambda r: r.snap(0)["log"]),
+        ("a second crew up keeps the one watch",
+         lambda r: "already running, pid %s" % r.snap(0)["pid"] in r.out(1) and r.snap(1)["pid"] == r.snap(0)["pid"]),
+        # crew_test.sh puts this check after a `;` on its line, so the harness's line count (which wants `check "` first) skips it
+        ("status says the watch runs", lambda r: any(ln.startswith("watch: running (pid %s)" % r.snap(0)["pid"]) for ln in r.out(2).splitlines())),
+        ("crew down stops the watch",
+         lambda r: not g4_alive(r.snap(0)["pid"]) and not (r.crew / "watch.pid").exists() and "stopped the watch" in r.out(3)),
+        ("--no-watch starts none", lambda r: "the watch" not in r.out(4) and not (r.crew / "watch.pid").exists()),
+    ],
+    covers=["crew up starts the watch in the background", "it writes to its log", "a second crew up keeps the one watch",
+            "crew down stops the watch", "--no-watch starts none"],  # "status says the watch runs" is asserted too (not a counted line)
+))
+
+# crew_test.sh, "A permission the person allows in the console is a grant on Tares": one story on the launch driver,
+# a reviewer, an orchestrator and two builders of the project shop, each launched with the grants of the world, then
+# the world gets a project grant, a grant for a helper and a grant for every project.
+G4_MERGE = "shop-build-m1 may run gh pr merge 12 --squash in shop"
+G4_E2E = "shop-build-m1-e2e may run npm run e2e in shop"
+G4_PROJECT = '- "%s" (2026-02-04)\n' % G4_MERGE
+G4_HELPER = '- "%s" (2026-02-05)\n' % G4_E2E
+G4_BUSY = ("crew-orchestrator", "crew-reviewer", "shop-build-m1", "shop-build-m2")
+G4_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+G4_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": G4_PROJECT})
+G4_W2 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": G4_PROJECT + G4_HELPER})
+G4_W3 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT, project_grants={"shop": G4_PROJECT + G4_HELPER})
+
+
+def g4_recorded(tmp: Path) -> dict:
+    """What a station launched with is kept: the row's grants and the grants file."""
+    row = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["shop-build-m1"]
+    kept = (tmp / "crew" / "stations" / "shop-build-m1.grants").read_text(encoding="utf-8")
+    return {"row": bool(row.get("grants")), "file": "staging database" in kept, "session": row.get("sessionId")}
+
+
+def g4_recording(step: Step) -> Step:
+    step.after = g4_recorded
+    return step
+
+
+def g4_prompt(r: "Run", station: str) -> str:
+    """The prompt of a station's first restart (its second start)."""
+    return _bg_of(r, station)[1][-1]
+
+
+def g4_started_and_differs(tmp: Path) -> dict:
+    """The sessions started so far, and whether the busy orchestrator's grants differ from the reviewer's."""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    return {"started": _sessions_started(tmp), "differs": rows["crew-orchestrator"]["grants"] != rows["crew-reviewer"]["grants"]}
+
+
+scenario(Scenario(
+    name="crew_g4_regrant",
+    suite="crew",
+    about="a permission allowed in Tares reaches a station between turns, in its conversation, once; busy and attached stations wait; helpers and blocked stations get it",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("crew-orchestrator", "orchestrator", G4_W0),                                            # 0
+           _launch("crew-reviewer", "reviewer", G4_W0),                                                    # 1
+           g4_recording(_launch("shop-build-m1", "builder", G4_W0, parent="crew-orchestrator", project="shop")),   # 2
+           _launch("shop-build-m2", "builder", G4_W0, parent="crew-orchestrator", project="shop"),         # 3
+           wstep(G4_W1, before=_busy(*G4_BUSY)),                                                           # 4: busy: waits
+           wstep(G4_W1, before=_both(_idle("shop-build-m1", "crew-reviewer"), _busy("shop-build-m2")),
+                 after=_sessions_and("shop-build-m1")),                                                    # 5: m1 restarted
+           wstep(G4_W1, before=_idle("shop-build-m1")),                                                    # 6: once per change
+           _launch("shop-build-m1-e2e", "helper", G4_W1, parent="shop-build-m1", project="shop"),          # 7
+           wstep(G4_W2, before=_both(_idle("shop-build-m1-e2e", "shop-build-m2"), _attach("shop-build-m2"))),   # 8
+           wstep(G4_W2, before=_leave("shop-build-m2")),                                                   # 9: they left
+           wstep({**G4_W3, "grants_status": 500}, before=_idle("crew-reviewer")),                          # 10: unreadable
+           wstep(G4_W3, before=_both(_idle("crew-reviewer"), _halted)),                                    # 11: halted
+           wstep(G4_W3, before=_both(_resumed, _waiting("crew-reviewer")), after=g4_started_and_differs)],  # 12: blocked on a person
+    checks=[
+        ("stations record the grants they started with", lambda r: r.snap(2)["row"] is True and r.snap(2)["file"] is True),
+        ("a busy station waits for its new grant", lambda r: r.code(4) == 0 and r.snap(4) == 4 and "new permissions" not in r.out(4)),
+        ("between turns it is restarted with the grant",
+         lambda r: r.code(5) == 0 and r.snap(5)["started"] == 5 and "shop-build-m1 has new permissions from Tares" in r.out(5)
+         and '"event":"regranted"' in _events(r).replace(" ", "")),
+        ("in the same conversation", lambda r: bool(r.snap(2)["session"]) and arg_after(_bg_of(r, "shop-build-m1")[1], "--resume") == r.snap(2)["session"]),
+        ("its fresh settings have the grant",
+         lambda r: any(('"%s"' % G4_MERGE) in a and "for project shop, in their own words" in a for a in r.snap(5)["allow"])),
+        ("its prompt quotes the new grant and says to run the refused command again",
+         lambda r: "allowed new permissions in Tares" in g4_prompt(r, "shop-build-m1") and ('"%s"' % G4_MERGE) in g4_prompt(r, "shop-build-m1")
+         and "run it again now" in g4_prompt(r, "shop-build-m1")),
+        ("and only the new one", lambda r: "staging database" not in g4_prompt(r, "shop-build-m1")),
+        ("a busy builder of the same project still waits", lambda r: "shop-build-m2 has new permissions" not in r.out(5)),
+        ("a station whose grants did not change is left alone",
+         lambda r: "crew-reviewer has new permissions" not in r.out(5) and r.snap(5)["started"] == 5),
+        ("once per change", lambda r: r.code(6) == 0 and r.snap(6) == 5),
+        ("a live helper is restarted with its grant",
+         lambda r: "shop-build-m1-e2e has new permissions" in r.out(8) and any(G4_E2E in a for a in allow_of(r, "shop-build-m1-e2e"))),
+        ("a station open in a terminal waits", lambda r: "shop-build-m2 has new permissions" not in r.out(8)),
+        ("and gets it once they leave",
+         lambda r: "shop-build-m2 has new permissions" in r.out(9) and any(G4_E2E in a for a in allow_of(r, "shop-build-m2"))),
+        ("grants that can't be read restart nothing", lambda r: r.code(10) == 0 and r.snap(10) == r.snap(9) and "new permissions" not in r.out(10)),
+        ("nothing restarts while halted", lambda r: r.code(11) == 0 and r.snap(11) == r.snap(9) and "new permissions" not in r.out(11)),
+        ("a station blocked on a person gets the grant at once",
+         lambda r: "crew-reviewer has new permissions" in r.out(12)
+         and any('for all projects, in their own words: "the reviewer may label pull requests"' in a for a in allow_of(r, "crew-reviewer"))),
+        ("busy crew stations still wait", lambda r: r.snap(12)["differs"] and "crew-orchestrator has new permissions" not in r.out(12)),
+    ],
+    covers=["stations record the grants they started with", "a busy station waits for its new grant",
+            "between turns it is restarted with the grant", "in the same conversation", "its fresh settings have the grant",
+            "its prompt quotes the new grant and says to run the refused command again", "and only the new one",
+            "a busy builder of the same project still waits", "a station whose grants did not change is left alone",
+            "once per change", "a live helper is restarted with its grant", "a station open in a terminal waits",
+            "and gets it once they leave", "grants that can't be read restart nothing", "nothing restarts while halted",
+            "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
+))
+
+# crew_test.sh, the same story seen from the person's side: `crew desk` shows a refused command and where to allow it,
+# and `crew status` says a station has new permissions waiting, or waits for the person to leave its session.
+G4_ITEM = {"label": "D1", "blocking": False, "project_name": "shop", "station": "shop-build-m1", "command": "gh pr merge 12 --squash",
+           "question": "shop-build-m1 was refused a command. Allow it?", "recommendation": G4_MERGE, "why": "it merges its own pull request"}
+G4_VIEWS_TARES = {"GET /api/desk?state=open": (200, {"desk": [G4_ITEM]}),
+                  "GET /api/grants?project=shop": (200, {"all": "", "project": G4_PROJECT}),
+                  "GET /api/grants": (200, {"all": ""}),
+                  "GET /api/crew/projects": (200, {"projects": []})}
+
+
+def g4_setup_views(tmp: Path, env: dict) -> None:
+    """The views' crew with two shop builders, both idle, each with a conversation and the grants it started with."""
+    _setup_views(tmp, env)
+    p = tmp / "crew" / "stations.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for name in ("shop-build-m1", "shop-build-m2"):
+        rows[name].update(sessionId="sess-" + name[-2:], grants="1")
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    a = tmp / "claude" / "agents.json"
+    agents = [x for x in json.loads(a.read_text(encoding="utf-8")) if x["id"] != "cccc0003"]
+    agents += [_row("idle", "cccc0003", "shop-build-m1", version="2.1.310"), _row("idle", "dddd0004", "shop-build-m2", version="2.1.310")]
+    a.write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+
+
+def g4_line(r: "Run", i: int, station: str) -> str:
+    return next((x for x in r.out(i).splitlines() if x.startswith(station + " ")), "")
+
+
+scenario(Scenario(
+    name="crew_g4_views",
+    suite="crew",
+    about="crew desk shows the refused command and where to allow it; crew status says a station has new permissions waiting, or waits until someone leaves its session",
+    setup=g4_setup_views,
+    tares=G4_VIEWS_TARES,
+    steps=[Step(["crew", "desk"]),
+           Step(["crew", "status"], before=_attach("shop-build-m2")),
+           Step(["crew", "status"], before=_leave("shop-build-m2"))],
+    checks=[
+        ("crew desk shows the refused command and where to allow it",
+         lambda r: "shop-build-m1 was refused: gh pr merge 12 --squash" in r.out(0) and "allow it in Tares" in r.out(0)),
+        ("status says it has new permissions waiting",
+         lambda r: "NEW PERMISSIONS: the watch restarts it" in g4_line(r, 1, "shop-build-m1")
+         and "NEW PERMISSIONS" in g4_line(r, 2, "shop-build-m2")),
+        ("status says it waits for you to leave it", lambda r: "once you leave its session" in g4_line(r, 1, "shop-build-m2")),
+    ],
+    covers=["crew desk shows the refused command and where to allow it", "status says it has new permissions waiting",
+            "status says it waits for you to leave it"],
+))
+
+# crew_test.sh: a running watch whose plugin is updated starts again on the new version, once the update has settled.
+# The bash suite runs `crew watch` in the foreground from a copy of the kit; a step here cannot be left running, so the
+# watch is the one crew up starts, from a copy of the kit, and the update is a line added to a skill of the copy.
+def g4_setup_kit(tmp: Path, env: dict) -> None:
+    _cc_plugin(tmp, env)
+
+
+def g4_banners(tmp: Path) -> int:
+    try:
+        return (tmp / "crew" / "watch.log").read_text(encoding="utf-8", errors="replace").count("watching the crew")
+    except OSError:
+        return 0
+
+
+def g4_first_banner(tmp: Path) -> dict:
+    g4_wait(6, lambda: g4_banners(tmp) >= 1)
+    time.sleep(1.5)   # the first round has read the kit, so the line below is a change of it
+    return {"banners": g4_banners(tmp)}
+
+
+def g4_update_kit(tmp: Path) -> None:
+    with open(tmp / "kit" / "claude-plugin" / "skills" / "factory-protocol" / "SKILL.md", "a", encoding="utf-8") as f:
+        f.write("# updated\n")
+
+
+def g4_restarted(tmp: Path) -> dict:
+    g4_wait(25, lambda: g4_banners(tmp) >= 2)
+    log = (tmp / "crew" / "watch.log").read_text(encoding="utf-8", errors="replace")
+    return {"banners": g4_banners(tmp), "said": "the plugin was updated" in log, "pid": g4_pid(tmp), "alive": g4_alive(g4_pid(tmp))}
+
+
+scenario(Scenario(
+    name="crew_g4_watch_update",
+    suite="crew",
+    about="a watch that crew up started restarts itself on the new version when the plugin is updated",
+    ignore_calls=_CC_READS,
+    tares=G4_UP_TARES,
+    ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
+    prepare=trust_crew,
+    setup=g4_setup_kit,
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_first_banner),
+           Step(["crew", "status"], env=G4_WATCH_ENV, before=g4_update_kit, after=g4_restarted),
+           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    checks=[
+        ("the watch restarts itself on an updated plugin",
+         lambda r: r.snap(0)["banners"] == 1 and r.snap(1)["said"] and r.snap(1)["banners"] >= 2 and r.snap(1)["alive"]),
+    ],
+    covers=["the watch restarts itself on an updated plugin"],
+))
+# end group g4
+# <<< TR-1159 crew_test.sh checks
 
 
 # settings_*: `settings <station> [role]` prints the settings file a station launches with (cmd_settings, TR-1122).
@@ -4031,6 +6421,1525 @@ scenario(Scenario(
     checks=[("$s may run factory tidy",
              lambda r: all(r.code(i) == 0 and "Bash(factory tidy *)" in _printed(r, i)["permissions"]["allow"] for i in range(3)))],
     covers=["$s may run factory tidy"],
+))
+
+
+# ---------------------------------------------------------------------------------------------
+# crew_update_* and cc_retry_* (TR-964): `crew update` and `crew restart` as commands, and the retry back-off of a
+# Claude Code move that lands on an old spare. The source is claude_update_test.sh. The stations are in stations.json
+# and the sessions in the fake Claude Code's agents.json; a session the command starts gets its version from a one-shot
+# hook of the fake (on-bg), which sets it in agents.json and arms itself again, since the Python engine reads the
+# version from the session list and has no process list to look at. The versions come in turn from spawn-seq (the last
+# one stays). Tares is a fake with the routes a launch reads, and the PUT of the retry list.
+
+CU_OLD, CU_NEW = "2.1.100", "2.1.200"
+CU_RETRY = "PUT /api/crew/claude-retry?crew=crew"
+CU_SETTINGS = {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind", "challenger": False, "builders_max": 3}
+CU_TARES = {"GET /api/crew/settings": (200, {"settings": CU_SETTINGS}), "GET /api/crew/projects": (200, {"projects": []}),
+            "GET /api/grants": (200, {"all": ""}), CU_RETRY: (200, {"ok": True})}
+CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2"}
+# bash reads GET /api/crew/pace before it starts a session; the Python pace is a stub until TR-962, so the
+# read is left out of the list of what was asked (the pace itself is not what these scenarios test).
+# Reads of Tares are left out, as in the cc_move scenarios: the engines make them in a different number and order
+# (the pace is real in Python since TR-962). What is written to Tares, started and stopped is compared.
+CU_NO_PACE = ("GET ",)
+CU_NO_HOOK = "the new session's version is set by the fake Claude Code's on-bg hook, which runs through bash"
+
+CU_HOOK = '''import json, os
+S = os.environ["FAKE_CLAUDE_STATE"]
+me = os.environ["FAKE_ID"]
+seq = open(S + "/spawn-seq").read().split()
+v = seq.pop(0) if len(seq) > 1 else seq[0]
+if seq:
+    open(S + "/spawn-seq", "w").write(" ".join(seq) + "\\n")
+rows = json.load(open(S + "/agents.json"))
+for r in rows:
+    if r["id"] == me:
+        r["version"] = v
+        r["status"] = "idle"
+json.dump(rows, open(S + "/agents.json", "w"), indent=2)
+if os.path.exists(S + "/halt-after-first"):
+    os.unlink(S + "/halt-after-first")
+    open(os.environ["FACTORY_CREW_HOME"] + "/HALT", "w").write('{"reason": "mid"}')
+open(S + "/on-bg", "w").write(open(S + "/on-bg-cmd").read())
+'''
+
+CU_STATIONS = {
+    "crew-orchestrator": {"role": "orchestrator", "id": "aaaa0001", "sessionId": "sess-o"},
+    "crew-reviewer": {"role": "reviewer", "id": "bbbb0002", "sessionId": "sess-r"},
+}
+
+
+def _cu_station(tmp: Path, **over) -> dict:
+    row = {"status": "active", "parent": "", "project": "", "repo": "", "cwd": str(tmp / "work"), "model": "opus", "effort": "high"}
+    row.update(over)
+    return row
+
+
+def _cu_world(stations=None, installed: str = CU_NEW, runs: str = CU_OLD, spawn: str = CU_NEW, states=None):
+    """A setup hook: the crew's stations (each with its session `runs`, idle unless `states` says otherwise), the
+    installed Claude Code, and the versions the sessions it starts get (spawn: words in turn)."""
+    def setup(tmp: Path, env: dict) -> None:
+        crew, state = tmp / "crew", tmp / "claude"
+        (crew / "stations").mkdir(parents=True, exist_ok=True)
+        state.mkdir(parents=True, exist_ok=True)
+        (tmp / "work").mkdir(exist_ok=True)
+        (crew / "crew.json").write_text('{"name": "crew"}\n', encoding="utf-8")
+        recorded = {n: _cu_station(tmp, **over) for n, over in (stations or CU_STATIONS).items()}
+        (crew / "stations.json").write_text(json.dumps(recorded, indent=2) + "\n", encoding="utf-8")
+        rows = []
+        for n, s in recorded.items():
+            if s["status"] == "active":
+                rows.append(_row((states or {}).get(n, "idle"), s["id"], n, version=runs, cwd=str(tmp / "work")))
+        (state / "agents.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+        (state / "version").write_text(installed + "\n", encoding="utf-8")
+        (state / "spawn-seq").write_text(spawn + "\n", encoding="utf-8")
+        hook = state / "hook.py"
+        hook.write_text(CU_HOOK, encoding="utf-8")
+        cmd = f'"{sys.executable}" "{hook}"'
+        (state / "on-bg-cmd").write_text(cmd, encoding="utf-8")
+        (state / "on-bg").write_text(cmd, encoding="utf-8")
+    return setup
+
+
+def _cu_seq(*versions: str):
+    """A `before` hook: the sessions started from now on get these versions in turn."""
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / "spawn-seq").write_text(" ".join(versions) + "\n", encoding="utf-8")
+    return before
+
+
+def _cu_names(r: Run) -> list:
+    return [c["args"][2] for c in bg_calls(r)]
+
+
+def _cu_marks(r: Run, station: str) -> list:
+    s = stations_json(r)[station]
+    return [s.get("cc_failed"), s.get("cc_fails"), s.get("cc_fresh")]
+
+
+def _cu_unmarked(r: Run, station: str) -> bool:
+    s = stations_json(r)[station]
+    return all(s.get(k) is None for k in ("cc_failed", "cc_fails", "cc_retry_at", "cc_fresh"))
+
+
+def _cu_puts(r: Run) -> list:
+    return [json.loads(q["body"]) for q in r.tares.asked(CU_RETRY)]
+
+
+def _cu_resumed(r: Run, station: str) -> list:
+    return ["--resume" in c["args"] for c in bg_calls(r) if c["args"][2] == station]
+
+
+def _cu_with_key(setup):
+    """The same world with the crew's key in its token file, which is what a Tares call sends."""
+    def keyed(tmp: Path, env: dict) -> None:
+        setup(tmp, env)
+        (tmp / "crew" / ".tares-token").write_text("cu-secret\n", encoding="utf-8")
+    return keyed
+
+
+def _cu_is(got, want) -> bool:
+    """got == want; when it is not, the check fails with both in its message."""
+    if got != want:
+        raise AssertionError(f"got {got}, wanted {want}")
+    return True
+
+
+def _cu_wait():
+    """An `after` hook: seconds from now to the station's retry time, to the nearest ten (the two engines run a moment
+    apart), and its failed moves."""
+    def after(tmp: Path):
+        import time
+        s = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["crew-reviewer"]
+        at = s.get("cc_retry_at")
+        return {"in": int(round(int(at) - time.time(), -1)) if at else None, "fails": s.get("cc_fails")}
+    return after
+
+
+def _cu_halt_file(tmp: Path) -> None:
+    (tmp / "claude" / "halt-after-first").write_text("", encoding="utf-8")
+
+
+def _cu_busy_reviewer(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if row["name"] == "crew-reviewer":
+            row["status"] = "busy"
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cu_orchestrator_current(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        if row["name"] == "crew-orchestrator":
+            row["version"] = CU_NEW
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cu_drop_stations(tmp: Path) -> None:
+    (tmp / "crew" / "stations.json").unlink()
+
+
+def _cu_no_claude(tmp: Path) -> None:
+    f = tmp / "noclaude"
+    f.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    f.chmod(0o755)
+
+
+scenario(Scenario(
+    name="crew_update_args",
+    suite="claude_update",
+    about="a --wait that is not a number of seconds, or an argument it does not know, is refused with nothing restarted",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    steps=[Step(["crew", "update", "--wait", "abc"], env=CU_ENV), Step(["crew", "update", "--wait", "1e3"], env=CU_ENV),
+           Step(["crew", "update", "--wait", "-5"], env=CU_ENV), Step(["crew", "update", "--wait", ""], env=CU_ENV),
+           Step(["crew", "update", "--wait", "99999999999999999999"], env=CU_ENV), Step(["crew", "update", "--wait"], env=CU_ENV),
+           Step(["crew", "update", "--bogus"], env=CU_ENV), Step(["crew", "restart", "--now"], env=CU_ENV)],
+    checks=[
+        ("--wait with a word, 1e3, a minus, nothing or 20 digits is refused",
+         lambda r: all(r.code(i) != 0 and "takes a number of seconds" in r.out(i) for i in range(5))),
+        ("--wait with no value is refused with the usage line, nothing restarted",
+         lambda r: r.code(5) != 0 and "takes a number of seconds" in r.out(5) and r.launches() == 0),
+        ("an argument it does not know gets the usage line",
+         lambda r: r.code(6) != 0 and "usage: " in r.out(6) and "crew update [--force] [--wait <seconds>]" in r.out(6)
+         and r.code(7) != 0 and "crew update [--force] [--wait <seconds>]" in r.out(7)),
+    ],
+    covers=["--wait with no value is refused with the usage line, nothing restarted"],
+))
+
+scenario(Scenario(
+    name="crew_update_gates",
+    suite="claude_update",
+    about="halted, no readable Claude Code version and no stations recorded each stop the command, restarting nothing",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    steps=[Step(["crew", "halt", "maintenance"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV),
+           Step(["crew", "restart"], env=CU_ENV), Step(["crew", "resume"], env=CU_ENV),
+           Step(["crew", "update"], env={**CU_ENV, "CLAUDE_BIN": "{tmp}/noclaude"}, before=_cu_no_claude),
+           Step(["crew", "update"], env=CU_ENV, before=_cu_drop_stations)],
+    checks=[
+        ("halted: the command stops and says why, nothing moves",
+         lambda r: r.code(1) != 0 and "the crew is halted (maintenance)" in r.out(1) and r.code(2) != 0
+         and "the crew is halted (maintenance)" in r.out(2) and r.launches() == 0),
+        ("no readable version: crew update stops plainly",
+         lambda r: r.code(4) != 0 and "could not read the Claude Code version" in r.out(4) and r.launches() == 0),
+        ("no stations recorded: it says so and succeeds", lambda r: r.code(5) == 0 and "no stations recorded" in r.out(5)),
+    ],
+    covers=["no readable version: crew update stops plainly"],
+))
+
+scenario(Scenario(
+    name="crew_update_current",
+    suite="claude_update",
+    about="stations already on the installed Claude Code are left; crew restart and --force restart them anyway, the orchestrator last",
+    setup=_cu_world(runs=CU_NEW),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "restart"], env=CU_ENV), Step(["crew", "update", "--force"], env=CU_ENV)],
+    checks=[
+        ("already current: nothing restarted",
+         lambda r: r.code(0) == 0 and f"crew-reviewer already runs Claude Code {CU_NEW}" in r.out(0)
+         and f"every station runs Claude Code {CU_NEW}, one session each" in r.out(0)),
+        ("crew restart restarts every station anyway, the orchestrator last",
+         lambda r: r.code(1) == 0 and _cu_names(r)[:2] == ["crew-reviewer", "crew-orchestrator"]
+         and f"restarting crew-reviewer on Claude Code {CU_NEW}, in the same conversation" in r.out(1)),
+        ("--force is crew restart", lambda r: r.code(2) == 0 and _cu_names(r) == ["crew-reviewer", "crew-orchestrator"] * 2),
+    ],
+    covers=["already current: nothing restarted"],
+))
+
+scenario(Scenario(
+    name="crew_update_moves",
+    suite="claude_update",
+    about="stations behind move in the same conversation, the others first and the orchestrator last; a second run finds none behind",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV)],
+    checks=[
+        ("every station runs the new version, the orchestrator last",
+         lambda r: r.code(0) == 0 and _cu_names(r) == ["crew-reviewer", "crew-orchestrator"]
+         and f"every station runs Claude Code {CU_NEW}, one session each" in r.out(0)),
+        ("each is resumed in its own conversation",
+         lambda r: [c["args"][c["args"].index("--resume") + 1] for c in bg_calls(r)] == ["sess-r", "sess-o"]),
+        ("no mark is left on a station that got there", lambda r: _cu_unmarked(r, "crew-reviewer") and _cu_unmarked(r, "crew-orchestrator")),
+        ("a second run finds every station on it", lambda r: r.code(1) == 0 and len(_cu_names(r)) == 2),
+        ("Tares is told the retry list, empty", lambda r: _cu_puts(r)[0] == {"stations": {}}),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_classify",
+    suite="claude_update",
+    about="a stopped station and one with no conversation are named, not restarted; the one that has no conversation fails the run",
+    setup=_cu_world(stations={**CU_STATIONS, "crew-releaser": {"role": "releaser", "id": "cccc0003"},
+                              "crew-builder": {"role": "builder", "id": "dddd0004", "sessionId": "sess-b", "project": "shop"}},
+                    states={"crew-builder": "stopped"}),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV)],
+    checks=[
+        ("a stopped station waits for the watch",
+         lambda r: "crew-builder is stopped; it starts on Claude Code" in r.out(0) and "crew-builder" not in _cu_names(r)),
+        ("a station with no conversation is named and fails the run",
+         lambda r: r.code(0) != 0 and "crew-releaser has no conversation to resume" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: crew-releaser" in r.out(0)),
+        ("the others still move, the orchestrator last", lambda r: _cu_names(r) == ["crew-reviewer", "crew-orchestrator"]),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_wait",
+    suite="claude_update",
+    about="a busy station is waited for, then given up on at --wait; the others still move and the run fails naming it",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
+    checks=[
+        ("it says it waits, once", lambda r: r.out(0).count("waiting for crew-reviewer to be idle (it is working)") == 1),
+        ("past --wait it gives up and fails naming the station",
+         lambda r: r.code(0) != 0 and "gave up waiting for crew-reviewer to be idle" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)),
+        ("the busy station is not restarted, the orchestrator is", lambda r: _cu_names(r) == ["crew-orchestrator"]),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_self",
+    suite="claude_update",
+    about="run from the orchestrator it leaves that station out and says how it moves; --force says it needs another session",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}),
+           Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}, before=_cu_orchestrator_current),
+           Step(["crew", "update", "--force"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"})],
+    checks=[
+        ("from the orchestrator: the others move, the orchestrator is left, and the way it moves is said",
+         lambda r: r.code(0) == 0 and _cu_names(r)[:1] == ["crew-reviewer"] and "crew-orchestrator" not in _cu_names(r)[:1]
+         and "crew-orchestrator, which ran this command, moves when" in r.out(0)),
+        ("a caller that is already on the version is not restarted and not told anything about its move",
+         lambda r: r.code(1) == 0 and "crew-orchestrator already runs Claude Code" in r.out(1)
+         and "every station runs Claude Code" in r.out(1) and "which ran this command" not in r.out(1)
+         and "restarting" not in r.out(1)),
+        ("--force restarts the others, leaves the caller and says it needs another session",
+         lambda r: r.code(2) == 0 and _cu_names(r) == ["crew-reviewer", "crew-reviewer"]
+         and "can only be restarted from another session" in r.out(2)),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="crew_update_dup",
+    suite="claude_update",
+    about="two sessions under one station name are reported and fail the run",
+    setup=_cu_world(runs=CU_NEW),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    steps=[Step(["crew", "update"], env=CU_ENV, before=lambda tmp: _cu_add_dup(tmp)), Step(["crew", "update"], env=CU_ENV, before=lambda tmp: _cu_drop_dup(tmp))],
+    checks=[
+        ("two sessions under one name: reported, the update fails",
+         lambda r: r.code(0) != 0 and "TWO SESSIONS named crew-reviewer" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: two-sessions" in r.out(0)),
+        ("one session each: it passes", lambda r: r.code(1) == 0 and "one session each" in r.out(1)),
+    ],
+    covers=["two sessions under one name: reported, the update fails", "one session each: it passes"],
+))
+
+
+def _cu_add_dup(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    rows.append({"id": "dup00001", "name": "crew-reviewer", "state": "working", "status": "idle", "sessionId": "other", "pid": 49999,
+                 "cwd": "/", "version": CU_NEW})
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+def _cu_drop_dup(tmp: Path) -> None:
+    p = tmp / "claude" / "agents.json"
+    rows = [x for x in json.loads(p.read_text(encoding="utf-8")) if x["id"] != "dup00001"]
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+scenario(Scenario(
+    name="crew_update_halt_mid",
+    suite="claude_update",
+    about="a halt that comes after the first restart stops the run before the orchestrator, and says so",
+    setup=_cu_world(),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV, before=_cu_halt_file)],
+    checks=[("halted in the middle: crew update stops and says so",
+             lambda r: r.code(0) != 0 and "the crew was halted; nothing more was restarted" in r.out(0)
+             and _cu_names(r) == ["crew-reviewer"])],
+    covers=[],
+))
+
+# cc_retry_*: a station whose restarts come back on an old spare is marked, retried after a back-off that doubles up to a
+# cap, and the list of them goes to Tares (PUT /api/crew/claude-retry). crew update tries at once whatever the back-off says.
+
+# A start in bash reads the grants and the projects again on every try; the Python side reads them once for the
+# run. Neither read changes what is done, so the retry scenarios leave them out of the list of what was asked.
+CU_RETRY_ENV = CU_ENV
+
+scenario(Scenario(
+    name="cc_retry_marks",
+    suite="claude_update",
+    about="every restart on an old spare: three tries in the conversation, one new conversation, then the station is marked and "
+          "Tares gets the list; a second run tries at once and doubles the wait; a run that gets there clears the marks",
+    setup=_cu_with_key(_cu_world(spawn=CU_OLD)),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()),
+           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait())],
+    checks=[
+        ("old spares every time: three resumed tries then a new conversation, for each station",
+         lambda r: _cu_names(r)[:8] == ["crew-reviewer"] * 4 + ["crew-orchestrator"] * 4
+         and _cu_resumed(r, "crew-reviewer")[:4] == [True, True, True, False]),
+        ("the run says the watch tries again, and fails naming both",
+         lambda r: r.code(0) != 0 and "the watch tries again in 10 min" in r.out(0)
+         and f"not every station runs Claude Code {CU_NEW}: crew-reviewer crew-orchestrator" in r.out(0)),
+        ("it is marked: the version, one failed move, the new conversation done, a retry time ten minutes on",
+         lambda r: r.snap(0)["fails"] == 1 and 540 < r.snap(0)["in"] <= 600),
+        ("Tares has the list, with a key",
+         lambda r: any(sorted(p["stations"]) == ["crew-orchestrator", "crew-reviewer"] for p in _cu_puts(r))
+         and _cu_is(_cu_puts(r)[0]["stations"]["crew-reviewer"], {"target": CU_NEW, "fails": 1, "next_at": _cu_puts(r)[0]["stations"]["crew-reviewer"]["next_at"]})
+         and _cu_is([q["auth"] for q in r.tares.asked(CU_RETRY)], [True] * len(r.tares.asked(CU_RETRY)))),
+        ("crew update ignores the back-off: it tries again at once and fails again",
+         lambda r: r.code(1) != 0 and "the watch tries again in 20 min" in r.out(1)),
+        ("no second new conversation: three more tries in the old one",
+         lambda r: _cu_is(_cu_resumed(r, "crew-reviewer"), [True, True, True, False, True, True, True, True])),
+        ("the wait doubles: two failed moves, a retry time twenty minutes on",
+         lambda r: r.snap(1)["fails"] == 2 and 1140 < r.snap(1)["in"] <= 1200),
+        ("the second list says two failures",
+         lambda r: any(p["stations"].get("crew-reviewer", {}).get("fails") == 2 for p in _cu_puts(r))),
+        ("once a spare is not in the way every mark is cleared, here and on Tares",
+         lambda r: r.code(2) == 0 and _cu_unmarked(r, "crew-reviewer") and _cu_unmarked(r, "crew-orchestrator")
+         and _cu_is(_cu_puts(r)[-1], {"stations": {}})),
+    ],
+    covers=["crew update ignores the backoff, tries the orchestrator again and says the watch retries",
+            "the failure marks are cleared, here and on Tares"],
+))
+
+scenario(Scenario(
+    name="cc_retry_cap",
+    suite="claude_update",
+    about="FACTORY_CC_BACKOFF sets the first wait and FACTORY_CC_BACKOFF_MAX the cap it doubles up to",
+    setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
+           for _ in range(3)],
+    checks=[
+        ("the first wait is FACTORY_CC_BACKOFF", lambda r: r.snap(0)["fails"] == 1 and 90 < r.snap(0)["in"] <= 100),
+        ("the second doubles, up to the cap", lambda r: r.snap(1)["fails"] == 2 and 140 < r.snap(1)["in"] <= 150),
+        ("the third stays at the cap", lambda r: r.snap(2)["fails"] == 3 and 140 < r.snap(2)["in"] <= 150),
+        ("the Tares list follows", lambda r: [p["stations"]["crew-reviewer"]["fails"] for p in _cu_puts(r)] == [1, 2, 3]),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="cc_retry_tries",
+    suite="claude_update",
+    about="FACTORY_CC_TRIES is the number of tries in the conversation before the new one",
+    setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
+    tares=CU_TARES,
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "1"}),
+           Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "5"})],
+    checks=[
+        ("one try, then the new conversation", lambda r: _cu_resumed(r, "crew-reviewer")[:2] == [True, False]),
+        ("five tries in the conversation, and the new conversation is not made again",
+         lambda r: _cu_resumed(r, "crew-reviewer")[2:] == [True] * 5),
+    ],
+    covers=[],
+))
+
+scenario(Scenario(
+    name="cc_retry_put_fails",
+    suite="claude_update",
+    about="a Tares that refuses the retry list does not change what the command says or does",
+    setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
+    tares={**CU_TARES, CU_RETRY: (500, "boom")},
+    ignore_asked=CU_NO_PACE,
+    not_windows=CU_NO_HOOK,
+    steps=[Step(["crew", "update"], env=CU_ENV)],
+    checks=[("the run fails as it would, naming the station and the retry",
+             lambda r: r.code(0) != 0 and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)
+             and "the watch tries again in 10 min" in r.out(0) and len(r.tares.asked(CU_RETRY)) == 1)],
+    covers=[],
+))
+
+
+# usage_test.sh, the watch's readings (TR-1163)
+# The watch answers the Crew page's asks for a /context reading and reads the plan's limits between its rounds
+# (readings_support.py runs it and stops it once the fake Tares has served the asks route a number of times).
+# The fake Tares below does what Tares does: an ask goes away once the reading comes in.
+
+class _UsageWatchRoutes(dict):
+    """The routes of a fake Tares that lists the Crew page's asks; the reading that is posted answers the ask of the
+    orchestrator's own session, and /ticks says how many times the asks were listed."""
+
+    def __init__(self, routes, asks):
+        super().__init__(routes)
+        self.asks = list(asks)
+        self.listed = 0
+
+    def get(self, key, default=None):
+        if key == "GET /api/crew/context/asks":
+            self.listed += 1
+            return (200, {"asks": self.asks})
+        if key == "GET /ticks":
+            return (200, {"n": self.listed})
+        if key == "POST /ingest/claude_code":
+            self.asks = [a for a in self.asks if a["session"] != "sess-orch-1"]
+        return super().get(key, default)
+
+
+# What the rounds of the watch do around the readings (both engines do their own: pace, retry, settings) is left out
+# of the comparison; the asks listed and the readings posted are in it.
+_UW_ROUND = (("agents",), ("--version",))
+_UW_ASKED = ("GET /ticks", "GET /health", "GET /api/crew/settings", "GET /api/crew/pace", "PUT ")
+
+
+def _usage_watch_asks(*asks):
+    def prepare(r):
+        r.tares.routes = _UsageWatchRoutes(r.tares.routes, [{"station": s, "session": x} for s, x in asks])
+    return prepare
+
+
+def _usage_asks_left(r) -> list:
+    return [(a["station"], a["session"]) for a in r.tares.routes.asks]
+
+
+def _usage_calls_with(r, needle: str) -> list:
+    return [c for c in r.calls() if needle in c["args"]]
+
+
+def _usage_posted(r, kind: str) -> list:
+    return [b for b in (json.loads(q["body"]) for q in r.tares.asked("POST /ingest/claude_code")) if b.get("type") == kind]
+
+
+scenario(Scenario(
+    name="usage_watch_readings",
+    suite="usage",
+    about="the watch reads a station's /context when the Crew page asks, leaves an ask for another station alone, and reads no plan when told not to",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(("crew-orchestrator", "sess-orch-1"), ("foreign-station", "s-foreign")),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"], env={"FACTORY_PLAN_EVERY": "0"})],
+    checks=[
+        ("the watch reads what the Crew page asked for",
+         lambda r: r.code(0) == 0 and ("crew-orchestrator", "sess-orch-1") not in _usage_asks_left(r)
+         and len(_usage_calls_with(r, "/context")) == 1 and len(_usage_posted(r, "session_context")) == 1),
+        ("and leaves another crew's ask alone",
+         lambda r: _usage_asks_left(r) == [("foreign-station", "s-foreign")]
+         and not any("s-foreign" in c["args"] for c in r.calls())),
+        ("and reads no plan when told not to",
+         lambda r: not _usage_calls_with(r, "/usage") and not _usage_posted(r, "claude_plan")),
+    ],
+    covers=["the watch reads what the Crew page asked for", "and leaves another crew's ask alone",
+            "and reads no plan when told not to"],
+))
+
+scenario(Scenario(
+    name="usage_watch_other_crew",
+    suite="usage",
+    about="an ask for a station of the same name that another crew plays (another session) is not read",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(("crew-orchestrator", "s-other-crew")),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"], env={"FACTORY_PLAN_EVERY": "0"})],
+    checks=[
+        ("an ask for the same name in another crew is left alone",
+         lambda r: r.code(0) == 0 and _usage_asks_left(r) == [("crew-orchestrator", "s-other-crew")]
+         and not _usage_calls_with(r, "/context")),
+    ],
+    covers=["an ask for the same name in another crew is left alone"],
+))
+
+scenario(Scenario(
+    name="usage_watch_plan",
+    suite="usage",
+    about="the watch reads the plan's limits at its first tick and sends them; with no plan to read it says so once",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"]), Step(["watch", "6"], env={"FAKE_CLAUDE_NO_PLAN": "1"})],
+    checks=[
+        ("the first tick reads the plan and sends it once",
+         lambda r: r.code(0) == 0 and len(_usage_posted(r, "claude_plan")) == 1 and "could not read" not in r.out(0)),
+        ("with no plan to read it is said once, and said plainly",
+         lambda r: r.code(1) == 0 and r.out(1).count("could not read the plan's limits (") == 1
+         and "plan says why); trying again every 600s" in r.out(1)),
+        ("and each watch reads the plan once",
+         lambda r: len(_usage_calls_with(r, "/usage")) == 2),
+    ],
+    covers=[],
+))
+
+
+# crewname_test.sh (TR-1162)
+# The crew's name: refused names, the roster's first line, spawn and adoption under each crew's names, the hooks
+# that follow the crew. Steps that need a Tares ask a fake one for the projects, and `crew up` the stand-in.
+
+CN_ENV = {"FACTORY_CREW_HOME": "{tmp}/empty"}
+
+
+def _cn_bad_names() -> list:
+    return ["Bad_Name", "-x", "UPPER", "a b", "x-build-y", "build", "a" * 32]
+
+
+scenario(Scenario(
+    name="crewname_names",
+    suite="crewname",
+    about="the name is read before anything else: a roster of an empty home says which crew it is; a bad name is refused by any command",
+    steps=[
+        Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "a"}),
+        *[Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": bad}) for bad in _cn_bad_names()],
+        Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "a" * 31}),
+        Step(["status"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "Bad_Name"}),
+    ],
+    checks=[
+        ("FACTORY_CREW_NAME=a: roster names a-orchestrator",
+         lambda r: r.out(0).splitlines()[0] == "crew: a (orchestrator: a-orchestrator)"),
+        ("crew name '$bad' is refused",
+         lambda r: all(r.code(i + 1) != 0 and "is not valid: it is 1 to 31 characters" in r.out(i + 1)
+                       for i in range(len(_cn_bad_names())))),
+        ("a 31 character name is accepted",
+         lambda r: r.out(-2).splitlines()[0] == "crew: %s (orchestrator: %s-orchestrator)" % ("a" * 31, "a" * 31)),
+        ("a command other than roster refuses an invalid crew name",
+         lambda r: r.code(-1) != 0 and "is not valid: it is 1 to 31 characters" in r.out(-1)),
+    ],
+    covers=["FACTORY_CREW_NAME=a: roster names a-orchestrator", "crew name '$bad' is refused",
+            "a 31 character name is accepted", "a command other than roster refuses an invalid crew name"],
+))
+
+
+def _cn_url(extra, up: bool):
+    """A step's env: the crew `extra` names, and either the stand-in Tares (`crew up`) or the fake one that holds the projects."""
+    def env(r):
+        base = extra(r) if callable(extra) else dict(extra)
+        if up:
+            return {**base, "TARESD_URL": r.stand_in.url, "TARES_FACTORY_MCP_URL": r.stand_in.mcp_url}
+        return {**base, "TARESD_URL": r.tares.url, "TARES_FACTORY_MCP_URL": r.tares.url + "/mcp"}
+    return env
+
+
+def _cn_default(r):
+    return {}
+
+
+def _cn_setup(tmp: Path, env: dict) -> None:
+    _mkrepo(tmp, "shop")
+
+
+def _cn_stand_in_releaser(r):
+    """The releaser is only started when the crew asks for one: record a stand-in so the helper path can run."""
+    home = r.tmp / "crew-a"
+    f = home / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc["a-releaser"] = {"role": "releaser", "status": "active", "project": "", "repo": "", "cwd": str(home), "model": "", "effort": ""}
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def _cn_add_sessions(*rows):
+    """A session the crew did not record, listed by the fake Claude Code."""
+    def run_before(r):
+        f = r.state / "agents.json"
+        cur = json.loads(f.read_text(encoding="utf-8"))
+        for row in rows:
+            cur.append({**row, "cwd": str(r.tmp / "shop")})
+        f.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+    return run_before
+
+
+def _cn_agents(r) -> list:
+    try:
+        return json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+
+def _cn_sent(r, station: str, text: str) -> bool:
+    return any(c["args"][2:3] == [station] and any(text in a for a in c["args"]) for c in r.calls() if "--bg" in c["args"])
+
+
+_CN_TARES = {
+    "GET /api/crew/settings": (200, {"settings": {**SAVED, "releaser": False, "builders_max": 5}}),
+    "GET /api/crew/projects": (200, {"projects": [
+        {"id": "uc_shop", "name": "shop", "repos": [{"path": "{tmp}/shop"}]},
+        {"id": "uc_atools", "name": "a-tools", "repos": [{"path": "{tmp}/shop"}]}]}),
+    "GET /api/grants": (200, {"all": ""}),
+    "POST /mcp": (200, {"result": {"serverInfo": {"name": "tares"}}}),
+}
+
+_CN_REPO = "{tmp}/shop"
+_CN_A = crew_at_unnamed("a")
+_CN_B = crew_at_unnamed("b")
+CN_ORCH_LINE = "a-orchestrator\torchestrator\t\tworking\t"
+
+scenario(Scenario(
+    name="crewname_stations",
+    suite="crewname",
+    about="the default crew and two named crews build the same project side by side, each under its own names; the roster adopts only its own",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    tares=_CN_TARES,
+    setup=_cn_setup,
+    prepare=trust_all,
+    steps=[
+        Step(["crew", "up", "--yes"], env=_cn_url(_cn_default, True), stdin=""),                                  # 0
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 1
+        Step(["spawn", "helper", "crew-reviewer", "probe", "look"], env=_cn_url(_cn_default, False)),              # 2
+        Step(["crew", "up", "--yes"], env=_cn_url(crew_at("a"), True), stdin=""),                                  # 3
+        Step(["crew", "up", "--yes"], env=_cn_url(crew_at("b"), True), stdin=""),                                  # 4
+        Step(["roster"], env=_cn_url(_CN_A, False)),                                                               # 5
+        Step(["roster"], env=_cn_url(_CN_B, False)),                                                               # 6
+        Step(["settings", "a-reviewer", "reviewer"], env=_cn_url(_CN_A, False)),                                   # 7
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 8
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_CN_A, False)),                  # 9
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_CN_B, False)),                  # 10
+        Step(["roster"], env=_cn_url(_CN_A, False)),                                                               # 11
+        Step(["spawn", "helper", "a-reviewer", "probe", "look"], env=_cn_url(_CN_A, False)),                       # 12
+        Step(["spawn", "builder", "a-tools", "m1", _CN_REPO, "x"], env=_cn_url(_CN_A, False)),                     # 13
+        Step(["spawn", "releaser-helper", "probe", "look"], env=_cn_url(_CN_A, False), run_before=_cn_stand_in_releaser),   # 14
+        Step(["roster"], env=_cn_url(_CN_A, False), run_before=_cn_add_sessions(
+            {"id": "0000a002", "name": "a-shop-build-m2", "state": "working", "sessionId": "s-a002", "startedAt": 98, "pid": 4242},
+            {"id": "0000b009", "name": "b-shop-build-m9", "state": "working", "sessionId": "s-b009", "startedAt": 99, "pid": 4243})),  # 15
+        Step(["roster"], env=_cn_url(_cn_default, False), run_before=_cn_add_sessions(
+            {"id": "0000d005", "name": "shop-build-m5", "state": "working", "sessionId": "s-d005", "startedAt": 100, "pid": 4244})),  # 16
+    ],
+    checks=[
+        ("default crew: a builder is <project>-build-<slug>", lambda r: r.station("shop-build-m1", "role") == "builder"),
+        ("default crew: its parent is crew-orchestrator",
+         lambda r: env_of(r, "shop-build-m1", "FACTORY_PARENT") == "crew-orchestrator"),
+        ("default crew: its env carries the crew",
+         lambda r: env_of(r, "shop-build-m1", "FACTORY_CREW") == "crew"
+         and env_of(r, "shop-build-m1", "FACTORY_ORCHESTRATOR") == "crew-orchestrator"),
+        ("default crew: a helper keeps its suffix rule", lambda r: r.station("crew-reviewer-probe", "parent") == "crew-reviewer"),
+        ("default crew: the boot prompt sends READY to crew-orchestrator",
+         lambda r: _cn_sent(r, "shop-build-m1", "send crew-orchestrator READY")),
+        ("crew $c: roster names the crew (a)", lambda r: r.out(5).splitlines()[0] == "crew: a (orchestrator: a-orchestrator)"),
+        ("crew $c: roster names the crew (b)", lambda r: r.out(6).splitlines()[0] == "crew: b (orchestrator: b-orchestrator)"),
+        ("crew $c: roster lists its orchestrator working (a)", lambda r: CN_ORCH_LINE in r.out(5).replace("\r", "")),
+        ("crew $c: roster lists its orchestrator working (b)", lambda r: "b-orchestrator\torchestrator\t\tworking\t" in r.out(6)),
+        ("crew.json names the crew with no variable",
+         lambda r: json.loads(r.results[7]["stdout"]).get("env", {}).get("FACTORY_CREW") == "a"),
+        ("crew a: the builder is a-shop-build-m1",
+         lambda r: r.station("a-shop-build-m1", "role", home_of(r, "a")) == "builder"
+         and r.station("shop-build-m1", "role", home_of(r, "a")) == ""),
+        ("crew a: its parent is a-orchestrator",
+         lambda r: r.station("a-shop-build-m1", "parent", home_of(r, "a")) == "a-orchestrator"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_PARENT") == "a-orchestrator"),
+        ("crew a: its env carries the crew and the orchestrator",
+         lambda r: env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_CREW") == "a"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_ORCHESTRATOR") == "a-orchestrator"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_STATION") == "a-shop-build-m1"),
+        ("crew a: its boot prompt sends READY to a-orchestrator",
+         lambda r: _cn_sent(r, "a-shop-build-m1", "send a-orchestrator READY")),
+        ("crew b: the same project builds as b-shop-build-m1, beside a's",
+         lambda r: r.station("b-shop-build-m1", "role", home_of(r, "b")) == "builder"
+         and sum(1 for n in agent_names(r) if n in ("a-shop-build-m1", "b-shop-build-m1")) == 2),
+        ("the default crew keeps its builder name beside them",
+         lambda r: r.station("shop-build-m1", "role") == "builder" and agent_names(r).count("shop-build-m1") == 1),
+        ("crew a: roster lists its builder and not b's",
+         lambda r: "a-shop-build-m1\tbuilder\tshop\tworking\t" in r.out(11) and "b-shop-build-m1" not in r.out(11)),
+        ("crew a: a helper of a-reviewer keeps its suffix rule and parent",
+         lambda r: r.station("a-reviewer-probe", "parent", home_of(r, "a")) == "a-reviewer"
+         and r.station("a-reviewer-probe", "role", home_of(r, "a")) == "helper"),
+        ("crew a: a helper of a-reviewer is told to load station-reviewer",
+         lambda r: any(c["args"][2:3] == ["a-reviewer-probe"]
+                       and any("station-reviewer" in x and "send a-reviewer DONE" in x for x in c["args"])
+                       for c in r.calls() if "--bg" in c["args"])),
+        ("crew a: a project can not be named like the crew",
+         lambda r: "can't start with \"a\"" in r.out(13) and r.station("a-tools-build-m1", "role", home_of(r, "a")) == ""),
+        ("crew a: a releaser helper hangs under a-releaser",
+         lambda r: r.station("a-releaser-probe", "parent", home_of(r, "a")) == "a-releaser"
+         and r.station("a-releaser-probe", "role", home_of(r, "a")) == "helper"),
+        ("crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator",
+         lambda r: r.station("a-shop-build-m2", "role", home_of(r, "a")) == "builder"
+         and r.station("a-shop-build-m2", "parent", home_of(r, "a")) == "a-orchestrator"
+         and r.station("a-shop-build-m2", "project", home_of(r, "a")) == "shop"),
+        ("crew a: b's unrecorded builder is not adopted", lambda r: r.station("b-shop-build-m9", "role", home_of(r, "a")) == ""),
+        ("default crew: an unrecorded shop-build-m5 is adopted",
+         lambda r: r.station("shop-build-m5", "role") == "builder" and r.station("shop-build-m5", "parent") == "crew-orchestrator"),
+        ("default crew: a- and b- builders on the same repo are not adopted",
+         lambda r: r.station("a-shop-build-m2", "role") == "" and r.station("b-shop-build-m9", "role") == ""
+         and r.station("a-shop-build-m1", "role") == ""),
+    ],
+    covers=["crew $c: roster names the crew", "crew $c: roster lists its orchestrator working",
+            "default crew: a builder is <project>-build-<slug>", "default crew: its parent is crew-orchestrator",
+            "default crew: its env carries the crew", "default crew: a helper keeps its suffix rule",
+            "default crew: the boot prompt sends READY to crew-orchestrator", "crew.json names the crew with no variable",
+            "crew a: the builder is a-shop-build-m1", "crew a: its parent is a-orchestrator",
+            "crew a: its env carries the crew and the orchestrator", "crew a: its boot prompt sends READY to a-orchestrator",
+            "crew b: the same project builds as b-shop-build-m1, beside a's", "the default crew keeps its builder name beside them",
+            "crew a: roster lists its builder and not b's", "crew a: a helper of a-reviewer keeps its suffix rule and parent",
+            "crew a: a helper of a-reviewer is told to load station-reviewer", "crew a: a project can not be named like the crew",
+            "crew a: a releaser helper hangs under a-releaser",
+            "crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator", "crew a: b's unrecorded builder is not adopted",
+            "default crew: an unrecorded shop-build-m5 is adopted",
+            "default crew: a- and b- builders on the same repo are not adopted"],
+))
+
+
+CN_HOOKS = "crewname_support.py"
+_CN_MERGE = "gh pr merge 3"
+_CN_UNDO = "kubectl --context kind-factory rollout " + "undo deploy/app"
+
+
+def _cn_guard(parent: str, command: str, crew: str) -> Step:
+    return Step(["guard", parent, command, crew])
+
+
+def _cn_start(parent: str, crew: str) -> Step:
+    return Step(["start", parent, crew])
+
+
+scenario(Scenario(
+    name="crewname_hooks",
+    suite="crewname",
+    about="the hooks follow the crew: a helper of a-reviewer is a reviewer, a helper of a builder is a builder; the plugin sends the crew's name",
+    driver=CN_HOOKS,
+    steps=[
+        _cn_guard("a-releaser", _CN_MERGE, "a"),                                                     # 0
+        _cn_guard("a-releaser", _CN_UNDO, "a"),                                                      # 1
+        _cn_guard("a-shop-build-m1", "factory restart a-reviewer", "a"),                             # 2
+        _cn_guard("crew-releaser", _CN_MERGE, ""),                                                   # 3
+        _cn_guard("crew-releaser-build-x", _CN_MERGE, ""),                                           # 4
+        _cn_guard("a-releaser-build-x", _CN_MERGE, "a"),                                             # 5
+        _cn_start("a-reviewer", "a"),                                                                # 6
+        _cn_start("a-shop-build-m1", "a"),                                                           # 7
+        _cn_start("crew-releaser", ""),                                                              # 8
+        _cn_start("crew-reviewer-build-x", ""),                                                      # 9
+        _cn_start("a-reviewer-build-x", "a"),                                                        # 10
+    ],
+    checks=[
+        ("guard: a helper of a-releaser acts as a releaser (named crew)",
+         lambda r: r.out(0).strip() == "deny" and r.out(1).strip() == "allow"),
+        ("guard: a helper of a-shop-build-m1 acts as a builder", lambda r: r.out(2).strip() == "deny"),
+        ("guard: the default crew still works with no FACTORY_CREW", lambda r: r.out(3).strip() == "deny"),
+        ("guard: a helper whose name has -build- under crew-releaser is still a releaser's",
+         lambda r: r.out(4).strip() == "deny" and r.out(5).strip() == "deny"),
+        ("session start: a helper of a-reviewer loads station-reviewer (named crew)",
+         lambda r: r.out(6).strip() == "station-reviewer" and r.out(7).strip() == "station-builder"
+         and r.out(8).strip() == "station-releaser"),
+        ("session start: a helper whose name has -build- under crew-reviewer loads station-reviewer",
+         lambda r: r.out(9).strip() == "station-reviewer" and r.out(10).strip() == "station-reviewer"),
+        ("the plugin sends X-Tares-Crew from FACTORY_CREW",
+         lambda r: json.loads((ROOT / "claude-plugin" / ".mcp.json").read_text(encoding="utf-8"))
+         ["mcpServers"]["tares"]["headers"]["X-Tares-Crew"] == "${FACTORY_CREW:-}"),
+    ],
+    covers=["guard: a helper of a-releaser acts as a releaser (named crew)", "guard: a helper of a-shop-build-m1 acts as a builder",
+            "guard: the default crew still works with no FACTORY_CREW",
+            "guard: a helper whose name has -build- under crew-releaser is still a releaser's",
+            "session start: a helper of a-reviewer loads station-reviewer (named crew)",
+            "session start: a helper whose name has -build- under crew-reviewer loads station-reviewer",
+            "the plugin sends X-Tares-Crew from FACTORY_CREW"],
+))
+
+
+# spec_test.sh (TR-1162)
+# The parts of the suite that ran on a real Tares: the fixtures are checked against the fake Tares the scenarios
+# use (the same projects as spec_contributor, read over HTTP as a command would), and the session-start hook and
+# the skill text are the plugin's own files, so both engines run them the same (spec_hook_support.py).
+
+SPEC_ASHISH_VIEW = {"projects": [dict(p, kind="software_factory") if p["name"] == "Secret plan" else p
+                                 for p in SPEC_PROJECTS["projects"]]}
+
+
+def _spec_get(r: Run, path: str) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.tares.url + path, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _spec_row(doc: dict, name: str) -> dict:
+    return [p for p in doc["projects"] if p["name"] == name][0]
+
+
+_spec_scenario(
+    "spec_fixtures", "the people and projects the contributor scenarios rely on are what their labels say",
+    {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/projects?viewer=ashish": (200, SPEC_ASHISH_VIEW),
+     "GET /api/whoami": (200, {"person": {"id": "u_kir", "name": "Kiran"}})},
+    [_sstep("spec", "--project", "Secret plan")],
+    [("fixture: Ashish leads Acme web, Nobody leads has no lead",
+      lambda r: (_spec_row(_spec_get(r, "/api/projects"), "Acme web")["lead"] or {}).get("name") == "Ashish"
+      and _spec_row(_spec_get(r, "/api/projects"), "Nobody leads").get("lead") is None),
+     ("fixture: Plain notes is led by Ashish and is not a software factory project",
+      lambda r: _spec_row(_spec_get(r, "/api/projects"), "Plain notes")["lead"]["name"] == "Ashish"
+      and _spec_row(_spec_get(r, "/api/projects"), "Plain notes").get("kind") != "software_factory"),
+     ("fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind",
+      lambda r: (lambda row: [row.get("hidden"), row["lead"]["name"], row.get("kind", "none")])(
+          _spec_row(_spec_get(r, "/api/projects"), "Secret plan")) == [True, "Ashish", "none"]
+      and _spec_row(_spec_get(r, "/api/projects?viewer=ashish"), "Secret plan").get("kind") == "software_factory")],
+    ["fixture: Ashish leads Acme web, Nobody leads has no lead",
+     "fixture: Plain notes is led by Ashish and is not a software factory project",
+     "fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind"])
+
+
+def _hookstep(op: str, source: str, *sets: str) -> Step:
+    return Step([op, source, *sets])
+
+
+def _ctx(r: Run, i: int) -> str:
+    return r.out(i)
+
+
+def _contributor_ok(ctx: str) -> bool:
+    return (re.search(r"contributes to the Tares project .Acme web. led by someone else", ctx) is not None
+            and re.search(r"spec-project. skill, section Contributor", ctx) is not None
+            and "Do not build tickets" in ctx and "`session` skill" not in ctx
+            and re.search(r"re-read the project.s tickets", ctx) is None)
+
+
+def _plain_bound_ok(ctx: str) -> bool:
+    return (re.search(r"Follow the .session. skill|load the .session. skill again", ctx) is not None
+            and "Contributor" not in ctx)
+
+
+def _contributor_section() -> str:
+    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "SKILL.md").read_text(encoding="utf-8")
+    start = text.index("\n## Contributor")
+    end = text.index("\n## Light mode", start)
+    return re.sub(r"[ \n]+", " ", text[start:end])
+
+
+_CONTRIB = ("TARES_PROJECT=Acme web", "TARES_SESSION_KIND=contributor")
+
+scenario(Scenario(
+    name="spec_hooks",
+    suite="spec",
+    about="the session-start hook of a contributor session says to follow the Contributor section, a plain bound one the session skill",
+    driver="spec_hook_support.py",
+    steps=[_hookstep("hook", "startup", *_CONTRIB), _hookstep("hook", "compact", *_CONTRIB),
+           _hookstep("hook", "resume", *_CONTRIB),
+           _hookstep("hook", "startup", "TARES_PROJECT=Acme web"), _hookstep("hook", "compact", "TARES_PROJECT=Acme web"),
+           _hookstep("bare", "startup", "TARES_SESSION_KIND=contributor", "CLAUDE_PLUGIN_ROOT={tmp}")],
+    checks=[
+        ("contributor hook ($src): spec-project, section Contributor, no building",
+         lambda r: all(_contributor_ok(_ctx(r, i)) for i in (0, 1, 2))),
+        ("contributor hook: no resume text on a fresh start", lambda r: "resumed or compacted" not in _ctx(r, 0)),
+        ("contributor hook: after compaction it says to load the skill again",
+         lambda r: re.search(r"resumed or compacted: load the .spec-project. skill again, section Contributor", _ctx(r, 1)) is not None),
+        ("a plain bound session ($src) still follows the session skill",
+         lambda r: _plain_bound_ok(_ctx(r, 3)) and _plain_bound_ok(_ctx(r, 4))),
+        ("a marker without a project: the hook is silent", lambda r: r.out(5) == ""),
+        ("the Contributor section asks my_work for this project's questions (Q numbers restart per project)",
+         lambda r: re.search(r"Call .my_work\(project=<project>\). and read .person. \(who this is\) and .spec_questions.",
+                             _contributor_section()) is not None and "restart in each project" in _contributor_section()),
+    ],
+    covers=["contributor hook ($src): spec-project, section Contributor, no building",
+            "contributor hook: no resume text on a fresh start",
+            "contributor hook: after compaction it says to load the skill again",
+            "a plain bound session ($src) still follows the session skill",
+            "a marker without a project: the hook is silent",
+            "the Contributor section asks my_work for this project's questions (Q numbers restart per project)"],
+))
+
+
+# session_test.sh (TR-1162)
+# The last two checks of the crew-held part look at what Tares kept: with a plain fake Tares that is a table the
+# scenario changes itself, the way Tares moves a project from the crew's list to "releasing" when the
+# takeover is posted (the table below answers the takeover POST by making that change).
+
+class _SessionTakeoverRoutes(dict):
+    """The routes of a fake Tares, which move Shop from the crew's projects to `releasing` once the takeover is posted."""
+
+    def get(self, key, default=None):
+        found = super().get(key, default)
+        if key == "POST /api/projects/p_shop/takeover":
+            self["GET /api/crew/projects"] = RELEASING["GET /api/crew/projects"]
+        return found
+
+
+def _session_stateful(r: Run) -> None:
+    r.tares.routes = _SessionTakeoverRoutes(r.tares.routes)
+
+
+def _session_crew(r: Run) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.tares.url + "/api/crew/projects", timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _session_keep_mark(r: Run) -> None:
+    doc = _session_crew(r)
+    r.marks["kept"] = {"projects": [p["name"] for p in doc["projects"]], "releasing": len(doc["releasing"]),
+                       "takeovers": len(r.tares.asked("POST /api/projects/p_shop/takeover"))}
+
+
+scenario(Scenario(
+    name="session_crew_state",
+    suite="session",
+    about="Enter leaves the project on the crew's list and records nothing; yes takes it off the list and into releasing",
+    tares={**MCP_ROUTE, **LISTED, **HELD, **SHOP_REPO, "POST /api/projects/p_shop/takeover": (200, {"ok": True})},
+    setup=_setup_session,
+    prepare=_session_stateful,
+    steps=[_ss("session", "Shop", stdin="\n"),
+           Step(["session", "Shop"], env={**WITH_MCP}, cwd="{tmp}/elsewhere", stdin="1\nsmall, I will finish it myself\n",
+                after=_claude_after, run_before=_session_keep_mark)],
+    checks=[
+        ("and nothing is recorded",
+         lambda r: "Shop" in r.marks["kept"]["projects"] and r.marks["kept"]["releasing"] == 0
+         and r.marks["kept"]["takeovers"] == 0),
+        ("off the crew's list, releasing",
+         lambda r: ",".join(p["name"] for p in _session_crew(r)["releasing"]) == "Shop"
+         and "Shop" not in [p["name"] for p in _session_crew(r)["projects"]]
+         and [json.loads(q["body"]) for q in r.tares.asked("POST /api/projects/p_shop/takeover")]
+         == [{"words": "small, I will finish it myself"}]),
+    ],
+    covers=["and nothing is recorded", "off the crew's list, releasing"],
+))
+
+
+# usage_test.sh (TR-1162)
+# crew up writes each station's settings (where it compacts, the status line command); the status line is run
+# the way Claude Code runs it, with the settings' own command and environment and the session's state on
+# stdin (usage_support.py), against the stand-in Tares, which keeps what it is sent.
+
+def _usage_ingested(r) -> list:
+    """The lines the status line sent to Tares's claude_code source, in order."""
+    return [w["body"] for w in r.stand_in.written() if w["path"] == "/ingest/claude_code"]
+
+
+def _usage_mark(r):
+    r.marks.setdefault("sent", []).append(len(_usage_ingested(r)))
+
+
+def _usage_sid(r) -> str:
+    return r.station("crew-orchestrator", "sessionId")
+
+
+scenario(Scenario(
+    name="usage_statusline",
+    suite="usage",
+    about="a station is told where it compacts and runs the plugin's status line, which prints a line and tells Tares only when something changed",
+    stand_in={"settings": {**SAVED, "releaser": False, "challenger": False, "builders_max": 2}},
+    prepare=trust_crew,
+    driver="usage_support.py",
+    steps=[Step(["crew", "up", "--yes"]),
+           Step(["status", "48", "31"]),
+           Step(["status", "48", "31"], run_before=_usage_mark),
+           Step(["status", "52", "33"], run_before=_usage_mark),
+           Step(["raw"], stdin="not json\n", run_before=_usage_mark),
+           Step(["notares", "52", "33"])],
+    checks=[
+        ("a station is told where it compacts",
+         lambda r: str(env_of(r, "crew-orchestrator", "FACTORY_AUTOCOMPACT")) == "200000"),
+        ("a station runs the plugin's status line",
+         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command")
+         == f"tares hook statusline --plugin-root {KIT}"
+         and r.station_settings("crew-orchestrator").get("statusLine", {}).get("type") == "command"),
+        ("the status line prints the window and the plan",
+         lambda r: r.code(1) == 0 and r.out(1).strip() == "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%"),
+        # The stand-in Tares keeps what the hook sent to ingest; bash's suite also reads what Tares made of it.
+        # So the next two checks compare the payload, not Tares's reading of it.
+        ("and Tares has the station's window, and how near it is to compacting",
+         lambda r: (lambda s: [s["sessionId"], s["status"]["context_window"]["used_percentage"],
+                               s["status"]["autocompact_tokens"]])(_usage_ingested(r)[0])
+         == [_usage_sid(r), 48, 200000]),
+        ("and the plan's limits",
+         lambda r: (lambda rl: [rl["five_hour"]["used_percentage"], rl["seven_day"]["used_percentage"]])(
+             _usage_ingested(r)[0]["status"]["rate_limits"]) == [31, 6]),
+        ("an unchanged report within the minute is not sent again",
+         lambda r: r.marks["sent"][:2] == [1, 1] and r.code(2) == 0),
+        ("a changed one is",
+         lambda r: r.marks["sent"][2] == 2
+         and _usage_ingested(r)[1]["status"]["context_window"]["used_percentage"] == 52),
+        ("bad input: a plain line, no failure", lambda r: r.code(4) == 0 and r.out(4).strip() == "Claude"),
+        ("no Tares: the line still prints",
+         lambda r: r.code(5) == 0 and "Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%" in r.out(5)),
+    ],
+    covers=["a station is told where it compacts", "a station runs the plugin's status line",
+            "the status line prints the window and the plan",
+            "and Tares has the station's window, and how near it is to compacting", "and the plan's limits",
+            "an unchanged report within the minute is not sent again", "a changed one is",
+            "bad input: a plain line, no failure", "no Tares: the line still prints"],
+))
+
+
+# tares_test.sh (TR-1162)
+# The crew against a Tares with auth on. The stand-in Tares (fake_up_tares.py) is given the key and answers 401 to any
+# other; `projects` are the documents of GET /api/crew/projects, kept in place of the project the bash suite hands over
+# through the real API (the checks that ask the API read it from the stand-in).
+
+TARES_KEY = "stub-token"
+TARES_STALE = "nvf_dead0000_revoked"
+TARES_ASK = "L4-ship\nno\nyes\n2\nthe reviewer may comment on draft PRs\n\n"
+TARES_WORDS = "the reviewer may comment on draft PRs"
+
+
+def tares_keyed(**kw) -> dict:
+    """The person's shell: the key of the Tares with auth on."""
+    return {"TARES_AUTH_TOKEN": TARES_KEY, **kw}
+
+
+def tares_setup_tools(tmp: Path, env: dict) -> None:
+    _fake_tool(tmp, "gh")
+    _fake_tool(tmp, "tares")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
+
+
+def tares_trust_two(r) -> None:
+    r.trust(r.crew, r.tmp / "crew-two")
+
+
+def tares_token_file(r) -> Path:
+    return r.crew / ".tares-token"
+
+
+def tares_mode_600(f: Path) -> bool:
+    """Only the person reads the key file. Windows keeps no such mode: there the file's content is all that is checked."""
+    return is_windows() or (f.stat().st_mode & 0o777) == 0o600
+
+
+def tares_bare(text: str, home: Path) -> str:
+    """A settings file with the crew home written as CREW (as the JSON file writes the path)."""
+    return text.replace(json.dumps(str(home))[1:-1], "CREW")
+
+
+def tares_no_token_in(folder: Path) -> bool:
+    return not any(TARES_KEY in f.read_text(encoding="utf-8", errors="replace") for f in folder.rglob("*") if f.is_file())
+
+
+scenario(Scenario(
+    name="tares_up_auth",
+    suite="tares",
+    about="crew up against a Tares with auth on: a wrong key stops it, the key is kept in a file only the person reads, "
+          "a second machine asks nothing",
+    stand_in={"token": TARES_KEY},
+    prepare=tares_trust_two,
+    setup=tares_setup_tools,
+    steps=[
+        # bash lets curl's own complaint through (curl: (22) ... 401); it is not the crew's message, so it is set aside
+        Step(["crew", "up", "--yes"], env={"TARES_AUTH_TOKEN": "wrong"}, drop=(r"^curl: \(22\)",),
+             after=lambda tmp: (tmp / "claude" / "calls.jsonl").exists()),
+        Step(["crew", "up"], env=tares_keyed(), stdin=TARES_ASK),
+        Step(["crew", "up", "--yes"], env=tares_keyed(TARES_FACTORY_MCP_URL="http://127.0.0.1:9/mcp")),
+        Step(["doctor"], env=tares_keyed(), drop=DOCTOR_DROP,
+             run_before=lambda r: r.marks.update(probes=len(r.stand_in.mcp_auth))),
+        Step(["crew", "up"], env=lambda r: tares_keyed(**crew_at_unnamed("two")(r)), stdin="",
+             run_before=lambda r: r.marks.update(probed=r.stand_in.mcp_auth[r.marks["probes"]:])),
+    ],
+    checks=[
+        ("a wrong token stops crew up plainly",
+         lambda r: "could not read the crew settings from Tares" in r.out(0) and r.snap(0) is False),
+        ("first crew up exits 0", lambda r: r.code(1) == 0 and "started crew-reviewer" in r.out(1)),
+        ("without a releaser, two stations", lambda r: "started crew-releaser" not in r.out(1)),
+        ("the release questions are not asked without a releaser", lambda r: "How does the releaser ship" not in r.out(1)),
+        ("settings saved on Tares",
+         lambda r: [r.stand_in.settings.get(k) for k in ("autonomy", "releaser", "challenger", "builders_max")]
+         == ["L4-ship", False, True, 2]),
+        ("grant saved on Tares", lambda r: any(TARES_WORDS in g for g in r.stand_in.grants)),
+        ("the token is kept in a file only the person reads",
+         lambda r: tares_token_file(r).read_text(encoding="utf-8").rstrip("\n") == TARES_KEY and tares_mode_600(tares_token_file(r))),
+        ("stations are told where the token is",
+         lambda r: fwd(env_of(r, "crew-reviewer", "TARES_FACTORY_TOKEN_FILE")) == fwd(tares_token_file(r))),
+        ("the plugin's header helper gets the same token file",
+         lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_CRED_FILE") != ""
+         and env_of(r, "crew-reviewer", "TARES_FACTORY_CRED_FILE") == env_of(r, "crew-reviewer", "TARES_FACTORY_TOKEN_FILE")),
+        ("no token in settings files", lambda r: tares_no_token_in(r.crew / "stations")),
+        ("stations reach the same Tares", lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_URL") == r.stand_in.url),
+        ("grant from Tares quoted with its date",
+         lambda r: allow_has(r, "crew-reviewer", 'granted this on %s for all projects, in their own words: "%s". Acting'
+                             % (TODAY, TARES_WORDS))),
+        ("no undated or doubly quoted grants",
+         lambda r: not any("undated" in x or '""' in x for x in allow_of(r, "crew-reviewer"))),
+        ("no MCP server with auth on: the command carries a token placeholder, never the token",
+         lambda r: "TARES_AUTH_TOKEN=<your token> tares mcp --transport streamable-http" in r.out(2) and TARES_KEY not in r.out(2)),
+        ("the MCP probe carries the token (auth on)",
+         lambda r: "  ok    MCP endpoint answers at %s" % r.stand_in.mcp_url in r.out(3).splitlines()
+         and r.marks["probed"] != [] and set(r.marks["probed"]) == {"Bearer " + TARES_KEY}),
+        ("second machine asks nothing", lambda r: "Choice [" not in r.out(4) and "started crew-reviewer" in r.out(4)),
+        ("same settings for crew-$r",
+         lambda r: all(tares_bare((r.crew / "stations" / f"crew-{role}.settings.json").read_text(encoding="utf-8"), r.crew)
+                       == tares_bare((r.tmp / "crew-two" / "stations" / f"crew-{role}.settings.json").read_text(encoding="utf-8"),
+                                     r.tmp / "crew-two") for role in ("orchestrator", "reviewer"))),
+    ],
+    covers=["a wrong token stops crew up plainly", "first crew up exits 0", "without a releaser, two stations",
+            "the release questions are not asked without a releaser", "settings saved on Tares", "grant saved on Tares",
+            "the token is kept in a file only the person reads", "stations are told where the token is",
+            "the plugin's header helper gets the same token file", "no token in settings files",
+            "stations reach the same Tares", "grant from Tares quoted with its date",
+            "no undated or doubly quoted grants",
+            "no MCP server with auth on: the command carries a token placeholder, never the token",
+            "the MCP probe carries the token (auth on)", "second machine asks nothing", "same settings for crew-$r"],
+))
+
+
+TARES_EMOJI = "\U0001F504 Emoji App"
+TARES_PROJECTS = [
+    {"id": "uc_links", "name": "Links App", "tickets_done": 1, "tickets_total": 2,
+     "milestone": {"name": "Links", "done": 1, "total": 2}, "repos": [{"path": "{tmp}/links"}]},
+    {"id": "uc_emoji", "name": TARES_EMOJI, "tickets_done": 0, "tickets_total": 0, "milestone": None,
+     "repos": [{"path": "{tmp}/emoji"}]},
+]
+TARES_PROJECT_GRANT = "builders may bump patch versions of dependencies"
+
+
+def tares_setup_repos(tmp: Path, env: dict) -> None:
+    for name in ("links", "emoji"):
+        (tmp / name).mkdir(parents=True, exist_ok=True)
+        _git(tmp, "init", "-q", cwd=tmp / name)
+
+
+def tares_orch(**extra):
+    """A step's env: the orchestrator runs `factory spawn` with its settings env, not the person's shell."""
+    return lambda r: {**{k: str(v) for k, v in r.station_settings("crew-orchestrator").get("env", {}).items()}, **extra}
+
+
+def tares_api(r, path: str):
+    """What the Tares behind the run answers to a GET, with the key (the bash suite's `api GET`)."""
+    import urllib.request
+    req = urllib.request.Request(r.stand_in.url + path, headers={"Authorization": "Bearer " + TARES_KEY})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def tares_set_token_aside(tmp: Path) -> None:
+    (tmp / "crew" / ".tares-token").replace(tmp / "token.bak")
+
+
+def tares_put_token_back(tmp: Path) -> None:
+    (tmp / "token.bak").replace(tmp / "crew" / ".tares-token")
+
+
+def tares_sign_out(tmp: Path) -> None:
+    tares_set_token_aside(tmp)
+    (tmp / "crew" / ".tares-token").write_text("", encoding="utf-8")
+
+
+def tares_back_after_sign_out(tmp: Path) -> None:
+    (tmp / "crew" / ".tares-token").unlink()
+    tares_put_token_back(tmp)
+
+
+def tares_drop_project_id(tmp: Path) -> None:
+    """A station recorded by name only, as one was before TR-534."""
+    f = tmp / "crew" / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc["emoji-app-build-m1"].pop("project_id", None)
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def tares_last_env(tmp: Path) -> dict:
+    """What the last Claude Code started was given: whether it was given anything, a key, or the stale key."""
+    try:
+        text = (tmp / "claude" / "last.env").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    return {"given": text != "", "key": any(x.startswith("TARES_AUTH_TOKEN=") for x in text.splitlines()),
+            "stale": TARES_STALE in text}
+
+
+def tares_stations_env(r, station: str, key: str):
+    return r.station_settings(station).get("env", {}).get(key, "<none>")
+
+
+def tares_out(r, i: int) -> list:
+    """The lines on stdout of step i (the suite reads status and projects with 2>/dev/null)."""
+    return r.results[i]["stdout"].splitlines()
+
+
+TARES_BUILDER = ["spawn", "builder"]
+# the projects table pads the name by bytes in bash 3 and by characters in bash 5 and Python: the emoji row is left out
+TARES_WIDE_ROW = (r"^\U0001F504 Emoji App ",)
+
+scenario(Scenario(
+    name="tares_spawn_auth",
+    suite="tares",
+    about="builders against a Tares with auth on: their project's grants, an emoji project by id, the orchestrator's own "
+          "spawn through the token file, and a key the person's shell holds never reaches a station",
+    stand_in={"token": TARES_KEY, "projects": TARES_PROJECTS,
+              "settings": {**SAVED, "autonomy": "L4-ship", "releaser": False, "challenger": True, "builders_max": 2},
+              "grants": ['- "%s" (%s)' % (TARES_WORDS, TODAY)],
+              "project_grants": {"uc_links": ['- "%s" (%s)' % (TARES_PROJECT_GRANT, TODAY)]}},
+    prepare=trust_crew,
+    setup=tares_setup_repos,
+    steps=[
+        Step(["crew", "up", "--yes"], env=tares_keyed()),                                                      # 0
+        Step(TARES_BUILDER + ["Links App", "m1", "{tmp}/links", "work T1"], env=tares_keyed()),                # 1
+        Step(["retire", "links-app-build-m1"], env=tares_keyed()),                                             # 2
+        Step(TARES_BUILDER + [TARES_EMOJI, "m1", "{tmp}/emoji", "work T1"], env=tares_keyed()),                # 3
+        Step(["settings", "emoji-app-build-m1"], env=tares_keyed(), before=tares_drop_project_id),             # 4
+        Step(["retire", "emoji-app-build-m1"], env=tares_keyed()),                                             # 5
+        Step(TARES_BUILDER + ["Links App", "m3", "{tmp}/links", "work T3"], env=tares_orch()),                 # 6
+        Step(["retire", "links-app-build-m3"], env=tares_keyed()),                                             # 7
+        Step(TARES_BUILDER + ["Links App", "m4", "{tmp}/links", "work T4"], env=tares_orch(),                  # 8
+             before=tares_set_token_aside, drop=(r"^curl: \(22\)",)),
+        Step(TARES_BUILDER + ["Links App", "m5", "{tmp}/links", "work T5"], env=tares_keyed(),                 # 9
+             before=tares_put_token_back, after=tares_last_env),
+        Step(["retire", "links-app-build-m5"], env=tares_keyed()),                                             # 10
+        Step(TARES_BUILDER + ["Links App", "m6", "{tmp}/links", "work T6"], env=tares_orch(TARES_AUTH_TOKEN=TARES_STALE),
+             after=tares_last_env),                                                                            # 11
+        Step(["retire", "links-app-build-m6"], env=tares_keyed()),                                             # 12
+        Step(["projects"], env={}, drop=TARES_WIDE_ROW),                                                       # 13
+        Step(TARES_BUILDER + ["Links App", "m7", "{tmp}/links", "work T7"], env=tares_orch(),                  # 14
+             before=tares_sign_out, drop=(r"^curl: \(22\)",)),
+        Step(["crew", "status"], env=tares_keyed(), before=tares_back_after_sign_out),                         # 15
+        Step(["projects"], env=tares_keyed(), drop=TARES_WIDE_ROW),                                            # 16
+        Step(["settings", "crew-reviewer"], env=NO_TARES),                                                     # 17
+    ],
+    checks=[
+        ("project grant quoted for the builder",
+         lambda r: allow_has(r, "links-app-build-m1", 'for project Links App, in their own words: "%s". Acting' % TARES_PROJECT_GRANT)),
+        ("and the grants for all",
+         lambda r: allow_has(r, "links-app-build-m1", 'in their own words: "%s"' % TARES_WORDS)),
+        ("L4: builder may merge on the gate",
+         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "links-app-build-m1"))),
+        ("a builder for an emoji project starts", lambda r: "started emoji-app-build-m1" in r.out(3)),
+        ("its TARES_PROJECT is the project id", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT") == "uc_emoji"),
+        ("and the name is kept for reading", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT_NAME") == TARES_EMOJI),
+        ("the header value is plain ASCII",
+         lambda r: re.fullmatch(r"[ -~]*", env_of(r, "emoji-app-build-m1", "TARES_PROJECT")) is not None),
+        ("Tares resolves the id the header carries",
+         lambda r: tares_api(r, "/api/projects/" + env_of(r, "emoji-app-build-m1", "TARES_PROJECT")).get("name") == TARES_EMOJI),
+        ("a station kept by name gets the id when its settings are written again",
+         lambda r: json.loads(r.results[4]["stdout"])["env"]["TARES_PROJECT"] == "uc_emoji"),
+        ("orchestrator's own spawn reaches Tares with the token file", lambda r: "started links-app-build-m3" in r.out(6)),
+        ("its builder gets the token file too",
+         lambda r: fwd(env_of(r, "links-app-build-m3", "TARES_FACTORY_TOKEN_FILE")) == fwd(r.crew / ".tares-token")),
+        ("unreadable crew settings stop a spawn plainly",
+         lambda r: "could not read the crew settings" in r.out(8) and "integer expression" not in r.out(8)
+         and not (r.crew / "stations" / "links-app-build-m4.settings.json").exists()),
+        ("claude is started without the person's key", lambda r: r.snap(9)["given"] and not r.snap(9)["key"]),
+        ("station settings blank an inherited key",
+         lambda r: tares_stations_env(r, "links-app-build-m5", "TARES_AUTH_TOKEN") == ""),
+        ("a station with a stale inherited key reaches Tares through the crew file",
+         lambda r: "started links-app-build-m6" in r.out(11)),
+        ("and leaves the crew file as it was",
+         lambda r: (r.crew / ".tares-token").read_text(encoding="utf-8").rstrip("\n") == TARES_KEY),
+        ("the station passes the stale key to nobody", lambda r: not r.snap(11)["stale"]),
+        ("the watch, started without a key, reads the crew file",
+         lambda r: any(x.startswith("Links App") for x in r.out(13).splitlines())),
+        ("a station whose person signed out says so",
+         lambda r: "the person signed out of Tares: they run tares login" in r.out(14)),
+        ("status has a line per project from Tares",
+         lambda r: any(x.startswith("project Links App: 1/2 tickets done, on Links 1/2") for x in tares_out(r, 15))),
+        ("projects reads the same",
+         lambda r: any(re.match(r"Links App +1/2 +Links 1/2 ", x) for x in tares_out(r, 16))),
+        ("unreachable Tares is reported, with how to start one",
+         lambda r: "no Tares answers at" in r.results[17]["stderr"] and "tares up" in r.results[17]["stderr"]
+         and r.results[17]["stdout"] == ""),
+    ],
+    covers=["project grant quoted for the builder", "and the grants for all", "L4: builder may merge on the gate",
+            "a builder for an emoji project starts", "its TARES_PROJECT is the project id", "and the name is kept for reading",
+            "the header value is plain ASCII", "Tares resolves the id the header carries",
+            "a station kept by name gets the id when its settings are written again",
+            "orchestrator's own spawn reaches Tares with the token file", "its builder gets the token file too",
+            "unreadable crew settings stop a spawn plainly", "claude is started without the person's key",
+            "station settings blank an inherited key",
+            "a station with a stale inherited key reaches Tares through the crew file", "and leaves the crew file as it was",
+            "the station passes the stale key to nobody", "the watch, started without a key, reads the crew file",
+            "a station whose person signed out says so", "status has a line per project from Tares", "projects reads the same",
+            "unreachable Tares is reported, with how to start one"],
+))
+
+
+# lsp_test.sh (TR-1162): the crew up part, the offer of the language servers and the install on a yes. The doctor
+# part of that suite is lsp_missing and lsp_servers above. The installers a yes runs (npm, go, rustup) are stand-ins
+# that log the call and make the binary they would install, in the one folder the servers are looked up in
+# (FACTORY_LSP_PATH), as in the bash suite; they are shell scripts, so the Python side is not run on Windows.
+
+LSP_INSTALLER = """#!/bin/sh
+echo "$(basename "$0") $*" >> "$(dirname "$0")/installs.log"
+for a in "$@"; do
+  case "$a" in
+    pyright) touch "$(dirname "$0")/pyright-langserver" ;;
+    typescript-language-server) touch "$(dirname "$0")/typescript-language-server" ;;
+    golang.org/x/tools/gopls@latest) touch "$(dirname "$0")/gopls" ;;
+    rust-analyzer) touch "$(dirname "$0")/rust-analyzer" ;;
+  esac
+done
+chmod +x "$(dirname "$0")"/* 2>/dev/null
+exit 0
+"""
+LSP_REPOS = ("api", "gw", "docs", "engine", "site", "gw2")
+
+
+def lsp_prepare(r: "Run") -> None:
+    """Claude Code trusts the crew home and every repo; Tares has one project with all six repos."""
+    r.trust(r.crew, *[r.tmp / n for n in LSP_REPOS])
+    r.stand_in.projects.append({"name": "Mix", "repos": [{"path": str(r.tmp / n)} for n in
+                                                         ("api", "gw", "docs", "engine", "gw2", "site")]})
+
+
+def lsp_setup(tmp: Path, env: dict) -> None:
+    _lsp_repos(tmp)
+    folder = tmp / "lspbin"
+    folder.mkdir(parents=True, exist_ok=True)
+    for tool in ("npm", "go", "rustup"):
+        f = folder / tool
+        f.write_text(LSP_INSTALLER, encoding="utf-8", newline="\n")
+        f.chmod(0o755)
+    _crew_json(tmp)
+    _lsp_plugins(tmp, [])
+    _fake_tool(tmp, "gh")
+    _fake_tool(tmp, "tares")
+    env["FACTORY_LSP_PATH"] = str(folder)
+    env["PATH"] = str(folder) + os.pathsep + env.get("PATH", "")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+
+
+def lsp_after(tmp: Path) -> dict:
+    """What the installers and Claude Code were asked so far: the log of installs, the plugins on."""
+    try:
+        log = (tmp / "lspbin" / "installs.log").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log = []
+    calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    plugins = json.loads((tmp / "claude" / "plugins.json").read_text(encoding="utf-8"))
+    return {"installs": log, "plugin_installs": sum(1 for c in calls if c["args"][:2] == ["plugin", "install"]),
+            "plugins": sorted(p["id"] for p in plugins)}
+
+
+def lsp_crew_up_checks() -> list:
+    def api(r):
+        return str(r.tmp / "api")
+
+    def installs(r, i):
+        return len(r.snap(i)["installs"])
+
+    def nothing_installed(r, i):
+        return installs(r, i) == 0 and r.snap(i)["plugin_installs"] == 0
+
+    def log(r):
+        return "\n".join(r.snap(4)["installs"]) + "\n"
+    return [
+        ("when claude cannot list its plugins crew up offers no install",
+         lambda r: "Code intelligence" not in r.out(0)),
+        ("crew up --yes recommends and installs nothing",
+         lambda r: "Code intelligence" in r.out(1) and f"Python in {api(r)}" in r.out(1)
+         and "not installing language servers without a yes" in r.out(1) and nothing_installed(r, 1)),
+        ("a closed input is a no",
+         lambda r: "no language servers installed" in r.out(2) and nothing_installed(r, 2)),
+        ("answering no installs nothing",
+         lambda r: "no language servers installed" in r.out(3) and nothing_installed(r, 3)),
+        ("a yes installs each binary",
+         lambda r: re.search(r"^npm install -g pyright", log(r), re.M) is not None
+         and re.search(r"^npm install -g typescript-language-server typescript", log(r), re.M) is not None
+         and re.search(r"^go install golang.org/x/tools/gopls@latest", log(r), re.M) is not None),
+        ("a yes installs each binary once, however many repos need it",
+         lambda r: len(re.findall(r"^go install", log(r), re.M)) == 1
+         and len(re.findall(r"^npm install -g typescript-language-server", log(r), re.M)) == 1),
+        ("a yes installs each plugin once",
+         lambda r: all(r.snap(4)["plugins"].count(f"{p}@claude-plugins-official") == 1
+                       for p in ("pyright-lsp", "typescript-lsp", "gopls-lsp", "rust-analyzer-lsp"))),
+        ("doctor finds Python, TypeScript and Go ready after the yes",
+         lambda r: re.search(r"ok .*Python in " + re.escape(api(r)) + " has a language server", r.out(5)) is not None
+         and re.search(r"ok .*TypeScript in " + re.escape(api(r)) + " has a language server", r.out(5)) is not None
+         and re.search(r"ok .*Go in " + re.escape(str(r.tmp / "gw")) + " has a language server", r.out(5)) is not None),
+        ("crew up offers nothing for languages that have a server",
+         lambda r: "Python in" not in r.out(6) and f"Go in {r.tmp / 'gw'}" not in r.out(6)),
+    ]
+
+
+scenario(Scenario(
+    name="lsp_crew_up",
+    suite="lsp",
+    about="crew up offers the missing language servers, installs only on a yes, and offers nothing once they are there",
+    stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
+    prepare=lsp_prepare,
+    setup=lsp_setup,
+    not_windows="the installers a yes runs are shell scripts",
+    steps=[Step(["crew", "up", "--yes"], env={"FAKE_CLAUDE_PLUGIN_FAIL": "1"}, stdin="", after=lsp_after),     # 0
+           Step(["crew", "up", "--yes"], stdin="", after=lsp_after),                                       # 1
+           Step(["crew", "up"], stdin="", after=lsp_after),                                                # 2 a closed input
+           Step(["crew", "up"], stdin="no\n", after=lsp_after),                                            # 3
+           Step(["crew", "up"], stdin="yes\n", after=lsp_after),                                           # 4
+           Step(["doctor"], drop=DOCTOR_DROP, after=lsp_after),                                            # 5
+           Step(["crew", "up", "--yes"], stdin="", after=lsp_after)],                                      # 6
+    checks=lsp_crew_up_checks(),
+    covers=["when claude cannot list its plugins crew up offers no install",
+            "crew up --yes recommends and installs nothing",
+            "a closed input is a no",
+            "answering no installs nothing",
+            "a yes installs each binary",
+            "a yes installs each binary once, however many repos need it",
+            "a yes installs each plugin once",
+            "doctor finds Python, TypeScript and Go ready after the yes",
+            "crew up offers nothing for languages that have a server"],
+))
+
+
+# guard_test.sh (TR-1162): the whole suite. The guard has one implementation (hooks/guard.sh is a shim for
+# `tares hook guard`), so both sides run the same code; guard_support.py runs the 154 cases of
+# tests/guard_cases.jsonl in one process, after checking the file still holds the suite's own cases.
+
+scenario(Scenario(
+    name="guard_all",
+    suite="guard",
+    about="every case of guard_test.sh: what each role may run, the halted crew, a session without a role",
+    driver="guard_support.py",
+    steps=[Step(["run"])],
+    checks=[("(the whole guard suite)", lambda r: r.code(0) == 0 and r.out(0).strip() == "guard: all cases pass")],
+    covers=["(the whole guard suite)"],
+))
+
+
+# heavy_test.sh (TR-1162): the whole suite. factory-heavy is its own script on the bash side and
+# `tares factory heavy` on the Python side; heavy_support.py runs the suite against the one it is given.
+
+scenario(Scenario(
+    name="heavy_all",
+    suite="heavy",
+    about="two heavy commands never overlap, a command past its timeout is killed (142) and the lock is released",
+    driver="heavy_support.py",
+    steps=[Step(["run"])],
+    checks=[("(the whole heavy suite)", lambda r: r.code(0) == 0
+             and r.out(0).strip() == "factory-heavy: serialises and times out")],
+    covers=["(the whole heavy suite)"],
+))
+
+
+# parse_test.sh (TR-1162): the whole suite. The session id is read from the output of `claude --bg`, with and without
+# colour codes, and is empty when Claude Code did not start a session.
+
+PARSE_CASES = [
+    ("backgrounded · feb401c6 · tfspike-alpha\n", "feb401c6"),
+    ("backgrounded · \033[36m3bd5cd67\033[39m · vetme-build-t1\n\033[2m  claude agents   list sessions\033[22m\n",
+     "3bd5cd67"),
+    ("Workspace not trusted. Run `claude` in /x once\n", ""),
+]
+
+scenario(Scenario(
+    name="parse_all",
+    suite="parse",
+    about="the session id is read from `claude --bg` output, with and without colour codes",
+    steps=[Step(["_parse-bg-id"], stdin=text) for text, _want in PARSE_CASES],
+    checks=[("(the whole parse suite)",
+             lambda r: all(r.out(i).strip() == want for i, (_text, want) in enumerate(PARSE_CASES)))],
+    covers=["(the whole parse suite)"],
 ))
 
 

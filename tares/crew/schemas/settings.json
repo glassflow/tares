@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/settings.json",
+  "title": "tares factory settings <station>: the Claude Code settings file a station launches with",
+  "description": "This is Claude Code's own settings file, so it has no `schema_version` key (Claude Code reads the file). A change to its shape raises `schema_version.json` all the same. Keys Claude Code adds later are allowed.",
+  "type": "object",
+  "required": ["env", "crossSessionInbound", "enabledPlugins", "statusLine", "worktree", "permissions", "autoMode"],
+  "properties": {
+    "env": {
+      "description": "What the station's session starts with. Every value is a string.",
+      "type": "object",
+      "required": [
+        "FACTORY_STATION", "FACTORY_ROLE", "FACTORY_PARENT", "FACTORY_CREW", "FACTORY_ORCHESTRATOR",
+        "FACTORY_HOME", "FACTORY_CREW_HOME", "FACTORY_WORKTREES",
+        "TARES_FACTORY_URL", "TARESD_URL", "TARES_FACTORY_MCP_URL", "FACTORY_AUTOCOMPACT", "TARES_AUTH_TOKEN"
+      ],
+      "properties": {
+        "FACTORY_STATION": {"type": "string", "minLength": 1},
+        "FACTORY_ROLE": {"type": "string", "minLength": 1},
+        "FACTORY_PARENT": {"description": "Empty for a crew station.", "type": "string"},
+        "FACTORY_CREW": {"type": "string", "minLength": 1},
+        "FACTORY_ORCHESTRATOR": {"type": "string", "minLength": 1},
+        "FACTORY_HOME": {"type": "string", "minLength": 1},
+        "FACTORY_CREW_HOME": {"type": "string", "minLength": 1},
+        "FACTORY_WORKTREES": {"type": "string", "minLength": 1},
+        "TARES_FACTORY_URL": {"type": "string"},
+        "TARESD_URL": {"type": "string"},
+        "TARES_FACTORY_MCP_URL": {"type": "string"},
+        "FACTORY_AUTOCOMPACT": {"description": "Where the station compacts, in tokens; empty when unknown.", "type": "string"},
+        "TARES_AUTH_TOKEN": {"description": "Always empty: stations use the crew's token file.", "const": ""},
+        "TARES_FACTORY_TOKEN_FILE": {"description": "Present when the crew has a token file.", "type": "string"},
+        "TARES_FACTORY_CRED_FILE": {"description": "The same file under a name the plugin's header helper can read.", "type": "string"},
+        "TARES_PROJECT": {"description": "The project's id. Builders and their helpers only.", "type": "string"},
+        "TARES_PROJECT_NAME": {"type": "string"},
+        "FACTORY_PROJECT": {"type": "string"},
+        "FACTORY_REPO": {"description": "Builders only.", "type": "string"}
+      },
+      "additionalProperties": {"type": "string"}
+    },
+    "crossSessionInbound": {"type": "string"},
+    "enabledPlugins": {"type": "object", "additionalProperties": {"type": "boolean"}},
+    "statusLine": {
+      "type": "object",
+      "required": ["type", "command"],
+      "properties": {
+        "type": {"const": "command"},
+        "command": {"type": "string", "minLength": 1},
+        "padding": {"type": "integer", "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "worktree": {"type": "object", "additionalProperties": true},
+    "permissions": {
+      "type": "object",
+      "required": ["allow"],
+      "properties": {"allow": {"type": "array", "items": {"type": "string"}}},
+      "additionalProperties": true
+    },
+    "autoMode": {
+      "type": "object",
+      "required": ["environment", "allow", "soft_deny"],
+      "properties": {
+        "environment": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "allow": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+        "soft_deny": {"type": "array", "items": {"type": "string"}, "minItems": 1}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

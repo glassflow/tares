@@ -48,6 +48,7 @@ from .connectors import (SPECS, normalize_config, redact_config, restore_secrets
 from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
 from .host import Host
+from .projects.icon import normalize_icon
 from .envelope import now_utc
 from .models import add_usage, empty_usage
 from .builtin_agents import (AGENT_MODELS, MODEL as AGENT_DEFAULT_MODEL, offers_conclude,
@@ -62,7 +63,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, integrations_api, outbound, standup as standup_mod
+from . import claude_usage, factory_api, integrations_api, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -468,6 +469,7 @@ class ProjectIn(BaseModel):
     objects: list | None = None   # template "custom": the objects, each {kind, name}
     goal: str | None = None       # one line, at most 200 characters; none = the template's GOAL
     kind: str | None = None       # "software_factory" for a project a spec session makes
+    icon: str | None = None       # one emoji shown beside the name; none = no icon
 
     @model_validator(mode="before")
     @classmethod
@@ -485,6 +487,9 @@ class ProjectUpdate(BaseModel):
     # the project's goal; left out = unchanged, "" or null = cleared. A body that sets only the
     # goal changes nothing else, and is the one edit the default project takes.
     goal: str | None = None
+    # the project's icon, one emoji; left out = unchanged, "" or null = removed. Like the goal, a
+    # body that sets only the icon changes nothing else.
+    icon: str | None = None
 
 
 class ProjectRepair(BaseModel):
@@ -729,6 +734,8 @@ def make_app() -> FastAPI:
         watch_task = asyncio.create_task(watch_mod.run(runtime, loop_stop))
         # pull requests read again in the background, not only when a project is opened (TR-1010)
         pr_sync_task = asyncio.create_task(factory_api.sync_prs(store, loop_stop))
+        # the morning status goes out from here, whoever's laptop is shut (TR-825)
+        morning_task = asyncio.create_task(_morning.run(loop_stop))
         # the licence: checked again every minute, and the desk told as it nears its end (TR-912)
         licence_task = asyncio.create_task(licence.run(store, loop_stop))
         print(f"taresd: {len(runtime.catalog.sources)} source(s); "
@@ -751,6 +758,7 @@ def make_app() -> FastAPI:
         schedule_task.cancel()
         watch_task.cancel()
         pr_sync_task.cancel()
+        morning_task.cancel()
         licence_task.cancel()
         if grpc_server is not None:
             await grpc_server.stop(grace=2)
@@ -4114,7 +4122,8 @@ def make_app() -> FastAPI:
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
             hidden = _hidden_ids()
             out = projects.create(body.template, params, name=body.name or None, goal=body.goal,
-                                  gone=lambda kind, name: _is_hidden(kind, name, hidden))
+                                  gone=lambda kind, name: _is_hidden(kind, name, hidden),
+                                  icon=body.icon)
         except Exception as e:
             _uc_err(e)
         # the person who makes a project leads it; the system credential is no person, so a
@@ -4142,13 +4151,23 @@ def make_app() -> FastAPI:
         _project_or_404(uid)
         given = body.model_fields_set
         try:
-            if "goal" in given and not ({"params", "objects"} & given) and not body.name.strip():
-                return projects.set_goal(uid, body.goal)
+            if "icon" in given:     # before anything is written: a wrong icon changes nothing
+                normalize_icon(body.icon)
+            if {"goal", "icon"} & given and not ({"params", "objects"} & given) and not body.name.strip():
+                out = projects.set_goal(uid, body.goal) if "goal" in given else None
+                if "icon" in given:
+                    out = projects.set_icon(uid, body.icon)
+                    factory_home.clear_cache()   # Home keeps its answer for a few seconds
+                return out
             params = {**body.params, "objects": body.objects} if body.objects is not None else body.params
             hidden = _hidden_ids()
             out = projects.update(uid, params, gone=lambda kind, name: _is_hidden(kind, name, hidden))
             if "goal" in given:
                 projects.set_goal(uid, body.goal)
+                out = {**projects.get(uid), "report": out["report"]}
+            if "icon" in given:
+                projects.set_icon(uid, body.icon)
+                factory_home.clear_cache()
                 out = {**projects.get(uid), "report": out["report"]}
             if body.name.strip():
                 store.update_project(uid, name=body.name.strip())
@@ -5902,12 +5921,10 @@ def make_app() -> FastAPI:
         report = _standup(since, until)
         return {**report, "markdown": standup_mod.markdown(report)}
 
-    @app.post("/api/crew/standup/summary")
-    async def crew_standup_summary(body: dict = Body(default={})):
-        """{since?, until?}: the same report with a line or two per project written by the cell's
-        model from those facts. Without a model provider, or when it fails, the report comes back
-        without the summary and `summary_error` says why."""
-        report = _standup(body.get("since"), body.get("until"))
+    async def _summarise_standup(report: dict, timeout: int | None = None) -> tuple[dict | None, str | None]:
+        """A line or two per project written by the cell's model, as (summary, why not). Never
+        raises: the standup stands on its facts alone."""
+        wait = timeout or 90
         summary, why = None, None
         provider, origin = resolve_provider(store)
         if provider is None:
@@ -5919,7 +5936,7 @@ def make_app() -> FastAPI:
                 reply = await asyncio.wait_for(provider.complete(
                     model=model, system=standup_mod.SUMMARY_SYSTEM, tools=[],
                     messages=[{"role": "user", "content": standup_mod.summary_prompt(report)}],
-                    max_tokens=standup_mod.SUMMARY_MAX_TOKENS, tools_allowed=False), timeout=90)
+                    max_tokens=standup_mod.SUMMARY_MAX_TOKENS, tools_allowed=False), timeout=wait)
                 # one reply's usage has no call count; the ledger row wants the loops' total
                 usage = empty_usage()
                 add_usage(usage, reply.usage)
@@ -5930,30 +5947,31 @@ def make_app() -> FastAPI:
                 if not summary["overall"] and not summary["projects"]:
                     summary, why = None, "the model's answer could not be read"
             except asyncio.TimeoutError:
-                why = "the model took longer than 90s"
+                why = f"the model took longer than {wait}s"
             except Exception as e:  # noqa: BLE001 — the report stands without the summary
                 msg = str(e)
                 why = ("the model provider refused its key; check it under Settings"
                        if any(c in msg for c in (" 401", " 403", "invalid x-api-key"))
                        else f"the model call failed ({type(e).__name__})")
                 print(f"standup: summary failed: {type(e).__name__}: {msg[:300]}", flush=True)
+        return summary, why
+
+    @app.post("/api/crew/standup/summary")
+    async def crew_standup_summary(body: dict = Body(default={})):
+        """{since?, until?}: the same report with a line or two per project written by the cell's
+        model from those facts. Without a model provider, or when it fails, the report comes back
+        without the summary and `summary_error` says why."""
+        report = _standup(body.get("since"), body.get("until"))
+        summary, why = await _summarise_standup(report)
         return {**report, "summary": summary, "summary_error": why,
                 "markdown": standup_mod.markdown(report, summary)}
 
-    @app.post("/api/slack/post")
-    async def slack_post(request: Request, body: dict = Body(...)):
-        """{channel, text, title?}: post markdown to a Slack channel as the cell's bot (the
-        standup's "Send to Slack"). A person's action: refused from a crew station."""
-        if factory_api.caller(request)["station"]:
-            _err(PermissionError("posting to Slack is the person's action, from the console"), 403)
-        channel = str(body.get("channel") or "").strip()
-        text = str(body.get("text") or "").strip()
-        if not channel or not text:
-            _err(ValueError("say which channel and what to post"))
+    async def _post_slack(channel: str, text: str, title: str = "") -> dict:
+        """Post markdown to a Slack channel as the cell's bot. LookupError when Slack is not
+        connected, RuntimeError with Slack's reason when it does not take the message."""
         token, _origin = resolve_slack_token(store)
         if not token:
-            _err(ValueError("Slack is not connected: add it under Settings, Slack"), 409)
-        title = " ".join(str(body.get("title") or "").split())
+            raise LookupError("Slack is not connected: add it under Settings, Slack")
         msg = {"channel": channel, "text": slack_mod.excerpt(text, 300) or title or "Tares",
                "blocks": ([slack_mod._header(title)] if title else []) + slack_mod._sections(text),
                "unfurl_links": False, "unfurl_media": False}
@@ -5966,11 +5984,42 @@ def make_app() -> FastAPI:
             except ValueError:
                 data = None
         except httpx.HTTPError as e:
-            _err(RuntimeError(f"could not reach Slack: {type(e).__name__}"), 502)
+            raise RuntimeError(f"could not reach Slack: {type(e).__name__}") from None
         ok, error, _retry = slack_mod.classify(r.status_code, data)
         if not ok:
-            _err(RuntimeError(error or "Slack refused the message"), 502)
-        return {"ok": True, "channel": channel, "ts": (data or {}).get("ts")}
+            raise RuntimeError(error or "Slack refused the message")
+        return data or {}
+
+    @app.post("/api/slack/post")
+    async def slack_post(request: Request, body: dict = Body(...)):
+        """{channel, text, title?}: post markdown to a Slack channel as the cell's bot (the
+        standup's "Send to Slack"). A person's action: refused from a crew station."""
+        if factory_api.caller(request)["station"]:
+            _err(PermissionError("posting to Slack is the person's action, from the console"), 403)
+        channel = str(body.get("channel") or "").strip()
+        text = str(body.get("text") or "").strip()
+        if not channel or not text:
+            _err(ValueError("say which channel and what to post"))
+        title = " ".join(str(body.get("title") or "").split())
+        try:
+            data = await _post_slack(channel, text, title)
+        except LookupError as e:
+            _err(e, 409)
+        except RuntimeError as e:
+            _err(e, 502)
+        return {"ok": True, "channel": channel, "ts": data.get("ts")}
+
+    # The morning status (TR-825) reuses the standup above. Its report leaves private projects out:
+    # it runs with no caller and goes to a shared place.
+    _morning = morning_mod.MorningStatus(
+        store,
+        report=lambda since, until: standup_mod.facts(
+            store, since, until, lambda uid: factory_api.project_progress(store, uid),
+            hide={p["id"] for p in store.private_projects()}),
+        summarise=_summarise_standup,
+        post_slack=_post_slack,
+        slack_connected=lambda: bool(resolve_slack_token(store)[0]))
+    app.state.morning = _morning
 
     # ── the software factory's crew (M3 onward): routes in tares/factory_api.py ──
     def _factory_project_id(ref: str) -> str:
@@ -6001,7 +6050,7 @@ def make_app() -> FastAPI:
     app.state.host = h
     fx = factory_api.register(app, store, h)
     # the edition screens (tares/screens/__init__.py lists them)
-    screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime))
+    screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)
 
     @app.get("/api/home")

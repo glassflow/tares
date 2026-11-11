@@ -271,7 +271,7 @@ def register(app, store, h, ctx):
                       key=lambda d: (tickets[d["id"]].get("number") or 0) if d["id"] in tickets else 10 ** 9)]},
                   {"key": "notes", "title": "Notes", "docs": [item(d) for d in reversed(own) if d["kind"] == "note"]}]
         groups = [g for g in groups if g["docs"]]
-        return {"project": {"id": p["id"], "name": p["name"]}, "groups": groups,
+        return {"project": {"id": p["id"], "name": p["name"], "icon": p.get("icon")}, "groups": groups,
                 "total": sum(len(g["docs"]) for g in groups)}
 
     @app.get("/api/factory/projects/{uid}/docs")

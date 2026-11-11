@@ -3,8 +3,8 @@ cmux_* and doctor_cmux / doctor_lsp / lsp_offer).
 
 The languages of each handed-over repo are read from its manifests (at the root or one folder down, never
 inside node_modules, .git, .factory, .venv or venv). A language has a server for Claude Code when an
-enabled user-scope plugin and its binary are both there. `crew up` is not ported yet; `lsp_offer` takes
-its inputs as arguments so the port of `crew up` only calls it.
+enabled user-scope plugin and its binary are both there. `crew up` calls `lsp_offer` (Up.lsp_offer in up.py);
+it takes its inputs as arguments.
 """
 from __future__ import annotations
 

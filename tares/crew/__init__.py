@@ -12,6 +12,7 @@ differ, bash is right.
   perms     a file that holds a key readable by its owner only (0600, or an access list on Windows)
   client    the engine's client for Tares (httpx); import it as `tares.crew.client`, it is not loaded here
   dispatch  which engine runs a `tares factory` command (PORTED, TARES_FACTORY_ENGINE)
+  up        `crew up` and the `crew setup` questions-and-answers contract; import it as `tares.crew.up`
   version   is the installed tares new enough for the plugin (check_plugin_compat, `tares hook compat`)
 """
 from . import errors, locks, paths, perms, state

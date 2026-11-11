@@ -227,6 +227,6 @@ def register(app, store, h, ctx):
                 "pr": _pr_out(t), "reviews": reviews, "checks": checks, "calls": calls,
                 "decisions": decisions, "history": history,
                 "notes": clean(full.get("working_doc_body")), "terminal": terminal,
-                "project": {"id": p["id"], "name": p["name"],
+                "project": {"id": p["id"], "name": p["name"], "icon": p.get("icon"),
                             "href": f"/projects/{quote(p['id'], safe='')}"},
                 "now": _iso(now)}

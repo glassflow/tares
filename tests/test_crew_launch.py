@@ -118,15 +118,16 @@ ck("a grant without a date says so", any("(undated)" in r for r in rules))
 ck("no grants, no rules", L.grant_rules("", "p", "Pat") == [])
 
 print("the status line command")
-ck("POSIX: a plain path is left alone, a path with a space is one word",
-   shlex.split(L.status_line_command("/a b/kit/scripts/statusline.py", "linux")) == ["python3", "/a b/kit/scripts/statusline.py"]
-   and L.status_line_command("/k/s.py", "darwin") == "python3 /k/s.py")
+HEAD = ["tares", "hook", "statusline", "--plugin-root"]
+ck("POSIX: a plain kit path is left alone, a path with a space is one word",
+   shlex.split(L.status_line_command("/a b/kit", "linux")) == HEAD + ["/a b/kit"]
+   and L.status_line_command("/k", "darwin") == "tares hook statusline --plugin-root /k")
 ck("POSIX: a quote, a dollar and a semicolon in the path stay inside the word",
-   shlex.split(L.status_line_command("/a'b $x;y/s.py", "linux"))[1:] == ["/a'b $x;y/s.py"])
-ck("Windows: plain path as it is, `python` not `python3`", L.status_line_command("C:/Users/p/kit/s.py", "win32") == "python C:/Users/p/kit/s.py")
+   shlex.split(L.status_line_command("/a'b $x;y/kit", "linux"))[4:] == ["/a'b $x;y/kit"])
+ck("Windows: plain path as it is", L.status_line_command("C:/Users/p/kit", "win32") == "tares hook statusline --plugin-root C:/Users/p/kit")
 ck("Windows: a space puts the path in double quotes, backslashes become forward slashes",
-   L.status_line_command("C:\\Users\\Pat Doe\\kit\\s.py", "win32") == 'python "C:/Users/Pat Doe/kit/s.py"')
-refused = [c for c in ('"', "%", "^", "!", "$", "`", "\n") if raises(L.quote_windows, f"C:/a{c}b/s.py") is not None]
+   L.status_line_command("C:\\Users\\Pat Doe\\kit", "win32") == 'tares hook statusline --plugin-root "C:/Users/Pat Doe/kit"')
+refused = [c for c in ('"', "%", "^", "!", "$", "`", "\n") if raises(L.quote_windows, f"C:/a{c}b/kit") is not None]
 ck("Windows: a quote, %, ^, !, $, a backtick and a line break are refused", len(refused) == 7, f"refused only {refused!r}")
 ck("...with a message that says what to do", "move the crew home or the kit" in (raises(L.quote_windows, "C:/a%b") or ""))
 
@@ -361,13 +362,13 @@ else:
                 docs[e + "_words"] = [parity.norm_text(w, tmp) for w in words]
             ck(f"{role} {station}: same settings (key order aside)", docs["bash"] == docs["python"],
                "\n".join(k for k in docs["bash"] if docs["bash"].get(k) != docs["python"].get(k)))
-            ck(f"{role} {station}: the status line runs the kit's statusline.py in both, as one word each",
-               docs["bash_words"] == docs["python_words"] and docs["python_words"][0] == "python3"
-               and docs["python_words"][1].endswith("/scripts/statusline.py") and len(docs["python_words"]) == 2, str(docs["python_words"]))
+            ck(f"{role} {station}: the status line is `tares hook statusline --plugin-root <kit>` in both, the kit as one word",
+               docs["bash_words"] == docs["python_words"] and docs["python_words"][:4] == HEAD
+               and len(docs["python_words"]) == 5, str(docs["python_words"]))
         if " " in tmps["python"].name:
             _, words = settings_of(tmps["python"], "crew-reviewer")
             ck("the crew home with a space is one word in the status line and in the file's own paths",
-               " " in tmps["python"].name and len(words) == 2)
+               " " in tmps["python"].name and len(words) == 5)
             doc = json.loads((tmps["python"] / "crew" / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8"))
             ck("JSON paths use forward slashes", "\\" not in json.dumps(doc["env"]).replace("\\n", ""), json.dumps(doc["env"])[:200])
         ck("no token in a settings file", all(FAKE_TOKEN not in p.read_text(encoding="utf-8", errors="replace")

@@ -6,6 +6,7 @@ import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { decideCall, factoryProject, type FactoryProjectData, type PastCall, type ProjectCall } from "./FactoryProject.api";
 import { CallRow } from "./FactoryProject";
+import { InlineIcon } from "./ProjectIcon";
 
 // /projects/:id/calls: the calls the crew made without the person, on their own page. The open
 // ones first, each kept or changed here; then the ones already kept or changed, newest first.
@@ -52,7 +53,7 @@ export default function FactoryCalls() {
   const crumb = (
     <div className={MUTED} data-testid="crumb">
       <Link to="/projects" className={LINK}>Projects</Link>
-      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text>{data.name}</Link></>}
+      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text><InlineIcon icon={data.icon} className="mr-1" />{data.name}</Link></>}
       {" / "}Calls
     </div>
   );

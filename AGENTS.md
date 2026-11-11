@@ -80,10 +80,13 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_PUBLIC_URL` | the address people reach the cell at, for the ingest URLs the guided setup shows; default the request's own |
 | `TARES_MCP_URL` | the MCP address the guided setup gives an outside agent; default `TARES_PUBLIC_URL` plus `/mcp` |
 | `TARES_FACTORY_MCP_URL` | the crew's shared MCP endpoint, set by `tares factory` for stations and the spec session; the plugin connects there (default: local Tares gives 127.0.0.1:8788/mcp, a remote one its own `/mcp`) |
-| `TARES_FACTORY_CRED_FILE` | path of the crew's token file, read by the plugin's MCP header helper (`claude-plugin/bin/mcp-headers`); same file as `TARES_FACTORY_TOKEN_FILE` |
+| `TARES_FACTORY_CRED_FILE` | path of the crew's token file, read by the plugin's MCP header helper (`claude-plugin/scripts/mcp_headers.py`); same file as `TARES_FACTORY_TOKEN_FILE` |
 | `TARES_METRICS_TOKEN` | when set, `/metrics` wants `Authorization: Bearer <token>` and answers 401 without it; unset keeps it public (the cell's auth token is not accepted there) |
 | `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
+| `TARES_FACTORY_ENGINE` | which engine runs `tares factory`: unset runs Python, and a command not yet ported falls back to bash; `python` allows Python only (an unported command exits 2); `bash` runs bash for every command. `"engine": "bash"` in `~/factory/crew.json` is the same as `bash` when the variable is not set. `tares factory doctor` shows the active engine |
 | `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` hand to bash, instead of the one in the install or checkout; the factory suites set it to their edited copy of the kit when `FACTORY_BIN` is set |
+| `TARES_FAKE_PS_DIR` | test hook: a folder a suite's fake `ps` (`tests/factory/fake-ps`) answers from, with `ps/<pid>.<field>` files and a `ps-list` file; the Python engine reads processes with psutil, which cannot see a fake `ps` on PATH, so with this set it reads those files instead of the machine's processes, and runs the `sort-hook` file once between `crew update`'s two spare checks, where bash's fake `sort` would |
+| `TARES_URL_LOG` | test hook: a file the Python crew engine appends each Tares request URL to, one per line; the suites' curl shim does the same for bash, and `tests/factory/idle_wake_test.sh` reads the file to check which addresses the watch asked for |
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 

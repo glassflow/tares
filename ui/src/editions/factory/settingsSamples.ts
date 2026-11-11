@@ -1,7 +1,8 @@
 // Sample data for the Settings page, shown at /settings?sample=<name> when the browser has the
 // sample flag (see sample.ts). It is invented: project-x, example-org, Alex, Kim, Lee.
 
-import type { SettingsGrant, SettingsPage, SettingsTool } from "./FactorySettings.api";
+import type { Person } from "../../types";
+import type { MorningStatus, SettingsGrant, SettingsPage, SettingsTool } from "./FactorySettings.api";
 
 const PACE_OFF = "Pacing is off. The crew keeps starting builders whatever the plan has left.";
 const NOTE = "Switching changes the screens, not your data. What only the other edition shows stays reachable under Settings, Advanced.";
@@ -62,8 +63,30 @@ const MANY: SettingsGrant[] = [
   ...[1, 2, 3, 4, 5].map((i) => grant(10 + i, "Builders may squash-merge factory/* pull requests once checks are green and the reviewer passed them", "project-x", `given ${i + 6} days ago`)),
 ];
 
+const MORNING: MorningStatus = {
+  enabled: true, to_slack: true, to_email: true, channel: "factory-status", recipients: ["alex@example.com", "kim@example.com"],
+  time: "09:00", timezone: "Europe/Berlin", email_available: true,
+  last_result: "Last sent Tuesday 09:00 to Slack and 2 people.",
+};
+const SLACK_ON = tools("Connected as the GitHub App on example-org", "Connected to the example-org workspace", "Connected to the example-org Slack", "Reporting: last session 2 minutes ago");
+const SLACK_OFF = tools("Connected as the GitHub App on example-org", "Connected to the example-org workspace", null, "Reporting: last session 2 minutes ago");
+
+const person = (id: string, name: string, email: string | null): Person =>
+  ({ id, name, email, emails: email ? [email] : [], github: null, is_admin: false, created_via: "console" });
+
+/** The workspace's people, for the samples of the Morning status page. Lee has no email. */
+export const SAMPLE_PEOPLE: Person[] = [
+  person("p1", "Alex", "alex@example.com"), person("p2", "Kim", "kim@example.com"),
+  person("p3", "Lee", null), person("p4", "Sam", "sam@example.com"),
+];
+
 const SAMPLES: Record<string, SettingsPage> = {
-  busy: BASE,
+  busy: { ...BASE, morning: MORNING },
+  morning: { ...BASE, tools: SLACK_ON, morning: MORNING },
+  morningoff: { ...BASE, tools: SLACK_ON, morning: { ...MORNING, enabled: false, to_slack: false, to_email: false, channel: "", recipients: [], last_result: "" } },
+  morningemail: { ...BASE, tools: SLACK_OFF, morning: { ...MORNING, to_slack: false, channel: "", last_result: "" } },
+  morningself: { ...BASE, tools: SLACK_ON, morning: { ...MORNING, to_email: false, recipients: [], email_available: false, last_result: "" } },
+  morningblocked: { ...BASE, tools: SLACK_ON, morning: { ...MORNING, to_slack: false, channel: "", to_email: true, recipients: [], last_result: "" } },
   newc: {
     ...BASE,
     tools: tools(null, null, null, null),

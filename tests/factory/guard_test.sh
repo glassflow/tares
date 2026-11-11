@@ -2,9 +2,9 @@
 # Checks the PreToolUse guard: each rule fires for the wrong station and lets the owner through.
 set -uo pipefail
 R="$(cd "$(dirname "$0")/../.." && pwd)"
-G="$R/claude-plugin/hooks/guard.sh"
-# TARES_FACTORY_ENGINE=python runs the Python guard (guard.py) through the same cases.
-guard() { if [ "${TARES_FACTORY_ENGINE:-}" = python ]; then "${PYTHON:-python3}" "$R/claude-plugin/hooks/guard.py"; else bash "$G"; fi; }
+# The guard as hooks.json starts it: `tares hook guard`, on this checkout's plugin (the same words a
+# station's PreToolUse hook runs, so the wiring is tested too).
+guard() { tares hook guard --plugin-root "$R/claude-plugin"; }
 export FACTORY_HOME=/nonexistent FACTORY_STATION=test
 fail=0
 t() { # role tool command expected

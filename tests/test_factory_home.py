@@ -383,7 +383,7 @@ async def main():
 
             ck("no forbidden word or dash anywhere in the body", words.offenders_in(h) == [],
                words.offenders_in(h))
-            ck("the page shape is the same on every key", all(set(p) == {
+            ck("the page shape is the same on every key", all(set(p) == {"icon", 
                 "id", "name", "goal", "state", "state_label", "milestone", "tickets", "repos", "builders",
                 "last_activity_at", "last_activity", "meta", "can_close"} for p in h["projects"]))
 
