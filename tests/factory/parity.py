@@ -9964,16 +9964,33 @@ _st_cc("cc_frozen_note", "the note of the Claude Code already said is kept while
 
 # A freeze that lands in the middle of a round (`crew freeze` while the watch has picked a station) wins: nothing is restarted.
 # The fake Claude Code freezes the crew once the watch has read the session list.
-# KNOWN DIFFERENCE, bash first: the checks pass on both engines and nothing is restarted by either, but the engines do not print
+# KNOWN DIFFERENCE (A46, set aside below), bash first: the checks pass on both engines and nothing is restarted by either, but the engines do not print
 # the same. Bash keeps the crew settings it read at the top of the round (the frozen check of the kit part and of the Claude Code
 # part) and reads them again only before a move, so a freeze that lands in between goes unsaid. The Python steps read the settings
 # for the first time after the hook ran, see the freeze, and say "kit ... is newer than the frozen kit" or "Claude Code ... is
 # newer" (a kit-newer or claude-newer event, and the note), once. See the report of TR-1161.
 FREEZE_HOOK = f'"{sys.executable}" -m tares.crew crew freeze'
+# A46 (the orchestrator's, confirmed with Kiran): Python's report of the freeze is the behaviour kept after TR-975, so the
+# difference is not a failure. The scenario sets its three traces aside from the comparison, on both sides, so that
+# `--coverage` counts its label: the stderr line (`drop`), the `claude-newer` row of events.jsonl and the note file
+# (removed in the step's `after`, before the snapshot is read; nothing that follows reads either).
+FROZEN_MIDROUND_DROP = (r"^tares factory: Claude Code \S+ is newer than the one \d+ station\(s\) run; not moving stations while the kit is frozen",)
+
+
+def _frozen_midround_after(tmp: Path) -> dict:
+    ev = tmp / "crew" / "events.jsonl"
+    if ev.is_file():
+        keep = [x for x in ev.read_text(encoding="utf-8").splitlines() if x.strip() and json.loads(x).get("event") != _NF]
+        if keep:
+            ev.write_text("\n".join(keep) + "\n", encoding="utf-8")
+        else:
+            ev.unlink()
+    (tmp / "crew" / _NF).unlink(missing_ok=True)
+    return _st_after(tmp)
 
 _st_cc("cc_frozen_midround", "a freeze that lands in the middle of a round wins: nothing is restarted onto the newer Claude Code",
        [Step(["crew", "watch", "--once"], before=_cb_all(_all_idle, _cb_file("on-agents", FREEZE_HOOK), _cb_file("on-agents-at", "1\n")),
-             after=_st_after),
+             after=_frozen_midround_after, drop=FROZEN_MIDROUND_DROP),
         Step(["crew", "status"]),
         Step(["crew", "unfreeze"])],
        [("frozen in the middle of the round: nothing moves onto the newer Claude Code",
