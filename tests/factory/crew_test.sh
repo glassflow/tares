@@ -161,9 +161,11 @@ repo3="$T/blog"; mkdir -p "$repo3"; git -C "$repo3" init -q; repo3=$(git -C "$re
 hand_over blog "$repo3" >/dev/null
 "$F" spawn builder blog m1 "$repo3" "work T1" >"$T/max.out" 2>&1
 check "builders_max is honoured" 'grep -q "builders_max is 3" "$T/max.out"'
-hand_over "Crew Tools" "$repo3" >/dev/null
+# the hand-over refuses a project named like the crew (TR-1071), so spawn finds nothing to build
+cid=$(api POST /api/projects '{"template": "custom", "kind": "software_factory", "name": "Crew Tools", "objects": []}' | jq -r .id)
+api POST "/api/projects/$cid/handover" "$(jq -cn --arg p "$repo3" '{repos: [{path: $p}]}')" >"$T/crewname-ho.out" 2>&1
 "$F" spawn builder "Crew Tools" m1 "$repo3" "x" >"$T/crewname.out" 2>&1
-check "a project can't be named like the crew" 'grep -q "can.t start with" "$T/crewname.out" && [ -z "$(st crew-tools-build-m1 .role)" ]'
+check "a project can't be named like the crew" 'grep -q "the crew.s name: station names starting crew- belong to the crew itself" "$T/crewname-ho.out" && grep -q "is not handed to the crew on Tares" "$T/crewname.out" && [ -z "$(st crew-tools-build-m1 .role)" ]'
 check "roster lists project" '"$F" roster | grep -q "^links-app-build-m1	builder	Links App	working"'
 "$F" projects >"$T/projects.out" 2>&1
 check "projects lists each handed-over project with its builders and repos" 'grep -E "^Links App +0/0 +- +1 +.*$repo" "$T/projects.out" >/dev/null && grep -E "^shop +0/0 +- +2 " "$T/projects.out" >/dev/null'
