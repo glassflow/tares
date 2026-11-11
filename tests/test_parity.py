@@ -353,13 +353,15 @@ else:
     code, text = run("crew_basic", env={"PARITY_CMD_PYTHON": same, "PARITY_FAIL": "python"})
     ck("a failing python side exits 1", code == 1 and "FAIL python" in text, f"{code}\n{text}")
 
-    # One real run, with --require-full: it prints what --coverage prints (the full run of every scenario is the slow part of
-    # this test, so it is not done twice); that --coverage alone exits 0 is checked above, on the fixture suites.
+    # One full run (it evaluates every scenario, in a pool of worker processes), asked for the strict form: below 100%
+    # it exits 1 and says why; at 100% it exits 0. The plain form prints the same lines.
     code, text = run("--coverage", "--require-full")
-    ck("--require-full exits 1 below 100%", code == 1 and "--require-full" in text, f"{code}\n{text[-300:]}")
     last = [ln for ln in text.strip().splitlines() if ln.startswith("coverage: ")]
-    ck("--coverage prints a percentage",
-       bool(last) and "%" in last[-1] and "scenarios pass against Python" in last[-1], f"{code}\n{text[-400:]}")
+    last = last[-1] if last else ""
+    full = last.startswith("coverage: ") and " of " in last and last.split()[1] == last.split()[3]
+    ck("--coverage prints a percentage and --require-full exits 1 below 100% (0 at 100%)",
+       last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last
+       and code == (0 if full else 1) and (full or "--require-full" in text), f"{code}\n{text[-400:]}")
     ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
 
 # factory-bin: runs $FACTORY_BIN, and a call that lost the variable stops plainly (the 'tares' suite once ran
