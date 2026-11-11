@@ -389,10 +389,25 @@ async function waitFor(url, tries = 100) {
              (await crews.count()) === 2 && /^Ashish \(you\)/.test(await crews.nth(0).locator("h2").first().innerText())
              && /^Adam/.test(await crews.nth(1).locator("h2").first().innerText())
              && /Working/.test(await crews.nth(0).getByTestId("crew-of-person-summary").innerText())
-             && (await crews.nth(1).getByTestId("crew-of-person-summary").innerText()) === "Not running"
+             && /^Not running/.test(await crews.nth(1).getByTestId("crew-of-person-summary").innerText())
              && (await p.getByTestId("crew-summary").count()) === 0);
-          ck(`${tag}: each crew lists only its own members`, /Finished its work\./.test(await crews.nth(1).innerText())
-             && !/Finished its work\./.test(await crews.nth(0).innerText()));
+          ck(`${tag}: the caller's crew starts open, the others folded, each still saying how it runs`,
+             (await crews.nth(0).getByTestId("crew-of-person-body").count()) === 1
+             && (await crews.nth(1).getByTestId("crew-of-person-body").count()) === 0
+             && /Not running, no builder on it/.test(await crews.nth(1).getByTestId("crew-of-person-summary").innerText())
+             && /3 builders on it/.test(await crews.nth(0).getByTestId("crew-of-person-summary").innerText()));
+          await crews.nth(1).getByTestId("crew-of-person-toggle").click();
+          ck(`${tag}: opening a folded crew shows only its own members`, /Finished its work\./.test(await crews.nth(1).innerText())
+             && !/Finished its work\./.test(await crews.nth(0).innerText())
+             && (await crews.nth(1).getByTestId("crew-of-person-toggle").getAttribute("aria-expanded")) === "true");
+          await crews.nth(0).getByTestId("crew-of-person-toggle").click();
+          ck(`${tag}: the caller's own crew folds too`, (await crews.nth(0).getByTestId("crew-of-person-body").count()) === 0);
+          await p.reload({ waitUntil: "load" });
+          await p.getByTestId("crew-of-person").first().waitFor();
+          ck(`${tag}: the folds are kept in this browser after a reload`,
+             (await p.getByTestId("crew-of-person").nth(0).getByTestId("crew-of-person-body").count()) === 0
+             && (await p.getByTestId("crew-of-person").nth(1).getByTestId("crew-of-person-body").count()) === 1);
+          await p.evaluate(() => { try { localStorage.removeItem("taresCrewFolds"); } catch (e) { /* none */ } });
         }
         if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("wash-2")).length)) === 4);
         if (name === "long") ck(`${tag}: long names and texts wrap inside the page`, (await overflow(p)) <= 0);

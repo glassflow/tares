@@ -12,6 +12,7 @@ import {
 } from "./FactoryCrew.api";
 import { Conversation } from "./CrewConversation";
 import { InlineIcon } from "./ProjectIcon";
+import { ChevronDown, ChevronRight } from "../../components/icons";
 import { isSample, sampleDetail, sampleLoad, sampleToolOutput } from "./crewSamples";
 
 // The factory Crew page: who is on the crew, what each member is doing, how far the crew may go,
@@ -193,26 +194,53 @@ function Single({ title, m, actions, empty }: { title: string; m: CrewMember | n
   );
 }
 
+/** Which crews the reader folded or opened, kept in this browser only (a convenience: without it the
+ *  reader's own crew opens and the others start folded). */
+const FOLD_KEY = "taresCrewFolds";
+function readFolds(): Record<string, boolean> {
+  try { return JSON.parse(localStorage.getItem(FOLD_KEY) || "{}") as Record<string, boolean>; } catch { return {}; }
+}
+function writeFold(id: string, open: boolean) {
+  try { localStorage.setItem(FOLD_KEY, JSON.stringify({ ...readFolds(), [id]: open })); } catch { /* none */ }
+}
+
 /** One person's crew on a cell with several (TR-1223): their name, the machine when they have more
- *  than one crew, whether it runs, then its members as on a cell of one. */
+ *  than one crew, whether it runs and how many builders are on it. It folds: the reader's own crew
+ *  starts open, the others folded, and the reader's choice is kept in this browser. */
 function PersonCrew({ c, actions }: { c: CrewOfPerson; actions: CrewActions }) {
   const name = c.person.name ?? "A crew with no person";
+  const key = c.id ?? "none";
+  const [open, setOpen] = React.useState<boolean>(() => readFolds()[key] ?? c.mine);
+  const toggle = () => { setOpen(!open); writeFold(key, !open); };
+  const live = c.builders.reduce((n, g) => n + g.members.filter((m) => m.state !== "ended").length, 0);
+  const builders = live === 0 ? "no builder on it" : live === 1 ? "1 builder on it" : `${live} builders on it`;
   return (
-    <section className="grid min-w-0 gap-5 border-t border-border pt-5 first:border-t-0 first:pt-0" data-testid="crew-of-person"
-             aria-label={`${name}'s crew`}>
-      <div>
-        <h2 className="m-0! text-lg!">
-          <span data-user-text>{name}</span>{c.mine && <span className="font-normal text-muted-foreground"> (you)</span>}
-          {c.machine_shown && c.machine && <span className="font-normal text-muted-foreground"> on <span data-user-text>{c.machine}</span></span>}
-        </h2>
-        <p className="m-0! mt-0.5 text-sm text-muted-foreground" data-testid="crew-of-person-summary">{c.summary}</p>
-      </div>
-      {c.talk_to ? <Single title="Orchestrator" m={c.talk_to} actions={actions} /> : (
-        <div className={cn(CARD, "px-4 py-3 text-muted-foreground")}>No orchestrator has reported for this crew.</div>
+    <section className="min-w-0 border border-border bg-card" data-testid="crew-of-person" aria-label={`${name}'s crew`}>
+      <h2 className="m-0!">
+        <button type="button" className="block w-full px-4 py-3 text-left" aria-expanded={open} onClick={toggle}
+                data-testid="crew-of-person-toggle">
+          <span className="flex w-full min-w-0 items-center gap-3">
+            {open ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
+            <span className="min-w-0 flex-1">
+              <span className="text-lg font-semibold">
+                <span data-user-text>{name}</span>{c.mine && <span className="font-normal text-muted-foreground"> (you)</span>}
+                {c.machine_shown && c.machine && <span className="font-normal text-muted-foreground"> on <span data-user-text>{c.machine}</span></span>}
+              </span>
+              <span className="block text-sm font-normal text-muted-foreground" data-testid="crew-of-person-summary">{c.summary}, {builders}</span>
+            </span>
+          </span>
+        </button>
+      </h2>
+      {open && (
+        <div className="grid min-w-0 gap-5 border-t border-border bg-background px-4 py-4" data-testid="crew-of-person-body">
+          {c.talk_to ? <Single title="Orchestrator" m={c.talk_to} actions={actions} /> : (
+            <div className={cn(CARD, "px-4 py-3 text-muted-foreground")}>No orchestrator has reported for this crew.</div>
+          )}
+          {c.reviewer && <Single title="Reviewer" m={c.reviewer} actions={actions} />}
+          {c.releaser && <Single title="Releaser" m={c.releaser} actions={actions} />}
+          <Builders groups={c.builders} actions={actions} />
+        </div>
       )}
-      {c.reviewer && <Single title="Reviewer" m={c.reviewer} actions={actions} />}
-      {c.releaser && <Single title="Releaser" m={c.releaser} actions={actions} />}
-      <Builders groups={c.builders} actions={actions} />
     </section>
   );
 }
@@ -378,7 +406,9 @@ export function FactoryCrewView({ data, error, reload, actions }: {
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
               {(data.crews ?? []).length > 1 ? (
-                (data.crews ?? []).map((c) => <PersonCrew key={c.id ?? "none"} c={c} actions={actions} />)
+                <div className="grid min-w-0 gap-3" data-testid="crew-people">
+                  {(data.crews ?? []).map((c) => <PersonCrew key={c.id ?? "none"} c={c} actions={actions} />)}
+                </div>
               ) : (
                 <>
                   <Single title="Orchestrator" m={data.talk_to} actions={actions} empty={<NotStarted />} />
