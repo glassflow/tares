@@ -177,9 +177,9 @@ async def main():
         print("== linking a project ==")
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Invoices",
                                                     "objects": []})).json()["id"]
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": "https://linear.app/acme/nope-000"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "linear", "link_fields": {"project": "https://linear.app/acme/nope-000"}})
         ck("an unknown Linear project -> 400", r.status_code == 400, r.text)
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": PROJECT["url"] + "/overview"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "linear", "link_fields": {"project": PROJECT["url"] + "/overview"}})
         tickets = r.json()["tickets"]
         ck("link by URL: three tickets in Linear's order", r.status_code == 200
            and [t["identifier"] for t in tickets] == ["FAC-1", "FAC-2", "FAC-3"]
@@ -191,8 +191,9 @@ async def main():
         ck("the linear source exists and is in the project",
            "linear" in app.state.runtime.catalog.sources
            and "linear" in store.project_sources(uid))
-        n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
-                                      "event_type = 'ticket_created'").fetchone()[0]
+        with store._lock:                    # the source's first poll writes under this lock, from its own thread
+            n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
+                                          "event_type = 'ticket_created'").fetchone()[0]
         ck("one event per ticket found", n_created == 3, n_created)
         r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x"})
         ck("no Tares tickets on it", r.status_code == 409, r.text)
@@ -294,7 +295,7 @@ async def main():
         uid2 = (await cx.post("/api/projects", json={"template": "custom", "name": "Other",
                                                      "objects": []})).json()["id"]
         await cx.post(f"/api/projects/{uid2}/tickets", json={"title": "mine"})
-        r = await cx.post(f"/api/projects/{uid2}/linear", json={"project": PROJECT["id"]})
+        r = await cx.put(f"/api/projects/{uid2}/tickets/link", json={"integration": "linear", "link_fields": {"project": PROJECT["id"]}})
         ck("a project with its own tickets cannot be linked", r.status_code == 409, r.text)
         r = await cx.delete("/api/linear")
         ck("disconnect", r.json()["connected"] is False and linear.get_connection(store) is None,

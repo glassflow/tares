@@ -291,6 +291,9 @@ class TicketsGithub(tickets.TicketBackend):
         (GitHub orders issues by number). A milestone GitHub does not have is an error."""
         fields = dict(fields or {})
         fields.pop("order", None)
+        if "depends_on" in fields:
+            raise ValueError("a GitHub issue's blocked-by links are set in GitHub; Tares reads "
+                             "them on the next sync")
         unknown = sorted(set(fields) - {"title", "body", "milestone"})
         if unknown:
             raise ValueError("a GitHub issue can change its title, body and milestone, not: "
@@ -309,7 +312,57 @@ class TicketsGithub(tickets.TicketBackend):
             await self._rest(ctx, "PATCH", f"/issues/{_number(t)}", body=patch)
 
     async def link(self, project, link_fields: dict) -> dict:
-        raise NotImplementedError("linking a project to GitHub Issues is done from the project page")
+        """Links the project to the repo `link_fields["repo"]` names (owner/name or a pasted
+        address) and the issue label `link_fields["issue_label"]` (default `tares:<project name>`).
+        Reads the repo once with the cell's GitHub credentials to check access; takes no key.
+        Returns the stored link (repo, label, URL and the credential's name). Raises
+        tickets.LinkConflict when the project's tickets live in Linear or are Tares's own, when it
+        is linked to another repo or label, or when another project holds this repo and label;
+        ValueError for a repo or label that is not valid; GitHubTicketsError when GitHub cannot be
+        read. The first sync and the `github_issues` source are the caller's."""
+        fields = tickets.check_link_fields(link_fields, ("repo", "issue_label"))
+        uid = self._project(project)
+        repo = _normalize_repo(fields.get("repo"))
+        name = project.get("name") if isinstance(project, dict) else None
+        if not name:
+            row = await asyncio.to_thread(self.store.get_project, uid)
+            name = (row or {}).get("name") or uid
+        issue_label = str(fields.get("issue_label") or gt.default_issue_label(name)).strip()
+        if not issue_label or len(issue_label) > 50:
+            raise ValueError("the issue label must be 1 to 50 characters")
+        cur = await asyncio.to_thread(self._link_refusals, uid, repo, issue_label)
+        info, _milestones, _issues = await gt.fetch(
+            self.store, {**(cur or {}), "repo": repo, "issue_label": issue_label})
+        # GitHub was asked in between: look again, and save with no await after the look
+        cur = await asyncio.to_thread(self._link_refusals, uid, repo, issue_label)
+        await asyncio.to_thread(
+            self.store.set_project_github, uid,
+            {**(cur or {}), "repo": repo, "issue_label": issue_label,
+             "url": f"https://github.com/{repo}", "credential": info["credential"]})
+        return await asyncio.to_thread(self.store.get_project_github, uid)
+
+    def _link_refusals(self, uid: str, repo: str, issue_label: str) -> dict | None:
+        """The 409s; the project's link as it stands."""
+        if self.store.get_project_linear(uid):
+            raise tickets.LinkConflict("this project's tickets live in Linear; stop using Linear "
+                                       "first")
+        if any(t["owner"] == "tares" for t in self.store.list_tickets(uid)):
+            raise tickets.LinkConflict("this project already has its own tickets in Tares; a "
+                                       "project's tickets live in one place")
+        cur = self.store.get_project_github(uid)
+        if cur and (cur.get("repo"), cur.get("issue_label")) != (repo, issue_label):
+            raise tickets.LinkConflict(
+                f"this project is linked to {cur.get('repo')} with issue label "
+                f"{cur.get('issue_label')}; unlink it first")
+        for other, link in self.store.github_projects():
+            if other != uid and (str(link.get("repo")).lower(),
+                                 str(link.get("issue_label")).lower()
+                                 ) == (repo.lower(), issue_label.lower()):
+                owner = self.store.get_project(other)
+                raise tickets.LinkConflict(
+                    f"{repo} with issue label {issue_label} is already the ticket home of "
+                    f"project {owner['name'] if owner else other}")
+        return cur
 
     # ── the status write ──────────────────────────────────────────────────────
     async def _write(self, t: dict, status: Status, retry: bool) -> bool:

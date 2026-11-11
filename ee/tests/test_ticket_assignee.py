@@ -186,7 +186,8 @@ async def main():
                                                     "objects": []})).json()["id"]
         catch = Catch()
         logging.getLogger("tares.ticket_assignee").addHandler(catch)
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": LIN_PROJECT["url"]})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link",
+                          json={"integration": "linear", "link_fields": {"project": LIN_PROJECT["url"]}})
         ck("link answers 200", r.status_code == 200, r.text[:300])
         tk = await tickets(uid)
         ck("owner still says where it lives", all(t["owner"] == "linear" for t in tk.values()),
@@ -291,8 +292,9 @@ async def main():
         gid = (await cx.post("/api/projects", json={"template": "custom", "name": "Gh project",
                                                     "objects": []})).json()["id"]
         GH["assignees"] = {1: ["kiran-gh"], 2: ["Octo-Unknown"], 3: [], 4: ["lena-not-gh", "kiran-gh"]}
-        r = await cx.post(f"/api/projects/{gid}/github", json={"repo": "acme/app",
-                                                              "issue_label": LABEL})
+        r = await cx.put(f"/api/projects/{gid}/tickets/link",
+                          json={"integration": "github", "link_fields": {"repo": "acme/app",
+                                                                         "issue_label": LABEL}})
         ck("link answers 200", r.status_code == 200, r.text[:300])
         tk = await tickets(gid)
         ck("owner is github", all(t["owner"] == "github" for t in tk.values()))

@@ -248,6 +248,9 @@ class TicketsLinear(tickets.TicketBackend):
         if fields is not None and not isinstance(fields, dict):
             raise ValueError("fields is a dict of what to change")
         fields = dict(fields or {})
+        if "depends_on" in fields:
+            raise ValueError("a Linear issue's blocking relations are set in Linear; Tares reads "
+                             "them on the next sync")
         unknown = sorted(str(k) for k in set(fields) - {"title", "order", "milestone"})
         if unknown:
             raise ValueError("a Linear issue can change its title, order and milestone, not: "
@@ -271,7 +274,34 @@ class TicketsLinear(tickets.TicketBackend):
             raise linear.LinearError(f"Linear did not change {factory_mod.label(t)}")
 
     async def link(self, project, link_fields: dict) -> dict:
-        raise NotImplementedError("linking a project to Linear is done from the project page")
+        """Links the project to the Linear project `link_fields["project"]` names (its id, URL or
+        name). Takes no key: the cell's own connection reads Linear. Returns the stored link (its
+        id, name and URL, and the state of the last sync). Raises tickets.LinkConflict when the
+        project's tickets live in GitHub, or are Tares's own, or it is linked to another Linear
+        project already; LinearError when Linear does not have the project. The first sync and the
+        `linear` source are the caller's."""
+        fields = tickets.check_link_fields(link_fields, ("project",))
+        uid = self._project(project)
+        await asyncio.to_thread(self._link_refusals, uid)
+        found = await linear.find_project(self.store, str(fields.get("project") or ""))
+        # Linear was asked in between: look again, and save with no await after the look
+        cur = await asyncio.to_thread(self._link_refusals, uid)
+        if cur and cur.get("id") != found["id"]:
+            raise tickets.LinkConflict(
+                f"this project is linked to Linear project {cur.get('name')!r}; unlink it first")
+        link = {**(cur or {}), **found}
+        await asyncio.to_thread(self.store.set_project_linear, uid, link)
+        return await asyncio.to_thread(self.store.get_project_linear, uid)
+
+    def _link_refusals(self, uid: str) -> dict | None:
+        """The 409s; the project's link as it stands."""
+        if self.store.get_project_github(uid):
+            raise tickets.LinkConflict("this project's tickets live in GitHub; stop using GitHub "
+                                       "first")
+        if any(t["owner"] == "tares" for t in self.store.list_tickets(uid)):
+            raise tickets.LinkConflict("this project already has its own tickets in Tares; a "
+                                       "project's tickets live in one place")
+        return self.store.get_project_linear(uid)
 
     # ── the write ─────────────────────────────────────────────────────────────
     async def _write(self, t: dict, status: Status, retry: bool) -> bool:

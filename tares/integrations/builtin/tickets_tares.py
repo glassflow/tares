@@ -123,6 +123,15 @@ class TicketsTares(tickets.TicketBackend):
                     factory_mod.label(by_id[x]) for x in loop if x in by_id))
         return ids
 
+    def _not_linked(self, uid: str, what: str) -> None:
+        """A project whose tickets live in Linear or GitHub takes no ticket or milestone made in
+        Tares (the POST routes answer 409 the same way): it would be a second list."""
+        home = self.store.project_ticket_home(uid)
+        if home:
+            title = {"linear": "Linear", "github": "GitHub"}.get(home, home)
+            raise tickets.LinkConflict(f"this project's {what} live in {title}; add it there and "
+                                       "it shows up here on the next sync")
+
     def _create_milestone(self, uid: str, item: dict) -> TicketRef:
         """A milestone with the same name is changed, not added twice (the route does the same),
         so a retry finds the one already made."""
@@ -136,12 +145,14 @@ class TicketsTares(tickets.TicketBackend):
                 fields["position"] = float(pos)
             self.store.update_milestone(cur["id"], **fields)
             return TicketRef(cur["id"])
+        self._not_linked(uid, "milestones")
         return TicketRef(self.store.create_milestone(
             uid, name, goal, checks, float(pos) if pos is not None else None))
 
     def _create_ticket(self, uid: str, item: dict) -> TicketRef:
         """A ticket Tares owns with the same title in the same milestone is the one a retry
         made: it is returned, and no second copy is added."""
+        self._not_linked(uid, "tickets")
         title = docs_mod.title_ok(item.get("title"))
         status = docs_mod.status_ok(item.get("status"))
         milestone = self._milestone_id(uid, item.get("milestone"))
@@ -161,6 +172,11 @@ class TicketsTares(tickets.TicketBackend):
 
     def _update(self, t: dict, fields: dict) -> None:
         uid = t["project"]
+        unknown = sorted(str(k) for k in set(fields) - {"title", "order", "position", "milestone",
+                                                        "depends_on"})
+        if unknown:
+            raise ValueError("a Tares ticket can change its title, order, milestone and "
+                             "dependencies, not: " + ", ".join(unknown))
         out: dict = {}
         if "title" in fields:
             out["title"] = docs_mod.title_ok(fields["title"])

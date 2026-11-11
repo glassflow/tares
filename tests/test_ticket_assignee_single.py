@@ -165,7 +165,7 @@ async def main():
                             "i2": {"email": "ghost@x.dev", "name": "Ghost"}}
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Invoices",
                                                     "objects": []})).json()["id"]
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": LIN_PROJECT["url"]})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "linear", "link_fields": {"project": LIN_PROJECT["url"]}})
         ck("link answers 200", r.status_code == 200, r.text[:300])
         tk = await tickets(uid)
         ck("the tickets came in", sorted(tk) == [1, 2, 3] and all(t["owner"] == "linear" for t in tk.values()),
@@ -195,7 +195,7 @@ async def main():
         gid = (await cx.post("/api/projects", json={"template": "custom", "name": "Gh project",
                                                     "objects": []})).json()["id"]
         GH["assignees"] = {1: ["kiran-gh"], 2: ["Octo-Unknown"]}
-        r = await cx.post(f"/api/projects/{gid}/github", json={"repo": "acme/app", "issue_label": LABEL})
+        r = await cx.put(f"/api/projects/{gid}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": LABEL}})
         ck("link answers 200", r.status_code == 200, r.text[:300])
         tk = await tickets(gid)
         ck("the issues came in as GitHub tickets", sorted(tk) == [1, 2, 3]

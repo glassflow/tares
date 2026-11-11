@@ -715,8 +715,8 @@ export const api = {
   linearProjects: (q = "") =>
     request<{ projects: { id: string; name: string; url: string }[] }>(`/api/linear/projects?q=${encodeURIComponent(q)}`),
   linkLinear: (id: string, project: string) =>
-    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/linear`,
-      { method: "POST", body: JSON.stringify({ project }) }),
+    request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets/link`,
+      { method: "PUT", body: JSON.stringify({ integration: "linear", link_fields: { project } }) }),
   syncLinear: (id: string) =>
     request<{ tickets: Ticket[]; linear: LinearLink | null }>(`/api/projects/${encodeURIComponent(id)}/linear/sync`,
       { method: "POST" }),
@@ -724,8 +724,8 @@ export const api = {
     request<{ tickets: Ticket[]; linear: null }>(`/api/projects/${encodeURIComponent(id)}/linear`,
       { method: "DELETE" }),
   linkGitHub: (id: string, repo: string, issue_label: string) =>
-    request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/github`,
-      { method: "POST", body: JSON.stringify({ repo, issue_label }) }),
+    request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/tickets/link`,
+      { method: "PUT", body: JSON.stringify({ integration: "github", link_fields: { repo, issue_label } }) }),
   syncGitHub: (id: string) =>
     request<{ tickets: Ticket[]; github: GitHubLink | null }>(`/api/projects/${encodeURIComponent(id)}/github/sync`,
       { method: "POST" }),
