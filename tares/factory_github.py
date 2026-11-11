@@ -72,6 +72,14 @@ def _ci(statuses: list[dict], runs: list[dict]) -> str:
     return "success"
 
 
+def _more_than_read(total, got: list) -> bool:
+    """GitHub says it holds more entries than the page it sent (`total_count` above what came)."""
+    try:
+        return int(total) > len(got)
+    except (TypeError, ValueError):
+        return False
+
+
 def _status_state(state) -> str:
     """A commit status as success, failure or pending (`error` is a failure; a word GitHub may
     add later waits as pending, never as a pass)."""
@@ -141,15 +149,26 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 pr = r.json()
                 head = (pr.get("head") or {}).get("sha") or ""
                 statuses, check_runs = [], []
+                partial = False   # a CI read that did not give everything (see ci_partial below)
                 try:   # CI and the verdict are extra: the PR itself is already read
                     st = await cx.get(f"{api}/repos/{repo}/commits/{head}/status",
                                       params={"per_page": 100})
                     runs = await cx.get(f"{api}/repos/{repo}/commits/{head}/check-runs",
                                         params={"per_page": 100})
-                    statuses = (st.json().get("statuses") or []) if st.status_code == 200 else []
-                    check_runs = (runs.json().get("check_runs") or []) if runs.status_code == 200 else []
+                    if st.status_code == 200:
+                        body = st.json()
+                        statuses = body.get("statuses") or []
+                        partial = partial or _more_than_read(body.get("total_count"), statuses)
+                    else:
+                        partial = True
+                    if runs.status_code == 200:
+                        body = runs.json()
+                        check_runs = body.get("check_runs") or []
+                        partial = partial or _more_than_read(body.get("total_count"), check_runs)
+                    else:
+                        partial = True
                 except Exception:
-                    pass
+                    partial = True
             review = next((s for s in statuses if s.get("context") == REVIEW_CONTEXT), None)
             out.update({
                 "title": pr.get("title"), "branch": (pr.get("head") or {}).get("ref"),
@@ -157,6 +176,9 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 "merge_commit": pr.get("merge_commit_sha") if pr.get("merged") else None,
                 "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs),
                 "ci_checks": _check_list(statuses, check_runs),
+                # True when a status or check-run read failed or GitHub holds more than was read:
+                # `ci` and `ci_checks` then show only part of the commit's checks
+                "ci_partial": partial,
                 # what the change was, for the project's GitHub page: the same read, no extra call
                 "created_at": pr.get("created_at"), "closed_at": pr.get("closed_at"),
                 "author": (pr.get("user") or {}).get("login"),
@@ -194,6 +216,7 @@ async def has_workflows(store, repo: str, ref: str) -> bool | None:
     if key in _workflows:
         return _workflows[key]
     found: bool | None = None
+    unsure = False   # a credential gave no answer: a 404 from another is not enough to say "none"
     for tok, api in await _tokens(store, repo):
         headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {tok}",
                    "X-GitHub-Api-Version": "2022-11-28"}
@@ -205,16 +228,21 @@ async def has_workflows(store, repo: str, ref: str) -> bool | None:
                 found = False   # or this credential cannot see the repo: another may know better
                 continue
             if r.status_code != 200:
+                unsure = True
                 continue
             body = r.json()
         except Exception:
+            unsure = True
             continue
         if not isinstance(body, list):
-            continue            # the path is a file, not a folder: nothing to say
+            unsure = True       # the path is a file, not a folder: nothing to say
+            continue
         if any(isinstance(f, dict) and f.get("type", "file") == "file" for f in body):
             found = True
             break
         found = False
+    if found is False and unsure:
+        found = None            # a 404 or an empty folder from one credential, no answer from another
     if found is not None:
         if len(_workflows) >= _WORKFLOWS_KEPT:
             _workflows.pop(next(iter(_workflows)))

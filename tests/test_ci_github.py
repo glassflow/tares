@@ -53,12 +53,13 @@ calls: list[str] = []
 
 
 def reset(statuses=None, runs=None, workflows=(200, [{"type": "file", "name": "ci.yml"}]),
-          head=HEAD, pr_status=200):
+          head=HEAD, pr_status=200, st_code=200, runs_code=200, st_total=None, runs_total=None):
     fg._workflows.clear()
     calls.clear()
     G.clear()
     G.update(statuses=statuses or [], runs=runs or [], workflows=workflows, head=head,
-             pr_status=pr_status)
+             pr_status=pr_status, st_code=st_code, runs_code=runs_code, st_total=st_total,
+             runs_total=runs_total)
 
 
 def handler(req: httpx.Request):
@@ -72,9 +73,23 @@ def handler(req: httpx.Request):
             "head": {"sha": G["head"], "ref": "factory/T1"}, "base": {"ref": "main"},
             "html_url": f"https://github.com/{REPO}/pull/{N}"})
     if path.endswith("/status"):
-        return httpx.Response(200, json={"statuses": G["statuses"]})
+        if G["st_code"] == "raise":
+            raise httpx.ConnectError("down")
+        if G["st_code"] != 200:
+            return httpx.Response(G["st_code"], json={})
+        body = {"statuses": G["statuses"]}
+        if G["st_total"] is not None:
+            body["total_count"] = G["st_total"]
+        return httpx.Response(200, json=body)
     if path.endswith("/check-runs"):
-        return httpx.Response(200, json={"check_runs": G["runs"]})
+        if G["runs_code"] == "raise":
+            raise httpx.ConnectError("down")
+        if G["runs_code"] != 200:
+            return httpx.Response(G["runs_code"], json={})
+        body = {"check_runs": G["runs"]}
+        if G["runs_total"] is not None:
+            body["total_count"] = G["runs_total"]
+        return httpx.Response(200, json=body)
     if path.endswith("/contents/.github/workflows"):
         code, body = G["workflows"]
         return httpx.Response(code, json=body)
@@ -290,6 +305,47 @@ fg._workflows.update({(REPO, f"r{i}"): True for i in range(fg._WORKFLOWS_KEPT)})
 asyncio.run(fg.has_workflows(store, REPO, "fresh"))
 ck("the remembered answers stay few", len(fg._workflows) <= fg._WORKFLOWS_KEPT, len(fg._workflows))
 
+print("== a read that gave only part of the checks ==")
+for label, kw in (("check runs answered 502", dict(runs_code=502)),
+                  ("check runs answered 403", dict(runs_code=403)),
+                  ("check runs raised", dict(runs_code="raise")),
+                  ("statuses answered 502", dict(st_code=502)),
+                  ("statuses raised", dict(st_code="raise"))):
+    reset(statuses=[status("outside/ci", "success")] if "runs" in label else [],
+          runs=[] if "runs" in label else [run("test")], **kw)
+    out = ci()
+    ck(f"{label}: green on the other side is pending, never success", (out.state, out.failing) == ("pending", []), out)
+    got = asyncio.run(fg.read_pr(store, REPO, N))
+    ck(f"{label}: read_pr marks the read partial", got["ci_partial"] is True, got.get("ci_partial"))
+reset(runs_code=502, workflows=(404, {}))
+ck("no checks and a failed read: pending, not none", asyncio.run(GithubCI(store).state(pr(), [])).state == "pending")
+ck("no checks and a failed read: workflows not asked", not any("/contents/" in c for c in calls), calls)
+reset(st_code=403, runs_code="raise", workflows=(404, {}))
+ck("no checks and both reads failed: pending", asyncio.run(GithubCI(store).state(pr(), [])).state == "pending")
+reset(runs=[run("test", conclusion="failure")], st_code=502)
+out = ci()
+ck("a failure that was read is still a failure when the other read failed",
+   (out.state, out.failing) == ("failure", ["test"]), out)
+reset(runs=[run("test")], st_code=502)
+ck("required names do not make a failed read count as green", ci(["test"]).state == "pending")
+reset(runs=[run("test")], st_code=502, workflows=(404, {}))
+ck("no workflow lookup when the read was partial and a check came back", ci().state == "pending")
+reset(runs=[run("test")], statuses=[status("s", "success")])
+ck("complete reads are not partial", asyncio.run(fg.read_pr(store, REPO, N))["ci_partial"] is False)
+reset(runs=[run("test")], runs_total=250)
+out = ci()
+ck("GitHub holds more check runs than were sent: pending", out.state == "pending", out)
+reset(runs=[run("test")], statuses=[status("s", "success")], st_total=101)
+ck("GitHub holds more statuses than were sent: pending", ci().state == "pending")
+reset(runs=[run("test", conclusion="failure")], runs_total=250)
+ck("more than were sent, and one failing among them: still failure", ci().state == "failure")
+reset(runs=[run("test")], runs_total=1, statuses=[status("s", "success")], st_total=1)
+ck("a total that matches is complete", ci().state == "success")
+reset(runs=[run("test")], runs_total="x")
+ck("a total that is no number is ignored", ci().state == "success")
+ck("_more_than_read", fg._more_than_read(3, [1, 2]) and not fg._more_than_read(2, [1, 2])
+   and not fg._more_than_read(None, [1]) and not fg._more_than_read("", [1]))
+
 print("== two credentials ==")
 store.upsert_github_credential("second", "tok-second")
 order = []
@@ -309,6 +365,58 @@ fg._transport = httpx.MockTransport(two)
 fg._workflows.clear()
 ck("a credential that cannot see the repo does not decide: True from the one that can",
    asyncio.run(fg.has_workflows(store, REPO, HEAD)) is True and len(order) == 2, order)
+
+def mixed(first, second):
+    """Two credentials in name order (main, second): what each answers for the workflows folder."""
+    def h(req: httpx.Request):
+        tok = req.headers.get("authorization", "")
+        if req.url.path.endswith("/contents/.github/workflows"):
+            code, body = first if tok.endswith("tok-main") else second
+            if code == "raise":
+                raise httpx.ConnectError("down")
+            return httpx.Response(code, json=body)
+        return httpx.Response(404, json={})
+    return httpx.MockTransport(h)
+
+
+for label, first, second, want in (
+        ("404 then 403: no answer, not none", (404, {}), (403, {}), None),
+        ("404 then 502: no answer", (404, {}), (502, {}), None),
+        ("404 then an exception: no answer", (404, {}), ("raise", {}), None),
+        ("403 then 404: no answer", (403, {}), (404, {}), None),
+        ("an empty folder then 403: no answer", (200, []), (403, {}), None),
+        ("a path that is a file then 404: no answer", (200, {"type": "file"}), (404, {}), None),
+        ("404 then 404: none", (404, {}), (404, {}), False),
+        ("404 then an empty folder: none", (404, {}), (200, []), False),
+        ("403 then files: found", (403, {}), (200, [{"type": "file", "name": "ci.yml"}]), True),
+        ("404 then files: found", (404, {}), (200, [{"type": "file", "name": "ci.yml"}]), True)):
+    fg._transport = mixed(first, second)
+    fg._workflows.clear()
+    got = asyncio.run(fg.has_workflows(store, REPO, HEAD))
+    ck(label, got is want, got)
+    if want is None:
+        ck(label + ": and it is not remembered", (REPO, HEAD) not in fg._workflows)
+
+
+def with_pr(first, second):
+    """The PR served normally with no checks at all; the workflows folder answers as `mixed`."""
+    inner = mixed(first, second)
+
+    def h(req: httpx.Request):
+        if req.url.path.endswith("/contents/.github/workflows"):
+            return inner.handler(req)
+        return handler(req)
+    return httpx.MockTransport(h)
+
+
+reset()
+fg._transport = with_pr((404, {}), (403, {}))
+ck("state: no checks, workflows 404 then 403: pending, not none",
+   asyncio.run(GithubCI(store).state(pr(), [])).state == "pending")
+reset()
+fg._transport = with_pr((404, {}), (404, {}))
+ck("state: no checks, workflows 404 from both: none",
+   asyncio.run(GithubCI(store).state(pr(), [])).state == "none")
 fg._transport = httpx.MockTransport(handler)
 
 print("== empty and null inputs ==")

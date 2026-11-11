@@ -56,6 +56,11 @@ class GithubCI(CISource):
         head = str(got.get("head") or "")
         url = f"{got.get('url') or f'https://github.com/{repo}/pull/{number}'}/checks"
         checks = [c for c in got.get("ci_checks") or [] if isinstance(c, dict)]
+        # a status or check-run read that failed, or more checks than were read: what is here may
+        # be all green while the rest is red, so nothing here may say success or none
+        partial = bool(got.get("ci_partial"))
+        if not checks and partial:
+            return CIState("pending", head=head, url=url)
         if not checks:
             has = await fg.has_workflows(self.store, repo, head)
             # no workflow files: no CI. Files, or no answer: CI has not started, so wait.
@@ -69,7 +74,7 @@ class GithubCI(CISource):
         failing = [str(c.get("name") or "") for c in checks if c.get("state") == "failure"]
         if failing:
             return CIState("failure", head=head, failing=failing, url=url)
-        if missing or any(c.get("state") == "pending" for c in checks):
+        if partial or missing or any(c.get("state") == "pending" for c in checks):
             return CIState("pending", head=head, url=url)
         return CIState("success", head=head, url=url)
 
