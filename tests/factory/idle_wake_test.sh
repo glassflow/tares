@@ -39,10 +39,11 @@ STATIONS="crew-orchestrator crew-reviewer crew-releaser $B"
 idle_all() { local s; for s in $STATIONS; do agent $s '.state = "done"'; done; }
 # One watch round at SEC seconds, then every station idle again (as a woken one is when its turn ends).
 # The watch's curl goes through a shim that notes each URL asked for ($T/urls) and then calls the real one.
+# The Python engine does not use curl: with TARES_URL_LOG set it notes each URL in the same file (bash ignores it).
 mkdir -p "$T/shim"; REAL_CURL=$(command -v curl)
 printf '#!/bin/sh\nfor a in "$@"; do case "$a" in http*) echo "$a" >> "%s/urls" ;; esac; done\nexec "%s" "$@"\n' "$T" "$REAL_CURL" > "$T/shim/curl"
 chmod +x "$T/shim/curl"
-round() { SEC=$1; PATH="$T/shim:$PATH" FACTORY_NOW=$((N0 + SEC)) "$F" crew watch --once >>"$T/watch.log" 2>&1; idle_all; }
+round() { SEC=$1; PATH="$T/shim:$PATH" TARES_URL_LOG="$T/urls" FACTORY_NOW=$((N0 + SEC)) "$F" crew watch --once >>"$T/watch.log" 2>&1; idle_all; }
 # Rounds every $2 seconds up to $1 seconds, noting when each station was woken (the state file's last_wake).
 sim() { # until-seconds step
   local t s lw

@@ -196,11 +196,24 @@ class TaresClient:
             self._http = httpx.Client(follow_redirects=False)
         return self._http
 
+    def _log_url(self, url: str) -> None:
+        """Test hook TARES_URL_LOG: a file each request's URL is appended to, one per line, as the suites' curl shim
+        does for bash (a Python request never goes through curl). Off when unset; a write that fails is ignored."""
+        path = self._e("TARES_URL_LOG")
+        if not path:
+            return
+        try:
+            with open(path, "a", encoding="utf-8", newline="\n") as f:
+                f.write(url + "\n")
+        except OSError:
+            pass
+
     def _request(self, method: str, url: str, headers: dict, content, seconds: float):
         """One request: the response, or TaresHTTPError with curl's text for a transport failure. A status
         of 400 or more is left to the caller (curl's -f). `seconds` limits each step and, while the body
         comes in, the whole request (see the module docstring)."""
         deadline = time.monotonic() + seconds
+        self._log_url(url)
         try:
             with self._client().stream(method, url, headers=headers, content=content,
                                        timeout=httpx.Timeout(seconds)) as r:

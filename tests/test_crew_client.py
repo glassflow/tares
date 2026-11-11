@@ -591,6 +591,20 @@ ck("...after about a second, not when the ten-second trickle ends", 0.9 <= took 
 drip.shutdown()
 dc.close()
 
+print("test hook TARES_URL_LOG: each request's URL is noted, nothing else")
+ulog = Path(ROOT) / "urls.log"
+cu, _ = machine({"TARES_URL_LOG": str(ulog)})
+cu.tares_http("GET", "/api/crew/projects")
+cu.tares_http("GET", "/api/crew/settings")
+ck("one line per request, the full address", ulog.read_text(encoding="utf-8").splitlines() ==
+   [f"{BASE}/api/crew/projects", f"{BASE}/api/crew/settings"], ulog.read_text(encoding="utf-8"))
+ck("no key in the file", TOKEN not in ulog.read_text(encoding="utf-8"))
+cn, _ = machine()
+cn.tares_http("GET", "/api/crew/projects")
+ck("off when unset: the file is not touched", len(ulog.read_text(encoding="utf-8").splitlines()) == 2)
+cb, _ = machine({"TARES_URL_LOG": str(Path(ROOT) / "no-such-dir" / "urls.log")})
+ck("a file that cannot be written does not fail the request", cb.tares_http("GET", "/api/crew/projects") is not None)
+
 print("the key is in no log line and no process was started")
 ck("no header but Authorization (and no URL or body) ever carried the key",
    all(r["leak"] is None and TOKEN not in r["path"] and TOKEN not in (r["body"] or "") for r in WORLD["log"]))
