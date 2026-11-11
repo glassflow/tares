@@ -36,6 +36,9 @@ KIT = ROOT / "claude-plugin"
 ENV_KEYS = ("FACTORY_ROLE", "FACTORY_PARENT", "FACTORY_HOME", "FACTORY_STATION")
 HALTED = ("factory spawn x", "/abs/bin/factory spawn x", "/abs/bin/factory revive x", "factory spawn;ls",
           "(factory revive x)")
+GRANTED = (("gh pr merge 426 -R o/r --squash", "allow"), ("gh pr merge  426 -R o/r   --squash", "allow"),
+           ("gh pr merge 427 -R o/r --squash", "deny"), ("gh pr merge 426 -R o/r --squash && git push", "deny"),
+           ("gh pr merge 7", "deny"), ("gh pr merge 9", "deny"))
 
 
 class _Std:
@@ -109,6 +112,19 @@ def main() -> int:
             who = f"helper of {c['parent']}" if c["role"] == "helper" else c["role"]
             print(f"FAIL {who} | {c['command']} | expected {c['expect']}, got {got}")
             fail = 1
+    # A console grant for the exact command lifts a one-owner rule (TR-644).
+    with tempfile.TemporaryDirectory() as home:
+        Path(home, "stations").mkdir()
+        Path(home, "stations", "crew-releaser.grants").write_text(
+            '- "The releaser may run `gh pr merge 426 -R o/r --squash` in every project" (2026-10-21)\n'
+            '- "The reviewer may run `gh pr merge 7` in every project" (2026-10-21)\n'
+            '- "Builders may merge anything once CI is green" (2026-10-21)\n', encoding="utf-8")
+        for cmd, want in GRANTED:
+            got = "deny" if '"deny"' in guard(bash_payload(cmd), FACTORY_HOME=home, FACTORY_STATION="crew-releaser",
+                                              FACTORY_ROLE="releaser") else "allow"
+            if got != want:
+                print(f"FAIL grant | {cmd} | expected {want}, got {got}")
+                fail = 1
     # A halted crew refuses a new session however the CLI is spelled.
     with tempfile.TemporaryDirectory() as halt:
         Path(halt, "HALT").write_text('{"reason":"test"}\n', encoding="utf-8")

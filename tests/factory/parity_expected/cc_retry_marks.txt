@@ -29,7 +29,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer crew-or
 -- after --
 {
   "fails": 1,
-  "in": 570
+  "in": 590
 }
 == step: crew update ==
 exit: 1
@@ -56,7 +56,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer crew-or
 -- after --
 {
   "fails": 2,
-  "in": 1190
+  "in": 1200
 }
 == step: crew update ==
 exit: 0
@@ -368,7 +368,7 @@ cu-secret
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "2299798679",
     "model": "opus",
     "parent": "",
     "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",
@@ -432,7 +432,7 @@ cu-secret
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "2299798679",
     "model": "opus",
     "parent": "",
     "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",

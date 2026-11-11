@@ -206,7 +206,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "2299798679",
     "model": "opus",
     "parent": "",
     "plugin": "/opt/glass0/tares/.factory/worktrees/TR-1172/claude-plugin",

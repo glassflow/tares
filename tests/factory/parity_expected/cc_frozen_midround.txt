@@ -1,0 +1,186 @@
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "again": {},
+  "alive": {},
+  "ids": {
+    "crew-orchestrator": "aaaa0001",
+    "crew-releaser": "cccc0003",
+    "crew-reviewer": "bbbb0002"
+  },
+  "last": {},
+  "launched": [],
+  "marks": {
+    "crew-orchestrator": [
+      null,
+      null,
+      null
+    ],
+    "crew-releaser": [
+      null,
+      null,
+      null
+    ],
+    "crew-reviewer": [
+      null,
+      null,
+      null
+    ]
+  },
+  "newer": 0,
+  "note": null,
+  "resumed": {},
+  "runs": {
+    "crew-orchestrator": "1.10.4",
+    "crew-releaser": "1.10.4",
+    "crew-reviewer": "1.10.4"
+  }
+}
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+claude code: 3 station(s) run an older Claude Code than 1.10.5; the freeze stops the watch moving them (tares factory crew unfreeze lets it; tares factory crew update does it now; one that restarts starts on 1.10.5)
+FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit unfrozen: the watch moves each station onto the checkout's kit when it's idle
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "2299798679", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "2299798679",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "old-orchestrator",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "2299798679",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "old-releaser",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "2299798679",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "old-reviewer",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.10.4"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.10.4"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.10.4"
+  }
+]
+== asked of Tares ==
+PUT /api/crew/claude-retry?crew=crew key=no {
+  "stations": {}
+}

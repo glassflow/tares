@@ -69,6 +69,7 @@ tares factory: crew-reviewer runs Claude Code 1.2.0
 }
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "1.1.0", "event": "spare-pruned", "station": ""}
+{"at": "<TS>", "detail": "1.1.0", "event": "spare-pruned", "station": ""}
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "1.1.0", "event": "stale-spare", "station": "crew-reviewer"}
@@ -137,7 +138,7 @@ tares factory: crew-reviewer runs Claude Code 1.2.0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "2299798679",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -149,7 +150,7 @@ tares factory: crew-reviewer runs Claude Code 1.2.0
     "cwd": "<TMP>/crew",
     "effort": "high",
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "2299798679",
     "model": "opus",
     "project": "",
     "repo": "",
@@ -179,7 +180,7 @@ tares factory: crew-reviewer runs Claude Code 1.2.0
     "grants": "3515105045",
     "grants_tried": null,
     "id": "<ID>",
-    "kit": "4076195382",
+    "kit": "2299798679",
     "model": "opus",
     "parent": "",
     "plugin": "<TMP>/kit/claude-plugin",

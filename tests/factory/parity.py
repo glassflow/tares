@@ -5979,6 +5979,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
     env.update(
         HOME=str(home), USERPROFILE=str(home), FACTORY_CREW_HOME=str(crew), FAKE_CLAUDE_STATE=str(state),
         CLAUDE_BIN=str(claude), FACTORY_PAUSE="0", FACTORY_NO_WATCH="1",
+        FACTORY_DOCKER=str(tmp / "no-docker"),  # the Python watch's Docker upkeep (TR-700) finds no Docker, whatever the machine has
         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
         PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8", TARES_FACTORY_ENGINE=engine,
@@ -7661,6 +7662,55 @@ scenario(Scenario(
             "once per change", "a live helper is restarted with its grant", "a station open in a terminal waits",
             "and gets it once they leave", "grants that can't be read restart nothing", "nothing restarts while halted",
             "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
+))
+
+# crew_test.sh, "A builder that has finished: only a new grant that names it brings it back (TR-645)": two done builders of
+# shop, a grant that names neither, then one that names the second.
+D_LINT = '- "The builder may run npm run lint in shop" (2026-02-06)\n'
+D_BUILD = '- "shop-build-m2 may run npm run build in shop" (2026-02-07)\n'
+D_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+D_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": D_LINT})
+D_W2 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": D_LINT + D_BUILD})
+
+
+def d_state(tmp: Path) -> dict:
+    """The sessions started so far, the regrant-skipped events, which builders are still marked done, and the session ids."""
+    ev = tmp / "crew" / "events.jsonl"
+    text = ev.read_text(encoding="utf-8") if ev.is_file() else ""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    return {"started": _sessions_started(tmp),
+            "skips": text.replace(" ", "").count('"event":"regrant-skipped"'),
+            "done": [s for s in ("shop-build-m1", "shop-build-m2") if (tmp / "crew" / "stations" / f"{s}.done").exists()],
+            "ids": [rows[s]["id"] for s in ("shop-build-m1", "shop-build-m2")],
+            "allow2": json.loads((tmp / "crew" / "stations" / "shop-build-m2.settings.json").read_text(encoding="utf-8"))["autoMode"]["allow"]}
+
+
+scenario(Scenario(
+    name="crew_done_builder_regrant",
+    suite="crew",
+    about="a builder that has finished sleeps through a grant that does not name it (noted once), and is restarted, no longer done, by one that does",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("shop-build-m1", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 0
+           _launch("shop-build-m2", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 1
+           wstep(D_W1, before=_both(_idle("shop-build-m1", "shop-build-m2"), _touch_done("shop-build-m1"),
+                                    _touch_done("shop-build-m2")), after=d_state),                         # 2: a grant naming neither
+           wstep(D_W1, after=d_state),                                                                     # 3: and only once
+           wstep(D_W2, after=d_state)],                                                                    # 4: one naming m2
+    checks=[
+        ("a done builder sleeps through a grant that does not name it",
+         lambda r: r.code(2) == 0 and r.snap(2)["started"] == 2 and r.snap(2)["done"] == ["shop-build-m1", "shop-build-m2"]),
+        ("the watch notes the skip for each", lambda r: r.snap(2)["skips"] == 2),
+        ("and only once", lambda r: r.snap(3)["skips"] == 2 and r.snap(3)["started"] == 2),
+        ("a done builder a new grant names is restarted with it",
+         lambda r: r.snap(4)["started"] == 3 and r.snap(4)["ids"][1] != r.snap(2)["ids"][1]
+         and any("shop-build-m2 may run npm run build" in a for a in r.snap(4)["allow2"])),
+        ("and is no longer marked done", lambda r: r.snap(4)["done"] == ["shop-build-m1"]),
+        ("the other done builder stays asleep", lambda r: r.snap(4)["ids"][0] == r.snap(2)["ids"][0] and r.snap(4)["done"] == ["shop-build-m1"]),
+    ],
+    covers=["a done builder sleeps through a grant that does not name it", "the watch notes the skip for each", "and only once",
+            "a done builder a new grant names is restarted with it", "and is no longer marked done",
+            "the other done builder stays asleep"],
 ))
 
 # crew_test.sh, the same story seen from the person's side: `crew desk` shows a refused command and where to allow it,
