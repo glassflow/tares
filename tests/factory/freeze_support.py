@@ -45,6 +45,9 @@ def change_kit(kit: Path, tag: str) -> None:
         f.write(f"<!-- {tag} -->\n")
 
 
+SLOW = 100   # half-second looks (50 s) for what a watch has to start, run a round and finish on a busy machine
+
+
 def wait_for(fn, tries: int = 40) -> bool:
     for _ in range(tries):
         if fn():
@@ -99,7 +102,7 @@ def frozen_loop(engine: str, env: dict) -> dict:
     try:
         time.sleep(2)
         change_kit(kit, "v1")
-        reported = wait_for(lambda: count_events(crew, "kit-newer") == 1)
+        reported = wait_for(lambda: count_events(crew, "kit-newer") == 1, SLOW)
         time.sleep(4)
         text = out.read_text(encoding="utf-8", errors="replace")
         facts = {
@@ -124,12 +127,12 @@ def copy_loop(engine: str, env: dict) -> dict:
     out = tmp / "copywatch.out"
     p = start_watch(out, {**env, "TARES_PLUGIN_DIR": str(snap)})
     try:
-        gone = wait_for(lambda: not snap.exists())
+        gone = wait_for(lambda: not snap.exists(), SLOW)
         alive = p.poll() is None
         before = runs_from(p, engine) if alive else ""
         change_kit(kit, "v5")
         restarted = wait_for(lambda: "the watch restarts on the new version"
-                             in out.read_text(encoding="utf-8", errors="replace"))
+                             in out.read_text(encoding="utf-8", errors="replace"), SLOW)
         time.sleep(2)
         after_alive = p.poll() is None
         after = runs_from(p, engine) if after_alive else ""
@@ -146,8 +149,8 @@ def copy_loop(engine: str, env: dict) -> dict:
         }
         # The restarted watch moves a station onto the new kit. Let that move end before the watch is stopped, so a
         # station lock is not left behind by a stop that comes in the middle of it (the engines differ in speed).
-        wait_for(lambda: count_events(crew, "upgraded") >= 1)
-        wait_for(lambda: not list((crew / "stations").glob("*.lock")))
+        wait_for(lambda: count_events(crew, "upgraded") >= 1, SLOW)
+        wait_for(lambda: not list((crew / "stations").glob("*.lock")), SLOW)
         time.sleep(1)
     finally:
         stop_watch(p)
