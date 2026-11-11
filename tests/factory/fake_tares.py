@@ -3,6 +3,7 @@
 few routes `tares factory doctor` asks, a `gh`, and a `tares` command. Standard library only.
 
     World         what the fake Tares answers; a scenario's `before` hook changes it between two steps
+                  (a PUT of the crew settings is kept, unless `keep` is False)
     serve(world)  start it on a free port in a thread: (server, base url)
     gh_main()     the fake gh: `auth status` is signed in; `repo view` names the folder's repo, with WRITE
                   access unless the folder's name starts with ro (READ) or nogh (no GitHub repo)
@@ -27,6 +28,7 @@ class World:
         self.projects = projects or []
         self.settings = dict(SETTINGS, **(settings or {}))
         self.mcp = True
+        self.keep = True                    # False: a PUT of the settings is answered but not kept
         self.log = []
 
 
@@ -44,8 +46,7 @@ def _handler(world: World):
 
         def _go(self):
             n = int(self.headers.get("Content-Length") or 0)
-            if n:
-                self.rfile.read(n)
+            raw = self.rfile.read(n) if n else b""
             path = urlparse(self.path).path
             world.log.append((self.command, path, self.headers.get("Authorization")))
             if path == "/health":
@@ -57,12 +58,17 @@ def _handler(world: World):
                     return self._json(404, {})
                 return self._json(200, '{"jsonrpc":"2.0","id":1,"result":{"serverInfo":{"name":"tares"}}}')
             if path == "/api/crew/settings":
+                if self.command == "PUT":
+                    # the real PUT answers the whole settings (the kit at the top level) and keeps what it was given
+                    if world.keep:
+                        world.settings.update(json.loads(raw.decode("utf-8") or "{}"))
+                    return self._json(200, world.settings)
                 return self._json(200, {"settings": world.settings})
             if path == "/api/crew/projects":
                 return self._json(200, {"projects": world.projects})
             self._json(404, {})
 
-        do_GET = do_POST = do_DELETE = _go  # noqa: N815
+        do_GET = do_POST = do_PUT = do_DELETE = _go  # noqa: N815
 
         def log_message(self, *a):
             pass

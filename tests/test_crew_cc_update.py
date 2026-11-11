@@ -971,9 +971,10 @@ ck("tell_newer_claude counts the stations behind with the binary it is given", b
 
 # the watch runs the step
 ran = []
-with patched(CU, "step", lambda paths: ran.append(paths)):
+from tares.crew import kit as KIT  # noqa: E402
+with patched(KIT, "step", lambda paths: False), patched(CU, "step", lambda paths, kit_upgraded=False: ran.append((paths, kit_upgraded))):
     watch._STEPS["updates"](CP)
-ck("the updates step of the watch runs cc_update.step", ran == [CP] and watch._STEPS["updates"] is watch._updates_step)
+ck("the updates step of the watch runs cc_update.step", ran == [(CP, False)] and watch._STEPS["updates"] is watch._updates_step)
 ck("the stubs are small and named", all(callable(getattr(CU, n)) for n in ("cc_backoff", "cc_delay", "cc_retry_sync", "_pace_closed",
                                                                           "upgrades_frozen")))
 
