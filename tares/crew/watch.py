@@ -519,18 +519,7 @@ from . import pace as _pace  # noqa: E402
 
 watch_revive.pace = _pace.Seam()   # TR-962: the revive loop asks the real pace, not the inert stand-in
 register("pace", _pace.step)
-
-
-def _round_start(paths: CrewPaths) -> None:
-    """The top of a round: the pace (TR-1157) and the kit's freeze are read once; a step that fails does not stop the other."""
-    from . import kit
-    try:
-        _pace.round_start(paths)
-    finally:
-        kit.round_start(paths)
-
-
-register(ROUND_NAME, _round_start)   # TR-1157: the pace is read once, at the top of the round
+register(ROUND_NAME, _pace.round_start)   # TR-1157: the pace is read once, at the top of the round
 
 from . import readings as _readings  # noqa: E402
 

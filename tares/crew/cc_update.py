@@ -584,15 +584,13 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None, kit_upgraded: bool = Fa
     # (and a station the kit part just took down, as a failed upgrade does, is not down for the round: bash read `down` before it)
     # (a station a later step of the round left stopped, a note whose restart failed, does not count: as in bash)
     down = False if kit_upgraded else (watch_revive.last.down or (not watch_revive.last.ran and _down(paths, claude_bin)))
-    from . import kit
-    round_frozen, kit._watch.round_frozen = kit._watch.round_frozen, None   # the top of the round's reading of the settings
     with TaresClient(paths, env) as client:
         # bash's round is `if <a station is due a kit upgrade> then upgrade_station elif <the Claude Code part
         # below>` (the kit part is kit.step, run first): a round that upgraded a station makes no Claude Code move
         if not kit_upgraded and settled and not down and not state.halted(paths) and claude_auto(client):
             # the same, for Claude Code itself: one idle station a round, the orchestrator last; a frozen crew
             # only hears that there is a newer one
-            if round_frozen.on if round_frozen else upgrades_frozen(paths, client):
+            if upgrades_frozen(paths, client):
                 tell_newer_claude(paths, client, cc_now, claude_bin)
             elif _pace_closed(client):
                 pass   # the plan's limit is full: a restart is a model turn into it, so the move waits for the reset (TR-674)

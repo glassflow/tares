@@ -592,7 +592,7 @@ paths.pace_file.write_text(json.dumps({"limit_since": "", "until": "", "said": T
 with FakeTares(doc(99, 0, on=False)) as t:
     pace.round_start(paths, dict(os.environ))
     ck("round_start tidies the pace file, as bash does at the top of a round", pace_json() is None)
-ck("a round of the watch starts with it (the pace, and the kit freeze since TR-1172)", watch._STEPS.get(watch.ROUND_NAME) is watch._round_start)
+ck("a round of the watch starts with it", watch._STEPS.get(watch.ROUND_NAME) is pace.round_start)
 
 print("the watch runs it as a step")
 ck("pace is a step of the watch", "pace" in watch.STEP_NAMES)
