@@ -37,7 +37,7 @@ import os
 import sys
 import time
 
-from . import claude, state, watch_revive
+from . import claude, locks, state, watch_revive
 from .client import TaresClient, TaresHTTPError
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -411,6 +411,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, reading: Reading, *, cla
     return {"station": s, "want": want, "prompt": prompt, "stretched": new_stretched, "held": new_held}
 
 
+@locks.scoped   # the station's lock goes with this restart, as with the end of bash's per-station subshell (TR-1171)
 def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> None:
     """Restart the station `plan` chose, in the same conversation, with the note. Never raises for a station that
     cannot be told: it is said, and tried again next round."""

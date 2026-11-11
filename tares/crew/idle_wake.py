@@ -28,7 +28,7 @@ import os
 import re
 import sys
 
-from . import claude, launch, lifecycle, pace, state
+from . import claude, launch, lifecycle, locks, pace, state
 from .claude import SessionListUnreadableError
 from .client import TaresClient, TaresHTTPError, cksum, uri
 from .errors import CrewError
@@ -349,6 +349,7 @@ def plan(client: TaresClient, paths: CrewPaths, s: str, *, claude_bin=None, now=
     return out
 
 
+@locks.scoped   # the station's lock goes with its wake, as with the end of bash's per-station subshell (TR-1171)
 def send(client: TaresClient, paths: CrewPaths, p: dict, *, claude_bin: str) -> None:
     """Restart the station `plan` chose, in the same conversation. Never raises for a station that cannot be
     woken: it is said, and tried again next round."""

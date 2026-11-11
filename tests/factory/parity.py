@@ -2115,10 +2115,10 @@ _FZ_STEPS = [
     Step(["crew", "watch", "--once"], before=_fz_touch("crew/freezing"), after=_fz_marks),           # 25 a freeze under way
     Step(["crew", "watch", "--once"], before=_fz_touch("crew/freezing", old=True), after=_fz_marks),  # 26 a marker that old
     Step(["crew", "freeze"], before=_fz_rm("crew/freezing"), after=_fz_marks),                       # 27 a fresh copy
-    # 28 Tares cannot give its settings. Bash's round says so on stderr (curl's line and "could not read the crew
-    # settings", from a subshell that dies); the Python round says nothing. Neither line is in an assertion.
+    # 28 Tares cannot give its settings. Both rounds say so on stderr: "could not read the crew settings" (TR-1171;
+    # the Python round said nothing before). Only curl's own line is dropped: Python does not run curl.
     Step(["crew", "watch", "--once"], before=_fz_do(_fz_kit("v4"), _fz_idle(_FZ_O, _FZ_R), _fz_broken(True)),
-         drop=(r"^curl: \(22\)", r"^tares factory: could not read the crew settings")),
+         drop=(r"^curl: \(22\)",)),
     Step(["crew", "status"], drop=(r"^curl: \(22\)",)),                                              # 29 (curl names its failure; Python does not)
     Step(["crew", "unfreeze"], before=_fz_broken(False)),                                            # 30
 ]
@@ -3685,6 +3685,59 @@ scenario(Scenario(
         ("the revives are in the event log", lambda r: _events(r).count("revived") >= 2),
     ],
     covers=[],
+))
+
+# TR-1171: each station's lock is let go when its step ends, not when the watch exits. Bash runs a station's step in a
+# `( ... )` subshell; the Python watch is one process. The fake Claude Code's one-shot hook (on-bg) records, at every
+# launch, which stations/*.lock folders exist, and arms itself again for the next one: when the second station is
+# started, the first one's lock must already be gone.
+LOCK_HOOK = '''import os
+S = os.environ["FAKE_CLAUDE_STATE"]
+stations = os.path.join(os.environ["FACTORY_CREW_HOME"], "stations")
+held = sorted(n for n in os.listdir(stations) if n.endswith(".lock"))
+with open(S + "/lock-log", "a") as f:
+    f.write(" ".join(held) + "\\n")
+open(S + "/on-bg", "w").write(open(S + "/on-bg-cmd").read())
+'''
+
+
+def _lock_world(rows: list):
+    base = _watch_setup(rows)
+
+    def setup(tmp: Path, env: dict) -> None:
+        base(tmp, env)
+        state = tmp / "claude"
+        (state / "lock-hook.py").write_text(LOCK_HOOK, encoding="utf-8")
+        cmd = f'"{sys.executable}" "{state / "lock-hook.py"}"'
+        (state / "on-bg-cmd").write_text(cmd, encoding="utf-8")
+        (state / "on-bg").write_text(cmd, encoding="utf-8")
+    return setup
+
+
+def _lock_log(r: Run) -> list:
+    f = r.state / "lock-log"
+    return f.read_text(encoding="utf-8").splitlines() if f.is_file() else []
+
+
+scenario(Scenario(
+    name="watch_locks_released",
+    suite="crew",
+    about="a round lets go of each station's lock when its revive ends: the second station starts with the first one's lock gone (TR-1171)",
+    driver=WATCH_DRIVER,
+    ignore_calls=WATCH_QUIET,
+    setup=_lock_world([("shop-build-m1", "builder", "crew-orchestrator", "stopped"),
+                       ("shop-build-m2", "builder", "crew-orchestrator", "stopped"),
+                       ("shop-build-m3", "builder", "crew-orchestrator", "stopped")]),
+    steps=[_WATCH_ONCE],
+    checks=[
+        ("all three stopped stations were revived", lambda r: _bg_names(r) == ["shop-build-m1", "shop-build-m2", "shop-build-m3"]),
+        ("each launch saw only its own station's lock, never an earlier one's",
+         lambda r: _lock_log(r) == ["shop-build-m1.lock", "shop-build-m2.lock", "shop-build-m3.lock"]),
+        ("no lock is left when the round ends",
+         lambda r: not [x for x in (r.crew / "stations").iterdir() if x.name.endswith(".lock")]),
+    ],
+    covers=[],
+    not_windows="the fake Claude Code's on-bg hook runs through bash",
 ))
 
 # ---------------------------------------------------------------------------------------------
