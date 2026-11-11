@@ -213,9 +213,6 @@ PROD = "(^|[-_.])(prod|production)([-_.]|$)"
 SAVED = {"autonomy": "L3-review", "releaser": True, "release_profile": "kind", "prod_pattern": PROD,
          "challenger": False, "builders_max": 3}
 ROLES = ("orchestrator", "reviewer", "releaser")
-# The language-server offer (TR-970) is not ported: the bash side asks Claude Code which plugins are on, the
-# Python side does not, so that one call is left out of the compared record.
-LSP_PROBE = (("plugin", "list"),)
 
 
 def mark(name):
@@ -281,7 +278,6 @@ def role_checks():
 
 scenario(Scenario(
     name="crew_up_basic",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up stops plainly in an untrusted crew home, and warns of another installed tares plugin",
     stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
@@ -305,7 +301,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="crew_up_yes",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up --yes uses the answers saved on Tares and asks nothing; a second run starts nothing",
     stand_in={"settings": dict(SAVED), "grants": ['- "%s" (%s)' % (GRANT, TODAY)]},
@@ -350,7 +345,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="crew_up_questions",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="the first crew up asks the settings one at a time and keeps the answers and one grant on Tares",
     stand_in={},
@@ -454,7 +448,6 @@ scenario(Scenario(
     about="a Tares that does not list the integrations capability: crew up stops with the upgrade message, starting nothing",
     stand_in={"settings": {**SAVED, "releaser": False}, "capabilities": []},
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
     steps=[Step(["crew", "up", "--yes"], stdin="")],
     checks=[
         ("crew up fails and names the missing capability",
@@ -476,7 +469,6 @@ scenario(Scenario(
     about="two named crews and the default crew side by side; the name comes from FACTORY_CREW_NAME, then crew.json",
     stand_in={"settings": {**SAVED, "releaser": False}},
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
     steps=[
         Step(["crew", "up", "--yes"], stdin=""),                                   # 0 the default crew
         Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),                 # 1
@@ -542,7 +534,6 @@ scenario(Scenario(
     about="the roster warns when the orchestrator's session title is not the name messages go to",
     stand_in={"settings": {**SAVED, "releaser": False}},
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
     steps=[
         Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),
         Step(["crew", "up", "--yes"], env=crew_at("b"), stdin=""),
@@ -4886,10 +4877,8 @@ CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
 # --coverage leaves them out of the total and prints "wrapper of <suite>"; the suite they run counts their
 # checks. suite -> (the suite it runs, why). Pinned in tests/test_parity.py: a suite with checks of its own
 # cannot be listed here (coverage fails on it), so a real suite cannot drop out of the count.
-# claude_update_mixed is renamed claude_update_python by TR-1157, so both names are listed.
 WRAPPERS = {
     "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
-    "claude_update_mixed": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
     "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
 }
 
@@ -7125,8 +7114,6 @@ scenario(Scenario(
     tares=_CN_TARES,
     setup=_cn_setup,
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
-    ignore_asked=("GET ",),
     steps=[
         Step(["crew", "up", "--yes"], env=_cn_url(_cn_default, True), stdin=""),                                  # 0
         Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 1
@@ -7425,7 +7412,9 @@ scenario(Scenario(
          and r.marks["kept"]["takeovers"] == 0),
         ("off the crew's list, releasing",
          lambda r: ",".join(p["name"] for p in _session_crew(r)["releasing"]) == "Shop"
-         and "Shop" not in [p["name"] for p in _session_crew(r)["projects"]]),
+         and "Shop" not in [p["name"] for p in _session_crew(r)["projects"]]
+         and [json.loads(q["body"]) for q in r.tares.asked("POST /api/projects/p_shop/takeover")]
+         == [{"words": "small, I will finish it myself"}]),
     ],
     covers=["and nothing is recorded", "off the crew's list, releasing"],
 ))
@@ -7453,7 +7442,6 @@ scenario(Scenario(
     name="usage_statusline",
     suite="usage",
     about="a station is told where it compacts and runs the plugin's status line, which prints a line and tells Tares only when something changed",
-    ignore_calls=LSP_PROBE,
     stand_in={"settings": {**SAVED, "releaser": False, "challenger": False, "builders_max": 2}},
     prepare=trust_crew,
     driver="usage_support.py",
@@ -7472,6 +7460,8 @@ scenario(Scenario(
          and r.station_settings("crew-orchestrator").get("statusLine", {}).get("type") == "command"),
         ("the status line prints the window and the plan",
          lambda r: r.code(1) == 0 and r.out(1).strip() == "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%"),
+        # The stand-in Tares keeps what the hook sent to ingest; bash's suite also reads what Tares made of it.
+        # So the next two checks compare the payload, not Tares's reading of it.
         ("and Tares has the station's window, and how near it is to compacting",
          lambda r: (lambda s: [s["sessionId"], s["status"]["context_window"]["used_percentage"],
                                s["status"]["autocompact_tokens"]])(_usage_ingested(r)[0])
@@ -7542,7 +7532,6 @@ def tares_no_token_in(folder: Path) -> bool:
 
 scenario(Scenario(
     name="tares_up_auth",
-    ignore_calls=LSP_PROBE,
     suite="tares",
     about="crew up against a Tares with auth on: a wrong key stops it, the key is kept in a file only the person reads, "
           "a second machine asks nothing",
@@ -7686,7 +7675,6 @@ TARES_WIDE_ROW = (r"^\U0001F504 Emoji App ",)
 
 scenario(Scenario(
     name="tares_spawn_auth",
-    ignore_calls=LSP_PROBE,
     suite="tares",
     about="builders against a Tares with auth on: their project's grants, an emoji project by id, the orchestrator's own "
           "spawn through the token file, and a key the person's shell holds never reaches a station",
@@ -7878,7 +7866,6 @@ scenario(Scenario(
     name="lsp_crew_up",
     suite="lsp",
     about="crew up offers the missing language servers, installs only on a yes, and offers nothing once they are there",
-    ignore_calls=LSP_PROBE,
     stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
     prepare=lsp_prepare,
     setup=lsp_setup,
