@@ -4508,7 +4508,17 @@
       "dropped": false,
       "python": "tests.factory.parity:SCENARIOS",
       "ported": true,
-      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases and the curl URL checks (the Python client is httpx); the bash suite stays for them."
+      "note": "Scenarios idle_wake_off, idle_wake_liveness, idle_wake_activity, idle_wake_reviewer, idle_wake_builder, idle_wake_orchestrator, idle_wake_guards, idle_wake_rearm, each running only the idle-wake pass of a round (launch_support.py idle_wake_round) on a fake Tares. Not ported: the status and doctor lines, the attached-session case, the failing restart cases; the bash suite stays for them. The curl URL checks run on the Python engine too (TR-1158): the client notes each URL in the file TARES_URL_LOG names."
+    },
+    {
+      "name": "idle_wake_python_test.sh",
+      "kind": "suite",
+      "what": "idle_wake_test.sh on the Python engine (TARES_FACTORY_ENGINE=python); any FAIL fails it",
+      "ticket": "TR-1158",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "CI wrapper: sets FACTORY_BIN and TARES_FACTORY_ENGINE=python; the suite sets TARES_URL_LOG."
     },
     {
       "name": "route_proxy.py",
