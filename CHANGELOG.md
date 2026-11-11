@@ -18,7 +18,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - A builder that had finished never got a permission allowed for it. The watch now restarts a finished builder when a new grant names it, leaves the others asleep with one `regrant-skipped` line in the event log, and Allow on Home offers the grant in the station's name (TR-645).
-- Allow in the console now works for a command only one role may run (TR-644). The guard honours a grant for that exact command for that station. Everything else stays with the role that owns it.
+- Plugin 0.6.9: allow in the console now works for a command only one role may run (TR-644). The guard honours a grant for that exact command for that station. Everything else stays with the role that owns it.
 - On a team cell's Home, your builder shows what it is working on even when the ticket is assigned to a teammate (TR-890).
 - Plugin 0.6.8: a challenger review that did not finish is never recorded as a pass (TR-530). Any Codex failure now shows as an error with its real reason, instead of "sandbox probably failed". When Codex is out of quota or signed out, the crew keeps working and one item on your desk says reviews have stopped.
 - A plugin update no longer turns the guard off in Claude Code sessions that were already open (TR-1131). Those sessions kept running the old hook commands, `bash .../hooks/guard.sh` and the others, which TR-1103 had deleted, so every call failed with exit 127 and Claude Code let the tool call through unguarded. `hooks/guard.sh`, `hooks/session-start.sh` and `bin/mcp-headers` are back as one-line shims that run `tares hook`; they go one release later (TR-975).
