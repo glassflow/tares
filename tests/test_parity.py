@@ -249,7 +249,8 @@ def fx_scenario(name, label):
     return parity.Scenario(name=name, suite="a", steps=crew_basic.steps, checks=[("it ran", lambda r: True)], covers=[label], about="fixture")
 
 
-with Fixture(), mock.patch.dict(os.environ, stubbed("plain", "plain")):
+# PARITY_JOBS=1: the fixture scenarios exist only in this process, a worker process would not have them
+with Fixture(), mock.patch.dict(os.environ, {**stubbed("plain", "plain"), "PARITY_JOBS": "1"}):
     parity.SCENARIOS.clear()
     parity.SCENARIOS["fx_ok"] = fx_scenario("fx_ok", "first")
     lines = []

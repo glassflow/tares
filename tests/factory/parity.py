@@ -42,6 +42,7 @@ Standard library only.
 from __future__ import annotations
 
 import difflib
+from concurrent.futures import ProcessPoolExecutor
 import fnmatch
 import json
 import os
@@ -4898,13 +4899,33 @@ def suite_scenarios() -> dict:
     return out
 
 
+def passes_one(name: str) -> bool:
+    """Whether scenario `name` passes against Python now (a worker of passes_now)."""
+    return evaluate(SCENARIOS[name], out=lambda _line: None)[1]
+
+
+def passes_now() -> dict:
+    """{scenario name: passes against Python}, every scenario run on both engines. Scenarios share nothing (each
+    has its own folder and its own fake Tares on a free port), so they run in PARITY_JOBS processes at once
+    (default: the CPUs, at most 4; 1 runs them one after the other in this process)."""
+    try:
+        jobs = int(os.environ.get("PARITY_JOBS") or min(os.cpu_count() or 1, 4))
+    except ValueError:
+        jobs = 1
+    names = list(SCENARIOS)
+    if jobs <= 1 or len(names) <= 1:
+        return {n: passes_one(n) for n in names}
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        return dict(zip(names, pool.map(passes_one, names)))
+
+
 def coverage(require_full: bool, out=print) -> int:
     found = suite_scenarios()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
+    results = passes_now()
     for sc in SCENARIOS.values():
-        quiet: list = []
-        ok = evaluate(sc, out=quiet.append)[1]
+        ok = results[sc.name]
         for label in sc.covers:
             if label not in found.get(sc.suite, []):
                 out(f"ERROR scenario {sc.name} covers a check that is not in {sc.suite}_test.sh: {label}")
