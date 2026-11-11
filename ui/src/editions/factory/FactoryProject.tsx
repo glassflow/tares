@@ -11,13 +11,14 @@ import { PR_CHIP, PrSize } from "./prParts";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectLead, type ProjectPeople, type ProjectPerson,
+  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectIcon, setProjectLead, type ProjectPeople, type ProjectPerson,
   type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
 import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
+import { ProjectIconHeader } from "./ProjectIcon";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
 
@@ -832,8 +833,10 @@ function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promi
   );
 }
 
-export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, start }: {
+export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, onIcon, start }: {
   data: FactoryProjectData;
+  /** Save a new icon, or null to remove it; answers when the cell has it. */
+  onIcon?: (icon: string | null) => Promise<void>;
   /** Allow is done on this page, and this reads the project again after it. Left out (a sample), Allow links to Home. */
   onAllowed?: () => void;
   /** Delete the project for good; the page then leaves for Projects. */
@@ -856,6 +859,21 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
   const [kept, setKept] = React.useState<string[]>([]);
   const [allowing, setAllowing] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [moving, setMoving] = React.useState(false);
+  // what the person just picked, shown at once and until the page's data has caught up with it
+  const [iconPicked, setIconPicked] = React.useState<string | null | undefined>(undefined);
+  const iconSave = React.useRef(0);
+  const icon = iconPicked === undefined ? d.icon ?? null : iconPicked;
+  React.useEffect(() => {
+    if (iconPicked !== undefined && iconPicked === (d.icon ?? null)) setIconPicked(undefined);
+  }, [iconPicked, d.icon]);
+  const changeIcon = (next: string | null) => {
+    if (!onIcon) return;
+    const save = ++iconSave.current;
+    setIconPicked(next);
+    onIcon(next).catch(() => {
+      if (save === iconSave.current) { setIconPicked(undefined); toast(NOT_SAVED); }
+    });
+  };
   const later = async (on: boolean) => {
     setMoving(true);
     try {
@@ -914,13 +932,14 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
       <div className="grid min-w-0 gap-3">
         <Crumb name={d.name} />
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-          <div className="flex min-w-0 flex-[1_1_320px] flex-wrap items-center gap-x-3 gap-y-2">
+          <ProjectIconHeader icon={icon} canEdit={Boolean(d.can_edit_icon && onIcon)} onChange={changeIcon}
+                             className="flex min-w-0 flex-[1_1_320px] flex-wrap items-center gap-x-3 gap-y-2">
             <h1 className="m-0! text-[22px]! md:text-[28px]! [overflow-wrap:anywhere]" data-user-text data-testid="project-name">{d.name}</h1>
             <span data-testid="project-chip"
                   className={cn("border px-2 py-1 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", CHIP[d.state])}>
               {d.state_label}
             </span>
-          </div>
+          </ProjectIconHeader>
           {(d.can_later || d.later || (d.can_close && !finished)) && (
             <div className="flex flex-wrap gap-2">
               {d.can_later && <Button variant="secondary" busy={moving} onClick={() => void later(true)} data-testid="project-later">Later</Button>}
@@ -1034,6 +1053,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
   const lead = async (person: string) => { if (!sample) { await setProjectLead(id, person); reload(); } };
   const add = async (person: string) => { if (!sample) { await addProjectMember(id, person); reload(); } };
   const keepLater = async (on: boolean) => { if (!sample) { await setLater(id, on); reload(); } };
+  const icon = async (next: string | null) => { await setProjectIcon(id, next); reload(); };
   const navigate = useNavigate();
   const remove = async () => {
     if (!sample) await api.deleteProject(id);
@@ -1064,7 +1084,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
           </Banner>
         </div>
       )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAllowed={sample ? undefined : reload} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} start={sample ? sampleClose(sample) : undefined} />
+      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAllowed={sample ? undefined : reload} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} onIcon={sample ? undefined : icon} start={sample ? sampleClose(sample) : undefined} />
     </>
   );
 }

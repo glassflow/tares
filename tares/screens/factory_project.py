@@ -432,7 +432,10 @@ def register(app, store, h, ctx):
         home = store.project_ticket_home(uid)
         link = (store.get_project_linear(uid) if home == "linear"
                 else store.get_project_github(uid) if home == "github" else None)
-        return {"id": p["id"], "name": p["name"], "goal": clean(p.get("goal")),
+        return {"id": p["id"], "name": p["name"], "icon": p.get("icon"),
+                # changing the icon is an edit of the project (PUT /api/projects/{id}): admin
+                "can_edit_icon": h.is_admin(request),
+                "goal": clean(p.get("goal")),
                 "stage": stage, "stage_label": STAGE_LABEL[stage],
                 "state": state, "state_label": STATE_LABEL[state],
                 "waiting": waiting, "counts": counts, "moving": moving, "moving_total": len(movers),
@@ -494,7 +497,7 @@ def register(app, store, h, ctx):
         for c in cards:          # one reason for all of them is said once, at the top
             if shared and c["error"] == shared:
                 c["error"] = None
-        return {"id": p["id"], "name": p["name"], "repos": repos,
+        return {"id": p["id"], "name": p["name"], "icon": p.get("icon"), "repos": repos,
                 "counts": {k: sum(r["counts"][k] for r in repos) for k in ("open", "merged", "closed")},
                 "checked": plain_ago(checked, now) if checked else None,
                 "github_error": (errors[0][:1].upper() + errors[0][1:] + ".") if shared

@@ -96,7 +96,7 @@ export interface FactoryTicketData {
   history: TicketHistoryLine[];
   notes: string;
   terminal: { label: string; command: string }[];
-  project: { id: string; name: string; href: string };
+  project: { id: string; name: string; icon?: string | null; href: string };
   now: string;
 }
 

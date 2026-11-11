@@ -73,7 +73,7 @@ export interface ProjectDocLink {
 
 /** GET /api/factory/projects/{uid}/docs: every document of one project, grouped, and one open. */
 export interface ProjectDocsPage {
-  project: { id: string; name: string };
+  project: { id: string; name: string; icon?: string | null };
   groups: { key: "project" | "working" | "notes"; title: string; docs: ProjectDocLink[] }[];
   total: number;
   doc: DocView | null;

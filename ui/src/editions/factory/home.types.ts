@@ -40,6 +40,8 @@ export interface HomeAction {
 export interface HomeRef {
   id: string;
   name: string;
+  /** A project's emoji, when the ref is a project and it has one. */
+  icon?: string | null;
 }
 
 export interface HomeItem {
@@ -73,6 +75,7 @@ export type HomeProjectState = "building" | "waiting_on_you" | "not_started" | "
 export interface HomeProject {
   id: string;
   name: string;
+  icon?: string | null;
   goal: string;
   state: HomeProjectState;
   state_label: string;

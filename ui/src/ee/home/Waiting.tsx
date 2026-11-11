@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Detail, DetailLines } from "@/editions/factory/HomeDetail";
 import type { HomeAction, HomeItem, HomeWaitingOn, HomeWaitingOnProps, HomeWaitingProps } from "./home.types";
 import { Sender, senderWords } from "./Sender";
+import { InlineIcon, ItemIcon } from "@/editions/factory/ProjectIcon";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "@/editions/factory/waitingGroups";
 
 // The team's side of the factory home: "Waiting for you" with who each item is from, and "You are
@@ -28,7 +29,7 @@ function Row({ item, renderAction, error, panel }: {
         <div className="min-w-0">
           <div className="[overflow-wrap:anywhere]">
             <span className={cn(KIND, "mr-2.5")}>{item.label}</span>
-            <span className="font-semibold" data-user-text>{item.title}</span>
+            <span className="font-semibold" data-user-text><ItemIcon project={item.project} title={item.title} />{item.title}</span>
           </div>
           <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text><Detail text={item.detail} /></div>
           <DetailLines lines={item.lines} />
@@ -114,7 +115,7 @@ export function YouAreWaitingOn({ entries }: HomeWaitingOnProps) {
                 {/* the name opens the project; the row itself holds buttons, so it is not one link */}
                 <Link to={`/projects/${encodeURIComponent(e.project.id)}`} data-testid="waiting-on-project" data-user-text
                       className="block w-fit font-semibold text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
-                  {e.title}
+                  <InlineIcon icon={e.project.icon} />{e.title}
                 </Link>
                 {e.no_lead && <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="waiting-on-no-lead">No lead yet</div>}
                 <div className="mt-0.5 [overflow-wrap:anywhere]" data-user-text>{e.detail}</div>
