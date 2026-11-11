@@ -32,7 +32,7 @@ const { checkWords, expectOneCall } = require("./words.cjs");
 const PORT = Number(process.env.TARES_E2E_PORT || 8851);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
-const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "load", "err"];
+const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "team", "load", "err"];
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -151,7 +151,7 @@ async function waitFor(url, tries = 100) {
     ck("two rules the reviewer proposes", (await rules.count()) === 2 && /^Rules the crew proposes\s*2$/m.test(await page.getByTestId("crew-rules").innerText()), `${await rules.count()}`);
     const markup = rules.filter({ hasText: "on a red check" });
     ck("markup in a rule shows as text", /<i>on a red check<\/i>/.test(await markup.innerText()) && (await markup.locator("i").count()) === 0);
-    ck("each rule says who and when", /From the reviewer, 6 hours ago/.test(await markup.innerText()));
+    ck("each rule says where it goes and when (TR-1223)", /For (every project|\S+) · .*6 hours ago/.test(await markup.innerText()), await markup.innerText());
     await checkWords(page, ck, "live");
     await shot(page, "live-1440.png");
     const rejected = page.waitForResponse((r) => /\/api\/rule-proposals\/.+\/reject$/.test(r.url()) && r.request().method() === "POST");
@@ -168,9 +168,9 @@ async function waitFor(url, tries = 100) {
     // 5. the fold
     const fold = m1.getByTestId("member-fold");
     ck("the fold is closed, its button says Show what it did", (await fold.innerText()) === "Show what it did" && (await fold.getAttribute("aria-expanded")) === "false");
-    const detailRead = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\?recent=0&conversation=200$/.test(r.url()));
+    const detailRead = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\?recent=0&conversation=200&crew=[^&]+$/.test(r.url()));
     await fold.click();
-    ck("opening it reads that member's lines, once", (await detailRead).status() === 200);
+    ck("opening it reads that member's lines, once, of its own crew (TR-1223)", (await detailRead).status() === 200);
     await m1.getByTestId("member-conversation").waitFor();
     const lines = await m1.getByTestId("member-conversation").innerText();
     ck("it reads as a conversation, its text as text, markup included (TR-1177)",
@@ -183,7 +183,7 @@ async function waitFor(url, tries = 100) {
     ck("the button says Hide what it did", (await fold.innerText()) === "Hide what it did");
     await checkWords(page, ck, "live, fold open");
     await shot(page, "live-fold-1440.png");
-    const asked = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\/context$/.test(r.url()) && r.request().method() === "POST");
+    const asked = page.waitForResponse((r) => /\/api\/crew\/project-x-build-m1\/context\?crew=[^&]+$/.test(r.url()) && r.request().method() === "POST");
     await m1.getByRole("button", { name: "Read memory again" }).click();
     ck("Read memory again is one POST that answers 200", (await asked).status() === 200);
     ck("and says it was asked", /Asked\. It answers in a few seconds\./.test(await m1.innerText()));
@@ -383,6 +383,38 @@ async function waitFor(url, tries = 100) {
         if (name === "quiet") ck(`${tag}: everybody is not heard from, with no standup yet`, (await p.getByTestId("crew-member").and(p.locator("[data-state='not heard']")).count()) === 4 && /Nothing moved in the last day\./.test(text), text);
         if (name === "none") ck(`${tag}: not started, how to start it, no other section`, /The crew is not started\./.test(text) && (await p.getByTestId("crew-not-started").locator("code").innerText()) === "tares factory crew up"
            && JSON.stringify(await heads(p)) === JSON.stringify(["Orchestrator", "Autonomy"]) && (await p.getByTestId("crew-member").count()) === 0, JSON.stringify(await heads(p)));
+        if (name === "busy") {
+          const metas = await p.getByTestId("crew-rule-meta").allInnerTexts();
+          ck(`${tag}: each rule says where it goes and the tickets it came back in (TR-1223)`,
+             /^For project-x · came back in 3 tickets \(project-x T3, project-x T5, project-x T9\), 2 days ago$/.test(metas[0] || "")
+             && /^For every project · came back in 6 tickets \(.* and 2 more\), 6 hours ago$/.test(metas[1] || ""), JSON.stringify(metas));
+        }
+        if (name === "team") {
+          const crews = p.getByTestId("crew-of-person");
+          ck(`${tag}: one section per person's crew, the caller's first, each with its own state (TR-1223)`,
+             (await crews.count()) === 2 && /^Ashish \(you\)/.test(await crews.nth(0).locator("h2").first().innerText())
+             && /^Adam/.test(await crews.nth(1).locator("h2").first().innerText())
+             && /Working/.test(await crews.nth(0).getByTestId("crew-of-person-summary").innerText())
+             && /^Not running/.test(await crews.nth(1).getByTestId("crew-of-person-summary").innerText())
+             && (await p.getByTestId("crew-summary").count()) === 0);
+          ck(`${tag}: the caller's crew starts open, the others folded, each still saying how it runs`,
+             (await crews.nth(0).getByTestId("crew-of-person-body").count()) === 1
+             && (await crews.nth(1).getByTestId("crew-of-person-body").count()) === 0
+             && /Not running, no builder on it/.test(await crews.nth(1).getByTestId("crew-of-person-summary").innerText())
+             && /3 builders on it/.test(await crews.nth(0).getByTestId("crew-of-person-summary").innerText()));
+          await crews.nth(1).getByTestId("crew-of-person-toggle").click();
+          ck(`${tag}: opening a folded crew shows only its own members`, /Finished its work\./.test(await crews.nth(1).innerText())
+             && !/Finished its work\./.test(await crews.nth(0).innerText())
+             && (await crews.nth(1).getByTestId("crew-of-person-toggle").getAttribute("aria-expanded")) === "true");
+          await crews.nth(0).getByTestId("crew-of-person-toggle").click();
+          ck(`${tag}: the caller's own crew folds too`, (await crews.nth(0).getByTestId("crew-of-person-body").count()) === 0);
+          await p.reload({ waitUntil: "load" });
+          await p.getByTestId("crew-of-person").first().waitFor();
+          ck(`${tag}: the folds are kept in this browser after a reload`,
+             (await p.getByTestId("crew-of-person").nth(0).getByTestId("crew-of-person-body").count()) === 0
+             && (await p.getByTestId("crew-of-person").nth(1).getByTestId("crew-of-person-body").count()) === 1);
+          await p.evaluate(() => { try { localStorage.removeItem("taresCrewFolds"); } catch (e) { /* none */ } });
+        }
         if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("wash-2")).length)) === 4);
         if (name === "long") ck(`${tag}: long names and texts wrap inside the page`, (await overflow(p)) <= 0);
         ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
