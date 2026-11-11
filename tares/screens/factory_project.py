@@ -34,6 +34,7 @@ from .. import factory_github
 from .. import factory_home as fh
 from .. import factory_waiting as fw
 from .. import licence
+from .. import project_secrets
 from .. import team as team_mod
 from ..envelope import now_utc
 from ..factory_home import plain_ago
@@ -450,6 +451,7 @@ def register(app, store, h, ctx):
                 "can_close": factory_mod.ready_to_close(p, tickets),
                 "later": later, "can_later": not later and not closed and not with_crew,
                 "people": people,
+                "secrets": project_secrets.page_listing(store, h, p, request),   # TR-775: None when not a member
                 "now": fh._iso(now)}
 
     @app.get("/api/factory/projects/{uid}/github")

@@ -63,7 +63,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, integrations_api, morning_status as morning_mod, outbound, standup as standup_mod
+from . import claude_usage, factory_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -6039,6 +6039,7 @@ def make_app() -> FastAPI:
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)
+    project_secrets.register(app, store, h)   # TR-775
 
     @app.get("/api/home")
     async def home(request: Request):
