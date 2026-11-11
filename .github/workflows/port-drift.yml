@@ -5,6 +5,14 @@ name: port-drift
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+    paths-ignore:
+      - "README.md"
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - "SECURITY.md"
+      - "THIRD_PARTY_NOTICES.md"
+      - "docs/**"
+      - ".github/ISSUE_TEMPLATE/**"
 
 concurrency:
   group: port-drift-${{ github.ref }}
