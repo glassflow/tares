@@ -2,7 +2,7 @@
 # Build from the repo root:  docker build -f deploy/docker/Dockerfile -t tares .
 # syntax=docker/dockerfile:1
 
-# 1) build the console SPA so it can be embedded in the wheel (hatch force-include ui/dist)
+# 1) build the console SPA so it can be embedded in the wheel (hatch_build.py adds ui/dist as tares/console)
 FROM node:20-slim AS ui
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json ./
@@ -13,12 +13,14 @@ RUN npm run build
 # 2) build + install the package (console baked in) with all connector extras
 FROM python:3.12-slim AS app
 WORKDIR /src
-COPY pyproject.toml README.md LICENSE ./
+COPY pyproject.toml hatch_build.py README.md LICENSE ./
 COPY tares/ ./tares/
 COPY ee/ ./ee/
-# the wheel bundles the Claude Code plugin (hatch force-include), for `tares factory`
+# the wheel bundles the Claude Code plugin (hatch force-include in pyproject.toml), for `tares factory`
 COPY claude-plugin/ ./claude-plugin/
 COPY --from=ui /ui/dist ./ui/dist
+# an image never ships without the console: a missing ui/dist fails this build instead of building without it
+ENV TARES_REQUIRE_CONSOLE=1
 RUN pip install --no-cache-dir ".[otlp-grpc,postgres-state]"
 
 # Run as a non-root user. Own /data before declaring the VOLUME so a first-mount Docker named

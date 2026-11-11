@@ -10,7 +10,7 @@ min_tares is above the installed version, and the hook says nothing extra when i
 not on PATH, or when the check fails).
 
 The wheel is built in a copy of the tree (git's file list, with a stub console), so the test leaves no
-dist/ or build output in the checkout. With `uv` not installed, the wheel checks are skipped and say so.
+dist/ or build output in the checkout (TR-1170: also a copy with no console and one that requires it). With `uv` not installed, the wheel checks are skipped and say so.
 
 Run: .venv/bin/python tests/test_crew_packaging.py
 """
@@ -77,17 +77,38 @@ else:
             continue
         (src / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / rel, src / rel)
+    # A fresh clone has no ui/dist (gitignored), and a plain git install must still build (TR-1170): the first
+    # builds below run with no console at all; the stub console comes after them.
+    plain = subprocess.run(["uv", "build", "--wheel", "--out-dir", str(T / "wheel-plain"), str(src)], capture_output=True,
+                           text=True, encoding="utf-8", cwd=str(T), env={k: v for k, v in os.environ.items() if k != "TARES_REQUIRE_CONSOLE"})
+    plain_wheels = sorted((T / "wheel-plain").glob("tares-*.whl"))
+    ck("a tree with no ui/dist builds a wheel (a fresh clone, no Node)", plain.returncode == 0 and len(plain_wheels) == 1,
+       short((plain.returncode, plain.stderr[-500:])))
+    ck("...and says in one line that it has no console", plain.stderr.count("building without the console") == 1, short(plain.stderr[-300:]))
+    if plain_wheels:
+        with zipfile.ZipFile(plain_wheels[0]) as z:
+            plain_names = set(z.namelist())
+        ck("...the wheel has no tares/console", not any(n.startswith("tares/console") for n in plain_names))
+        ck("...but still the package, the crew engine and the plugin",
+           {"tares/cli.py", "tares/crew/dispatch.py", "tares/claude-plugin/min_tares.txt"} <= plain_names)
+    req = subprocess.run(["uv", "build", "--wheel", "--out-dir", str(T / "wheel-req"), str(src)], capture_output=True, text=True,
+                         encoding="utf-8", cwd=str(T), env={**os.environ, "TARES_REQUIRE_CONSOLE": "1"})
+    ck("TARES_REQUIRE_CONSOLE=1 with no console fails the build (a release never ships without it)",
+       req.returncode != 0 and "TARES_REQUIRE_CONSOLE" in req.stderr and not list((T / "wheel-req").glob("*.whl")),
+       short((req.returncode, req.stderr[-400:])))
     (src / "ui" / "dist").mkdir(parents=True)
     (src / "ui" / "dist" / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
     out = T / "wheel"
     r = subprocess.run(["uv", "build", "--wheel", "--out-dir", str(out), str(src)], capture_output=True, text=True,
-                       encoding="utf-8", cwd=str(T))
+                       encoding="utf-8", cwd=str(T), env={**os.environ, "TARES_REQUIRE_CONSOLE": "1"})
     wheels = sorted(out.glob("tares-*.whl"))
     ck("uv build --wheel builds a wheel", r.returncode == 0 and len(wheels) == 1, short((r.returncode, r.stderr[-500:])))
     if wheels:
         with zipfile.ZipFile(wheels[0]) as z:
             names = set(z.namelist())
             meta = next((z.read(n).decode("utf-8") for n in names if n.endswith(".dist-info/METADATA")), "")
+        ck("with a console built, the wheel holds it as tares/console, as before (and the require flag lets it through)",
+           "tares/console/index.html" in names)
         ck("the wheel holds tares/crew/schemas/schema_version.json", "tares/crew/schemas/schema_version.json" in names)
         ck("...and the crew modules, including version.py", {"tares/crew/__init__.py", "tares/crew/version.py", "tares/crew/dispatch.py"} <= names)
         ck("...and the plugin with its min_tares.txt", "tares/claude-plugin/min_tares.txt" in names)

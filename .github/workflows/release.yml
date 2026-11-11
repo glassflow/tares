@@ -48,8 +48,16 @@ jobs:
         working-directory: ui
 
       - uses: astral-sh/setup-uv@v5
-      - name: Build sdist + wheel
+      # A git install builds without the console (TR-1170); a release never may.
+      - name: Build sdist + wheel (fails when the console is missing)
+        env:
+          TARES_REQUIRE_CONSOLE: "1"
         run: uv build
+
+      - name: The wheel carries the console
+        run: |
+          unzip -l dist/*.whl | grep -q ' tares/console/index.html$' \
+            || { echo "::error::the wheel has no tares/console/index.html"; exit 1; }
 
       - uses: actions/upload-artifact@v4
         with:
