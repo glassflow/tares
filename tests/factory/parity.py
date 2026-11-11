@@ -7279,6 +7279,223 @@ scenario(Scenario(
 ))
 
 
+# spec_test.sh (TR-1162)
+# The parts of the suite that ran on a real Tares: the fixtures are checked against the fake Tares the scenarios
+# use (the same projects as spec_contributor, read over HTTP as a command would), and the session-start hook and
+# the skill text are the plugin's own files, so both engines run them the same (spec_hook_support.py).
+
+SPEC_ASHISH_VIEW = {"projects": [dict(p, kind="software_factory") if p["name"] == "Secret plan" else p
+                                 for p in SPEC_PROJECTS["projects"]]}
+
+
+def _spec_get(r: Run, path: str) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.tares.url + path, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _spec_row(doc: dict, name: str) -> dict:
+    return [p for p in doc["projects"] if p["name"] == name][0]
+
+
+_spec_scenario(
+    "spec_fixtures", "the people and projects the contributor scenarios rely on are what their labels say",
+    {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/projects?viewer=ashish": (200, SPEC_ASHISH_VIEW),
+     "GET /api/whoami": (200, {"person": {"id": "u_kir", "name": "Kiran"}})},
+    [_sstep("spec", "--project", "Secret plan")],
+    [("fixture: Ashish leads Acme web, Nobody leads has no lead",
+      lambda r: (_spec_row(_spec_get(r, "/api/projects"), "Acme web")["lead"] or {}).get("name") == "Ashish"
+      and _spec_row(_spec_get(r, "/api/projects"), "Nobody leads").get("lead") is None),
+     ("fixture: Plain notes is led by Ashish and is not a software factory project",
+      lambda r: _spec_row(_spec_get(r, "/api/projects"), "Plain notes")["lead"]["name"] == "Ashish"
+      and _spec_row(_spec_get(r, "/api/projects"), "Plain notes").get("kind") != "software_factory"),
+     ("fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind",
+      lambda r: (lambda row: [row.get("hidden"), row["lead"]["name"], row.get("kind", "none")])(
+          _spec_row(_spec_get(r, "/api/projects"), "Secret plan")) == [True, "Ashish", "none"]
+      and _spec_row(_spec_get(r, "/api/projects?viewer=ashish"), "Secret plan").get("kind") == "software_factory")],
+    ["fixture: Ashish leads Acme web, Nobody leads has no lead",
+     "fixture: Plain notes is led by Ashish and is not a software factory project",
+     "fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind"])
+
+
+def _hookstep(op: str, source: str, *sets: str) -> Step:
+    return Step([op, source, *sets])
+
+
+def _ctx(r: Run, i: int) -> str:
+    return r.out(i)
+
+
+def _contributor_ok(ctx: str) -> bool:
+    return (re.search(r"contributes to the Tares project .Acme web. led by someone else", ctx) is not None
+            and re.search(r"spec-project. skill, section Contributor", ctx) is not None
+            and "Do not build tickets" in ctx and "`session` skill" not in ctx
+            and re.search(r"re-read the project.s tickets", ctx) is None)
+
+
+def _plain_bound_ok(ctx: str) -> bool:
+    return (re.search(r"Follow the .session. skill|load the .session. skill again", ctx) is not None
+            and "Contributor" not in ctx)
+
+
+def _contributor_section() -> str:
+    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "SKILL.md").read_text(encoding="utf-8")
+    start = text.index("\n## Contributor")
+    end = text.index("\n## Light mode", start)
+    return re.sub(r"[ \n]+", " ", text[start:end])
+
+
+_CONTRIB = ("TARES_PROJECT=Acme web", "TARES_SESSION_KIND=contributor")
+
+scenario(Scenario(
+    name="spec_hooks",
+    suite="spec",
+    about="the session-start hook of a contributor session says to follow the Contributor section, a plain bound one the session skill",
+    driver="spec_hook_support.py",
+    steps=[_hookstep("hook", "startup", *_CONTRIB), _hookstep("hook", "compact", *_CONTRIB),
+           _hookstep("hook", "resume", *_CONTRIB),
+           _hookstep("hook", "startup", "TARES_PROJECT=Acme web"), _hookstep("hook", "compact", "TARES_PROJECT=Acme web"),
+           _hookstep("bare", "startup", "TARES_SESSION_KIND=contributor", "CLAUDE_PLUGIN_ROOT={tmp}")],
+    checks=[
+        ("contributor hook ($src): spec-project, section Contributor, no building",
+         lambda r: all(_contributor_ok(_ctx(r, i)) for i in (0, 1, 2))),
+        ("contributor hook: no resume text on a fresh start", lambda r: "resumed or compacted" not in _ctx(r, 0)),
+        ("contributor hook: after compaction it says to load the skill again",
+         lambda r: re.search(r"resumed or compacted: load the .spec-project. skill again, section Contributor", _ctx(r, 1)) is not None),
+        ("a plain bound session ($src) still follows the session skill",
+         lambda r: _plain_bound_ok(_ctx(r, 3)) and _plain_bound_ok(_ctx(r, 4))),
+        ("a marker without a project: the hook is silent", lambda r: r.out(5) == ""),
+        ("the Contributor section asks my_work for this project's questions (Q numbers restart per project)",
+         lambda r: re.search(r"Call .my_work\(project=<project>\). and read .person. \(who this is\) and .spec_questions.",
+                             _contributor_section()) is not None and "restart in each project" in _contributor_section()),
+    ],
+    covers=["contributor hook ($src): spec-project, section Contributor, no building",
+            "contributor hook: no resume text on a fresh start",
+            "contributor hook: after compaction it says to load the skill again",
+            "a plain bound session ($src) still follows the session skill",
+            "a marker without a project: the hook is silent",
+            "the Contributor section asks my_work for this project's questions (Q numbers restart per project)"],
+))
+
+
+# session_test.sh (TR-1162)
+# The last two checks of the crew-held part look at what Tares kept: with a plain fake Tares that is a table the
+# scenario changes itself, the way Tares moves a project from the crew's list to "releasing" when the
+# takeover is posted (the table below answers the takeover POST by making that change).
+
+class _SessionTakeoverRoutes(dict):
+    """The routes of a fake Tares, which move Shop from the crew's projects to `releasing` once the takeover is posted."""
+
+    def get(self, key, default=None):
+        found = super().get(key, default)
+        if key == "POST /api/projects/p_shop/takeover":
+            self["GET /api/crew/projects"] = RELEASING["GET /api/crew/projects"]
+        return found
+
+
+def _session_stateful(r: Run) -> None:
+    r.tares.routes = _SessionTakeoverRoutes(r.tares.routes)
+
+
+def _session_crew(r: Run) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.tares.url + "/api/crew/projects", timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _session_keep_mark(r: Run) -> None:
+    doc = _session_crew(r)
+    r.marks["kept"] = {"projects": [p["name"] for p in doc["projects"]], "releasing": len(doc["releasing"]),
+                       "takeovers": len(r.tares.asked("POST /api/projects/p_shop/takeover"))}
+
+
+scenario(Scenario(
+    name="session_crew_state",
+    suite="session",
+    about="Enter leaves the project on the crew's list and records nothing; yes takes it off the list and into releasing",
+    tares={**MCP_ROUTE, **LISTED, **HELD, **SHOP_REPO, "POST /api/projects/p_shop/takeover": (200, {"ok": True})},
+    setup=_setup_session,
+    prepare=_session_stateful,
+    steps=[_ss("session", "Shop", stdin="\n"),
+           Step(["session", "Shop"], env={**WITH_MCP}, cwd="{tmp}/elsewhere", stdin="1\nsmall, I will finish it myself\n",
+                after=_claude_after, run_before=_session_keep_mark)],
+    checks=[
+        ("and nothing is recorded",
+         lambda r: "Shop" in r.marks["kept"]["projects"] and r.marks["kept"]["releasing"] == 0
+         and r.marks["kept"]["takeovers"] == 0),
+        ("off the crew's list, releasing",
+         lambda r: ",".join(p["name"] for p in _session_crew(r)["releasing"]) == "Shop"
+         and "Shop" not in [p["name"] for p in _session_crew(r)["projects"]]),
+    ],
+    covers=["and nothing is recorded", "off the crew's list, releasing"],
+))
+
+
+# usage_test.sh (TR-1162)
+# crew up writes each station's settings (where it compacts, the status line command); the status line is run
+# the way Claude Code runs it, with the settings' own command and environment and the session's state on
+# stdin (usage_support.py), against the stand-in Tares, which keeps what it is sent.
+
+def _usage_ingested(r) -> list:
+    """The lines the status line sent to Tares's claude_code source, in order."""
+    return [w["body"] for w in r.stand_in.written() if w["path"] == "/ingest/claude_code"]
+
+
+def _usage_mark(r):
+    r.marks.setdefault("sent", []).append(len(_usage_ingested(r)))
+
+
+def _usage_sid(r) -> str:
+    return r.station("crew-orchestrator", "sessionId")
+
+
+scenario(Scenario(
+    name="usage_statusline",
+    suite="usage",
+    about="a station is told where it compacts and runs the plugin's status line, which prints a line and tells Tares only when something changed",
+    ignore_calls=LSP_PROBE,
+    stand_in={"settings": {**SAVED, "releaser": False, "challenger": False, "builders_max": 2}},
+    prepare=trust_crew,
+    driver="usage_support.py",
+    steps=[Step(["crew", "up", "--yes"]),
+           Step(["status", "48", "31"]),
+           Step(["status", "48", "31"], run_before=_usage_mark),
+           Step(["status", "52", "33"], run_before=_usage_mark),
+           Step(["raw"], stdin="not json\n", run_before=_usage_mark),
+           Step(["notares", "52", "33"])],
+    checks=[
+        ("a station is told where it compacts",
+         lambda r: str(env_of(r, "crew-orchestrator", "FACTORY_AUTOCOMPACT")) == "200000"),
+        ("a station runs the plugin's status line",
+         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command")
+         == f"tares hook statusline --plugin-root {KIT}"
+         and r.station_settings("crew-orchestrator").get("statusLine", {}).get("type") == "command"),
+        ("the status line prints the window and the plan",
+         lambda r: r.code(1) == 0 and r.out(1).strip() == "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%"),
+        ("and Tares has the station's window, and how near it is to compacting",
+         lambda r: (lambda s: [s["sessionId"], s["status"]["context_window"]["used_percentage"],
+                               s["status"]["autocompact_tokens"]])(_usage_ingested(r)[0])
+         == [_usage_sid(r), 48, 200000]),
+        ("and the plan's limits",
+         lambda r: (lambda rl: [rl["five_hour"]["used_percentage"], rl["seven_day"]["used_percentage"]])(
+             _usage_ingested(r)[0]["status"]["rate_limits"]) == [31, 6]),
+        ("an unchanged report within the minute is not sent again",
+         lambda r: r.marks["sent"][:2] == [1, 1] and r.code(2) == 0),
+        ("a changed one is",
+         lambda r: r.marks["sent"][2] == 2
+         and _usage_ingested(r)[1]["status"]["context_window"]["used_percentage"] == 52),
+        ("bad input: a plain line, no failure", lambda r: r.code(4) == 0 and r.out(4).strip() == "Claude"),
+        ("no Tares: the line still prints",
+         lambda r: r.code(5) == 0 and "Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%" in r.out(5)),
+    ],
+    covers=["a station is told where it compacts", "a station runs the plugin's status line",
+            "the status line prints the window and the plan",
+            "and Tares has the station's window, and how near it is to compacting", "and the plan's limits",
+            "an unchanged report within the minute is not sent again", "a changed one is",
+            "bad input: a plain line, no failure", "no Tares: the line still prints"],
+))
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
