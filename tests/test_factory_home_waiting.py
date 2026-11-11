@@ -282,7 +282,8 @@ async def main():
            and px_perm["meta"] == "Asked by the crew, 4 days ago", px_perm)
         ck("answer, and allow in one click", px_perm["actions"] == [
             {"label": "Answer", "primary": False, "href": f"/projects/{px}#desk-{px_perm['id'].split(':')[1]}"},
-            {"label": "Allow", "primary": True, "do": "allow", "desk": pq["label"], "may_limit": True}],
+            {"label": "Allow", "primary": True, "do": "allow", "desk": pq["label"], "station": "project-x-build-m1",
+             "may_limit": True}],
            px_perm["actions"])
         cp = perms[None]
         ck("a crew station's request is the reviewer's, for every project", cp["title"] == "Every project"

@@ -519,6 +519,22 @@ kill "$apid" 2>/dev/null; wait "$apid" 2>/dev/null
 "$F" crew watch --once >/dev/null 2>&1
 check "and gets it once they leave" 'moved shop-build-m2 "$m2" && allow_has shop-build-m2 "shop-build-m1-e2e may run npm run e2e"'
 "$F" retire shop-build-m1-e2e >/dev/null 2>&1
+# A builder that has finished: only a new grant that names it brings it back (TR-645).
+idle shop-build-m1; idle shop-build-m2; m1=$(st shop-build-m1 .id); m2=$(st shop-build-m2 .id)
+touch "$FACTORY_CREW_HOME/stations/shop-build-m1.done" "$FACTORY_CREW_HOME/stations/shop-build-m2.done"
+skips() { grep -c "\"event\":\"regrant-skipped\"" "$FACTORY_CREW_HOME/events.jsonl" || true; }
+api POST /api/grants "$(jq -cn --arg p "$SHOP" '{words: "The builder may run npm run lint in shop", scope: "project", project: $p}')" >/dev/null
+"$F" crew watch --once >/dev/null 2>&1
+check "a done builder sleeps through a grant that does not name it" '[ "$(st shop-build-m1 .id)" = "$m1" ] && [ "$(st shop-build-m2 .id)" = "$m2" ]'
+check "the watch notes the skip for each" '[ "$(skips)" = 2 ]'
+"$F" crew watch --once >/dev/null 2>&1
+check "and only once" '[ "$(skips)" = 2 ]'
+api POST /api/grants "$(jq -cn --arg p "$SHOP" '{words: "shop-build-m2 may run npm run build in shop", scope: "project", project: $p}')" >/dev/null
+"$F" crew watch --once >/dev/null 2>&1
+check "a done builder a new grant names is restarted with it" 'moved shop-build-m2 "$m2" && allow_has shop-build-m2 "shop-build-m2 may run npm run build"'
+check "and is no longer marked done" '[ ! -f "$FACTORY_CREW_HOME/stations/shop-build-m2.done" ]'
+check "the other done builder stays asleep" '[ "$(st shop-build-m1 .id)" = "$m1" ] && [ -f "$FACTORY_CREW_HOME/stations/shop-build-m1.done" ]'
+rm -f "$FACTORY_CREW_HOME/stations/shop-build-m1.done"
 # A grant for every project; a Tares that answers its health check but can't give the grants.
 api POST /api/grants '{"words": "the reviewer may label pull requests", "scope": "all"}' >/dev/null
 fake="$T/fake-tares"; mkdir -p "$fake"; echo ok > "$fake/health"

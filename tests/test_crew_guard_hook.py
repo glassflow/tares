@@ -127,6 +127,30 @@ ck("halted with a reason that is an object: jq's indented JSON",
 r = guard(bash("factory spawn x"), FACTORY_ROLE="orchestrator", FACTORY_HOME=str(halt))
 ck("halted with an unreadable file: still refuses", b"crew is halted (" in r.stdout, r.stdout)
 
+print("a console grant for the exact command lifts a one-owner rule (TR-644)")
+g_home = TMP / "granted"
+(g_home / "stations").mkdir(parents=True)
+(g_home / "stations" / "crew-releaser.grants").write_text(
+    '- "The releaser may run `gh pr merge 426 -R o/r --squash` in every project" (2026-10-21)\n'
+    '@project - "crew-releaser may run `git tag v9` in shop" (2026-10-21)\n'
+    '- "The reviewer may run `gh pr merge 7` in every project" (2026-10-21)\n'
+    '- "Builders may merge anything once CI is green" (2026-10-21)\n'
+    '- "The releaser may run `docker build .` in every project" (2026-10-21)\n', encoding="utf-8")
+G = dict(FACTORY_HOME=str(g_home), FACTORY_STATION="crew-releaser", FACTORY_ROLE="releaser")
+ck("the exact command, granted to its role: allowed", decision(guard(bash("gh pr merge 426 -R o/r --squash"), **G)) == "allow")
+ck("white space does not change the command", decision(guard(bash("gh pr merge  426 -R o/r   --squash"), **G)) == "allow")
+ck("granted by station name: allowed", decision(guard(bash("git tag v9"), FACTORY_HOME=str(g_home), FACTORY_STATION="crew-releaser", FACTORY_ROLE="builder")) == "allow")
+ck("any other command is still refused", decision(guard(bash("gh pr merge 427 -R o/r --squash"), **G)) == "deny")
+ck("the granted command chained to another is refused", decision(guard(bash("gh pr merge 426 -R o/r --squash && git push"), **G)) == "deny")
+ck("split over lines it is refused", decision(guard(bash("gh pr merge 426 -R o/r\n--squash"), **G)) == "deny")
+ck("a grant to another role does not count", decision(guard(bash("gh pr merge 7"), **G)) == "deny")
+ck("words that name no command lift nothing", decision(guard(bash("gh pr merge 9"), **G)) == "deny")
+ck("another station has its own grants", decision(guard(bash("gh pr merge 426 -R o/r --squash"), FACTORY_HOME=str(g_home), FACTORY_STATION="crew-other", FACTORY_ROLE="releaser")) == "deny")
+ck("a grant does not lift the heavy-command rule", decision(guard(bash("docker build ."), **G)) == "deny")
+(g_home / "HALT").write_bytes(b'{"reason":"test"}')
+ck("nor a halted crew", decision(guard(bash("gh pr merge 426 -R o/r --squash"), **G)) == "deny")
+(g_home / "HALT").unlink()
+
 print("the deny output")
 home = TMP / "crewhome"
 home.mkdir()
@@ -136,7 +160,7 @@ hso = out["hookSpecificOutput"]
 ck("it is the PreToolUse deny shape Claude Code reads", r.returncode == 0 and hso["hookEventName"] == "PreToolUse"
    and hso["permissionDecision"] == "deny", out)
 ck("the reason names the owner and the way out", hso["permissionDecisionReason"] ==
-   "In this factory only the builder station may merge pull requests. Send it a message instead (see the factory-protocol skill).",
+   "In this factory only the builder station may merge pull requests. Send it a message instead (see the factory-protocol skill), or ask the person to allow this exact command in the console.",
    hso["permissionDecisionReason"])
 events = [json.loads(line) for line in (home / "events.jsonl").read_text(encoding="utf-8").splitlines()]
 ck("one guard-deny line is appended to events.jsonl", len(events) == 1 and events[0]["event"] == "guard-deny"

@@ -72,7 +72,7 @@ IDENTITY_SLACK = 1.0        # seconds the create time in the pid file may differ
 WATCH_USAGE = "usage: factory crew watch [--once] [--interval <seconds>]"
 
 # What a round does, in this order. A later ticket registers the function for its name.
-STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates")
+STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
 # What a round does before its first step: bash reads the pace at the top of a round (TR-1157).
@@ -507,3 +507,7 @@ register(ROUND_NAME, _pace.round_start)   # TR-1157: the pace is read once, at t
 from . import readings as _readings  # noqa: E402
 
 register("readings", _readings.step)   # TR-1163: the Crew page's asks and the plan's limits, on every tick of a nap
+
+from . import docker_cleanup as _docker_cleanup  # noqa: E402
+
+register("docker", _docker_cleanup.step)   # TR-700: Docker's leftovers, once a day, never during a heavy command

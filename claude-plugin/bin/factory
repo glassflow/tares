@@ -1307,7 +1307,10 @@ cmd_watch() { # every interval: revive stopped stations, restart stuck ones fres
       # A live helper between turns still gets a permission the person allowed for it.
       case "$(stations_get "$s" '.role')" in
         helper) if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi; continue ;;
-        builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
+        builder) if [ -f "$CREW_HOME/stations/$s.done" ]; then
+            if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi
+            continue
+          fi ;;
       esac
       local up; up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; down=1; continue; }
       if [ "$up" = yes ]; then
@@ -1393,7 +1396,21 @@ attached() { # station → 0 while someone has its session open in a terminal (c
   local id; id=$(stations_get "$1" '.id'); [ -n "$id" ] && pgrep -f "attach $id( |\$)" >/dev/null 2>&1
 }
 regrant_due() { # station → 0 when the watch is to restart it with new grants, once it is between turns
-  [ -n "$(stations_get "$1" '.sessionId')" ] && [ ! -f "$CREW_HOME/stations/$1.done" ] && ! attached "$1" && regranted "$1"
+  [ -n "$(stations_get "$1" '.sessionId')" ] && ! attached "$1" && regranted "$1" || return 1
+  [ ! -f "$CREW_HOME/stations/$1.done" ] || done_regrant_due "$1"
+}
+done_regrant_due() { # done station → 0 when a new grant names it; otherwise says so in the event log, once per change
+  local s=$1 now sum added name kept="$CREW_HOME/stations/$1.grants"
+  now=$(grants_read "$(stations_get "$s" '.project')") || return 1
+  added=$now; [ -f "$kept" ] && added=$(grep -Fxv -f "$kept" <<<"$now" || true)
+  name=$(sed 's/[]\.*^$+?(){}|[]/\\&/g' <<<"$s")
+  grep -Eq "(^|[^A-Za-z0-9_-])$name([^A-Za-z0-9_-]|\$)" <<<"$added" && return 0
+  sum=$(printf '%s\n' "$now" | grants_sum)
+  if [ "$(stations_get "$s" '.grants_skipped')" != "$sum" ]; then
+    stations_put "$s" "$(jq -n --arg t "$sum" '{grants_skipped: $t}')"
+    event regrant-skipped "$s" done
+  fi
+  return 1
 }
 
 regrant_station() { # station: restart it with its new grants, in the same conversation, saying which
@@ -1420,6 +1437,7 @@ If something you tried was refused for want of one of these and is still needed,
     fi
     say "$s has new permissions from Tares; restarting it with them now that it's between turns, in the same conversation"
     cmd_restart "$s" "$prompt"
+    rm -f "$CREW_HOME/stations/$s.done"   # it has work again; it says so itself when that is over
     event regranted "$s" "$sum" )
   rc=$?
   set -e

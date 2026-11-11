@@ -153,6 +153,16 @@ def _status(returncode: int) -> int:
     return 128 - returncode if returncode < 0 else returncode
 
 
+LOW_FREE = 10 * 1024 ** 3   # bytes; the same as docker_cleanup.LOW_FREE
+
+
+def _low_on_disk() -> bool:
+    try:
+        return shutil.disk_usage(os.path.expanduser("~")).free < LOW_FREE
+    except OSError:
+        return False
+
+
 def cmd_heavy(argv: list[str], env: dict) -> int:
     """argv is `heavy <seconds> <command...>`."""
     args = argv[1:]
@@ -178,6 +188,9 @@ def cmd_heavy(argv: list[str], env: dict) -> int:
                 pass
     proc = None
     try:
+        if _low_on_disk():   # TR-700: clean up Docker first (the lock is held); nothing is loaded otherwise
+            from . import docker_cleanup
+            docker_cleanup.before_heavy(env)
         try:
             proc = subprocess.Popen(command, env=env)
         except OSError as e:

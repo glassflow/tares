@@ -485,7 +485,8 @@ async def list_decisions(project: str = "") -> str:
 # ── the crew (TR-419, TR-420, TR-425) ─────────────────────────────────────────
 
 SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "challenger",
-                "builders_max", "kit", "idle_wake", "pace", "claude_update")
+                "builders_max", "kit", "idle_wake", "pace", "claude_update", "docker_cleanup",
+                "docker_keep")
 
 @mcp.tool()
 async def get_crew_settings() -> str:
@@ -502,7 +503,11 @@ async def get_crew_settings() -> str:
     `idle_wake` (null or false: off): when true the factory's watch wakes you with a message when
     you have work and holds your liveness tick, so you arm no schedule of your own. `pace` (null or
     false: off): when true the watch slows the crew before the plan's limits: no new builders, a
-    45-minute tick, and builders wait near the 5-hour limit; its notes to you say what to do."""
+    45-minute tick, and builders wait near the 5-hour limit; its notes to you say what to do.
+    `docker_cleanup` (on unless false): once a day the watch removes Docker's leftovers on the crew
+    machine (stopped containers, old build cache, images unused for 7 days; never volumes), and a
+    heavy command cleans up first when the disk is low. `docker_keep` lists image names it never
+    removes."""
     async with _cx(10) as cx:
         r = await cx.get(f"{TARESD}/api/crew/settings")
     return _out(r, SETTING_KEYS)
@@ -516,17 +521,22 @@ async def set_crew_settings(autonomy: str = "", release_profile: str | None = No
                             idle_wake: bool | None = None,
                             pace: bool | None = None,
                             claude_update: bool | None = None,
+                            docker_cleanup: bool | None = None,
+                            docker_keep: list[str] | None = None,
                             clear: list[str] | None = None) -> str:
     """Save the crew's settings the person chose (only the ones given change). They are saved for
     that person; on a single-user cell they are the cell's. A personal autonomy or challenger
     can be as strict as the team's or stricter, not looser. `clear` names settings to unset, so
     a person's own fall back to the team's. Only the person's own session or the orchestrator
     may. `idle_wake` true has the watch wake idle stations when they have work, instead of each
-    ticking on its own. `pace` true slows the crew before the plan's limits are hit."""
+    ticking on its own. `pace` true slows the crew before the plan's limits are hit.
+    `docker_cleanup` false stops the daily Docker cleanup; `docker_keep` (image names, `*` as a
+    wildcard) replaces the list of images it never removes."""
     body = {"autonomy": autonomy or None, "release_profile": release_profile,
             "prod_pattern": prod_pattern, "challenger": challenger, "builders_max": builders_max,
             "releaser": releaser, "idle_wake": idle_wake, "pace": pace,
-            "claude_update": claude_update, "clear": clear}
+            "claude_update": claude_update, "docker_cleanup": docker_cleanup,
+            "docker_keep": docker_keep, "clear": clear}
     async with _cx(10) as cx:
         r = await cx.put(f"{TARESD}/api/crew/settings", json=body)
     return _out(r, SETTING_KEYS)

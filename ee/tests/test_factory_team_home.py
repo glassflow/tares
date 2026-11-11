@@ -255,7 +255,7 @@ async def main():
            dp["detail"] == "The builder wants to use: `gh api repos/acme/web/statuses/abc`"
            and [a.get("do") for a in dp["actions"]] == ["answer", "allow"]
            and dp["actions"][1] == {"label": "Allow", "primary": True, "do": "allow",
-                                    "desk": perm["label"], "may_limit": True}, dp)
+                                    "desk": perm["label"], "station": "shop-build-m1", "may_limit": True}, dp)
         ck("the permission's Answer carries its desk label and no options",
            dp["actions"][0] == {"label": "Answer", "primary": False, "do": "answer",
                                 "desk": perm["label"], "options": []}, dp["actions"][0])

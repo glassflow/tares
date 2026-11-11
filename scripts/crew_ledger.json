@@ -1235,6 +1235,17 @@
       "note": ""
     },
     {
+      "name": "done_regrant_due",
+      "kind": "function",
+      "line": 1392,
+      "what": "is a finished builder named by a new grant",
+      "ticket": "TR-645",
+      "dropped": false,
+      "python": "tares.crew.regrant:_done_regrant_due",
+      "ported": true,
+      "note": ""
+    },
+    {
       "name": "regrant_station",
       "kind": "function",
       "line": 1397,

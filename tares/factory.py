@@ -868,7 +868,7 @@ def attach_command(station: str, role: str = "") -> str:
 CREW_DEFAULTS = {"autonomy": None, "releaser": None, "release_profile": None,
                  "prod_pattern": None, "challenger": None, "builders_max": None,
                  "kit": {"frozen": None}, "idle_wake": None, "pace": None,
-                 "claude_update": None}
+                 "claude_update": None, "docker_cleanup": None, "docker_keep": None}
 
 
 def kit_ok(v) -> dict:
@@ -950,7 +950,7 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
             if len(v) > 300:
                 raise DocError(f"{k} is {len(v)} characters; keep it to 300")
             out[k] = v or None
-    for k in ("challenger", "releaser", "claude_update"):
+    for k in ("challenger", "releaser", "claude_update", "docker_cleanup"):
         if body.get(k) is not None:
             out[k] = bool(body[k])
     if body.get("idle_wake") is not None:
@@ -969,8 +969,29 @@ def crew_settings_ok(body: dict, cur: dict) -> dict:
         if not 1 <= n <= 20:
             raise DocError("builders_max is between 1 and 20")
         out["builders_max"] = n
+    if body.get("docker_keep") is not None:
+        out["docker_keep"] = docker_keep_ok(body["docker_keep"])
     if body.get("kit") is not None:
         out["kit"] = kit_ok(body["kit"])
+    return out
+
+
+def docker_keep_ok(v) -> list:
+    """The images the crew's Docker cleanup never removes (TR-700): image names, such as
+    `supabase/postgres` (every tag) or `myimage:1.2`, `*` as a wildcard. DocError on anything else."""
+    if not isinstance(v, list) or any(not isinstance(x, str) for x in v):
+        raise DocError("docker_keep is a list of image names")
+    out = []
+    for x in v:
+        x = x.strip()
+        if not x:
+            continue
+        if len(x) > 200 or any(c.isspace() for c in x):
+            raise DocError(f"{x[:40]!r} is not an image name")
+        if x not in out:
+            out.append(x)
+    if len(out) > 50:
+        raise DocError("docker_keep holds at most 50 names")
     return out
 
 

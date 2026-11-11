@@ -559,6 +559,15 @@ class Doctor:
             self.warn("claude_update", "crew setting claude_update is off: the watch does not move stations onto a new "
                       "Claude Code (one that restarts for another reason starts on it); "
                       f"{ME} crew update moves them", f"{ME} crew update")
+        try:
+            from . import docker_cleanup
+            for cid, status, text, fix in docker_cleanup.preview(self.paths, self.env, raw):   # TR-700
+                if status == "ok":
+                    self.ok(cid, text)
+                else:
+                    self.warn(cid, text, fix)
+        except Exception:
+            pass
         if not missing and settings.get("challenger") is True:
             if shutil.which("codex", path=self.env.get("PATH")):
                 self.ok("codex", "codex (challenger on)")
