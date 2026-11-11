@@ -28,7 +28,7 @@ WHAT IT CREATES
   - two or three Claude Code background sessions named spike-<random>..., each answering one short
     prompt. Two small conversation transcripts remain in ~/.claude/projects (one from the resumed
     session, one from --fork-session); they are harmless and can be deleted.
-  - one detached Python process that writes a heartbeat file for 60 seconds (step 7).
+  - one detached Python process that writes a heartbeat file for 10 minutes (step 7).
   - one temporary entry in the Windows Credential Manager, service "tares-spike", user "spike".
     The value is random, never printed or logged, and deleted again within the same run.
 
@@ -38,11 +38,14 @@ WHAT IT REMOVES
   (it reads ~/.claude/jobs/<id>/state.json of its own sessions, and the key names of settings
   files to see whether --bg is disabled). Nothing is written outside the results folder.
 
-STEP 7 NEEDS YOU (about one minute)
+STEP 7 NEEDS YOU (about a minute of your time, inside 10 minutes of the script ending)
   When the script ends it tells you to CLOSE THE TERMINAL it was started in, wait 20 seconds, open a
   new terminal and run the command it printed:
 
       py scripts\\windows_spike.py --check-detached <heartbeat file>
+
+  Close the window right after the script ends: the detached child writes for 10 minutes and the answer
+  only counts when the terminal closed while it was still writing.
 
   That reports whether the detached child survived the terminal closing, stops it, and updates the
   results files (JSON and Markdown) with the answer.
@@ -55,7 +58,8 @@ WHERE THE RESULTS LAND, AND WHAT TO DO WITH THEM
 OTHER MODES
   --dry-run   Safe on Mac and Linux (it is switched on by itself when the OS is not Windows). Windows
               only steps are skipped, the keychain is replaced by a file in the results folder, and
-              the detached child lives 6 seconds. Set CLAUDE_BIN to a fake `claude` to exercise the
+              the detached child lives 6 seconds (10 minutes on Windows) and the pid polls
+              are ten times faster. Set CLAUDE_BIN to a fake `claude` to exercise the
               Claude steps (without it the Claude steps are skipped in a dry run).
   CLAUDE_BIN  The claude executable to use (default: claude).
 """
@@ -384,6 +388,12 @@ def list_processes():
 # ---------------------------------------------------------------------------------------------
 
 
+# Seconds after `claude --bg` returns at which step pid_timing lists the session (TR-1185). Does a pid
+# appear late, or never? A dry run polls ten times faster.
+PID_POLL_OFFSETS = (0.3, 1, 2, 5, 10, 30)
+DETACHED_SECONDS = 600
+
+
 class Step:
     def __init__(self, name: str, item: int, title: str):
         self.name, self.item, self.title = name, item, title
@@ -492,6 +502,7 @@ class Spike:
         self.agent_row = None
         self.state_json = None
         self.launch_ok = None
+        self.launched_at = None
         self.env = dict(os.environ, NO_COLOR="1", FORCE_COLOR="0")
         want = os.environ.get("CLAUDE_BIN", "")
         if self.dry and not want:
@@ -630,6 +641,7 @@ class Spike:
         st.details["claude_path"] = self.claude
         st.details["prompt_bytes"] = PROMPT_BYTES
         sid, rec = self.launch_once(st, self.name)
+        self.launched_at = time.monotonic()
         self.job_id = sid
         text = ANSI.sub("", rec["stdout"] + " " + rec["stderr"])
         if sid:
@@ -695,6 +707,59 @@ class Spike:
         else:
             st.ok("agents --json lists the session with id=%s name=%s state=%s status=%s pid=%s startedAt=%s; %s" % (
                 fields["id"], fields["name"], fields["state"], fields["status"], fields["pid"], fields["startedAt"], cwd_note))
+
+    def step_pid_timing(self, st: Step):
+        """Does the background session's row in `agents --json` get a pid, a status and a version, and how long
+        after `claude --bg` returned? Windows run 2 saw none of them in the one listing taken straight after launch."""
+        if not self.need_claude(st):
+            return
+        if not self.job_id or self.launched_at is None:
+            st.skip("no session was started, so there is nothing to poll")
+            return
+        scale = 0.1 if self.dry else 1.0
+        polls = []
+        for target in PID_POLL_OFFSETS:
+            wait = self.launched_at + target * scale - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            rows, rec = self.agents(st, keep=False)
+            at = round(time.monotonic() - self.launched_at, 2)
+            if rows is None:
+                polls.append({"target_s": target * scale, "at_s": at, "listed": None, "note": "agents --json did not return a list (exit %s)" % rec["exit_code"]})
+                continue
+            row = self.find_row(rows, id_=self.job_id, name=self.name)
+            entry = {"target_s": target * scale, "at_s": at, "listed": bool(row)}
+            for k in ("pid", "status", "version", "state"):
+                entry[k] = redact_value(k, row[k]) if row and k in row else "(absent)"
+            polls.append(entry)
+            if row and row.get("pid") and not (self.agent_row or {}).get("pid"):
+                self.agent_row = row   # step processes can walk from it
+        st.details["polls"] = polls
+        st.details["offsets_scaled_for_dry_run"] = bool(self.dry)
+
+        def first(field):
+            for e in polls:
+                if e.get("listed") and e.get(field) not in (None, "(absent)", ""):
+                    return e["at_s"]
+            return None
+
+        listed = [e for e in polls if e.get("listed")]
+        if not listed:
+            st.fail("the session was never listed in %d polls over %.0f s (last at %.1f s): it ended or was never started" % (
+                len(polls), polls[-1]["at_s"], polls[-1]["at_s"]))
+            return
+        last = polls[-1]
+        parts = []
+        for f in ("pid", "status", "version"):
+            t = first(f)
+            parts.append("%s %s" % (f, ("first seen at %.1f s" % t) if t is not None else "never in %.0f s" % last["at_s"]))
+        t_pid = first("pid")
+        head = ("pid appears after %.1f s" % t_pid) if t_pid is not None else ("pid never appears in %.0f s" % last["at_s"])
+        if t_pid is not None and t_pid <= polls[0]["at_s"] + 0.01:
+            head = "pid is there from the first poll (%.1f s)" % t_pid
+        st.details["pid_first_seen_s"] = t_pid
+        st.ok("%s%s; %s; last poll at %.1f s: listed=%s state=%s status=%s" % (
+            head, " (dry run: offsets are a tenth)" if self.dry else "", "; ".join(parts), last["at_s"], last.get("listed"), last.get("state"), last.get("status")))
 
     def step_state(self, st: Step):
         if not self.job_id:
@@ -1219,12 +1284,18 @@ class Spike:
             r = st.run([found, "--version"], 30)
             parts.append("tares --version exit %s: %s" % (r["exit_code"], one_line(r["stdout"] or r["stderr"], 60)))
         st.details = {"which": found}
+        dirs = scripts_dirs()
+        st.details["scripts_dirs"] = dirs
+        for d in dirs:
+            parts.append("%s scripts dir %s: %s%s" % (d["scheme"], d["path"] or "(none)",
+                                                       ("holds " + ", ".join(d["found"])) if d["found"] else "no tares there",
+                                                       "; on PATH" if d["on_path"] else "; NOT on PATH"))
         (st.ok if found else st.fail)("; ".join(parts))
 
     # --- 7. detached child -------------------------------------------------------------------
 
     def step_detached(self, st: Step):
-        secs = 6 if self.dry else 60
+        secs = 6 if self.dry else DETACHED_SECONDS
         shell_pid = nearest_shell_pid()
         argv = [sys.executable, str(Path(__file__).resolve()), "--heartbeat-child", str(self.heartbeat), str(secs), str(shell_pid)]
         kw = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, close_fds=True)
@@ -1248,7 +1319,7 @@ class Spike:
         warn = "" if lazy("psutil") else (" WARNING: psutil is missing, so the shell pid recorded may be the py launcher, not your terminal. "
                                          "Install it (py -m pip install psutil) and run the spike again for a reliable answer.")
         st.details["shell_pid_reliable"] = bool(lazy("psutil"))
-        st.skip("NOT ANSWERED YET: the detached child is running (pid %s, %d s heartbeat). Close this terminal, wait 20 s, open a new one and run: "
+        st.skip("NOT ANSWERED YET: the detached child is running (pid %s, %d s heartbeat). Close this terminal now, wait 20 s, open a new one and run: "
                 "py scripts\\windows_spike.py --check-detached \"%s\".%s" % (p.pid, secs, self.heartbeat, warn))
 
     # --- 8. keyring --------------------------------------------------------------------------
@@ -1315,6 +1386,7 @@ class Spike:
             T("launch", 1, "claude --bg with settings, plugin dir and an 8 KB system prompt", self.step_launch)
             T("agents_json", 2, "claude agents --json lists the session", self.step_agents)
             T("state_json", 2, "~/.claude/jobs/<id>/state.json and the fields bash reads", self.step_state)
+            T("pid_timing", 2, "Does the session row get a pid, a status and a version, and when", self.step_pid_timing)
             T("processes", 4, "Processes of the background session (psutil)", self.step_processes)
             T("hook_via_claude", 5, "Which shell Claude Code runs hook commands in (probe hooks of the spike plugin)", self.step_hooks)
             T("bg_enabled", 3, "Is --bg enabled", self.step_bg_enabled)
@@ -1352,6 +1424,28 @@ class Spike:
 
 
 # ---------------------------------------------------------------------------------------------
+def scripts_dirs():
+    """The folders pip puts console scripts (tares.exe) in: the default scheme and the user scheme, with
+    whether the tares launcher is in each and whether the folder is on PATH."""
+    import sysconfig
+    names = ["tares.exe", "tares-script.py", "tares"] if IS_WIN else ["tares"]
+    user = next((n for n in (["nt_user"] if IS_WIN else ["posix_user", "osx_framework_user"]) if n in sysconfig.get_scheme_names()), None)
+    on_path = [os.path.normcase(os.path.normpath(p)) for p in os.environ.get("PATH", "").split(os.pathsep) if p]
+    out = []
+    for label, scheme in (("default", None), ("user", user)):
+        path = None
+        if label == "default" or scheme:
+            try:
+                path = sysconfig.get_path("scripts", scheme) if scheme else sysconfig.get_path("scripts")
+            except Exception:
+                path = None
+        found = [n for n in names if path and (Path(path) / n).exists()]
+        out.append({"scheme": "%s scheme%s" % (label, " " + scheme if scheme else " (none on this OS)" if label == "user" else ""),
+                    "path": path, "found": found, "exe_found": "tares.exe" in found,
+                    "on_path": bool(path) and os.path.normcase(os.path.normpath(path)) in on_path})
+    return out
+
+
 # hidden modes: heartbeat child, check-detached, keyring
 # ---------------------------------------------------------------------------------------------
 
@@ -1468,6 +1562,9 @@ def check_detached(path: Path, require_shell_gone: bool = True, stop_child: bool
         else:
             msg = "the heartbeat is advancing (%d beats); the terminal-close part was not exercised in a dry run" % d2["count"]
         status = "ok"
+    elif finished and not gone_at:
+        msg = "the child finished before the terminal closed; re-run and close the window right after the script ends"
+        status, stop_child = "skipped", False
     elif survived:
         msg = ("the heartbeat is advancing but the shell (pid %s) that started the script is still running, so this proves nothing about closing the terminal. "
                "Close that terminal and run the check again (the child is left running)." % d2.get("shell_pid"))
@@ -1673,6 +1770,17 @@ def render_markdown(results: dict) -> str:
     L += ["", "## Steps in detail", ""]
     for s in results["steps"]:
         L += ["### %s: %s" % (s["name"], s["status"].upper()), "", "%s" % s["title"], "", "Finding: %s" % s["finding"], ""]
+        det = s.get("details") or {}
+        if det.get("polls"):
+            L += ["| target s | at s | listed | pid | status | version | state |", "|---|---|---|---|---|---|---|"]
+            for e in det["polls"]:
+                L.append("| %s | %s | %s | %s | %s | %s | %s |" % tuple(cell(str(e.get(k, ""))) for k in (
+                    "target_s", "at_s", "listed", "pid", "status", "version", "state")))
+            L.append("")
+        for d in det.get("scripts_dirs") or []:
+            L.append("- %s: `%s` holds %s; %s" % (d["scheme"], d["path"], ", ".join(d["found"]) or "no tares", "on PATH" if d["on_path"] else "NOT on PATH"))
+        if det.get("scripts_dirs"):
+            L.append("")
         for c in s.get("commands") or []:
             L.append("- `%s` exit %s, %s ms%s" % (cell(" ".join(json.dumps(a) if " " in a else a for a in c["argv"])) if c.get("argv") else "(none)",
                                                    c.get("exit_code"), c.get("elapsed_ms"), ", TIMED OUT" if c.get("timed_out") else ""))
@@ -1786,12 +1894,12 @@ def main(argv=None) -> int:
     det = step_by_name(results, "detached_child")
     if det and det["status"] == "skipped" and not spike.dry:
         print()
-        print("STEP 7 NEEDS YOU: the detached child is writing a heartbeat for 60 s. Now:")
-        print("  1. CLOSE THE TERMINAL this script was started in.")
+        print("STEP 7 NEEDS YOU: the detached child is writing a heartbeat for %d minutes. Now:" % (DETACHED_SECONDS // 60))
+        print("  1. CLOSE THE TERMINAL this script was started in, right now.")
         print("  2. Wait 20 seconds.")
         print("  3. Open a new terminal and run:")
         print('       py scripts\\windows_spike.py --check-detached "%s"' % spike.heartbeat)
-        print("  (If more than 60 s pass, that is fine: the check handles a finished run.)")
+        print("  Run it within %d minutes of closing. If the child finished before the terminal closed, the check says so and you run the script again, closing the window right after it ends." % (DETACHED_SECONDS // 60))
         print("Then paste %s back." % (spike.out / RESULTS_MD))
     else:
         print("Paste %s back." % (spike.out / RESULTS_MD))

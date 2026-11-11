@@ -228,7 +228,8 @@ async def main():
         async with mk() as cx:
             ho = (await cx.get(f"/api/projects/{other}/crew")).json()["handover"]
         ck("the older one-path form still works",
-           ho["repos"] == [{"path": "/w/notes", "name": None}] and ho["repo"] == "/w/notes", ho)
+           ho["repos"] == [{"path": "/w/notes", "name": None, "paths": {"local/crew": "/w/notes"}}]
+           and ho["repo"] == "/w/notes", ho)
         out = await mf.hand_over("Notes", repos=[{"path": "C:\\x\\repo", "name": "g/win"}])
         ck("a Windows folder with backslashes is accepted", "refused" not in out.lower()
            and "not absolute" not in out, out)
@@ -237,6 +238,8 @@ async def main():
             ho = (await cx.get(f"/api/projects/{other}/crew")).json()["handover"]
         ck("C:\\x\\repo and C:/x/repo are one folder, kept with forward slashes",
            [x["path"] for x in ho["repos"]] == ["/w/notes", "C:/x/repo"], ho)
+        ck("and this crew's own folder is kept the same way",
+           ho["repos"][1]["paths"] == {"local/crew": "C:/x/repo"}, ho)
         async with mk() as cx:
             cp = (await cx.get("/api/crew/projects")).json()["projects"]
         notes_row = [p for p in cp if p["name"] == "Notes"]
@@ -270,6 +273,40 @@ async def main():
             st = await cx.get("/api/crew/crew-orchestrator")
         ck("the station route still answers for a station", st.status_code == 404
            and "station" in st.text, st.text)
+
+        print("== each crew keeps its own folder (TR-1222) ==")
+
+        def shop_repos(doc):
+            return next(p for p in doc["projects"] if p["name"] == "Shop")["repos"]
+        async with mk() as cx:
+            r = await cx.post(f"/api/projects/{shop}/handover", json={
+                "crew": "adam-crew", "repos": [{"path": "/home/adam/api", "name": "glassflow/factory-test-api"},
+                                               {"path": "/home/adam/web", "name": "glassflow/factory-test-web"}]})
+            ck("a teammate's crew hands over its own clones", r.status_code == 200, r.text)
+            ck("and the reply shows its own folders", [x["path"] for x in r.json()["handover"]["repos"]]
+               == ["/home/adam/api", "/home/adam/web"], r.text)
+            ho = (await cx.get(f"/api/projects/{shop}/crew")).json()["handover"]
+            mine = shop_repos((await cx.get("/api/crew/projects?crew=crew")).json())
+            his = shop_repos((await cx.get("/api/crew/projects?crew=adam-crew")).json())
+            new = shop_repos((await cx.get("/api/crew/projects?crew=eve-crew")).json())
+            hdr = shop_repos((await cx.get("/api/crew/projects", headers={"X-Tares-Crew": "adam-crew"})).json())
+        ck("still two repos, matched by name", [x["name"] for x in ho["repos"]]
+           == ["glassflow/factory-test-api", "glassflow/factory-test-web"], ho)
+        ck("the first crew keeps its folders", [x["path"] for x in mine] == ["/w/api", "/w/web"], mine)
+        ck("the teammate's crew gets its own", [x["path"] for x in his] == ["/home/adam/api", "/home/adam/web"], his)
+        ck("the header names the crew too",
+           [x["path"] for x in hdr] == ["/home/adam/api", "/home/adam/web"], hdr)
+        ck("a crew that gave none sees the first folder", [x["path"] for x in new] == ["/w/api", "/w/web"], new)
+        ck("no crew sees the others' folders", all("paths" not in x for x in mine + his + new), his)
+        async with mk() as cx:
+            r = await cx.post(f"/api/projects/{shop}/handover", json={
+                "crew": "eve-crew", "repos": [{"path": "/e/api", "name": "glassflow/factory-test-api",
+                                              "paths": {"local/crew": "/evil"}}]})
+            mine = shop_repos((await cx.get("/api/crew/projects?crew=crew")).json())
+        ck("a hand-over cannot set another crew's folder", mine[0]["path"] == "/w/api", mine)
+        async with mk() as cx:
+            bad = await cx.get("/api/crew/projects?crew=Not A Crew")
+        ck("a crew name that cannot be one is refused", bad.status_code == 400, bad.text)
 
         print("== the project page's repos ==")
         async with mk() as cx:
@@ -374,6 +411,41 @@ async def main():
            (row["tickets_done"], row["tickets_total"]) == (3, 7)
            and row["stages"] == {"merged": 2, "review": 1, "todo": 2, "done": 1, "blocked": 1}
            and row["milestone"] == {"name": "API", "done": 1, "total": 2}, row)
+
+        print("== a project name the crew's stations own is refused at hand-over (TR-1071) ==")
+
+        async def handover(name, crew=None):
+            uid = json.loads(await m.create_project(name, "x"))["id"]
+            body = {"repos": [{"path": "/w/x"}]} | ({"crew": crew} if crew else {})
+            async with mk() as cx:
+                r = await cx.post(f"/api/projects/{uid}/handover", json=body)
+                ho = (await cx.get(f"/api/projects/{uid}/crew")).json().get("handover")
+            return r, ho
+
+        for name, crew in (("crew", None), ("crew-engine-in-python", None), ("Crew Engine", None),
+                           ("alpha", "alpha"), ("alpha-tools", "alpha")):
+            r, ho = await handover(name, crew)
+            said = r.json().get("detail", "") if r.status_code >= 400 else ""
+            who = crew or "crew"
+            ck(f"{name!r} for crew {who!r} is refused", r.status_code == 400
+               and f'starts with "{who}", the crew\'s name' in said
+               and f"station names starting {who}- belong to the crew itself" in said
+               and "Rename the project, then hand it over" in said
+               and "\u2014" not in said, (r.status_code, r.text))
+            ck(f"and {name!r} records nothing", ho is None, ho)
+        for name, crew in (("crewmate", None), ("my-crew-app", None), ("crew-engine", "alpha"),
+                           ("alphabet", "alpha")):
+            r, ho = await handover(name, crew)
+            ck(f"{name!r} for crew {crew or 'crew'!r} is handed over", r.status_code == 200
+               and ho and ho.get("crew") == (crew or "crew"), (r.status_code, r.text, ho))
+        uid = json.loads(await m.create_project("crew-tools", "x"))["id"]
+        out = await mf.hand_over(uid, repos=[{"path": "/w/x"}])
+        ck("the MCP tool passes the reason on", "Rename the project, then hand it over" in out, out)
+        from tares.crew import state as crew_state
+        names = ["crew-engine-in-python", "Crew Engine!", "  --A_b.C--  ", "\u00e9t\u00e9 crew", "x"]
+        ck("the server's slugify matches the crew's",
+           all(factory_mod.slugify(n) == crew_state.slugify(n) for n in names),
+           [(factory_mod.slugify(n), crew_state.slugify(n)) for n in names])
 
 
 rules()

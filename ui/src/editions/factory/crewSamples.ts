@@ -3,7 +3,7 @@
 
 import type { CrewBuilders, CrewMember, CrewPage, CrewPlan, CrewProposal, MemberDetail, MemberState } from "./FactoryCrew.api";
 
-export const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "load", "err"] as const;
+export const SAMPLES = ["busy", "fold", "finished", "l3", "pace", "quiet", "none", "many", "long", "team", "load", "err"] as const;
 export const isSample = (s: string | null): s is string => !!s && (SAMPLES as readonly string[]).includes(s);
 
 const NOW = "2026-11-02T10:00:00+00:00";
@@ -59,8 +59,10 @@ const PLAN: CrewPlan = {
 };
 
 const PROPOSALS: CrewProposal[] = [
-  { id: "p1", text: "Put the milestone check in the ticket before asking for review.", from: "the reviewer", when: "2 days ago" },
-  { id: "p2", text: "Never merge on a red check, even when the change looks small.", from: "the reviewer", when: "6 hours ago" },
+  { id: "p1", text: "Put the milestone check in the ticket before asking for review.", from: "the reviewer", when: "2 days ago",
+    for: "For project-x", tickets: ["project-x T3", "project-x T5", "project-x T9"] },
+  { id: "p2", text: "Never merge on a red check, even when the change looks small.", from: "the reviewer", when: "6 hours ago",
+    for: "For every project", tickets: ["project-x T2", "project-y T4", "project-y T6", "project-z T1", "project-z T8", "project-x T11"] },
 ];
 const STANDUP = { text: "In the last day: 4 tickets done, 2 in review. Projects that moved: project-x, project-y.", when: "The last 24 hours" };
 const L4 = { text: "The crew merges after its review and green CI.", detail: "No releases. Up to 4 builders at once.", settings_href: "/settings#crew" };
@@ -124,6 +126,18 @@ export function sampleLoad(name: string): Promise<CrewPage> {
       }));
     case "finished": return Promise.resolve(page({ builders: FINISHED() }));
     case "many": return Promise.resolve(page({ builders: MANY }));
+    case "team": {
+      // two people's crews with the same station names (TR-1223): the caller's runs, Adam's ended
+      const ended = (m: CrewMember): CrewMember => ({ ...m, state: "ended", state_text: "Ended 1 hour ago", doing: "Finished its work.",
+        heard: "1 hour ago", memory_pct: null, memory_text: null });
+      const mine = { id: "c1", person: { id: "p1", name: "Ashish" }, machine: "ashish-mbp", machine_shown: false, mine: true,
+        summary: "Working, last heard 12 seconds ago", talk_to: LEAD(), reviewer: REVIEWER(), releaser: null,
+        builders: [group("factory-is-modular", X())] };
+      const theirs = { id: "c2", person: { id: "p2", name: "Adam" }, machine: "adam-mbp", machine_shown: false, mine: false,
+        summary: "Not running", talk_to: ended(LEAD()), reviewer: ended(REVIEWER()), releaser: null, builders: [] };
+      return Promise.resolve(page({ crews: [mine, theirs], summary: mine.summary, talk_to: mine.talk_to, reviewer: mine.reviewer,
+        builders: mine.builders }));
+    }
     case "long":
       return Promise.resolve(page({
         builders: [group("customer-connectors-for-the-enterprise-edition-2026",
@@ -136,18 +150,50 @@ export function sampleLoad(name: string): Promise<CrewPage> {
   }
 }
 
-/** The member's lines in a sample: what the fold shows. */
+const SAMPLE_LOG = Array.from({ length: 120 }, (_, i) => `ok ${i + 1} - claude_update: frozen kit case ${i + 1}`).join("\n");
+
+/** The member's session in a sample, as the fold shows it: a conversation (TR-1177). */
 export function sampleDetail(): Promise<MemberDetail> {
   const at = (hm: string) => `2026-11-02T${hm}:00+00:00`;
+  const tool = (id: string, hm: string, name: string, summary: string, input: unknown, output: string | null,
+                ms: number | null, failed = false, more = false) => ({
+    kind: "tool" as const, at: at(hm), id, name, summary, input: JSON.stringify(input, null, 2), output, failed, ms, more,
+  });
   return Promise.resolve({
     attach: "tares factory crew attach project-x-build-m2",
-    recent: [
-      { at: at("11:42"), type: "tool_use", text: "Read ui/src/editions/WORDS.md" },
-      { at: at("11:43"), type: "tool_use", text: "Edit ui/src/editions/factory/FactoryHome.tsx" },
-      { at: at("11:44"), type: "tool_use", text: "Bash: cd ui && npx tsc --noEmit" },
-      { at: at("11:44"), type: "tool_result", text: "error TS2322: Type 'string | null' is not assignable to type 'string'." },
-      { at: at("11:45"), type: "assistant", text: "Fixing the type, then checking again." },
-      { at: at("11:47"), type: "assistant", text: "Message to the reviewer: pull request ready <b>not markup</b>" },
+    recent: [],
+    conversation_from: 0,
+    conversation: [
+      { kind: "divider", at: at("09:40"), text: "Session started" },
+      { kind: "asked", at: at("09:41"), from: "crew-orchestrator", quiet: false,
+        text: "Take TR-1174: make cc_frozen_midround set its known difference aside. The working doc is in the ticket." },
+      { kind: "said", at: at("09:43"),
+        text: "The difference is the one skill file the frozen kit holds back on purpose. I'll teach the check to read the known list instead of counting it as a failure." },
+      tool("t1", "09:44", "Edit", "tests/factory/claude_update_test.sh",
+        { file_path: "tests/factory/claude_update_test.sh", old_string: "check cc_frozen_midround \\", new_string: "check cc_frozen_midround --known \"$KNOWN_DIFFS\" \\" },
+        "- check cc_frozen_midround \\\n+ check cc_frozen_midround --known \"$KNOWN_DIFFS\" \\", 31),
+      tool("t2", "09:46", "Bash", "bash tests/factory/claude_update_test.sh",
+        { command: "bash tests/factory/claude_update_test.sh", timeout: 600000 },
+        "FAIL cc_frozen_midround: unknown flag --known\n111 passed, 1 failed", 92000, true),
+      { kind: "said", at: at("09:46"), text: "The `check` helper doesn't take flags yet. Adding `--known` to it in `lib.sh`." },
+      tool("t3", "09:47", "Edit", "tests/factory/lib.sh", { file_path: "tests/factory/lib.sh" }, "Updated tests/factory/lib.sh", 28),
+      tool("t4", "09:48", "Bash", "bash tests/factory/claude_update_test.sh", { command: "bash tests/factory/claude_update_test.sh" },
+        SAMPLE_LOG.slice(0, 400), 88000, false, true),
+      tool("t5", "09:49", "Bash", "git push -u origin tr-1174", { command: "git push -u origin tr-1174" }, "branch 'tr-1174' set up to track 'origin/tr-1174'.", 2400),
+      tool("t6", "09:50", "SendMessage", "crew-reviewer", { to: "crew-reviewer", message: "PR #595 is ready." }, "Sent.", 120),
+      { kind: "said", at: at("09:50"), text: "Opened #595 and asked the reviewer. 112/112 on the frozen kit, with the known difference listed in the output." },
+      { kind: "asked", at: at("09:58"), from: "crew-reviewer", quiet: false,
+        text: "Approved #595. One nit: name the variable KNOWN_DIFFERENCES so it matches the docs." },
+      { kind: "divider", at: at("10:02"), text: "Memory compacted" },
+      { kind: "asked", at: at("10:05"), from: "The factory", quiet: true,
+        text: "Builder tick: follow the Tick section of your skill." },
+      { kind: "said", at: at("10:06"), text: "Renaming it now." },
+      { kind: "said", at: at("10:07"), text: "Told the reviewer: pull request ready <b>not markup</b>" },
     ],
   });
+}
+
+/** One sample call's whole output. */
+export function sampleToolOutput(id: string): Promise<string> {
+  return Promise.resolve(id === "t4" ? SAMPLE_LOG : "");
 }

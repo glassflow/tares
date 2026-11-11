@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from fastapi import Body, HTTPException, Request
 
 from . import claude_usage
+from . import crew_conversation
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
@@ -1205,13 +1206,18 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                             now or now_utc(), waiting or [])
 
     @app.get("/api/crew/projects")
-    def crew_projects(request: Request):
+    def crew_projects(request: Request, crew: str | None = None):
         """The projects handed to the crew, oldest hand-over first: each with its repos (the
         folder on the crew's machine and the GitHub name), the autonomy it was handed over at
         when stricter than the crew's, its tickets by stage, the milestone it is on, and which
         tickets each repo has. The orchestrator works from this list (TR-462). A person's key
         sees the projects the person leads or holds a ticket in; the system credential sees all
-        (TR-633)."""
+        (TR-633). A repo's `path` is the folder the asking crew (`crew`, else X-Tares-Crew)
+        handed over, else the first one handed over (TR-1222)."""
+        try:
+            key = factory_mod.crew_key(person_of(request), crew_name_of(request, crew))
+        except ValueError as e:
+            h.err(e)
         names = {p["id"]: p["name"] for p in store.list_projects()}
         hidden = h.hidden_ids()
         mine = my_projects(request)
@@ -1227,7 +1233,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 continue
             ho = store.get_handover(uid) or {}
             out.append({"id": uid, "name": names[uid], **project_progress(store, uid, tk[uid]),
-                        "repos": repo_rows(uid, ho.get("repos") or [], tk[uid]),
+                        "repos": repo_rows(uid, factory_mod.own_paths(ho.get("repos") or [], key),
+                                           tk[uid]),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by_label") or ho.get("by"),
                         "handed_over_person": ho.get("person")})
@@ -1244,18 +1251,24 @@ def register(app, store, h: Host) -> SimpleNamespace:
             ho = store.get_handover(uid) or {}
             if uid in names and not (ho.get("takeover") or {}).get("released_at"):
                 releasing.append({"id": uid, "name": names[uid], "takeover": ho["takeover"],
-                                  "repos": ho.get("repos") or [],
+                                  "repos": factory_mod.own_paths(ho.get("repos") or [], key),
                                   "holders": sorted({t["holder"] for t in store.list_tickets(uid)
                                                      if t["holder"]})})
         return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
 
+    SINCE_MAX = 1000   # lines a refresh from `since` reads at most (TR-1177)
     @app.get("/api/crew/{name}")
     def get_station(name: str, request: Request, recent: int = 30,
-                          crew: str | None = None):
+                          crew: str | None = None, conversation: int = 0, before: int | None = None,
+                          since: int | None = None):
         """One station: its row as in /api/crew, the tickets it holds in every project, its
         current session's last lines (`recent`, at most 200), and the command that opens it.
         Crews can repeat a station name: `crew` (id or name) says which; without it the caller's
-        own crew's station comes back."""
+        own crew's station comes back. `conversation` (at most 500) adds the session's last lines as a
+        conversation (tares/crew_conversation.py, TR-1177), oldest first; `before` (a `conversation_from`
+        from an earlier answer) reads the lines before that point instead, for "Show earlier". `since`
+        reads from that line to the newest, at most SINCE_MAX lines (the newest when there are more), so a
+        reader who loaded earlier lines refreshes without a gap; `conversation_from` says where it starts."""
         st = pick_station(name, request, crew)
         held = []
         hidden = h.hidden_ids()
@@ -1272,12 +1285,32 @@ def register(app, store, h: Host) -> SimpleNamespace:
         lines = store.key_events(h.cc_source(), st["session"], limit=n,
                                  offset=max((st["lines"] or 0) - n, 0)) if n else []
         m = store.session_meters([st["session"]]).get(st["session"]) or {}
-        return {**st, "tickets": held,
+        convo = {}
+        c = min(max(conversation, 0), 500)
+        if c and st["session"]:
+            end = (st["lines"] or 0) if before is None else max(min(before, st["lines"] or 0), 0)
+            start = max(end - c, 0)
+            if since is not None and before is None:
+                start = max(min(since, end), end - SINCE_MAX, 0)
+            rows = store.key_payload_rows(h.cc_source(), st["session"], limit=end - start, offset=start)
+            convo = {"conversation": crew_conversation.build(rows)[0], "conversation_from": start}
+        return {**st, "tickets": held, **convo,
                 "context_detail": m.get("context"), "context_at": m.get("context_at"),
                 "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
                             "text": str(x.get("text") or "")[:600]} for x in lines],
                 "attach": factory_mod.attach_command(name, st.get("role") or "")}
+
+    @app.get("/api/crew/{name}/tool/{tool_id}")
+    def station_tool(name: str, tool_id: str, request: Request, crew: str | None = None):
+        """One tool call's whole result in the station's current session (TR-1177): what a card on
+        the Crew page loads when it is opened and the list held only the start of it."""
+        st = pick_station(name, request, crew)
+        b = store.key_tool_result(h.cc_source(), st["session"], tool_id) if st["session"] else None
+        if b is None:
+            raise HTTPException(404, f"no tool call {tool_id} in {name}'s session")
+        return {"id": tool_id, "output": crew_conversation._result_text(b.get("content")),
+                "failed": bool(b.get("is_error"))}
 
     @app.post("/api/crew/{name}/end")
     def end_station(name: str, request: Request, body: dict | None = Body(None),
@@ -2576,7 +2609,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands
         the project to the crew. Each repo is the folder it is checked out in on the crew's
         machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
-        them. `autonomy` only when the person wants this project stricter than the crew
+        them; a folder is kept for the crew that gave it, so a teammate's crew hands over its own
+        clone of the same repo. `autonomy` only when the person wants this project stricter than the crew
         (L3-review). Recorded with the time, the person and the crew (`crew`, else X-Tares-Crew,
         else `crew`); the orchestrator finds it in /api/crew/projects. A key with no person is
         refused (TR-633). Nobody signs off first: a repo's owner is asked through a question when
@@ -2585,9 +2619,17 @@ def register(app, store, h: Host) -> SimpleNamespace:
         me = work_person(request)
         try:
             crew = crew_name_of(request, body.get("crew"))
+            if clash := factory_mod.project_name_clash(p["name"], crew):
+                raise ValueError(clash)
             new = factory_mod.handover_repos(body.get("repos"))
             if body.get("repo"):
                 new = factory_mod.merge_repos(new, factory_mod.handover_repos(body.get("repo")))
+            # each folder is this crew's own: another crew's machine keeps its own (TR-1222)
+            key = factory_mod.crew_key(me["id"], crew)
+            for r in new:
+                r.pop("paths", None)
+                if r["path"]:
+                    r["paths"] = {key: r["path"]}
             autonomy = str(body.get("autonomy") or "").strip() or None
             if autonomy and autonomy not in factory_mod.AUTONOMY:
                 raise docs_mod.DocError(f"unknown autonomy {autonomy!r}; one of: "
@@ -2603,7 +2645,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         if old.get("finished") or p.get("status") == "later":
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
-        return {"handover": store.get_handover(uid)}
+        ho = store.get_handover(uid)
+        return {"handover": {**ho, "repos": factory_mod.own_paths(ho.get("repos") or [], key)}}
 
     @app.post("/api/projects/{uid}/later")
     def set_later(uid: str, body: dict = Body(default={})):

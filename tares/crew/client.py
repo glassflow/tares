@@ -391,11 +391,11 @@ class TaresClient:
     # -- the crew's projects --
 
     def crew_projects(self) -> list:
-        """The projects handed to the crew, as Tares lists them (cached). When Tares can't say, an empty
-        list, and `projects_err` holds why."""
+        """The projects handed to the crew, as Tares lists them (cached), each repo with the folder this
+        crew handed over (`crew`). When Tares can't say, an empty list, and `projects_err` holds why."""
         if self._projects is None:
             try:
-                out = self.tares_http("GET", "/api/crew/projects")
+                out = self.tares_http("GET", f"/api/crew/projects?crew={quote(state.crew_name(self.paths), safe='')}")
             except TaresHTTPError as e:
                 self._projects, self.projects_err = [], (str(e).splitlines() or [""])[-1]
                 return self._projects
