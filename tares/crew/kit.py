@@ -450,6 +450,7 @@ class _Watch:
         self.start: str | None = None   # the kit the watch started on
         self.seen: str | None = None    # the kit the last round saw
         self.said_dirty = False  # the dirty checkout was said
+        self.root: Path | None = None   # the plugin the watch started on (bash maps KIT_PLUGIN once, at its start)
 
 
 _watch = _Watch()
@@ -528,7 +529,9 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
     Claude Code move (bash: `if <upgrade> elif <Claude Code move>`)."""
     from . import watch, watch_revive
     env = os.environ if env is None else env
-    root = plugin_root(paths, env)
+    if _watch.root is None:   # a frozen copy the watch started from may go later; the checkout it meant stays the root
+        _watch.root = plugin_root(paths, env)
+    root = _watch.root
     kit = kit_version(root)
     if _watch.start is None:   # cmd_watch reads it once before its first round
         _watch.start = _watch.seen = kit
@@ -548,7 +551,8 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
                 tell_newer_kit(paths, client, frozen, kit)
         elif settled and kit != _watch.start and not watch.LOOP.once:
             client.say("the plugin was updated; the watch restarts on the new version")
-            watch.restart_self(paths, watch.LOOP.interval, env)
+            # a watch started from a frozen copy restarts on the checkout it meant, not on the copy that is gone (TR-686)
+            watch.restart_self(paths, watch.LOOP.interval, {**env, "TARES_PLUGIN_DIR": str(root)} if env.get("TARES_PLUGIN_DIR") else env)
         else:
             reap_frozen_copy(paths)
         last = watch_revive.last
@@ -560,7 +564,7 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
         except CrewError:
             return False
         from . import cc_update   # here, not at the top: cc_update imports crew modules that import this one
-        down = last.down or cc_update._down(paths, binary)
+        down = last.down or (not last.ran and cc_update._down(paths, binary))
         if candidate and settled and not down and not state.halted(paths) and not frozen.on:
             upgrade_station(paths, client, candidate, kit, claude_bin=binary)
             return True

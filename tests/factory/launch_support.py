@@ -16,7 +16,7 @@ write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window
 level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
 watch round), pace_down (what the revive step asks of the pace for stations that are down or up), idle_wake_round (the
 idle-wake pass of one watch round), and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
-tares.crew.stations), `revive` and `restart` (cmd_revive and cmd_restart, or those of tares.crew.lifecycle). `watch_regrant` is one round of
+tares.crew.stations), `revive`, `restart` and `retire` (cmd_revive, cmd_restart and cmd_retire, or those of tares.crew.lifecycle). `watch_regrant` is one round of
 the watch's regrant step (TR-960): bash's per-station loop of cmd_watch cut down to its regrant branches, or regrant.step of tares.crew. The
 word {TMP} in an argument is the temp folder.
 
@@ -201,9 +201,9 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
                   "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note", "spawn", "revive", "restart", "pace_round", "pace_down", "watch_regrant",
+                  "idle_wake_note", "spawn", "revive", "restart", "retire", "pace_round", "pace_down", "watch_regrant",
                   "idle_wake_round"}
-NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "pace_round",
+NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "retire", "pace_round",
                "pace_down", "idle_wake_round"}
 
 # The pace pass of one watch round, as the bash watch loop runs it: the reading and the tidy at the top of the
@@ -283,7 +283,7 @@ def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
     script = f'set -euo pipefail; source "$1" x; shift; {prime}{fn} "$@"'
     if fn == "idle_wake_on":
         script = script.replace('idle_wake_on "$@"', 'idle_wake_on')
-    if fn in ("spawn", "revive", "restart"):
+    if fn in ("spawn", "revive", "restart", "retire"):
         script = script.replace(f'{fn} "$@"', f'cmd_{fn} "$@"')
     if fn == "pace_round":
         script = script.replace('pace_round "$@"', BASH_PACE_ROUND)
@@ -371,7 +371,7 @@ def run_python(fn: str, args: list) -> int:
         elif fn == "spawn":
             from tares.crew import stations
             return stations.cmd_spawn(["spawn", *args], dict(os.environ))
-        elif fn in ("revive", "restart"):
+        elif fn in ("revive", "restart", "retire"):
             from tares.crew import lifecycle
             return getattr(lifecycle, f"cmd_{fn}")([fn, *args], dict(os.environ))
         elif fn == "watch_regrant":
@@ -403,13 +403,19 @@ def main(argv: list) -> int:
         env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit)}
         if fn == "spawn":  # the spawn command wants the crew's MCP endpoint, which the settings checks leave at its default
             env["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
-        if engine == "bash":
-            return run_bash(fn, args, env, kit)
-        os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
-        if fn == "spawn":
-            os.environ["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
-        sys.path.insert(0, str(ROOT))
-        return run_python(fn, args)
+        try:
+            if engine == "bash":
+                return run_bash(fn, args, env, kit)
+            os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
+            if fn == "spawn":
+                os.environ["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
+            sys.path.insert(0, str(ROOT))
+            return run_python(fn, args)
+        finally:
+            # the address of every GET the command made, appended to <tmp>/urls: what the idle wake suite's curl shim notes
+            # for bash (idle_wake_test.sh), read from the Tares side so both engines are seen the same way
+            with open(tmp / "urls", "a", encoding="utf-8", newline="\n") as f:
+                f.writelines(e["path"] + "\n" for e in tares.log if not e.get("post"))
 
 
 if __name__ == "__main__":
