@@ -27,6 +27,7 @@ test_clean_env
 test_cli
 test_cloud_connect
 test_core_single_person
+test_crew_adopt
 test_crew_cc_update
 test_crew_claude
 test_crew_client

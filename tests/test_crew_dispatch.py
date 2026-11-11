@@ -106,12 +106,19 @@ def ported(table):
 TABLE = {("zz",): fake_a, ("zz", "sub"): fake_sub, ("zn",): fake_none}
 
 
-def call_run(argv, env=None, script="/nonexistent/factory", windows=False):
-    """Run dispatch.run in-process with execve replaced. Returns (exit code, stdout, stderr, execve calls)."""
+_real_exists = os.path.exists
+
+
+def call_run(argv, env=None, script="/nonexistent/factory", windows=False, bin_bash=False):
+    """Run dispatch.run in-process with execve replaced. Returns (exit code, stdout, stderr, execve calls).
+    bin_bash: act as if /bin/bash exists. On a real Windows runner it does not, so bash_exe would answer with
+    Git's bash.EXE from PATH (TR-1069) and a check of the /bin/bash route could never see /bin/bash there."""
     execs = []
     out, err = io.StringIO(), io.StringIO()
     code = None
+    exists = (lambda p: p == "/bin/bash" or _real_exists(p)) if bin_bash else _real_exists
     with mock.patch.object(os, "execve", lambda *a: execs.append(a)), \
+            mock.patch.object(os.path, "exists", exists), \
             mock.patch.object(dispatch, "is_windows", lambda: windows), \
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
@@ -373,11 +380,11 @@ with mock.patch.object(sys, "platform", "linux"):
 
 # ---------- the execve is the one bash has always had, and the env reaches the script ----------
 print("bash route")
-code, out, err, execs = call_run([UNPORTED, "-x", "a b"], {"K": "v", ENGINE: ""}, "/some dir/factory")
+code, out, err, execs = call_run([UNPORTED, "-x", "a b"], {"K": "v", ENGINE: ""}, "/some dir/factory", bin_bash=True)
 ck("the bash route calls os.execve('/bin/bash', ['bash', script, *argv], env)",
    execs == [("/bin/bash", ["bash", "/some dir/factory", UNPORTED, "-x", "a b"], {"K": "v", ENGINE: ""})], short(execs))
 env_obj = {"K": "v"}
-code, out, err, execs = call_run([UNPORTED], env_obj, Path("/p/factory"))
+code, out, err, execs = call_run([UNPORTED], env_obj, Path("/p/factory"), bin_bash=True)
 ck("...with the same env object and a script given as a Path turned into text", execs and execs[0][2] is env_obj and execs[0][1][1] == str(Path("/p/factory")), short(execs))
 
 STUB = T / "stub factory"
