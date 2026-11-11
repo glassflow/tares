@@ -321,14 +321,14 @@ else:
     code, text = run("crew_basic", env={"PARITY_CMD_PYTHON": same, "PARITY_FAIL": "python"})
     ck("a failing python side exits 1", code == 1 and "FAIL python" in text, f"{code}\n{text}")
 
-    code, text = run("--coverage")
-    last = text.strip().splitlines()[-1] if text.strip() else ""
-    ck("--coverage prints a percentage and exits 0",
-       code == 0 and last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last,
-       f"{code}\n{text[-400:]}")
-    ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
+    # One real run, with --require-full: it prints what --coverage prints (the full run of every scenario is the slow part of
+    # this test, so it is not done twice); that --coverage alone exits 0 is checked above, on the fixture suites.
     code, text = run("--coverage", "--require-full")
     ck("--require-full exits 1 below 100%", code == 1 and "--require-full" in text, f"{code}\n{text[-300:]}")
+    last = [ln for ln in text.strip().splitlines() if ln.startswith("coverage: ")]
+    ck("--coverage prints a percentage",
+       bool(last) and "%" in last[-1] and "scenarios pass against Python" in last[-1], f"{code}\n{text[-400:]}")
+    ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
 
 # factory-bin: runs $FACTORY_BIN, and a call that lost the variable stops plainly (the 'tares' suite once ran
 # `env -i ... "$F" spawn` without it and executed "spawn" itself).
