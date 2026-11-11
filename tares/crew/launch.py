@@ -445,7 +445,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         # blank over any key Claude Code itself inherited: stations use the crew file (TR-560)
         "TARES_AUTH_TOKEN": "",
     }
-    # the `tares` that started the crew, so a station whose PATH lacks it still runs `tares factory` (TR-1069)
+    # the `tares` that started the crew, written for a later release to read (TR-1069); nothing reads it yet
     try:
         tares_bin = shutil.which("tares")
     except (AttributeError, OSError):  # a lookup that cannot run never stops a launch

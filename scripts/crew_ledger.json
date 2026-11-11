@@ -3528,14 +3528,14 @@
     {
       "name": "FACTORY_TARES",
       "kind": "env",
-      "reads": true,
+      "reads": false,
       "writes": true,
-      "what": "path of the `tares` that started the crew, so a station whose PATH lacks it still runs `tares factory`",
+      "what": "path of the `tares` that started the crew, written for a later release to read",
       "ticket": "TR-1069",
       "dropped": false,
       "python": "tares.crew.launch:write_settings",
       "ported": true,
-      "note": "Written into each station's settings env (bash and Python alike); read by the station's `factory` shim."
+      "note": "Written into each station's settings env (bash and Python alike); nothing reads it yet."
     },
     {
       "name": "FACTORY_UPDATE_POLL",

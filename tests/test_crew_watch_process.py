@@ -326,6 +326,55 @@ try:
     argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
     ck("TARES_FACTORY_ENGINE=bash alone: bash on POSIX, Python on Windows",
        engine == ("python" if WINDOWS else "bash") and (WINDOWS or argv[0] == "bash"), str(argv))
+    from unittest import mock
+    with mock.patch.object(dispatch, "bash_exe", lambda e: None):
+        argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
+        ck("TARES_FACTORY_ENGINE=bash with no bash on the system: the watch is Python (nothing to run it with)",
+           engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
+        argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "bash"})
+        ck("TARES_FACTORY_WATCH=bash with no bash on the system: the watch is Python", engine == "python", str(argv))
+
+    print("a running Python watch follows the engine setting (TR-1069)")
+    switched = []
+    with mock.patch.object(watch, "restart_self", lambda p, i, e=None: switched.append(i)):
+        watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
+        watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
+        ck("the default engine: nothing changes", not switched and watch.read_pidfile(paths)[2] == "python")
+        (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "python"}), encoding="utf-8")
+        watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
+        ck("\"engine\": \"python\" in crew.json: nothing changes", not switched)
+        (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "bash"}), encoding="utf-8")
+        watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
+        if WINDOWS:
+            ck("\"engine\": \"bash\" in crew.json: Windows has no bash, the watch stays", not switched)
+        else:
+            ck("\"engine\": \"bash\" in crew.json: the bash watch takes over, on the same interval", switched == [7], str(switched))
+            ck("...and the pid file now names bash, so a stop terminates it", watch.read_pidfile(paths)[2] == "bash",
+               str(watch.read_pidfile(paths)))
+        switched.clear()
+        with mock.patch.object(dispatch, "bash_exe", lambda e: None):
+            watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
+        ck("...but with no bash on the system it stays Python", not switched)
+    if not WINDOWS:
+        execs = []
+        with mock.patch.object(os, "execve", lambda *a: execs.append(a)):
+            watch.restart_self(paths, 3, {"TARES_FACTORY_ENGINE": "bash", "PATH": os.environ.get("PATH", "")})
+        ck("restart_self onto the bash watch execs bash by its path (a bare \"bash\" is not an execve path)",
+           len(execs) == 1 and os.path.isabs(execs[0][0]) and os.path.basename(execs[0][0]) == "bash"
+           and execs[0][1][0] == "bash" and execs[0][1][-2:] == ["--interval", "3"], str(execs))
+        (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "bash"}), encoding="utf-8")
+
+        def no_exec(*a):
+            raise FileNotFoundError(2, "No such file or directory", "bash")
+        watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
+        with mock.patch.object(os, "execve", no_exec):
+            watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})   # must not raise
+        ck("an exec that fails leaves the Python watch running and its pid file naming python",
+           watch.read_pidfile(paths)[2] == "python", str(watch.read_pidfile(paths)))
+    (CREW / "crew.json").write_text(json.dumps({"crew_name": "t"}), encoding="utf-8")
+    for name in ("watch.pid", "watch.pid.meta"):
+        (CREW / name).unlink(missing_ok=True)
+
     for words in (["watch"], ["crew", "watch"]):
         ck(f"`{' '.join(words)}` goes to Python by default", dispatch.route(words, {})[0] == "python")
         ck(f"`{' '.join(words)}` goes to bash with TARES_FACTORY_WATCH=bash" if not WINDOWS else f"`{' '.join(words)}` runs in Python on Windows",

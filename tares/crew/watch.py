@@ -32,6 +32,7 @@ Differences from bash
   * A meta file next to the pid file has the create time and the engine.
   * The loop leaves on a stop file, and on SIGTERM where the platform has it, removing its pid file and stop file.
   * Only the steps registered so far run; see above.
+  * A round that finds the engine setting turned to bash runs the bash watch in its place (`follow_engine`, TR-1069).
   * When the kit step sees the plugin updated, `restart_self` runs the watch again on the new code: `os.execve` where
     the platform has it (same pid, same pid file), a new detached watch on Windows (untested there, TR-946).
 
@@ -44,6 +45,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -248,6 +250,28 @@ def _spawn(paths: CrewPaths, argv: list, env: dict) -> tuple:
         raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
 
 
+def follow_engine(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
+    """A running Python watch whose engine setting has turned to bash (`"engine": "bash"` in crew.json, TR-1069) runs
+    the bash watch instead, so the switch back needs no `crew down`. Looked at at the top of every round. The pid file
+    is rewritten to name bash first: stop() ends a bash watch with a terminate, not the stop file. Does not return
+    when it switches. An environment variable cannot change under a running process; that one takes a new watch."""
+    env = dict(os.environ if env is None else env)
+    if _watch_command(env)[1] != "bash":
+        return
+    _say("the engine setting is now bash; the bash watch takes over")
+    try:
+        me = psutil.Process()
+        write_pidfile(paths, me.pid, me.create_time(), "bash")
+    except (psutil.Error, OSError, SystemError):   # the pid file then keeps naming python; stop() terminates it anyway
+        pass
+    try:
+        restart_self(paths, interval, env)
+    except OSError as e:   # the exec failed: this watch is still here, so it stays the Python watch and says so
+        _say(f"could not start the bash watch ({e}); staying on the Python watch")
+        with contextlib.suppress(psutil.Error, OSError, SystemError):
+            write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
+
+
 def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
     """The plugin was updated: run the watch again on the new code (bash: `exec watch --interval`). Where the platform
     has exec, this process becomes the new watch (same pid, same pid file). On Windows there is none: a new watch is
@@ -261,7 +285,8 @@ def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> 
         raise SystemExit(0)
     sys.stdout.flush()
     sys.stderr.flush()
-    os.execve(argv[0], argv, env)
+    # execve wants a path: the bash watch's argv[0] is "bash", so find it on the PATH the new watch will have
+    os.execve(shutil.which(argv[0], path=env.get("PATH")) or argv[0], argv, env)
 
 
 def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:
@@ -398,6 +423,7 @@ def watch(paths: CrewPaths, interval: float, once: bool = False, poll: float = D
     try:
         while not stop_requested(paths):
             claim_pidfile(paths)   # every round: the first try may have run before start() wrote the file
+            follow_engine(paths, interval)
             run_steps(paths)
             if nap(paths, interval, poll):
                 break
