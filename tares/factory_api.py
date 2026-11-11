@@ -24,6 +24,9 @@ from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
 from . import team as team_mod
+from .integrations import registry as integrations_registry
+from .integrations import resolve as integrations_resolve
+from .integrations.types import Status
 from .envelope import now_utc
 from .factory_store import MapChanged
 from .host import Host
@@ -129,14 +132,82 @@ async def sync_prs(store, stop: asyncio.Event) -> None:
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
-    """What a merge seen on GitHub changes on the ticket (nothing when it already says so). A
-    Linear or GitHub ticket keeps its own status; only a Tares one is set done."""
+    """What a merge seen on GitHub changes on the ticket: its stage becomes merged (nothing when
+    it already is). A pull request counts once it is merged into its base, which for a project
+    with milestone branches is the milestone branch, not the default one. The ticket's status
+    follows through `write_status`, whichever system holds the ticket."""
     if not pr.get("merged") or t["stage"] in ("merged", "shipped"):
         return {}
-    out = {"stage": "merged"}
-    if t["owner"] == "tares":
-        out["status"] = "done"
-    return out
+    return {"stage": "merged"}
+
+
+STATUS_WAIT = 10.0      # seconds a route waits for the ticket system before it hands the write on
+_WRITING: set = set()   # status writes still running after their route moved on
+
+
+async def write_status(store, uid: str, t: dict, stage: str) -> None:
+    """The status the ticket's `stage` asks for, written through the project's tickets
+    integration (TR-848). Never raises, and never holds the caller longer than STATUS_WAIT:
+
+    - a ticket the project's integration does not hold (a Tares ticket in a project whose tickets
+      live in Linear, or whose cell-wide choice is Linear) is offered to the Tares integration,
+      which holds it; the refusal is logged. A ticket nobody holds is left as it is;
+    - a write that fails, or is still waiting on a rate limit when STATUS_WAIT is up, leaves a
+      pending_writeback row, so the integration tries again on its next sync and the sync leaves
+      the ticket's status and stage alone meanwhile. The write itself carries on in the
+      background and clears the row when it lands."""
+    if stage not in factory_mod.STATUS_OF_STAGE or not isinstance(t, dict) or not t.get("id"):
+        return      # a stage with no status, or no ticket: nothing to write
+    status = Status(factory_mod.STATUS_OF_STAGE[stage])
+    name = ""
+    try:
+        name = integrations_resolve.effective("tickets", uid, store=store).integration
+        try:
+            await _write(store, t, name, status)
+        except (ValueError, KeyError) as refused:
+            if name == "tares":
+                return      # nobody holds this ticket: nothing to write
+            print(f"[tares] {name} does not hold {t.get('id')} ({refused}); "
+                  "trying the Tares integration", flush=True)
+            name = "tares"
+            try:
+                await _write(store, t, name, status)
+            except (ValueError, KeyError):
+                return
+    except Exception as e:  # noqa: BLE001 - a status write never fails the route that asked
+        print(f"[tares] status write for {t.get('id')} failed: {type(e).__name__}: {e}", flush=True)
+        _keep(store, t, name, status, f"the write failed: {type(e).__name__}")
+
+
+async def _write(store, t: dict, name: str, status: Status) -> None:
+    """One integration's `set_status`, given STATUS_WAIT to answer; after that it carries on in
+    the background and a row keeps the status wanted. Raises what the integration raises."""
+    cls = integrations_registry.get("tickets", name)
+    if cls is None:
+        raise KeyError(f"no tickets integration {name!r}")
+    task = asyncio.ensure_future(cls(store).set_status(t, status))
+    _WRITING.add(task)
+    task.add_done_callback(_WRITING.discard)
+    done, _ = await asyncio.wait({task}, timeout=STATUS_WAIT)
+    if not done:
+        _keep(store, t, name, status, "the ticket system is slow to answer")
+        return
+    exc = task.exception()
+    if exc is not None:
+        raise exc
+
+
+def _keep(store, t: dict, name: str, status: Status, error: str) -> None:
+    """Leave the status wanted where the integration's next sync finds it. Only an integration
+    that retries (it has `retry_pending`) is given a row: Tares tickets have nothing to retry."""
+    cls = integrations_registry.get("tickets", name) if name else None
+    if cls is None or not hasattr(cls, "retry_pending"):
+        return
+    try:
+        store.pending_writeback_fail(t["id"], name, status.value, error, now_utc())
+    except Exception as e:  # noqa: BLE001
+        print(f"[tares] pending write-back for {t.get('id')} not kept: {type(e).__name__}: {e}",
+              flush=True)
 
 
 def _reread_only(cur: dict, fields: dict) -> bool:
@@ -197,6 +268,7 @@ async def _refresh(store, uid: str) -> None:
             store.add_ticket_history(cur["id"], uid, "stage", "merged",
                                      "GitHub shows the pull request merged", "github", "github",
                                      now_utc())
+            await write_status(store, uid, cur, "merged")
 
     await asyncio.gather(*(one(t) for t in linked), return_exceptions=True)
 
@@ -1280,8 +1352,9 @@ def register(app, store, h: Host) -> SimpleNamespace:
         it started) moves it; only the releaser marks it shipped; a person's own session may do
         anything. `checks` ({command, result, commit?, broke_test?} each) are recorded in the same
         call, so a builder asking for review need not record them one by one. `pr` (a PR URL or owner/repo#12) links the ticket to its pull request, read
-        from GitHub from then on. A Tares ticket's status follows its stage; a Linear or GitHub
-        ticket's status stays its home's."""
+        from GitHub from then on. A ticket's status follows its stage in the system that
+        holds it (Tares, Linear or GitHub), through the project's tickets integration; a write
+        that does not land is kept and tried again, and never fails this call."""
         # the store work runs in worker threads, before and after the one GitHub read
 
         def check():
@@ -1299,8 +1372,6 @@ def register(app, store, h: Host) -> SimpleNamespace:
         t, stage, reason = await asyncio.to_thread(check)
         checks = parse_checks(body) if body.get("checks") else []
         fields: dict = {"stage": stage, "stage_reason": reason or None}
-        if t["owner"] == "tares":
-            fields["status"] = factory_mod.STATUS_OF_STAGE[stage]
         pr_ref = str(body.get("pr") or "").strip()
         if pr_ref:
             parsed = factory_github.parse_pr(pr_ref)
@@ -1327,9 +1398,14 @@ def register(app, store, h: Host) -> SimpleNamespace:
                     store.add_ticket_history(t["id"], uid, "stage", "merged",
                                              "GitHub shows the pull request merged", "github",
                                              "github", now_utc())
-            return h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False)
+            return ticket_or_404(uid, t["id"])
 
-        return await asyncio.to_thread(write)
+        after = await asyncio.to_thread(write)
+        # the status follows the stage in the project's ticket system; a merge GitHub already
+        # showed made the stage merged above, so the status is the one of the stage it ended on
+        await write_status(store, uid, after, after["stage"] or stage)
+        return await asyncio.to_thread(
+            lambda: h.ticket_out(uid, ticket_or_404(uid, t["id"]), with_doc=False))
 
     @app.get("/api/projects/{uid}/tickets/{ref}/messages")
     def ticket_messages(uid: str, ref: str):
