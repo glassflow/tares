@@ -69,7 +69,7 @@ GH = {"state": "open", "merged": False, "draft": False, "head": HEAD, "error": "
 REVIEW = {"answer": None}
 CI = {"answer": None}
 RAILS = {"answer": []}
-CI_SEEN = {"source": "unset", "calls": 0}
+CI_SEEN = {"source": "unset", "calls": 0, "required": "unset"}
 
 
 async def fake_read_pr(store, repo, number, prev=None):
@@ -111,6 +111,7 @@ class FakeCI(CISource):
         self.store = store
 
     async def state(self, pr, required):
+        CI_SEEN["required"] = required
         a = CI["answer"]
         if isinstance(a, Exception):
             raise a
@@ -178,7 +179,7 @@ async def main():
             CI["answer"] = CIState(state="success", head=HEAD)
             RAILS["answer"] = []
             RAILS.pop("seen", None)
-            CI_SEEN.update({"source": "unset", "calls": 0})
+            CI_SEEN.update({"source": "unset", "calls": 0, "required": "unset"})
             hooks.run = fake_run
 
         def choose(review="fakerev", ci="fakeci"):
@@ -196,6 +197,11 @@ async def main():
            (store.ticket_for_pr("ACME/Shop", 7) or {}).get("id") == cat["id"])
         ck("the same number in another repo is another ticket",
            (store.ticket_for_pr("acme/other", 7) or {}).get("id") == cart["id"])
+        link(cart, repo="Acme/Mixed", number=9)
+        ck("a repo stored with capitals is found by its lower-case name (F5)",
+           (store.ticket_for_pr("acme/mixed", 9) or {}).get("id") == cart["id"]
+           and (store.ticket_for_pr("ACME/MIXED", 9) or {}).get("id") == cart["id"])
+        link(cart, repo="acme/other", number=7)
         ck("another number is none", store.ticket_for_pr("acme/shop", 8) is None)
         ck("a number that only contains it is none (70 is not 7)",
            store.ticket_for_pr("acme/shop", 70) is None)
@@ -247,8 +253,21 @@ async def main():
            and "no GitHub credential" in a["reasons"][0] and a["head"] == "", a)
         GH["error"] = "keep: rate limited"
         a = await ask()
-        ck("a failed read that kept the last head goes on to the other checks",
-           a["head"] == HEAD and a["ready"] is True, a)
+        ck("a failed read that kept the last snapshot is still not ready, with its error (F1)",
+           a["ready"] is False and a["head"] == "" and len(a["reasons"]) == 1
+           and "rate limited" in a["reasons"][0] and a["review"] is None and a["ci"] is None, a)
+        for label, kept in (("closed", {"state": "closed"}), ("a draft", {"draft": True}),
+                            ("merged", {"state": "closed", "merged": True}),
+                            ("an older head", {"head": OLD})):
+            reset()
+            GH.update(kept)
+            GH["error"] = "keep: rate limited"
+            REVIEW["answer"] = Verdict(state="approved", head=HEAD, by="Fake")
+            CI["answer"] = CIState(state="success", head=HEAD)
+            a = await ask()
+            ck(f"a failed read never answers ready for the snapshot's {label}",
+               a["ready"] is False and any("could not be read" in r for r in a["reasons"]), a)
+        reset()
         reset()
         for label, change, word in (("closed", {"state": "closed"}, "closed"),
                                     ("merged", {"state": "closed", "merged": True}, "already merged"),
@@ -279,7 +298,7 @@ async def main():
             ("changes", Verdict(state="changes", head=HEAD, summary="Two problems"), "asked for changes", "Two problems"),
             ("stale", Verdict(state="stale", head=OLD), "older commit", ""),
             ("pending", Verdict(state="pending", head=HEAD), "pending", ""),
-            ("none", Verdict(state="none", head=""), "Not reviewed yet", ""),
+            ("none", Verdict(state="none", head=""), "is not reviewed yet", ""),
             ("approved for another commit", Verdict(state="approved", head=OLD, by="Fake"), "older commit", ""),
         )
         for label, v, word, extra in cases:
@@ -305,7 +324,14 @@ async def main():
         REVIEW["answer"] = Verdict(state="changes", head=HEAD, summary="", findings=["fix it"])
         a = await ask()
         ck("changes without a summary still say something",
-           "see the findings" in a["reasons"][0] and a["review"]["findings"] == ["fix it"], a)
+           "fix it" in a["reasons"][0] and "aaaaaaa" in a["reasons"][0]
+           and a["review"]["findings"] == ["fix it"], a)
+        reset()
+        REVIEW["answer"] = Verdict(state="changes", head=HEAD, summary="", findings=[], by="CodeRabbit")
+        a = await ask()
+        ck("a reason names the gate and the commit; with nothing to quote it points at the findings",
+           a["reasons"][0].startswith("CodeRabbit asked for changes on aaaaaaa")
+           and "see the findings" in a["reasons"][0], a["reasons"])
         reset()
         a = await ask()
         ck("the review part names the gate and who approved",
@@ -321,12 +347,17 @@ async def main():
            a["ci"]["state"] == "success" and a["guardrails"] == [] and RAILS.get("seen"), a)
 
         print("== CI ==")
+        reset()
+        choose()
+        await ask()
+        ck("the CI source is asked with an empty list of required checks, not None (F5)",
+           CI_SEEN["required"] == [], CI_SEEN["required"])
         for label, c, word, ready in (
                 ("success", CIState(state="success", head=HEAD), "", True),
                 ("none", CIState(state="none", head=HEAD, summary="No CI configured"), "", True),
                 ("failure with names", CIState(state="failure", head=HEAD, failing=["pytest -q", "ruff"]), "pytest -q, ruff", False),
                 ("failure with no names", CIState(state="failure", head=HEAD, summary="the run was cancelled"), "cancelled", False),
-                ("pending", CIState(state="pending", head=HEAD, summary="pytest -q has not run"), "not finished: pytest -q has not run", False),
+                ("pending", CIState(state="pending", head=HEAD, summary="pytest -q has not run"), "not finished on aaaaaaa: pytest -q has not run", False),
                 ("pending with no summary", CIState(state="pending", head=HEAD), "not finished", False)):
             reset()
             CI["answer"] = c
@@ -334,6 +365,11 @@ async def main():
             ck(f"{label}: " + ("ready" if ready else "not ready, says why"),
                a["ready"] is ready and (ready or any(word in r for r in a["reasons"]))
                and a["ci"]["state"] == c.state, a)
+        reset()
+        CI["answer"] = CIState(state="failure", head=HEAD, failing=["ruff"])
+        a = await ask()
+        ck("a failing CI reason names the commit (F2)",
+           a["reasons"] == ["CI is failing on aaaaaaa: ruff"], a["reasons"])
         reset()
         CI["answer"] = ValueError("a required check is not a command")
         a = await ask()
@@ -355,12 +391,12 @@ async def main():
         ck("local is built with the cell's source and asked once",
            CI_SEEN["source"] == "claude_code_x" and CI_SEEN["calls"] == 1 and a["ci"]["integration"] == "local"
            and a["ready"] is True, (CI_SEEN, a["reasons"]))
-        CI_SEEN.update({"source": "unset", "calls": 0})
+        CI_SEEN.update({"source": "unset", "calls": 0, "required": "unset"})
         a = await ask()
         ck("with no source given, it is built with none", CI_SEEN["source"] is None and a["ready"] is True, CI_SEEN)
         registry._loaded[("ci", "fakeci")] = FakeCI
         store.set_project_choice(shop, "ci", "fakeci", {}, by="test")
-        CI_SEEN.update({"source": "unset", "calls": 0})
+        CI_SEEN.update({"source": "unset", "calls": 0, "required": "unset"})
         reset()
         await ask(source="claude_code_x")
         ck("another CI source is not given the source", CI_SEEN["calls"] == 0 and CI_SEEN["source"] == "unset", CI_SEEN)
@@ -483,11 +519,15 @@ async def main():
             GH["calls"].clear()
             async with mk() as cx:
                 r = await cx.get("/api/factory/merge-ready", params={"pr": "acme/shop#7"})
-                ck("a hidden project's PR is 404, and nothing was read",
-                   r.status_code == 404 and seen_404 == [shop] and GH["calls"] == [],
+                hid = r.json()
+                ck("a hidden project's PR answers 200, and nothing was read",
+                   r.status_code == 200 and seen_404 == [shop] and GH["calls"] == [],
                    (r.status_code, seen_404, GH["calls"]))
                 r = await cx.get("/api/factory/merge-ready", params={"pr": "acme/shop#99"})
-                ck("a PR no ticket has is not a hidden project", r.status_code == 200, r.status_code)
+                ck("a PR no ticket has answers the same way as a hidden one (F3)",
+                   r.status_code == 200 and r.json()["ready"] is False and hid["ticket"] is None
+                   and hid["project"] is None and hid["reasons"][0].startswith("No ticket has acme/shop#")
+                   and set(hid) == set(r.json()), (hid, r.json()))
         finally:
             helpers["project_or_404"] = real_404
 

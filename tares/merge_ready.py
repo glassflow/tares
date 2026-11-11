@@ -32,6 +32,14 @@ def _answer(ready: bool, reasons: list[str], **more) -> dict:
             "ci": more.pop("ci", None), "guardrails": more.pop("guardrails", [])}
 
 
+def no_ticket(repo: str, number: int) -> dict:
+    """The answer for a pull request no ticket has. The route gives it too for a PR whose ticket
+    is in a project the caller cannot see, so the two cannot be told apart."""
+    return _answer(False, [f"No ticket has {repo}#{number} as its pull request, so Tares "
+                           "does not know which project's rules apply"],
+                   pr={"repo": repo, "number": number})
+
+
 async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
     """The answer for the pull request `pr_ref` (a PR URL or `owner/repo#12`). `source` is the
     cell's Claude Code source name, which the local CI integration reads the sessions from."""
@@ -44,9 +52,7 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
     repo, number = parsed
     t = store.ticket_for_pr(repo, number)
     if t is None:
-        return _answer(False, [f"No ticket has {repo}#{number} as its pull request, so Tares "
-                               "does not know which project's rules apply"],
-                       pr={"repo": repo, "number": number})
+        return no_ticket(repo, number)
     uid = t["project"]
     base = {"ticket": factory_mod.label(t), "project": uid}
     pr = await factory_github.read_pr(store, repo, number, prev=t.get("pr"))
@@ -54,9 +60,11 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
     brief = {"repo": repo, "number": number, "url": pr.get("url") or "",
              "state": pr.get("state"), "draft": bool(pr.get("draft")),
              "merged": bool(pr.get("merged")), "base": pr.get("base") or ""}
-    if pr.get("error") and not head:
+    if pr.get("error"):
+        # read_pr keeps the ticket's last snapshot (head, state, draft) when a read fails; none of
+        # that is a fresh answer, so a failed read stops here whatever it kept
         return _answer(False, [f"GitHub could not be read for {repo}#{number}: {pr['error']}"],
-                       pr=brief, **base)
+                       pr={"repo": repo, "number": number, "url": brief["url"]}, **base)
     reasons: list[str] = []
     if pr.get("merged"):
         reasons.append("The pull request is already merged")
@@ -66,6 +74,7 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
         reasons.append("The pull request is a draft")
     if not head:
         reasons.append("The pull request has no head commit")
+    short = head[:7]
     ref = PRRef(repo=repo, number=number, head=head, base=pr.get("base") or "",
                 url=pr.get("url") or "", ticket=t["id"], project_uid=uid)
 
@@ -81,17 +90,19 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
                        "findings": list(v.findings), "url": v.url})
         if v.state == "approved" and v.head and head and not factory_mod.same_commit(v.head, head):
             review["state"] = "stale"
-            reasons.append("The review was for an older commit; the new head is not reviewed yet")
+            reasons.append(f"The review was for an older commit; {short} is not reviewed yet")
         elif v.state == "approved":
             pass
         elif v.state == "changes":
-            reasons.append(f"Review asked for changes: {v.summary or 'see the findings'}")
+            who = v.by or eff.integration or "The review"
+            first = (v.findings[0] if v.findings else "") or v.summary or "see the findings"
+            reasons.append(f"{who} asked for changes on {short}: {str(first)[:160]}")
         elif v.state == "stale":
-            reasons.append("The review was for an older commit; the new head is not reviewed yet")
+            reasons.append(f"The review was for an older commit; {short} is not reviewed yet")
         elif v.state == "pending":
-            reasons.append("The review is still pending")
+            reasons.append(f"The review of {short} is still pending")
         else:
-            reasons.append("Not reviewed yet")
+            reasons.append(f"{short} is not reviewed yet")
     except Exception as e:  # noqa: BLE001 - one slot failing must not hide the other two
         review["state"] = "error"
         reasons.append(f"The review gate could not be read: {type(e).__name__}: {e}")
@@ -107,10 +118,10 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
         ci.update({"state": c.state, "failing": list(c.failing), "summary": c.summary, "url": c.url})
         if c.state == "failure":
             names = ", ".join(c.failing)
-            reasons.append("CI is failing" + (f": {names}" if names else "") +
+            reasons.append(f"CI is failing on {short}" + (f": {names}" if names else "") +
                            (f" ({c.summary})" if c.summary and not names else ""))
         elif c.state == "pending":
-            reasons.append("CI is not finished" + (f": {c.summary}" if c.summary else ""))
+            reasons.append(f"CI is not finished on {short}" + (f": {c.summary}" if c.summary else ""))
     except ValueError as e:
         ci["state"] = "error"
         reasons.append(f"The project's required checks are not valid: {e}")

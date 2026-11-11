@@ -110,14 +110,15 @@ async def get_integrations(project: str = "") -> str:
 
 
 @mcp.tool()
-async def merge_ready(pr: str) -> str:
+async def merge_ready(pr: str, project: str = "") -> str:
     """May this pull request merge? One answer from the review gate, CI and the guardrails of
     the project its ticket belongs to. `pr` is a PR URL or `owner/repo#12`. Returns `ready`
     (true only when the PR is open, not a draft, the review gate approved its current head, CI
     passed or the project has none, and no guardrail blocks), `reasons` (a sentence for each thing
     holding the merge back; empty when ready), the head commit, and the `review`, `ci` and
     `guardrails` answers. A bad reference, a PR no ticket has or a failed read comes back as
-    ready false with a reason. It changes nothing: the builder merges."""
+    ready false with a reason. It changes nothing: the builder merges. `project` is accepted for
+    consistency with the other tools; the project comes from the pull request's ticket."""
     async with _cx(30) as cx:
         r = await cx.get(f"{TARESD}/api/factory/merge-ready", params={"pr": pr})
     return _out(r)

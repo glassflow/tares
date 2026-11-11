@@ -1868,7 +1868,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
         parsed = factory_github.parse_pr(pr)
         t = store.ticket_for_pr(*parsed) if parsed else None
         if t is not None:
-            h.project_or_404(t["project"])      # a private project the caller is not on is unknown
+            try:
+                h.project_or_404(t["project"])
+            except HTTPException:
+                # a private project the caller is not on answers like a PR no ticket has, so the
+                # reply does not say which PRs it tracks
+                return merge_ready_mod.no_ticket(*parsed)
         return await merge_ready_mod.merge_ready(store, pr, source=h.cc_source())
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
