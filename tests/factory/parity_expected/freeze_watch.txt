@@ -1107,7 +1107,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-
+tares factory: could not read the crew settings from Tares at http://127.0.0.1:127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
 == step: crew status ==
 exit: 0
 -- stdout --
