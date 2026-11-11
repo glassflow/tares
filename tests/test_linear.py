@@ -191,8 +191,9 @@ async def main():
         ck("the linear source exists and is in the project",
            "linear" in app.state.runtime.catalog.sources
            and "linear" in store.project_sources(uid))
-        n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
-                                      "event_type = 'ticket_created'").fetchone()[0]
+        with store._lock:                    # the source's first poll writes under this lock, from its own thread
+            n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
+                                          "event_type = 'ticket_created'").fetchone()[0]
         ck("one event per ticket found", n_created == 3, n_created)
         r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x"})
         ck("no Tares tickets on it", r.status_code == 409, r.text)
