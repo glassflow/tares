@@ -189,15 +189,33 @@ async def main():
         print("== a ticket the project's integration does not hold ==")
         LIN["moves"].clear()
         mine = ticket(lp, "tares", "Mine in linear project")
-        r = await stage(lp, mine["id"], "review")
-        ck("a Tares ticket in a Linear project: 200, stage set", r.status_code == 200
-           and r.json()["stage"] == "review", r.text)
-        ck("it calls nothing and leaves no row", not LIN["moves"] and pending(store, mine["id"]) is None)
+        seen = []
+        for to in ("doing", "review", "merged", "todo"):
+            r = await stage(lp, mine["id"], to)
+            seen.append((r.status_code, r.json()["stage"], r.json()["status"]))
+        ck("a Tares ticket in a Linear project: stage set, status follows in Tares", seen == [
+           (200, "doing", "in_progress"), (200, "review", "in_progress"), (200, "merged", "done"),
+           (200, "todo", "todo")], seen)
+        ck("it calls nothing in Linear and leaves no row", not LIN["moves"] and pending(store, mine["id"]) is None)
         foreign = ticket(uid, "linear", "Linear in tares project")
         r = await stage(uid, foreign["id"], "review")
         ck("a Linear ticket in a Tares project: 200, stage set, status left as it was",
            r.status_code == 200 and r.json()["stage"] == "review" and r.json()["status"] == "todo", r.text)
         ck("and no row", pending(store, foreign["id"]) is None)
+
+        print("== a cell-wide choice of Linear, a project not linked ==")
+        store.set_choice("tickets", "linear", {}, by="test")
+        try:
+            cw = await new_project("cell wide linear")
+            ct = ticket(cw, "tares", "Tares ticket, linear cell wide")
+            seen = []
+            for to in ("doing", "review", "merged"):
+                r = await stage(cw, ct["id"], to)
+                seen.append((r.status_code, r.json()["stage"], r.json()["status"]))
+            ck("a Tares ticket follows its stage in Tares", seen == [
+               (200, "doing", "in_progress"), (200, "review", "in_progress"), (200, "merged", "done")], seen)
+        finally:
+            store.set_choice("tickets", "tares", {}, by="test")
 
         print("== a write that fails ==")
         LIN["mode"] = "down"

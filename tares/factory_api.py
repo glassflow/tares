@@ -149,8 +149,9 @@ async def write_status(store, uid: str, t: dict, stage: str) -> None:
     """The status the ticket's `stage` asks for, written through the project's tickets
     integration (TR-848). Never raises, and never holds the caller longer than STATUS_WAIT:
 
-    - a ticket the integration does not hold (a Tares ticket in a project whose tickets live in
-      Linear, say) is a mistake of the pairing, not a failure: nothing is written anywhere;
+    - a ticket the project's integration does not hold (a Tares ticket in a project whose tickets
+      live in Linear, or whose cell-wide choice is Linear) is offered to the Tares integration,
+      which holds it; the refusal is logged. A ticket nobody holds is left as it is;
     - a write that fails, or is still waiting on a rate limit when STATUS_WAIT is up, leaves a
       pending_writeback row, so the integration tries again on its next sync and the sync leaves
       the ticket's status and stage alone meanwhile. The write itself carries on in the
@@ -161,24 +162,39 @@ async def write_status(store, uid: str, t: dict, stage: str) -> None:
     name = ""
     try:
         name = integrations_resolve.effective("tickets", uid, store=store).integration
-        cls = integrations_registry.get("tickets", name)
-        if cls is None:
-            return
-        task = asyncio.ensure_future(cls(store).set_status(t, status))
-        _WRITING.add(task)
-        task.add_done_callback(_WRITING.discard)
-        done, _ = await asyncio.wait({task}, timeout=STATUS_WAIT)
-        if not done:
-            _keep(store, t, name, status, "the ticket system is slow to answer")
-            return
-        exc = task.exception()
-        if exc is not None:
-            raise exc
-    except (ValueError, KeyError):
-        return      # the integration does not hold this ticket: nothing to write
+        try:
+            await _write(store, t, name, status)
+        except (ValueError, KeyError) as refused:
+            if name == "tares":
+                return      # nobody holds this ticket: nothing to write
+            print(f"[tares] {name} does not hold {t.get('id')} ({refused}); "
+                  "trying the Tares integration", flush=True)
+            name = "tares"
+            try:
+                await _write(store, t, name, status)
+            except (ValueError, KeyError):
+                return
     except Exception as e:  # noqa: BLE001 - a status write never fails the route that asked
         print(f"[tares] status write for {t.get('id')} failed: {type(e).__name__}: {e}", flush=True)
         _keep(store, t, name, status, f"the write failed: {type(e).__name__}")
+
+
+async def _write(store, t: dict, name: str, status: Status) -> None:
+    """One integration's `set_status`, given STATUS_WAIT to answer; after that it carries on in
+    the background and a row keeps the status wanted. Raises what the integration raises."""
+    cls = integrations_registry.get("tickets", name)
+    if cls is None:
+        raise KeyError(f"no tickets integration {name!r}")
+    task = asyncio.ensure_future(cls(store).set_status(t, status))
+    _WRITING.add(task)
+    task.add_done_callback(_WRITING.discard)
+    done, _ = await asyncio.wait({task}, timeout=STATUS_WAIT)
+    if not done:
+        _keep(store, t, name, status, "the ticket system is slow to answer")
+        return
+    exc = task.exception()
+    if exc is not None:
+        raise exc
 
 
 def _keep(store, t: dict, name: str, status: Status, error: str) -> None:
