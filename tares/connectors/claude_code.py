@@ -117,6 +117,15 @@ class ClaudeCodeConnector(Connector):
     async def poll(self) -> list[Envelope]:
         return []   # push-only: events arrive via map_payload() from the plugin
 
+    def _scrub_secrets(self, items: list) -> list:
+        """Every value of a project secret replaced with [secret NAME] before anything is stored or
+        counted (TR-775), whatever the redact setting. A store without secrets changes nothing."""
+        if self.store is None or not hasattr(self.store, "all_secret_rows"):
+            return items
+        from .. import project_secrets
+        pairs = project_secrets.scrub_pairs(self.store)
+        return [project_secrets.scrub(o, pairs) for o in items] if pairs else items
+
     # ── push ingestion (the Claude Code plugin posts transcript lines to /ingest) ──
     def map_payload(self, payload) -> list[Envelope]:
         """Map pushed transcript events → Envelopes. `payload` is a single JSONL object or a list of
@@ -126,6 +135,7 @@ class ClaudeCodeConnector(Connector):
         redact = c.get("redact", True)
         include_thinking = c.get("include_thinking", False)
         items = payload if isinstance(payload, list) else [payload]
+        items = self._scrub_secrets(items)
         out = []
         projects: dict[str, str | None] = {}
         for o in items:

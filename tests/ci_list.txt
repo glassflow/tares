@@ -60,6 +60,7 @@ test_crew_unicode_home
 test_crew_views
 test_crew_watch_process
 test_crew_watch_revive
+test_crew_with_secrets
 test_crews_single
 test_decision_answers
 test_degraded

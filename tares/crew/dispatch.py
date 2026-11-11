@@ -62,6 +62,20 @@ def _events(argv: list[str], env: dict) -> int:
 PORTED[("events",)] = _events  # new in Python (TR-1067): bash has no such command
 
 
+def _with_secrets(argv: list[str], env: dict) -> int:
+    from .with_secrets import cmd_with_secrets  # imported when used (TR-775)
+    return cmd_with_secrets(argv, env)
+
+
+def _secrets(argv: list[str], env: dict) -> int:
+    from .with_secrets import cmd_secrets
+    return cmd_secrets(argv, env)
+
+
+PORTED[("with-secrets",)] = _with_secrets  # new in Python (TR-775): bash has no such command
+PORTED[("secrets",)] = _secrets            # new in Python (TR-775)
+
+
 def _spawn(argv: list[str], env: dict) -> int:
     from .stations import cmd_spawn  # imported when used (TR-954)
     return cmd_spawn(argv, env)

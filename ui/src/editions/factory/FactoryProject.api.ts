@@ -4,6 +4,7 @@
 
 import { request } from "../../api";
 import type { HomeItem } from "./home.types";
+import type { SecretsDoc } from "./ProjectSecrets";
 
 export type ProjectStage = "spec" | "build" | "review" | "done";
 export type ProjectPageState = "building" | "waiting_on_you" | "not_started" | "ready_to_close" | "later" | "finished";
@@ -118,6 +119,8 @@ export interface FactoryProjectData {
   can_later?: boolean;
   /** Who is on the project (TR-1023). */
   people?: ProjectPeople;
+  /** The project's secrets, names only (TR-775); null for someone not on the project. */
+  secrets?: SecretsDoc | null;
   now: string;
 }
 
