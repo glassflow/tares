@@ -22,6 +22,8 @@ import threading
 import types
 from pathlib import Path
 
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
+
 ROOT = Path(__file__).resolve().parent.parent
 HERE = Path(__file__).resolve().parent
 FACTORY_DIR = HERE / "factory"
@@ -38,6 +40,7 @@ os.environ.update(
     FACTORY_PAUSE="0", FACTORY_NO_WATCH="1", FACTORY_CREW_HOME=str(CREW), FAKE_CLAUDE_STATE=str(STATE),
 )
 (SCRATCH / "home").mkdir()
+_crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
 
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FACTORY_DIR))

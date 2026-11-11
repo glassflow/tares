@@ -23,6 +23,8 @@ import threading
 import time
 from pathlib import Path
 
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
+
 ROOT = Path(__file__).resolve().parent.parent
 HERE = Path(__file__).resolve().parent
 FACTORY_DIR = HERE / "factory"
@@ -41,6 +43,7 @@ os.environ.update(
     TARES_PLUGIN_DIR=str(KITDIR), FACTORY_STATION="python-test",
 )
 (SCRATCH / "home").mkdir()
+_crew_guard.install()   # an exec or spawn that would reach the real ~/factory fails the run (TR-1164)
 
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FACTORY_DIR))
@@ -741,8 +744,17 @@ class _OS:
 
 execs: list = []
 world()
-env_ = {"PATH": os.environ.get("PATH", ""), "TARES_FACTORY_ENGINE": "python"}
-with patched(watch, "os", _OS("posix", lambda path, argv, env: execs.append((path, argv, env)))):
+# The environment the new watch would get: a scratch home too, or a patch that missed would start a watch on ~/factory
+env_ = {"PATH": os.environ.get("PATH", ""), "TARES_FACTORY_ENGINE": "python", "HOME": os.environ["HOME"],
+        "USERPROFILE": os.environ["HOME"], "FACTORY_HOME": str(CREW), "FACTORY_CREW_HOME": str(CREW)}
+
+
+def record_exec(path, argv, env):
+    _crew_guard.check_exec([path, *argv], env)   # the environment it would exec with must not reach the real home
+    execs.append((path, argv, env))
+
+
+with patched(watch, "os", _OS("posix", record_exec)):
     real_restart_self(CP, 7, env_)
 ck("on a platform with exec the process becomes the new watch", len(execs) == 1 and execs[0][0] == execs[0][1][0], str(execs))
 ck("...an absolute program, the watch command and the interval it ran with", os.path.isabs(execs[0][1][0])
@@ -754,6 +766,7 @@ world()
 
 
 def fake_spawn(paths, argv, env):
+    _crew_guard.check_exec(argv, env)
     spawned.append(argv)
     return 4242, 1234.5
 
