@@ -119,9 +119,13 @@ def answer_asks(paths: CrewPaths, env, say) -> None:
             continue   # not on the roster
         if sid != ask and state.stations_get(s, "sessionId", paths=paths) != ask:
             continue
+        # bash runs each read in a subshell: one that fails never keeps the others waiting a tick
         sink = io.StringIO()
-        with contextlib.redirect_stdout(sink):
-            code = person.cmd_context(["context", s], env)
+        try:
+            with contextlib.redirect_stdout(sink):
+                code = person.cmd_context(["context", s], env)
+        except Exception:
+            code = 1
         if code != 0:
             say(f"could not read the context of {s}")
 

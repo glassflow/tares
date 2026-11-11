@@ -266,6 +266,26 @@ tick(ZERO)
 ck("a context that cannot be read is said, with the station",
    said == ["could not read the context of crew-orchestrator"], said)
 
+fresh()
+station("crew-orchestrator", id="job-1", sessionId="roster-sess")
+station("crew-reviewer", id="job-2", sessionId="rev-sess")
+tares.asks = [{"station": "crew-orchestrator", "session": "roster-sess"}, {"station": "crew-reviewer", "session": "rev-sess"}]
+
+
+def fake_context_raises_first(argv, env=None):
+    context_calls.append(argv[1])
+    if argv[1] == "crew-orchestrator":
+        raise OSError("transcript unreadable")
+    return 0
+
+
+person.cmd_context = fake_context_raises_first
+tick(ZERO)
+ck("a read that raises is said, and the next ask is still answered",
+   said == ["could not read the context of crew-orchestrator"] and context_calls == ["crew-orchestrator", "crew-reviewer"],
+   (said, context_calls))
+person.cmd_context = fake_context
+
 print("the watch runs it as a tick step")
 ck("readings is the watch's tick step", watch._STEPS.get(watch.TICK_NAME) is readings.step, watch._STEPS)
 ck("and it is not one of the round's steps", watch.TICK_NAME not in watch.STEP_NAMES)

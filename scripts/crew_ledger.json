@@ -2119,11 +2119,11 @@
       "kind": "function",
       "line": 2451,
       "what": "answer the Crew page's reading asks",
-      "ticket": "TR-958",
+      "ticket": "TR-1163",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Runs in the watch nap but answers the Crew page's /context and /usage asks (TR-967 supplies the readings)."
+      "python": "tares.crew.readings:step",
+      "ported": true,
+      "note": "Runs on every tick of the watch nap: reads the plan's limits every FACTORY_PLAN_EVERY seconds (said once when it cannot) and answers the Crew page's /context asks for this station's own session. Parity: usage_watch_*; unit checks: tests/test_crew_readings.py."
     },
     {
       "name": "nap",
@@ -2134,7 +2134,7 @@
       "dropped": false,
       "python": "tares.crew.watch:nap",
       "ported": true,
-      "note": "Looks for the stop file on every tick (FACTORY_ASK_POLL, at least 0.05s) and calls the readings step (serve_readings, TR-967) once registered."
+      "note": "Looks for the stop file on every tick (FACTORY_ASK_POLL, at least 0.05s) and calls the readings step (serve_readings, tares/crew/readings.py) on every tick."
     },
     {
       "name": "cmd_roster",
@@ -4649,6 +4649,16 @@
       "python": "",
       "ported": false,
       "note": "Used by the watch_* scenarios of parity.py; it goes when the bash engine does."
+    },
+    {
+      "name": "readings_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the watch between its rounds on either engine and waits until a fake Tares has answered the asks route N times",
+      "ticket": "TR-1163",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the usage_watch_* scenarios of parity.py; standard library only; it goes when the bash engine does."
     }
   ],
   "cmux_touchpoints": [
