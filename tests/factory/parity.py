@@ -5174,7 +5174,7 @@ def g1_setup_adopt(tmp: Path, env: dict) -> None:
         (tmp / "argus" / repo).mkdir(parents=True, exist_ok=True)
     agents = tmp / "claude" / "agents.json"
     rows = json.loads(agents.read_text(encoding="utf-8"))
-    rows.append(_row("working", "0000beef", "argus-build-m2-charts", cwd=str(tmp / "argus" / "charts"), sessionId="s-beef"))
+    rows.append(_row("working", "0000beef", "argus-build-m2-charts", cwd="%s/argus/charts" % tmp, sessionId="s-beef"))  # the route's spelling ("{tmp}/argus/charts"): the engines compare the two as text
     agents.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
 
 
@@ -5190,7 +5190,7 @@ scenario(Scenario(
     checks=[
         ("multi: an unrecorded builder in the second repo is adopted with its project",
          lambda r: r.station("argus-build-m2-charts", "project") == "argus"
-         and r.station("argus-build-m2-charts", "repo") == str(r.tmp / "argus" / "charts")),
+         and r.station("argus-build-m2-charts", "repo") == "%s/argus/charts" % r.tmp),
     ],
     covers=["multi: an unrecorded builder in the second repo is adopted with its project"],
 ))
