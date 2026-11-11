@@ -31,8 +31,7 @@
   },
   "permissions": {
     "allow": [
-      "Bash(tares factory tidy *)",
-      "Bash(tares factory heavy *)"
+      "Bash(tares factory tidy *)"
     ]
   },
   "autoMode": {

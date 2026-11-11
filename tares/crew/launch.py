@@ -402,9 +402,9 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
                  f"pattern {prod_pattern}. That needs {human} directly."]
 
     # each command is allowed as `tares factory ...` (the bare `factory` of the old bash crew is gone, TR-975)
-    cmds = ["tidy *", "heavy *"]
+    cmds = ["tidy *"]
     if role == "orchestrator":
-        cmds = ["tidy *", "heavy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
+        cmds = ["tidy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
                 "crew halt", "crew halt *", "crew resume"]
     perms = {"allow": [f"Bash(tares factory {c})" for c in cmds]}
 
