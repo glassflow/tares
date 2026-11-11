@@ -791,7 +791,8 @@ def make_app() -> FastAPI:
     _AREA_ONE = re.compile(r"^/api/areas/[^/]+/[^/]+$")
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke|decline))?$")
     _REPLY_WRITE = re.compile(r"^/api/desk/[^/]+/reply$")
-    _PROJECT_INTEGRATION = re.compile(r"^/api/projects/[^/]+/integrations/[^/]+(/test)?$")
+    _PROJECT_INTEGRATION = re.compile(
+        r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks)$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
 
     def _required_scope(method: str, path: str) -> str | None:
@@ -821,9 +822,10 @@ def make_app() -> FastAPI:
                               # a person answering their own desk item from the console (TR-740):
                               # the handler decides by the credential's person
         if method != "GET" and _PROJECT_INTEGRATION.match(path):
-            return "ingest"   # a project's own integration choice and its test (TR-842): an
-                              # admin or the project's lead; the handler decides, it needs the
-                              # credential's person. A read key is refused here
+            return "ingest"   # a project's own integration choice and its test (TR-842), and
+                              # its required checks (TR-854): an admin or the project's lead;
+                              # the handler decides, it needs the credential's person. A read
+                              # key is refused here
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person

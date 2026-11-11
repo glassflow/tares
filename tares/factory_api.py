@@ -342,25 +342,35 @@ def verdict_now(t: dict, last: dict | None) -> dict | None:
             f"verdict is for an older commit ({last['head'][:7]}); the PR is now at {head[:7]}"}
 
 
+def commands_for(store, uid: str, t: dict, source: str) -> tuple[list[dict] | None, object]:
+    """(the commands the ticket's sessions ran, the time before which a run does not count) that
+    a ticket's recorded checks are compared with. The sessions are the holder's station sessions,
+    or the project's when the ticket has no holder. `None` for the commands means there is no
+    session to compare with (not the same as a session that ran nothing: that gives `[]`).
+    `since` is 5 minutes before the ticket first went into the work, or None when it never did."""
+    holder = t.get("holder")
+    sessions = (store.station_session_ids(holder) if holder
+                else [s["session"] for s in store.project_sessions(uid)])
+    commands = store.recorded_commands(source, sessions) if sessions else None
+    # only what ran since the ticket went into the work counts for its checks
+    since = next((x["at"] for x in store.ticket_history(t["id"])
+                  if x["field"] == "stage" and x["value"] == "doing"), None)
+    if since is not None:
+        from datetime import timedelta
+        since = since - timedelta(minutes=5)
+    return commands, since
+
+
 def review_state(store, uid: str, t: dict, source: str) -> dict:
     """What a ticket's full view adds for review (TR-440..444): its checks matched against the
     recording, the challenger's layer, the review rounds, and whether the last verdict counts."""
     raw = store.ticket_checks(t["id"], 50)
     checks = []
     if raw:
-        holder = t.get("holder")
-        sessions = (store.station_session_ids(holder) if holder
-                    else [s["session"] for s in store.project_sessions(uid)])
-        commands = store.recorded_commands(source, sessions) if sessions else []
-        # only what ran since the ticket went into the work counts for its checks
-        since = next((x["at"] for x in store.ticket_history(t["id"])
-                      if x["field"] == "stage" and x["value"] == "doing"), None)
-        if since is not None:
-            from datetime import timedelta
-            since = since - timedelta(minutes=5)
+        commands, since = commands_for(store, uid, t, source)
         for c in raw:
-            state, recorded = (factory_mod.match_check(c, commands, since) if sessions
-                               else (None, None))
+            state, recorded = (factory_mod.match_check(c, commands, since)
+                               if commands is not None else (None, None))
             checks.append({**c, "match": state, "recorded": recorded})
     reviews = store.ticket_reviews(t["id"])
     layer = factory_mod.challenger_layer(

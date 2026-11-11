@@ -565,6 +565,11 @@ def _same_command(claimed: str, ran: str) -> bool:
     return last == c
 
 
+# the two comparisons the checks use, for code outside this module (the local ci integration)
+same_command = _same_command
+says_failed = _says_failed
+
+
 def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str | None]:
     """("matched" | "not_found" | "differs", what the recording shows) for a check a builder
     claimed (TR-442): the command must be in the recording between `since` (when the ticket

@@ -250,6 +250,22 @@ async def main():
                                                                  [("Shop", "T2"), ("Shop", "T1")])
            and q[-1]["project_name"] == "Blog", q)
 
+        print("== what a ticket's checks are compared with (TR-854) ==")
+        from datetime import timedelta
+        from tares import factory_api
+        shop_t1 = store.get_ticket(shop, "T1")
+        commands, since = factory_api.commands_for(store, shop, shop_t1, "claude_code")
+        doing = next(x["at"] for x in store.ticket_history(shop_t1["id"])
+                     if x["field"] == "stage" and x["value"] == "doing")
+        ck("a ticket with a session gets its commands", commands is not None
+           and any(c["command"] == "pytest -q" for c in commands), commands)
+        ck("a run counts from 5 minutes before the ticket went into the work", since == doing - timedelta(minutes=5),
+           (since, doing))
+        blog_t1 = store.get_ticket(b, "T1")
+        commands, since = factory_api.commands_for(store, b, blog_t1, "claude_code")
+        ck("no session at all is None, not a session that ran nothing ([])", commands is None, commands)
+        ck("a ticket that never went into the work has no cut-off", since is None, since)
+
         print("== recurring findings and the rules offered (TR-443) ==")
         as_station("crew-reviewer", "reviewer")
         for ref in ("T2", "T3"):

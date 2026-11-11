@@ -392,6 +392,14 @@ FACTORY_SCHEMA = [
       used_at     TIMESTAMPTZ,
       PRIMARY KEY (project, name)
     )""",
+    # The commands a project's local ci integration wants recorded as passing on a pull request's
+    # head (TR-854): one row per project, the commands as a JSON list.
+    """CREATE TABLE IF NOT EXISTS project_required_checks (
+      project     TEXT PRIMARY KEY,
+      commands    JSON,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -1927,6 +1935,42 @@ class FactoryStore:
             for n in names:
                 self.sc.execute("UPDATE project_secrets SET used_by = ?, used_at = ? WHERE project = ? "
                                 "AND name = ?", [by, at, uid, n])
+
+    # ── the project's required checks (TR-854) ────────────────────────────────
+    @staticmethod
+    def clean_commands(commands) -> list[str]:
+        """The command strings of a list a person or a station gave: each trimmed, blanks and
+        repeats dropped, in the order given. ValueError for anything but a list of strings."""
+        if commands is None:
+            return []
+        if not isinstance(commands, (list, tuple)) or not all(isinstance(c, str) for c in commands):
+            raise ValueError("commands is a list of command strings")
+        out: list[str] = []
+        for c in commands:
+            c = " ".join(c.split())
+            if c and c not in out:
+                out.append(c)
+        return out
+
+    def get_required_checks(self, uid: str) -> list[str]:
+        """The commands the project requires recorded as passing; [] when it has none."""
+        with self._sread:
+            r = self.sc.execute("SELECT commands FROM project_required_checks WHERE project = ?",
+                                [uid]).fetchone()
+        v = json.loads(r[0]) if r and isinstance(r[0], str) else (r[0] if r else None)
+        return [c for c in v if isinstance(c, str)] if isinstance(v, list) else []
+
+    def set_required_checks(self, uid: str, commands, by: str) -> list[str]:
+        """Replace the project's required checks with `commands` (cleaned as clean_commands);
+        an empty list is "no required checks". Returns what was saved."""
+        saved = self.clean_commands(commands)
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO project_required_checks (project, commands, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
+                "commands = excluded.commands, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by", [uid, json.dumps(saved), now_utc(), by])
+        return saved
 
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, secrets redacted, as get_choice; None when it

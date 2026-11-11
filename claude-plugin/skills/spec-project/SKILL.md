@@ -158,6 +158,9 @@ Write for a reader who was not here: no "as discussed", no references to this co
    git rules; what not to touch; and the **release section**: how to release, where it runs, how
    to check it went out, how to roll back, as exact commands. Propose the release section and get
    the user's yes. Ask for anything you do not know; a builder cannot guess it.
+   When the project's CI is local (`get_integrations` shows the `ci` slot as `local`), call
+   `set_required_checks` with the test and lint commands from that AGENTS.md, exactly as a
+   builder runs them. A pull request counts as passing when each is recorded on its head commit.
 5. Link and milestones. When the tickets live in Linear or GitHub, `link_tickets` first: for
    Linear `link_fields={"project": "<the Linear project's URL or name>"}`; for GitHub
    `link_fields={"repo": "owner/name", "issue_label": "tares:<project>"}`, the label cut to 50
