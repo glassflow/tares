@@ -8,11 +8,22 @@ the watch under the name the skeleton reserves for it.
 Run: python tests/test_crew_regrant.py
 """
 import json
+import os
 import sys
 import tempfile
 from pathlib import Path
 
+import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the real home)
+
 ROOT = Path(__file__).resolve().parent.parent
+SCRATCH = Path(tempfile.mkdtemp(prefix="tares-crew-regrant-"))
+for _k in [k for k in os.environ if k.startswith(("TARES", "FACTORY", "FAKE_CLAUDE", "CLAUDE_PLUGIN_OPTION_"))]:
+    del os.environ[_k]
+os.environ.update(HOME=str(SCRATCH / "home"), USERPROFILE=str(SCRATCH / "home"), FACTORY_HOME=str(SCRATCH / "crew"),
+                  FACTORY_CREW_HOME=str(SCRATCH / "crew"), TARES_HOME=str(SCRATCH / "tares-home"),
+                  PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring")
+(SCRATCH / "home").mkdir()
+_crew_guard.install()   # a restart the step makes must not reach the real ~/factory (TR-1164)
 sys.path.insert(0, str(ROOT))
 
 from tares.crew import claude, launch, lifecycle, regrant, state, watch, watch_revive  # noqa: E402
@@ -203,5 +214,8 @@ for what, err in (("a refused restart", CrewError("no room")), ("a restart that 
 check("the watch runs this step under the name the skeleton reserves", watch._STEPS.get("regrant") is regrant.step)
 check("that name is one of the skeleton's", "regrant" in watch.STEP_NAMES)
 
+import shutil  # noqa: E402
+
+shutil.rmtree(SCRATCH, ignore_errors=True)
 print(f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)

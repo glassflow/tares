@@ -52,8 +52,12 @@ def stop_watch(paths: CrewPaths, say) -> None:
 
 def rearm_text(client: TaresClient) -> str:
     """What a restart tells a station about its schedule. The pace is read here, as bash does for a command that
-    has not read it yet (pace.read; a watch round has its own reading in pace.step)."""
-    reading = pace.read(client)
+    has not read it yet (a watch round has its own reading in pace.step). Bash reads it in a command substitution,
+    so a reading taken here is not remembered: a restart that read nothing before writes no pace file."""
+    had = pace.has_read(client.paths)
+    reading = pace.last(client.paths) if had else pace.read(client)
+    if not had:
+        pace.unremember(client.paths)
     if launch.idle_wake_on(client):
         return ("arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds "
                 "your tick; if you hold one, delete it with CronList and CronDelete)")

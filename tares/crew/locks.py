@@ -130,6 +130,26 @@ def release_locks() -> None:
         _HELD.pop(lock, None)
 
 
+def release_for_exec() -> list[str]:
+    """Release every lock this process holds, because exec runs no atexit, and return the folders let go, so a failed
+    exec can take them back with retake_locks."""
+    me = os.getpid()
+    held = [lock for lock, owner in _HELD.items() if owner == me]
+    release_locks()
+    return held
+
+
+def retake_locks(held: list[str]) -> None:
+    """Take back the locks release_for_exec let go, after an exec that failed and left this process running. A lock
+    another command took meanwhile stays theirs."""
+    me = os.getpid()
+    for lock in held:
+        if _mkdir(lock):
+            with open(os.path.join(lock, "pid"), "w", encoding="utf-8", newline="\n") as f:
+                f.write(f"{me}\n")
+            _HELD[lock] = me
+
+
 def release_lock(station: str, paths=None) -> None:
     """Release one station's lock if this process holds it."""
     paths = paths or CrewPaths.from_env()

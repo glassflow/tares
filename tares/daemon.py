@@ -239,18 +239,7 @@ MAX_DB_SIZE = _parse_size(os.getenv("TARES_MAX_DB_SIZE"))
 # fills its disk and dies (glassflow-web, 2026-09-08). Reads, findings and the console keep working.
 INGEST_PAUSE_PCT = float(os.getenv("TARES_INGEST_PAUSE_PCT", "95"))
 
-
-def _ui_dist() -> Path:
-    """Where the built console SPA lives. Prefer the copy shipped inside the wheel
-    (tares/console, via hatch force-include); fall back to the source tree's ui/dist for
-    `npm run dev`-style local work. TARES_UI_DIST overrides both."""
-    if env := os.getenv("TARES_UI_DIST"):
-        return Path(env)
-    from importlib import resources
-    packaged = resources.files("tares") / "console"   # present in an installed wheel
-    if packaged.is_dir():
-        return Path(str(packaged))
-    return Path(__file__).resolve().parent.parent / "ui" / "dist"   # running from the source tree
+from ._ui import NO_CONSOLE_HINT, console_built, ui_dist as _ui_dist  # noqa: E402  (kept under this name: tests and callers read it here)
 
 
 UI_DIST = _ui_dist()
@@ -301,10 +290,8 @@ SLACK_ASK_TIMEOUT = float(os.getenv("TARES_SLACK_ASK_TIMEOUT", "120"))
 
 def _serve_ui(path: str):
     """The built console SPA: a real file if it exists, else index.html (client-side routing)."""
-    if not UI_DIST.exists():
-        return JSONResponse(
-            {"detail": "console not built; run `npm install && npm run build` in ui/"},
-            status_code=404)
+    if not console_built(UI_DIST):
+        return JSONResponse({"detail": f"console not built: {NO_CONSOLE_HINT}"}, status_code=404)
     f = (UI_DIST / path).resolve()
     if path and f.is_file() and f.is_relative_to(UI_DIST.resolve()):
         return FileResponse(f)

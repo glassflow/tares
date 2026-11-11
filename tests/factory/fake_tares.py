@@ -3,7 +3,8 @@
 few routes `tares factory doctor` asks, a `gh`, and a `tares` command. Standard library only.
 
     World         what the fake Tares answers; a scenario's `before` hook changes it between two steps
-                  (a PUT of the crew settings is kept, unless `keep` is False)
+                  (a PUT of the crew settings is kept, unless `keep` is False; `broken` makes every GET but
+                  /health a 500; `routes` adds GET paths)
     serve(world)  start it on a free port in a thread: (server, base url)
     gh_main()     the fake gh: `auth status` is signed in; `repo view` names the folder's repo, with WRITE
                   access unless the folder's name starts with ro (READ) or nogh (no GitHub repo)
@@ -29,6 +30,8 @@ class World:
         self.settings = dict(SETTINGS, **(settings or {}))
         self.mcp = True
         self.keep = True                    # False: a PUT of the settings is answered but not kept
+        self.broken = False                 # True: a Tares that is up but cannot answer, every GET but /health is a 500
+        self.routes = {}                    # more GETs: path -> answer (200); /api/grants is one the watch asks
         self.log = []
 
 
@@ -53,6 +56,8 @@ def _handler(world: World):
                 return self._json(200, {"status": "ok"})
             if world.token and self.headers.get("Authorization") != f"Bearer {world.token}":
                 return self._json(401, {"detail": "unauthorized"})
+            if world.broken and self.command == "GET":
+                return self._json(500, {"detail": "broken"})
             if path == "/mcp":
                 if not world.mcp:
                     return self._json(404, {})
@@ -66,6 +71,8 @@ def _handler(world: World):
                 return self._json(200, {"settings": world.settings})
             if path == "/api/crew/projects":
                 return self._json(200, {"projects": world.projects})
+            if self.command == "GET" and path in world.routes:
+                return self._json(200, world.routes[path])
             self._json(404, {})
 
         do_GET = do_POST = do_PUT = do_DELETE = _go  # noqa: N815
