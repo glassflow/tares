@@ -6460,7 +6460,7 @@ def make_app() -> FastAPI:
     claude_usage.register(app, store)
 
     # ── Linear (TR-408): the cell's connection, and the Linear project a project's tickets live
-    # in. Tares only reads from Linear; sessions write with Linear's own tools ───────────────
+    # in. Tares reads from Linear; write_ticket and write_milestone create there through Tares ──
     def _linear_err(e: Exception):
         _err(e, 502 if "reach" in str(e) or "answered" in str(e) else 400)
 

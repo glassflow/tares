@@ -172,8 +172,9 @@ Write for a reader who was not here: no "as discussed", no references to this co
    Tares, Linear or GitHub alike, and a repeat of the same title finds it again. Then
    `list_tickets` and check it holds what you created.
    - A ticket in Linear or GitHub takes no `status`, `assignee` or `position` when it is created.
-     Assign it there afterwards if the owner of its repo should have it (`list_people` gives
-     the email, and the `github` login).
+     The person sets the assignee in the tracker afterwards, if the owner of its repo should
+     have it (`list_people` gives the email, and the `github` login); this session cannot.
+     `assign_ticket` is the orchestrator's, and only hands a ticket to a crew station.
    - A Tares ticket also takes `assignee` (the email or id of its repo's area owner).
    - **Every ticket carries `repo`, wherever it lives, even in a project with one repo:** it is
      how a ticket finds its area owner and how a builder knows where to work.

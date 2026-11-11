@@ -290,8 +290,9 @@ class Linear:
         LS["milestones"].append({"id": f"m{n}", "name": name, "description": "", "sortOrder": n * 1000.0})
 
     @staticmethod
-    def make_directly(title):
-        lin_new_issue(f"d{len(LS['issues']) + 1}", f"FAC-{90 + len(LS['issues'])}", title)
+    def make_directly(title, ms=None):
+        lin_new_issue(f"d{len(LS['issues']) + 1}", f"FAC-{90 + len(LS['issues'])}", title,
+                      ms=Linear.ms_ext_id(ms) if ms else None)
 
     @staticmethod
     async def sync(store, uid):
@@ -344,8 +345,10 @@ class Github:
                                  "description": "", "html_url": f"https://github.com/{REPO}/milestone/{n}"})
 
     @staticmethod
-    def make_directly(title):
-        GS["issues"].append(gh_issue(len(GS["issues"]) + 1, title))
+    def make_directly(title, ms=None):
+        GS["issues"].append(gh_issue(len(GS["issues"]) + 1, title,
+                                     milestone=next(x for x in GS["milestones"] if x["title"] == ms)
+                                     if ms else None))
 
     @staticmethod
     async def sync(store, uid):
@@ -529,6 +532,67 @@ async def milestone_scenario(b, cx, store):
     await b.sync(store, uid)
     ck(f"{k}: a sync afterwards keeps two milestone rows", len(store.list_milestones(uid)) == 2
        and store.get_milestone(uid, "Shared")["id"] == row["id"], store.list_milestones(uid))
+    return uid
+
+
+async def race_scenario(b, cx, store):
+    """A sync that has read the Tares rows when write_ticket / write_milestone adopt the same
+    issue and milestone, and inserts afterwards: it must find them, not add a second row."""
+    k = b.kind
+    print(f"== {k}: a sync racing a write ==")
+    b.reset(store)
+    uid = json.loads(await m.create_project(f"Race in {k}", "A sync and a write at once"))["id"]
+    r = await cx.put(f"/api/projects/{uid}/tickets/link",
+                     json={"integration": k, "link_fields": b.link_fields})
+    ck(f"{k}: linked", r.status_code == 200, r.text)
+    b.make_ms_directly("Beta")
+    b.make_directly("Race issue", ms="Beta")       # in the tracker, in the milestone, not read yet
+    adopted = {}
+
+    def after_first_read(name, fire):
+        orig = getattr(store, name)
+        state = {"fired": False}
+
+        def wrapper(*a, **kw):
+            out = orig(*a, **kw)
+            if not state["fired"]:
+                state["fired"] = True
+                fire()
+            return out
+        setattr(store, name, wrapper)
+        return name, orig
+
+    def adopt_milestone():
+        adopted["ms"] = store.adopt_milestone(uid, k, b.ms_ext_id("Beta"), "Beta", "Written by the session",
+                                              [{"check": "make e2e", "expect": "passes"}])
+
+    def adopt_ticket():
+        adopted["t"] = store.adopt_ticket(uid, k, b.ext_id("Race issue"), "Race issue", "todo", "RACE-1",
+                                          "https://example.test/race-1", repo="acme/app")
+    hooks = [after_first_read("list_milestones", adopt_milestone), after_first_read("list_tickets", adopt_ticket)]
+    try:
+        await b.sync(store, uid)
+    finally:
+        for name, orig in hooks:
+            setattr(store, name, orig)
+    ck(f"{k}: both adoptions ran between the sync's read and its insert", set(adopted) == {"ms", "t"}, adopted)
+
+    def check(label):
+        t = [x for x in store.list_tickets(uid) if x["title"] == "Race issue"]
+        ms = [x for x in store.list_milestones(uid) if x["name"] == "Beta"]
+        ck(f"{k}: {label}: one row for the issue, the one the write made", len(t) == 1
+           and t[0]["id"] == adopted["t"] and t[0]["owner"] == k and t[0]["external_id"] == b.ext_id("Race issue")
+           and row_count(store, uid) == (1, 0) and t[0]["repo"] == "acme/app", (t, row_count(store, uid)))
+        ck(f"{k}: {label}: one row for the milestone, the one the write made, with its goal and checks",
+           len(store.list_milestones(uid)) == 1 and len(ms) == 1 and ms[0]["id"] == adopted["ms"]
+           and ms[0]["owner"] == k and ms[0]["external_id"] == b.ms_ext_id("Beta")
+           and ms[0]["goal"] == "Written by the session"
+           and ms[0]["checks"] == [{"check": "make e2e", "expect": "passes"}], ms)
+        ck(f"{k}: {label}: the ticket sits in that milestone", t and t[0]["milestone"] == adopted["ms"], t)
+    check("after the sync")
+    await b.sync(store, uid)
+    check("after a second sync")
+    return uid
 
 
 async def main():
@@ -545,8 +609,13 @@ async def main():
         gh_uid = await scenario(Github, app, cx, store)
         await cx.delete(f"/api/projects/{lin_uid}/linear")    # a repo and a label serve one project
         await cx.delete(f"/api/projects/{gh_uid}/github")
-        await milestone_scenario(Linear, cx, store)
-        await milestone_scenario(Github, cx, store)
+        lin_uid = await milestone_scenario(Linear, cx, store)
+        await cx.delete(f"/api/projects/{lin_uid}/linear")
+        gh_uid = await milestone_scenario(Github, cx, store)
+        await cx.delete(f"/api/projects/{gh_uid}/github")
+        lin_uid = await race_scenario(Linear, cx, store)
+        await cx.delete(f"/api/projects/{lin_uid}/linear")
+        await race_scenario(Github, cx, store)
 
         print("== a Tares project is untouched ==")
         lin_reset()

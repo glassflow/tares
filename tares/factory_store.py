@@ -524,13 +524,16 @@ class FactoryStore:
                  json.dumps(checks or []), float(position), ts, ts])
         return mid
 
-    def adopt_milestone(self, project: str, owner: str, external_id: str, name: str, goal: str,
-                        checks: list[dict] | None = None) -> str:
+    def adopt_milestone(self, project: str, owner: str, external_id: str, name: str,
+                        goal: str | None, checks: list[dict] | None = None,
+                        position: float | None = None, new_goal: str = "") -> str:
         """The Tares row of a milestone that was just made in Linear or GitHub (TR-851): the row of
         this project with this owner and external id, else the project's Tares-owned milestone of
         the same name (written before the milestone existed there), else a new one. Look and write
         are one locked step. A row found takes the owner, the external id and the goal and checks
-        given. Returns the row's id."""
+        given (a position only when given). `new_goal` is the goal of a new row when `goal` is None,
+        so a sync can fill a new row from the tracker without touching a found one. The syncs
+        insert through here too. Returns the row's id."""
         with self._swrite:
             r = self.sc.execute("SELECT id FROM milestones WHERE project = ? AND owner = ? AND "
                                 "external_id = ? LIMIT 1", [project, owner, external_id]).fetchone()
@@ -541,12 +544,15 @@ class FactoryStore:
             if r is None:
                 mid = "ms_" + uuid.uuid4().hex[:10]
                 ts = now_utc()
-                last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
-                                       [project]).fetchone()[0]
+                if position is None:
+                    last = self.sc.execute("SELECT max(position) FROM milestones WHERE project = ?",
+                                           [project]).fetchone()[0]
+                    position = (last or 0) + 1
                 self.sc.execute(
                     f"INSERT INTO milestones ({self._MS_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [mid, project, owner, external_id, name, goal or "",
-                     json.dumps(checks or []), float((last or 0) + 1), ts, ts])
+                    [mid, project, owner, external_id, name,
+                     (goal if goal is not None else new_goal) or "",
+                     json.dumps(checks or []), float(position), ts, ts])
                 return mid
             sets, vals = ["owner = ?", "external_id = ?", "updated_at = ?"], [owner, external_id,
                                                                                 now_utc()]
@@ -554,6 +560,8 @@ class FactoryStore:
                 sets.append("goal = ?"); vals.append(goal)
             if checks is not None:
                 sets.append("checks = ?"); vals.append(json.dumps(checks))
+            if position is not None:
+                sets.append("position = ?"); vals.append(float(position))
             self.sc.execute(f"UPDATE milestones SET {', '.join(sets)} WHERE id = ?", vals + [r[0]])
             return r[0]
 

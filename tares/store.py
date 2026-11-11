@@ -3093,12 +3093,15 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
     def adopt_ticket(self, project: str, owner: str, external_id: str, title: str, status: str,
                      identifier: str, url: str, position: float | None = None,
                      working_doc: str | None = None, milestone: str | None = None,
-                     depends_on: list[str] | None = None, repo: str | None = None) -> str:
+                     depends_on: list[str] | None = None, repo: str | None = None,
+                     assignee_person_id: str | None = None,
+                     assignee_raw: str | None = None) -> str:
         """The Tares row of a ticket that was just made in Linear or GitHub (TR-851): the row of
         this project with this owner and external id when there is one (a retry, or a sync that got
         there first), else a new one. Look and write are one locked step, so the two never make
         two rows. A row found takes the identifier, the url and the fields given (a field left as
-        None keeps its value). Returns the row's id."""
+        None keeps its value). The assignee is set only on a new row. The syncs insert through here
+        too, so a sync and a write_ticket never leave two rows for one issue. Returns the row's id."""
         with self._swrite:
             r = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND owner = ? AND "
                                 "external_id = ? ORDER BY created_at LIMIT 1",
@@ -3106,7 +3109,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             if r is None:
                 return self._insert_ticket(project, owner, title, status, position, external_id,
                                            identifier, url, working_doc, milestone, depends_on,
-                                           repo, None, None)
+                                           repo, assignee_person_id, assignee_raw)
             tid = r[0]
             sets, vals = ["identifier = ?", "url = ?"], [identifier, url]
             for col, v in (("working_doc", working_doc), ("milestone", milestone),

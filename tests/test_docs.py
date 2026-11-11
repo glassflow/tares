@@ -207,9 +207,13 @@ async def api():
         lt = store.create_ticket(p2, "linear", "Charge cards", "todo", 1, external_id="iss-1",
                                  identifier="ENG-7", url="https://l/ENG-7")
         tb2 = f"/api/projects/{p2}/tickets"
-        r = await cx.post(tb2, json={"title": "x"})
-        ck("no Tares tickets on a Linear project -> 409", r.status_code == 409
+        r = await cx.post(tb2, json={"title": "x", "status": "done"})
+        ck("a status is not set when a ticket is made on a Linear project -> 409", r.status_code == 409
            and "Linear" in r.json()["detail"], r.text)
+        r = await cx.post(tb2, json={"title": "x"})
+        ck("a new ticket goes to Linear, never made in Tares alone: not connected, so refused and nothing added",
+           r.status_code >= 400 and "Linear is not connected" in r.json()["detail"]
+           and len((await cx.get(tb2)).json()["tickets"]) == 1, r.text)
         r = await cx.get(f"{tb2}/eng-7")
         ck("look up by Linear identifier, any case", r.status_code == 200
            and r.json()["id"] == lt, r.text)
