@@ -7017,6 +7017,268 @@ scenario(Scenario(
 ))
 
 
+# crewname_test.sh (TR-1162)
+# The crew's name: refused names, the roster's first line, spawn and adoption under each crew's names, the hooks
+# that follow the crew. Steps that need a Tares ask a fake one for the projects, and `crew up` the stand-in.
+
+CN_ENV = {"FACTORY_CREW_HOME": "{tmp}/empty"}
+
+
+def _cn_bad_names() -> list:
+    return ["Bad_Name", "-x", "UPPER", "a b", "x-build-y", "build", "a" * 32]
+
+
+scenario(Scenario(
+    name="crewname_names",
+    suite="crewname",
+    about="the name is read before anything else: a roster of an empty home says which crew it is; a bad name is refused by any command",
+    steps=[
+        Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "a"}),
+        *[Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": bad}) for bad in _cn_bad_names()],
+        Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "a" * 31}),
+        Step(["status"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "Bad_Name"}),
+    ],
+    checks=[
+        ("FACTORY_CREW_NAME=a: roster names a-orchestrator",
+         lambda r: r.out(0).splitlines()[0] == "crew: a (orchestrator: a-orchestrator)"),
+        ("crew name '$bad' is refused",
+         lambda r: all(r.code(i + 1) != 0 and "is not valid: it is 1 to 31 characters" in r.out(i + 1)
+                       for i in range(len(_cn_bad_names())))),
+        ("a 31 character name is accepted",
+         lambda r: r.out(-2).splitlines()[0] == "crew: %s (orchestrator: %s-orchestrator)" % ("a" * 31, "a" * 31)),
+        ("a command other than roster refuses an invalid crew name",
+         lambda r: r.code(-1) != 0 and "is not valid: it is 1 to 31 characters" in r.out(-1)),
+    ],
+    covers=["FACTORY_CREW_NAME=a: roster names a-orchestrator", "crew name '$bad' is refused",
+            "a 31 character name is accepted", "a command other than roster refuses an invalid crew name"],
+))
+
+
+def _cn_url(extra, up: bool):
+    """A step's env: the crew `extra` names, and either the stand-in Tares (`crew up`) or the fake one that holds the projects."""
+    def env(r):
+        base = extra(r) if callable(extra) else dict(extra)
+        if up:
+            return {**base, "TARESD_URL": r.stand_in.url, "TARES_FACTORY_MCP_URL": r.stand_in.mcp_url}
+        return {**base, "TARESD_URL": r.tares.url, "TARES_FACTORY_MCP_URL": r.tares.url + "/mcp"}
+    return env
+
+
+def _cn_default(r):
+    return {}
+
+
+def _cn_setup(tmp: Path, env: dict) -> None:
+    _mkrepo(tmp, "shop")
+
+
+def _cn_stand_in_releaser(r):
+    """The releaser is only started when the crew asks for one: record a stand-in so the helper path can run."""
+    home = r.tmp / "crew-a"
+    f = home / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc["a-releaser"] = {"role": "releaser", "status": "active", "project": "", "repo": "", "cwd": str(home), "model": "", "effort": ""}
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def _cn_add_sessions(*rows):
+    """A session the crew did not record, listed by the fake Claude Code."""
+    def run_before(r):
+        f = r.state / "agents.json"
+        cur = json.loads(f.read_text(encoding="utf-8"))
+        for row in rows:
+            cur.append({**row, "cwd": str(r.tmp / "shop")})
+        f.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+    return run_before
+
+
+def _cn_agents(r) -> list:
+    try:
+        return json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+
+def _cn_sent(r, station: str, text: str) -> bool:
+    return any(c["args"][2:3] == [station] and any(text in a for a in c["args"]) for c in r.calls() if "--bg" in c["args"])
+
+
+_CN_TARES = {
+    "GET /api/crew/settings": (200, {"settings": {**SAVED, "releaser": False, "builders_max": 5}}),
+    "GET /api/crew/projects": (200, {"projects": [
+        {"id": "uc_shop", "name": "shop", "repos": [{"path": "{tmp}/shop"}]},
+        {"id": "uc_atools", "name": "a-tools", "repos": [{"path": "{tmp}/shop"}]}]}),
+    "GET /api/grants": (200, {"all": ""}),
+    "POST /mcp": (200, {"result": {"serverInfo": {"name": "tares"}}}),
+}
+
+_CN_REPO = "{tmp}/shop"
+_CN_A = crew_at_unnamed("a")
+_CN_B = crew_at_unnamed("b")
+CN_ORCH_LINE = "a-orchestrator\torchestrator\t\tworking\t"
+
+scenario(Scenario(
+    name="crewname_stations",
+    suite="crewname",
+    about="the default crew and two named crews build the same project side by side, each under its own names; the roster adopts only its own",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    tares=_CN_TARES,
+    setup=_cn_setup,
+    prepare=trust_all,
+    ignore_calls=LSP_PROBE,
+    ignore_asked=("GET ",),
+    steps=[
+        Step(["crew", "up", "--yes"], env=_cn_url(_cn_default, True), stdin=""),                                  # 0
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 1
+        Step(["spawn", "helper", "crew-reviewer", "probe", "look"], env=_cn_url(_cn_default, False)),              # 2
+        Step(["crew", "up", "--yes"], env=_cn_url(crew_at("a"), True), stdin=""),                                  # 3
+        Step(["crew", "up", "--yes"], env=_cn_url(crew_at("b"), True), stdin=""),                                  # 4
+        Step(["roster"], env=_cn_url(_CN_A, False)),                                                               # 5
+        Step(["roster"], env=_cn_url(_CN_B, False)),                                                               # 6
+        Step(["settings", "a-reviewer", "reviewer"], env=_cn_url(_CN_A, False)),                                   # 7
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 8
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_CN_A, False)),                  # 9
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_CN_B, False)),                  # 10
+        Step(["roster"], env=_cn_url(_CN_A, False)),                                                               # 11
+        Step(["spawn", "helper", "a-reviewer", "probe", "look"], env=_cn_url(_CN_A, False)),                       # 12
+        Step(["spawn", "builder", "a-tools", "m1", _CN_REPO, "x"], env=_cn_url(_CN_A, False)),                     # 13
+        Step(["spawn", "releaser-helper", "probe", "look"], env=_cn_url(_CN_A, False), run_before=_cn_stand_in_releaser),   # 14
+        Step(["roster"], env=_cn_url(_CN_A, False), run_before=_cn_add_sessions(
+            {"id": "0000a002", "name": "a-shop-build-m2", "state": "working", "sessionId": "s-a002", "startedAt": 98, "pid": 4242},
+            {"id": "0000b009", "name": "b-shop-build-m9", "state": "working", "sessionId": "s-b009", "startedAt": 99, "pid": 4243})),  # 15
+        Step(["roster"], env=_cn_url(_cn_default, False), run_before=_cn_add_sessions(
+            {"id": "0000d005", "name": "shop-build-m5", "state": "working", "sessionId": "s-d005", "startedAt": 100, "pid": 4244})),  # 16
+    ],
+    checks=[
+        ("default crew: a builder is <project>-build-<slug>", lambda r: r.station("shop-build-m1", "role") == "builder"),
+        ("default crew: its parent is crew-orchestrator",
+         lambda r: env_of(r, "shop-build-m1", "FACTORY_PARENT") == "crew-orchestrator"),
+        ("default crew: its env carries the crew",
+         lambda r: env_of(r, "shop-build-m1", "FACTORY_CREW") == "crew"
+         and env_of(r, "shop-build-m1", "FACTORY_ORCHESTRATOR") == "crew-orchestrator"),
+        ("default crew: a helper keeps its suffix rule", lambda r: r.station("crew-reviewer-probe", "parent") == "crew-reviewer"),
+        ("default crew: the boot prompt sends READY to crew-orchestrator",
+         lambda r: _cn_sent(r, "shop-build-m1", "send crew-orchestrator READY")),
+        ("crew $c: roster names the crew (a)", lambda r: r.out(5).splitlines()[0] == "crew: a (orchestrator: a-orchestrator)"),
+        ("crew $c: roster names the crew (b)", lambda r: r.out(6).splitlines()[0] == "crew: b (orchestrator: b-orchestrator)"),
+        ("crew $c: roster lists its orchestrator working (a)", lambda r: CN_ORCH_LINE in r.out(5).replace("\r", "")),
+        ("crew $c: roster lists its orchestrator working (b)", lambda r: "b-orchestrator\torchestrator\t\tworking\t" in r.out(6)),
+        ("crew.json names the crew with no variable",
+         lambda r: json.loads(r.results[7]["stdout"]).get("env", {}).get("FACTORY_CREW") == "a"),
+        ("crew a: the builder is a-shop-build-m1",
+         lambda r: r.station("a-shop-build-m1", "role", home_of(r, "a")) == "builder"
+         and r.station("shop-build-m1", "role", home_of(r, "a")) == ""),
+        ("crew a: its parent is a-orchestrator",
+         lambda r: r.station("a-shop-build-m1", "parent", home_of(r, "a")) == "a-orchestrator"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_PARENT") == "a-orchestrator"),
+        ("crew a: its env carries the crew and the orchestrator",
+         lambda r: env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_CREW") == "a"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_ORCHESTRATOR") == "a-orchestrator"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_STATION") == "a-shop-build-m1"),
+        ("crew a: its boot prompt sends READY to a-orchestrator",
+         lambda r: _cn_sent(r, "a-shop-build-m1", "send a-orchestrator READY")),
+        ("crew b: the same project builds as b-shop-build-m1, beside a's",
+         lambda r: r.station("b-shop-build-m1", "role", home_of(r, "b")) == "builder"
+         and sum(1 for n in agent_names(r) if n in ("a-shop-build-m1", "b-shop-build-m1")) == 2),
+        ("the default crew keeps its builder name beside them",
+         lambda r: r.station("shop-build-m1", "role") == "builder" and agent_names(r).count("shop-build-m1") == 1),
+        ("crew a: roster lists its builder and not b's",
+         lambda r: "a-shop-build-m1\tbuilder\tshop\tworking\t" in r.out(11) and "b-shop-build-m1" not in r.out(11)),
+        ("crew a: a helper of a-reviewer keeps its suffix rule and parent",
+         lambda r: r.station("a-reviewer-probe", "parent", home_of(r, "a")) == "a-reviewer"
+         and r.station("a-reviewer-probe", "role", home_of(r, "a")) == "helper"),
+        ("crew a: a helper of a-reviewer is told to load station-reviewer",
+         lambda r: any(c["args"][2:3] == ["a-reviewer-probe"]
+                       and any("station-reviewer" in x and "send a-reviewer DONE" in x for x in c["args"])
+                       for c in r.calls() if "--bg" in c["args"])),
+        ("crew a: a project can not be named like the crew",
+         lambda r: "can't start with \"a\"" in r.out(13) and r.station("a-tools-build-m1", "role", home_of(r, "a")) == ""),
+        ("crew a: a releaser helper hangs under a-releaser",
+         lambda r: r.station("a-releaser-probe", "parent", home_of(r, "a")) == "a-releaser"
+         and r.station("a-releaser-probe", "role", home_of(r, "a")) == "helper"),
+        ("crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator",
+         lambda r: r.station("a-shop-build-m2", "role", home_of(r, "a")) == "builder"
+         and r.station("a-shop-build-m2", "parent", home_of(r, "a")) == "a-orchestrator"
+         and r.station("a-shop-build-m2", "project", home_of(r, "a")) == "shop"),
+        ("crew a: b's unrecorded builder is not adopted", lambda r: r.station("b-shop-build-m9", "role", home_of(r, "a")) == ""),
+        ("default crew: an unrecorded shop-build-m5 is adopted",
+         lambda r: r.station("shop-build-m5", "role") == "builder" and r.station("shop-build-m5", "parent") == "crew-orchestrator"),
+        ("default crew: a- and b- builders on the same repo are not adopted",
+         lambda r: r.station("a-shop-build-m2", "role") == "" and r.station("b-shop-build-m9", "role") == ""
+         and r.station("a-shop-build-m1", "role") == ""),
+    ],
+    covers=["crew $c: roster names the crew", "crew $c: roster lists its orchestrator working",
+            "default crew: a builder is <project>-build-<slug>", "default crew: its parent is crew-orchestrator",
+            "default crew: its env carries the crew", "default crew: a helper keeps its suffix rule",
+            "default crew: the boot prompt sends READY to crew-orchestrator", "crew.json names the crew with no variable",
+            "crew a: the builder is a-shop-build-m1", "crew a: its parent is a-orchestrator",
+            "crew a: its env carries the crew and the orchestrator", "crew a: its boot prompt sends READY to a-orchestrator",
+            "crew b: the same project builds as b-shop-build-m1, beside a's", "the default crew keeps its builder name beside them",
+            "crew a: roster lists its builder and not b's", "crew a: a helper of a-reviewer keeps its suffix rule and parent",
+            "crew a: a helper of a-reviewer is told to load station-reviewer", "crew a: a project can not be named like the crew",
+            "crew a: a releaser helper hangs under a-releaser",
+            "crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator", "crew a: b's unrecorded builder is not adopted",
+            "default crew: an unrecorded shop-build-m5 is adopted",
+            "default crew: a- and b- builders on the same repo are not adopted"],
+))
+
+
+CN_HOOKS = "crewname_support.py"
+_CN_MERGE = "gh pr merge 3"
+_CN_UNDO = "kubectl --context kind-factory rollout " + "undo deploy/app"
+
+
+def _cn_guard(parent: str, command: str, crew: str) -> Step:
+    return Step(["guard", parent, command, crew])
+
+
+def _cn_start(parent: str, crew: str) -> Step:
+    return Step(["start", parent, crew])
+
+
+scenario(Scenario(
+    name="crewname_hooks",
+    suite="crewname",
+    about="the hooks follow the crew: a helper of a-reviewer is a reviewer, a helper of a builder is a builder; the plugin sends the crew's name",
+    driver=CN_HOOKS,
+    steps=[
+        _cn_guard("a-releaser", _CN_MERGE, "a"),                                                     # 0
+        _cn_guard("a-releaser", _CN_UNDO, "a"),                                                      # 1
+        _cn_guard("a-shop-build-m1", "factory restart a-reviewer", "a"),                             # 2
+        _cn_guard("crew-releaser", _CN_MERGE, ""),                                                   # 3
+        _cn_guard("crew-releaser-build-x", _CN_MERGE, ""),                                           # 4
+        _cn_guard("a-releaser-build-x", _CN_MERGE, "a"),                                             # 5
+        _cn_start("a-reviewer", "a"),                                                                # 6
+        _cn_start("a-shop-build-m1", "a"),                                                           # 7
+        _cn_start("crew-releaser", ""),                                                              # 8
+        _cn_start("crew-reviewer-build-x", ""),                                                      # 9
+        _cn_start("a-reviewer-build-x", "a"),                                                        # 10
+    ],
+    checks=[
+        ("guard: a helper of a-releaser acts as a releaser (named crew)",
+         lambda r: r.out(0).strip() == "deny" and r.out(1).strip() == "allow"),
+        ("guard: a helper of a-shop-build-m1 acts as a builder", lambda r: r.out(2).strip() == "deny"),
+        ("guard: the default crew still works with no FACTORY_CREW", lambda r: r.out(3).strip() == "deny"),
+        ("guard: a helper whose name has -build- under crew-releaser is still a releaser's",
+         lambda r: r.out(4).strip() == "deny" and r.out(5).strip() == "deny"),
+        ("session start: a helper of a-reviewer loads station-reviewer (named crew)",
+         lambda r: r.out(6).strip() == "station-reviewer" and r.out(7).strip() == "station-builder"
+         and r.out(8).strip() == "station-releaser"),
+        ("session start: a helper whose name has -build- under crew-reviewer loads station-reviewer",
+         lambda r: r.out(9).strip() == "station-reviewer" and r.out(10).strip() == "station-reviewer"),
+        ("the plugin sends X-Tares-Crew from FACTORY_CREW",
+         lambda r: json.loads((ROOT / "claude-plugin" / ".mcp.json").read_text(encoding="utf-8"))
+         ["mcpServers"]["tares"]["headers"]["X-Tares-Crew"] == "${FACTORY_CREW:-}"),
+    ],
+    covers=["guard: a helper of a-releaser acts as a releaser (named crew)", "guard: a helper of a-shop-build-m1 acts as a builder",
+            "guard: the default crew still works with no FACTORY_CREW",
+            "guard: a helper whose name has -build- under crew-releaser is still a releaser's",
+            "session start: a helper of a-reviewer loads station-reviewer (named crew)",
+            "session start: a helper whose name has -build- under crew-reviewer loads station-reviewer",
+            "the plugin sends X-Tares-Crew from FACTORY_CREW"],
+))
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
