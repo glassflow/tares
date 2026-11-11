@@ -189,6 +189,58 @@ jobs:
           boot 18787 none False
           TARES_LICENSE=TL1.not.valid boot 18797 env False
 
+  # `uv tool install git+https://github.com/glassflow/tares` builds from a clean checkout, which has no
+  # ui/dist (it is gitignored and needs Node). The build must still pass, say so, and give a wheel
+  # without the console that installs and runs. TARES_REQUIRE_CONSOLE=1 must turn that into an error.
+  wheel-clean:
+    name: wheel from a clean checkout (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v5
+      - name: No console in the checkout
+        run: test ! -e ui/dist
+      - name: Build the wheel
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/wheel" 2>&1 | tee "$RUNNER_TEMP/build.log"
+      - name: The build said it has no console, and the wheel has none
+        run: |
+          grep -q "building without the console" "$RUNNER_TEMP/build.log"
+          python - <<'PY'
+          import glob, os, zipfile
+          whl = glob.glob(os.path.join(os.environ["RUNNER_TEMP"], "wheel", "tares-*.whl"))
+          assert len(whl) == 1, whl
+          names = zipfile.ZipFile(whl[0]).namelist()
+          assert not any(n.startswith("tares/console") for n in names), "the wheel has a console"
+          assert "tares/crew/schemas/schema_version.json" in names
+          PY
+      - name: The release build refuses it
+        run: |
+          if TARES_REQUIRE_CONSOLE=1 uv build --wheel --out-dir "$RUNNER_TEMP/wheel-req" > "$RUNNER_TEMP/req.log" 2>&1; then
+            echo "::error::TARES_REQUIRE_CONSOLE=1 built a wheel without the console"; exit 1
+          fi
+          grep -q TARES_REQUIRE_CONSOLE "$RUNNER_TEMP/req.log"
+      - name: Install it and run it
+        run: |
+          uv venv "$RUNNER_TEMP/venv"
+          uv pip install --python "$RUNNER_TEMP/venv" "$RUNNER_TEMP"/wheel/tares-*.whl
+          if [ -x "$RUNNER_TEMP/venv/bin/tares" ]; then T="$RUNNER_TEMP/venv/bin/tares"; else T="$RUNNER_TEMP/venv/Scripts/tares.exe"; fi
+          "$T" --version
+          # doctor exits 1 on a runner with no Claude Code or gh login; what counts is that it runs and prints its report
+          "$T" factory doctor > "$RUNNER_TEMP/doctor.log" 2>&1 || true
+          cat "$RUNNER_TEMP/doctor.log"
+          head -1 "$RUNNER_TEMP/doctor.log" | grep -q "tares factory doctor"
+          ! grep -q Traceback "$RUNNER_TEMP/doctor.log"
+
   # The browser e2e suites named in ui/tests/e2e_suites.txt (tests/ci_e2e.py gives each its own port),
   # in 2 shards. Each suite starts its own scratch daemons, so tares is installed and Playwright's
   # Chromium comes with it. Screenshots are uploaded only when a shard fails.

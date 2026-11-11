@@ -196,6 +196,9 @@ def _up(args: argparse.Namespace):
     else:
         print(f"tares: console at {url}  ·  data in {home}  ·  auth OFF (open; "
               f"run with --auth to require a login)", flush=True)
+    from ._ui import NO_CONSOLE_HINT, console_built, ui_dist
+    if not console_built(ui_dist()):
+        print(f"tares: {NO_CONSOLE_HINT}", flush=True)
     if edition_now in ("factory", "sre"):
         from .edition import NAMES
         print(f"tares: {NAMES[edition_now]}", flush=True)
