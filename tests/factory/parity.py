@@ -31,7 +31,8 @@ does not count in --coverage.
 Coverage. A "scenario" of a bash suite (the suites named in tests/factory/ci_list.txt) is one `check
 "<label>"` call: a source line that starts, after any indentation, with `check "`. A check in a loop
 counts once. A suite with no such line (guard, heavy, parse) counts as one scenario, named after the
-suite. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
+suite, except a wrapper (WRAPPERS below): a suite that runs another suite on Python only, has no check line of
+its own and counts for nothing, since its checks belong to the suite it runs. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
 when its run passes on the Python side (a SKIP does not count). Percentage = passing / all scenarios.
 
 Test hooks (for tests/test_parity.py): PARITY_CMD_BASH and PARITY_CMD_PYTHON replace the command a side
@@ -4881,6 +4882,17 @@ def evaluate(sc: Scenario, out=print) -> tuple:
 
 CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
 
+# Suites that only run another suite on the Python engine. They have no `check "` line of their own, so
+# --coverage leaves them out of the total and prints "wrapper of <suite>"; the suite they run counts their
+# checks. suite -> (the suite it runs, why). Pinned in tests/test_parity.py: a suite with checks of its own
+# cannot be listed here (coverage fails on it), so a real suite cannot drop out of the count.
+# claude_update_mixed is renamed claude_update_python by TR-1157, so both names are listed.
+WRAPPERS = {
+    "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
+    "claude_update_mixed": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
+    "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
+}
+
 
 def suites() -> list:
     return [ln.strip() for ln in CI_LIST.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
@@ -4923,6 +4935,10 @@ def coverage(require_full: bool, out=print) -> int:
     found = suite_scenarios()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
+    for suite in found:
+        if suite in WRAPPERS and not found[suite][0].startswith("(the whole"):
+            out(f"ERROR {suite} is listed as a wrapper but has checks of its own: {len(found[suite])}")
+            bad = 1
     results = passes_now()
     for sc in SCENARIOS.values():
         ok = results[sc.name]
@@ -4933,7 +4949,13 @@ def coverage(require_full: bool, out=print) -> int:
             elif ok:
                 passing[(sc.suite, label)] = sc.name
     total = done = 0
+    counted = 0
     for suite, labels in found.items():
+        if suite in WRAPPERS and labels[0].startswith("(the whole"):
+            of, why = WRAPPERS[suite]
+            out(f"{suite}: wrapper of {of} ({why})")
+            continue
+        counted += 1
         n = sum(1 for label in labels if (suite, label) in passing)
         total += len(labels)
         done += n
@@ -4942,7 +4964,7 @@ def coverage(require_full: bool, out=print) -> int:
             mark = f"PASS python  ({passing[(suite, label)]})" if (suite, label) in passing else "todo"
             out(f"  {mark:<28} {label}")
     pct = 100.0 * done / total if total else 100.0
-    out(f"coverage: {done} of {total} scenarios pass against Python ({pct:.1f}%) in {len(found)} suites")
+    out(f"coverage: {done} of {total} scenarios pass against Python ({pct:.1f}%) in {counted} suites")
     if require_full and done < total:
         out(f"FAIL: --require-full wants every scenario ported, {total - done} are not")
         return 1

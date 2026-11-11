@@ -143,6 +143,18 @@ ck("the crew suite lists its checks", "without Tares crew up stops plainly" in f
 ck("a suite with no check line counts as one scenario", found.get("parse") == ["(the whole parse suite)"], found.get("parse"))
 ck("each scenario covers checks that exist", all(label in found[sc.suite] for sc in parity.SCENARIOS.values() for label in sc.covers))
 
+# The wrapper suites (A39) run another suite on Python and have no check line of their own; coverage leaves them
+# out of the total. The set is pinned here, so a real suite cannot be added to it to lift the percentage.
+ck("the wrapper suites are exactly crew_python, claude_update_mixed and claude_update_python (TR-1157 renames the second)",
+   set(parity.WRAPPERS) == {"crew_python", "claude_update_mixed", "claude_update_python"}, str(sorted(parity.WRAPPERS)))
+ck("...each names the suite it runs and says why",
+   all(of in found and isinstance(why, str) and why for of, why in parity.WRAPPERS.values() if of in found)
+   and {of for of, _ in parity.WRAPPERS.values()} == {"crew", "claude_update"}, str(parity.WRAPPERS))
+ck("...and a wrapper that is a suite today has no check line, so it is one whole-suite scenario",
+   all(found[s] == [f"(the whole {s} suite)"] for s in parity.WRAPPERS if s in found), str({s: found[s] for s in parity.WRAPPERS if s in found}))
+ck("...and no suite with checks of its own is a wrapper",
+   not any(len(labels) > 1 or not labels[0].startswith("(the whole") for s, labels in found.items() if s in parity.WRAPPERS))
+
 # The count is one scenario per `check "` line, in every suite, not one per suite or the first of each.
 for suite, labels in found.items():
     lines = (FACTORY / f"{suite}_test.sh").read_text(encoding="utf-8").splitlines()
@@ -267,6 +279,26 @@ with Fixture(), mock.patch.dict(os.environ, {**stubbed("plain", "plain"), "PARIT
     ck("a covers label missing from its suite is an ERROR: exit 1, it names scenario, suite and label",
        rc == 1 and "ERROR scenario fx_bad covers a check that is not in a_test.sh: a label the suite does not have" in text, text)
     ck("...and it counts for nothing", "coverage: 0 of 4 scenarios" in text, text)
+
+    # A wrapper is left out of the total and says so; a suite with checks of its own cannot be one.
+    parity.SCENARIOS.clear()
+    parity.SCENARIOS["fx_ok"] = fx_scenario("fx_ok", "first")
+    with mock.patch.dict(parity.WRAPPERS, {"b": ("a", "runs a on Python; its checks count under a")}, clear=True):
+        lines = []
+        rc = parity.coverage(False, out=lines.append)
+        text = "\n".join(lines)
+        ck("a wrapper suite is left out of the total and prints 'wrapper of <suite>': 1 of 3 (33.3%) in 1 suites",
+           rc == 0 and "b: wrapper of a (runs a on Python; its checks count under a)" in text and "b: 0/1" not in text
+           and "coverage: 1 of 3 scenarios pass against Python (33.3%) in 1 suites" in text, text)
+        lines = []
+        rc = parity.coverage(True, out=lines.append)
+        ck("...and --require-full does not count it as missing", "wants every scenario ported, 2 are not" in "\n".join(lines), "\n".join(lines))
+    with mock.patch.dict(parity.WRAPPERS, {"a": ("b", "wrongly listed")}, clear=True):
+        lines = []
+        rc = parity.coverage(False, out=lines.append)
+        text = "\n".join(lines)
+        ck("a real suite listed as a wrapper is an ERROR: exit 1, and it still counts in the total",
+           rc == 1 and "ERROR a is listed as a wrapper but has checks of its own: 3" in text and "a: 1/3" in text, text)
 
 # --- the command line -----------------------------------------------------------------------------
 code, text = run("--list")
