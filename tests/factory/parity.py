@@ -25,8 +25,9 @@ timestamps, pids, session ids and the key order of JSON. Ids and epoch times are
 appear as such (after `backgrounded ·`, `job`, `at`, `since`, under an id or time key in JSON): a plain
 eight-digit or ten-digit number is data and is compared as it is.
 
-Result: PASS, FAIL, or SKIP (the Python engine answers exit 2 with "is not yet ported", or the scenario cannot
-run on this platform). Exit 0 when the scenario passes or is skipped, 1 when a check fails or the record differs.
+Result: PASS, FAIL, or SKIP (the scenario cannot run on this platform). Exit 0 when the scenario passes or is
+skipped, 1 when a check fails, the record differs, or the Python engine answers exit 2 with "is not yet ported" (every
+scenario runs with TARES_FACTORY_ENGINE=python, so a command missing from PORTED fails instead of running on bash).
 
 Coverage. A "check" is one label of the bash suites the scenarios replaced, kept in tests/factory/parity_labels.json
 (suite -> labels; a suite that was one script counts as one, named "(the whole <suite> suite)"). A scenario lists
@@ -5865,6 +5866,7 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     if ver:
         s = re.sub(r"(version\s+)" + re.escape(ver) + r"(?![\w.])", r"\1<PLUGIN-VERSION>", s)
     s = PORT.sub("<PORT>", s)
+    s = user_by().sub(r"\1<USER>", s)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
@@ -5872,6 +5874,13 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     s = SESSION.sub("<ID>", s)
     s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
     return s
+
+
+def user_by():
+    """`by <login>` in a freeze line, and `"by": "<login>"` in its JSON: the person who froze the kit is whoever runs
+    the scenario, so the login is a placeholder (a runner is `runner`, a person their own name)."""
+    import getpass
+    return re.compile(r"(\bby |\"by\":\s*\")" + re.escape(getpass.getuser()) + r"(?![\w-])")
 
 
 def norm_json(v, tmp: Path | None = None, key: str = ""):
@@ -5889,6 +5898,8 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
             return "<KIT>"      # the fingerprint of the kit a station runs on: it moves with every change to the plugin
         if key in ID_KEYS and HEX8.fullmatch(v):
             return "<ID>"
+        if key == "by" and v == _fz_user():
+            return "<USER>"
         if TIME_KEY.search(key) and EPOCH_VALUE.fullmatch(v):
             return "<TS>"
         return norm_text(v, tmp)
@@ -5997,6 +6008,7 @@ def crew_env(tmp: Path) -> dict:
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
     env.update(
         HOME=str(home), USERPROFILE=str(home), FACTORY_CREW_HOME=str(crew), FAKE_CLAUDE_STATE=str(state),
+        TARES_FACTORY_ENGINE="python",  # Python alone: a command missing from PORTED exits 2, not "runs on bash and matches"
         CLAUDE_BIN=str(claude), FACTORY_PAUSE="0", FACTORY_NO_WATCH="1",
         FACTORY_DOCKER=str(tmp / "no-docker"),  # the Python watch's Docker upkeep (TR-700) finds no Docker, whatever the machine has
         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
@@ -6208,6 +6220,11 @@ def evaluate_python(sc: Scenario, out=print) -> tuple:
     record must equal the one recorded from bash."""
     out(f"== {sc.name}: {sc.about or sc.suite} ==")
     side = run_side(sc)
+    if side.skip == "not ported":
+        # a command the engine does not know is a failure: it would otherwise pass as a skip, and a command dropped
+        # from PORTED would go unseen
+        out("FAIL python: the engine says this command is not yet ported")
+        return 1, False
     if side.skip:
         out(f"SKIP python: {side.skip}")
         return 0, False
@@ -8883,9 +8900,19 @@ def tares_keyed(**kw) -> dict:
     return {"TARES_AUTH_TOKEN": TARES_KEY, **kw}
 
 
+def _fake_codex(tmp: Path) -> None:
+    """A `codex` on PATH that does nothing: doctor only asks whether the Codex CLI is installed (the machine's own may not be)."""
+    if sys.platform == "win32":
+        (tmp / "bin" / "codex.cmd").write_bytes(b"@exit /b 0\r\n")
+    else:
+        (tmp / "bin" / "codex").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        (tmp / "bin" / "codex").chmod(0o755)
+
+
 def tares_setup_tools(tmp: Path, env: dict) -> None:
     _fake_tool(tmp, "gh")
     _fake_tool(tmp, "tares")
+    _fake_codex(tmp)    # challenger is on in this world: doctor wants the Codex CLI
     env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
 
 

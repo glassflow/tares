@@ -14,7 +14,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: kit frozen since <TS> by kiran: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
 -- after --
 {
   "checkout_file": true,
@@ -25,7 +25,7 @@ tares factory: kit frozen since <TS> by kiran: stations that start or revive use
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "2299798679"
   },
   "id": {
@@ -68,7 +68,7 @@ exit: 0
 STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
 crew-orchestrator              orchestrator opus/high      done     -        
 crew-reviewer                  reviewer     opus/high      done     -        
-FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
+FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -87,7 +87,7 @@ tares factory doctor
   ok    stations load the plugin at <TMP>/kit/claude-plugin
   ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
   ok    crew settings on Tares: {"autonomy":"L3-review","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":false}
-  ok    the kit is frozen since <TS> by kiran; the checkout has nothing newer
+  ok    the kit is frozen since <TS> by <USER>; the checkout has nothing newer
   warn  crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); tares factory crew update moves them
   ok    gh signed in
   ok    crew-orchestrator runs Claude Code 1.0.0
@@ -120,7 +120,7 @@ exit: 0
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "2299798679"
   },
   "id": {
@@ -174,7 +174,7 @@ exit: 0
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "2299798679"
   },
   "id": {
@@ -218,7 +218,7 @@ STATION                        ROLE         MODEL          STATE    TEMPO    DOI
 crew-orchestrator              orchestrator opus/high      done     -        
 crew-reviewer                  reviewer     opus/high      done     -        
 plugin: 2 station(s) run an older version; the freeze holds them (tares factory crew unfreeze lets the watch move each onto the checkout's)
-FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
+FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -247,7 +247,7 @@ exit: 0
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "2299798679"
   },
   "id": {
@@ -304,7 +304,7 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "2299798679"
   },
   "id": {
@@ -575,7 +575,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: kit frozen since <TS> by kiran: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
 == step: crew watch --once ==
 exit: 0
 -- stdout --
@@ -598,7 +598,7 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "3804381130"
   },
   "id": {
@@ -641,7 +641,7 @@ exit: 0
 STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
 crew-orchestrator              orchestrator opus/high      done     -        
 crew-reviewer                  reviewer     opus/high      done     -        
-FROZEN: the kit since <TS> by kiran; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
+FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -761,7 +761,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: kit frozen since <TS> by kiran: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
 -- after --
 {
   "checkout_file": true,
@@ -777,7 +777,7 @@ tares factory: kit frozen since <TS> by kiran: stations that start or revive use
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "3804381130"
   },
   "id": {
@@ -1049,7 +1049,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: kit frozen since <TS> by kiran: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
 -- after --
 {
   "checkout_file": true,
@@ -1065,7 +1065,7 @@ tares factory: kit frozen since <TS> by kiran: stations that start or revive use
   },
   "frozen": {
     "at": "<TS>",
-    "by": "kiran",
+    "by": "<USER>",
     "version": "1483295536"
   },
   "id": {

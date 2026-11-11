@@ -3,7 +3,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: kit frozen since <TS> by kiran: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
 == step: crew watch --once ==
 exit: 0
 -- stdout --

@@ -3,8 +3,8 @@ Python alone against its recorded result, the recorded labels and the coverage c
 
 Checks: what the normaliser removes (temp folder, timestamps, pids, ids, the checkout's folder, the kit fingerprint,
 the plugin version, the `tares` binary, key order) and what it keeps; `parity.py crew_basic` exits 0 and matches
-its recorded result; a scenario whose command the Python engine has not moved over (a made-up word) prints
-`SKIP python: not ported`; a failing check exits 1; `--record` stores what a run printed and wrote, and a later run
+its recorded result; a scenario whose command the Python engine has not moved over (a made-up word) fails
+with exit 1 (not ported is a failure, not a skip); a failing check exits 1; `--record` stores what a run printed and wrote, and a later run
 that prints the same matches while one that prints something else, writes another crew file, other contents or makes
 another Claude Code call exits 1 and names the file (stub commands through PARITY_CMD_PYTHON); a scenario with no
 recorded result fails; every recorded result belongs to a scenario and every scenario has one; `--coverage` counts
@@ -70,6 +70,13 @@ ck("an eight-digit number or an eight-letter hex word is kept",
 ck("a job id after stop, rm, job or id is replaced", parity.norm_text("stop 0000000a, rm 0000000b, job 0000000c, id=0000000d") == "stop <ID>, rm <ID>, job <ID>, id=<ID>")
 ck("a string under an id key in JSON is replaced, under another key it is kept",
    parity.norm_output('{"id": "0000000a", "name": "deadbeef"}') == parity.render_json({"id": "<ID>", "name": "deadbeef"}))
+_me = __import__("getpass").getuser()
+ck("the login of whoever froze the kit is a placeholder, in text and in JSON",
+   parity.norm_text(f"frozen since 2026-11-07T10:11:12Z by {_me}; ok") == "frozen since <TS> by <USER>; ok"
+   and parity.norm_text(f'{{"by": "{_me}"}}') == '{"by": "<USER>"}'
+   and parity.norm_json({"by": _me}) == {"by": "<USER>"})
+ck("...but the same word elsewhere, or a longer login, is data",
+   parity.norm_text(f"{_me} went by {_me}x and bye {_me}") == f"{_me} went by {_me}x and bye {_me}")
 ck("a uuid is replaced", parity.norm_text("id 123e4567-e89b-12d3-a456-426614174000") == "id <ID>")
 ck("words and small numbers are kept", parity.norm_text("started 3 stations, port 8788") == "started 3 stations, port 8788")
 ck("CRLF becomes LF", parity.norm_text("a\r\nb") == "a\nb")
@@ -123,8 +130,8 @@ with mock.patch.dict(os.environ, lent):
     env_b = parity.crew_env(work / "env")
 ck("the scenario environment drops the person's Claude, XDG, GH, crew, Tares and fake settings",
    not [k for k in lent if k != "KEEP_ME" and k in env_b], str([k for k in lent if k in env_b and k != "KEEP_ME"]))
-ck("...keeps the rest and points HOME at the scenario and names no engine",
-   env_b.get("KEEP_ME") == "yes" and env_b["HOME"] == str(work / "env" / "home") and "TARES_FACTORY_ENGINE" not in env_b, str(env_b.get("HOME")))
+ck("...keeps the rest and points HOME at the scenario and pins the Python engine",
+   env_b.get("KEEP_ME") == "yes" and env_b["HOME"] == str(work / "env" / "home") and env_b.get("TARES_FACTORY_ENGINE") == "python", str(env_b.get("HOME")))
 
 # TR-1066: the fake Claude Code is a launcher named `claude`, first on PATH and also CLAUDE_BIN.
 launcher = Path(env_b["CLAUDE_BIN"])
@@ -319,8 +326,8 @@ unported = parity.Scenario(name="fx_unported", suite="a", steps=[parity.Step(["n
 lines = []
 with mock.patch.dict(os.environ, stubbed("unported")):
     code, passes = parity.evaluate_python(unported, out=lines.append)
-ck("an unported command skips: SKIP python: not ported, exit 0, not counted as passing",
-   any("SKIP python: not ported" in x for x in lines) and code == 0 and passes is False, "\n".join(lines))
+ck("an unported command fails: exit 1, named, not counted as passing (a SKIP would let a dropped PORTED entry through)",
+   any("not yet ported" in x and x.startswith("FAIL python") for x in lines) and code == 1 and passes is False, "\n".join(lines))
 
 # The strict coverage count, without running the scenarios (--static: each counts as passing). CI runs every scenario in
 # the `parity` job's shards (ci.yml), so this checks only that each recorded label has a scenario that names it.

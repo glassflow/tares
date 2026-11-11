@@ -108,16 +108,17 @@ jobs:
   # scenarios share session ids). The 43 scenarios marked not_windows run only here. tests/test_parity.py (in the
   # test job) checks that every recorded check label (parity_labels.json) has a scenario, without running them again.
   parity:
-    name: parity (${{ matrix.os }} ${{ matrix.shard }}/6)
+    name: parity (${{ matrix.os }} ${{ matrix.shard }}/12)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     env:
       PARITY_JOBS: "1"
+      PYTHONUNBUFFERED: "1"     # the log shows each scenario as it finishes, so a slow or stuck one is seen
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -128,7 +129,7 @@ jobs:
       - name: Install
         run: pip install -e .
       - name: Parity scenarios
-        run: python tests/factory/parity.py --shard=${{ matrix.shard }}/6
+        run: python tests/factory/parity.py --shard=${{ matrix.shard }}/12
 
   # The enterprise code's own tests, ee/tests/ci_list.txt (tests/ci_run.py --suite ee), with the
   # state in DuckDB and in Postgres. They run with a test licence the test root signed.
