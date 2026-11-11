@@ -9,6 +9,8 @@ import os
 import shutil
 from pathlib import Path
 
+import _crew_guard
+
 ROOT = Path(__file__).resolve().parent.parent
 FACTORY_DIR = ROOT / "tests" / "factory"
 
@@ -16,6 +18,7 @@ FACTORY_DIR = ROOT / "tests" / "factory"
 def fake_crew_env(tmp: Path, base: dict | None = None) -> dict:
     """An environment for `tares factory roster` against an empty crew in tmp (made if missing).
     base is the environment to start from (default os.environ)."""
+    _crew_guard.install()   # a test that builds a fake crew must not spawn or exec on the real ~/factory (TR-1164)
     tmp = Path(tmp)
     crew, home, fhome, state, bindir = (tmp / n for n in ("crew", "home", "fhome", "claude", "bin"))
     for d in (crew, home, fhome, state, bindir):
@@ -34,7 +37,7 @@ def fake_crew_env(tmp: Path, base: dict | None = None) -> dict:
            if not k.startswith(("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_"))
            and k not in ("TARESD_URL", "NAVFLOW_DB")}
     env.update(
-        HOME=str(home), FACTORY_HOME=str(fhome), FACTORY_CREW_HOME=str(crew),
+        HOME=str(home), USERPROFILE=str(home), FACTORY_HOME=str(fhome), FACTORY_CREW_HOME=str(crew),
         FAKE_CLAUDE_STATE=str(state), CLAUDE_BIN=str(FACTORY_DIR / "fake-claude"),
         FACTORY_PAUSE="0", FACTORY_NO_WATCH="1",
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",

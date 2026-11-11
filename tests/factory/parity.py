@@ -867,7 +867,8 @@ scenario(Scenario(
         ("orchestrator may spawn as tares factory too (TR-1069)",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
-         lambda r: station_json(r, "crew-reviewer")["env"].get("FACTORY_TARES", "").endswith("tares")
+         # on Windows the resolved path is tares.exe (any case), so compare the file name without its extension
+         lambda r: Path(station_json(r, "crew-reviewer")["env"].get("FACTORY_TARES", "")).stem.lower() == "tares"
          or shutil.which("tares") is None),
         ("nothing goes to production without the person",
          lambda r: any("needs" in x and "prod" in x for x in station_json(r, "crew-releaser")["autoMode"]["soft_deny"])

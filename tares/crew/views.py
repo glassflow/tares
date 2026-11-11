@@ -247,7 +247,9 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> None
         sid = _tsv(row.get("id"))
         if not sid:
             continue
-        session, cwd = _tsv(row.get("sessionId")), _tsv(row.get("cwd"))
+        # The folder as Claude Code writes it, not as jq @tsv prints it: bash compares two @tsv-escaped texts, so a
+        # backslash path (Windows) matches there; here the repo path from Tares is raw, so cwd must be raw too (TR-1167).
+        session, cwd = _tsv(row.get("sessionId")), _text(row.get("cwd")) if row.get("cwd") is not None else ""
         # A second live session under a recorded live station is a duplicate for status to show, not a replacement.
         recorded = state.stations_get(name, "id", paths=paths)
         if any(r.get("id") == recorded and not claude.gone(r) for r in live):
