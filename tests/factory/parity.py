@@ -5156,7 +5156,9 @@ def _wakes(tmp: Path) -> dict:
             continue
         if e.get("event") == "idle_wake":
             events.append((e.get("station"), str(e.get("detail", ""))))
-    return {"files": files, "events": events}
+    urls = tmp / "urls"   # the addresses of the two scans asked of the fake Tares so far (the launch driver notes every GET, as the suite's curl shim does); the rest differ between the engines
+    return {"files": files, "events": events, "urls": sorted({u for u in (urls.read_text(encoding="utf-8").splitlines() if urls.is_file() else [])
+                                    if u.startswith(("/api/review-queue", "/api/desk"))})}
 
 
 def _n(r: Run, i: int = -1, station: str = "", word: str = "") -> int:
@@ -5374,12 +5376,15 @@ scenario(Scenario(
         ("the next round, once it is idle, wakes it", lambda r: _n(r, 6, "crew-reviewer", "work") == 3),
         ("the wake marks that head as told", lambda r: len(_wf(r, 6, "crew-reviewer", "seen")) == 1),
         ("a PR with a current verdict is no work for the reviewer", lambda r: _n(r, 7, "crew-reviewer", "work") == 3),
+        # two crews share a cell: the scans ask only for their own person's work (the bash suite reads the URLs its curl shim noted)
+        ("the reviewer's scan asked for its own tickets only",
+         lambda r: "/api/review-queue?mine=1" in r.snap(7)["urls"] and "/api/review-queue" not in r.snap(7)["urls"]),
     ],
     covers=["an unreviewed PR wakes the reviewer", "and only the reviewer",
             "the prompt names the work and says not to arm a tick", "the same head wakes it once, not every round",
             "a new head wakes it again", "a reviewer in the middle of a turn is not woken",
             "the next round, once it is idle, wakes it", "the wake marks that head as told",
-            "a PR with a current verdict is no work for the reviewer"],
+            "a PR with a current verdict is no work for the reviewer", "the reviewer's scan asked for its own tickets only"],
 ))
 
 
@@ -5469,8 +5474,11 @@ scenario(Scenario(
          lambda r: _n(r, 7, "crew-releaser", "work") == 1 and _n(r, 7) == _n(r, 6) + 1),
         ("once per line", lambda r: _n(r, 8, "crew-releaser", "work") == 1),
         ("a second line is a second wake", lambda r: _n(r, 9, "crew-releaser", "work") == 2),
+        ("the orchestrator's scan asked for its own desk answers only",
+         lambda r: "/api/desk?state=answered&mine=1" in r.snap(9)["urls"] and "/api/desk?state=answered" not in r.snap(9)["urls"]),
     ],
-    covers=["the first look only sets the baseline", "a RELEASE line outside Undelivered, or none inside it, wakes nobody",
+    covers=["the orchestrator's scan asked for its own desk answers only",
+            "the first look only sets the baseline", "a RELEASE line outside Undelivered, or none inside it, wakes nobody",
             "an open question is not an answer", "a desk answer wakes the orchestrator, and only it", "once",
             "an answer the orchestrator recorded itself is no news to it",
             "an allowed permission request is the watch's to act on, not a wake for the orchestrator",

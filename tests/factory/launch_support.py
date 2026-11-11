@@ -403,13 +403,19 @@ def main(argv: list) -> int:
         env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit)}
         if fn == "spawn":  # the spawn command wants the crew's MCP endpoint, which the settings checks leave at its default
             env["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
-        if engine == "bash":
-            return run_bash(fn, args, env, kit)
-        os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
-        if fn == "spawn":
-            os.environ["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
-        sys.path.insert(0, str(ROOT))
-        return run_python(fn, args)
+        try:
+            if engine == "bash":
+                return run_bash(fn, args, env, kit)
+            os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
+            if fn == "spawn":
+                os.environ["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
+            sys.path.insert(0, str(ROOT))
+            return run_python(fn, args)
+        finally:
+            # the address of every GET the command made, appended to <tmp>/urls: what the idle wake suite's curl shim notes
+            # for bash (idle_wake_test.sh), read from the Tares side so both engines are seen the same way
+            with open(tmp / "urls", "a", encoding="utf-8", newline="\n") as f:
+                f.writelines(e["path"] + "\n" for e in tares.log if not e.get("post"))
 
 
 if __name__ == "__main__":
