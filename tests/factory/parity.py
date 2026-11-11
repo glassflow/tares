@@ -7496,6 +7496,286 @@ scenario(Scenario(
 ))
 
 
+# tares_test.sh (TR-1162)
+# The crew against a Tares with auth on. The stand-in Tares (fake_up_tares.py) is given the key and answers 401 to any
+# other; `projects` are the documents of GET /api/crew/projects, kept in place of the project the bash suite hands over
+# through the real API (the checks that ask the API read it from the stand-in).
+
+TARES_KEY = "stub-token"
+TARES_STALE = "nvf_dead0000_revoked"
+TARES_ASK = "L4-ship\nno\nyes\n2\nthe reviewer may comment on draft PRs\n\n"
+TARES_WORDS = "the reviewer may comment on draft PRs"
+
+
+def tares_keyed(**kw) -> dict:
+    """The person's shell: the key of the Tares with auth on."""
+    return {"TARES_AUTH_TOKEN": TARES_KEY, **kw}
+
+
+def tares_setup_tools(tmp: Path, env: dict) -> None:
+    _fake_tool(tmp, "gh")
+    _fake_tool(tmp, "tares")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
+
+
+def tares_trust_two(r) -> None:
+    r.trust(r.crew, r.tmp / "crew-two")
+
+
+def tares_token_file(r) -> Path:
+    return r.crew / ".tares-token"
+
+
+def tares_mode_600(f: Path) -> bool:
+    """Only the person reads the key file. Windows keeps no such mode: there the file's content is all that is checked."""
+    return is_windows() or (f.stat().st_mode & 0o777) == 0o600
+
+
+def tares_bare(text: str, home: Path) -> str:
+    """A settings file with the crew home written as CREW (as the JSON file writes the path)."""
+    return text.replace(json.dumps(str(home))[1:-1], "CREW")
+
+
+def tares_no_token_in(folder: Path) -> bool:
+    return not any(TARES_KEY in f.read_text(encoding="utf-8", errors="replace") for f in folder.rglob("*") if f.is_file())
+
+
+scenario(Scenario(
+    name="tares_up_auth",
+    ignore_calls=LSP_PROBE,
+    suite="tares",
+    about="crew up against a Tares with auth on: a wrong key stops it, the key is kept in a file only the person reads, "
+          "a second machine asks nothing",
+    stand_in={"token": TARES_KEY},
+    prepare=tares_trust_two,
+    setup=tares_setup_tools,
+    steps=[
+        # bash lets curl's own complaint through (curl: (22) ... 401); it is not the crew's message, so it is set aside
+        Step(["crew", "up", "--yes"], env={"TARES_AUTH_TOKEN": "wrong"}, drop=(r"^curl: \(22\)",),
+             after=lambda tmp: (tmp / "claude" / "calls.jsonl").exists()),
+        Step(["crew", "up"], env=tares_keyed(), stdin=TARES_ASK),
+        Step(["crew", "up", "--yes"], env=tares_keyed(TARES_FACTORY_MCP_URL="http://127.0.0.1:9/mcp")),
+        Step(["doctor"], env=tares_keyed(), drop=DOCTOR_DROP,
+             run_before=lambda r: r.marks.update(probes=len(r.stand_in.mcp_auth))),
+        Step(["crew", "up"], env=lambda r: tares_keyed(**crew_at_unnamed("two")(r)), stdin="",
+             run_before=lambda r: r.marks.update(probed=r.stand_in.mcp_auth[r.marks["probes"]:])),
+    ],
+    checks=[
+        ("a wrong token stops crew up plainly",
+         lambda r: "could not read the crew settings from Tares" in r.out(0) and r.snap(0) is False),
+        ("first crew up exits 0", lambda r: r.code(1) == 0 and "started crew-reviewer" in r.out(1)),
+        ("without a releaser, two stations", lambda r: "started crew-releaser" not in r.out(1)),
+        ("the release questions are not asked without a releaser", lambda r: "How does the releaser ship" not in r.out(1)),
+        ("settings saved on Tares",
+         lambda r: [r.stand_in.settings.get(k) for k in ("autonomy", "releaser", "challenger", "builders_max")]
+         == ["L4-ship", False, True, 2]),
+        ("grant saved on Tares", lambda r: any(TARES_WORDS in g for g in r.stand_in.grants)),
+        ("the token is kept in a file only the person reads",
+         lambda r: tares_token_file(r).read_text(encoding="utf-8").rstrip("\n") == TARES_KEY and tares_mode_600(tares_token_file(r))),
+        ("stations are told where the token is",
+         lambda r: fwd(env_of(r, "crew-reviewer", "TARES_FACTORY_TOKEN_FILE")) == fwd(tares_token_file(r))),
+        ("the plugin's header helper gets the same token file",
+         lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_CRED_FILE") != ""
+         and env_of(r, "crew-reviewer", "TARES_FACTORY_CRED_FILE") == env_of(r, "crew-reviewer", "TARES_FACTORY_TOKEN_FILE")),
+        ("no token in settings files", lambda r: tares_no_token_in(r.crew / "stations")),
+        ("stations reach the same Tares", lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_URL") == r.stand_in.url),
+        ("grant from Tares quoted with its date",
+         lambda r: allow_has(r, "crew-reviewer", 'granted this on %s for all projects, in their own words: "%s". Acting'
+                             % (TODAY, TARES_WORDS))),
+        ("no undated or doubly quoted grants",
+         lambda r: not any("undated" in x or '""' in x for x in allow_of(r, "crew-reviewer"))),
+        ("no MCP server with auth on: the command carries a token placeholder, never the token",
+         lambda r: "TARES_AUTH_TOKEN=<your token> tares mcp --transport streamable-http" in r.out(2) and TARES_KEY not in r.out(2)),
+        ("the MCP probe carries the token (auth on)",
+         lambda r: "  ok    MCP endpoint answers at %s" % r.stand_in.mcp_url in r.out(3).splitlines()
+         and r.marks["probed"] != [] and set(r.marks["probed"]) == {"Bearer " + TARES_KEY}),
+        ("second machine asks nothing", lambda r: "Choice [" not in r.out(4) and "started crew-reviewer" in r.out(4)),
+        ("same settings for crew-$r",
+         lambda r: all(tares_bare((r.crew / "stations" / f"crew-{role}.settings.json").read_text(encoding="utf-8"), r.crew)
+                       == tares_bare((r.tmp / "crew-two" / "stations" / f"crew-{role}.settings.json").read_text(encoding="utf-8"),
+                                     r.tmp / "crew-two") for role in ("orchestrator", "reviewer"))),
+    ],
+    covers=["a wrong token stops crew up plainly", "first crew up exits 0", "without a releaser, two stations",
+            "the release questions are not asked without a releaser", "settings saved on Tares", "grant saved on Tares",
+            "the token is kept in a file only the person reads", "stations are told where the token is",
+            "the plugin's header helper gets the same token file", "no token in settings files",
+            "stations reach the same Tares", "grant from Tares quoted with its date",
+            "no undated or doubly quoted grants",
+            "no MCP server with auth on: the command carries a token placeholder, never the token",
+            "the MCP probe carries the token (auth on)", "second machine asks nothing", "same settings for crew-$r"],
+))
+
+
+TARES_EMOJI = "\U0001F504 Emoji App"
+TARES_PROJECTS = [
+    {"id": "uc_links", "name": "Links App", "tickets_done": 1, "tickets_total": 2,
+     "milestone": {"name": "Links", "done": 1, "total": 2}, "repos": [{"path": "{tmp}/links"}]},
+    {"id": "uc_emoji", "name": TARES_EMOJI, "tickets_done": 0, "tickets_total": 0, "milestone": None,
+     "repos": [{"path": "{tmp}/emoji"}]},
+]
+TARES_PROJECT_GRANT = "builders may bump patch versions of dependencies"
+
+
+def tares_setup_repos(tmp: Path, env: dict) -> None:
+    for name in ("links", "emoji"):
+        (tmp / name).mkdir(parents=True, exist_ok=True)
+        _git(tmp, "init", "-q", cwd=tmp / name)
+
+
+def tares_orch(**extra):
+    """A step's env: the orchestrator runs `factory spawn` with its settings env, not the person's shell."""
+    return lambda r: {**{k: str(v) for k, v in r.station_settings("crew-orchestrator").get("env", {}).items()}, **extra}
+
+
+def tares_api(r, path: str):
+    """What the Tares behind the run answers to a GET, with the key (the bash suite's `api GET`)."""
+    import urllib.request
+    req = urllib.request.Request(r.stand_in.url + path, headers={"Authorization": "Bearer " + TARES_KEY})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def tares_set_token_aside(tmp: Path) -> None:
+    (tmp / "crew" / ".tares-token").replace(tmp / "token.bak")
+
+
+def tares_put_token_back(tmp: Path) -> None:
+    (tmp / "token.bak").replace(tmp / "crew" / ".tares-token")
+
+
+def tares_sign_out(tmp: Path) -> None:
+    tares_set_token_aside(tmp)
+    (tmp / "crew" / ".tares-token").write_text("", encoding="utf-8")
+
+
+def tares_back_after_sign_out(tmp: Path) -> None:
+    (tmp / "crew" / ".tares-token").unlink()
+    tares_put_token_back(tmp)
+
+
+def tares_drop_project_id(tmp: Path) -> None:
+    """A station recorded by name only, as one was before TR-534."""
+    f = tmp / "crew" / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc["emoji-app-build-m1"].pop("project_id", None)
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def tares_last_env(tmp: Path) -> dict:
+    """What the last Claude Code started was given: whether it was given anything, a key, or the stale key."""
+    try:
+        text = (tmp / "claude" / "last.env").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    return {"given": text != "", "key": any(x.startswith("TARES_AUTH_TOKEN=") for x in text.splitlines()),
+            "stale": TARES_STALE in text}
+
+
+def tares_stations_env(r, station: str, key: str):
+    return r.station_settings(station).get("env", {}).get(key, "<none>")
+
+
+def tares_out(r, i: int) -> list:
+    """The lines on stdout of step i (the suite reads status and projects with 2>/dev/null)."""
+    return r.results[i]["stdout"].splitlines()
+
+
+TARES_BUILDER = ["spawn", "builder"]
+# the projects table pads the name by bytes in bash 3 and by characters in bash 5 and Python: the emoji row is left out
+TARES_WIDE_ROW = (r"^\U0001F504 Emoji App ",)
+
+scenario(Scenario(
+    name="tares_spawn_auth",
+    ignore_calls=LSP_PROBE,
+    suite="tares",
+    about="builders against a Tares with auth on: their project's grants, an emoji project by id, the orchestrator's own "
+          "spawn through the token file, and a key the person's shell holds never reaches a station",
+    stand_in={"token": TARES_KEY, "projects": TARES_PROJECTS,
+              "settings": {**SAVED, "autonomy": "L4-ship", "releaser": False, "challenger": True, "builders_max": 2},
+              "grants": ['- "%s" (%s)' % (TARES_WORDS, TODAY)],
+              "project_grants": {"uc_links": ['- "%s" (%s)' % (TARES_PROJECT_GRANT, TODAY)]}},
+    prepare=trust_crew,
+    setup=tares_setup_repos,
+    steps=[
+        Step(["crew", "up", "--yes"], env=tares_keyed()),                                                      # 0
+        Step(TARES_BUILDER + ["Links App", "m1", "{tmp}/links", "work T1"], env=tares_keyed()),                # 1
+        Step(["retire", "links-app-build-m1"], env=tares_keyed()),                                             # 2
+        Step(TARES_BUILDER + [TARES_EMOJI, "m1", "{tmp}/emoji", "work T1"], env=tares_keyed()),                # 3
+        Step(["settings", "emoji-app-build-m1"], env=tares_keyed(), before=tares_drop_project_id),             # 4
+        Step(["retire", "emoji-app-build-m1"], env=tares_keyed()),                                             # 5
+        Step(TARES_BUILDER + ["Links App", "m3", "{tmp}/links", "work T3"], env=tares_orch()),                 # 6
+        Step(["retire", "links-app-build-m3"], env=tares_keyed()),                                             # 7
+        Step(TARES_BUILDER + ["Links App", "m4", "{tmp}/links", "work T4"], env=tares_orch(),                  # 8
+             before=tares_set_token_aside, drop=(r"^curl: \(22\)",)),
+        Step(TARES_BUILDER + ["Links App", "m5", "{tmp}/links", "work T5"], env=tares_keyed(),                 # 9
+             before=tares_put_token_back, after=tares_last_env),
+        Step(["retire", "links-app-build-m5"], env=tares_keyed()),                                             # 10
+        Step(TARES_BUILDER + ["Links App", "m6", "{tmp}/links", "work T6"], env=tares_orch(TARES_AUTH_TOKEN=TARES_STALE),
+             after=tares_last_env),                                                                            # 11
+        Step(["retire", "links-app-build-m6"], env=tares_keyed()),                                             # 12
+        Step(["projects"], env={}, drop=TARES_WIDE_ROW),                                                       # 13
+        Step(TARES_BUILDER + ["Links App", "m7", "{tmp}/links", "work T7"], env=tares_orch(),                  # 14
+             before=tares_sign_out, drop=(r"^curl: \(22\)",)),
+        Step(["crew", "status"], env=tares_keyed(), before=tares_back_after_sign_out),                         # 15
+        Step(["projects"], env=tares_keyed(), drop=TARES_WIDE_ROW),                                            # 16
+        Step(["settings", "crew-reviewer"], env=NO_TARES),                                                     # 17
+    ],
+    checks=[
+        ("project grant quoted for the builder",
+         lambda r: allow_has(r, "links-app-build-m1", 'for project Links App, in their own words: "%s". Acting' % TARES_PROJECT_GRANT)),
+        ("and the grants for all",
+         lambda r: allow_has(r, "links-app-build-m1", 'in their own words: "%s"' % TARES_WORDS)),
+        ("L4: builder may merge on the gate",
+         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "links-app-build-m1"))),
+        ("a builder for an emoji project starts", lambda r: "started emoji-app-build-m1" in r.out(3)),
+        ("its TARES_PROJECT is the project id", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT") == "uc_emoji"),
+        ("and the name is kept for reading", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT_NAME") == TARES_EMOJI),
+        ("the header value is plain ASCII",
+         lambda r: re.fullmatch(r"[ -~]*", env_of(r, "emoji-app-build-m1", "TARES_PROJECT")) is not None),
+        ("Tares resolves the id the header carries",
+         lambda r: tares_api(r, "/api/projects/" + env_of(r, "emoji-app-build-m1", "TARES_PROJECT")).get("name") == TARES_EMOJI),
+        ("a station kept by name gets the id when its settings are written again",
+         lambda r: json.loads(r.results[4]["stdout"])["env"]["TARES_PROJECT"] == "uc_emoji"),
+        ("orchestrator's own spawn reaches Tares with the token file", lambda r: "started links-app-build-m3" in r.out(6)),
+        ("its builder gets the token file too",
+         lambda r: fwd(env_of(r, "links-app-build-m3", "TARES_FACTORY_TOKEN_FILE")) == fwd(r.crew / ".tares-token")),
+        ("unreadable crew settings stop a spawn plainly",
+         lambda r: "could not read the crew settings" in r.out(8) and "integer expression" not in r.out(8)
+         and not (r.crew / "stations" / "links-app-build-m4.settings.json").exists()),
+        ("claude is started without the person's key", lambda r: r.snap(9)["given"] and not r.snap(9)["key"]),
+        ("station settings blank an inherited key",
+         lambda r: tares_stations_env(r, "links-app-build-m5", "TARES_AUTH_TOKEN") == ""),
+        ("a station with a stale inherited key reaches Tares through the crew file",
+         lambda r: "started links-app-build-m6" in r.out(11)),
+        ("and leaves the crew file as it was",
+         lambda r: (r.crew / ".tares-token").read_text(encoding="utf-8").rstrip("\n") == TARES_KEY),
+        ("the station passes the stale key to nobody", lambda r: not r.snap(11)["stale"]),
+        ("the watch, started without a key, reads the crew file",
+         lambda r: any(x.startswith("Links App") for x in r.out(13).splitlines())),
+        ("a station whose person signed out says so",
+         lambda r: "the person signed out of Tares: they run tares login" in r.out(14)),
+        ("status has a line per project from Tares",
+         lambda r: any(x.startswith("project Links App: 1/2 tickets done, on Links 1/2") for x in tares_out(r, 15))),
+        ("projects reads the same",
+         lambda r: any(re.match(r"Links App +1/2 +Links 1/2 ", x) for x in tares_out(r, 16))),
+        ("unreachable Tares is reported, with how to start one",
+         lambda r: "no Tares answers at" in r.results[17]["stderr"] and "tares up" in r.results[17]["stderr"]
+         and r.results[17]["stdout"] == ""),
+    ],
+    covers=["project grant quoted for the builder", "and the grants for all", "L4: builder may merge on the gate",
+            "a builder for an emoji project starts", "its TARES_PROJECT is the project id", "and the name is kept for reading",
+            "the header value is plain ASCII", "Tares resolves the id the header carries",
+            "a station kept by name gets the id when its settings are written again",
+            "orchestrator's own spawn reaches Tares with the token file", "its builder gets the token file too",
+            "unreadable crew settings stop a spawn plainly", "claude is started without the person's key",
+            "station settings blank an inherited key",
+            "a station with a stale inherited key reaches Tares through the crew file", "and leaves the crew file as it was",
+            "the station passes the stale key to nobody", "the watch, started without a key, reads the crew file",
+            "a station whose person signed out says so", "status has a line per project from Tares", "projects reads the same",
+            "unreachable Tares is reported, with how to start one"],
+))
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
