@@ -6144,6 +6144,7 @@ scenario(Scenario(
     prepare=trust_crew,
     steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_up_after),
            Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=lambda tmp: {"pid": g4_pid(tmp)}),
+           Step(["crew", "status"], env=G4_WATCH_ENV),
            Step(["crew", "down"], env=G4_WATCH_ENV),
            Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV),
            Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
@@ -6153,12 +6154,14 @@ scenario(Scenario(
         ("it writes to its log", lambda r: r.snap(0)["log"]),
         ("a second crew up keeps the one watch",
          lambda r: "already running, pid %s" % r.snap(0)["pid"] in r.out(1) and r.snap(1)["pid"] == r.snap(0)["pid"]),
+        # crew_test.sh puts this check after a `;` on its line, so the harness's line count (which wants `check "` first) skips it
+        ("status says the watch runs", lambda r: any(ln.startswith("watch: running (pid %s)" % r.snap(0)["pid"]) for ln in r.out(2).splitlines())),
         ("crew down stops the watch",
-         lambda r: not g4_alive(r.snap(0)["pid"]) and not (r.crew / "watch.pid").exists() and "stopped the watch" in r.out(2)),
-        ("--no-watch starts none", lambda r: "the watch" not in r.out(3) and not (r.crew / "watch.pid").exists()),
+         lambda r: not g4_alive(r.snap(0)["pid"]) and not (r.crew / "watch.pid").exists() and "stopped the watch" in r.out(3)),
+        ("--no-watch starts none", lambda r: "the watch" not in r.out(4) and not (r.crew / "watch.pid").exists()),
     ],
     covers=["crew up starts the watch in the background", "it writes to its log", "a second crew up keeps the one watch",
-            "crew down stops the watch", "--no-watch starts none"],
+            "crew down stops the watch", "--no-watch starts none"],  # "status says the watch runs" is asserted too (not a counted line)
 ))
 
 # crew_test.sh, "A permission the person allows in the console is a grant on Tares": one story on the launch driver,
