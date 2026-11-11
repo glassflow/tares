@@ -1,0 +1,52 @@
+# The factory CLI suites (tests/factory/ci_list.txt) against the Python crew engine, on Linux and on macOS
+# (TR-1069). Python is the default engine; FACTORY_BIN makes each suite run `tares factory` in place of the
+# bash script, and TARES_FACTORY_ENGINE=python makes a command that is not ported fail instead of falling
+# back to bash, so a green run means every command the suites use runs in Python.
+# Its own workflow, like windows-crew, so ci.yml (and the required checks) stay as they are. The bash engine
+# is still tested by ci.yml's test jobs, which run the same suites without FACTORY_BIN.
+name: factory-engine
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: factory-engine-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  factory-engine:
+    name: factory-engine (${{ matrix.os }} ${{ matrix.shard }}/3)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          # The package forces ui/dist into the wheel and fails without it. The crew engine never serves the console, so an empty folder is enough here.
+          mkdir -p ui/dist
+          python -m venv .venv
+          .venv/bin/pip install -e .
+          echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Tools the suites use
+        run: |
+          command -v jq >/dev/null || { if [ "$(uname)" = Darwin ]; then brew install jq; else sudo apt-get update && sudo apt-get install -y jq; fi; }
+          tares factory --help >/dev/null
+      - name: Factory suites on the Python engine
+        env:
+          FACTORY_BIN: tares factory
+          TARES_FACTORY_ENGINE: python
+        run: python tests/ci_run.py --suite factory --shard ${{ matrix.shard }} --of 3

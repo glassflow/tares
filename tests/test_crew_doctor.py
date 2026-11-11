@@ -4,7 +4,7 @@ helpers that read the machine.
 The parity harness (tests/factory/parity.py 'doctor_*') compares the checks both engines share. This file
 covers what only the Python doctor does:
 
-  - `--json` is a list of {id, ok, message, fix}; an unknown argument prints the usage and exits 2;
+  - `--json` is one contract document {schema_version, ok, checks: [{id, ok, message, fix, level}]}; an unknown argument prints the usage and exits 2;
   - the exit code is 1 when any check is FIX, 0 when none is;
   - the tares version against the plugin's min_tares (TR-1064) and `tares` on PATH with `tares hook` (TR-1068);
   - the login key: in the keychain, in a file only the owner can read, or readable by others (TR-949);
@@ -119,6 +119,38 @@ with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
     code = doctor.cmd_doctor(["doctor", "--wat"], {})
 ck("an unknown argument exits 2 with the usage", code == 2 and "usage: tares factory doctor [--json]" in err.getvalue() and not out.getvalue(), (code, err.getvalue()))
 
+out, err = io.StringIO(), io.StringIO()
+try:
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        doctor.cmd_doctor(["doctor", "--wat", "--json"], {})
+    exit_code = None
+except SystemExit as e:
+    exit_code = e.code
+ck("an unknown argument with --json is the usage error shape, exit 2", exit_code == 2 and not err.getvalue()
+   and json.loads(out.getvalue()) == {"schema_version": 1, "error": {"code": "usage", "message": doctor.USAGE}},
+   (exit_code, out.getvalue(), err.getvalue()))
+
+# a CrewError while collecting is the error document under --json (TR-973 review F2), a text line without it
+_real_collect = doctor.Doctor.collect
+def _boom(self):
+    raise doctor.CrewError("the crew home is unreadable")
+doctor.Doctor.collect = _boom
+try:
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = doctor.cmd_doctor(["doctor", "--json"], {})
+    jd = json.loads(out.getvalue()) if out.getvalue().strip().startswith("{") else {}
+    ck("a CrewError with --json is the error document on stdout, exit 1, nothing on stderr",
+       code == 1 and jd.get("error", {}).get("message") == "the crew home is unreadable" and not err.getvalue(),
+       (code, out.getvalue(), err.getvalue()))
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = doctor.cmd_doctor(["doctor"], {})
+    ck("a CrewError without --json is a text line on stderr, exit 1, nothing on stdout",
+       code == 1 and "the crew home is unreadable" in err.getvalue() and not out.getvalue(), (code, out.getvalue(), err.getvalue()))
+finally:
+    doctor.Doctor.collect = _real_collect
+
 base = fresh("run")
 env_run = {"HOME": str(base / "h"), "USERPROFILE": str(base / "h"), "TARES_HOME": str(base / "th"),
            "FACTORY_CREW_HOME": str(base / "crew"), "PATH": os.environ.get("PATH", ""),
@@ -131,18 +163,23 @@ for argv in (["doctor", "--json"], ["doctor"]):
         code = doctor.cmd_doctor(argv, dict(env_run))
     if argv[-1] == "--json":
         try:
-            rows = json.loads(out.getvalue())
-        except ValueError:
-            rows = None
-        ck("--json prints a JSON list of checks", isinstance(rows, list) and rows, out.getvalue()[:200])
+            jdoc = json.loads(out.getvalue())
+            rows = jdoc["checks"]
+        except (ValueError, KeyError, TypeError):
+            jdoc, rows = None, None
+        ck("--json prints one contract document with the checks", isinstance(rows, list) and rows
+           and jdoc.get("schema_version") == 1 and next(iter(jdoc)) == "schema_version"
+           and len(out.getvalue().strip().splitlines()) == 1, out.getvalue()[:200])
+        ck("--json: ok is false when a check is FIX", jdoc and jdoc["ok"] == (not any(not r["ok"] for r in rows)), jdoc and jdoc["ok"])
         ck("each check has id, ok, message and fix", all(isinstance(r.get("id"), str) and isinstance(r.get("ok"), bool)
                                                          and isinstance(r.get("message"), str) and isinstance(r.get("fix"), str)
                                                          for r in rows or []))
         ids = [r["id"] for r in rows or []]
+        ck("--json: no two checks share an id", len(ids) == len(set(ids)), sorted({i for i in ids if ids.count(i) > 1}))
         ck("--json holds the Python-only checks", {"engine", "min_tares", "tares_path", "git"} <= set(ids), ids)
         ck("no Tares answers, so the doctor says so and exits 1", code == 1 and any(r["id"] == "tares" and not r["ok"] for r in rows or []), code)
         ck("a failing check carries a fix", all(r["fix"] for r in rows or [] if not r["ok"]), [r for r in rows or [] if not r["ok"] and not r["fix"]])
-        ck("--json prints nothing but the JSON", out.getvalue().lstrip().startswith("["), out.getvalue()[:60])
+        ck("--json prints nothing but the JSON", out.getvalue().startswith('{"schema_version":1,'), out.getvalue()[:60])
         ck("no cmux file and no project repo: no line for cmux or a language server", not any(re.search(r"cmux|language server", r["message"], re.I) for r in rows or []))
     else:
         text = out.getvalue()
@@ -426,6 +463,38 @@ newer = [c for c in d.checks if c.new]
 ck("every check marked new is a line the harness sets aside", newer and all(pat.match(c.line()) for c in newer), [c.line() for c in newer if not pat.match(c.line())])
 shared = [c for c in d.checks if not c.new]
 ck("no check bash also makes is marked new", not shared, [c.id for c in shared])
+
+print("check ids are unique (TR-1130)")
+# A project with several repos, two of them in folders of the same name, one listed twice and one missing:
+# every check the project and LSP sections add must still have an id of its own.
+ids_home = fresh("ids")
+for sub in ("a/api", "b/api", "web"):
+    Path(ids_home, sub).mkdir(parents=True)
+    Path(ids_home, sub, "go.mod").write_text("module x\n", encoding="utf-8")
+rows = [("Shop", str(ids_home / "a" / "api")), ("Shop", str(ids_home / "b" / "api")), ("Shop", str(ids_home / "web")),
+        ("Shop", str(ids_home / "web")), ("Shop", str(ids_home / "gone")), ("Other", str(ids_home / "web"))]
+ck("repo_ids: the folder name, then -2 for a repeat inside the project, restarting for another project",
+   doctor.repo_ids(rows) == ["api", "api-2", "web", "web-2", "gone", "web"], doctor.repo_ids(rows))
+ck("repo_ids: a folder that is already named like a suffixed repeat still gets its own part (api, api, api-2)",
+   doctor.repo_ids([("P", "/a/api"), ("P", "/b/api"), ("P", "/c/api-2")]) == ["api", "api-2", "api-2-2"],
+   doctor.repo_ids([("P", "/a/api"), ("P", "/b/api"), ("P", "/c/api-2")]))
+ck("repo_ids: a trailing slash or backslash does not make an empty part",
+   doctor.repo_ids([("P", "/x/y/"), ("P", "C:\\x\\z\\")]) == ["y", "z"], doctor.repo_ids([("P", "/x/y/"), ("P", "C:\\x\\z\\")]))
+d, *_ = make("ids-doc", {"FACTORY_LSP_PATH": str(fresh("ids-nobins"))},
+             run=fake_run({("--json", "nameWithOwner,viewerPermission", "-q", '.nameWithOwner + " " + .viewerPermission'): res(0, "acme/shop WRITE\n")}))
+d.trusted = lambda repo: True
+real_lsp = doctor.doctor_lsp.read_plugins
+doctor.doctor_lsp.read_plugins = lambda path="": []
+try:
+    d.check_projects(SimpleNamespace(project_repo_rows=lambda: rows))
+    d.check_lsp(SimpleNamespace(project_repo_rows=lambda: rows))
+finally:
+    doctor.doctor_lsp.read_plugins = real_lsp
+got = [c.id for c in d.checks]
+dupes = sorted({i for i in got if got.count(i) > 1})
+ck("a multi-repo project: no two checks share an id", got and not dupes, dupes)
+ck("the per-repo ids carry the repo", "project_Shop_api_trust" in got and "project_Shop_api-2_trust" in got and "project_Shop_gone" in got, got)
+ck("a repo of another project with the same folder name keeps its own ids", "project_Other_web_trust" in got, got)
 
 print("the doctor stays light")
 r = subprocess.run([sys.executable, "-c",

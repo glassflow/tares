@@ -1,7 +1,8 @@
 # The crew tests and the parity harness on Windows, from the first milestone (TR-1066), so a Windows
 # break shows up in the PR that causes it. Advisory for now: continue-on-error keeps a red run from
 # blocking a merge, and the job name says so. Its own workflow, so ci.yml (and the required checks) stay as they are.
-# The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py and parity.py, and fails if it ran no test.
+# The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_ci_windows.py and the parity scenarios, and fails
+# if it ran no test, if a test printed no summary, or (--floors) if a test passed fewer checks than its floor (TR-976).
 name: windows-crew
 
 on:
@@ -22,7 +23,7 @@ jobs:
     name: windows-crew (not required yet)
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -52,8 +53,13 @@ jobs:
           New-Item -ItemType Directory -Force -Path ui\dist | Out-Null
           uv venv
           uv pip install -e .
+      # FACTORY_CREW_HOME is the crew's own folder under that profile, so every path the engine builds from it has the
+      # space and the e-acute in it. Tests that make their own crew home override it; the ones that read the
+      # environment get this one.
       - name: Crew tests and parity
         shell: pwsh
+        env:
+          FACTORY_CREW_HOME: ${{ env.USERPROFILE }}\factory
         run: |
           .venv\Scripts\activate.ps1
-          python tests/ci_windows.py --timeout 1200
+          python tests/ci_windows.py --floors --timeout 1200

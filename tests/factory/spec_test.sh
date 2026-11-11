@@ -121,10 +121,9 @@ check "a private project the caller is not on keeps the lead's flow" '[ "$(last 
 
 # The session-start hook of a contributor session says to follow the Contributor section, never the
 # `session` skill (which would have it build the project); a plain bound session still says `session`.
-hook="$here/../../claude-plugin/hooks/session-start.sh"
 hookctx() { # source, then VAR=value... for the hook
   local src=$1; shift
-  echo "{\"source\": \"$src\"}" | env -u FACTORY_ROLE -u TARES_PROJECT -u TARES_SESSION_KIND -u TARES_SESSION_TAKEOVER "$@" bash "$hook" | jq -r '.hookSpecificOutput.additionalContext'
+  echo "{\"source\": \"$src\"}" | env -u FACTORY_ROLE -u TARES_PROJECT -u TARES_SESSION_KIND -u TARES_SESSION_TAKEOVER "$@" tares hook session-start --plugin-root "$here/../../claude-plugin" | jq -r '.hookSpecificOutput.additionalContext'
 }
 for src in startup compact resume; do
   ctx=$(hookctx $src TARES_PROJECT="Acme web" TARES_SESSION_KIND=contributor)
@@ -139,7 +138,7 @@ for src in startup compact; do
   check "a plain bound session ($src) still follows the session skill" 'grep -q "Follow the .session. skill\|load the .session. skill again" <<<"$ctx" && ! grep -q "Contributor" <<<"$ctx"'
 done
 # CLAUDE_PLUGIN_ROOT points at a folder with no min_tares.txt, so an older tares installed here cannot add its compat line.
-check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\": \"startup\"}" | env -u FACTORY_ROLE -u TARES_PROJECT TARES_SESSION_KIND=contributor CLAUDE_PLUGIN_ROOT="$T" bash "$hook")" ]'
+check "a marker without a project: the hook is silent" '[ -z "$(echo "{\"source\": \"startup\"}" | env -u FACTORY_ROLE -u TARES_PROJECT TARES_SESSION_KIND=contributor CLAUDE_PLUGIN_ROOT="$T" python3 "$plugin/hooks/session_start.py")" ]'
 skill="$here/../../claude-plugin/skills/spec-project/SKILL.md"
 check "the Contributor section asks my_work for this project's questions (Q numbers restart per project)" 'sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "Call .my_work(project=<project>). and read .person. (who this is) and .spec_questions." && sed -n "/^## Contributor/,/^## Light mode/p" "$skill" | tr -s " \n" " " | grep -q "restart in each project"'
 

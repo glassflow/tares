@@ -2,8 +2,9 @@
 
 The port of cmd_doctor, doctor_keys and doctor_kit. The text output is the bash output for every check
 bash makes: a header, one `  ok`, `  warn` or `  FIX` line per check, then `all good` or
-`fix the items marked FIX`, and exit 1 when any line is FIX. `--json` prints the same checks as a list
-of {id, ok, message, fix, level} for the desktop app and exits the same way. `ok` is false only for FIX
+`fix the items marked FIX`, and exit 1 when any line is FIX. `--json` prints the same checks as one
+contract document, {schema_version, ok, checks: [{id, ok, message, fix, level}]} (schemas/doctor.json), for the desktop
+app, and exits the same way: 1 when a check is FIX, with the document still on stdout. `ok` is false only for FIX
 (a warning is still ok); `level` says which of the three it is; `fix` is what to do, "" for an ok line.
 
 Checks bash does not make are marked `new` and their text starts with a fixed label (NEW_LABELS), so a
@@ -36,7 +37,7 @@ from pathlib import Path
 
 import psutil
 
-from . import claude, doctor_lsp, state, version
+from . import claude, contract, doctor_lsp, state, version
 from .client import TaresClient, _say as client_say, cksum, key_name, settings_missing
 from .errors import ClaudeNotFoundError, CrewError, JobStateUnreadableError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -67,6 +68,24 @@ class Check:
 
     def line(self) -> str:
         return f"  {LABELS[self.level]} {self.message}"
+
+
+def repo_ids(rows: list) -> list:
+    """One id part per (project, repo) row, unique within its project: the repo's folder name, with -2, -3
+    after the first when two repos of a project share a folder name or the same repo is listed twice (and
+    on to the next free number when that name is a folder name too). The desktop app tells checks apart
+    by id, so a project with several repos needs one per repo."""
+    used: set = set()
+    out = []
+    for project, repo in rows:
+        base = re.split(r"[\\/]", str(repo).rstrip("/\\"))[-1] or "repo"
+        part, n = base, 1
+        while (project, part) in used:
+            n += 1
+            part = f"{base}-{n}"
+        used.add((project, part))
+        out.append(part)
+    return out
 
 
 def _windows() -> bool:
@@ -301,9 +320,18 @@ class Doctor:
         self.check_tares_path()
 
     def check_engine(self) -> None:
-        asked = self.env.get("TARES_FACTORY_ENGINE") or ""
-        why = f"TARES_FACTORY_ENGINE={asked}" if asked else "the default"
-        self.ok("engine", f"engine: python ({why}; TARES_FACTORY_ENGINE=bash runs bash instead)", True)
+        from . import dispatch
+        engine, source = dispatch.engine_setting(self.env)
+        if engine == "bash":
+            where = "TARES_FACTORY_ENGINE=bash" if source == dispatch.ENGINE_VAR else 'engine: bash in crew.json'
+            self.ok("engine", f"engine: bash ({where}; unset it to use the Python engine)", True)
+            return
+        if engine not in ("", "python"):
+            self.no("engine", f'engine: "{engine}" is not an engine', 'use "python" or "bash"', True)
+            return
+        why = {dispatch.ENGINE_VAR: "TARES_FACTORY_ENGINE=python", "crew.json": "engine: python in crew.json"}.get(
+            source, "the default")
+        self.ok("engine", f"engine: python ({why}; TARES_FACTORY_ENGINE=bash or engine: bash in crew.json runs bash instead)", True)
 
     def check_tares_version(self) -> None:
         need = version.plugin_min_version(self.root)
@@ -563,14 +591,14 @@ class Doctor:
             rows = c.project_repo_rows()
         except CrewError:
             return
-        for p, repo in rows:
+        for (p, repo), rid in zip(rows, repo_ids(rows)):
             if not os.path.isdir(repo):
-                self.no(f"project_{p}", f"project {p}: {repo} does not exist on this machine", "fix the repo path on Tares")
+                self.no(f"project_{p}_{rid}", f"project {p}: {repo} does not exist on this machine", "fix the repo path on Tares")
                 continue
             if self.trusted(repo):
-                self.ok(f"project_{p}_trust", f"project {p}: {repo} trusted")
+                self.ok(f"project_{p}_{rid}_trust", f"project {p}: {repo} trusted")
             else:
-                self.no(f"project_{p}_trust", f"project {p}: Claude Code has not trusted {repo} (its git root must be "
+                self.no(f"project_{p}_{rid}_trust", f"project {p}: Claude Code has not trusted {repo} (its git root must be "
                         "trusted itself); run `claude` there once", f"cd {repo} && claude, accept the trust prompt")
             gh = shutil.which("gh", path=self.env.get("PATH"))
             if not gh:
@@ -582,12 +610,12 @@ class Doctor:
             if not _:
                 name, perm = line, line
             if perm in ("ADMIN", "MAINTAIN", "WRITE"):
-                self.ok(f"project_{p}_github", f"project {p}: {repo} is {name} on GitHub ({perm})")
+                self.ok(f"project_{p}_{rid}_github", f"project {p}: {repo} is {name} on GitHub ({perm})")
             elif perm == "":
-                self.no(f"project_{p}_github", f"project {p}: gh can't read the GitHub repo of {repo} (no GitHub remote, "
+                self.no(f"project_{p}_{rid}_github", f"project {p}: gh can't read the GitHub repo of {repo} (no GitHub remote, "
                         "or no access); builders open PRs there", "gh auth login, and add a GitHub remote")
             else:
-                self.no(f"project_{p}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
+                self.no(f"project_{p}_{rid}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
                         "push and merge", "ask for write access to the repo")
 
     def check_cmux(self) -> None:
@@ -603,8 +631,9 @@ class Doctor:
         if not rows:
             return
         plugins = doctor_lsp.read_plugins(self.claude_path)
-        for level, project, lang, msg, cmds in doctor_lsp.doctor_rows(rows, plugins, self.env):
-            self.add(level, f"lsp_{project}_{lang.lower()}", msg, " && ".join(cmds))
+        for row, rid in zip(rows, repo_ids(rows)):
+            for level, project, lang, msg, cmds in doctor_lsp.doctor_rows([row], plugins, self.env):
+                self.add(level, f"lsp_{project}_{rid}_{lang.lower()}", msg, " && ".join(cmds))
 
     def check_git(self) -> None:
         r = self.run(["git", "--version"], timeout=30)
@@ -721,16 +750,19 @@ def cmd_doctor(argv: list, env: dict) -> int:
     """`doctor [--json]`. argv starts with the word doctor."""
     args = argv[1:]
     if any(a != "--json" for a in args):
+        if contract.wants_json(args):
+            contract.fail("usage", USAGE, contract.EXIT_USAGE)
         print(USAGE, file=sys.stderr)
         return 2
     try:
         checks = Doctor(env).collect()
     except CrewError as e:
-        print(e.line, file=sys.stderr)
+        if not contract.refuse(e, args):
+            print(e.line, file=sys.stderr)
         return 1
     bad = any(not c.ok for c in checks)
     if args:
-        print(json.dumps([c.as_json() for c in checks], ensure_ascii=False, indent=2))
+        contract.emit({"ok": not bad, "checks": [c.as_json() for c in checks]}, "doctor")
         return 1 if bad else 0
     print(f"{ME} doctor")
     for c in checks:

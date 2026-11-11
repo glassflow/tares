@@ -633,6 +633,23 @@ def transcript_of_finds_the_conversation():
     ck("a session id with a path separator is refused (gives '')", cc.transcript_of("st4", paths=PATHS) == "")
     station("st5", sessionId="*")
     ck("a bare * does not match every transcript", cc.transcript_of("st5", paths=PATHS) == "")
+    # TR-1155: the job's state.json names the live session first, as in bash. After a /clear the list and
+    # the recorded id may still show the old one.
+    station("st6", id="0000000d", sessionId="sess-recorded")
+    agents(sess(id="0000000d", sessionId="sess-list"))
+    job("0000000d", {"sessionId": "sess-cleared"})
+    ck("a session cleared in the job file has no transcript yet: '', not the old one on the list",
+       cc.transcript_of("st6", paths=PATHS) == "")
+    (proj / "-w-e").mkdir(parents=True, exist_ok=True)
+    (proj / "-w-e" / "sess-cleared.jsonl").write_text("{}\n", encoding="utf-8")
+    ck("the job file's session id wins over the list and the recorded one",
+       cc.transcript_of("st6", paths=PATHS) == str(proj / "-w-e" / "sess-cleared.jsonl"))
+    job("0000000d", "{\"half\": ")
+    ck("a job file that is not JSON falls back to the list, no error",
+       cc.transcript_of("st6", paths=PATHS) == str(proj / "-w-a" / "sess-list.jsonl"))
+    job("0000000d", {})
+    ck("a job file with no sessionId falls back to the list",
+       cc.transcript_of("st6", paths=PATHS) == str(proj / "-w-a" / "sess-list.jsonl"))
 
 
 # ============================================================ job_state, quiet, between_turns
@@ -672,7 +689,8 @@ def job_state_reads_the_job_file():
     users = re.findall(r"^def (\w+)\(.*?(?=^def |\Z)", src, re.S | re.M)
     callers = sorted(n for n, body in ((m.group(1), m.group(0)) for m in re.finditer(r"^def (\w+)\(.*?(?=^def |\Z)", src, re.S | re.M))
                      if n != "job_state" and "job_state(" in re.sub(r'""".*?"""', "", body, flags=re.S) and not n.startswith("_"))
-    ck("only quiet and station_updated read the job file", callers == ["quiet", "station_updated"] and users, short(callers))
+    ck("only quiet, station_updated and transcript_of (TR-1155) read the job file",
+       callers == ["quiet", "station_updated", "transcript_of"] and users, short(callers))
 
 
 @test
@@ -973,6 +991,38 @@ def running_version_from_the_list_or_the_process():
         ck("a pre-release version is read up to the next slash", cc.running_version("0000000a", [{"id": "0000000a", "pid": pid7}]) == "2.1.314-rc.1")
     finally:
         stop_procs()
+
+
+@test
+def fake_ps_hook():
+    """TARES_FAKE_PS_DIR: the files a suite's fake `ps` answers from stand in for the processes."""
+    d = Path(tempfile.mkdtemp(prefix="fakeps "))
+    old = os.environ.get("TARES_FAKE_PS_DIR")
+    try:
+        (d / "ps").mkdir()
+        (d / "ps" / "4001.command").write_text("claude bg-spare\n", encoding="utf-8")
+        (d / "ps" / "4001.ppid").write_text("5001\n", encoding="utf-8")
+        (d / "ps" / "5001.command").write_text("claude bg-pty-host -- /home/u/.local/share/claude/versions/2.1.399 --bg-spare /x\n", encoding="utf-8")
+        (d / "ps-list").write_text("4001 claude bg-spare\n5001 claude bg-pty-host -- /home/u/versions/2.1.399 --bg-spare /tmp/s.claim.sock\nnot-a-pid x\n", encoding="utf-8")
+        os.environ["TARES_FAKE_PS_DIR"] = str(d)
+        ck("the hook gives a pid's command line from <pid>.command", cc._command_line(4001) == "claude bg-spare")
+        ck("a pid with no file there is read from the real process (gone: '')", cc._command_line(2 ** 22 + 777) == "")
+        ck("running_version reads the parent named in <pid>.ppid, then the pid",
+           cc.running_version("0000000a", [{"id": "0000000a", "pid": 4001}]) == "2.1.399")
+        ck("the listing is the ps-list file: pid and command, a line without a pid skipped",
+           cc.process_listing() == [(4001, "claude bg-spare"),
+                                    (5001, "claude bg-pty-host -- /home/u/versions/2.1.399 --bg-spare /tmp/s.claim.sock")])
+        (d / "ps-list").unlink()
+        ck("no ps-list file: an empty listing, never the machine's processes", cc.process_listing() == [])
+        del os.environ["TARES_FAKE_PS_DIR"]
+        ck("the hook off: the real process list (this process is in it)", any(p == os.getpid() for p, _ in cc.process_listing()))
+        ck("...and a pid with a file there is not read from it", cc._command_line(4001) != "claude bg-spare")
+    finally:
+        if old is None:
+            os.environ.pop("TARES_FAKE_PS_DIR", None)
+        else:
+            os.environ["TARES_FAKE_PS_DIR"] = old
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # ============================================================ older_than and claude_version

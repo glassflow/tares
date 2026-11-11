@@ -10,6 +10,11 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `roster --json` | one document | `roster.json` |
 | `desk --json` (also `crew desk`) | one document | `desk.json` |
 | `events --json [--follow] [--since <cursor>]` | one document per line | `events.json` |
+| `doctor --json` | one document | `doctor.json` |
+| `projects --json` | one document | `projects.json` |
+| `crew setup --questions` | one document | `setup_questions.json` |
+| `crew setup --answers <file> --json` | one document | `setup_answers.json` |
+| `settings <station>` | Claude Code's settings file, no `schema_version` | `settings.json` |
 | `tidy --json` | nothing on success; the error shape on a refusal | `error.json` |
 | any of them, when it fails with `--json` | one document | `error.json` |
 
@@ -17,6 +22,14 @@ Only the Python engine prints JSON. With `TARES_FACTORY_ENGINE=bash`, `status`, 
 text, as before, and `events` has no bash version: it prints its usage on stderr and exits 1. A command run
 without `--json` is unchanged. `tidy --json` shapes failures only: on success it prints nothing on stdout, as
 `tidy` does without it.
+
+`settings <station>` prints the Claude Code settings file a station launches with. Claude Code reads that file, so
+it has no `schema_version`; `settings.json` describes the keys the crew relies on and allows the rest. A change to
+its shape raises the number in `schema_version.json` all the same.
+
+`doctor --json` exits 1 when any check is at level `fix`, and still prints its document: read `checks`, not the
+exit code alone. The schema files are published with the package (`tares/crew/schemas/`), so an app can generate
+its types from them.
 
 ## Rules
 

@@ -1,11 +1,11 @@
-"""The MCP headers helper in Python (claude-plugin/scripts/mcp_headers.py), the twin of bin/mcp-headers.
+"""The MCP headers helper (claude-plugin/scripts/mcp_headers.py, started by `tares hook mcp-headers`), which replaced bin/mcp-headers.
 
 Checks: the crew's token file wins and is stripped of every space and newline; the key `tares login`
 saved is sent only to the endpoint of the workspace it belongs to (the saved cell_url plus /mcp, a
 trailing slash on either does not matter); a missing, empty, broken or mismatching file gives `{}`;
 a key kept in the OS keychain (login.json says key_store keychain) is read through tares.login with a
 stub keychain, only when TARES_KEYRING is on, and nothing the keychain says reaches stdout or stderr;
-the Python helper answers what the bash helper answers (where sh and python3 exist); `tares hook
+the helper answers what bin/mcp-headers answered (pinned in a table here); `tares hook
 mcp-headers` runs it in process; the script stays stdlib-only and 3.9-safe. No real key, keychain or
 ~/.tares is touched: every file lives in a temp folder.
 
@@ -43,7 +43,6 @@ def short(x, n=300):
 WINDOWS = os.name == "nt"
 PY = sys.executable
 SCRIPT = ROOT / "claude-plugin" / "scripts" / "mcp_headers.py"
-BASH_HELPER = ROOT / "claude-plugin" / "bin" / "mcp-headers"
 T = Path(tempfile.mkdtemp(prefix="crew_mcp_headers_"))
 HOME = T / "home"
 HOME.mkdir()
@@ -248,39 +247,61 @@ else:
             else:
                 os.environ[k] = v
 
-# ---------- the bash helper says the same ----------
-print("the bash helper answers the same")
-SH = shutil.which("sh")
-if WINDOWS or not SH:
-    print("  skip no sh here; the bash comparison did not run")
-else:
-    cases = []
-    cases.append(("nothing", {}))
-    cases.append(("crew file", {"TARES_FACTORY_CRED_FILE": str(cred_plain)}))
-    cases.append(("crew file with spaces", {"TARES_FACTORY_CRED_FILE": str(T / "cred-spaces.txt")}))
-    cases.append(("empty crew file", {"TARES_FACTORY_CRED_FILE": str(cred_empty)}))
-    cases.append(("missing crew file", {"TARES_FACTORY_CRED_FILE": str(T / "no-such-file")}))
-    for name, h in (("ok", th), ("slash", th2)):
-        for u in (url, url + "/", "https://other.example.com/mcp", CELL, ""):
-            cases.append((f"login {name} {u!r}", {"TARES_HOME": str(h), "CLAUDE_CODE_MCP_SERVER_URL": u}))
-    for d in sorted(T.glob("h-*")):
-        if d.name not in ("h-ok", "h-slash", "h-kc"):
-            cases.append((f"login {d.name}", {"TARES_HOME": str(d), "CLAUDE_CODE_MCP_SERVER_URL": url}))
-    cases.append(("both", {"TARES_HOME": str(th), "CLAUDE_CODE_MCP_SERVER_URL": url, "TARES_FACTORY_CRED_FILE": str(cred_plain)}))
-    bad_cases = []
-    for label, extra in cases:
-        env = dict(CLEAN, PYTHONUTF8="1", **extra)
-        env["PATH"] = os.environ.get("PATH", "")
-        b = subprocess.run([SH, str(BASH_HELPER)], capture_output=True, env=env, cwd=str(T), timeout=60)
-        p = subprocess.run([PY, str(SCRIPT)], capture_output=True, env=env, cwd=str(T), timeout=60)
-        try:
-            same = b.returncode == p.returncode == 0 and json.loads(b.stdout) == json.loads(p.stdout)
-        except ValueError:
-            same = False
-        if not same:
-            bad_cases.append((label, b.stdout, p.stdout))
-    ck(f"the same JSON as bin/mcp-headers in {len(cases)} cases (crew file, saved key, mismatches, broken files)",
-       not bad_cases, short(bad_cases, 600))
+# ---------- what bin/mcp-headers answered ----------
+print("the helper answers what bin/mcp-headers answered")
+# What bin/mcp-headers answered in each case, taken from it before it was removed (TR-1103).
+EXPECT = {
+    'nothing': {},
+    'crew file': bearer(CREW),
+    'crew file with spaces': {'Authorization': 'Bearer crew-token-0123'},
+    'empty crew file': {},
+    'missing crew file': {},
+    "login ok 'https://cell.example.com/mcp'": bearer(KEY),
+    "login ok 'https://cell.example.com/mcp/'": bearer(KEY),
+    "login ok 'https://other.example.com/mcp'": {},
+    "login ok 'https://cell.example.com'": {},
+    "login ok ''": {},
+    "login slash 'https://cell.example.com/mcp'": bearer(KEY),
+    "login slash 'https://cell.example.com/mcp/'": bearer(KEY),
+    "login slash 'https://other.example.com/mcp'": {},
+    "login slash 'https://cell.example.com'": {},
+    "login slash ''": {},
+    'login h-a-list-instead-of-an-object': {},
+    'login h-an-empty-cell_url': {},
+    'login h-an-empty-file': {},
+    'login h-an-empty-key': {},
+    'login h-no-cell_url': {},
+    'login h-no-key': {},
+    'login h-not-JSON': {},
+    'both': bearer(CREW),
+}
+cases = []
+cases.append(("nothing", {}))
+cases.append(("crew file", {"TARES_FACTORY_CRED_FILE": str(cred_plain)}))
+cases.append(("crew file with spaces", {"TARES_FACTORY_CRED_FILE": str(T / "cred-spaces.txt")}))
+cases.append(("empty crew file", {"TARES_FACTORY_CRED_FILE": str(cred_empty)}))
+cases.append(("missing crew file", {"TARES_FACTORY_CRED_FILE": str(T / "no-such-file")}))
+for name, h in (("ok", th), ("slash", th2)):
+    for u in (url, url + "/", "https://other.example.com/mcp", CELL, ""):
+        cases.append((f"login {name} {u!r}", {"TARES_HOME": str(h), "CLAUDE_CODE_MCP_SERVER_URL": u}))
+for d in sorted(T.glob("h-*")):
+    if d.name not in ("h-ok", "h-slash", "h-kc"):
+        cases.append((f"login {d.name}", {"TARES_HOME": str(d), "CLAUDE_CODE_MCP_SERVER_URL": url}))
+cases.append(("both", {"TARES_HOME": str(th), "CLAUDE_CODE_MCP_SERVER_URL": url, "TARES_FACTORY_CRED_FILE": str(cred_plain)}))
+bad_cases = []
+for label, extra in cases:
+    env = dict(CLEAN, PYTHONUTF8="1", **extra)
+    env["PATH"] = os.environ.get("PATH", "")
+    p = subprocess.run([PY, str(SCRIPT)], capture_output=True, env=env, cwd=str(T), timeout=60)
+    try:
+        same = p.returncode == 0 and json.loads(p.stdout) == EXPECT[label]
+    except ValueError:
+        same = False
+    if not same:
+        bad_cases.append((label, EXPECT[label], p.stdout))
+ck("the table covers every case", sorted(EXPECT) == sorted(label for label, _ in cases), sorted(set(EXPECT) ^ {label for label, _ in cases}))
+ck(f"the same JSON as bin/mcp-headers gave in {len(cases)} cases (crew file, saved key, mismatches, broken files)",
+   not bad_cases, short(bad_cases, 600))
 
 # ---------- tares hook mcp-headers ----------
 print("tares hook mcp-headers")

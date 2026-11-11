@@ -21,12 +21,13 @@ import os
 import re
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 from . import claude, contract, state
+from .cc_update import cc_behind, cc_retry_in, station_cc  # moved there by TR-963, TR-964; status and roster read them
 from .client import TaresClient, TaresHTTPError, cksum
 from .errors import CrewError, SessionListUnreadableError
+from .kit import Frozen, frozen_phys, kit_version, plugin_root, stale_kit  # noqa: F401  (moved there by TR-965; status, roster and doctor read them)
 from .lifecycle import watch_pid  # moved there by TR-955; the status view reads it
 from .paths import ME, CrewPaths
 from .regrant import regranted  # moved there by TR-960; the status view reads it
@@ -164,134 +165,15 @@ def cmd_desk(argv: list, env: dict) -> int:
     return 0
 
 
-# ---------- the kit and the freeze (read-only; the freeze commands are ported with TR-957's successors) ----------
-
-
-def frozen_phys(paths: CrewPaths) -> str:
-    """The frozen copy as stations record it: physical, so a symlinked crew home still matches."""
-    home = os.path.realpath(paths.raw) if os.path.isdir(paths.raw) else paths.raw
-    return f"{home}/frozen-kit"
-
-
-def plugin_root(paths: CrewPaths, env: dict) -> Path:
-    """The plugin this engine ships in (KIT_PLUGIN): TARES_PLUGIN_DIR when set, else the install's or the
-    checkout's; when that is the frozen copy, the checkout the freeze was taken from."""
-    override = env.get("TARES_PLUGIN_DIR")
-    if override:
-        root = Path(override)
-    else:
-        here = Path(__file__).resolve().parent.parent
-        root = here / "claude-plugin"
-        for c in (here / "claude-plugin", here.parent / "claude-plugin"):
-            if (c / "bin" / "factory").is_file():
-                root = c
-                break
-    if paths.checkout_file.is_file() and (str(root) + "/").startswith(frozen_phys(paths) + "/"):
-        c = state.read_text(paths.checkout_file).rstrip("\n")
-        if c and os.path.isdir(c):
-            return Path(c)
-    return root
-
-
-def kit_version(root) -> str:
-    """A fingerprint of what the stations run on: every file of the plugin, in byte order, through cksum
-    (`find | sort -z | xargs cat | cksum`). Never fails: an unreadable folder fingerprints as nothing."""
-    found = []
-    for base, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d != "__pycache__"]
-        for name in files:
-            if name.startswith(".") or name == "4913" or name.endswith(("~", ".orig", ".rej", ".swp", ".pyc")):
-                continue
-            path = os.path.join(base, name)
-            if os.path.islink(path) or not os.path.isfile(path):
-                continue
-            rel = "./" + os.path.relpath(path, root).replace(os.sep, "/")
-            found.append((rel.encode("utf-8"), path))
-    found.sort()
-    data = bytearray()
-    for _, path in found:
-        try:
-            with open(path, "rb") as f:
-                data += f.read()
-        except OSError:
-            pass
-    return str(cksum(bytes(data)))
-
-
-class Frozen:
-    """Whether the kit is frozen and what the freeze recorded, from the crew settings read once.
-    Tares unreadable: a copy on disk means frozen, so a blip never lets a station move."""
-
-    def __init__(self, paths: CrewPaths, client: TaresClient):
-        self.paths = paths
-        try:
-            self.settings = client.crew_settings()
-        except CrewError:
-            self.settings = None
-
-    @property
-    def on(self) -> bool:
-        if self.settings is None:
-            return self.paths.frozen_kit.is_dir()
-        kit = self.settings.get("kit")
-        return isinstance(kit, dict) and kit.get("frozen") is not None
-
-    def field(self, name: str) -> str:
-        """`.kit.frozen[name] // empty`."""
-        if self.settings is None:
-            return ""
-        kit = self.settings.get("kit")
-        frozen = kit.get("frozen") if isinstance(kit, dict) else None
-        return _field(frozen, name) if isinstance(frozen, dict) else ""
-
-    def text(self) -> str:
-        if self.field("at"):
-            return f"since {self.field('at')} by {self.field('by')}"
-        return "(Tares does not say since when)"
-
-    @property
-    def idle_wake(self) -> bool:
-        return self.settings is not None and self.settings.get("idle_wake") is True
-
-
-def stale_kit(paths: CrewPaths, station: str, kit: str, frozen: Frozen) -> bool:
-    """True when the station runs another kit version, or from a frozen copy that is going away."""
-    if state.stations_get(station, "kit", paths=paths) != kit:
-        return True
-    return not frozen.on and state.stations_get(station, "plugin", paths=paths) == frozen_phys(paths)
+# ---------- the kit and the freeze: kit.py has them (TR-965); these names stay importable from here ----------
 
 
 # ---------- grants, context, Claude Code versions ----------
 
 
-def cc_retry_in(paths: CrewPaths, station: str) -> str:
-    """How long until the watch tries a station's move again: "10 min", "3 h"."""
-    at = state.stations_get(station, "cc_retry_at", paths=paths)
-    at = int(at) if at.isdigit() else 0
-    n = (at - int(time.time()) + 59) // 60
-    if n < 1:
-        n = 1
-    return f"{(n + 59) // 60} h" if n >= 120 else f"{n} min"
-
-
 def _active(paths: CrewPaths) -> list:
     return [s for s, row in state.stations_load(paths).items()
             if isinstance(row, dict) and row.get("status") == "active"]
-
-
-def station_cc(paths: CrewPaths, station: str, agents: list) -> str:
-    return claude.running_version(state.stations_get(station, "id", paths=paths), agents)
-
-
-def cc_behind(paths: CrewPaths, target: str, agents: list) -> int:
-    """How many stations that matter run an older Claude Code than target."""
-    n = 0
-    for s in _active(paths):
-        if paths.done_file(s).exists():
-            continue
-        if claude.older_than(station_cc(paths, s, agents), target):
-            n += 1
-    return n
 
 
 # ---------- the watch and the pace ----------

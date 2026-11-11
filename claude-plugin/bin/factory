@@ -712,10 +712,10 @@ write_settings() { # station role parent project repo
     wt_repos="the repositories of project $project: $(project_repo_rows | P="$project" awk -F'\t' '$1 == ENVIRON["P"] { print $2 }' | paste -sd ',' - | sed 's/,/, /g')"
   fi
   local -a allow=("Creating and editing files under $CREW_HOME (the crew's own folder), and git worktrees under the .factory/worktrees folder of $wt_repos or under $CREW_HOME/worktrees, is expected work for this crew station."
-                  "Removing git worktrees and scratch folders with \`factory tidy <path>\`, which deletes only inside the crew's own folders, is expected work for this crew station."
+                  "Removing git worktrees and scratch folders with \`tares factory tidy <path>\`, which deletes only inside the crew's own folders, is expected work for this crew station."
                   "Reading and writing this crew's records on Tares at $TARES through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.")
   case "$work_role" in
-    orchestrator) allow+=("Starting background Claude Code sessions for this crew with \`factory spawn\` (builders named \`<project>-build-<slug>\` inside a project's repo, helpers named \`<station>-<slug>\`), and stopping, removing or resuming the sessions recorded in $STATIONS with \`factory retire\`, \`factory revive\`, \`factory restart\`, \`claude stop\`, \`claude rm\` or \`claude --bg --resume\`, is expected work that $human authorized by running \`tares factory crew up\`. Sessions not recorded there are out of scope.") ;;
+    orchestrator) allow+=("Starting background Claude Code sessions for this crew with \`tares factory spawn\` (builders named \`<project>-build-<slug>\` inside a project's repo, helpers named \`<station>-<slug>\`), and stopping, removing or resuming the sessions recorded in $STATIONS with \`tares factory retire\`, \`tares factory revive\`, \`tares factory restart\`, \`claude stop\`, \`claude rm\` or \`claude --bg --resume\`, is expected work that $human authorized by running \`tares factory crew up\`. Sessions not recorded there are out of scope.") ;;
     builder)
       allow+=("Pushing \`factory/*\` branches to $where, and opening pull requests there, is expected work that $human authorized.")
       [ "$level" != "L3-review" ] && allow+=("Merging a pull request in $where, that this crew opened from a \`factory/*\` branch is expected work that $human pre-authorized at level $level, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's \`factory/review\` commit status on that head commit is \`success\`. The reviewer station's verdict is the review $human chose to rely on. Deleting the merged \`factory/*\` branch is expected.")
@@ -728,8 +728,9 @@ write_settings() { # station role parent project repo
 
   local -a soft_deny=("Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern $prod_pattern. That needs $human directly.")
 
-  local perms_json='{"allow": ["Bash(factory tidy *)"]}'
-  [ "$role" = orchestrator ] && perms_json='{"allow": ["Bash(factory tidy *)", "Bash(factory spawn *)", "Bash(factory revive *)", "Bash(factory restart *)", "Bash(factory retire *)", "Bash(factory roster)", "Bash(factory projects)", "Bash(factory crew status)", "Bash(factory crew halt)", "Bash(factory crew halt *)", "Bash(factory crew resume)"]}'
+  # each command is allowed as `factory ...` and as `tares factory ...` (the Python engine's name, TR-1069)
+  local perms_json='{"allow": ["Bash(factory tidy *)", "Bash(tares factory tidy *)"]}'
+  [ "$role" = orchestrator ] && perms_json='{"allow": ["Bash(factory tidy *)", "Bash(tares factory tidy *)", "Bash(factory spawn *)", "Bash(tares factory spawn *)", "Bash(factory revive *)", "Bash(tares factory revive *)", "Bash(factory restart *)", "Bash(tares factory restart *)", "Bash(factory retire *)", "Bash(tares factory retire *)", "Bash(factory roster)", "Bash(tares factory roster)", "Bash(factory projects)", "Bash(tares factory projects)", "Bash(factory crew status)", "Bash(tares factory crew status)", "Bash(factory crew halt)", "Bash(tares factory crew halt)", "Bash(factory crew halt *)", "Bash(tares factory crew halt *)", "Bash(factory crew resume)", "Bash(tares factory crew resume)"]}'
 
   local allow_json deny_json wt tok_file=""
   allow_json=$(printf '%s\n' "${allow[@]}" | jq -R . | jq -s '["$defaults"] + .')
@@ -756,9 +757,9 @@ write_settings() { # station role parent project repo
     --arg role "$role" --arg station "$station" --arg parent "$parent" --arg project "$project" --arg pid "$pid" \
     --arg pslug "$( [ -n "$project" ] && slugify "$project" || true)" --arg home "$CREW_HOME" --arg repo "$repo" \
     --arg wt "$wt" --arg tares_url "$TARES" --arg tok "$tok_file" --arg mcp_url "$(mcp_url)" \
-    --arg crew "$(crew_name)" --arg orch "$(crew_orchestrator)" \
+    --arg crew "$(crew_name)" --arg orch "$(crew_orchestrator)" --arg tares_bin "$(command -v tares 2>/dev/null || true)" \
     --arg env_line "$env_line" --argjson allow "$allow_json" --argjson deny "$deny_json" --argjson perms "$perms_json" \
-    --arg status_line "$(printf 'python3 %q' "$(kit_dir)/scripts/statusline.py")" --arg compact "$(compact_window 2>/dev/null)" \
+    --arg status_line "$(printf 'tares hook statusline --plugin-root %q' "$(kit_dir)")" --arg compact "$(compact_window 2>/dev/null)" \
     '{
       env: ({
         FACTORY_STATION: $station, FACTORY_ROLE: $role, FACTORY_PARENT: $parent,
@@ -768,7 +769,8 @@ write_settings() { # station role parent project repo
         FACTORY_AUTOCOMPACT: $compact,
         # blank over any key Claude Code itself inherited: stations use the crew file (TR-560)
         TARES_AUTH_TOKEN: ""
-      } + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
+      } + (if ($tares_bin | startswith("/")) then {FACTORY_TARES: $tares_bin} else {} end)
+        + (if $tok != "" then {TARES_FACTORY_TOKEN_FILE: $tok,
              # the same file under a name Claude Code does not hide from the plugin header helper
              TARES_FACTORY_CRED_FILE: $tok} else {} end)
         + (if $project != "" then {TARES_PROJECT: $pid, TARES_PROJECT_NAME: $project, FACTORY_PROJECT: $pslug} else {} end)
@@ -1051,6 +1053,28 @@ setup_crew_name() {
   store_crew_name "$n"
 }
 
+# The second half of crew up: start each role's station, the orchestrator first. Also the internal command
+# `_start-stations <role...>` the Python crew up calls until launch is ported (TR-953).
+start_stations() {
+  local roles="$*"
+  [ -n "${roles// /}" ] || roles=$(crew_roles)
+  # Orchestrator first so the others can check in with it.
+  local ordered="" r
+  for r in $roles; do [ "$r" = orchestrator ] && ordered="orchestrator"; done
+  for r in $roles; do [ "$r" = orchestrator ] || ordered="$ordered $r"; done
+
+  echo >&2; echo "Starting the crew" >&2
+  for r in $ordered; do
+    case "$r" in orchestrator|reviewer|releaser) ;; *) die "unknown crew role '$r' (crew roles: orchestrator, reviewer, releaser; builders start with factory spawn)" ;; esac
+    local station; station=$(station_name "$r")
+    station_lock "$station"
+    if is_alive "$station"; then echo "  ✓ $station is already running" >&2; continue; fi
+    launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
+    [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
+  done
+  return 0   # the loop ends on a false test for any role but the orchestrator; as a function that would be a failure under set -e
+}
+
 cmd_crew_up() {
   local roles="" watch=1
   while [ $# -gt 0 ]; do
@@ -1067,21 +1091,7 @@ cmd_crew_up() {
   ensure_settings
   prime
   lsp_offer
-  [ -n "${roles// /}" ] || roles=$(crew_roles)
-  # Orchestrator first so the others can check in with it.
-  local ordered="" r
-  for r in $roles; do [ "$r" = orchestrator ] && ordered="orchestrator"; done
-  for r in $roles; do [ "$r" = orchestrator ] || ordered="$ordered $r"; done
-
-  echo >&2; echo "Starting the crew" >&2
-  for r in $ordered; do
-    case "$r" in orchestrator|reviewer|releaser) ;; *) die "unknown crew role '$r' (crew roles: orchestrator, reviewer, releaser; builders start with factory spawn)" ;; esac
-    local station; station=$(station_name "$r")
-    station_lock "$station"
-    if is_alive "$station"; then echo "  ✓ $station is already running" >&2; continue; fi
-    launch "$station" "$r" "" "" "" "$CREW_HOME" "$(ccfg ".stations.$r.model")" "$(ccfg ".stations.$r.effort")" "$(boot_prompt "$r")"
-    [ "$r" = orchestrator ] && sleep "${FACTORY_PAUSE:-5}"
-  done
+  start_stations $roles
   [ $watch = 1 ] && start_watch
   cat >&2 <<NEXT
 
@@ -2992,6 +3002,9 @@ cmd_doctor() {
   echo "$ME doctor"
   ok "claude: $CLAUDE ($("$CLAUDE" --version 2>/dev/null | head -1))"
   ok "crew home: $CREW_HOME"
+  if [ "${TARES_FACTORY_ENGINE:-}" = bash ]; then ok "engine: bash (TARES_FACTORY_ENGINE=bash; unset it to use the Python engine)"
+  elif [ "$(ccfg '.engine')" = bash ]; then ok "engine: bash (engine: bash in crew.json; remove it to use the Python engine)"
+  else ok "engine: bash (this script runs directly; \`tares factory\` uses Python for the commands it has)"; fi
   local src=${TARES_FACTORY_SOURCE:-environment}
   if tares_on; then
     ok "Tares answers at $TARES (from the $src)"
@@ -3125,6 +3138,7 @@ case "$cmd" in
   tidy) cmd_tidy "$@" ;;
   _parse-bg-id) parse_bg_id ;;
   _mcp-url) mcp_url ;;
+  _start-stations) start_stations "$@" ;;
   doctor) cmd_doctor ;;
   *) usage; exit 1 ;;
 esac

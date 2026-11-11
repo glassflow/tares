@@ -29,9 +29,8 @@ Notes written at a start
 
 Differences from bash
   * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` runs
-    bin/factory from, symlinks resolved). Bash's frozen branch (upgrades_frozen, frozen_phys, the
-    crew's frozen copy of the kit) is left to TR-965, which completes kit_dir; a frozen crew started from
-    Python would start on the checkout.
+    bin/factory from, symlinks resolved). Given the client it is bash's kit_dir: the crew's frozen copy of
+    the kit while the crew is frozen and the copy is there (kit.kit_dir, TR-965).
   * statusLine: bash writes the path with printf %q; here it is shlex.quote. They differ only for a path
     with a character the shell must escape (a space: `a\\ b` against `'a b'`); both read back as the same
     one word. The Windows form uses `python` where bash and POSIX use `python3`, which Windows does not ship.
@@ -47,6 +46,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -149,19 +149,24 @@ def _forward(path: str) -> str:
     return path.replace("\\", "/") if sys.platform == "win32" else path
 
 
-def kit_dir() -> str:
+def kit_dir(client=None) -> str:
     """The kit a station starts on: the plugin folder `tares factory` runs bin/factory from (TARES_PLUGIN_DIR
-    wins), symlinks resolved, as bash's KIT_PLUGIN is. Bash's frozen copy is TR-965's (see the module note)."""
+    wins), symlinks resolved, as bash's KIT_PLUGIN is. With a client, bash's kit_dir: the frozen copy while the
+    crew is frozen and the copy is there. Without one, the checkout (a fingerprint of the kit, say)."""
     from ..cli import plugin_dir  # not at import time: a settings file needs it, a roster does not
     try:
         d = plugin_dir()
     except SystemExit as e:
         raise CrewError(str(e).removeprefix("tares: ")) from None
-    return str(Path(os.path.realpath(d / "bin" / "factory")).parent.parent)
+    checkout = str(Path(os.path.realpath(d / "bin" / "factory")).parent.parent)
+    if client is None:
+        return checkout
+    from . import kit   # here, not at the top: kit imports crew modules that import this one
+    return kit.kit_dir(client.paths, client, checkout)
 
 
-def plugin_flags() -> list:
-    return ["--plugin-dir", kit_dir()]
+def plugin_flags(client=None) -> list:
+    return ["--plugin-dir", kit_dir(client)]
 
 
 _KIT_SKIP_SUFFIX = ("~", )
@@ -241,11 +246,12 @@ def quote_windows(text: str) -> str:
     return f'"{text}"'
 
 
-def status_line_command(script: str, platform: str | None = None) -> str:
-    """`python3 <script>` for the shell that runs the status line, with the script path quoted for it."""
+def status_line_command(kit: str, platform: str | None = None) -> str:
+    """`tares hook statusline --plugin-root <kit>` for the shell that runs the status line, with the kit
+    path quoted for it. The kit is named, so a frozen copy keeps its own status line script."""
     if (platform or sys.platform) == "win32":
-        return f"python {quote_windows(script.replace(chr(92), '/'))}"
-    return f"python3 {shlex.quote(script)}"
+        return f"tares hook statusline --plugin-root {quote_windows(kit.replace(chr(92), '/'))}"
+    return f"tares hook statusline --plugin-root {shlex.quote(kit)}"
 
 
 # ---------- idle wake ----------
@@ -348,7 +354,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     allow = [
         f"Creating and editing files under {home} (the crew's own folder), and git worktrees under the "
         f".factory/worktrees folder of {wt_repos} or under {home}/worktrees, is expected work for this crew station.",
-        "Removing git worktrees and scratch folders with `factory tidy <path>`, which deletes only inside the "
+        "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the "
         "crew's own folders, is expected work for this crew station.",
         f"Reading and writing this crew's records on Tares at {tares} through the Tares MCP tools (tickets, "
         "stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what "
@@ -356,10 +362,10 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     ]
     if work_role == "orchestrator":
         allow.append(
-            "Starting background Claude Code sessions for this crew with `factory spawn` (builders named "
+            "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named "
             "`<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, "
-            f"removing or resuming the sessions recorded in {stations_file} with `factory retire`, `factory "
-            "revive`, `factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work "
+            f"removing or resuming the sessions recorded in {stations_file} with `tares factory retire`, `tares "
+            "factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work "
             f"that {human} authorized by running `tares factory crew up`. Sessions not recorded there are out of "
             "scope.")
     elif work_role == "builder":
@@ -395,12 +401,12 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     soft_deny = [f"Deploying to, or changing, any environment, kube context or namespace whose name matches the "
                  f"pattern {prod_pattern}. That needs {human} directly."]
 
-    perms = {"allow": ["Bash(factory tidy *)"]}
+    # each command is allowed as `factory ...` and as `tares factory ...` (the Python engine's name, TR-1069)
+    cmds = ["tidy *"]
     if role == "orchestrator":
-        perms = {"allow": ["Bash(factory tidy *)", "Bash(factory spawn *)", "Bash(factory revive *)",
-                           "Bash(factory restart *)", "Bash(factory retire *)", "Bash(factory roster)",
-                           "Bash(factory projects)", "Bash(factory crew status)", "Bash(factory crew halt)",
-                           "Bash(factory crew halt *)", "Bash(factory crew resume)"]}
+        cmds = ["tidy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
+                "crew halt", "crew halt *", "crew resume"]
+    perms = {"allow": [f"Bash({pre}factory {c})" for c in cmds for pre in ("", "tares ")]}
 
     wt = f"{repo_f}/.factory/worktrees" if repo else f"{home}/worktrees"
     tok_file = ""
@@ -439,6 +445,13 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         # blank over any key Claude Code itself inherited: stations use the crew file (TR-560)
         "TARES_AUTH_TOKEN": "",
     }
+    # the `tares` that started the crew, written for a later release to read (TR-1069); nothing reads it yet
+    try:
+        tares_bin = shutil.which("tares")
+    except (AttributeError, OSError):  # a lookup that cannot run never stops a launch
+        tares_bin = None
+    if tares_bin:
+        env["FACTORY_TARES"] = _forward(tares_bin)
     if tok_file:
         env["TARES_FACTORY_TOKEN_FILE"] = tok_file
         # the same file under a name Claude Code does not hide from the plugin header helper
@@ -451,7 +464,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         "env": env,
         "crossSessionInbound": "accept",
         "enabledPlugins": {"tares@inline": True},
-        "statusLine": {"type": "command", "command": status_line_command(f"{_forward(kit_dir())}/scripts/statusline.py"),
+        "statusLine": {"type": "command", "command": status_line_command(_forward(kit_dir(client))),
                        "padding": 0},
         "worktree": {"bgIsolation": "none"},
         "permissions": perms,
@@ -496,8 +509,8 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
                  "your role.")
     args = ["--bg", "-n", station, "--model", model, "--effort", effort, "--permission-mode", "auto",
             "--settings", settings, "--autocompact", compact_window(paths, client.say),
-            "--append-system-prompt", identity, *plugin_flags()]
-    kd = kit_dir()
+            "--append-system-prompt", identity, *plugin_flags(client)]
+    kd = kit_dir(client)
     if resume:
         args += ["--resume", resume]
     args.append(prompt)

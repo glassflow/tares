@@ -3,9 +3,10 @@
 Ports these functions of `claude-plugin/bin/factory`: cmd_watch (the loop skeleton), nap, watch_pid, start_watch
 and stop_watch. What the loop does each round (revive a stopped station, regrant, wake an idle one, pace, move onto
 an updated plugin) is not here: those steps are separate tickets, and each registers itself with `register` when it
-lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`). Every step not
-yet registered falls back to nothing, so the Python watch does less than the bash one and the bash watch stays
-the default. `TARES_FACTORY_WATCH=python` opts the `watch` command in (on Windows there is no bash, so it is always Python there).
+lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`; the Claude Code
+move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing. The Python watch is
+the default (TR-1069); `TARES_FACTORY_WATCH=bash` or the bash engine (`TARES_FACTORY_ENGINE=bash`, `"engine": "bash"` in
+crew.json) keeps the bash one (on Windows there is no bash, so it is always Python there).
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
@@ -31,6 +32,9 @@ Differences from bash
   * A meta file next to the pid file has the create time and the engine.
   * The loop leaves on a stop file, and on SIGTERM where the platform has it, removing its pid file and stop file.
   * Only the steps registered so far run; see above.
+  * A round that finds the engine setting turned to bash runs the bash watch in its place (`follow_engine`, TR-1069).
+  * When the kit step sees the plugin updated, `restart_self` runs the watch again on the new code: `os.execve` where
+    the platform has it (same pid, same pid file), a new detached watch on Windows (untested there, TR-946).
 
 Untested on real Windows (TR-946 is deferred): the creation flags, `pythonw.exe` and the launcher case below.
 On Windows a venv's `python.exe` starts the real interpreter as a child, so `Popen.pid` is the launcher's; the
@@ -41,6 +45,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -70,6 +75,8 @@ WATCH_USAGE = "usage: factory crew watch [--once] [--interval <seconds>]"
 STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
+# What a round does before its first step: bash reads the pace at the top of a round (TR-1157).
+ROUND_NAME = "round_start"
 
 _STEPS: dict = {}
 
@@ -77,7 +84,7 @@ _STEPS: dict = {}
 def register(name: str, fn) -> None:
     """Give the watch the function for a step: fn(paths) is called once a round (the readings step: once a
     tick of the nap). A name that is not a step is refused, so a typo does not silently do nothing."""
-    if name not in STEP_NAMES and name != TICK_NAME:
+    if name not in STEP_NAMES and name not in (TICK_NAME, ROUND_NAME):
         raise ValueError(f"no watch step called {name!r}")
     _STEPS[name] = fn
 
@@ -92,6 +99,21 @@ def _idle_wake_step(paths: CrewPaths) -> None:
 
 
 register("idle_wake", _idle_wake_step)   # TR-961
+
+
+def _updates_step(paths: CrewPaths) -> None:
+    """The kit part of the round (TR-965), then the Claude Code part: bash moves one station in a round, onto a new
+    kit or a new Claude Code, and the kit comes first. A kit part that fails does not stop the Claude Code part."""
+    from . import cc_update, kit   # here, not at the top: they import crew modules that import this one
+    upgraded = False
+    try:
+        upgraded = kit.step(paths)
+    except Exception as e:
+        _say(f"the kit step failed: {type(e).__name__}: {e}")
+    cc_update.step(paths, kit_upgraded=upgraded)
+
+
+register("updates", _updates_step)  # TR-963
 
 
 def _say(msg: str) -> None:
@@ -196,10 +218,11 @@ def stop_requested(paths: CrewPaths) -> bool:
 
 
 def _watch_command(env: dict) -> tuple:
-    """(argv, engine): the command that runs the watch. Python when opted in, and always on Windows (no bash),
-    whatever TARES_FACTORY_ENGINE says."""
+    """(argv, engine): the command that runs the watch. Python unless the bash engine or TARES_FACTORY_WATCH=bash
+    asks for bash, and always Python where there is no bash (Windows, or a system without it), whatever the engine
+    setting says."""
     from . import dispatch   # the one rule for which engine runs `crew watch`; imported late, dispatch imports us
-    if os.name == "nt" or dispatch.route(["crew", "watch"], env)[0] == "python":
+    if os.name == "nt" or dispatch.bash_exe(env) is None or dispatch.route(["crew", "watch"], env)[0] == "python":
         exe = sys.executable
         if os.name == "nt":
             gui = os.path.join(os.path.dirname(exe), "pythonw.exe")
@@ -208,6 +231,62 @@ def _watch_command(env: dict) -> tuple:
         return [exe, "-m", "tares.crew", "crew", "watch"], "python"
     from ..cli import plugin_dir   # as `python -m tares.crew` does
     return ["bash", str(plugin_dir() / "bin" / "factory"), "crew", "watch"], "bash"
+
+
+def _spawn(paths: CrewPaths, argv: list, env: dict) -> tuple:
+    """Run `argv` detached from this process, its output in the watch log: (pid, create time)."""
+    kwargs: dict = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0x8)
+                                   | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200))
+    else:
+        kwargs["start_new_session"] = True
+    with open(paths.home / LOG_FILE, "ab") as out:
+        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                env=env, **kwargs)
+    try:
+        return proc.pid, psutil.Process(proc.pid).create_time()
+    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
+        raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
+
+
+def follow_engine(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
+    """A running Python watch whose engine setting has turned to bash (`"engine": "bash"` in crew.json, TR-1069) runs
+    the bash watch instead, so the switch back needs no `crew down`. Looked at at the top of every round. The pid file
+    is rewritten to name bash first: stop() ends a bash watch with a terminate, not the stop file. Does not return
+    when it switches. An environment variable cannot change under a running process; that one takes a new watch."""
+    env = dict(os.environ if env is None else env)
+    if _watch_command(env)[1] != "bash":
+        return
+    _say("the engine setting is now bash; the bash watch takes over")
+    try:
+        me = psutil.Process()
+        write_pidfile(paths, me.pid, me.create_time(), "bash")
+    except (psutil.Error, OSError, SystemError):   # the pid file then keeps naming python; stop() terminates it anyway
+        pass
+    try:
+        restart_self(paths, interval, env)
+    except OSError as e:   # the exec failed: this watch is still here, so it stays the Python watch and says so
+        _say(f"could not start the bash watch ({e}); staying on the Python watch")
+        with contextlib.suppress(psutil.Error, OSError, SystemError):
+            write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
+
+
+def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
+    """The plugin was updated: run the watch again on the new code (bash: `exec watch --interval`). Where the platform
+    has exec, this process becomes the new watch (same pid, same pid file). On Windows there is none: a new watch is
+    started, takes over the pid file, and this one leaves. Does not return. Untested on real Windows (TR-946)."""
+    env = dict(os.environ if env is None else env)
+    argv, engine = _watch_command(env)
+    argv = [*argv, "--interval", f"{interval:g}"]
+    if os.name == "nt":
+        pid, created = _spawn(paths, argv, env)
+        write_pidfile(paths, pid, created, engine)   # the pid file names the new watch, so this one's exit leaves it alone
+        raise SystemExit(0)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    # execve wants a path: the bash watch's argv[0] is "bash", so find it on the PATH the new watch will have
+    os.execve(shutil.which(argv[0], path=env.get("PATH")) or argv[0], argv, env)
 
 
 def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:
@@ -221,22 +300,9 @@ def start(paths: CrewPaths, env: dict | None = None, *, note=None) -> None:
         note(f"  ✓ the watch keeps the crew alive (already running, pid {pid})")
         return
     argv, engine = _watch_command(env)
-    log = paths.home / LOG_FILE
     _unlink(paths.home / STOP_FILE)   # a stop asked for the watch that ran before is not for this one
-    kwargs: dict = {}
-    if os.name == "nt":
-        kwargs["creationflags"] = (getattr(subprocess, "DETACHED_PROCESS", 0x8)
-                                   | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200))
-    else:
-        kwargs["start_new_session"] = True
-    with open(log, "ab") as out:
-        proc = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                                env=env, **kwargs)
-    try:
-        created = psutil.Process(proc.pid).create_time()
-    except (psutil.Error, OSError, SystemError):   # psutil on macOS can leak SystemError
-        raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
-    write_pidfile(paths, proc.pid, created, engine)
+    proc_pid, created = _spawn(paths, argv, env)
+    write_pidfile(paths, proc_pid, created, engine)
     note(f"  ✓ started the watch, which revives any station that stops (log: {paths.shown(LOG_FILE)})")
 
 
@@ -303,6 +369,12 @@ def stop(paths: CrewPaths, say, timeout: float | None = None, env: dict | None =
 def run_steps(paths: CrewPaths) -> None:
     """One round: each registered step in order. A step that raises is reported and the round goes on, so one
     broken step does not end the watch."""
+    start = _STEPS.get(ROUND_NAME)
+    if start is not None:
+        try:
+            start(paths)
+        except Exception as e:
+            _say(f"the {ROUND_NAME} step failed: {type(e).__name__}: {e}")
     for name in STEP_NAMES:
         fn = _STEPS.get(name)
         if fn is None:
@@ -330,14 +402,28 @@ def nap(paths: CrewPaths, seconds: float, poll: float = DEFAULT_POLL, *, sleep=t
     return stop_requested(paths)
 
 
+class Loop:
+    """How the running loop was asked to go (bash's ONCE and INTERVAL), for the steps that need it: the kit step
+    restarts the watch on new code after the same interval, and never in a --once run."""
+
+    def __init__(self):
+        self.once = False
+        self.interval = float(DEFAULT_INTERVAL)
+
+
+LOOP = Loop()
+
+
 def watch(paths: CrewPaths, interval: float, once: bool = False, poll: float = DEFAULT_POLL) -> None:
     """The loop: a round of steps, then a nap, until a stop file shows or SIGTERM comes."""
+    LOOP.once, LOOP.interval = once, interval
     if once:
         run_steps(paths)
         return
     try:
         while not stop_requested(paths):
             claim_pidfile(paths)   # every round: the first try may have run before start() wrote the file
+            follow_engine(paths, interval)
             run_steps(paths)
             if nap(paths, interval, poll):
                 break
@@ -363,6 +449,7 @@ def cmd_watch(argv: list, env: dict) -> int:
         args = args[1:]
     paths = CrewPaths.from_env()
     state.require_crew(paths)
+    state.merge_crew_defaults(paths)   # bash primes before every command but a local one: the crew's defaults are filled in
     once = False
     try:
         interval = float(env.get("FACTORY_WATCH_INTERVAL") or DEFAULT_INTERVAL)
@@ -410,3 +497,8 @@ from . import pace as _pace  # noqa: E402
 
 watch_revive.pace = _pace.Seam()   # TR-962: the revive loop asks the real pace, not the inert stand-in
 register("pace", _pace.step)
+register(ROUND_NAME, _pace.round_start)   # TR-1157: the pace is read once, at the top of the round
+
+from . import readings as _readings  # noqa: E402
+
+register("readings", _readings.step)   # TR-1163: the Crew page's asks and the plan's limits, on every tick of a nap
