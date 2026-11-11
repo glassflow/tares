@@ -92,6 +92,13 @@
         {
           "allowed": true,
           "ee": false,
+          "name": "local",
+          "settings_schema": [],
+          "title": "Local checks"
+        },
+        {
+          "allowed": true,
+          "ee": false,
           "name": "github",
           "settings_schema": [
             {
@@ -112,7 +119,7 @@
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "local"
+        "title": "Local checks"
       },
       "slot": "ci"
     },
@@ -383,7 +390,7 @@
           "reason": "",
           "slot": "ci",
           "source": "default",
-          "title": "local"
+          "title": "Local checks"
         },
         {
           "integration": "tares",
