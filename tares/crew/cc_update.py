@@ -580,7 +580,8 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None, kit_upgraded: bool = Fa
     except SessionListUnreadableError:
         return   # the revive step says so; nothing is moved this round
     # bash's `down` holds for the whole round: a station the revive step brought back this round still counts
-    down = watch_revive.last.down or _down(paths, claude_bin)
+    # (and a station the kit part just took down, as a failed upgrade does, is not down for the round: bash read `down` before it)
+    down = False if kit_upgraded else (watch_revive.last.down or _down(paths, claude_bin))
     with TaresClient(paths, env) as client:
         # bash's round is `if <a station is due a kit upgrade> then upgrade_station elif <the Claude Code part
         # below>` (the kit part is kit.step, run first): a round that upgraded a station makes no Claude Code move
