@@ -256,6 +256,17 @@ run_heavy(paths, fake, client, env, [2 * 1024 ** 3])
 check("low with the setting off: nothing removed, the person is asked",
       fake.removed() == ([], [], False) and len(client.posted) == 1)
 paths, fake, client, env = setup()
+made = []
+saved_client = dc.TaresClient
+dc.TaresClient = lambda p, e: made.append(1) or client
+saved_free = dc.free_bytes
+dc.free_bytes = lambda p: 2 * 1024 ** 3
+try:
+    dc.before_heavy({**env, "FACTORY_CREW_HOME": str(paths.home / "no-crew-here")}, now=NOW)
+finally:
+    dc.TaresClient, dc.free_bytes = saved_client, saved_free
+check("low with no crew on the machine: a warning only, Tares is not called", made == [] and fake.calls == [])
+paths, fake, client, env = setup()
 
 
 def boom(*a, **k):

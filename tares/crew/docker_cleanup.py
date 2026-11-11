@@ -350,6 +350,10 @@ def before_heavy(env: dict, now=None) -> None:
         free = free_bytes(paths)
         if free is None or free >= LOW_FREE:
             return
+        if not paths.home.is_dir():   # no crew on this machine: nothing to clean, nobody to ask
+            print(f"factory-heavy: only {_gb(free)} free on this machine; the command may fail for want of "
+                  "space", file=sys.stderr)
+            return
         binary = docker_bin(env)
         client = TaresClient(paths, env)
         try:
