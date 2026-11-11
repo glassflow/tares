@@ -5112,23 +5112,24 @@ IW_IDS = {"crew-orchestrator": "aaaa0001", "crew-reviewer": "bbbb0002", "crew-re
 IW_PROJECTS = {"projects": [{"id": "p1", "name": "links-app", "repos": []}]}
 
 
-def _setup_wake(tmp: Path, env: dict) -> None:
+def _setup_wake(tmp: Path, env: dict, ids: dict | None = None) -> None:
+    ids = ids or IW_IDS
     crew = tmp / "crew"
     crew.mkdir(parents=True, exist_ok=True)
     shutil.copy(ROOT / "claude-plugin" / "templates" / "crew.json", crew / "crew.json")
     base = {"status": "active", "repo": "", "cwd": str(tmp), "model": "opus", "effort": "high"}
     roles = {"crew-orchestrator": ("orchestrator", ""), "crew-reviewer": ("reviewer", ""),
              "crew-releaser": ("releaser", ""), "links-app-build-m1": ("builder", "links-app")}
-    stations = {n: {**base, "role": r, "project": pr, "id": IW_IDS[n], "sessionId": f"sess-{IW_IDS[n]}",
+    stations = {n: {**base, "role": r, "project": pr, "id": ids[n], "sessionId": f"sess-{ids[n]}",
                     "parent": "crew-orchestrator" if n != "crew-orchestrator" else ""} for n, (r, pr) in roles.items()}
     (crew / "stations.json").write_text(json.dumps(stations, indent=2) + "\n", encoding="utf-8")
-    agents = [{"id": IW_IDS[n], "name": n, "cwd": str(tmp), "state": "done", "pid": 40000 + int(IW_IDS[n][-4:], 16)}
+    agents = [{"id": ids[n], "name": n, "cwd": str(tmp), "state": "done", "pid": 40000 + int(ids[n][-4:], 16)}
               for n in stations]
     state = tmp / "claude"
     state.mkdir(parents=True, exist_ok=True)
     (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
     (state / "version").write_text("2.1.310\n", encoding="utf-8")
-    for n, sid in IW_IDS.items():
+    for n, sid in ids.items():
         job = tmp / "home" / ".claude" / "jobs" / sid
         job.mkdir(parents=True, exist_ok=True)
         (job / "state.json").write_text(json.dumps({"sessionId": f"sess-{sid}"}) + "\n", encoding="utf-8")
@@ -5258,6 +5259,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="with the setting unset, and then false, rounds hours apart wake no one and write no wake state",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(t, _quiet_world(None)) for t in (600, 1800, 3600, 7200, 14400)] + [_round(21600, _quiet_world(False)),
            lstep("restart", "crew-reviewer", world=_quiet_world(False), env={"FACTORY_STOP_WAIT": "3"})],
@@ -5283,6 +5285,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="with the setting on and nothing to do: a release wake, then liveness wakes backing off 15/30/45 minutes",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(t, _world()) for t in _LIVE_AT],
     checks=[
@@ -5329,6 +5332,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="activity after a wake and its settle time pushes the liveness clock back; the session's own turn does not",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()), _round(600, _world()), _round(840, _world()), _round(900, _world()),
            _round(1700, _world(), _touch("crew-reviewer", 1600)), _round(2400, _world()), _round(2500, _world()),
@@ -5356,6 +5360,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="a PR without a current verdict wakes the reviewer once per head, and not in the middle of a turn",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(60, _world(queue=_head(_H1))), _round(120, _world(queue=_head(_H1))), _round(180, _world(queue=_head(_H1))),
@@ -5400,6 +5405,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="a builder is woken once for a verdict, changes asked for or failed CI on a ticket it holds",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(60, _world(tickets=[_ticket("T1", "review", _H3, "success", "changes")])),
@@ -5440,6 +5446,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="a desk answer or a new project wakes the orchestrator once, a RELEASE line under Undelivered wakes the releaser once",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(60, _world(), _report("# crew-orchestrator\n\n## Undelivered\n- T4 done, waiting on nothing\n\n## Notes\n- RELEASE later maybe\n")),
@@ -5514,13 +5521,21 @@ def _spawn_helper_step() -> Step:
     return st
 
 
+# The process this scenario starts says `attach <id>`, and every process on the machine can see it, so the reviewer
+# has an id of its own here: with the shared one, a scenario running at the same time (or another crew's run of this
+# harness) would find the reviewer "open in a terminal" and not wake it.
+def _setup_guards(tmp: Path, env: dict) -> None:
+    _setup_wake(tmp, env, {**IW_IDS, "crew-reviewer": "ee5a0b02"})
+
+
 scenario(Scenario(
     name="idle_wake_guards",
     suite="idle_wake",
     about="a halted crew, a station open in a terminal, a finished builder and a helper are never woken; a head with a current verdict is no work",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     not_windows=WIN_NO_MULTILINE,
-    setup=_setup_wake,
+    setup=_setup_guards,
     steps=[_round(0, _world()),
            _round(3600, _world(), _halt), _round(7200, _world()),
            _round(10800, _world(), _resume, _attach("crew-reviewer")),
@@ -5576,6 +5591,7 @@ scenario(Scenario(
     suite="idle_wake",
     about="switched off again, each station that gave up its tick is woken once to take it back; a restart says to re-arm, or to arm no tick",
     driver=LAUNCH_DRIVER,
+    ignore_calls=_CC_READS,
     setup=_setup_wake,
     steps=[_round(0, _world()), _round(100, _world(False)), _round(200, _world(False)), _round_started(90000, _world(False)),
            _round_started(130000, _world(False)),
@@ -6100,6 +6116,7 @@ CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
 WRAPPERS = {
     "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
     "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
+    "idle_wake_python": ("idle_wake", "runs idle_wake_test.sh on Python; its checks count under idle_wake"),
 }
 
 
