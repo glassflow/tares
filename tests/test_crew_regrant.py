@@ -91,7 +91,7 @@ regrant.regrant_due(paths, Client(A + B + '- "may read in shop" (2026-02-05)\n')
 check("a further change is noted again", len(events(paths)) == 2)
 NAMED = '- "s may run `gh pr merge 1` in shop" (2026-02-05)\n'
 check("a done station is due for a new grant that names it", regrant.regrant_due(paths, Client(A + NAMED), "s"))
-paths.station_file("s", "grants").write_text(A + NAMED, encoding="utf-8")
+paths.station_file("s", "grants").write_bytes((A + NAMED).encode())   # LF, as launch writes it
 check("a grant that named it before it started does not wake it",
       not regrant.regrant_due(paths, Client(A + NAMED + B), "s"))
 check("the name is matched whole", not regrant.names_station('- "s-10 may run x"', "s-1")
