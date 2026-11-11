@@ -19,6 +19,7 @@ from types import SimpleNamespace
 from fastapi import Body, HTTPException, Request
 
 from . import claude_usage
+from . import crew_conversation
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
@@ -1249,13 +1250,19 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                                      if t["holder"]})})
         return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
 
+    SINCE_MAX = 1000   # lines a refresh from `since` reads at most (TR-1177)
     @app.get("/api/crew/{name}")
     def get_station(name: str, request: Request, recent: int = 30,
-                          crew: str | None = None):
+                          crew: str | None = None, conversation: int = 0, before: int | None = None,
+                          since: int | None = None):
         """One station: its row as in /api/crew, the tickets it holds in every project, its
         current session's last lines (`recent`, at most 200), and the command that opens it.
         Crews can repeat a station name: `crew` (id or name) says which; without it the caller's
-        own crew's station comes back."""
+        own crew's station comes back. `conversation` (at most 500) adds the session's last lines as a
+        conversation (tares/crew_conversation.py, TR-1177), oldest first; `before` (a `conversation_from`
+        from an earlier answer) reads the lines before that point instead, for "Show earlier". `since`
+        reads from that line to the newest, at most SINCE_MAX lines (the newest when there are more), so a
+        reader who loaded earlier lines refreshes without a gap; `conversation_from` says where it starts."""
         st = pick_station(name, request, crew)
         held = []
         hidden = h.hidden_ids()
@@ -1272,12 +1279,32 @@ def register(app, store, h: Host) -> SimpleNamespace:
         lines = store.key_events(h.cc_source(), st["session"], limit=n,
                                  offset=max((st["lines"] or 0) - n, 0)) if n else []
         m = store.session_meters([st["session"]]).get(st["session"]) or {}
-        return {**st, "tickets": held,
+        convo = {}
+        c = min(max(conversation, 0), 500)
+        if c and st["session"]:
+            end = (st["lines"] or 0) if before is None else max(min(before, st["lines"] or 0), 0)
+            start = max(end - c, 0)
+            if since is not None and before is None:
+                start = max(min(since, end), end - SINCE_MAX, 0)
+            rows = store.key_payload_rows(h.cc_source(), st["session"], limit=end - start, offset=start)
+            convo = {"conversation": crew_conversation.build(rows)[0], "conversation_from": start}
+        return {**st, "tickets": held, **convo,
                 "context_detail": m.get("context"), "context_at": m.get("context_at"),
                 "context_asked_at": m.get("context_asked_at"),
                 "recent": [{"at": x.get("event_time"), "type": x.get("event_type"),
                             "text": str(x.get("text") or "")[:600]} for x in lines],
                 "attach": factory_mod.attach_command(name, st.get("role") or "")}
+
+    @app.get("/api/crew/{name}/tool/{tool_id}")
+    def station_tool(name: str, tool_id: str, request: Request, crew: str | None = None):
+        """One tool call's whole result in the station's current session (TR-1177): what a card on
+        the Crew page loads when it is opened and the list held only the start of it."""
+        st = pick_station(name, request, crew)
+        b = store.key_tool_result(h.cc_source(), st["session"], tool_id) if st["session"] else None
+        if b is None:
+            raise HTTPException(404, f"no tool call {tool_id} in {name}'s session")
+        return {"id": tool_id, "output": crew_conversation._result_text(b.get("content")),
+                "failed": bool(b.get("is_error"))}
 
     @app.post("/api/crew/{name}/end")
     def end_station(name: str, request: Request, body: dict | None = Body(None),
