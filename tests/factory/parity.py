@@ -4978,7 +4978,6 @@ def g1_line(r: Run, pattern: str, i: int = -1) -> bool:
 
 scenario(Scenario(
     name="crew_g1_up_endpoints",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up gives every crew station the same Tares address; `settings` shows the MCP endpoint too",
     stand_in={"settings": dict(SAVED)},
@@ -5158,7 +5157,6 @@ def g1_hand_made(r: Run) -> None:
 
 scenario(Scenario(
     name="crew_g1_hand_made_crewjson",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="a crew.json written by hand keeps its choice, gains the template's defaults, and a crew without a releaser starts two stations",
     stand_in={"settings": {**SAVED, "releaser": False}},
@@ -5214,7 +5212,6 @@ G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integration
 
 scenario(Scenario(
     name="crew_g1_no_mcp",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up stops and names the URL and the command when no MCP server answers; taresd itself is not one",
     tares=G1_HEALTH,
@@ -6148,7 +6145,7 @@ scenario(Scenario(
     name="crew_g4_up_watch",
     suite="crew",
     about="crew up starts the watch in the background and logs; a second crew up keeps it; crew down stops it; --no-watch starts none",
-    ignore_calls=LSP_PROBE + _CC_READS,
+    ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
     # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
@@ -6354,7 +6351,7 @@ scenario(Scenario(
     name="crew_g4_watch_update",
     suite="crew",
     about="a watch that crew up started restarts itself on the new version when the plugin is updated",
-    ignore_calls=LSP_PROBE + _CC_READS,
+    ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
