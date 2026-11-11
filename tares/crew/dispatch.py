@@ -48,7 +48,7 @@ def _tidy(argv: list[str], env: dict) -> int:
     return cmd_tidy(argv, env)
 
 
-PORTED[("crew", "up")] = _crew_up        # TR-956 (runs in Python only with TARES_FACTORY_ENGINE=python)
+PORTED[("crew", "up")] = _crew_up        # TR-956
 PORTED[("crew", "setup")] = _crew_setup  # TR-956 (new: no bash twin)
 PORTED[("tidy",)] = _tidy
 

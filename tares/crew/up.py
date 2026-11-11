@@ -21,15 +21,15 @@ the box of tares/factory_setup.py before it calls this; the plain prompts here a
 
 Differences from bash (each one a decision, none an accident):
 
- 0. `crew up` is registered with the dispatcher but gated: only TARES_FACTORY_ENGINE=python runs it here.
-    With the engine unset it goes to bash, so a default crew keeps its watch and language server offer
-    until TR-958 and TR-970 land (then drop the gate: entry_crew_up). `crew setup` has no bash twin and
-    runs here unless the engine is "bash".
+ 0. `crew up` runs here by default (TR-1069), as every ported command does; TARES_FACTORY_ENGINE=bash runs
+    bash's. It was gated behind TARES_FACTORY_ENGINE=python until the watch (TR-958) and the language
+    server offer (TR-970) were wired in. `crew setup` has no bash twin and runs here unless the engine
+    is "bash".
 
  1. `crew setup` is new: bash has no such command (it answers "crew takes up, down, ..."). It runs on
     Python whatever TARES_FACTORY_ENGINE says unless that is "bash" (then bash's own error answers).
- 2. The watch is started here (watch.start, TR-958, wired in TR-1155): the Python watch with
-    TARES_FACTORY_ENGINE=python, as `crew watch` is routed. The language server offer (lsp_offer,
+ 2. The watch is started here (watch.start, TR-958, wired in TR-1155): the Python watch, as
+    `crew watch` is routed (TARES_FACTORY_WATCH=bash keeps the bash one, TR-1069). The language server offer (lsp_offer,
     TR-970) is Up.lsp_offer, which calls tares.crew.doctor_lsp.offer.
  3. Starting the stations (launch, boot_prompt, write_settings, is_alive: TR-950 and TR-953, not ported
     yet) is the one step that still runs bash: `start_stations` hands the roles to the bash internal
@@ -640,13 +640,9 @@ def cmd_crew_up(argv: list, env: dict) -> int:
 
 
 def entry_crew_up(argv: list, env: dict) -> int:
-    """What the dispatcher calls for `crew up`. Until the watch and the language server offer are ported
-    (TR-958, TR-970) a crew started with the default engine must still get them, so only
-    TARES_FACTORY_ENGINE=python runs the Python crew up; any other value hands the command to bash, as if
-    it were not ported. Windows has no bash: there Python always runs."""
-    if env.get("TARES_FACTORY_ENGINE") != "python" and os.name != "nt":
-        from ..cli import plugin_dir
-        os.execve("/bin/bash", ["bash", str(plugin_dir() / "bin" / "factory"), *argv], env)
+    """What the dispatcher calls for `crew up`. The watch (TR-958) and the language server offer (TR-970) are
+    wired in, so it runs here whatever the engine; `engine=bash` never reaches this (the dispatcher hands
+    every command to bash then)."""
     return cmd_crew_up(argv, env)
 
 

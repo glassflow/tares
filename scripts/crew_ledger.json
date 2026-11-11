@@ -1100,7 +1100,7 @@
       "dropped": false,
       "python": "tares.crew.up:cmd_crew_up",
       "ported": true,
-      "note": "Ported as tares.crew.up:cmd_crew_up, reached only with TARES_FACTORY_ENGINE=python (entry_crew_up): bash stays the default engine until the watch (TR-958) and the language server offer (TR-970) are ported. On Python it skips the lsp_offer and prints \"watch: not ported yet\" instead of starting the watch, and starts the stations through the bash `_start-stations` bridge until launch is ported (TR-953)."
+      "note": "Ported as tares.crew.up:cmd_crew_up and the default for `crew up` since TR-1069 (the gate behind TARES_FACTORY_ENGINE=python is gone; engine=bash still runs bash). It makes the language server offer (lsp_offer, TR-970), starts the Python watch (TR-958) and starts the stations through the bash `_start-stations` bridge until launch is ported (TR-953)."
     },
     {
       "name": "cmd_spawn",
@@ -2486,7 +2486,7 @@
       "dropped": false,
       "python": "tares.crew.doctor_lsp:offer",
       "ported": true,
-      "note": "Ported as an injectable function; crew up (TR-956) only calls it. Unit-tested in tests/test_crew_doctor_lsp.py (--yes, a closed input, no, yes, once per plugin, unknown); the bash lsp_test.sh crew up cases need crew up in Python."
+      "note": "Ported as an injectable function; crew up (TR-956) only calls it. Unit-tested in tests/test_crew_doctor_lsp.py (--yes, a closed input, no, yes, once per plugin, unknown); crew up calls it since TR-1069, and the bash lsp_test.sh crew up cases pass on the Python engine."
     },
     {
       "name": "doctor_keys",
@@ -4582,7 +4582,7 @@
       "dropped": false,
       "python": "tests.factory.parity:SCENARIOS",
       "ported": true,
-      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py until crew up is ported (TR-956); lsp_test.sh itself still passes them only through bash crew up."
+      "note": "Scenarios lsp_missing and lsp_servers (the doctor cases) and doctor_cmux. The crew up cases are unit-tested in tests/test_crew_doctor_lsp.py, and lsp_test.sh passes them through the Python crew up since TR-1069."
     },
     {
       "name": "pace_test.sh",
