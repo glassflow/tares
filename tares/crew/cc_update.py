@@ -26,13 +26,13 @@ Stubs, each behind one small named function so the ticket that owns the real thi
   * cc_delay (TR-964): FACTORY_CC_BACKOFF seconds (default 600), no doubling and no FACTORY_CC_BACKOFF_MAX.
   * cc_retry_sync (TR-964): does nothing, so the Crew page's retry flags are not sent.
   * _pace_closed: the pace module's reading of this round (TR-962), `pace.current(paths).closed`.
-  * upgrades_frozen (TR-965): views.Frozen, the read-only copy of the freeze check.
+  * upgrades_frozen (TR-965): kit.upgrades_frozen, the real freeze check.
 cc_retry_in (the text of the retry time) is views.cc_retry_in, imported when needed (TR-964 owns it).
 
 Differences from bash
   * The kit upgrade (upgrade_station, TR-965) shares an `if ... elif` with the Claude Code move in the bash
-    round: a kit upgrade this round means no Claude Code move. The kit part is not ported; `step` marks where
-    it chains in.
+    round: a kit upgrade this round means no Claude Code move. The kit part is kit.step (TR-965); the watch's
+    `updates` step runs it first and hands `step` whether it moved a station (`kit_upgraded`).
   * `step` runs after the revive step has had its turn in the same round (the steps run in order, each with its
     own reading). A station the revive step started this round is up when `step` looks, so `step` also reads
     the revive step's own `down` (`watch_revive.last.down`), and a round in which any station was down moves
@@ -200,13 +200,10 @@ def _pace_closed(client: TaresClient, *, fresh: bool = False) -> bool:
 
 
 def upgrades_frozen(paths: CrewPaths, client: TaresClient, *, fresh: bool = False) -> bool:
-    """Whether the crew's kit is frozen. TR-965 owns the real port; this is views.Frozen, the read-only copy.
-    `fresh` reads the settings again (bash: SETTINGS="" first)."""
-    from . import views   # here, not at the top: views imports this module
-    if fresh:
-        with TaresClient(client.paths, client.env, lambda _m: None) as other:
-            return views.Frozen(paths, other).on
-    return views.Frozen(paths, client).on
+    """Whether the crew's kit is frozen (kit.upgrades_frozen, TR-965). `fresh` reads the settings again
+    (bash: SETTINGS="" first)."""
+    from . import kit   # here, not at the top: kit imports crew modules that import this one
+    return kit.upgrades_frozen(paths, client, fresh=fresh)
 
 
 def tell_newer_claude(paths: CrewPaths, client: TaresClient, version: str, binary=None) -> None:
@@ -456,10 +453,11 @@ def _down(paths: CrewPaths, binary) -> bool:
     return down
 
 
-def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
+def step(paths: CrewPaths, *, env=None, claude_bin=None, kit_upgraded: bool = False) -> None:
     """The Claude Code part of one watch round: when `claude --version` has said the same for a whole round and
     every station is up, the crew is not halted and the setting allows it, move one idle station onto it (a
-    frozen crew is only told there is a newer one)."""
+    frozen crew is only told there is a newer one). A round whose kit part moved a station (`kit_upgraded`) makes no
+    Claude Code move: bash's `if <kit upgrade> elif <this>`."""
     global _cc_seen
     env = os.environ if env is None else env
     if claude_bin is None:
@@ -476,9 +474,9 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None) -> None:
     # bash's `down` holds for the whole round: a station the revive step brought back this round still counts
     down = watch_revive.last.down or _down(paths, claude_bin)
     with TaresClient(paths, env) as client:
-        # TR-965 chains in here: bash's round is `if <a station is due a kit upgrade> then upgrade_station
-        # elif <the Claude Code part below>`, so the Claude Code part must be skipped on a round that upgraded one.
-        if settled and not down and not state.halted(paths) and claude_auto(client):
+        # bash's round is `if <a station is due a kit upgrade> then upgrade_station elif <the Claude Code part
+        # below>` (the kit part is kit.step, run first): a round that upgraded a station makes no Claude Code move
+        if not kit_upgraded and settled and not down and not state.halted(paths) and claude_auto(client):
             # the same, for Claude Code itself: one idle station a round, the orchestrator last; a frozen crew
             # only hears that there is a newer one
             if upgrades_frozen(paths, client):

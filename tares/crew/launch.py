@@ -29,9 +29,8 @@ Notes written at a start
 
 Differences from bash
   * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` runs
-    bin/factory from, symlinks resolved). Bash's frozen branch (upgrades_frozen, frozen_phys, the
-    crew's frozen copy of the kit) is left to TR-965, which completes kit_dir; a frozen crew started from
-    Python would start on the checkout.
+    bin/factory from, symlinks resolved). Given the client it is bash's kit_dir: the crew's frozen copy of
+    the kit while the crew is frozen and the copy is there (kit.kit_dir, TR-965).
   * statusLine: bash writes the path with printf %q; here it is shlex.quote. They differ only for a path
     with a character the shell must escape (a space: `a\\ b` against `'a b'`); both read back as the same
     one word. The Windows form uses `python` where bash and POSIX use `python3`, which Windows does not ship.
@@ -149,19 +148,24 @@ def _forward(path: str) -> str:
     return path.replace("\\", "/") if sys.platform == "win32" else path
 
 
-def kit_dir() -> str:
+def kit_dir(client=None) -> str:
     """The kit a station starts on: the plugin folder `tares factory` runs bin/factory from (TARES_PLUGIN_DIR
-    wins), symlinks resolved, as bash's KIT_PLUGIN is. Bash's frozen copy is TR-965's (see the module note)."""
+    wins), symlinks resolved, as bash's KIT_PLUGIN is. With a client, bash's kit_dir: the frozen copy while the
+    crew is frozen and the copy is there. Without one, the checkout (a fingerprint of the kit, say)."""
     from ..cli import plugin_dir  # not at import time: a settings file needs it, a roster does not
     try:
         d = plugin_dir()
     except SystemExit as e:
         raise CrewError(str(e).removeprefix("tares: ")) from None
-    return str(Path(os.path.realpath(d / "bin" / "factory")).parent.parent)
+    checkout = str(Path(os.path.realpath(d / "bin" / "factory")).parent.parent)
+    if client is None:
+        return checkout
+    from . import kit   # here, not at the top: kit imports crew modules that import this one
+    return kit.kit_dir(client.paths, client, checkout)
 
 
-def plugin_flags() -> list:
-    return ["--plugin-dir", kit_dir()]
+def plugin_flags(client=None) -> list:
+    return ["--plugin-dir", kit_dir(client)]
 
 
 _KIT_SKIP_SUFFIX = ("~", )
@@ -452,7 +456,7 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
         "env": env,
         "crossSessionInbound": "accept",
         "enabledPlugins": {"tares@inline": True},
-        "statusLine": {"type": "command", "command": status_line_command(_forward(kit_dir())),
+        "statusLine": {"type": "command", "command": status_line_command(_forward(kit_dir(client))),
                        "padding": 0},
         "worktree": {"bgIsolation": "none"},
         "permissions": perms,
@@ -497,8 +501,8 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
                  "your role.")
     args = ["--bg", "-n", station, "--model", model, "--effort", effort, "--permission-mode", "auto",
             "--settings", settings, "--autocompact", compact_window(paths, client.say),
-            "--append-system-prompt", identity, *plugin_flags()]
-    kd = kit_dir()
+            "--append-system-prompt", identity, *plugin_flags(client)]
+    kd = kit_dir(client)
     if resume:
         args += ["--resume", resume]
     args.append(prompt)
