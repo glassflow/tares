@@ -1304,13 +1304,18 @@ def register(app, store, h: Host) -> SimpleNamespace:
                                             now or now_utc(), waiting or [])
 
     @app.get("/api/crew/projects")
-    def crew_projects(request: Request):
+    def crew_projects(request: Request, crew: str | None = None):
         """The projects handed to the crew, oldest hand-over first: each with its repos (the
         folder on the crew's machine and the GitHub name), the autonomy it was handed over at
         when stricter than the crew's, its tickets by stage, the milestone it is on, and which
         tickets each repo has. The orchestrator works from this list (TR-462). A person's key
         sees the projects the person leads or holds a ticket in; the system credential sees all
-        (TR-633)."""
+        (TR-633). A repo's `path` is the folder the asking crew (`crew`, else X-Tares-Crew)
+        handed over, else the first one handed over (TR-1222)."""
+        try:
+            key = factory_mod.crew_key(person_of(request), crew_name_of(request, crew))
+        except ValueError as e:
+            h.err(e)
         names = {p["id"]: p["name"] for p in store.list_projects()}
         hidden = h.hidden_ids()
         mine = my_projects(request)
@@ -1326,7 +1331,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 continue
             ho = store.get_handover(uid) or {}
             out.append({"id": uid, "name": names[uid], **project_progress(store, uid, tk[uid]),
-                        "repos": repo_rows(uid, ho.get("repos") or [], tk[uid]),
+                        "repos": repo_rows(uid, factory_mod.own_paths(ho.get("repos") or [], key),
+                                           tk[uid]),
                         "autonomy": ho.get("autonomy"), "handed_over_at": ho.get("at"),
                         "handed_over_by": ho.get("by_label") or ho.get("by"),
                         "handed_over_person": ho.get("person")})
@@ -1343,7 +1349,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
             ho = store.get_handover(uid) or {}
             if uid in names and not (ho.get("takeover") or {}).get("released_at"):
                 releasing.append({"id": uid, "name": names[uid], "takeover": ho["takeover"],
-                                  "repos": ho.get("repos") or [],
+                                  "repos": factory_mod.own_paths(ho.get("repos") or [], key),
                                   "holders": sorted({t["holder"] for t in store.list_tickets(uid)
                                                      if t["holder"]})})
         return {"projects": out, "finished": done, "releasing": releasing, "now": now_utc()}
@@ -2730,7 +2736,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands
         the project to the crew. Each repo is the folder it is checked out in on the crew's
         machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
-        them. `autonomy` only when the person wants this project stricter than the crew
+        them; a folder is kept for the crew that gave it, so a teammate's crew hands over its own
+        clone of the same repo. `autonomy` only when the person wants this project stricter than the crew
         (L3-review). Recorded with the time, the person and the crew (`crew`, else X-Tares-Crew,
         else `crew`); the orchestrator finds it in /api/crew/projects. A key with no person is
         refused (TR-633). Nobody signs off first: a repo's owner is asked through a question when
@@ -2742,6 +2749,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
             new = factory_mod.handover_repos(body.get("repos"))
             if body.get("repo"):
                 new = factory_mod.merge_repos(new, factory_mod.handover_repos(body.get("repo")))
+            # each folder is this crew's own: another crew's machine keeps its own (TR-1222)
+            key = factory_mod.crew_key(me["id"], crew)
+            for r in new:
+                r.pop("paths", None)
+                if r["path"]:
+                    r["paths"] = {key: r["path"]}
             autonomy = str(body.get("autonomy") or "").strip() or None
             if autonomy and autonomy not in factory_mod.AUTONOMY:
                 raise docs_mod.DocError(f"unknown autonomy {autonomy!r}; one of: "
@@ -2757,7 +2770,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         if old.get("finished") or p.get("status") == "later":
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
-        return {"handover": store.get_handover(uid)}
+        ho = store.get_handover(uid)
+        return {"handover": {**ho, "repos": factory_mod.own_paths(ho.get("repos") or [], key)}}
 
     @app.post("/api/projects/{uid}/later")
     def set_later(uid: str, body: dict = Body(default={})):
