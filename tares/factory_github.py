@@ -72,6 +72,35 @@ def _ci(statuses: list[dict], runs: list[dict]) -> str:
     return "success"
 
 
+def _status_state(state) -> str:
+    """A commit status as success, failure or pending (`error` is a failure; a word GitHub may
+    add later waits as pending, never as a pass)."""
+    state = str(state or "")
+    if state == "success":
+        return "success"
+    return "failure" if state in ("failure", "error") else "pending"
+
+
+def _check_list(statuses: list[dict], runs: list[dict]) -> list[dict]:
+    """Every check on a commit as {name, state}, one per commit status and check run, the
+    reviewer's own status left out. The mapping is the one `_ci` uses: a run still going is
+    pending, `success`, `neutral` and `skipped` pass, any other conclusion (`cancelled`,
+    `timed_out`, `action_required`, `startup_failure`, `stale`, `failure`) fails."""
+    out = []
+    for s in statuses or []:
+        if s.get("context") != REVIEW_CONTEXT:
+            out.append({"name": str(s.get("context") or ""), "state": _status_state(s.get("state"))})
+    for r in runs or []:
+        if r.get("status") != "completed":
+            state = "pending"
+        elif r.get("conclusion") in ("success", "neutral", "skipped"):
+            state = "success"
+        else:
+            state = "failure"
+        out.append({"name": str(r.get("name") or ""), "state": state})
+    return out
+
+
 async def _tokens(store, repo: str) -> list[tuple[str, str]]:
     """[(token, API base)] for every credential that can give one; a GitHub Enterprise
     credential uses its own API."""
@@ -127,6 +156,7 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 "head": head, "state": pr.get("state"), "merged": bool(pr.get("merged")),
                 "merge_commit": pr.get("merge_commit_sha") if pr.get("merged") else None,
                 "merged_at": pr.get("merged_at"), "ci": _ci(statuses, check_runs),
+                "ci_checks": _check_list(statuses, check_runs),
                 # what the change was, for the project's GitHub page: the same read, no extra call
                 "created_at": pr.get("created_at"), "closed_at": pr.get("closed_at"),
                 "author": (pr.get("user") or {}).get("login"),
@@ -145,6 +175,51 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
             last_err = f"could not read {repo}#{number}: {type(e).__name__}"
     out["error"] = last_err or "could not read it"
     return out
+
+
+# (repo, ref) -> whether the commit has workflow files; a commit's files never change, so an
+# answer is kept (the oldest goes first once the dict is full)
+_workflows: dict[tuple[str, str], bool] = {}
+_WORKFLOWS_KEPT = 256
+
+
+async def has_workflows(store, repo: str, ref: str) -> bool | None:
+    """Whether `repo` has a GitHub Actions workflow file at `ref` (a commit): True for at least
+    one file in `.github/workflows`, False for an empty or missing folder, None when GitHub
+    gave no answer (no credential, rate limit, network). Only a True or False is remembered."""
+    repo, ref = str(repo or "").strip(), str(ref or "").strip()
+    if not repo or not ref:
+        return None
+    key = (repo, ref)
+    if key in _workflows:
+        return _workflows[key]
+    found: bool | None = None
+    for tok, api in await _tokens(store, repo):
+        headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {tok}",
+                   "X-GitHub-Api-Version": "2022-11-28"}
+        try:
+            async with httpx.AsyncClient(timeout=8, transport=_transport, headers=headers) as cx:
+                r = await cx.get(f"{api}/repos/{repo}/contents/.github/workflows",
+                                 params={"ref": ref})
+            if r.status_code == 404:
+                found = False   # or this credential cannot see the repo: another may know better
+                continue
+            if r.status_code != 200:
+                continue
+            body = r.json()
+        except Exception:
+            continue
+        if not isinstance(body, list):
+            continue            # the path is a file, not a folder: nothing to say
+        if any(isinstance(f, dict) and f.get("type", "file") == "file" for f in body):
+            found = True
+            break
+        found = False
+    if found is not None:
+        if len(_workflows) >= _WORKFLOWS_KEPT:
+            _workflows.pop(next(iter(_workflows)))
+        _workflows[key] = found
+    return found
 
 
 def branch_ref(branch: str) -> str | None:
