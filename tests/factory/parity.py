@@ -2349,6 +2349,7 @@ class FakeTares:
         self.routes = {"GET /health": (200, {"ok": True}), "GET /api/crew/settings": (200, {"settings": {}})}
         self.routes.update(routes)
         self.requests: list = []
+        self.state: dict = {}   # what a stateful route (a callable answer) keeps between two requests
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -2361,6 +2362,8 @@ class FakeTares:
                 key = f"{self.command} {self.path}"
                 fake.requests.append({"route": key, "auth": bool(self.headers.get("Authorization")), "body": body})
                 status, doc = fake.routes.get(key, (404, {"detail": "not found"}))
+                if callable(doc):   # a stateful answer: doc(request body, the fake)
+                    doc = doc(body, fake)
                 data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -2386,7 +2389,7 @@ class FakeTares:
 def routes_in(routes: dict, tmp: Path) -> dict:
     """The routes with "{tmp}" in an answer replaced by the scenario's folder (a path inside a document)."""
     folder = json.dumps(str(tmp))[1:-1]  # as it reads inside a JSON string
-    return {k: (st, doc.replace("{tmp}", str(tmp)) if isinstance(doc, str)
+    return {k: (st, doc if callable(doc) else doc.replace("{tmp}", str(tmp)) if isinstance(doc, str)
                 else json.loads(json.dumps(doc).replace("{tmp}", folder)))
             for k, (st, doc) in routes.items()}
 
@@ -7842,14 +7845,14 @@ scenario(Scenario(
            Step(["crew", "update", "--bogus"], env=CU_ENV), Step(["crew", "restart", "--now"], env=CU_ENV)],
     checks=[
         ("--wait with a word, 1e3, a minus, nothing or 20 digits is refused",
-         lambda r: all(r.code(i) != 0 and "takes a number of seconds" in r.out(i) for i in range(5))),
+         lambda r: all(r.code(i) != 0 and "takes a number of seconds" in r.out(i) for i in range(5)) and r.launches() == 0),
         ("--wait with no value is refused with the usage line, nothing restarted",
          lambda r: r.code(5) != 0 and "takes a number of seconds" in r.out(5) and r.launches() == 0),
         ("an argument it does not know gets the usage line",
          lambda r: r.code(6) != 0 and "usage: " in r.out(6) and "crew update [--force] [--wait <seconds>]" in r.out(6)
          and r.code(7) != 0 and "crew update [--force] [--wait <seconds>]" in r.out(7)),
     ],
-    covers=["--wait with no value is refused with the usage line, nothing restarted"],
+    covers=["--wait with no value is refused with the usage line, nothing restarted", "--wait '$w' is refused, nothing restarted"],
 ))
 
 scenario(Scenario(
@@ -9181,6 +9184,1027 @@ scenario(Scenario(
              lambda r: all(r.out(i).strip() == want for i, (_text, want) in enumerate(PARSE_CASES)))],
     covers=["(the whole parse suite)"],
 ))
+
+# ---------------------------------------------------------------------------------------------
+# compat_*: the crew CLI against the capabilities a cell lists on /health (compat_test.sh). `crew up` stops with the
+# upgrade message when the cell lacks `integrations`, goes on when it has it, and `crew status` and `crew down` work
+# either way. The old cell (no capabilities) is a FakeTares of this file, answering /health with a given body; the
+# cell with other capabilities is a second one; the "real cell" of the bash suite (a daemon) is the stand-in Tares
+# of fake_up_tares.py, which lists integrations on /health like the daemon does.
+
+COMPAT_MSG = "This needs a newer Tares on the cell (missing integrations). Upgrade Tares, then run this again."
+COMPAT_OLD = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "version": "1.0.0"}
+COMPAT_OTHER = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "capabilities": ["merge_queue"]}
+_COMPAT_OTHERS: dict = {}   # scenario folder -> the second fake cell (the one with other capabilities)
+
+
+def _compat_prepare(r: Run) -> None:
+    trust_crew(r)
+    _COMPAT_OTHERS[str(r.tmp)] = FakeTares({"GET /health": (200, COMPAT_OTHER)})
+
+
+def _compat_cell(which: str):
+    """The step's env: TARESD_URL names the old cell, the one with other capabilities, or the stand-in Tares."""
+    def env(r: Run) -> dict:
+        url = {"old": r.tares.url if r.tares else "", "other": _COMPAT_OTHERS[str(r.tmp)].url,
+               "real": r.stand_in.url}[which]
+        return {"TARESD_URL": url}
+    return env
+
+
+def _compat_after(stop: bool = False):
+    """After a step: how many sessions were started; after the last, the second fake cell is stopped."""
+    def after(tmp: Path):
+        try:
+            calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+        except OSError:
+            calls = []
+        if stop:
+            cell = _COMPAT_OTHERS.pop(str(tmp), None)
+            if cell:
+                cell.stop()
+        return {"launches": sum(1 for c in calls if "--bg" in c["args"])}
+    return after
+
+
+def _compat_health(r: Run) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.stand_in.url + "/health", timeout=10) as f:
+        return json.loads(f.read().decode("utf-8"))
+
+
+def _compat_no_capability_ask() -> bool:
+    """Neither `status` nor `down` asks for a capability: bash's cmd_status and cmd_down (as the suite greps them),
+    and the Python functions that are the same commands."""
+    import inspect
+    sys.path.insert(0, str(ROOT))
+    from tares.crew import lifecycle, views
+    text = (ROOT / "claude-plugin" / "bin" / "factory").read_text(encoding="utf-8")
+    bodies = []
+    for fn in ("cmd_status", "cmd_down"):
+        m = re.search(r"^%s\(\)(.*?)^\}" % fn, text, re.M | re.S)
+        if not m:
+            return False
+        bodies.append(m.group(1))
+    bodies += [inspect.getsource(views.cmd_status), inspect.getsource(lifecycle.down)]
+    return not any("need_capability" in b for b in bodies)
+
+
+scenario(Scenario(
+    name="compat_capabilities",
+    suite="compat",
+    about="crew up needs the integrations capability on /health and stops with the upgrade message without it; crew status and "
+          "crew down never ask for it. Old cell and other-capabilities cell: FakeTares; the cell that has it: the stand-in Tares",
+    stand_in={},
+    tares={"GET /health": (200, COMPAT_OLD)},
+    prepare=_compat_prepare,
+    ignore_asked=("GET ",),
+    steps=[
+        Step(["crew", "up", "--yes"], env=_compat_cell("old"), after=_compat_after()),                                # 0
+        Step(["crew", "up", "--yes"], env=_compat_cell("other"), after=_compat_after()),                              # 1
+        Step(["crew", "up"], env=_compat_cell("real"), stdin="L3-review\nno\nno\n2\n\n"),                           # 2
+        Step(["crew", "status"], env=_compat_cell("real")),                                                           # 3
+        Step(["crew", "status"], env=_compat_cell("old")),                                                            # 4
+        Step(["crew", "down"], env=_compat_cell("old")),                                                              # 5
+        Step(["crew", "status"], env=_compat_cell("other"), after=_compat_after(stop=True)),                          # 6
+    ],
+    checks=[
+        ("crew up against a cell with no capabilities stops with the upgrade message",
+         lambda r: r.code(0) != 0 and COMPAT_MSG in r.out(0)),
+        ("it starts nothing", lambda r: r.snap(0)["launches"] == 0),
+        ("crew up against a cell with other capabilities stops the same way",
+         lambda r: r.code(1) != 0 and COMPAT_MSG in r.out(1) and r.snap(1)["launches"] == 0),
+        ("a real cell lists integrations on /health", lambda r: "integrations" in (_compat_health(r).get("capabilities") or [])),
+        ("crew up against a cell with the capability proceeds",
+         lambda r: r.code(2) == 0 and "needs a newer Tares" not in r.out(2) and "started crew-reviewer" in r.out(2)),
+        ("crew status works against a cell with the capability",
+         lambda r: r.code(3) == 0 and "crew-reviewer" in r.out(3)),
+        ("crew status works against a cell without the capability",
+         lambda r: r.code(4) == 0 and "needs a newer Tares" not in r.out(4)),
+        ("crew down works against a cell without the capability",
+         lambda r: r.code(5) == 0 and "needs a newer Tares" not in r.out(5) and ("stopped" in r.out(5) or "down" in r.out(5))),
+        ("crew status works against a cell with other capabilities",
+         lambda r: r.code(6) == 0 and "needs a newer Tares" not in r.out(6)),
+        ("the CLI never asks for a capability in status or down", lambda r: _compat_no_capability_ask()),
+    ],
+    covers=["crew up against a cell with no capabilities stops with the upgrade message", "it starts nothing",
+            "crew up against a cell with other capabilities stops the same way",
+            "a real cell lists integrations on /health", "crew up against a cell with the capability proceeds",
+            "crew status works against a cell with the capability", "crew status works against a cell without the capability",
+            "crew down works against a cell without the capability", "crew status works against a cell with other capabilities",
+            "the CLI never asks for a capability in status or down"],
+))
+
+
+# cc_versions: the Claude Code versions in roster, status and doctor, and the roster after the watch has moved the crew
+# (claude_update_test.sh). The first is a real `crew up` on the stand-in Tares (the suite's real Tares), the fake Claude
+# Code stamps each new session's row with the installed version (stamp-version), which stands in for the process listing
+# the bash suite reads it from.
+
+def _cv_world(tmp: Path, env: dict) -> None:
+    state = tmp / "claude"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "version").write_text("1.0.0\n", encoding="utf-8")
+    (state / "stamp-version").write_text("1\n", encoding="utf-8")
+
+
+def _cv_round(before=None) -> Step:
+    """One `crew watch --once`; its snap says which sessions had been started by then (the cc_move rounds; `_round` is
+    redefined further up for the wake scenarios)."""
+    return _watch_once(before=before, after=_cc_after())
+
+
+def _cv_line(r: Run, i: int, start: str) -> str:
+    return next((x for x in r.out(i).splitlines() if x.startswith(start)), "")
+
+
+scenario(Scenario(
+    name="cc_versions",
+    suite="claude_update",
+    about="roster, status and doctor show each station's Claude Code, and flag it once a newer one is installed "
+          "(a real crew up on the stand-in Tares, then the installed version moves from 1.0.0 to 1.1.0)",
+    stand_in={},
+    prepare=trust_crew,
+    setup=_cv_world,
+    ignore_calls=_CC_READS,
+    ignore_asked=("GET ",),
+    steps=[
+        Step(["crew", "up"], stdin="L3-review\nyes\n\nno\n3\n\n"),                                       # 0
+        Step(["roster"], before=_all_idle),                                                                  # 1
+        Step(["doctor"], drop=DOCTOR_DROP),                                                                  # 2
+        Step(["crew", "status"]),                                                                            # 3
+        Step(["roster"], before=_cc_installed("1.1.0")),                                                     # 4
+        Step(["crew", "status"]),                                                                            # 5
+        Step(["doctor"], drop=DOCTOR_DROP),                                                                  # 6
+    ],
+    checks=[
+        ("crew up starts three stations", lambda r: r.launches() == 3),
+        ("roster shows each station's Claude Code",
+         lambda r: "1.0.0" in _cv_line(r, 1, "crew-reviewer") and "older than" not in r.out(1)),
+        ("doctor names it", lambda r: "crew-reviewer runs Claude Code 1.0.0" in r.out(2)),
+        ("status says nothing is behind", lambda r: not any(x.startswith("claude code:") for x in r.out(3).splitlines())),
+        ("roster flags an older station", lambda r: "1.0.0 (older than 1.1.0)" in _cv_line(r, 4, "crew-reviewer")),
+        ("status counts them",
+         lambda r: any(x.startswith("claude code: 3 station(s) run an older Claude Code than 1.1.0") for x in r.out(5).splitlines())),
+        ("doctor warns, and says how to update",
+         lambda r: any("crew-reviewer runs Claude Code 1.0.0, older than the 1.1.0 installed" in x and "crew update" in x
+                       for x in r.out(6).splitlines())),
+    ],
+    covers=["crew up starts three stations", "roster shows each station's Claude Code", "doctor names it",
+            "status says nothing is behind", "roster flags an older station", "status counts them",
+            "doctor warns, and says how to update"],
+))
+
+_cc("cc_versions_moved", "once the watch has moved every station onto the installed Claude Code, the roster flags none",
+    [_cv_round(), _cv_round(before=_all_idle), _cv_round(before=_all_idle), Step(["roster"], before=_all_idle)],
+    [("the watch moved all three", lambda r: _seen(r, 2) == _CC_ORDER),
+     ("roster has no flag any more", lambda r: r.code(3) == 0 and "older than" not in r.out(3) and "1.1.0" in _cv_line(r, 3, "crew-reviewer"))],
+    ["roster has no flag any more"])
+
+
+def _cc_dup(tmp: Path) -> None:
+    """Another session under the reviewer's name, and every session between turns."""
+    _all_idle(tmp)
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    rows.append({"id": "dup00001", "name": "crew-reviewer", "state": "working", "status": "idle", "sessionId": "other",
+                 "pid": 49999, "cwd": "/", "version": "1.4.0"})
+    p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+
+
+_cc("cc_move_dup", "a watch round that moves a station reports two sessions under one name",
+    [_cv_round(before=_cc_dup)],
+    [("the watch reports it after a move too",
+      lambda r: "TWO SESSIONS named crew-reviewer" in r.out(0) or "two-sessions" in _events(r))],
+    ["the watch reports it after a move too"], setup=_cc_setup(have="1.4.0", installed="1.5.0"))
+
+
+# --- claude_update_test.sh, the retry back-off views and the `crew update` waits (lines 154-313) -----------------------------
+# The sessions are the cc_move kind (stamp-version gives each new row the installed or spare version); `crew update` runs with a
+# poll of one second. A person's turn ending, or a halt, while `crew update` waits is a timer of the harness that edits the fake's
+# files a few seconds into the step.
+
+CB_TARES = CU_TARES
+CB_ENV = CU_ENV
+_CB_SPARE = {"spawn-version": "1.1.0\n", "stale-left": "all\n"}
+
+
+def _cb_all(*fns):
+    """A `before` that runs each of the hooks in turn."""
+    def before(tmp: Path) -> None:
+        for f in fns:
+            f(tmp)
+    return before
+
+
+def _cb_file(name: str, text: str):
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / name).write_text(text, encoding="utf-8")
+    return before
+
+
+def _cb_rows(tmp: Path, fn) -> None:
+    """Edit the rows of agents.json (fn(row) for each), in one step the fake never sees half-written."""
+    p = tmp / "claude" / "agents.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    for row in rows:
+        fn(row)
+    t = p.with_name("agents.json.tmp")
+    t.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    os.replace(t, p)
+
+
+def _cb_station_id(tmp: Path, name: str) -> str:
+    return json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[name]["id"]
+
+
+def _cb_current(name: str):
+    """The station's session shows the installed Claude Code."""
+    def before(tmp: Path) -> None:
+        sid, v = _cb_station_id(tmp, name), (tmp / "claude" / "version").read_text(encoding="utf-8").strip()
+        _cb_rows(tmp, lambda row: row.update(version=v) if row.get("id") == sid else None)
+    return before
+
+
+def _cb_later(secs: float, fn):
+    """A `before` hook's timer: fn(tmp) runs `secs` seconds into the step that follows (a daemon thread, ignored if the folder is gone)."""
+    import threading
+
+    def start(tmp: Path) -> None:
+        def go() -> None:
+            try:
+                fn(tmp)
+            except (OSError, ValueError):
+                pass
+        t = threading.Timer(secs, go)
+        t.daemon = True
+        t.start()
+    return start
+
+
+def _cb_idle_later(name: str, secs: float):
+    """The station is in a turn, and `secs` seconds into the step it is between turns again."""
+    def idle(tmp: Path) -> None:
+        sid = _cb_station_id(tmp, name)
+        _cb_rows(tmp, lambda row: row.update(status="idle") if row.get("id") == sid else None)
+    return _cb_all(_cc_busy(name), _cb_later(secs, idle))
+
+
+def _cb_halt_file(tmp: Path) -> None:
+    (tmp / "crew" / "HALT").write_text('{"at":1700000000,"reason":"testing"}\n', encoding="utf-8")
+
+
+def _cb_due(name: str):
+    """The station's back-off is over (its retry time is long past), and every session is between turns."""
+    def before(tmp: Path) -> None:
+        _all_idle(tmp)
+        p = tmp / "crew" / "stations.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        rows[name]["cc_retry_at"] = 1
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def _cb_after(*stations: str, reap: bool = False):
+    """The sessions started so far (and the processes left, with reap); for each station named, how long to its retry time
+    (up to the whole minute, the two engines run a moment apart), its failed moves and the version it failed on."""
+    base = _cc_after(reap)
+
+    def after(tmp: Path) -> dict:
+        d = base(tmp)
+        rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+        for st in stations:
+            at = rows[st].get("cc_retry_at")
+            d[st] = {"in": -(-(int(at) - int(time.time())) // 60) * 60 if at else None, "fails": rows[st].get("cc_fails"),
+                     "failed": rows[st].get("cc_failed")}
+        return d
+    return after
+
+
+def _cb_has_put(r: Run, keys: set, **want) -> bool:
+    """Tares was told the retry list, with exactly these stations (and for the first of them, these fields)."""
+    for p in _cu_puts(r):
+        if set(p["stations"]) == keys and all(p["stations"][sorted(keys)[0]].get(k) == v for k, v in want.items()):
+            return True
+    return False
+
+
+def _cb_clean(r: Run, name: str) -> bool:
+    return _cc_marks(r, name) == [None, None, None, None]
+
+
+# A spare that is claimed after the process listing was read (its claim socket is gone) is not stopped. The suite's fake `ps` and
+# `sort` are on the bash side's PATH, and TARES_FAKE_PS_DIR makes the Python side read the same files.
+CB_SORT = '''#!/usr/bin/env bash
+case " $* " in *" -V "*) ;; *) exec /usr/bin/sort "$@" ;; esac
+in=$(cat)
+if [ -f "$FAKE_CLAUDE_STATE/sort-hook" ] && grep -q '0\\.9\\.9' <<<"$in"; then hook=$(cat "$FAKE_CLAUDE_STATE/sort-hook"); rm -f "$FAKE_CLAUDE_STATE/sort-hook"; bash -c "$hook"; fi
+printf '%s\\n' "$in" | /usr/bin/sort "$@"
+'''
+
+
+def _cb_fake_ps(inner, sort: bool = False):
+    """The setup `inner`, then the suite's fake `ps` (and with `sort` its `sort` that runs the sort-hook) on the bash side's PATH and
+    TARES_FAKE_PS_DIR for the Python side: an empty process list, whatever else runs on the machine."""
+    def setup(tmp: Path, env: dict) -> None:
+        inner(tmp, env)
+        bindir = tmp / "bin"
+        bindir.mkdir(exist_ok=True)
+        shutil.copy(HERE / "fake-ps", bindir / "ps")
+        (bindir / "ps").chmod(0o755)
+        if sort:
+            (bindir / "sort").write_text(CB_SORT, encoding="utf-8")
+            (bindir / "sort").chmod(0o755)
+        env["TARES_FAKE_PS_DIR"] = str(tmp / "claude")
+        (tmp / "claude" / "ps-list").touch()   # no spare in the pool, whatever else runs on the machine
+    return setup
+
+
+_CB_V = {"crew-reviewer": "1.2.1"}
+
+scenario(Scenario(
+    name="cc_backoff",
+    suite="claude_update",
+    about="every restart lands on an old spare: the station is marked and shown as retrying (roster, status, doctor, Tares), the one "
+          "backing off is not tried again and does not hold the orchestrator back, the wait doubles, and a spare out of the way clears the marks",
+    setup=_cb_fake_ps(_cc_setup(have="1.2.0", installed="1.2.1", versions=_CB_V, files=_CB_SPARE)),
+    tares=CB_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=[
+        Step(["crew", "watch", "--once"], before=_all_idle, after=_cb_after(_L)),                                   # 0 the releaser keeps landing on old spares
+        Step(["roster"]),                                                                                            # 1
+        Step(["crew", "status"]),                                                                                    # 2
+        Step(["doctor"], drop=DOCTOR_DROP),                                                                          # 3
+        Step(["crew", "watch", "--once"], before=_all_idle, after=_cb_after(_L, _O)),                                # 4 the orchestrator is tried instead
+        Step(["crew", "watch", "--once"], before=_all_idle, after=_cb_after()),                                     # 5 everyone is backing off
+        Step(["crew", "watch", "--once"], before=_cb_due(_L), after=_cb_after(_L)),                                 # 6 the back-off is over
+        Step(["crew", "watch", "--once"], before=_cb_all(_cb_due(_L), _cb_file("stale-left", "0\n")), after=_cb_after(_L)),  # 7 no spare in the way
+        Step(["crew", "update", "--wait", "5"], env=CB_ENV, before=_cb_all(_all_idle, _cb_file("stale-left", "all\n")), after=_cb_after(_L, _O)),  # 8
+        Step(["crew", "update", "--wait", "5"], env=CB_ENV, before=_cb_all(_all_idle, _cb_file("stale-left", "0\n")), after=_cb_after()),      # 9
+    ],
+    checks=[
+        ("roster flags it as retrying",
+         lambda r: "1.1.0 (older than 1.2.1, retrying in 10 min)" in _cv_line(r, 1, _L)),
+        ("status counts it as retrying",
+         lambda r: re.search(r"^claude code: 2 station\(s\) run an older Claude Code than 1\.2\.1.*1 retrying after coming back on an old spare",
+                             r.out(2), re.M) is not None),
+        ("doctor says it keeps coming back and when the watch retries",
+         lambda r: any(f"{_L} runs Claude Code 1.1.0" in x and "keeps coming back on an old spare; the watch retries in 10 min" in x
+                       for x in r.out(3).splitlines())),
+        ("Tares has it, for the Crew page", lambda r: _cb_has_put(r, {_L}, target="1.2.1", fails=1)),
+        ("the station backing off is not tried again, and does not hold the orchestrator back",
+         lambda r: r.snap(4)["launched"][-1] == _O and len(r.snap(4)["launched"]) == len(r.snap(0)["launched"]) + 4
+         and r.snap(4)[_O]["failed"] == "1.2.1" and r.snap(4)[_L]["fails"] == 1),
+        ("everyone is backing off: nothing more is tried", lambda r: r.snap(5)["launched"] == r.snap(4)["launched"]),
+        ("Tares lists both", lambda r: _cb_has_put(r, {_L, _O})),
+        ("after the backoff: three more tries, no second new conversation, the wait doubles",
+         lambda r: len(r.snap(6)["launched"]) == len(r.snap(5)["launched"]) + 3 and all("--resume" in a for a in _bg_of(r, _L)[-3:])
+         and r.snap(6)[_L]["fails"] == 2 and r.snap(6)[_L]["in"] == 1200),
+        ("once a spare is not in the way it moves, and every mark is cleared",
+         lambda r: len(r.snap(7)["launched"]) == len(r.snap(6)["launched"]) + 1 and r.snap(7)["launched"][-1] == _L
+         and r.snap(7)[_L]["fails"] is None and r.snap(7)[_L]["in"] is None and _runs(r, _L) == "1.2.1"),
+        ("crew update ignores the backoff, tries the orchestrator again and says the watch retries",
+         lambda r: r.code(8) != 0 and "not every station runs Claude Code 1.2.1" in r.out(8) and "the watch tries again in" in r.out(8)
+         and len(r.snap(8)["launched"]) >= len(r.snap(7)["launched"]) + 3 and r.snap(8)[_O]["fails"] == 2),
+        ("crew update, once the spares are gone: every station on 1.2.1",
+         lambda r: r.code(9) == 0 and all(_runs(r, s) == "1.2.1" for s in (_O, _R, _L))
+         and "every station runs Claude Code 1.2.1, one session each" in r.out(9)),
+        ("the failure marks are cleared, here and on Tares",
+         lambda r: _cb_clean(r, _L) and _cb_clean(r, _O) and _cu_puts(r)[-1] == {"stations": {}}),
+    ],
+    covers=["roster flags it as retrying", "status counts it as retrying", "doctor says it keeps coming back and when the watch retries",
+            "Tares has it, for the Crew page", "the station backing off is not tried again, and does not hold the orchestrator back",
+            "everyone is backing off: nothing more is tried", "Tares lists both",
+            "after the backoff: three more tries, no second new conversation, the wait doubles",
+            "once a spare is not in the way it moves, and every mark is cleared",
+            "crew update, once the spares are gone: every station on 1.2.1"],
+))
+
+
+# The retries look again at what the first restart left: a halt, or someone opening the station, stops them.
+CB_HALT_HOOK = 'printf \'{"at":1700000000,"reason":"retry-test"}\\n\' > "$FACTORY_CREW_HOME/HALT"'
+CB_ATTACH_HOOK = 'bash -c "exec -a \'claude attach $FAKE_ID\' sleep 120" & echo $! > "$FAKE_CLAUDE_STATE/attach.pid"'
+
+
+def _cb_kill_attach(tmp: Path) -> dict:
+    """After the step: whoever the hook left attached is closed again."""
+    try:
+        os.kill(int((tmp / "claude" / "attach.pid").read_text(encoding="utf-8").strip()), 9)
+    except (OSError, ValueError):
+        pass
+    time.sleep(0.3)
+    return _cc_after()(tmp)
+
+
+scenario(Scenario(
+    name="cc_retry_interrupted",
+    suite="claude_update",
+    about="the first restart lands on an old spare, then a halt, or someone opening the station, stops the retries; a crew update then moves them all",
+    setup=_cc_setup(have="1.2.1", installed="1.2.5", files=_CB_SPARE),
+    tares=CB_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    not_windows=_WIN_NO_EXEC_A,
+    steps=[
+        Step(["crew", "watch", "--once"], before=_cb_all(_all_idle, _cb_file("on-bg", CB_HALT_HOOK)), after=_cc_after()),       # 0
+        Step(["crew", "resume"]),                                                                                              # 1
+        Step(["crew", "watch", "--once"], before=_cb_all(_all_idle, _cb_file("on-bg", CB_ATTACH_HOOK)), after=_cb_kill_attach),  # 2
+        Step(["crew", "update", "--wait", "5"], env=CB_ENV, before=_cb_all(_cb_file("stale-left", "0\n"), _all_idle), after=_cc_after()),  # 3
+    ],
+    checks=[
+        ("halted after the first try: no second restart",
+         lambda r: len(r.snap(0)["launched"]) == 1 and "came back on Claude Code 1.1.0" in r.out(0) and not _stn(r, _R, "cc_failed")),
+        ("opened after the first try: no second restart",
+         lambda r: len(r.snap(2)["launched"]) == 2 and "came back on Claude Code 1.1.0" in r.out(2) and not _stn(r, _R, "cc_failed")),
+        ("the stations all run 1.2.5 after it", lambda r: all(_runs(r, s) == "1.2.5" for s in (_O, _R, _L))),
+    ],
+    covers=["halted after the first try: no second restart", "opened after the first try: no second restart",
+            "the stations all run 1.2.5 after it"],
+))
+
+
+def _cb_raced(tmp: Path) -> None:
+    _all_idle(tmp)
+    p = subprocess.Popen(["sleep", "300"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    _CC_PROCS[(str(tmp), "raced")] = p
+    (tmp / "raced.claim.sock").write_text("", encoding="utf-8")
+    (tmp / "claude" / "ps-list").write_text(f"{p.pid} claude bg-pty-host --bg-pty-host {tmp}/raced.pty.sock 200 50 -- /x/versions/0.9.9 "
+                                            f"--bg-spare {tmp}/raced.claim.sock\n", encoding="utf-8")
+    (tmp / "claude" / "sort-hook").write_text(f"rm -f {tmp}/raced.claim.sock", encoding="utf-8")
+
+
+def _cb_raced_after(tmp: Path) -> dict:
+    d = _cc_after(reap=True)(tmp)
+    d["hook_used"] = not (tmp / "claude" / "sort-hook").exists()
+    return d
+
+
+scenario(Scenario(
+    name="cc_update_raced",
+    suite="claude_update",
+    about="an older spare whose claim socket is gone between the listing and the stop (claimed in the meantime) is left alone",
+    setup=_cb_fake_ps(_cc_setup(have="1.2.5", installed="1.2.6"), sort=True),
+    tares=CB_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    not_windows=_WIN_NO_EXEC_A,
+    steps=[Step(["crew", "update", "--wait", "5"], env=CB_ENV, before=_cb_raced, after=_cb_raced_after)],
+    checks=[("a spare claimed since the listing is left alone",
+             lambda r: r.code(0) == 0 and r.snap(0)["alive"]["raced"] and r.snap(0)["hook_used"])],
+    covers=["a spare claimed since the listing is left alone"],
+))
+
+
+# crew update on demand: waits for a busy station, the orchestrator last; a station already current is left; crew restart does all.
+_cc("cc_update_busy", "crew update waits for a busy station and then moves it, the orchestrator last; one already current is left; crew restart restarts all",
+    [Step(["crew", "update", "--wait", "30"], env=CB_ENV, before=_cb_idle_later(_R, 3), after=_cc_after()),
+     Step(["crew", "update"], env=CB_ENV, before=_all_idle, after=_cc_after()),
+     Step(["crew", "restart"], env=CB_ENV, after=_cc_after())],
+    [("crew update waits for a busy station and then does it",
+      lambda r: r.code(0) == 0 and "waiting for crew-reviewer to be idle" in r.out(0) and _runs(r, _R) == "1.3.0"),
+     ("orchestrator last", lambda r: len(_seen(r, 0)) == 3 and _seen(r, 0)[-1] == _O),
+     ("already current: nothing restarted",
+      lambda r: _seen(r, 1) == _seen(r, 0) and "already runs Claude Code 1.3.0" in r.out(1)),
+     ("crew restart restarts every station anyway, the orchestrator last",
+      lambda r: r.code(2) == 0 and len(_seen(r, 2)) == len(_seen(r, 1)) + 3 and _seen(r, 2)[-1] == _O)],
+    ["crew update waits for a busy station and then does it", "orchestrator last",
+     "crew restart restarts every station anyway, the orchestrator last"],
+    setup=_cb_fake_ps(_cc_setup(have="1.2.0", installed="1.3.0")))
+
+# Someone has a station open: crew update does not interrupt, and gives up at --wait.
+_cc("cc_update_attached", "a station someone has open is not restarted: crew update gives up at --wait, says who it waited for, and moves the others",
+    [Step(["crew", "update", "--wait", "3"], env=CB_ENV, before=_cc_attach(_R), after=_cc_after(reap=True))],
+    [("an attached station is not restarted; crew update says who it waited for",
+      lambda r: r.code(0) != 0 and _stn(r, _R) == "bbbb0002" and "gave up waiting for crew-reviewer" in r.out(0)
+      and "someone has it open" in r.out(0)),
+     ("the others were done", lambda r: _runs(r, _L) == "1.4.0" and _runs(r, _O) == "1.4.0")],
+    ["an attached station is not restarted; crew update says who it waited for", "the others were done"],
+    setup=_cc_setup(have="1.3.0", installed="1.4.0"), not_windows=_WIN_NO_EXEC_A)
+
+# crew update run from a station (the orchestrator) leaves that station out instead of waiting on itself, and says its way out.
+_CB_SELF = {**CB_ENV, "FACTORY_STATION": _O}
+
+
+def _cb_runs_after(tmp: Path) -> dict:
+    """The sessions started, and each station's session id and Claude Code version, as the step left them."""
+    d = _cc_after()(tmp)
+    ids = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    rows = json.loads((tmp / "claude" / "agents.json").read_text(encoding="utf-8"))
+    d["ids"] = {n: v["id"] for n, v in ids.items()}
+    d["runs"] = {n: next((x.get("version") for x in rows if x.get("id") == v["id"]), None) for n, v in ids.items()}
+    return d
+
+
+_cc("cc_update_self", "crew update from the orchestrator leaves it out and says how it moves (only when it is behind); --force says it needs "
+                      "another session; the way out is said even when another station fails",
+    [Step(["crew", "update"], env=_CB_SELF, before=_cc_busy(_O), after=_cb_runs_after),                                        # 0
+     Step(["crew", "update"], env=_CB_SELF, before=_cb_all(_all_idle, _cb_current(_O)), after=_cc_after()),                    # 1
+     Step(["crew", "update", "--force"], env=_CB_SELF, before=_all_idle, after=_cc_after()),                                   # 2
+     Step(["crew", "update", "--wait", "5"], env=_CB_SELF,
+          before=_cb_all(_all_idle, _cb_file("version", "1.5.8\n"), _cb_file("spawn-version", "1.1.0\n"), _cb_file("stale-left", "all\n")),
+          after=_cc_after())],                                                                                                 # 3
+    [("from the orchestrator: it finishes, the others move, the orchestrator is left",
+      lambda r: r.code(0) == 0 and len(_seen(r, 0)) == 2 and r.snap(0)["ids"][_O] == "aaaa0001"
+      and r.snap(0)["runs"][_R] == "1.5.5" and r.snap(0)["runs"][_L] == "1.5.5"),
+     ("it says how the orchestrator moves", lambda r: "crew-orchestrator, which ran this command, moves when" in r.out(0)),
+     ("the caller already runs the version: nothing restarted, nothing said about its move",
+      lambda r: r.code(1) == 0 and _seen(r, 1) == _seen(r, 0) and "crew-orchestrator already runs Claude Code 1.5.5" in r.out(1)
+      and "which ran this command" not in r.out(1)),
+     ("a caller that is not behind: it is told to restart itself from another session, not that the watch moves it",
+      lambda r: r.code(2) == 0 and re.search(r"crew-orchestrator, which ran this command, can only be restarted from another session: run .* restart crew-orchestrator there", r.out(2))
+      and "moves when" not in r.out(2)),
+     ("another station fails: the caller's way out is still said",
+      lambda r: r.code(3) not in (0, 124) and "crew-orchestrator, which ran this command, moves when" in r.out(3)
+      and "not every station runs Claude Code 1.5.8" in r.out(3))],
+    ["from the orchestrator: it finishes, the others move, the orchestrator is left", "it says how the orchestrator moves",
+     "the caller already runs the version: nothing restarted, nothing said about its move",
+     "a caller that is not behind: it is told to restart itself from another session, not that the watch moves it",
+     "another station fails: the caller's way out is still said"],
+    setup=_cb_fake_ps(_cc_setup(have="1.5.4", installed="1.5.5")))
+
+# A halt in the middle of crew update stops it; it does not wait for ever.
+_cc("cc_update_halted", "a halt while crew update waits for a busy station stops it and says so",
+    [Step(["crew", "update", "--wait", "0"], env=CB_ENV, before=_cb_all(_cc_busy(_R), _cb_later(2.5, _cb_halt_file)), after=_cc_after()),
+     Step(["crew", "resume"])],
+    [("halted in the middle: crew update stops and says so",
+      lambda r: r.code(0) not in (0, 124) and "the crew was halted" in r.out(0))],
+    ["halted in the middle: crew update stops and says so"],
+    setup=_cb_fake_ps(_cc_setup(have="1.5.5", installed="1.5.6")))
+
+# --wait 00 is 0, no deadline; 08 is 8 seconds, not an octal error.
+_cc("cc_update_wait_zero", "--wait 00 is no deadline: crew update waits for the busy reviewer; --wait 08 is 8 seconds, not an octal error",
+    [Step(["crew", "update", "--wait", "00"], env=CB_ENV, before=_cb_idle_later(_R, 3), after=_cc_after()),
+     Step(["crew", "update", "--wait", "08"], env=CB_ENV, before=_cb_all(_cb_file("version", "1.5.7.1\n"), _cb_idle_later(_R, 3)), after=_cc_after())],
+    [("--wait 00 is 0: it waits for the busy reviewer, then every station moves",
+      lambda r: r.code(0) == 0 and "waiting for crew-reviewer to be idle" in r.out(0) and "gave up waiting" not in r.out(0)
+      and len(_seen(r, 0)) == 3),
+     ("--wait 08 is 8 seconds, not an octal error: the busy reviewer is waited for",
+      lambda r: r.code(1) == 0 and "value too great" not in r.out(1) and "waiting for crew-reviewer to be idle" in r.out(1)
+      and _runs(r, _R) == "1.5.7.1")],
+    ["--wait 00 is 0: it waits for the busy reviewer, then every station moves",
+     "--wait 08 is 8 seconds, not an octal error: the busy reviewer is waited for"],
+    setup=_cb_fake_ps(_cc_setup(have="1.5.6", installed="1.5.7")))
+
+
+
+# --- claude_update_test.sh, from the schedule words to the end (lines 321-499) ---------------------------------------------------
+# These need a Tares that keeps what it is told: the crew settings (idle_wake, claude_update, the kit freeze), the plan's pace and
+# the retry list. FakeTares answers a route with a function of the request when the answer is a callable; what it keeps is its
+# `state`. A scenario's `run_before` hook changes that state between two steps (the suite's `api PUT`, `plan`), and the fake
+# Claude Code's on-agents hook (a shell command, run once at the first read of the session list) changes it, or freezes the crew,
+# in the middle of a round.
+
+def _st_settings(fake) -> dict:
+    return fake.state.setdefault("settings", dict(CU_SETTINGS))
+
+
+def _st_get_settings(body: str, fake) -> dict:
+    return {"settings": _st_settings(fake)}
+
+
+def _st_put_settings(body: str, fake) -> dict:
+    """The real PUT keeps what it is given and answers the whole settings (the kit at the top level)."""
+    s = _st_settings(fake)
+    s.update(json.loads(body or "{}"))
+    return s
+
+
+def _st_get_pace(body: str, fake) -> dict:
+    return fake.state.get("pace", {"on": False})
+
+
+def _st_post_pace(body: str, fake) -> dict:
+    """A test route: the fake Claude Code's hook posts the pace document the plan has in the middle of a round."""
+    fake.state["pace"] = json.loads(body)
+    return {"ok": True}
+
+
+def _st_put_retry(body: str, fake) -> dict:
+    fake.state["retry"] = json.loads(body or "{}").get("stations", {})
+    return {"ok": True}
+
+
+def _st_tares() -> dict:
+    return {**CU_TARES,
+            "GET /api/crew/settings": (200, _st_get_settings), "PUT /api/crew/settings": (200, _st_put_settings),
+            "GET /api/crew/pace": (200, _st_get_pace), "POST /test/pace": (200, _st_post_pace),
+            CU_RETRY: (200, _st_put_retry)}
+
+
+ST_ASKED = ("GET ", "PUT /api/crew/settings", "POST /test/pace")   # the freeze's PUT holds the time it was made
+
+
+def _st_set(**kw):
+    """run_before: the crew settings (the suite's `api PUT /api/crew/settings`)."""
+    def rb(run: "Run") -> None:
+        _st_settings(run.tares).update(kw)
+    return rb
+
+
+def _st_plan(session, weekly, **kw):
+    """run_before: the plan's pace document (the suite's `plan`); session% and weekly%."""
+    def rb(run: "Run") -> None:
+        run.tares.state["pace"] = _pc_doc(session, weekly, **kw)
+    return rb
+
+
+def _st_retry(stations: dict):
+    """run_before: the retry list Tares holds (the suite's `api PUT /api/crew/claude-retry`)."""
+    def rb(run: "Run") -> None:
+        run.tares.state["retry"] = json.loads(json.dumps(stations))
+    return rb
+
+
+def _st_keep(name: str):
+    """run_before: keep the retry list Tares holds under `name`, for a check."""
+    def rb(run: "Run") -> None:
+        run.marks[name] = json.loads(json.dumps(run.tares.state.get("retry")))
+    return rb
+
+
+def _st_run(*fns):
+    """run_before hooks, one after the other."""
+    def rb(run: "Run") -> None:
+        for f in fns:
+            f(run)
+    return rb
+
+
+def _st_cc(name: str, about: str, steps: list, checks: list, covers: list, setup, not_windows: str = "") -> Scenario:
+    return scenario(Scenario(name=name, suite="claude_update", about=about, setup=_cb_fake_ps(setup), tares=_st_tares(),
+                             steps=steps, checks=checks, covers=covers, not_windows=not_windows,
+                             ignore_asked=ST_ASKED, ignore_calls=_CC_READS))
+
+
+def _st_prompts(r: Run, name: str) -> list:
+    return [a[-1] for a in _bg_of(r, name)]
+
+
+_NF = "claude-newer"
+
+
+def _st_after(tmp: Path) -> dict:
+    """The sessions started so far, how many times the watch said a newer Claude Code (events) and the note of the version said,
+    and for every station: the marks (cc_failed, cc_fails, cc_fresh), its id, the Claude Code its session shows, the starts that
+    resumed its conversation and that started it again, and the prompt of its last start."""
+    d = _cc_after()(tmp)
+    ev = tmp / "crew" / "events.jsonl"
+    lines = ev.read_text(encoding="utf-8").splitlines() if ev.is_file() else []
+    d["newer"] = sum(1 for x in lines if x.strip() and json.loads(x).get("event") == "claude-newer")
+    note = tmp / "crew" / _NF
+    d["note"] = note.read_text(encoding="utf-8").strip() if note.is_file() else None
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    agents = json.loads((tmp / "claude" / "agents.json").read_text(encoding="utf-8"))
+    ver = {a.get("id"): a.get("version") for a in agents}
+    d["marks"] = {n: [v.get("cc_failed"), v.get("cc_fails"), v.get("cc_fresh")] for n, v in sorted(rows.items())}
+    d["ids"] = {n: v.get("id") for n, v in sorted(rows.items())}
+    d["runs"] = {n: ver.get(v.get("id")) for n, v in sorted(rows.items())}
+    resumed, again, last = {}, {}, {}
+    try:
+        calls = (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        calls = []
+    for line in calls:
+        args = json.loads(line)["args"]
+        if "--bg" not in args:
+            continue
+        resumed[args[2]] = resumed.get(args[2], 0) + (1 if "--resume" in args else 0)
+        again[args[2]] = again.get(args[2], 0) + (1 if "started you again" in args[-1] else 0)
+        last[args[2]] = args[-1]
+    d["resumed"], d["again"], d["last"] = resumed, again, last
+    return d
+
+
+def _st_note(version: str):
+    """before: the note of the version already said holds `version` (the suite writes it by hand)."""
+    def before(tmp: Path) -> None:
+        (tmp / "crew" / _NF).write_text(version + "\n", encoding="utf-8")
+    return before
+
+
+def _st_watch(before=None, env=None) -> Step:
+    return Step(["crew", "watch", "--once"], env=env or {}, before=before or _all_idle, after=_st_after)
+
+
+def _st_update(before=None, env=None, run_before=None, wait: str = "5") -> Step:
+    return Step(["crew", "update", "--wait", wait], env={**CB_ENV, **(env or {})}, before=before or _all_idle, after=_st_after,
+                run_before=run_before)
+
+
+def _st_line(r: Run, i: int, pattern: str) -> bool:
+    return re.search(pattern, r.out(i), re.M) is not None
+
+
+# What a restart says about the schedule follows idle_wake: off, re-arm it; on, arm none (the factory holds the tick).
+_st_cc("cc_rearm", "a Claude Code move is a restart: it says to re-arm the schedule with idle_wake off, and to arm no tick with it on",
+       [_st_update(run_before=_st_set(idle_wake=False)),
+        _st_update(before=_cc_installed("1.6.0"), run_before=_st_set(idle_wake=True), env={"FACTORY_NOW": str(PC_N0)})],
+       [("idle_wake off: the Claude Code restart says to re-arm the schedule",
+         lambda r: r.code(0) == 0 and all("re-arm your schedule if you have one" in _st_prompts(r, s)[0] for s in (_O, _R, _L))),
+        ("idle_wake on: the Claude Code restart says to arm no tick",
+         lambda r: r.code(1) == 0 and all("arm no tick of your own" in _st_prompts(r, s)[-1]
+                                          and "re-arm your schedule" not in _st_prompts(r, s)[-1] for s in (_O, _R, _L)))],
+       ["idle_wake off: the Claude Code restart says to re-arm the schedule",
+        "idle_wake on: the Claude Code restart says to arm no tick"],
+       _cc_setup(have="1.5.8", installed="1.5.9"))
+
+
+# A frozen crew moves no station onto a newer Claude Code either, and says so once for each version; `crew update` is the person
+# asking, so it still works; unfreezing lets the watch move.
+_st_cc("cc_frozen", "a frozen crew: the watch says a newer Claude Code once for each version and moves nothing, status says why, "
+                    "crew update still moves every station, and unfreezing lets the watch move a station",
+       [Step(["crew", "freeze"], before=_all_idle, after=_st_after),                                          # 0
+        _st_watch(),                                                                                          # 1
+        _st_watch(),                                                                                          # 2
+        Step(["crew", "status"]),                                                                             # 3
+        _st_update(),                                                                                         # 4
+        _st_watch(before=_cc_installed("1.10.2")),                                                            # 5
+        Step(["crew", "unfreeze"], after=_st_after),                                                          # 6
+        _st_watch()],                                                                                         # 7
+       [("frozen: the watch moves no station onto a newer Claude Code",
+         lambda r: r.code(1) == 0 and r.snap(1)["launched"] == r.snap(0)["launched"] == []),
+        ("frozen: it says there is a newer Claude Code",
+         lambda r: _st_line(r, 1, r"Claude Code 1\.10\.1 is newer than the one \d+ station\(s\) run; not moving stations while the kit is frozen")),
+        ("frozen: the same version is said once",
+         lambda r: r.snap(2)["newer"] == 1 and "is newer than" not in r.out(2) and r.snap(2)["launched"] == []),
+        ("frozen: status says the freeze stops the watch moving them",
+         lambda r: _st_line(r, 3, r"^claude code: \d+ station\(s\) run an older Claude Code than 1\.10\.1; the freeze stops the watch moving them")),
+        ("frozen: crew update still moves every station",
+         lambda r: r.code(4) == 0 and all(r.snap(4)["runs"][s] == "1.10.1" for s in (_O, _R, _L))),
+        ("frozen: the next version is said once more",
+         lambda r: r.snap(5)["newer"] == 2 and "Claude Code 1.10.2 is newer" in r.out(5)),
+        ("unfrozen: the watch moves a station again",
+         lambda r: r.code(7) == 0 and len(r.snap(7)["launched"]) == len(r.snap(6)["launched"]) + 1)],
+       ["frozen: the watch moves no station onto a newer Claude Code", "frozen: it says there is a newer Claude Code",
+        "frozen: the same version is said once", "frozen: status says the freeze stops the watch moving them",
+        "frozen: crew update still moves every station", "frozen: the next version is said once more",
+        "unfrozen: the watch moves a station again"],
+       _cc_setup(have="1.10.0", installed="1.10.1"))
+
+
+# The note of the version already said (claude-newer) goes when nobody is behind any more, and with a freeze or unfreeze.
+_st_cc("cc_frozen_note", "the note of the Claude Code already said is kept while a station is behind, and goes when nobody is, "
+                         "on a freeze and on an unfreeze",
+       [Step(["crew", "freeze"], before=_all_idle),                                                           # 0
+        _st_watch(),                                                                                          # 1
+        _st_update(),                                                                                         # 2
+        _st_watch(),                                                                                          # 3
+        Step(["crew", "unfreeze"], before=_st_note("9.9.9"), after=_st_after),                                # 4
+        Step(["crew", "freeze"], before=_st_note("9.9.9"), after=_st_after),                                  # 5
+        Step(["crew", "unfreeze"])],                                                                          # 6
+       [("frozen: the version said is noted", lambda r: r.snap(1)["note"] == "1.10.4"),
+        ("frozen, nobody behind: the note is cleared", lambda r: r.snap(3)["note"] is None and "is newer than" not in r.out(3)),
+        ("unfreeze clears the note", lambda r: r.snap(4)["note"] is None),
+        ("freeze clears the note", lambda r: r.snap(5)["note"] is None)],
+       ["frozen: the version said is noted", "frozen, nobody behind: the note is cleared", "unfreeze clears the note",
+        "freeze clears the note"],
+       _cc_setup(have="1.10.3", installed="1.10.4"))
+
+
+# A freeze that lands in the middle of a round (`crew freeze` while the watch has picked a station) wins: nothing is restarted.
+# The fake Claude Code freezes the crew once the watch has read the session list.
+# KNOWN DIFFERENCE, bash first: the checks pass on both engines and nothing is restarted by either, but the engines do not print
+# the same. Bash keeps the crew settings it read at the top of the round (the frozen check of the kit part and of the Claude Code
+# part) and reads them again only before a move, so a freeze that lands in between goes unsaid. The Python steps read the settings
+# for the first time after the hook ran, see the freeze, and say "kit ... is newer than the frozen kit" or "Claude Code ... is
+# newer" (a kit-newer or claude-newer event, and the note), once. See the report of TR-1161.
+FREEZE_HOOK = f'"{sys.executable}" -m tares.crew crew freeze'
+
+_st_cc("cc_frozen_midround", "a freeze that lands in the middle of a round wins: nothing is restarted onto the newer Claude Code",
+       [Step(["crew", "watch", "--once"], before=_cb_all(_all_idle, _cb_file("on-agents", FREEZE_HOOK), _cb_file("on-agents-at", "1\n")),
+             after=_st_after),
+        Step(["crew", "status"]),
+        Step(["crew", "unfreeze"])],
+       [("frozen in the middle of the round: nothing moves onto the newer Claude Code",
+         lambda r: r.snap(0)["launched"] == [] and _st_line(r, 1, r"^FROZEN"))],
+       ["frozen in the middle of the round: nothing moves onto the newer Claude Code"],
+       _cc_setup(have="1.10.4", installed="1.10.5"), not_windows=CU_NO_HOOK)
+
+
+
+# --- the pace, the helpers, the retry marks and the note for the caller (lines 351-499) -------------------------------------------
+
+def _rw(before=None, env=None, run_before=None) -> Step:
+    """One watch round whose snap is _st_after (the stations idle first, unless `before` says otherwise)."""
+    return Step(["crew", "watch", "--once"], env=env or {}, before=_all_idle if before is None else before, after=_st_after,
+                run_before=run_before)
+
+
+def _ru(before=None, env=None, run_before=None, wait: str = "5") -> Step:
+    return Step(["crew", "update", "--wait", wait], env={**CB_ENV, **(env or {})}, before=_all_idle if before is None else before,
+                after=_st_after, run_before=run_before)
+
+
+def _st_mark(name: str):
+    """run_before: keep the pace document Tares holds now, for a check."""
+    def rb(run: "Run") -> None:
+        run.marks[name] = json.loads(json.dumps(run.tares.state.get("pace")))
+    return rb
+
+
+def _st_plan_later(secs: float, session, weekly):
+    """run_before: `secs` seconds into the step that follows, the plan's pace document is the one for these levels."""
+    import threading
+
+    def rb(run: "Run") -> None:
+        def go() -> None:
+            run.tares.state["pace"] = _pc_doc(session, weekly)
+        t = threading.Timer(secs, go)
+        t.daemon = True
+        t.start()
+    return rb
+
+
+def _rt_new(r: Run, i: int, j: int) -> int:
+    """The sessions started between the snaps of step j and step i."""
+    return len(r.snap(i)["launched"]) - len(r.snap(j)["launched"])
+
+
+_RT_SETTLE = "the notes pace sends to a crew at its limit are restarts too; let them go first"
+_RT_NO = WIN_NO_PERCENT + "; the fake Claude Code's mid-round hook is a shell command"
+
+# Pace: a Claude Code move is a restart, a model turn, so it never goes into a plan limit that is full and has not reset (the watch
+# moves nothing, `crew update` says why and restarts nothing), and moves again once the limit has reset.
+_st_cc("cc_pace_limit", "a plan limit that is full: the watch moves no station onto a newer Claude Code, crew update says so and "
+                        "restarts nothing, and once the limit has reset the watch moves a station again",
+       [_rw(run_before=_st_run(_st_set(pace=True, idle_wake=False), _st_plan(100, 10))),                      # 0 settle
+        _rw(), _rw(),                                                                                         # 1, 2
+        _rw(before=_cc_installed("1.11.0")), _rw(), _rw(), _rw(),                                             # 3-6 the limit is full
+        _ru(),                                                                                                # 7
+        _rw(run_before=_st_plan(10, 10)), _rw(), _rw(), _rw()],                                               # 8-11 reset
+       [("limit full: the watch moves no station onto the newer Claude Code",
+         lambda r: r.snap(6)["launched"] == r.snap(2)["launched"] and r.snap(6)["runs"][_R] == r.snap(2)["runs"][_R]
+         and all(r.code(i) == 0 for i in (3, 4, 5, 6))),
+        ("limit full: crew update says so and restarts nothing",
+         lambda r: r.code(7) != 0 and _st_line(r, 7, r"the plan.s limit is full until 20") and r.snap(7)["launched"] == r.snap(6)["launched"]),
+        ("the limit has reset: the watch moves a station again",
+         lambda r: _rt_new(r, 11, 7) > 0 and r.snap(11)["runs"][r.snap(11)["launched"][-1]] == "1.11.0")],
+       ["limit full: the watch moves no station onto the newer Claude Code", "limit full: crew update says so and restarts nothing",
+        "the limit has reset: the watch moves a station again"],
+       _cc_setup(have="1.10.9", installed="1.10.9"), not_windows=WIN_NO_PERCENT)
+
+
+# The limit fills in the middle of a round (the watch read the plan before it did): the move waits. Below the limit, slow, the
+# restart tells the station to tick every 45 minutes. The limit fills while crew update waits for a busy station: it stops there.
+PACE_FULL_HOOK = ("curl -sS -X POST -H 'Content-Type: application/json' --data '" + json.dumps(_pc_doc(100, 10))
+                  + "' \"$TARESD_URL/test/pace\"")
+
+_st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is restarted onto the newer Claude Code; slow, not full: "
+                       "crew update moves them and says to re-arm at 45 minutes; it fills while crew update waits: it stops there",
+       [Step(["crew", "watch", "--once"], env={}, after=_st_after,                                            # 0
+             before=_cb_all(_all_idle, _cb_file("on-agents", PACE_FULL_HOOK), _cb_file("on-agents-at", "1\n")),
+             run_before=_st_run(_st_set(pace=True, idle_wake=False), _st_plan(10, 10))),
+        _rw(run_before=_st_run(_st_mark("filled"), _st_plan(90, 10))), _rw(), _rw(),                          # 1-3
+        _ru(before=_cc_installed("1.11.2")),                                                                  # 4
+        _ru(before=_cb_all(_cc_installed("1.11.3"), _cb_idle_later(_R, 3.5)), env={}, wait="30",              # 5
+            run_before=_st_run(_st_plan(10, 10), _st_plan_later(2.5, 100, 10)))],
+       [("the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
+         lambda r: r.marks["filled"]["at_limit"] is True and not _st_line(r, 0, r"restarting .* on 1\.11\.1") and r.snap(0)["launched"] == []),
+        ("below the limit, crew update moves them",
+         lambda r: r.code(4) == 0 and all(r.snap(4)["runs"][s] == "1.11.2" for s in (_O, _R, _L))),
+        ("and the restart says to re-arm at 45 minutes",
+         lambda r: all("re-arm your schedule if you have one, at 45 minutes while the factory paces the crew" in r.snap(4)["last"][s]
+                       for s in (_O, _R, _L))),
+        ("the limit fills while crew update waits: it stops, says until when, and restarts nothing more",
+         lambda r: r.code(5) != 0 and _st_line(r, 5, r"the plan.s limit is full until 20") and "nothing more was restarted" in r.out(5)
+         and r.snap(5)["ids"][_R] == r.snap(4)["ids"][_R] and r.snap(5)["ids"][_O] == r.snap(4)["ids"][_O])],
+       ["the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
+        "below the limit, crew update moves them", "and the restart says to re-arm at 45 minutes",
+        "the limit fills while crew update waits: it stops, says until when, and restarts nothing more"],
+       _cc_setup(have="1.11.0", installed="1.11.1"), not_windows=_RT_NO)
+
+
+# A helper follows its station onto a new Claude Code, but its task lives only in its spawn prompt, so it is never started in a new
+# conversation: where every try lands on an old spare it is marked and retried after a backoff, resumed each time. crew update
+# does not promise it a new conversation either, and a helper whose restart fails is not revived by the watch.
+def _helper_lines(r: Run, i: int, word: str) -> list:
+    return [x for x in r.out(i).splitlines() if f"{_H} {word}" in x]
+
+
+_st_cc("cc_helper_spares", "a helper behind on old spares: three resumed tries and never a new conversation, marked for a retry; "
+                           "crew update promises it no new conversation; one that cannot be restarted is not revived by the watch",
+       [Step(["roster"], after=_st_after),                                                                    # 0 the helper runs
+        Step(["roster"], before=_cc_installed("1.12.2")),                                                     # 1
+        _rw(before=_cb_all(_all_idle, _cb_file("spawn-version", "1.12.0\n"), _cb_file("stale-left", "all\n"))),   # 2 the reviewer
+        _rw(),                                                                                                # 3 the releaser
+        _rw(),                                                                                                # 4 the helper
+        _ru(before=_cb_due(_H)),                                                                              # 5
+        _rw(before=_cb_due(_H), env={"FAKE_CLAUDE_FAIL_RESUME": "1"})],                                       # 6
+       [("a helper is running, on the installed version",
+         lambda r: bool(r.snap(0)["ids"].get(_H)) and r.snap(0)["runs"].get(_H) == "1.11.2"),
+        ("the roster flags an old helper",
+         lambda r: any(_H in x and "older than 1.12.2" in x for x in r.out(1).splitlines())),
+        ("a helper behind on old spares: three resumed tries, no new conversation",
+         lambda r: _rt_new(r, 4, 3) == 3 and r.snap(4)["resumed"].get(_H, 0) - r.snap(3)["resumed"].get(_H, 0) == 3
+         and r.snap(4)["again"].get(_H, 0) == 0),
+        ("it is marked for a retry, with no new conversation recorded",
+         lambda r: r.snap(4)["marks"][_H][0] == "1.12.2" and r.snap(4)["marks"][_H][2] is None
+         and "a helper keeps its conversation" in r.out(4)),
+        ("crew update on a helper that keeps landing on old spares: no new conversation promised",
+         lambda r: bool(_helper_lines(r, 5, "came back")) and any("a helper keeps its conversation" in x for x in _helper_lines(r, 5, "came back"))
+         and not any("even in a new conversation" in x for x in _helper_lines(r, 5, "came back"))),
+        ("a helper that could not be restarted: the message says the watch does not revive helpers",
+         lambda r: f"could not restart {_H} on Claude Code 1.12.2; the watch does not revive helpers, so ask crew-reviewer to spawn it again" in r.out(6)
+         and not any("revives it as before" in x for x in r.out(6).splitlines() if _H in x))],
+       ["a helper is running, on the installed version", "the roster flags an old helper",
+        "a helper behind on old spares: three resumed tries, no new conversation",
+        "it is marked for a retry, with no new conversation recorded",
+        "crew update on a helper that keeps landing on old spares: no new conversation promised",
+        "a helper that could not be restarted: the message says the watch does not revive helpers"],
+       _cc_setup(have="1.11.2", installed="1.11.2", extra=(_HELPER,)))
+
+
+# The new conversation is recorded only once its restart has returned: one that dies leaves it to a later round.
+_st_cc("cc_fresh_unrecorded", "a new conversation that could not be started is not recorded as done, nor marked as failed; "
+                              "the next rounds start it, and every station runs the new version",
+       [_rw(env={"FAKE_CLAUDE_FAIL_FRESH": "1"}),
+        _rw(before=_cb_all(_all_idle, _cb_file("stale-left", "0\n"))), _rw(), _rw(), _rw()],
+       [("the new conversation could not be started: it is not recorded as done, nor marked as failed",
+         lambda r: bool(r.snap(0)["launched"]) and r.snap(0)["marks"][r.snap(0)["launched"][0]][2] != "1.12.3"
+         and r.snap(0)["marks"][r.snap(0)["launched"][0]][0] != "1.12.3"),
+        ("the stations all run 1.12.3 after it", lambda r: all(r.snap(4)["runs"][s] == "1.12.3" for s in (_O, _R, _L)))],
+       ["the new conversation could not be started: it is not recorded as done, nor marked as failed",
+        "the stations all run 1.12.3 after it"],
+       _cc_setup(have="1.12.2", installed="1.12.3", files={"spawn-version": "1.12.0\n", "stale-left": "all\n"}))
+
+
+# Tares hears only of stations still retrying the version now installed: one that moved some other way, or a mark for an older
+# version, drops off the list at the next round.
+def _tares_retry(r: Run, key: str, name: str):
+    return (r.marks.get(key) or {}).get(name)
+
+
+_st_cc("cc_retry_listing", "a station that exhausted its tries is listed on Tares; moved by a manual restart it keeps its mark "
+                           "until the next round drops it from Tares",
+       [_rw(),                                                                                                # 0
+        Step(["restart", _R], before=_cb_all(_all_idle, _cb_file("stale-left", "0\n")), after=_st_after,      # 1
+             run_before=_st_keep("listed")),
+        _rw(run_before=_st_keep("after-restart"))],                                                           # 2
+       [("a station that exhausted its tries is listed on Tares",
+         lambda r: r.snap(0)["marks"][_R][0] == "1.12.4" and (_tares_retry(r, "listed", _R) or {}).get("target") == "1.12.4"),
+        ("it moved by a manual restart and the mark is still there",
+         lambda r: r.snap(1)["runs"][_R] == "1.12.4" and r.snap(1)["marks"][_R][0] == "1.12.4"
+         and (_tares_retry(r, "after-restart", _R) or {}).get("target") == "1.12.4"),
+        ("the next round drops it from Tares", lambda r: _R not in (r.tares.state.get("retry") or {}))],
+       ["a station that exhausted its tries is listed on Tares", "it moved by a manual restart and the mark is still there",
+        "the next round drops it from Tares"],
+       _cc_setup(have="1.12.3", installed="1.12.4", files={"spawn-version": "1.12.0\n", "stale-left": "all\n"}))
+
+
+def _cb_marks(name: str, **fields):
+    """before: the station has these fields in stations.json (a mark, written by hand)."""
+    def before(tmp: Path) -> None:
+        p = tmp / "crew" / "stations.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        rows[name].update(fields)
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+_STALE = {_R: {"target": "1.12.6", "fails": 2, "next_at": 4102444800}}
+
+_st_cc("cc_retry_stale_mark", "a mark for an older version is dropped from Tares, not carried over to the new one: the station is "
+                              "still behind (busy, so not moved) but has not failed for the version now installed",
+       [_rw(before=_cb_all(_cc_busy(_R), _cb_marks(_R, cc_failed="1.12.6", cc_fails=2, cc_retry_at=4102444800)),
+            run_before=_st_run(_st_retry(_STALE), _st_keep("before"))),
+        _rw(before=lambda tmp: None)],
+       [("a mark for an older version is listed on Tares before the round",
+         lambda r: (_tares_retry(r, "before", _R) or {}).get("target") == "1.12.6"),
+        ("a mark for an older version: the next settled round drops it from Tares",
+         lambda r: _R not in (r.tares.state.get("retry") or {}))],
+       ["a mark for an older version is listed on Tares before the round",
+        "a mark for an older version: the next settled round drops it from Tares"],
+       _cc_setup(have="1.12.6", installed="1.12.7", files={"spawn-version": "1.12.0\n", "stale-left": "all\n"}))
+
+
+# The note for the caller promises a move by the watch only when the watch makes one.
+_SELF = {"FACTORY_STATION": "crew-orchestrator"}
+_SELF_NOTE = "crew-orchestrator, which ran this command, can only be restarted from another session"
+
+_st_cc("cc_update_self_off", "crew update from the orchestrator: with claude_update off, or the crew frozen, the caller is told to "
+                             "restart itself from another session, not that the watch moves it",
+       [_ru(env=_SELF, run_before=_st_set(claude_update=False), before=_cc_installed("1.12.5")),              # 0
+        Step(["crew", "freeze"], before=_cc_installed("1.12.6"), run_before=_st_set(claude_update=True)),     # 1
+        _ru(env=_SELF),                                                                                       # 2
+        Step(["crew", "unfreeze"])],
+       [("claude_update off: the caller is told to restart itself from another session, not that the watch moves it",
+         lambda r: r.code(0) == 0 and _SELF_NOTE in r.out(0) and "moves when" not in r.out(0)),
+        ("a frozen crew: the same", lambda r: r.code(2) == 0 and _SELF_NOTE in r.out(2) and "moves when" not in r.out(2))],
+       ["claude_update off: the caller is told to restart itself from another session, not that the watch moves it",
+        "a frozen crew: the same"],
+       _cc_setup(have="1.12.4", installed="1.12.5"))
+
+
+# crew update on a helper whose restart fails: it says the watch does not revive helpers, not that it revives it.
+_st_cc("cc_update_helper_down", "crew update, a helper whose restart fails: the watch is not said to revive it",
+       [_ru(env={"FAKE_CLAUDE_FAIL_RESUME": "1"})],
+       [("crew update, a helper that could not be restarted: the watch is not said to revive it",
+         lambda r: f"could not restart {_H} on Claude Code 1.12.8; the watch does not revive helpers, so ask crew-reviewer to spawn it again" in r.out(0)
+         and not any("revives it" in x for x in r.out(0).splitlines() if _H in x))],
+       ["crew update, a helper that could not be restarted: the watch is not said to revive it"],
+       _cc_setup(have="1.12.7", installed="1.12.8", extra=(_HELPER,)))
+
 
 
 def main(argv: list) -> int:
