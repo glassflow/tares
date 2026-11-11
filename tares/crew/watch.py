@@ -73,6 +73,8 @@ WATCH_USAGE = "usage: factory crew watch [--once] [--interval <seconds>]"
 STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
+# What a round does before its first step: bash reads the pace at the top of a round (TR-1157).
+ROUND_NAME = "round_start"
 
 _STEPS: dict = {}
 
@@ -80,7 +82,7 @@ _STEPS: dict = {}
 def register(name: str, fn) -> None:
     """Give the watch the function for a step: fn(paths) is called once a round (the readings step: once a
     tick of the nap). A name that is not a step is refused, so a typo does not silently do nothing."""
-    if name not in STEP_NAMES and name != TICK_NAME:
+    if name not in STEP_NAMES and name not in (TICK_NAME, ROUND_NAME):
         raise ValueError(f"no watch step called {name!r}")
     _STEPS[name] = fn
 
@@ -341,6 +343,12 @@ def stop(paths: CrewPaths, say, timeout: float | None = None, env: dict | None =
 def run_steps(paths: CrewPaths) -> None:
     """One round: each registered step in order. A step that raises is reported and the round goes on, so one
     broken step does not end the watch."""
+    start = _STEPS.get(ROUND_NAME)
+    if start is not None:
+        try:
+            start(paths)
+        except Exception as e:
+            _say(f"the {ROUND_NAME} step failed: {type(e).__name__}: {e}")
     for name in STEP_NAMES:
         fn = _STEPS.get(name)
         if fn is None:
@@ -461,3 +469,4 @@ from . import pace as _pace  # noqa: E402
 
 watch_revive.pace = _pace.Seam()   # TR-962: the revive loop asks the real pace, not the inert stand-in
 register("pace", _pace.step)
+register(ROUND_NAME, _pace.round_start)   # TR-1157: the pace is read once, at the top of the round

@@ -667,6 +667,20 @@ PACE.remember(CP, PACE.Reading("off"))
 ck("_pace_closed: pace off is not closed", CU._pace_closed(_who) is False)
 PACE.forget()
 
+# the move reads the pace again (bash: pace_read in the subshell), not the reading the command took when it began
+world(one, old_row)
+SPAWN[:] = [NEW]
+asked = []
+with patched(CU, "_pace_closed", lambda c, **k: asked.append(k) or False):
+    rc, _, _ = move()
+ck("the move reads the pace afresh before it restarts", rc == 0 and asked and all(k == {"fresh": True} for k in asked), str(asked))
+world(one, old_row)
+PACE.remember(CP, PACE.Reading("active", 1, False))   # the command's own reading, a moment old: the limit was open
+with patched(PACE, "read", lambda c: PACE.Reading("active", 2, True, "20:00")):
+    rc, _, _ = move()
+PACE.forget()
+ck("6: a limit that filled since a young reading was taken still stops the move", rc == 6 and launched == [], str((rc, launched)))
+
 world(one, old_row)
 ON_LAUNCH.append(lambda n: (_ for _ in ()).throw(CrewError("launch failed (fake)")))
 rc, msgs, _ = move()
@@ -1286,6 +1300,21 @@ with patched(CU, "claude_move", lambda *a, **k: 6):
     rc, said, _ = cu()
 ck("a limit that fills during a move ends the run", rc == 1 and said[-1] == "the plan's limit is full, and a restart is a model turn "
    "into it; nothing more was restarted (tares factory crew update again after it resets)", str(said))
+# the time the refusal names is from a new reading too (bash: pace_read, then die)
+PACE.remember(CP, PACE.Reading("active", 1, False))
+def _new_reading(c):   # what pace.read does: take a reading and remember it
+    r = PACE.Reading("active", 2, True, "20:00")
+    PACE.remember(CP, r)
+    return r
+
+
+with patched(CU, "claude_move", lambda *a, **k: 6), patched(PACE, "read", _new_reading):
+    world(one, old_row)
+    rc, said, _ = cu()
+PACE.forget()
+ck("a limit that fills during a move names its time from a new reading", rc == 1 and said[-1] == "the plan's limit is full until "
+   "20:00, and a restart is a model turn into it; nothing more was restarted (tares factory crew update again after it resets)",
+   str(said))
 
 print("crew update: waiting for a busy station")
 BUSY = {"shop-build-m1": station(), "shop-build-m2": station(id="aaaa0003", sessionId="s3")}

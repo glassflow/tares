@@ -153,6 +153,7 @@ def prune_spares(paths: CrewPaths, target: str) -> None:
             continue   # claimed: a session runs in it
         v = claude._VERSIONS_IN_COMMAND.search(cmd)
         v = v.group(1) if v else ""
+        claude.fake_ps_step(v)   # test hook: what bash's `sort -V` lets a suite do between these two checks
         if not claude.older_than(v, target):
             continue
         if not os.path.exists(sock):
@@ -434,7 +435,7 @@ def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin
     client.crew_settings()
     if state.halted(paths):
         return 4
-    if _pace_closed(client):
+    if _pace_closed(client, fresh=True):   # bash: pace_read, a new reading, not the one the command took when it began
         return 6
     if not (claude.quiet(s, claude=claude_bin, paths=paths) and not claude.attached(s, paths)):
         return 4   # it started something, or someone opened it, since the first check
@@ -465,7 +466,7 @@ def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin
         if tried > 1:
             if state.halted(paths) or claude.attached(s, paths):
                 return 4   # the first restart started it on the prompt, so only a halt or someone opening it stops a retry
-            if _pace_closed(client):
+            if _pace_closed(client, fresh=True):
                 return 6
         prune_spares(paths, target)
         if tried > tries:
@@ -708,6 +709,7 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
                 elif rc == 4:
                     still.append(s)
                 elif rc == 6:
+                    _pace_closed(client, fresh=True)   # bash: pace_read again, so the time named is the one the move saw
                     raise _full(client, f"nothing more was restarted ({ME} crew update again after it resets)")
                 elif rc == 5:
                     if helper:
