@@ -5954,6 +5954,19 @@ def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
     return path
 
 
+def _no_docker(path: Path) -> Path:
+    """A `docker` that is installed but not running (every call exits 1), first on PATH for both engines.
+    The Python crew engine cleans Docker up (doctor lists its disk use, the watch prunes), the bash engine
+    does not; without this stub a scenario's output would depend on the Docker on the machine running it."""
+    if sys.platform == "win32":
+        path = path.with_suffix(".cmd")
+        path.write_bytes(b"@exit /b 1\r\n")
+    else:
+        path.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        path.chmod(0o755)
+    return path
+
+
 # What the person's own shell must not lend a scenario: the crew's and Tares' settings, Claude Code's
 # config and job folders, the XDG folders and GitHub's CLI settings (all of them move state or a login).
 STRIPPED_PREFIXES = ("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_", "PARITY_", "FAKE_CLAUDE_",
@@ -5967,6 +5980,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
     for d in (home, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
     claude = make_launcher(bindir / "claude", [])  # claude.cmd on Windows, which is also what `claude` finds on PATH
+    _no_docker(bindir / "docker")
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
@@ -7385,6 +7399,9 @@ g3_scn(
 
 # FACTORY_PLAN_EVERY=0: the bash watch reads the plan's limits (/usage) between rounds and answers the console's /context asks;
 # the Python watch does not do that yet (no serve_readings in tares/crew/watch.py), so the scenarios here leave it out on both sides.
+# The Python `crew up` says once that the watch also cleans Docker up (tares/crew/docker_cleanup.py, where Docker is on
+# PATH, and the scenarios put a stub there); the bash engine does not clean Docker up and says nothing. Set aside on both sides.
+G4_DROP = (r"once a day the watch also removes Docker's leftovers",)
 G4_WATCH_ENV = {"FACTORY_NO_WATCH": "", "FACTORY_WATCH_INTERVAL": "1", "FACTORY_ASK_POLL": "0.2", "FACTORY_PLAN_EVERY": "0",
                 "TARES_FACTORY_MCP_URL": "{tares}/mcp"}
 
@@ -7448,12 +7465,12 @@ scenario(Scenario(
     # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
-    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_up_after),
-           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=lambda tmp: {"pid": g4_pid(tmp)}),
-           Step(["crew", "status"], env=G4_WATCH_ENV),
-           Step(["crew", "down"], env=G4_WATCH_ENV),
-           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV),
-           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=G4_DROP, after=g4_up_after),
+           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=G4_DROP, after=lambda tmp: {"pid": g4_pid(tmp)}),
+           Step(["crew", "status"], env=G4_WATCH_ENV, drop=G4_DROP),
+           Step(["crew", "down"], env=G4_WATCH_ENV, drop=G4_DROP),
+           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV, drop=G4_DROP),
+           Step(["crew", "down"], env=G4_WATCH_ENV, drop=G4_DROP, after=g4_quiet)],
     checks=[
         ("crew up starts the watch in the background",
          lambda r: "started the watch" in r.out(0) and bool(r.snap(0)["pid"]) and r.snap(0)["alive"]),
@@ -7654,9 +7671,9 @@ scenario(Scenario(
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
     setup=g4_setup_kit,
-    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_first_banner),
-           Step(["crew", "status"], env=G4_WATCH_ENV, before=g4_update_kit, after=g4_restarted),
-           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=G4_DROP, after=g4_first_banner),
+           Step(["crew", "status"], env=G4_WATCH_ENV, drop=G4_DROP, before=g4_update_kit, after=g4_restarted),
+           Step(["crew", "down"], env=G4_WATCH_ENV, drop=G4_DROP, after=g4_quiet)],
     checks=[
         ("the watch restarts itself on an updated plugin",
          lambda r: r.snap(0)["banners"] == 1 and r.snap(1)["said"] and r.snap(1)["banners"] >= 2 and r.snap(1)["alive"]),
