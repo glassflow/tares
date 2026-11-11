@@ -663,7 +663,7 @@ new = _find(4)
 ck("one ticket gives one issue with the project label, body and milestone", len(refs) == 1 and new
    and new["title"] == "Add retries" and [l["name"] for l in new["labels"]] == [LABEL]
    and new["body"] == "Do it" and new["milestone"]["title"] == "Alpha", new)
-ck("the ref is the issue's node id, url and status", len(refs) == 1 and refs[0] == TicketRef("I_4", f"https://github.com/{REPO}/issues/4", "todo"), refs)
+ck("the ref is the issue's node id, url, status and identifier", len(refs) == 1 and refs[0] == TicketRef("I_4", f"https://github.com/{REPO}/issues/4", "todo", "GH-4"), refs)
 ck("the label existed: it was not made again", calls("POST", "/labels") == [])
 refs2 = attempt("create again", b.create("p1", [], [{"title": "Add retries", "body": "Do it", "milestone": "Alpha"}]))
 ck("create twice gives ONE issue and the same ref", len(STATE["issues"]) == 4 and refs2 == refs, (len(STATE["issues"]), refs2))

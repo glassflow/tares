@@ -195,8 +195,13 @@ async def main():
             n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
                                           "event_type = 'ticket_created'").fetchone()[0]
         ck("one event per ticket found", n_created == 3, n_created)
+        r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x", "status": "done"})
+        ck("a status is not set when a ticket is made: 409, Linear's to change", r.status_code == 409
+           and "Linear" in r.json()["detail"], r.text)
         r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x"})
-        ck("no Tares tickets on it", r.status_code == 409, r.text)
+        ck("a new ticket goes to Linear, never made in Tares alone: its refusal is passed on and nothing is added",
+           r.status_code >= 400 and "team" in r.json()["detail"]
+           and len((await cx.get(f"/api/projects/{uid}/tickets")).json()["tickets"]) == 3, r.text)
 
         print("== changes made in Linear ==")
         iss = STATE["issues"]

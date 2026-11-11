@@ -415,7 +415,8 @@ class TicketsLinear(tickets.TicketBackend):
                 if not (data.get("issueRelationCreate") or {}).get("success"):
                     raise linear.LinearError(
                         f"Linear did not make {title!r} depend on {blocker}; try again")
-        return TicketRef(iid, str(issue.get("url") or ""), linear.status_of(issue.get("state")))
+        return TicketRef(iid, str(issue.get("url") or ""), linear.status_of(issue.get("state")),
+                         str(issue.get("identifier") or ""))
 
     async def _blockers(self, uid: str, refs) -> list[str]:
         """The Linear ids of what an issue is blocked by. A ref is a ticket of the project (its

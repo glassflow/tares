@@ -24,8 +24,10 @@ async def write_milestone(name: str, goal: str | None = None, checks: list[dict]
     reach the person to accept.
     `position` orders them (a new one goes last). To rename one, pass its current name or id as
     `id` and the new `name`. Give tickets a milestone with write_ticket(milestone=<name>). When
-    the project's tickets live in Linear or GitHub, its milestones come from there (for GitHub,
-    the milestones its issues sit in): add and rename them there and write only the goal and checks here."""
+    the project's tickets live in Linear or GitHub (link_tickets), a new milestone is created
+    there, one per call, and a repeat of the same name finds it again; `goal` goes to Linear or
+    GitHub as its description and `checks` stay here. Rename, reorder and delete a milestone in
+    Linear or GitHub (`position` is ignored there)."""
     body: dict = {"name": name}
     if goal is not None:               # a change keeps the goal and checks it was not given
         body["goal"] = goal

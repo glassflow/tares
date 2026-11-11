@@ -257,9 +257,9 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         if cur is None:
             who = {} if mapped is None else {"assignee_person_id": mapped[0],
                                              "assignee_raw": mapped[1]}
-            store.create_ticket(uid, "github", iss.get("title") or ident, status, pos,
-                                external_id=iss["id"], identifier=ident, url=iss.get("url"),
-                                milestone=ms, **who)
+            # find-or-insert in one locked step: a write_ticket may have adopted it since the read
+            store.adopt_ticket(uid, "github", iss["id"], iss.get("title") or ident, status, ident,
+                               iss.get("url"), position=pos, milestone=ms, **who)
             if mapped is not None:
                 team.assignee_sync_join(store, project, mapped[0], status)
             out.append(_env(project, link, iss, "created",
@@ -348,9 +348,9 @@ def _sync_milestones(store, uid: str, milestones: list[dict], issues: list[dict]
                                        position=pos)
                 ids[gm["id"]] = same["id"]
                 continue
-            ids[gm["id"]] = store.create_milestone(
-                uid, name, " ".join(str(gm.get("description") or "").split())[:500], [], pos,
-                owner="github", external_id=gm["id"])
+            ids[gm["id"]] = store.adopt_milestone(
+                uid, "github", gm["id"], name, None, None, pos,
+                " ".join(str(gm.get("description") or "").split())[:500])
             continue
         ids[gm["id"]] = cur["id"]
         clash = store.get_milestone(uid, name)

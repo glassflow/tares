@@ -98,6 +98,14 @@ def rest(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json=[{"number": m["number"], "title": m["title"], "node_id": m["id"],
                                           "html_url": "https://github.com/acme/app/milestone/" + str(m["number"])}
                                          for m in STATE["milestones"]])
+    if path == "/milestones" and request.method == "POST":
+        body = json.loads(request.content)
+        n = max(m["number"] for m in STATE["milestones"]) + 1
+        STATE["milestones"].append({"id": f"M_new{n}", "number": n, "title": body["title"],
+                                    "description": body.get("description") or ""})
+        STATE.setdefault("made_milestones", []).append(body["title"])
+        return httpx.Response(201, json={"number": n, "title": body["title"], "node_id": f"M_new{n}",
+                                         "html_url": "https://github.com/acme/app/milestone/" + str(n)})
     if path.startswith("/issues/") and request.method == "PATCH":
         body = json.loads(request.content)
         STATE.setdefault("patches", []).append((int(path.rsplit("/", 1)[1]), body))
@@ -926,18 +934,19 @@ async def api():
         ck("(F) DELETE a GitHub ticket -> 409", r.status_code == 409
            and r.json()["detail"] == "GH-31 lives in GitHub: remove it there"
            and store.get_ticket(own, "GH-31") is not None, r.text)
-        r = await cx.post(f"/api/projects/{own}/tickets", json={"title": "Mine"})
-        ck("(F) POST a ticket in a GitHub project -> 409", r.status_code == 409
-           and r.json()["detail"] == "this project's tickets live in GitHub; add the ticket there and it "
-           "shows up here on the next sync" and len(store.list_tickets(own)) == 2, r.text)
+        r = await cx.post(f"/api/projects/{own}/tickets", json={"title": "Mine", "status": "done"})
+        ck("(F) POST a ticket with a status in a GitHub project -> 409, it changes in GitHub", r.status_code == 409
+           and r.json()["detail"] == "this project's tickets live in GitHub: a ticket's status changes in "
+           "GitHub, not when it is created" and len(store.list_tickets(own)) == 2, r.text)
 
         ms = {m["name"]: m for m in store.list_milestones(own)}
         ck("(F) the GitHub milestone is there to test on", ms.get("Alpha", {}).get("owner") == "github", ms)
         alpha = ms["Alpha"]
-        r = await cx.post(f"/api/projects/{own}/milestones", json={"name": "Brand new"})
-        ck("(F) a new milestone name in a GitHub project -> 409", r.status_code == 409
-           and r.json()["detail"] == "this project's milestones live in GitHub: add it there, then write "
-           "its checks here" and "Brand new" not in {m["name"] for m in store.list_milestones(own)}, r.text)
+        r = await cx.post(f"/api/projects/{own}/milestones", json={"name": "Brand new", "goal": "Fresh"})
+        made = {m["name"]: m for m in store.list_milestones(own)}.get("Brand new")
+        ck("(F) a new milestone name in a GitHub project is made in GitHub (TR-851) and is GitHub's here",
+           r.status_code == 201 and STATE.get("made_milestones") == ["Brand new"]
+           and made is not None and made["owner"] == "github" and made["external_id"] == "M_new4", (r.text, made))
         r = await cx.put(f"/api/projects/{own}/milestones/{alpha['id']}", json={"name": "Alpha 2"})
         ck("(F) renaming a GitHub milestone -> 409", r.status_code == 409
            and r.json()["detail"] == "Alpha lives in GitHub: rename or reorder it there", r.text)

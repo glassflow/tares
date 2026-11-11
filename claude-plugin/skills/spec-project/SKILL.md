@@ -133,14 +133,14 @@ Fix what holds up. **Show the user a short list of what changed and why**, then 
 Ask (one question, with your recommendation): "Should the tickets live in Linear, GitHub Issues,
 or only in Tares?"
 
-- **Linear:** you need Linear's own MCP tools in this session (a `linear` server or the user's
-  Linear connector). If they are missing, say so and offer Tares instead. Tares also needs Linear
-  connected (Tares console, Settings, Linear) to keep its list in sync.
-- **GitHub Issues:** one repo holds the issues, marked by an issue label. You need `gh` logged in
-  with `repo` scope, and a GitHub credential on Tares (Settings, GitHub) that can read that repo's
-  issues. Ask which repo, recommending the repo that holds the plan. GitHub owns these tickets:
-  Tares refuses to change a ticket's title, status, order, milestone or dependencies, so change
-  those with `gh`. `set_stage`, `add_check`, the working doc and `repo` still work in Tares.
+- **Linear:** Tares needs Linear connected (Tares console, Linear connection); Tares does the
+  writing, so this session needs no Linear tools. The Linear project must exist: ask for its URL or
+  name, or offer to make it once the user has.
+- **GitHub Issues:** one repo holds the issues, marked by an issue label. Tares needs a GitHub
+  credential (Tares console, GitHub connection) that can write that repo's issues; this session
+  needs no `gh` for it. Ask which repo, recommending the repo that holds the plan.
+- Linear and GitHub own a ticket's status, assignee and dependencies once it exists. `set_stage`,
+  `add_check`, the working doc and `repo` still work in Tares.
 - **Tares only:** nothing else to set up.
 
 ## 6. Write the project into Tares
@@ -158,40 +158,25 @@ Write for a reader who was not here: no "as discussed", no references to this co
    git rules; what not to touch; and the **release section**: how to release, where it runs, how
    to check it went out, how to roll back, as exact commands. Propose the release section and get
    the user's yes. Ask for anything you do not know; a builder cannot guess it.
-5. Milestones: `write_milestone` once per milestone, in order, with its goal and its acceptance
-   checks (`[{"check": ..., "expect": ...}]`, plus `"for": "person"` on a check only a person can do).
-6. Tickets, in order:
-   - **Linear:** create the Linear project named like the Tares project, its milestones, and one
-     issue per ticket in its milestone, with a two or three line description; add a "blocks"
-     relation for each dependency. Then `link_linear_project` with the Linear project's URL, and
-     `write_milestone` again for each milestone to add its checks (Linear has no place for them).
-     Set each issue's assignee to its repo's area owner (Linear's `save_issue` with `assignee`, the
-     owner's email from `list_people`). Check the ticket list Tares returns matches what you
-     created. Then `write_ticket(id=<label>, repo="owner/name", title="")` for each ticket.
-   - **GitHub Issues:** `R` is the repo (`owner/name`) and `L` is the label `tares:<project>`, cut
-     to 50 characters. In order:
-     1. `gh label create "L" --repo R --force` and `gh label create "in progress" --repo R --force`
-     2. one GitHub milestone per Tares milestone, in plan order:
-        `gh api repos/R/milestones -f title="<milestone name>" -f description="<goal>"`
-     3. one issue per ticket, in plan order (the issue number is the order):
-        `gh issue create --repo R --title "<title>" --body "<two or three lines>" --label "L" --milestone "<milestone name>"`
-     4. each dependency: get both node ids with `gh issue view <n> --repo R --json id -q .id`, then
-        `gh api graphql -f query='mutation($i:ID!,$b:ID!){addBlockedBy(input:{issueId:$i,blockingIssueId:$b}){clientMutationId}}' -f i=<blocked issue id> -f b=<blocking issue id>`
-     5. `link_github_issues(repo=R, issue_label=L)`, then `write_milestone` again for each milestone
-        to add its checks (GitHub has no place for them). Check the ticket list Tares returns
-        matches what you created (identifiers `GH-<n>`). If `link_github_issues` answers
-        `error 429: GitHub rate limit reached`, nothing is linked: wait about 5 minutes and call it
-        again. If the answer shows `github.error` naming the rate limit, the link is saved: wait
-        about 5 minutes and check `list_tickets`.
-     6. `gh issue edit <n> --repo R --add-assignee <login>` for each issue, the login of its repo's
-        area owner (`github` in `list_people`; skip it when the owner has none and say so, and when
-        `gh` fails because the owner is not a collaborator on the repo, say so and leave that ticket
-        unassigned, the same way). Then
-        `write_ticket(id=<GH-n>, repo="owner/name", title="")` for each ticket.
-   - **Tares only:** `write_ticket` once per ticket with `milestone`, `depends_on` (the
-     tickets' labels, `T1`, `T2`, ...), `repo` (the GitHub `owner/name` it changes) and `assignee`
-     (the email or id of that repo's area owner). Titles say what the ticket does, without a number.
-   - **Every ticket carries `repo`, in all three modes, even in a project with one repo:** it is
+5. Link and milestones. When the tickets live in Linear or GitHub, `link_tickets` first: for
+   Linear `link_fields={"project": "<the Linear project's URL or name>"}`; for GitHub
+   `link_fields={"repo": "owner/name", "issue_label": "tares:<project>"}`, the label cut to 50
+   characters. If it answers `error 429: GitHub rate limit reached`, nothing is linked: wait about
+   5 minutes and call it again. Then `write_milestone` once per milestone, in order, with its goal
+   and its acceptance checks (`[{"check": ..., "expect": ...}]`, plus `"for": "person"` on a check
+   only a person can do). For Linear and GitHub it creates the milestone there; the checks stay in
+   Tares.
+6. Tickets: `write_ticket` once per ticket, in dependency order, with `milestone` (the name
+   written just above) and `depends_on` (the labels of tickets already written, `T1`, `T2`, or
+   `GH-3`, `ENG-12`). Titles say what the ticket does, without a number. It creates the ticket in
+   Tares, Linear or GitHub alike, and a repeat of the same title finds it again. Then
+   `list_tickets` and check it holds what you created.
+   - A ticket in Linear or GitHub takes no `status`, `assignee` or `position` when it is created.
+     The person sets the assignee in the tracker afterwards, if the owner of its repo should
+     have it (`list_people` gives the email, and the `github` login); this session cannot.
+     `assign_ticket` is the orchestrator's, and only hands a ticket to a crew station.
+   - A Tares ticket also takes `assignee` (the email or id of its repo's area owner).
+   - **Every ticket carries `repo`, wherever it lives, even in a project with one repo:** it is
      how a ticket finds its area owner and how a builder knows where to work.
 7. A working doc per ticket: `write_doc` kind `working`, titled `Working: <ticket title>`, then
    `attach_working_doc`. Working docs never go to Linear or GitHub. Use exactly these sections:
@@ -349,9 +334,9 @@ Tares: the project, its shared AGENTS.md and memory, a light record of what was 
    - `write_doc` kind `start`, titled `Start here`: what the project is in two lines, where the
      code lives, and "follow the `session` skill", so a later session can pick it up.
    - The tickets: `write_ticket` per piece of work, in order, with `depends_on` (one ticket is
-     fine). When the person keeps tickets in Linear or GitHub Issues, create them there as in
-     step 6 of the full spec (one issue per ticket with `gh issue create`, then
-     `link_github_issues`). No milestones, no working docs, no second-model attack.
+     fine). When the person keeps tickets in Linear or GitHub Issues, `link_tickets` first, then
+     `write_ticket` creates them there, as in the last two steps of the full spec. No milestones, no
+     working docs, no second-model attack.
 5. **Size check**, once the ticket list exists: more than about five tickets, or tickets in more
    than one repo, is big enough for the crew. Then ask: "This looks big enough for the crew.
    Switch to the full spec and hand it over?" (recommend yes). On yes, carry on from step 2 of the

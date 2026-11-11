@@ -3065,21 +3065,61 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
                       assignee_raw: str | None = None) -> str:
         """A ticket at the end of the project's list unless `position` says where. It gets the
         project's next number (T1, T2, ...)."""
+        with self._swrite:
+            return self._insert_ticket(project, owner, title, status, position, external_id,
+                                       identifier, url, working_doc, milestone, depends_on, repo,
+                                       assignee_person_id, assignee_raw)
+
+    def _insert_ticket(self, project, owner, title, status, position, external_id, identifier,
+                       url, working_doc, milestone, depends_on, repo, assignee_person_id,
+                       assignee_raw) -> str:
+        """The INSERT of create_ticket. The write lock is held by the caller."""
         tid = "tk_" + uuid.uuid4().hex[:10]
         ts = now_utc()
+        if position is None:
+            last = self.sc.execute("SELECT max(position) FROM tickets WHERE project = ?",
+                                    [project]).fetchone()[0]
+            position = (last or 0) + 1
+        num = self._next_ticket_number(project)
+        self.sc.execute(
+            f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [tid, project, owner, external_id, identifier, url, title, status,
+             float(position), working_doc, ts, ts, milestone,
+             json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
+             repo, assignee_person_id or None, assignee_raw or None])
+        return tid
+
+    def adopt_ticket(self, project: str, owner: str, external_id: str, title: str, status: str,
+                     identifier: str, url: str, position: float | None = None,
+                     working_doc: str | None = None, milestone: str | None = None,
+                     depends_on: list[str] | None = None, repo: str | None = None,
+                     assignee_person_id: str | None = None,
+                     assignee_raw: str | None = None) -> str:
+        """The Tares row of a ticket that was just made in Linear or GitHub (TR-851): the row of
+        this project with this owner and external id when there is one (a retry, or a sync that got
+        there first), else a new one. Look and write are one locked step, so the two never make
+        two rows. A row found takes the identifier, the url and the fields given (a field left as
+        None keeps its value). The assignee is set only on a new row. The syncs insert through here
+        too, so a sync and a write_ticket never leave two rows for one issue. Returns the row's id."""
         with self._swrite:
-            if position is None:
-                last = self.sc.execute("SELECT max(position) FROM tickets WHERE project = ?",
-                                        [project]).fetchone()[0]
-                position = (last or 0) + 1
-            num = self._next_ticket_number(project)
-            self.sc.execute(
-                f"INSERT INTO tickets ({self._TICKET_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [tid, project, owner, external_id, identifier, url, title, status,
-                 float(position), working_doc, ts, ts, milestone,
-                 json.dumps(depends_on) if depends_on else None, num, None, None, None, None,
-                 repo, assignee_person_id or None, assignee_raw or None])
+            r = self.sc.execute("SELECT id FROM tickets WHERE project = ? AND owner = ? AND "
+                                "external_id = ? ORDER BY created_at LIMIT 1",
+                                [project, owner, external_id]).fetchone()
+            if r is None:
+                return self._insert_ticket(project, owner, title, status, position, external_id,
+                                           identifier, url, working_doc, milestone, depends_on,
+                                           repo, assignee_person_id, assignee_raw)
+            tid = r[0]
+            sets, vals = ["identifier = ?", "url = ?"], [identifier, url]
+            for col, v in (("working_doc", working_doc), ("milestone", milestone),
+                           ("repo", repo), ("position", position)):
+                if v is not None:
+                    sets.append(f"{col} = ?"); vals.append(float(v) if col == "position" else v)
+            if depends_on is not None:
+                sets.append("depends_on = ?"); vals.append(json.dumps(depends_on) if depends_on else None)
+            sets.append("updated_at = ?"); vals.append(now_utc())
+            self.sc.execute(f"UPDATE tickets SET {', '.join(sets)} WHERE id = ?", vals + [tid])
         return tid
 
     def update_ticket(self, tid: str, touch: bool = True, why: str | None = None,
