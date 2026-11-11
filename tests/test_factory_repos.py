@@ -190,7 +190,8 @@ async def main():
         async with mk() as cx:
             ho = (await cx.get(f"/api/projects/{other}/crew")).json()["handover"]
         ck("the older one-path form still works",
-           ho["repos"] == [{"path": "/w/notes", "name": None}] and ho["repo"] == "/w/notes", ho)
+           ho["repos"] == [{"path": "/w/notes", "name": None, "paths": {"local/crew": "/w/notes"}}]
+           and ho["repo"] == "/w/notes", ho)
 
         print("== the crew's projects ==")
         async with mk() as cx:
@@ -215,6 +216,40 @@ async def main():
             st = await cx.get("/api/crew/crew-orchestrator")
         ck("the station route still answers for a station", st.status_code == 404
            and "station" in st.text, st.text)
+
+        print("== each crew keeps its own folder (TR-1222) ==")
+
+        def shop_repos(doc):
+            return next(p for p in doc["projects"] if p["name"] == "Shop")["repos"]
+        async with mk() as cx:
+            r = await cx.post(f"/api/projects/{shop}/handover", json={
+                "crew": "adam-crew", "repos": [{"path": "/home/adam/api", "name": "glassflow/factory-test-api"},
+                                               {"path": "/home/adam/web", "name": "glassflow/factory-test-web"}]})
+            ck("a teammate's crew hands over its own clones", r.status_code == 200, r.text)
+            ck("and the reply shows its own folders", [x["path"] for x in r.json()["handover"]["repos"]]
+               == ["/home/adam/api", "/home/adam/web"], r.text)
+            ho = (await cx.get(f"/api/projects/{shop}/crew")).json()["handover"]
+            mine = shop_repos((await cx.get("/api/crew/projects?crew=crew")).json())
+            his = shop_repos((await cx.get("/api/crew/projects?crew=adam-crew")).json())
+            new = shop_repos((await cx.get("/api/crew/projects?crew=eve-crew")).json())
+            hdr = shop_repos((await cx.get("/api/crew/projects", headers={"X-Tares-Crew": "adam-crew"})).json())
+        ck("still two repos, matched by name", [x["name"] for x in ho["repos"]]
+           == ["glassflow/factory-test-api", "glassflow/factory-test-web"], ho)
+        ck("the first crew keeps its folders", [x["path"] for x in mine] == ["/w/api", "/w/web"], mine)
+        ck("the teammate's crew gets its own", [x["path"] for x in his] == ["/home/adam/api", "/home/adam/web"], his)
+        ck("the header names the crew too",
+           [x["path"] for x in hdr] == ["/home/adam/api", "/home/adam/web"], hdr)
+        ck("a crew that gave none sees the first folder", [x["path"] for x in new] == ["/w/api", "/w/web"], new)
+        ck("no crew sees the others' folders", all("paths" not in x for x in mine + his + new), his)
+        async with mk() as cx:
+            r = await cx.post(f"/api/projects/{shop}/handover", json={
+                "crew": "eve-crew", "repos": [{"path": "/e/api", "name": "glassflow/factory-test-api",
+                                              "paths": {"local/crew": "/evil"}}]})
+            mine = shop_repos((await cx.get("/api/crew/projects?crew=crew")).json())
+        ck("a hand-over cannot set another crew's folder", mine[0]["path"] == "/w/api", mine)
+        async with mk() as cx:
+            bad = await cx.get("/api/crew/projects?crew=Not A Crew")
+        ck("a crew name that cannot be one is refused", bad.status_code == 400, bad.text)
 
         print("== the project page's repos ==")
         async with mk() as cx:

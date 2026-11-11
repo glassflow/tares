@@ -61,12 +61,15 @@ def repo(name: str) -> str:
 
 
 LINKS, OTHER, SHOP = repo("links"), repo("other"), repo("shop")
+CLONE = repo("clone")   # a teammate's clone of glassflow/web, nowhere near the folder the first crew handed over
+subprocess.run(["git", "-C", CLONE, "remote", "add", "origin", "git@github.com:GlassFlow/web.git"], check=True)
 PROJECTS = [
     {"id": "uc_links", "name": "Links App", "repos": [{"path": LINKS}]},
     {"id": "uc_strict", "name": "Strict", "autonomy": "L3-review", "repos": [{"path": SHOP}]},
     {"id": "uc_crew", "name": "Crew Tools", "repos": [{"path": SHOP}]},
     {"id": "uc_named", "name": "No Path", "repos": [{"name": "glassflow/nopath"}]},
     {"id": "uc_strs", "name": "String Repos", "repos": [LINKS, "glassflow/plain"]},   # a malformed payload: repos as plain strings
+    {"id": "uc_team", "name": "Team Web", "repos": [{"path": "/Users/someone/web", "name": "glassflow/web"}]},
 ]
 SETUP = {"stations": {"crew-reviewer": {"role": "reviewer", "status": "active", "project": "", "repo": "", "cwd": str(SCRATCH / "crew"),
                                         "model": "sonnet", "effort": "high"}}}
@@ -132,6 +135,10 @@ err, ls = run(["builder", "--autonomy", "L3-review", "Links App", "m4", LINKS, "
 ck("--autonomy L3-review under an L4 crew is recorded", err is None and stations()["links-app-build-m4"]["autonomy"] == "L3-review", str(err))
 err, ls = run(["builder", "Strict", "m1", SHOP, "x"])
 ck("a project handed over stricter keeps it", err is None and stations()["strict-build-m1"]["autonomy"] == "L3-review", str(err))
+
+print("a teammate's clone (TR-1222)")
+err, ls = run(["builder", "Team Web", "m1", CLONE, "x"])
+ck("a clone of the project's GitHub repo starts, wherever it is", err is None and len(ls) == 1 and ls[0][4] == CLONE, str(err))
 
 print("refusals")
 def refused(label, args, text, **world):

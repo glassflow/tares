@@ -2361,7 +2361,8 @@ class FakeTares:
                 body = self.rfile.read(n).decode("utf-8", "replace") if n else ""
                 key = f"{self.command} {self.path}"
                 fake.requests.append({"route": key, "auth": bool(self.headers.get("Authorization")), "body": body})
-                status, doc = fake.routes.get(key, (404, {"detail": "not found"}))
+                # a route named without its query answers it too (the crew names itself on /api/crew/projects)
+                status, doc = fake.routes.get(key) or fake.routes.get(key.split("?", 1)[0], (404, {"detail": "not found"}))
                 if callable(doc):   # a stateful answer: doc(request body, the fake)
                     doc = doc(body, fake)
                 data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")

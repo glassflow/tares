@@ -683,7 +683,8 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     `repos` is one {path, name} per repo:
     `path` the absolute folder it is checked out in on this machine, `name` its GitHub repo
     (owner/name), the repo that holds the plan first. A later call adds repos, never replaces
-    them. `autonomy` only when the person wants this project stricter than the crew
+    them. A folder is kept for your crew only: a teammate's crew building the same project hands
+    over its own clone's folder with the same `name`. `autonomy` only when the person wants this project stricter than the crew
     (L3-review: every merge waits for their yes). `repo` (one path) is the older form. Then
     send your own crew's orchestrator (the reply names it) a `[TF:SHIP]` message with
     SendMessage so it starts now rather than on its tick. If your crew is not running (the
