@@ -71,7 +71,7 @@ SCRATCH_ENV = {"PATH": os.environ.get("PATH", ""), "HOME": HOME, "USERPROFILE": 
 
 print("what counts as the real home")
 ck("the real home is not this script's scratch home", os.path.realpath(REAL) != os.path.realpath(HOME), REAL)
-ck("a scratch home for a watch is fine", _crew_guard.problems(WATCH, SCRATCH_ENV) == [], _crew_guard.problems(WATCH, SCRATCH_ENV))
+ck("a scratch home for a watch is fine", _crew_guard.problems(WATCH, SCRATCH_ENV) == [], str(_crew_guard.problems(WATCH, SCRATCH_ENV)))
 ck("...with or without FACTORY_HOME (the Python engine reads FACTORY_CREW_HOME)",
    _crew_guard.problems(WATCH, {k: v for k, v in SCRATCH_ENV.items() if k != "FACTORY_HOME"}) == [])
 ck("a watch with no home at all is refused (the environment test_crew_kit.py handed restart_self)",
@@ -129,13 +129,14 @@ r = subprocess.run([sys.executable, "-c",
 ck("a run that swallowed a refusal ends non-zero and says so", r.returncode == 1 and "reached the real home" in r.stderr, str((r.returncode, r.stderr[-200:])))
 
 r = subprocess.run([sys.executable, "-c",
-                    "import os, sys; sys.path.insert(0, sys.argv[1]); import _crew_guard as g; a = g.scratch_home(); b = g.scratch_home(); "
-                    "e = os.environ; print(a == b, e['HOME'] == e['USERPROFILE'], e['FACTORY_CREW_HOME'] == e['FACTORY_HOME'], "
-                    "g.problems([sys.executable, '-m', 'tares.crew']), a)", str(ROOT / "tests")],
-                   env={"PATH": os.environ.get("PATH", ""), "HOME": REAL, "USERPROFILE": REAL}, capture_output=True, text=True)
+                    "import os, sys; sys.path.insert(0, sys.argv[1]); import _crew_guard as g; before = os.environ['HOME']; "
+                    "a = g.scratch_home(); b = g.scratch_home(); e = os.environ; "
+                    "print(a == b, e['HOME'] != before, e['HOME'] == e['USERPROFILE'], e['FACTORY_CREW_HOME'] == e['FACTORY_HOME'], "
+                    "g.problems([sys.executable, '-m', 'tares.crew']) == [], a)", str(ROOT / "tests")],
+                   env=SCRATCH_ENV, capture_output=True, text=True)
 out = r.stdout.split()
-ck("scratch_home() moves a process off the real home, once, and the guard is then content",
-   r.returncode == 0 and out[:4] == ["True", "True", "True", "[]"], str((r.returncode, r.stdout, r.stderr[-200:])))
+ck("scratch_home() moves a process off the home it had, once, and the guard is then content",
+   r.returncode == 0 and out[:5] == ["True"] * 5, str((r.returncode, r.stdout, r.stderr[-200:])))
 ck("...and the folder is gone when the process ends", len(out) >= 5 and not os.path.exists(out[-1]), str(out))
 
 print("every test that restarts or starts a watch, or runs crew up, installs the guard")
