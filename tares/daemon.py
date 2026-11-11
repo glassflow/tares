@@ -5547,6 +5547,9 @@ def make_app() -> FastAPI:
             "integration": name, "tickets": _tickets_out(uid),
             name: store.get_project_linear(uid) if name == "linear" else store.get_project_github(uid)})
 
+    _TICKET_EDIT_FIELDS = {"title", "status", "position", "milestone", "depends_on", "assignee",
+                           "working_doc", "repo"}
+
     @app.put("/api/projects/{uid}/tickets/{ref}")
     async def update_project_ticket(uid: str, ref: str, request: Request,
                                     body: dict = Body(...)):
@@ -5559,6 +5562,10 @@ def make_app() -> FastAPI:
         clears it. Changing it leaves the holder and stage alone."""
         project = await asyncio.to_thread(_project_or_404, uid)
         t = await asyncio.to_thread(_ticket_or_404, uid, ref)
+        unknown = sorted(str(k) for k in set(body) - _TICKET_EDIT_FIELDS)
+        if unknown:
+            _err(ValueError("a ticket takes " + ", ".join(sorted(_TICKET_EDIT_FIELDS))
+                            + ", not: " + ", ".join(unknown)))
         foreign = t["owner"] != "tares"
         if foreign:
             # GitHub orders issues by number, so only Linear has an order to write

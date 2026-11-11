@@ -982,14 +982,16 @@ async def write_ticket(title: str, status: str = "", position: float | None = No
                        id: str = "", project: str = "", repo: str | None = None,
                        assignee: str | None = None) -> str:
     """Add a ticket to the project's list, or change one when `id` is given (its id or T<n>).
-    Only for a project whose tickets live in Tares: when they live in Linear or GitHub, create
-    and change them there (milestones and "blocks" or "blocked by" relations included; `gh` for
-    GitHub) and Tares picks them up on its next sync. `status` is todo, in_progress, done or
+    New tickets are for a project whose tickets live in Tares: when they live in Linear or GitHub,
+    create them there (milestones and "blocks" or "blocked by" relations included; `gh` for
+    GitHub) and Tares picks them up on its next sync; an existing one can be retitled, reordered
+    or moved to a milestone here, as said below. `status` is todo, in_progress, done or
     canceled; `position` orders the list (a new ticket goes to the end); `milestone` is the name of a milestone written with
     write_milestone ("" takes it out of its milestone); `depends_on` lists the tickets (T<n> or
     id) that must be done first ([] clears them); `repo` is the GitHub repo the ticket changes
     (owner/name), for a project that spans several repos ("" clears it; a Linear or GitHub ticket
-    takes only this, and attach_working_doc); `assignee` is the person it is for (a person id or
+    also takes title, milestone and, for Linear, position: they are written to Linear or GitHub,
+    and attach_working_doc; its status, assignee and dependencies change there); `assignee` is the person it is for (a person id or
     an email; an email nobody on the cell has is kept as written and the ticket shows as unowned;
     "" clears it). Assigning someone to a ticket of a private project adds them to it. Naming an
     assignee needs an enterprise licence; without one, leave it out. Returns the ticket with its

@@ -91,7 +91,25 @@ def reset():
     })
 
 
+def rest(request: httpx.Request) -> httpx.Response:
+    """The REST side an edit of an issue uses: the open milestones, and PATCH of one issue."""
+    path = request.url.path.removeprefix("/repos/acme/app")
+    if path == "/milestones" and request.method == "GET":
+        return httpx.Response(200, json=[{"number": m["number"], "title": m["title"], "node_id": m["id"],
+                                          "html_url": "https://github.com/acme/app/milestone/" + str(m["number"])}
+                                         for m in STATE["milestones"]])
+    if path.startswith("/issues/") and request.method == "PATCH":
+        body = json.loads(request.content)
+        STATE.setdefault("patches", []).append((int(path.rsplit("/", 1)[1]), body))
+        if STATE.get("patch_status"):
+            return httpx.Response(STATE["patch_status"], json={"message": "refused"})
+        return httpx.Response(200, json={})
+    return httpx.Response(404)
+
+
 def handler(request: httpx.Request) -> httpx.Response:
+    if request.url.path.startswith("/repos/"):
+        return rest(request)
     if str(request.url) != gt.API_URL:
         return httpx.Response(404)
     token = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -872,12 +890,37 @@ async def api():
            and r.json()["detail"] == "GH-31 lives in GitHub: change its position, status there", r.text)
         ck("(F) none of them changed the ticket",
            {t["identifier"]: t for t in store.list_tickets(own)} == before)
+        ck("(F) a refused edit sent nothing to GitHub", not STATE.get("patches"), STATE.get("patches"))
+        r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"title": "Own one, renamed"})
+        ck("(F) a title edit reaches GitHub and shows in Tares", r.status_code == 200
+           and STATE.get("patches") == [(31, {"title": "Own one, renamed"})]
+           and r.json()["title"] == "Own one, renamed"
+           and store.get_ticket(own, "GH-31")["title"] == "Own one, renamed", (r.text, STATE.get("patches")))
+        STATE["patches"] = []
+        r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"milestone": None})
+        ck("(F) no milestone takes the issue out of its milestone", r.status_code == 200
+           and STATE["patches"] == [(31, {"milestone": None})]
+           and store.get_ticket(own, "GH-31")["milestone"] is None, (r.text, STATE["patches"]))
+        STATE["patches"] = []
+        alpha = next(m for m in store.list_milestones(own) if m["name"] == "Alpha")
+        r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"milestone": alpha["id"]})
+        ck("(F) a milestone edit is sent as GitHub's milestone number and saved", r.status_code == 200
+           and STATE["patches"] == [(31, {"milestone": 2})]
+           and store.get_ticket(own, "GH-31")["milestone"] == alpha["id"], (r.text, STATE["patches"]))
+        STATE["patches"] = []
+        STATE["patch_status"] = 403
+        r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"title": "Refused by GitHub"})
+        STATE["patch_status"] = None
+        ck("(F) GitHub refusing the write is answered, and Tares keeps the title", r.status_code == 400
+           and "cannot write to acme/app" in r.json()["detail"]
+           and store.get_ticket(own, "GH-31")["title"] == "Own one, renamed", (r.status_code, r.text))
+        STATE["patches"] = []
         r = await cx.post(f"/api/projects/{own}/docs", json={"kind": "working", "title": "W31", "body": "plan"})
         doc = r.json()["id"]
         r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"working_doc": doc, "repo": "acme/app"})
         ck("(F) a GitHub ticket still takes a working doc and a repo", r.status_code == 200
            and r.json()["working_doc_body"] == "plan" and r.json()["repo"] == "acme/app"
-           and r.json()["title"] == "Own one" and r.json()["owner"] == "github", r.text)
+           and r.json()["title"] == "Own one, renamed" and r.json()["owner"] == "github", r.text)
         r = await cx.delete(f"/api/projects/{own}/tickets/GH-31")
         ck("(F) DELETE a GitHub ticket -> 409", r.status_code == 409
            and r.json()["detail"] == "GH-31 lives in GitHub: remove it there"

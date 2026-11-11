@@ -228,6 +228,11 @@ async def main():
         r = await cx.put(f"/api/projects/{uid}/tickets/FAC-2", json={})
         ck("(F) an empty body changes nothing and sends nothing", r.status_code == 200 and not STATE["updates"], r.text)
 
+        r = await cx.put(f"/api/projects/{uid}/tickets/FAC-2", json={"title": "Colour", "colour": "red"})
+        ck("(F) an unknown field is refused, naming it, and nothing is saved or sent", r.status_code == 400
+           and "colour" in r.text and not STATE["updates"]
+           and store.get_ticket(uid, "FAC-2")["title"] == "Store invoices", r.text)
+
         print("== (G) a slow write does not hold the route ==")
         old_wait = factory_api.EDIT_WAIT
         factory_api.EDIT_WAIT = 0.3
