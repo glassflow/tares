@@ -147,11 +147,16 @@ async def main():
                 await asyncio.sleep(0.02)
 
         print("== no required commands ==")
-        for label, req in (("null", None), ("empty", []), ("blank strings", ["", "   "]),
-                           ("a string, not a list", "pytest -q"), ("numbers", [1, 2])):
+        for label, req in (("null", None), ("empty", []), ("blank strings", ["", "   "])):
             s = await ci.state(pr(), req)
             ck(f"required {label} and none on the project is none",
                s.state == "none" and s.head == HEAD and s.summary, s)
+        for label, req in (("a string, not a list", "pytest -q"), ("numbers", [1, 2])):
+            try:
+                await ci.state(pr(), req)
+                ck(f"required {label} is refused, as the store refuses it", False)
+            except ValueError:
+                ck(f"required {label} is refused, as the store refuses it", True)
 
         print("== nothing recorded yet ==")
         s = await ci.state(pr(), [PYTEST, RUFF])
@@ -209,7 +214,8 @@ async def main():
         await record((PYTEST, "14 passed", HEAD))
         await record(("make e2e", "all green", HEAD))
         s = await ci.state(pr(), ["make e2e"])
-        ck("a command the session never ran is failure", s.state == "failure" and s.failing == ["make e2e"], s)
+        ck("a command the recording does not show is pending, not failure (ingest lag, window)",
+           s.state == "pending" and not s.failing and "Not in the session recording yet: make e2e" in s.summary, s)
         await record((LINT, "clean", HEAD))
         s = await ci.state(pr(), [LINT])
         ck("a misreported result (the recording shows 3 errors) is failure",
@@ -217,6 +223,9 @@ async def main():
         await record((LINT, "3 errors", HEAD))
         s = await ci.state(pr(), [LINT])
         ck("an honest failed result, which the recording backs, is still failure",
+           s.state == "failure" and s.failing == [LINT], s)
+        s = await ci.state(pr(), ["make e2e", LINT])
+        ck("a failing claim still wins over one not in the recording yet",
            s.state == "failure" and s.failing == [LINT], s)
         await record((LINT, "clean", HEAD))
         s = await ci.state(pr(), [LINT, PYTEST, "never recorded"])

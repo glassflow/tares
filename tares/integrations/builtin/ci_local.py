@@ -13,8 +13,10 @@ A required command counts when a recorded check is for it (the same command, or 
 a chain: `cd x && pytest -q` is `pytest -q`) and names the head commit. For each command the
 latest such check decides:
 
-- it says it failed, or the recording shows the command failing, not running, or printing other
-  counts: the command is failing, and the state is `failure` (listed in `failing`)
+- it says it failed, or the recording shows the command failing or printing other counts: the
+  command is failing, and the state is `failure` (listed in `failing`)
+- the recording does not show the command at all: `pending` ("Not in the session recording yet").
+  Ingest lag, a reassigned holder or the recording's window can leave a run that passed out of it
 - no check on this head: `pending`. A check only on an older commit says "checks are for an older
   commit, run them again"
 - the recording cannot be read (the ticket has no session): `pending`, since nothing backs the claim
@@ -23,7 +25,8 @@ latest such check decides:
 The integration needs the cell's store: `LocalCI(store)`. Without one (the settings page builds it
 bare to test the connection) only `check_connection` works. `source` is the name of the cell's
 Claude Code source, where the sessions' commands are recorded; it is "claude_code" unless the
-caller says otherwise.
+caller says otherwise: the daemon resolves its own name (`_cc_source()`), so whatever builds
+`LocalCI` for a project passes that. A bad `required` (not a list of strings) raises ValueError.
 """
 from __future__ import annotations
 
@@ -32,24 +35,11 @@ import asyncio
 from ..ci import CISource
 from ..types import CIState, PRRef
 from ... import factory as factory_mod
+from ...factory_store import FactoryStore
 
 DEFAULT_SOURCE = "claude_code"
 OLDER_COMMIT = "checks are for an older commit, run them again"
 _CHECKS_READ = 500    # the checks of one ticket that are looked at, newest last
-
-
-def _clean(commands) -> list[str]:
-    """The command strings of a list: trimmed, blanks and repeats dropped, in order. Anything
-    that is not a list of strings gives no commands."""
-    if not isinstance(commands, (list, tuple)):
-        return []
-    out: list[str] = []
-    for c in commands:
-        if isinstance(c, str):
-            c = " ".join(c.split())
-            if c and c not in out:
-                out.append(c)
-    return out
 
 
 class LocalCI(CISource):
@@ -77,7 +67,7 @@ class LocalCI(CISource):
         ref = str(getattr(pr, "ticket", "") or "").strip()
         head = str(getattr(pr, "head", "") or "").strip()
         url = str(getattr(pr, "url", "") or "")
-        wanted = _clean(required) or (self.store.get_required_checks(uid) if uid else [])
+        wanted = FactoryStore.clean_commands(required) or (self.store.get_required_checks(uid) if uid else [])
         if not wanted:
             return CIState("none", head=head, url=url,
                            summary="This project requires no checks")
@@ -92,6 +82,7 @@ class LocalCI(CISource):
         failing: list[str] = []
         missing: list[str] = []
         older = unbacked = False
+        unseen: list[str] = []     # claimed, but not in the session recording (yet)
         commands = since = None
         read = False     # the session recording is read once, and only when a check needs it
         for cmd in wanted:
@@ -113,13 +104,15 @@ class LocalCI(CISource):
                 unbacked = True
                 continue
             match, _ = factory_mod.match_check(latest, commands, since)
-            if match != "matched":
+            if match == "not_found":
+                unseen.append(cmd)       # not proof of a failure: the recording may lag
+            elif match != "matched":
                 failing.append(cmd)
         if failing:
             return CIState("failure", head=head, failing=failing, url=url,
                            summary="Failed, or the session recording shows something else: "
                                    + ", ".join(failing))
-        if missing or unbacked:
+        if missing or unbacked or unseen:
             parts = []
             if older:
                 parts.append(OLDER_COMMIT)
@@ -127,5 +120,7 @@ class LocalCI(CISource):
                 parts.append("Not recorded on this commit yet: " + ", ".join(missing))
             if unbacked:
                 parts.append("No session recording to compare the checks with")
+            if unseen:
+                parts.append("Not in the session recording yet: " + ", ".join(unseen))
             return CIState("pending", head=head, url=url, summary=". ".join(parts))
         return CIState("success", head=head, url=url)
