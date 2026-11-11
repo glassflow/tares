@@ -864,7 +864,7 @@ scenario(Scenario(
          lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
         ("orchestrator may spawn",
          lambda r: "Bash(factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
-        ("orchestrator may spawn as tares factory too (TR-1069)",
+        ("orchestrator may spawn as tares factory",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
          # on Windows the resolved path is tares.exe (any case), so compare the file name without its extension
@@ -880,7 +880,8 @@ scenario(Scenario(
     covers=["crew-$r env FACTORY_STATION", "crew-$r env FACTORY_ROLE", "crew-$r env FACTORY_PARENT empty",
             "crew-$r has no TARES_PROJECT", "crew-$r is told the shared MCP endpoint", "no Rius, no comms",
             "stations turn the plugin on, whatever the person's settings say", "orchestrator may spawn",
-            "nothing goes to production without the person", "grant quoted in the allow rules"],
+            "orchestrator may spawn as tares factory", "nothing goes to production without the person",
+            "grant quoted in the allow rules"],
 ))
 
 _LINKS = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
@@ -7580,6 +7581,68 @@ scenario(Scenario(
             "once per change", "a live helper is restarted with its grant", "a station open in a terminal waits",
             "and gets it once they leave", "grants that can't be read restart nothing", "nothing restarts while halted",
             "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
+))
+
+# crew_test.sh, "A builder that has finished: only a new grant that names it brings it back (TR-645)": two idle shop
+# builders, both with a `.done` file. A project grant that names neither is noted as skipped, once per builder and
+# once per change; a grant that names one restarts that one and takes its `.done` file away, the other sleeps on.
+G4_LINT = "The builder may run npm run lint in shop"
+G4_BUILD = "shop-build-m2 may run npm run build in shop"
+G4_DONE_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+G4_DONE_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": '- "%s" (2026-02-06)\n' % G4_LINT})
+G4_DONE_W2 = lworld("L3-review", grants=LAUNCH_GRANT,
+                    project_grants={"shop": '- "%s" (2026-02-06)\n- "%s" (2026-02-07)\n' % (G4_LINT, G4_BUILD)})
+G4_DONE_BUILDERS = ("shop-build-m1", "shop-build-m2")
+
+
+def g4_done_state(tmp: Path) -> dict:
+    """After a step: the sessions started, each builder's id, whether its .done file is there, and the skips noted."""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    ev = tmp / "crew" / "events.jsonl"
+    text = ev.read_text(encoding="utf-8") if ev.is_file() else ""
+    return {"started": _sessions_started(tmp),
+            "ids": {n: rows[n]["id"] for n in G4_DONE_BUILDERS},
+            "done": {n: (tmp / "crew" / "stations" / f"{n}.done").is_file() for n in G4_DONE_BUILDERS},
+            "skips": text.replace(" ", "").count('"event":"regrant-skipped"')}
+
+
+def g4_done_recording(step: Step) -> Step:
+    step.after = g4_done_state
+    return step
+
+
+def g4_done_asleep(r: "Run", i: int) -> bool:
+    """Neither builder was restarted by step i: the ids and the number of sessions are those of the start."""
+    return r.snap(i)["ids"] == r.snap(1)["ids"] and r.snap(i)["started"] == r.snap(1)["started"]
+
+
+scenario(Scenario(
+    name="crew_g4_regrant_done",
+    suite="crew",
+    about="a done builder sleeps through a grant that does not name it (noted once per builder), and is restarted, no longer done, by one that does",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("shop-build-m1", "builder", G4_DONE_W0, parent="crew-orchestrator", project="shop"),              # 0
+           g4_done_recording(_launch("shop-build-m2", "builder", G4_DONE_W0, parent="crew-orchestrator", project="shop")),  # 1
+           wstep(G4_DONE_W1, before=_both(_idle(*G4_DONE_BUILDERS), _touch_done("shop-build-m1"), _touch_done("shop-build-m2")),
+                 after=g4_done_state),                                                                             # 2: names neither
+           wstep(G4_DONE_W1, after=g4_done_state),                                                                 # 3: the same again
+           wstep(G4_DONE_W2, after=g4_done_state)],                                                                # 4: names m2
+    checks=[
+        ("a done builder sleeps through a grant that does not name it", lambda r: r.code(2) == 0 and g4_done_asleep(r, 2)),
+        ("the watch notes the skip for each", lambda r: r.snap(2)["skips"] == 2),
+        ("and only once", lambda r: r.code(3) == 0 and g4_done_asleep(r, 3) and r.snap(3)["skips"] == 2),
+        ("a done builder a new grant names is restarted with it",
+         lambda r: r.code(4) == 0 and r.snap(4)["ids"]["shop-build-m2"] != r.snap(1)["ids"]["shop-build-m2"]
+         and r.snap(4)["started"] == r.snap(1)["started"] + 1
+         and any("shop-build-m2 may run npm run build" in a for a in allow_of(r, "shop-build-m2"))),
+        ("and is no longer marked done", lambda r: r.snap(2)["done"]["shop-build-m2"] and not r.snap(4)["done"]["shop-build-m2"]),
+        ("the other done builder stays asleep",
+         lambda r: r.snap(4)["ids"]["shop-build-m1"] == r.snap(1)["ids"]["shop-build-m1"] and r.snap(4)["done"]["shop-build-m1"]),
+    ],
+    covers=["a done builder sleeps through a grant that does not name it", "the watch notes the skip for each", "and only once",
+            "a done builder a new grant names is restarted with it", "and is no longer marked done",
+            "the other done builder stays asleep"],
 ))
 
 # crew_test.sh, the same story seen from the person's side: `crew desk` shows a refused command and where to allow it,
