@@ -4,8 +4,8 @@
     crew setup --questions [--json]        every outstanding setup question, as one document (schemas/setup_questions.json)
     crew setup --answers <file.json> [--json]  validate the answers and save them, as the prompts would; --json says what was saved (schemas/setup_answers.json)
 
-Bash stays the default engine: this runs only for TARES_FACTORY_ENGINE=python (or when the dispatcher
-sends `crew up` here). Wherever it differs from claude-plugin/bin/factory, bash is right, except for the
+Python is the default engine (TR-1069): the dispatcher sends `crew up` here unless TARES_FACTORY_ENGINE=bash
+(or "engine": "bash" in crew.json) asks for bash. Wherever it differs from claude-plugin/bin/factory, bash is right, except for the
 lines below.
 
 What is ported here (bash name -> Python): installed_tares, clash_text, home_trusted, ensure_home_trusted,
@@ -626,7 +626,7 @@ def start_stations(env: dict, roles: list) -> int:
     runs the bash internal command `_start-stations`; see the module docstring."""
     from ..cli import plugin_dir
     script = plugin_dir() / "bin" / "factory"
-    if os.name == "nt" or not shutil.which("bash"):
+    if os.name == "nt" or not shutil.which("bash", path=env.get("PATH")):
         _err(f'{ME}: "crew up" cannot start the stations here: that step is not yet ported to the Python engine '
              "(TR-953) and runs in bash, which is not available. The settings and the crew name are saved.\n")
         return 2

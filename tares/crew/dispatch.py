@@ -19,6 +19,7 @@ stays quick: nothing here is imported that bash does not need.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from pathlib import Path
 from typing import Callable
@@ -149,7 +150,7 @@ def _bash_watch(argv: list[str], env: dict) -> bool:
     the default now; the engine setting (bash) is handled by route. Windows has no bash to keep."""
     if argv[:1] == ["crew"]:
         argv = argv[1:]
-    return argv[:1] == ["watch"] and env.get(WATCH_VAR) == "bash" and not is_windows()
+    return argv[:1] == ["watch"] and env.get(WATCH_VAR) == "bash" and bash_exe(env) is not None
 
 
 def _view(name: str):
@@ -197,6 +198,21 @@ PORTED[("doctor",)] = _doctor
 def is_windows() -> bool:
     """True where bash is not there to fall back on. A function so a test can patch it."""
     return sys.platform == "win32"
+
+
+def bash_exe(env: dict) -> str | None:
+    """The bash that can run a command not ported yet, or None where there is none: Windows, or a Mac or Linux
+    without bash (a slim container, a minimal image). The platform is detected, never assumed (TR-1069, D73)."""
+    if is_windows():
+        return None
+    if os.path.exists("/bin/bash"):
+        return "/bin/bash"
+    return shutil.which("bash", path=env.get("PATH"))
+
+
+def no_bash_reason(env: dict) -> str:
+    """Why there is no bash to fall back on, in the words of the message that names it."""
+    return "bash is not available on Windows" if is_windows() else "bash was not found on this system (PATH)"
 
 
 def find(argv: list[str]) -> Callable[[list[str], dict], int] | None:
@@ -313,10 +329,10 @@ def run(argv: list[str], env: dict, script: str | Path) -> None:
             except (OSError, ValueError):
                 pass
         raise SystemExit(code or 0)
-    if is_windows():
+    exe = bash_exe(env)
+    if exe is None:
         if engine_setting(env)[0] == "bash":
-            _fail('the bash engine needs bash, which is not available on Windows; '
+            _fail(f'the bash engine needs bash, which is not available {"on Windows" if is_windows() else "on this system"}; '
                   f'unset {ENGINE_VAR} and remove "engine": "bash" from crew.json to use the Python engine')
-        _fail(f'"{command_name(argv)}" is not yet ported to the Python engine, '
-              "and bash is not available on Windows")
-    os.execve("/bin/bash", ["bash", str(script), *argv], env)
+        _fail(f'"{command_name(argv)}" is not yet ported to the Python engine, and {no_bash_reason(env)}')
+    os.execve(exe, ["bash", str(script), *argv], env)

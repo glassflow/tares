@@ -341,6 +341,30 @@ with ported(TABLE):
     ck("...and execs nothing, runs nothing", not execs and not calls, short((execs, calls)))
     code, out, err, execs = call_run([UNPORTED], {ENGINE: "weird"}, windows=True)
     ck("an invalid value is still an invalid value on Windows", code == 2 and "must be" in err and not execs, short(err))
+# ---------- a Mac or Linux with no bash: the platform is detected, the message says so (TR-1069, D73) ----------
+print("no bash on this system")
+
+
+def call_run_nobash(argv, env=None):
+    with mock.patch.object(dispatch, "bash_exe", lambda e: None):
+        return call_run(argv, env)
+
+
+with ported(TABLE):
+    code, out, err, execs = call_run_nobash([UNPORTED], {})
+    ck("an unported command with no bash exits 2, no traceback", code == 2 and execs == [] and "Traceback" not in err, short((code, err)))
+    ck("...naming the command and that bash was not found", err == f'tares factory: "{UNPORTED}" is not yet ported to the Python engine, and bash was not found on this system (PATH)\n',
+       short(err))
+    calls.clear()
+    code, out, err, execs = call_run_nobash(["zz"], {})
+    ck("a ported command still runs", calls == [("a", ["zz"])] and code == 0 and not execs, short((calls, code, err)))
+    code, out, err, execs = call_run_nobash(["zz"], {ENGINE: "bash"})
+    ck("engine=bash with no bash exits 2 with a message of its own", code == 2 and "needs bash, which is not available on this system" in err and not execs, short((code, err)))
+with mock.patch.object(dispatch, "bash_exe", lambda e: None):
+    ck("TARES_FACTORY_WATCH=bash still gets the Python watch when there is no bash", dispatch.route(["crew", "watch"], {"TARES_FACTORY_WATCH": "bash"})[0] == "python")
+ck("bash_exe finds a bash on this machine (or says None)", dispatch.bash_exe({"PATH": os.environ.get("PATH", "")}) in (None, "/bin/bash") or os.path.basename(dispatch.bash_exe({"PATH": os.environ.get("PATH", "")})) == "bash")
+with mock.patch.object(os.path, "exists", lambda p: False), mock.patch.object(shutil, "which", lambda *a, **k: None):
+    ck("bash_exe is None when /bin/bash and PATH have none", dispatch.bash_exe({}) is None)
 ck("is_windows is true only for win32", dispatch.is_windows() == (sys.platform == "win32"))
 with mock.patch.object(sys, "platform", "win32"):
     ck("...patching sys.platform flips it", dispatch.is_windows() is True)

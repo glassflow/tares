@@ -217,9 +217,10 @@ def stop_requested(paths: CrewPaths) -> bool:
 
 def _watch_command(env: dict) -> tuple:
     """(argv, engine): the command that runs the watch. Python unless the bash engine or TARES_FACTORY_WATCH=bash
-    asks for bash, and always Python on Windows (no bash), whatever the engine setting says."""
+    asks for bash, and always Python where there is no bash (Windows, or a system without it), whatever the engine
+    setting says."""
     from . import dispatch   # the one rule for which engine runs `crew watch`; imported late, dispatch imports us
-    if os.name == "nt" or dispatch.route(["crew", "watch"], env)[0] == "python":
+    if os.name == "nt" or dispatch.bash_exe(env) is None or dispatch.route(["crew", "watch"], env)[0] == "python":
         exe = sys.executable
         if os.name == "nt":
             gui = os.path.join(os.path.dirname(exe), "pythonw.exe")
