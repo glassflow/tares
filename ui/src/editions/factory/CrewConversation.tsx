@@ -314,7 +314,7 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
               <div key={r.key} className="ml-auto flex max-w-[92%] justify-end gap-2" data-testid="bubble-asked">
                 <div className="min-w-0 text-right">
                   <div className="mb-1 font-mono text-[11px] text-muted-foreground"><span data-user-text>{it.from}</span>{hm(it.at) ? ` · ${hm(it.at)}` : ""}</div>
-                  <div className="inline-block max-w-full bg-foreground px-3 py-2 text-left text-sm text-background" data-user-text><Prose text={it.text} /></div>
+                  <div className="inline-block max-w-full bg-foreground px-3 py-2 text-left text-sm text-background dark:bg-[var(--accent)] dark:text-[#1e0f00]" data-user-text><Prose text={it.text} /></div>
                 </div>
                 <Initial name={it.from} dark />
               </div>
