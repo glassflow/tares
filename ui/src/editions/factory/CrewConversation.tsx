@@ -108,17 +108,6 @@ function Prose({ text }: { text: string }) {
   );
 }
 
-function Initial({ name, dark }: { name: string; dark?: boolean }) {
-  const letters = name.replace(/^the\s+/i, "").replace(/[^A-Za-z0-9]+/g, " ").trim().split(" ")
-    .filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "?";
-  return (
-    <span aria-hidden className={cn("mt-5 inline-flex size-6 shrink-0 items-center justify-center font-mono text-[10px] font-bold",
-      dark ? "bg-[var(--accent)] text-[#1e0f00]" : "border border-border bg-card text-foreground")}>
-      {letters}
-    </span>
-  );
-}
-
 function Copy({ text }: { text: string }) {
   const [done, setDone] = React.useState(false);
   return (
@@ -274,11 +263,11 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
         <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3">
           {rows.map((r) => {
             if (r.kind === "group") {
-              return <div key={r.key} className="ml-8 min-w-0"><Group tools={r.tools} openAll={openAll} opened={opened} toggle={toggle} loadFull={loadFull} /></div>;
+              return <div key={r.key} className="ml-4 min-w-0"><Group tools={r.tools} openAll={openAll} opened={opened} toggle={toggle} loadFull={loadFull} /></div>;
             }
             const it = r.item;
             if (it.kind === "tool") {
-              return <div key={r.key} className="ml-8 min-w-0"><ToolCard t={it} open={openAll || opened.has(it.id)} onToggle={() => toggle(it.id)} loadFull={loadFull} /></div>;
+              return <div key={r.key} className="ml-4 min-w-0"><ToolCard t={it} open={openAll || opened.has(it.id)} onToggle={() => toggle(it.id)} loadFull={loadFull} /></div>;
             }
             if (it.kind === "divider") {
               return (
@@ -291,8 +280,7 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
             }
             if (it.kind === "said") {
               return (
-                <div key={r.key} className="flex max-w-[92%] gap-2" data-testid="bubble-said">
-                  <Initial name={who} />
+                <div key={r.key} className="max-w-[88%]" data-testid="bubble-said">
                   <div className="min-w-0">
                     <div className="mb-1 font-mono text-[11px] text-muted-foreground"><span data-user-text>{who}</span>{hm(it.at) ? ` · ${hm(it.at)}` : ""}</div>
                     <div className="border border-border bg-card px-3 py-2 text-sm" data-user-text><Prose text={it.text} /></div>
@@ -311,12 +299,11 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
               );
             }
             return (
-              <div key={r.key} className="ml-auto flex max-w-[92%] justify-end gap-2" data-testid="bubble-asked">
+              <div key={r.key} className="ml-auto flex max-w-[88%] justify-end" data-testid="bubble-asked">
                 <div className="min-w-0 text-right">
                   <div className="mb-1 font-mono text-[11px] text-muted-foreground"><span data-user-text>{it.from}</span>{hm(it.at) ? ` · ${hm(it.at)}` : ""}</div>
-                  <div className="inline-block max-w-full bg-foreground px-3 py-2 text-left text-sm text-background dark:bg-[var(--accent)] dark:text-[#1e0f00]" data-user-text><Prose text={it.text} /></div>
+                  <div className="inline-block max-w-full border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-left text-sm text-foreground dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]" data-user-text><Prose text={it.text} /></div>
                 </div>
-                <Initial name={it.from} dark />
               </div>
             );
           })}
