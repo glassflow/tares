@@ -34,6 +34,7 @@ test_crew_cc_update
 test_crew_claude
 test_crew_client
 test_crew_contract
+test_crew_conversation
 test_crew_dispatch
 test_crew_docker_cleanup
 test_crew_doctor

@@ -7,11 +7,12 @@ import { cn } from "@/lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  crewMember, decideRule, factoryCrew, readMemoryAgain,
-  type CrewBuilders, type CrewMember, type CrewPage, type CrewProposal, type MemberDetail, type MemberLine,
+  crewMember, crewToolOutput, decideRule, factoryCrew, readMemoryAgain,
+  type ConvoItem, type CrewBuilders, type CrewMember, type CrewPage, type CrewProposal, type MemberDetail,
 } from "./FactoryCrew.api";
+import { Conversation } from "./CrewConversation";
 import { InlineIcon } from "./ProjectIcon";
-import { isSample, sampleDetail, sampleLoad } from "./crewSamples";
+import { isSample, sampleDetail, sampleLoad, sampleToolOutput } from "./crewSamples";
 
 // The factory Crew page: who is on the crew, what each member is doing, how far the crew may go,
 // what the Claude plan has left, the rules the reviewer proposes and the standup. FactoryCrewView is
@@ -32,7 +33,9 @@ const FOLD_BTN = "linklike text-[13px]";
 const CODE = "mt-0.5 inline-block border border-border bg-muted px-1.5 py-0.5 font-mono";
 
 export interface CrewActions {
-  detail: (station: string) => Promise<MemberDetail>;
+  /** The member's session; `before` reads the lines before a point, `since` from a point to the newest. */
+  detail: (station: string, at?: { before?: number; since?: number }) => Promise<MemberDetail>;
+  toolOutput: (station: string, id: string) => Promise<string>;
   ask: (station: string) => Promise<unknown>;
   decide: (id: string, decision: "accept" | "reject") => Promise<unknown>;
 }
@@ -44,23 +47,6 @@ const DOT: Record<string, string> = {
   "not heard": "bg-[var(--ink-faint)]",
   ended: "border border-[var(--ink-faint)] bg-transparent",
 };
-
-const LINE_TYPES: Record<string, string> = {
-  user: "Asked", assistant: "Said", tool_use: "Ran", tool_result: "Result", session_state: "State",
-};
-
-/** One line of the fold: the time, what kind of line, then the text. */
-function lineText(l: MemberLine): string | null {
-  const type = l.type ?? "";
-  const text = (l.text ?? "").trim();
-  if (!LINE_TYPES[type] || !text || text === type) return null;
-  let when = "";
-  if (l.at) {
-    const d = new Date(l.at);
-    if (!Number.isNaN(d.getTime())) when = d.toTimeString().slice(0, 5);
-  }
-  return `${when.padEnd(5)}  ${LINE_TYPES[type].padEnd(6)}  ${text}`;
-}
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
@@ -80,6 +66,7 @@ const Count = ({ children }: { children: React.ReactNode }) => (
 function Fold({ member, actions }: { member: CrewMember; actions: CrewActions }) {
   const [open, setOpen] = React.useState(false);
   const [detail, setDetail] = React.useState<MemberDetail>();
+  const [older, setOlder] = React.useState<{ items: ConvoItem[]; from: number } | null>(null);
   const [failed, setFailed] = React.useState(false);
   const [asked, setAsked] = React.useState<"idle" | "asked" | "failed">("idle");
   const timer = React.useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -89,6 +76,22 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
     setFailed(false);
     actions.detail(member.station).then(setDetail).catch(() => setFailed(true));
   }, [actions, member.station]);
+
+  // while open it follows the session: a fresh read every few seconds. Once earlier lines are loaded
+  // the read starts where they end, so the lines between stay; when the session outgrew what one read
+  // holds, the earlier lines no longer join on and are let go
+  const olderEnd = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const id = setInterval(() => {
+      const since = olderEnd.current;
+      actions.detail(member.station, since === null ? undefined : { since }).then((d) => {
+        if (since !== null && (d.conversation_from ?? 0) > since) { olderEnd.current = null; setOlder(null); }
+        setDetail(d);
+      }).catch(() => undefined);
+    }, POLL_MS);
+    return () => clearInterval(id);
+  }, [open, actions, member.station]);
 
   const toggle = () => {
     if (!open && !detail) load();
@@ -100,10 +103,17 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
       .then(() => { timer.current = setTimeout(load, ASKED_RELOAD_MS); })
       .catch(() => setAsked("failed"));
   };
+  const from = older ? older.from : (detail?.conversation_from ?? 0);
+  const earlier = async () => {
+    const d = await actions.detail(member.station, { before: from });
+    if (olderEnd.current === null) olderEnd.current = detail?.conversation_from ?? 0;
+    setOlder({ items: [...(d.conversation ?? []), ...(older?.items ?? [])], from: d.conversation_from ?? 0 });
+  };
+  const items = React.useMemo(() => [...(older?.items ?? []), ...(detail?.conversation ?? [])], [older, detail]);
+  const loadFull = React.useCallback((id: string) => actions.toolOutput(member.station, id), [actions, member.station]);
 
-  const lines = (detail?.recent ?? []).map(lineText).filter((x): x is string => x !== null);
   return (
-    <div className="col-start-2 col-end-[-1]">
+    <div className="col-start-2 col-end-[-1] min-w-0">
       <button type="button" className={FOLD_BTN} aria-expanded={open} onClick={toggle} data-testid="member-fold">
         {open ? "Hide what it did" : "Show what it did"}
       </button>
@@ -117,16 +127,11 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
           {!failed && !detail && <Skeleton className="mt-2" width="70%" />}
           {detail && (
             <>
-              <pre
-                data-words-exempt
-                className="m-0 mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words bg-[#1e0f00] px-3 py-2.5 font-mono text-xs leading-normal text-[#efeddb]"
-              >
-                {lines.length ? lines.join("\n") : "Nothing recent."}
-              </pre>
+              <Conversation items={items} who={member.station} earlier={from > 0} onEarlier={earlier} loadFull={loadFull} />
               {detail.attach && (
                 <div className={cn(MUTED, "mt-2")}>
                   Open in a terminal<br />
-                  <code data-words-exempt className={CODE}>{detail.attach}</code>
+                  <code data-words-exempt className={CODE} data-testid="member-attach">{detail.attach}</code>
                 </div>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
@@ -384,11 +389,13 @@ export function FactoryCrewView({ data, error, reload, actions }: {
 
 const LIVE_ACTIONS: CrewActions = {
   detail: crewMember,
+  toolOutput: crewToolOutput,
   ask: readMemoryAgain,
   decide: decideRule,
 };
 const SAMPLE_ACTIONS: CrewActions = {
   detail: () => sampleDetail(),
+  toolOutput: (_s: string, id: string) => sampleToolOutput(id),
   ask: () => Promise.resolve(),
   decide: () => Promise.resolve(),
 };
