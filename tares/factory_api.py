@@ -210,6 +210,52 @@ def _keep(store, t: dict, name: str, status: Status, error: str) -> None:
               flush=True)
 
 
+EDIT_WAIT = 10.0        # seconds an edit route waits for the ticket system before it carries on
+_EDITING: set = set()   # edits still running after their route moved on
+_LATE: set = set()
+
+
+async def edit_ticket(store, t: dict, name: str, fields: dict, mirror: dict) -> bool:
+    """`fields` written to the ticket where it lives, through the integration `name`'s `update`
+    (TR-849); on success `mirror` (the same change in Tares's own columns) is saved, so the
+    console shows it before the next sync brings it in. Raises what `update` raises (ValueError for
+    a refused field, KeyError for an unknown ticket or milestone, the system's own error), and
+    nothing is saved then. Never holds the caller longer than EDIT_WAIT: a write still waiting
+    (Linear's rate limit) carries on in the background, saves `mirror` when it lands, and logs a
+    failure; the next sync shows the truth either way. Returns False for that case, True when the
+    edit landed."""
+    cls = integrations_registry.get("tickets", name)
+    if cls is None:
+        raise KeyError(f"no tickets integration {name!r}")
+
+    async def go() -> None:
+        await cls(store).update(t, fields)
+        if mirror:
+            await asyncio.to_thread(lambda: store.update_ticket(t["id"], **mirror))
+
+    task = asyncio.ensure_future(go())
+    _EDITING.add(task)
+
+    def _done(tk) -> None:
+        _EDITING.discard(tk)
+        if tk in _LATE:
+            _LATE.discard(tk)
+            if not tk.cancelled() and tk.exception() is not None:
+                e = tk.exception()
+                print(f"[tares] edit of {t.get('id')} in {name} failed: {type(e).__name__}: {e}",
+                      flush=True)
+
+    task.add_done_callback(_done)
+    done, _ = await asyncio.wait({task}, timeout=EDIT_WAIT)
+    if not done:
+        _LATE.add(task)
+        return False
+    exc = task.exception()
+    if exc is not None:
+        raise exc
+    return True
+
+
 def _reread_only(cur: dict, fields: dict) -> bool:
     """The PR was read again and nothing but when (or whether the read failed) differs: that is
     not ticket activity, and the Projects list's Updated column must not move for it."""

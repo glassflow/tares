@@ -1045,8 +1045,9 @@ async def link_linear_project(linear_project: str, project: str = "") -> str:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/linear",
-                          json={"project": linear_project})
+        r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/link",
+                         json={"integration": "linear",
+                               "link_fields": {"project": linear_project}})
     if r.status_code >= 400:
         return _out(r)
     data = r.json()
@@ -1068,8 +1069,11 @@ async def link_github_issues(repo: str, issue_label: str = "", project: str = ""
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
-        r = await cx.post(f"{TARESD}/api/projects/{uid}/github",
-                          json={"repo": repo, "issue_label": issue_label})
+        fields = {"repo": repo}
+        if issue_label:
+            fields["issue_label"] = issue_label
+        r = await cx.put(f"{TARESD}/api/projects/{uid}/tickets/link",
+                         json={"integration": "github", "link_fields": fields})
     if r.status_code >= 400:
         return _out(r)
     data = r.json()

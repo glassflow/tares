@@ -743,7 +743,9 @@ ck("a Tares ticket is refused: it does not live in Linear",
    fails(b.set_status(s.get_ticket("p1", mine), Status.done), ValueError))
 ck("None and '' are not projects", fails(b.sync(None), ValueError) and fails(b.sync(""), ValueError)
    and fails(b.sync({}), ValueError))
-ck("link says it is not built yet", fails(b.link("p1", {}), NotImplementedError))
+_before = s.get_project_linear("p1")
+ck("link with no project to name is refused, the link is untouched", fails(b.link("p1", {}), Exception) is not False
+   and s.get_project_linear("p1") == _before)
 ck("nothing was written by the refused calls", STATE["calls"] == []
    and s.list_pending_writebacks("linear") == [])
 

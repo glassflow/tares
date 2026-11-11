@@ -45,7 +45,6 @@ from .config import (SLACK_URL_PREFIX, CatalogError, agent_url, catalog_from_db,
                      _source_from_dict)
 from .connectors import (SPECS, normalize_config, redact_config, restore_secrets,
                          source_type_for)
-from .connectors.github import _normalize_repo as _gh_normalize_repo
 from .dispatch import Dispatcher
 from .host import Host
 from .envelope import now_utc
@@ -70,6 +69,7 @@ from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
+from .integrations import registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -5405,8 +5405,10 @@ def make_app() -> FastAPI:
         except docs_mod.DocError as e:
             _err(e)
 
-    # where a ticket or milestone not owned by Tares lives; its owner is the key
-    _HOME_NAME = {"linear": "Linear", "github": "GitHub"}
+    def _home_title(owner: str) -> str:
+        """Where a ticket or milestone Tares does not own lives, in a word: Linear, GitHub."""
+        cls = integrations_registry.get("tickets", owner)
+        return (getattr(cls, "title", None) or owner).split()[0]
 
     def _assignee_ref(v) -> tuple[str | None, str | None]:
         """(person id, raw) for the `assignee` a caller sent; 404 for text that is neither a
@@ -5473,7 +5475,7 @@ def make_app() -> FastAPI:
         project = _project_or_404(uid)
         home = store.project_ticket_home(uid)
         if home:
-            _err(ValueError(f"this project's tickets live in {_HOME_NAME[home]}; add the ticket "
+            _err(ValueError(f"this project's tickets live in {_home_title(home)}; add the ticket "
                             "there and it shows up here on the next sync"), 409)
         try:
             title = docs_mod.title_ok(body.get("title"))
@@ -5503,50 +5505,145 @@ def make_app() -> FastAPI:
         await factory_api.refresh_prs(store, uid)
         return _ticket_out(uid, _ticket_or_404(uid, ref), with_doc=True)
 
+    @app.put("/api/projects/{uid}/tickets/link")
+    async def link_project_tickets(uid: str, body: dict = Body(...)):
+        """{integration, link_fields?}: link the project's tickets to Linear or GitHub Issues
+        through that integration's `link`, then read them once. `link_fields` are the non-secret
+        fields the integration names: `project` for Linear; `repo` and `issue_label` for GitHub.
+        A body that carries a key or a token is refused (400): the cell's own credentials read the
+        system. 409 when the project's tickets already live somewhere else. Answers
+        {integration, tickets, linear | github}, the link with the state of its first sync (a
+        sync that failed is on the link; the sync button tries again). DELETE /api/projects/{uid}/linear (or /github) unlinks."""
+        project = await asyncio.to_thread(_project_or_404, uid)
+        name = body.get("integration")
+        if not isinstance(name, str) or name not in ("linear", "github"):
+            _err(ValueError("integration is 'linear' or 'github'"))
+        extra = sorted(str(k) for k in set(body) - {"integration", "link_fields"})
+        if extra:
+            _err(ValueError("this takes integration and link_fields, not: " + ", ".join(extra)))
+        cls = integrations_registry.get("tickets", name)
+        if cls is None:
+            _err(KeyError(f"no tickets integration {name!r}"), 404)
+        try:
+            link = await cls(store).link(project, body.get("link_fields") or {})
+        except _tickets_integ.LinkConflict as e:
+            _err(e, 409)
+        except _linear.LinearError as e:
+            _linear_err(e)
+        except _gh_tickets.GitHubTicketsError as e:
+            _err(e, 429 if e.rate_limited else 400)
+        except (ValueError, KeyError) as e:
+            _err(e)
+        mod = _linear if name == "linear" else _gh_tickets
+        if mod.ensure_source(store):
+            runtime.reload_catalog()
+        await asyncio.to_thread(store.upsert_project_object, uid, "source",
+                                f"+source:{mod.SOURCE_NAME}", mod.SOURCE_NAME)
+        try:
+            await (_linear_sync_now if name == "linear" else _github_sync_now)(uid)
+        except (_linear.LinearError, _gh_tickets.GitHubTicketsError):
+            pass   # recorded on the link; the answer shows it
+        return await asyncio.to_thread(lambda: {
+            "integration": name, "tickets": _tickets_out(uid),
+            name: store.get_project_linear(uid) if name == "linear" else store.get_project_github(uid)})
+
     @app.put("/api/projects/{uid}/tickets/{ref}")
-    def update_project_ticket(uid: str, ref: str, request: Request,
+    async def update_project_ticket(uid: str, ref: str, request: Request,
                                     body: dict = Body(...)):
-        """Change a ticket. A Linear or GitHub ticket only takes `working_doc` and `repo` (its
-        title, status, order, assignee, milestone and blocking relations change where it lives);
-        a Tares ticket also takes title, status, position, assignee, milestone and depends_on.
-        `assignee` is a person id or an email; "" clears it. Changing it leaves the holder and
-        stage alone."""
-        project = _project_or_404(uid)
-        t = _ticket_or_404(uid, ref)
+        """Change a ticket. A Tares ticket takes title, status, position, assignee, milestone,
+        depends_on, working_doc and repo. A Linear or GitHub ticket takes title, position (its
+        order) and milestone, written to where it lives through the tickets integration (a slow
+        write carries on in the background and the answer says `edit_pending`), plus working_doc
+        and repo; its status, assignee and blocking relations change where it lives (409). Nothing
+        is saved when Linear or GitHub refuses the edit. `assignee` is a person id or an email; ""
+        clears it. Changing it leaves the holder and stage alone."""
+        project = await asyncio.to_thread(_project_or_404, uid)
+        t = await asyncio.to_thread(_ticket_or_404, uid, ref)
+        foreign = t["owner"] != "tares"
+        if foreign:
+            # GitHub orders issues by number, so only Linear has an order to write
+            home_only = {"status", "assignee", "depends_on"}
+            if t["owner"] == "github":
+                home_only.add("position")
+            held = sorted(home_only & set(body))
+            if held:
+                _err(ValueError(f"{t['identifier'] or t['id']} lives in {_home_title(t['owner'])}: "
+                                "change its " + ", ".join(held) + " there"), 409)
+        fields, remote, mirror, joins = await asyncio.to_thread(
+            _ticket_edit_plan, uid, t, project, request, body, foreign)
+        pending = False
+        if remote:
+            try:
+                landed = await factory_api.edit_ticket(store, t, t["owner"], remote, mirror)
+            except (_linear.LinearError, _gh_tickets.GitHubTicketsError) as e:
+                (_linear_err if t["owner"] == "linear" else _gh_err)(e)
+            except (ValueError, KeyError) as e:
+                _err(e)
+            pending = not landed
+
+        def _save() -> dict:
+            if fields:
+                why = (f"marked {fields['status'].replace('_', ' ')} in Tares"
+                       if "status" in fields else None)
+                store.update_ticket(t["id"], why=why, **fields)
+            if joins:
+                team_mod.get().assignee_join(store, project, fields["assignee_person_id"],
+                                             _added_by(request))
+            return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
+        out = await asyncio.to_thread(_save)
+        if pending:
+            out["edit_pending"] = True
+        return out
+
+    def _ticket_edit_plan(uid: str, t: dict, project: dict, request, body: dict, foreign: bool):
+        """What a ticket edit changes: (columns saved in Tares now, fields for the integration's
+        `update`, the columns that mirror them once it lands, whether the assignee joins the
+        project). Every 4xx is raised here, before anything is written."""
         fields: dict = {}
+        remote: dict = {}
+        mirror: dict = {}
         joins = False
         if "working_doc" in body:
             fields["working_doc"] = _working_doc_ok(uid, body.get("working_doc"))
         if "repo" in body:
             fields["repo"] = _repo_ok(body.get("repo"))
-        own = {"title", "status", "position", "milestone", "depends_on", "assignee"} & set(body)
-        if own and t["owner"] != "tares":
-            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
-                            "change its " + ", ".join(sorted(own)) + " there"), 409)
         try:
             if "title" in body:
-                fields["title"] = docs_mod.title_ok(body["title"])
+                title = docs_mod.title_ok(body["title"])
+                (remote if foreign else fields)["title"] = title
+                if foreign:
+                    mirror["title"] = title
             if "status" in body:
                 fields["status"] = docs_mod.status_ok(body["status"])
         except docs_mod.DocError as e:
             _err(e)
         if "position" in body and body["position"] is not None:
-            fields["position"] = float(body["position"])
+            try:
+                pos = float(body["position"])
+            except (TypeError, ValueError):
+                _err(ValueError("position is a number"))
+            if foreign:
+                remote["order"] = pos
+                mirror["position"] = pos
+            else:
+                fields["position"] = pos
         if "milestone" in body:
-            fields["milestone"] = _milestone_ref(uid, body.get("milestone"))
+            mid = _milestone_ref(uid, body.get("milestone"))
+            if foreign:
+                m = store.get_milestone(uid, mid) if mid else None
+                if mid and m is None:
+                    _err(KeyError(f"project has no milestone {body.get('milestone')!r}"), 404)
+                remote["milestone"] = m["name"] if m else None
+                mirror["milestone"] = mid
+            else:
+                fields["milestone"] = mid
         if "depends_on" in body:
             fields["depends_on"] = _depends_ref(uid, t["id"], body.get("depends_on"))
         if "assignee" in body:
             who, raw = _assignee_ref(body.get("assignee"))
             joins = _assign_join(request, project, t.get("assignee_person_id"), who)
             fields.update(assignee_person_id=who, assignee_raw=raw)
-        if fields:
-            why = (f"marked {fields['status'].replace('_', ' ')} in Tares" if "status" in fields else None)
-            store.update_ticket(t["id"], why=why, **fields)
-        if joins:
-            team_mod.get().assignee_join(store, project, fields["assignee_person_id"],
-                                         _added_by(request))
-        return _ticket_out(uid, _ticket_or_404(uid, t["id"]), with_doc=True)
+        return fields, remote, mirror, joins
 
     @app.delete("/api/projects/{uid}/tickets/{ref}")
     def delete_project_ticket(uid: str, ref: str):
@@ -5555,7 +5652,7 @@ def make_app() -> FastAPI:
         _project_or_404(uid)
         t = _ticket_or_404(uid, ref)
         if t["owner"] != "tares":
-            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_HOME_NAME[t['owner']]}: "
+            _err(ValueError(f"{t['identifier'] or t['id']} lives in {_home_title(t['owner'])}: "
                             "remove it there"), 409)
         store.delete_ticket(t["id"])
         return {"ok": True, "deleted": t["id"]}
@@ -5682,7 +5779,7 @@ def make_app() -> FastAPI:
         else:
             home = store.project_ticket_home(uid)
             if home:
-                _err(ValueError(f"this project's milestones live in {_HOME_NAME[home]}: add it "
+                _err(ValueError(f"this project's milestones live in {_home_title(home)}: add it "
                                 "there, then write its checks here"), 409)
             mid = store.create_milestone(uid, name, goal, checks,
                                          float(pos) if pos is not None else None)
@@ -5695,7 +5792,7 @@ def make_app() -> FastAPI:
         _project_or_404(uid)
         m = _milestone_or_404(uid, ref)
         if m["owner"] != "tares" and ({"name", "position"} & set(body)):
-            _err(ValueError(f"{m['name']} lives in {_HOME_NAME[m['owner']]}: rename or reorder "
+            _err(ValueError(f"{m['name']} lives in {_home_title(m['owner'])}: rename or reorder "
                             "it there"), 409)
         fields: dict = {}
         try:
@@ -5723,7 +5820,7 @@ def make_app() -> FastAPI:
         _project_or_404(uid)
         m = _milestone_or_404(uid, ref)
         if m["owner"] != "tares":
-            _err(ValueError(f"{m['name']} lives in {_HOME_NAME[m['owner']]}: remove it there"),
+            _err(ValueError(f"{m['name']} lives in {_home_title(m['owner'])}: remove it there"),
                  409)
         store.delete_milestone(m["id"])
         return {"ok": True, "deleted": m["id"]}
@@ -6338,38 +6435,6 @@ def make_app() -> FastAPI:
         if envelopes:
             await asyncio.to_thread(store.append, envelopes)
 
-    @app.post("/api/projects/{uid}/linear")
-    async def link_linear_project(uid: str, body: dict = Body(...)):
-        """{project}: the Linear project (id, URL or name) this project's tickets live in. Runs a
-        first sync; from then on the `linear` source keeps them in sync. A project that already
-        has Tares tickets cannot be linked (they would be two lists)."""
-        _project_or_404(uid)
-        if store.get_project_github(uid):
-            _err(ValueError("this project's tickets live in GitHub; stop using GitHub first"),
-                 409)
-        if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
-            _err(ValueError("this project already has its own tickets in Tares; a project's "
-                            "tickets live in one place"), 409)
-        try:
-            found = await _linear.find_project(store, str(body.get("project") or ""))
-        except _linear.LinearError as e:
-            _linear_err(e)
-        cur = store.get_project_linear(uid)
-        if cur and cur.get("id") != found["id"]:
-            _err(ValueError(f"this project is linked to Linear project {cur.get('name')!r}; "
-                            "unlink it first"), 409)
-        store.set_project_linear(uid, {**(cur or {}), **found})
-        if _linear.ensure_source(store):
-            runtime.reload_catalog()
-        store.upsert_project_object(uid, "source", f"+source:{_linear.SOURCE_NAME}",
-                                    _linear.SOURCE_NAME)
-        try:
-            await _linear_sync_now(uid)
-        except _linear.LinearError:
-            pass   # recorded on the link; the answer shows it
-        return {"tickets": _tickets_out(uid),
-                "linear": store.get_project_linear(uid)}
-
     @app.post("/api/projects/{uid}/linear/sync")
     async def sync_linear_project(uid: str):
         """Sync the project's tickets with Linear now."""
@@ -6409,65 +6474,6 @@ def make_app() -> FastAPI:
         envelopes = await _gh_tickets.sync_project(store, uid)
         if envelopes:
             await asyncio.to_thread(store.append, envelopes)
-
-    @app.post("/api/projects/{uid}/github")
-    async def link_github_issues(uid: str, body: dict = Body(...)):
-        """{repo, issue_label?}: the GitHub repo and the issue label whose issues are this
-        project's tickets (default `tares:<project name>`). Reads the repo once to check access,
-        then runs a first sync; from then on the `github_issues` source keeps them in sync. A
-        project that uses Linear or has Tares tickets cannot be linked (two lists), and a repo
-        and issue label belong to one project."""
-        project = _project_or_404(uid)
-        try:
-            repo = _gh_normalize_repo(body.get("repo"))
-        except ValueError as e:
-            _err(e, 400)
-        issue_label = str(body.get("issue_label")
-                          or _gh_tickets.default_issue_label(project["name"])).strip()
-        if not issue_label or len(issue_label) > 50:
-            _err(ValueError("the issue label must be 1 to 50 characters"), 400)
-        def refusals() -> dict | None:
-            """The 409s; the project's link as it stands. Run again after the fetch, since
-            another request may have linked something while GitHub was answering."""
-            if store.get_project_linear(uid):
-                _err(ValueError("this project's tickets live in Linear; stop using Linear first"),
-                     409)
-            if any(t["owner"] == "tares" for t in store.list_tickets(uid)):
-                _err(ValueError("this project already has its own tickets in Tares; a project's "
-                                "tickets live in one place"), 409)
-            cur = store.get_project_github(uid)
-            if cur and (cur.get("repo"), cur.get("issue_label")) != (repo, issue_label):
-                _err(ValueError(f"this project is linked to {cur.get('repo')} with issue label "
-                                f"{cur.get('issue_label')}; unlink it first"), 409)
-            for other, link in store.github_projects():
-                if other != uid and (str(link.get("repo")).lower(),
-                                     str(link.get("issue_label")).lower()
-                                     ) == (repo.lower(), issue_label.lower()):
-                    owner = store.get_project(other)
-                    _err(ValueError(f"{repo} with issue label {issue_label} is already the "
-                                    f"ticket home of project {owner['name'] if owner else other}"),
-                         409)
-            return cur
-
-        cur = refusals()
-        try:
-            info, _milestones, _issues = await _gh_tickets.fetch(
-                store, {**(cur or {}), "repo": repo, "issue_label": issue_label})
-        except _gh_tickets.GitHubTicketsError as e:
-            _err(e, 429 if e.rate_limited else 400)
-        cur = refusals()   # no await between this check and the save
-        store.set_project_github(uid, {**(cur or {}), "repo": repo, "issue_label": issue_label,
-                                       "url": f"https://github.com/{repo}",
-                                       "credential": info["credential"]})
-        if _gh_tickets.ensure_source(store):
-            runtime.reload_catalog()
-        store.upsert_project_object(uid, "source", f"+source:{_gh_tickets.SOURCE_NAME}",
-                                    _gh_tickets.SOURCE_NAME)
-        try:
-            await _github_sync_now(uid)
-        except _gh_tickets.GitHubTicketsError:
-            pass   # recorded on the link; the answer shows it
-        return {"tickets": _tickets_out(uid), "github": store.get_project_github(uid)}
 
     @app.post("/api/projects/{uid}/github/sync")
     async def sync_github_issues(uid: str):

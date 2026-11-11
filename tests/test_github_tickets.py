@@ -677,15 +677,15 @@ async def api():
 
         print("== (A) linking a project ==")
         uid = await new_project("p")
-        r = await cx.post("/api/projects/nope/github", json={"repo": "acme/app"})
+        r = await cx.put("/api/projects/nope/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app"}})
         ck("(A) an unknown project -> 404", r.status_code == 404, r.text)
         for body, text in [({}, "owner/name"), ({"repo": "acme"}, "owner/name"),
                            ({"repo": "acme/app", "issue_label": "   "}, "1 to 50"),
                            ({"repo": "acme/app", "issue_label": "x" * 51}, "1 to 50")]:
-            r = await cx.post(f"/api/projects/{uid}/github", json=body)
+            r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "github", "link_fields": body})
             ck(f"(A) {body} -> 400", r.status_code == 400 and text in r.json()["detail"], r.text)
         ck("(A) none of them linked it", store.get_project_github(uid) is None)
-        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "https://github.com/acme/app.git"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "github", "link_fields": {"repo": "https://github.com/acme/app.git"}})
         tickets = r.json()["tickets"]
         ck("(A) link by pasted URL, issue label defaulting to tares:<name>: GH-1..GH-4 in order",
            r.status_code == 200 and [t["identifier"] for t in tickets] == ["GH-1", "GH-2", "GH-3", "GH-4"]
@@ -705,56 +705,56 @@ async def api():
         ck("(A) GET tickets shows the github link, and no linear one", r.json()["github"]["repo"] == "acme/app"
            and r.json()["github"]["issue_label"] == "tares:p" and r.json()["linear"] is None
            and len(r.json()["tickets"]) == 4, r.text)
-        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "acme/app", "issue_label": "tares:p"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:p"}})
         ck("(A) linking the same repo and issue label again is fine", r.status_code == 200
            and len(r.json()["tickets"]) == 4, r.text)
-        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "acme/app", "issue_label": "other"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "other"}})
         ck("(A) another issue label on a linked project -> 409, unlink first", r.status_code == 409
            and "unlink it first" in r.json()["detail"], r.text)
-        r = await cx.post(f"/api/projects/{uid}/github", json={"repo": "acme/lib"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/lib"}})
         ck("(A) another repo on a linked project -> 409", r.status_code == 409, r.text)
 
         print("== (B) refusals ==")
         other = await new_project("other")
-        r = await cx.post(f"/api/projects/{other}/github", json={"repo": "acme/app", "issue_label": "TARES:P"})
+        r = await cx.put(f"/api/projects/{other}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "TARES:P"}})
         ck("(B) the same repo + issue label in another project (any case) -> 409 naming the owner",
            r.status_code == 409 and "acme/app with issue label TARES:P is already the ticket home of project p"
            in r.json()["detail"], r.text)
         ck("(B) and nothing was linked", store.get_project_github(other) is None)
         lin = await new_project("lin")
         store.set_project_linear(lin, {"id": "lp1", "name": "Invoicing"})
-        r = await cx.post(f"/api/projects/{lin}/github", json={"repo": "acme/app", "issue_label": "tares:lin"})
+        r = await cx.put(f"/api/projects/{lin}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:lin"}})
         ck("(B) a project using Linear cannot link GitHub -> 409", r.status_code == 409
            and "live in Linear; stop using Linear first" in r.json()["detail"], r.text)
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": "anything"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "linear", "link_fields": {"project": "anything"}})
         ck("(B) a project using GitHub cannot link Linear -> 409", r.status_code == 409
            and "live in GitHub; stop using GitHub first" in r.json()["detail"], r.text)
         ck("(B) and the Linear link was not made", store.get_project_linear(uid) is None)
         mine = await new_project("mine")
         await cx.post(f"/api/projects/{mine}/tickets", json={"title": "mine"})
-        r = await cx.post(f"/api/projects/{mine}/github", json={"repo": "acme/app", "issue_label": "tares:mine"})
+        r = await cx.put(f"/api/projects/{mine}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:mine"}})
         ck("(B) a project with its own tickets cannot link -> 409", r.status_code == 409
            and "already has its own tickets" in r.json()["detail"], r.text)
         bad = await new_project("bad")
         STATE["repo_null"] = True
-        r = await cx.post(f"/api/projects/{bad}/github", json={"repo": "acme/app", "issue_label": "tares:bad"})
+        r = await cx.put(f"/api/projects/{bad}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:bad"}})
         ck("(B) a repo no credential can read -> 400 with the reason", r.status_code == 400
            and "no stored GitHub credential can read acme/app" in r.json()["detail"], r.text)
         ck("(B) no link saved, no tickets", store.get_project_github(bad) is None and store.list_tickets(bad) == [])
         STATE["repo_null"] = False
         STATE["tokens"] = {"tok-a": "forbidden"}
-        r = await cx.post(f"/api/projects/{bad}/github", json={"repo": "acme/app", "issue_label": "tares:bad"})
+        r = await cx.put(f"/api/projects/{bad}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:bad"}})
         ck("(B) a credential without Issues: read -> 400 that says so", r.status_code == 400
            and "Issues: read" in r.json()["detail"] and store.get_project_github(bad) is None, r.text)
         STATE["tokens"] = {"tok-a": "ok"}
         STATE["transport_error"] = True
-        r = await cx.post(f"/api/projects/{bad}/github", json={"repo": "acme/app", "issue_label": "tares:bad"})
+        r = await cx.put(f"/api/projects/{bad}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:bad"}})
         ck("(B) GitHub unreachable while linking -> 400, nothing saved", r.status_code == 400
            and store.get_project_github(bad) is None, r.text)
         STATE["transport_error"] = False
         flaky = await new_project("flaky")
         STATE["during_fetch"] = lambda: STATE.update(transport_error=True)   # GitHub drops after the check
-        r = await cx.post(f"/api/projects/{flaky}/github", json={"repo": "acme/app", "issue_label": "tares:flaky"})
+        r = await cx.put(f"/api/projects/{flaky}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:flaky"}})
         STATE["transport_error"] = False
         lk = store.get_project_github(flaky) or {}
         ck("(B) the first sync failing does not undo the link: it keeps the credential that passed the check",
@@ -794,7 +794,7 @@ async def api():
         STATE["issues"] += [issue(21, "Second project one", labels=("tares:q",)),
                             issue(22, "Second project two", labels=("tares:q",))]
         second = await new_project("second")
-        r = await cx.post(f"/api/projects/{second}/github", json={"repo": "acme/app", "issue_label": "tares:q"})
+        r = await cx.put(f"/api/projects/{second}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:q"}})
         ck("(D) a second project links with its own issue label", r.status_code == 200
            and [t["identifier"] for t in r.json()["tickets"]] == ["GH-21", "GH-22"], r.text)
         conn = GitHubIssuesConnector(SourceCfg(name="github_issues", type="event_stream",
@@ -859,18 +859,17 @@ async def api():
         STATE["issues"] += [issue(31, "Own one", labels=("tares:own",), milestone="M_alpha"),
                             issue(32, "Own two", labels=("tares:own",), milestone="M_alpha", blocked_by=["I_31"])]
         own = await new_project("own")
-        r = await cx.post(f"/api/projects/{own}/github", json={"repo": "acme/app", "issue_label": "tares:own"})
+        r = await cx.put(f"/api/projects/{own}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:own"}})
         ck("(F) a project to test on, linked to GitHub", r.status_code == 200
            and [t["identifier"] for t in r.json()["tickets"]] == ["GH-31", "GH-32"], r.text)
         before = {t["identifier"]: t for t in store.list_tickets(own)}
-        for field, value in [("title", "Renamed"), ("status", "done"), ("position", 5),
-                             ("milestone", None), ("depends_on", [])]:
+        for field, value in [("status", "done"), ("position", 5), ("depends_on", [])]:
             r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={field: value})
             ck(f"(F) PUT {field} on a GitHub ticket -> 409 'lives in GitHub'", r.status_code == 409
                and r.json()["detail"] == f"GH-31 lives in GitHub: change its {field} there", r.text)
         r = await cx.put(f"/api/projects/{own}/tickets/GH-31", json={"title": "x", "status": "done", "position": 1})
         ck("(F) several fields at once are named together", r.status_code == 409
-           and r.json()["detail"] == "GH-31 lives in GitHub: change its position, status, title there", r.text)
+           and r.json()["detail"] == "GH-31 lives in GitHub: change its position, status there", r.text)
         ck("(F) none of them changed the ticket",
            {t["identifier"]: t for t in store.list_tickets(own)} == before)
         r = await cx.post(f"/api/projects/{own}/docs", json={"kind": "working", "title": "W31", "body": "plan"})
@@ -972,7 +971,7 @@ async def api():
             ran_all.append(1)
             ran = []
             STATE["during_fetch"] = lambda hook=hook: (ran.append(1), hook())
-            r = await cx.post(f"/api/projects/{racer}/github", json={"repo": "acme/app", "issue_label": lab})
+            r = await cx.put(f"/api/projects/{racer}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": lab}})
             STATE["during_fetch"] = None
             link = store.get_project_github(racer)
             ck(f"(G) {what} while GitHub answered -> 409, nothing saved", ran and r.status_code == 409
@@ -998,7 +997,7 @@ async def api():
             store.set_project_github(own, link)
         for how in ("gql_rate_limit", "http_rate_limit"):
             STATE[how] = True
-            r = await cx.post(f"/api/projects/{own}/github", json={"repo": "acme/app", "issue_label": "tares:own"})
+            r = await cx.put(f"/api/projects/{own}/tickets/link", json={"integration": "github", "link_fields": {"repo": "acme/app", "issue_label": "tares:own"}})
             STATE[how] = False
             ck(f"(G) linking with {how} -> 429, not 400", r.status_code == 429
                and r.json()["detail"] == "GitHub rate limit reached", r.text)

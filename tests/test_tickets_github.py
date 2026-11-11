@@ -641,7 +641,9 @@ ck("a ticket that is not there is refused", fails(b.set_status({"id": "zzz", "pr
 ck("a bare integration has no store to work with", fails(TicketsGithub().set_status(tk(s, "GH-1"), Status.done), RuntimeError) is not False
    and fails(TicketsGithub().sync("p1"), RuntimeError) is not False)
 ck("sync wants a project", fails(b.sync(""), ValueError) is not False)
-ck("link is done from the project page", fails(b.link("p1", {}), NotImplementedError) is not False)
+_before = s.get_project_github("p1")
+ck("link with no repo to name is refused, the link is untouched", fails(b.link("p1", {}), Exception) is not False
+   and s.get_project_github("p1") == _before)
 ck("nothing was written by the refused calls", calls("PATCH") + calls("POST") + calls("DELETE") == []
    and s.list_pending_writebacks("github") == [])
 s, b = world(link={}, seed=False)

@@ -207,7 +207,7 @@ async def main():
             await cx.post("/api/linear", json={"api_key": "lin_api_x"})
             lp = json.loads(await m.create_project("Billing", "Bill customers"))["id"]
             await mf.write_milestone("Report", "", [{"check": "open /report", "expect": "a chart"}], project=lp)
-            r = await cx.post(f"/api/projects/{lp}/linear", json={"project": "Billing"})
+            r = await cx.put(f"/api/projects/{lp}/tickets/link", json={"integration": "linear", "link_fields": {"project": "Billing"}})
             ck("linking runs a first sync", r.status_code == 200, r.text)
         ms = json.loads(await mf.list_milestones(project=lp))
         ck("Linear's milestones show in Linear's order",
