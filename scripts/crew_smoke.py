@@ -27,8 +27,8 @@ Isolation, so a smoke run cannot touch the live crew (TR-1164):
     <crew>-*, and only the scratch daemon and MCP processes this script started.
 
 The one edit outside the scratch folder: Claude Code starts no session in a folder it has not trusted, so
-the script adds the scratch crew home to ~/.claude.json (hasTrustDialogAccepted) and removes that entry at
-the end. Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok.
+the script adds the scratch crew home, the clone's folder and the worktrees folder to ~/.claude.json
+(hasTrustDialogAccepted) and removes those entries at the end. Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok.
 """
 from __future__ import annotations
 
@@ -226,7 +226,7 @@ class Smoke:
         self.port, self.mcp_port = free_port(), free_port()
         self.url = f"http://127.0.0.1:{self.port}"
         self.procs: list = []
-        self.trusted = None
+        self.trusted = []
         self.env: dict = {}
         self.started = time.time()
         self.project = ""
@@ -331,10 +331,17 @@ class Smoke:
 
     # -- the crew --
 
-    def crew_up(self) -> None:
+    def trust_folders(self) -> None:
+        """The orchestrator runs in the crew home, the builder in the clone and in its worktrees, and Claude Code
+        refuses a session in a folder it has not trusted. Our own folders only; teardown removes every entry."""
         trust = self.hdir / ".claude.json"
-        trust_folder(trust, str(self.crew_home))
-        self.trusted = (trust, str(self.crew_home))
+        for folder in (self.crew_home, self.work / "repos", self.crew_home / "worktrees"):
+            Path(folder).mkdir(parents=True, exist_ok=True)
+            trust_folder(trust, str(folder))
+            self.trusted.append((trust, str(folder)))
+
+    def crew_up(self) -> None:
+        self.trust_folders()
         r = self.tares_factory("crew", "up", "--yes", "--no-watch", timeout=600)
         sys.stdout.write(r.stdout)
         sys.stdout.write(r.stderr)
@@ -373,6 +380,7 @@ class Smoke:
         end = time.time() + seconds
         last = ""
         gone = 0
+        idle = 0
         while time.time() < end:
             pr = self.github_pr()
             if pr:
@@ -385,6 +393,13 @@ class Smoke:
                 say(line)
                 last = line
             gone = gone + 1 if stations and all(s.get("turn") == "gone" for s in stations) else 0
+            # every station finished its turn and none is a builder: nothing will build the ticket (a refused
+            # builder spawn looks like this), so waiting out the timeout only spends the hour
+            idle = idle + 1 if stations and all(s.get("turn") in ("done", "gone") for s in stations) \
+                and not any("-build-" in s["station"] for s in stations) else 0
+            if idle >= 10:
+                raise Failed("every station has finished its turn, no builder was started and no pull request was "
+                             f"opened; read {self.crew_home}/reports/{self.crew_name}-orchestrator.md")
             if gone >= 3:
                 raise Failed("every station of the scratch crew has ended and no pull request was opened "
                              "(the watch is off, so nothing revives them)")
@@ -437,11 +452,11 @@ class Smoke:
                     os.killpg(p.pid, signal.SIGKILL)
                 except OSError:
                     pass
-        if self.trusted:
+        for entry in self.trusted:
             try:
-                untrust_folder(*self.trusted)
+                untrust_folder(*entry)
             except (OSError, ValueError) as e:
-                say(f"could not remove the trust entry for {self.trusted[1]} from {self.trusted[0]}: {e}")
+                say(f"could not remove the trust entry for {entry[1]} from {entry[0]}: {e}")
 
     def close_pr(self, pr: dict) -> None:
         r = run(["gh", "pr", "close", str(pr["number"]), "-R", self.repo, "--delete-branch", "--comment",

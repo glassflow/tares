@@ -78,6 +78,19 @@ try:
     smoke.untrust_folder(cj, "/scratch/crew")
     check("untrust_folder restores the file", json.loads(cj.read_text(encoding="utf-8")) ==
           {"theme": "dark", "projects": {"/a": {"hasTrustDialogAccepted": True}}})
+    # the folders a real run trusts: crew home, the clone's parent (the builder runs there) and the worktrees
+    import types
+    sm = smoke.Smoke(types.SimpleNamespace(dry_run=False, repo="o/r", crew_name="smoke-9", workdir=str(tmp / "w"),
+                                           crew_home=None))
+    sm.hdir = tmp / "h"
+    sm.hdir.mkdir()
+    sm.trust_folders()
+    got = set(json.loads((sm.hdir / ".claude.json").read_text(encoding="utf-8"))["projects"])
+    check("trust covers the crew home, the repos folder and the worktrees",
+          got == {str(sm.crew_home), str(sm.work / "repos"), str(sm.crew_home / "worktrees")}, str(got))
+    for entry in sm.trusted:
+        smoke.untrust_folder(*entry)
+    check("untrusting every entry empties the file", json.loads((sm.hdir / ".claude.json").read_text(encoding="utf-8"))["projects"] == {})
     smoke.trust_folder(tmp / "missing.json", "/x")
     check("trust_folder makes a missing file", (tmp / "missing.json").is_file())
 
