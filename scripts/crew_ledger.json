@@ -1177,7 +1177,7 @@
       "dropped": false,
       "python": "tares.crew.watch:cmd_watch",
       "ported": true,
-      "note": "The loop skeleton. Its steps (revive, regrant, idle wake, pace, updates) and the readings tick are registered by later tickets; with none registered a round does nothing, so the bash watch stays the default and TARES_FACTORY_WATCH=python opts in (always on Windows)."
+      "note": "The loop skeleton. Its steps (revive, regrant, idle wake, pace, updates) and the readings tick are registered by later tickets; with none registered a round does nothing, so a Python watch of that era did nothing; since TR-1069 the Python watch is the default and TARES_FACTORY_WATCH=bash (or the bash engine) keeps the bash one (Python only on Windows)."
     },
     {
       "name": "grants_now",
@@ -2673,7 +2673,7 @@
       "dropped": false,
       "python": "tares.crew.watch:cmd_watch",
       "ported": true,
-      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python by default since TR-1069; TARES_FACTORY_WATCH=bash or the bash engine keeps bash (Python only on Windows)."
     },
     {
       "name": "halt",
@@ -3093,7 +3093,7 @@
       "dropped": false,
       "python": "tares.crew.watch:cmd_watch",
       "ported": true,
-      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python only when TARES_FACTORY_WATCH=python, TARES_FACTORY_ENGINE=python or on Windows."
+      "note": "Registered in tares.crew.dispatch (TR-958); routed to Python by default since TR-1069; TARES_FACTORY_WATCH=bash or the bash engine keeps bash (Python only on Windows)."
     },
     {
       "name": "crew halt",
@@ -3526,6 +3526,18 @@
       "note": "Read by restart (seconds to wait for the stop; default 10)."
     },
     {
+      "name": "FACTORY_TARES",
+      "kind": "env",
+      "reads": true,
+      "writes": true,
+      "what": "path of the `tares` that started the crew, so a station whose PATH lacks it still runs `tares factory`",
+      "ticket": "TR-1069",
+      "dropped": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
+      "note": "Written into each station's settings env (bash and Python alike); read by the station's `factory` shim."
+    },
+    {
       "name": "FACTORY_UPDATE_POLL",
       "kind": "env",
       "reads": true,
@@ -3656,6 +3668,18 @@
       "python": "",
       "ported": false,
       "note": ""
+    },
+    {
+      "name": "TARES_FACTORY_ENGINE",
+      "kind": "env",
+      "reads": true,
+      "writes": false,
+      "what": "which engine runs `tares factory`: unset is Python with bash for commands not ported yet, `python` is Python only, `bash` is bash for every command",
+      "ticket": "TR-1069",
+      "dropped": false,
+      "python": "tares.crew.dispatch:engine_setting",
+      "ported": true,
+      "note": "`\"engine\": \"bash\"` in ~/factory/crew.json is the same when the variable is unset; `tares factory doctor` shows the active engine."
     },
     {
       "name": "TARES_FACTORY_KEY_SOURCE",
