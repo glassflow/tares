@@ -48,8 +48,28 @@ export interface SettingsEdition {
   note: string;
 }
 
+export interface MorningStatus {
+  enabled: boolean;
+  to_slack: boolean;
+  to_email: boolean;
+  /** The Slack channel it is posted to; empty until one is picked. */
+  channel: string;
+  /** Workspace members, by email. */
+  recipients: string[];
+  /** "09:00", in `timezone`. */
+  time: string;
+  timezone: string;
+  /** Tares Cloud only. */
+  email_available: boolean;
+  /** "Last sent Tuesday 09:00 to Slack and 2 people." or what failed; empty until it has run. */
+  last_result: string;
+}
+
+export interface MorningResult { ok: boolean; result: string }
+
 export interface SettingsPage {
   can_change: boolean;
+  morning?: MorningStatus;
   tools: SettingsTool[];
   crew: SettingsCrew;
   models: { default_provider: string; chosen: boolean; budget_text: string };
@@ -70,3 +90,9 @@ export const addGrant = (words: string) =>
 
 export const switchEdition = (edition: string) =>
   request<unknown>("/api/settings/edition", { method: "PUT", body: JSON.stringify({ edition }) });
+
+export const saveMorning = (m: MorningStatus) =>
+  request<MorningStatus>("/api/factory/settings/morning", { method: "PUT", body: JSON.stringify(m) });
+
+export const sendMorningNow = () =>
+  request<MorningResult>("/api/factory/settings/morning/send", { method: "POST" });

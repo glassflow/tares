@@ -9,6 +9,7 @@ export type ProjectState = "building" | "waiting_on_you" | "not_started" | "read
 export interface FactoryProjectRow {
   id: string;
   name: string;
+  icon?: string | null;
   goal: string;
   state: ProjectState;
   state_label: string;

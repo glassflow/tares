@@ -3,6 +3,7 @@
   {
    "default": false,
    "goal": null,
+   "icon": null,
    "id": "uc_small",
    "kind": "software_factory",
    "last_error": null,
@@ -34,6 +35,7 @@
   {
    "default": false,
    "goal": null,
+   "icon": null,
    "id": "uc_big",
    "kind": "software_factory",
    "last_error": null,
@@ -65,6 +67,7 @@
   {
    "default": false,
    "goal": null,
+   "icon": null,
    "id": "uc_solo",
    "kind": "software_factory",
    "last_error": null,
@@ -96,6 +99,7 @@
   {
    "default": false,
    "goal": null,
+   "icon": null,
    "id": "uc_plain",
    "kind": null,
    "last_error": null,

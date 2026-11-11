@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
-import { ApiError } from "../../api";
+import { api, ApiError } from "../../api";
 import { licenceWordsOn, slugFromHost, useCloud, useWorkspaceOverview } from "../../cloud";
 import LicencePanel from "../../components/LicencePanel";
 import LinearSettings from "../../components/LinearSettings";
@@ -19,10 +19,12 @@ import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
-  addGrant, changeCrew, factorySettings, switchEdition,
-  type Autonomy, type CrewChange, type SettingsGrant, type SettingsPage, type SettingsTool,
+  addGrant, changeCrew, factorySettings, saveMorning, sendMorningNow, switchEdition,
+  type Autonomy, type CrewChange, type MorningResult, type MorningStatus, type SettingsGrant, type SettingsPage, type SettingsTool,
 } from "./FactorySettings.api";
-import { isSample, sampleLoad } from "./settingsSamples";
+import { isSample, SAMPLE_PEOPLE, sampleLoad } from "./settingsSamples";
+import { MORNING_OFF, MorningStatusPane } from "./MorningStatus";
+import type { Person } from "../../types";
 import { FIRST_SETTING, settingFrom, shownGroups, type SettingGroup, type SettingId } from "./settingsNav";
 import { placeBeforeSettings } from "../settingsBack";
 
@@ -151,6 +153,12 @@ export interface ViewProps {
   onCrew: (c: CrewChange) => Promise<void>;
   onGrant: (words: string) => Promise<string | null>;
   onSwitch: (edition: string) => Promise<void>;
+  /** Saves Morning status; answers what went wrong, or null. */
+  onMorning?: (m: MorningStatus) => Promise<string | null>;
+  /** Sends one report on the saved settings; null when nothing was sent (a sample). */
+  onMorningSend?: () => Promise<MorningResult | null>;
+  /** The people Morning status can email; null until the list has loaded. */
+  morningPeople?: Person[] | null;
 }
 
 // A console panel that is the whole page: its heading sits above its card, like the other pages.
@@ -204,7 +212,7 @@ function ToolPanel({ id }: { id: string }) {
   return null;
 }
 
-export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant, onSwitch }: ViewProps) {
+export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant, onSwitch, onMorning, onMorningSend, morningPeople = null }: ViewProps) {
   const { crew, models, edition, tools } = page;
   const cloud = useCloud();
   const dim = !page.can_change;
@@ -283,6 +291,14 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
             )}
           </Card>
         </>
+      )}
+
+      {tab === "morning" && (
+        <MorningStatusPane value={page.morning ?? MORNING_OFF} dim={dim}
+                           slackConnected={tools.some((t) => t.key === "slack" && t.connected)}
+                           people={morningPeople}
+                           onSave={onMorning ?? (async () => null)}
+                           onSendNow={onMorningSend ?? (async () => null)} />
       )}
 
       {tool && (
@@ -508,6 +524,26 @@ function SettingsPage() {
     if (sample) return;
     try { await switchEdition(edition); window.location.reload(); } catch (e) { setProblem(failed(e)); }
   };
+  const onMorning = async (m: MorningStatus) => {
+    if (sample) return null;
+    try { await saveMorning(m); reload(); return null; } catch (e) { return e instanceof ApiError && e.status !== 403 && e.message ? e.message : failed(e); }
+  };
+  const onMorningSend = async (): Promise<MorningResult | null> => {
+    if (sample) return null;
+    const result = await sendMorningNow();
+    reload();
+    return result;
+  };
+
+  // The people Morning status can email; a sample reads no cell.
+  const [people, setPeople] = React.useState<Person[] | null>(null);
+  const wantsPeople = !sample && tab === "morning";
+  React.useEffect(() => {
+    if (!wantsPeople) return;
+    let stop = false;
+    api.people().then((r) => { if (!stop) setPeople(r.people); }).catch(() => { if (!stop) setPeople([]); });
+    return () => { stop = true; };
+  }, [wantsPeople]);
 
   const page = data && {
     ...data,
@@ -540,7 +576,8 @@ function SettingsPage() {
         {page && !waiting && (
           <TerseSettings.Provider value={true}>
             <FactorySettingsView page={page} tab={tab} agent={new URLSearchParams(loc.search).get("agent") ?? undefined}
-                                 problem={problem} onCrew={onCrew} onGrant={onGrant} onSwitch={onSwitch} />
+                                 problem={problem} onCrew={onCrew} onGrant={onGrant} onSwitch={onSwitch}
+                                 onMorning={onMorning} onMorningSend={onMorningSend} morningPeople={sample ? SAMPLE_PEOPLE : people} />
           </TerseSettings.Provider>
         )}
       </div>

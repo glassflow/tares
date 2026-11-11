@@ -19,6 +19,7 @@ from .. import skills as _skills
 from ..config import CatalogError, agent_url, import_catalog_dict
 from ..goal import normalize_goal
 from .base import PlannedObject, ProjectError
+from .icon import normalize_icon
 from .registry import get_template, list_templates as _list_templates
 
 # delete order: dependents first (an agent references a trigger and may reference an mcp server,
@@ -138,8 +139,9 @@ class Engine:
 
     # ── write side ───────────────────────────────────────────────────────────
     def create(self, template_key: str, params: dict, name: str | None = None,
-               goal: str | None = None, gone=None) -> dict:
+               goal: str | None = None, gone=None, icon: str | None = None) -> dict:
         """`goal`: what the project is for, one line; none given = the template's GOAL.
+        `icon`: one emoji shown beside the name; none = no icon.
         `gone(kind, name)`: an object the caller may not see; naming one in a custom project's
         list answers as one that does not exist (TR-944)."""
         if template_key == "default":
@@ -147,6 +149,7 @@ class Engine:
         template = get_template(template_key)
         try:
             goal = normalize_goal(goal) or normalize_goal(getattr(template, "GOAL", "") or None)
+            icon = normalize_icon(icon)
         except ValueError as e:
             raise ProjectError(str(e)) from e
         params = template.validate(params)
@@ -160,7 +163,8 @@ class Engine:
             raise ProjectError(f"a project named {name!r} already exists")
         plan = template.plan(params)
         uid = "uc_" + uuid.uuid4().hex[:10]
-        self.store.create_project(uid, template.key, name, params, status="active", goal=goal)
+        self.store.create_project(uid, template.key, name, params, status="active", goal=goal,
+                                  icon=icon)
         self.store.log_project(uid, "create", f"{len(plan)} objects planned")
         before = self._existing_names(uid)
         try:
@@ -263,6 +267,18 @@ class Engine:
         except ValueError as e:
             raise ProjectError(str(e)) from e
         self.store.update_project(uid, goal=goal)
+        return self.get(uid)
+
+    def set_icon(self, uid: str, icon: str | None) -> dict:
+        """Set or clear the project's icon (one emoji, or None or ""). Any project, like the goal:
+        it is how the person tells projects apart, not configuration. A wrong value is refused
+        before anything changes."""
+        self._require(uid)
+        try:
+            icon = normalize_icon(icon)
+        except ValueError as e:
+            raise ProjectError(str(e)) from e
+        self.store.set_project_icon(uid, icon)
         return self.get(uid)
 
     def fill_template_goals(self) -> int:

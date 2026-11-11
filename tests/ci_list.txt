@@ -143,6 +143,7 @@ test_metrics
 test_milestone_checks
 test_model_provider
 test_model_providers
+test_morning_status
 test_normalize
 test_openai_provider
 test_otlp
@@ -162,6 +163,7 @@ test_postgres
 test_pricing
 test_private_any_licence
 test_project_access_single
+test_project_icon
 test_project_keys
 test_project_later
 test_project_timeline
