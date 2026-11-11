@@ -560,7 +560,7 @@ def step(paths: CrewPaths, env: Mapping | None = None, claude_bin: str | None = 
         except CrewError:
             return False
         from . import cc_update   # here, not at the top: cc_update imports crew modules that import this one
-        down = last.down or cc_update._down(paths, binary)
+        down = last.down or (not last.ran and cc_update._down(paths, binary))
         if candidate and settled and not down and not state.halted(paths) and not frozen.on:
             upgrade_station(paths, client, candidate, kit, claude_bin=binary)
             return True
