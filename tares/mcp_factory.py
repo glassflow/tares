@@ -109,6 +109,23 @@ async def get_integrations(project: str = "") -> str:
     return _out(r)
 
 
+@writable()
+async def set_required_checks(commands: list[str], project: str = "") -> str:
+    """Set the commands a pull request of this project must have recorded as passing checks
+    when its CI is the local integration (the `ci` slot is `local`): the test and lint commands
+    from the project's AGENTS.md, exactly as a builder runs them. Replaces the list; an empty
+    list means the project requires none. For the project's lead or an admin, not a crew
+    station."""
+    project = (project or "").strip() or _default_project()
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/projects/{uid}/required-checks",
+                         json={"commands": commands})
+    return _out(r, ("project", "commands"))
+
+
 # ── the ledger (TR-427, TR-428, TR-410) ───────────────────────────────────────
 
 @writable()
