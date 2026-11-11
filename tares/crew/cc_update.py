@@ -1,9 +1,12 @@
-"""Moving the stations onto a newer Claude Code, in the same conversation, one idle station a round (TR-963).
+"""Moving the stations onto a newer Claude Code, in the same conversation, one idle station a round (TR-963,
+TR-964).
 
 Ports these functions of `claude-plugin/bin/factory`, with the same behaviour and the same printed text:
 station_cc, prune_spares, duplicate_sessions, claude_auto, cc_behind, tell_newer_claude, cc_movable, cc_pick,
-claude_move and watch_claude_move, and the Claude Code part of the watch's round (`step`). Where this module
-and the bash differ, the bash is right; every difference is listed under "Differences from bash" below.
+claude_move and watch_claude_move, and the Claude Code part of the watch's round (`step`) (TR-963); and the
+retry side of a move (TR-964): cc_backoff, cc_delay, cc_retry_in, cc_retrying, cc_retry_sync, and
+cmd_crew_update (`crew update` and `crew restart`). Where this module and the bash differ, the bash is right;
+every difference is listed under "Differences from bash" below.
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
@@ -21,13 +24,19 @@ How a move goes
     4 (it is not idle any more, someone opened it, or the crew is halted), 5 (an older spare came back every
     time; the station is marked cc_failed with a retry time), 6 (the plan's limit is full) or 1 (anything else).
 
+When a move fails
+  * A station whose restarts keep landing on an older spare is marked on its stations.json row: cc_failed (the
+    version), cc_fails (how many moves failed), cc_retry_at (when the watch may try again). cc_backoff is true
+    until then, and cc_delay sets the wait: FACTORY_CC_BACKOFF seconds (600), doubled for each failure, never
+    past FACTORY_CC_BACKOFF_MAX (14400). `crew update` ignores the wait and tries again at once.
+  * cc_retry_sync tells Tares which stations are retrying (PUT /api/crew/claude-retry), so the Crew page flags
+    them. Best effort; the watch sends it every round.
+
 Stubs, each behind one small named function so the ticket that owns the real thing replaces just that
-  * cc_backoff (TR-964): never waiting. A station that failed a move is tried again the next round.
-  * cc_delay (TR-964): FACTORY_CC_BACKOFF seconds (default 600), no doubling and no FACTORY_CC_BACKOFF_MAX.
-  * cc_retry_sync (TR-964): does nothing, so the Crew page's retry flags are not sent.
-  * _pace_closed: the pace module's reading of this round (TR-962), `pace.current(paths).closed`.
+  * _pace_closed and _pace_until: the pace module's reading of this round (TR-962), `pace.current(paths).closed`
+    and `.until`.
   * upgrades_frozen (TR-965): kit.upgrades_frozen, the real freeze check.
-cc_retry_in (the text of the retry time) is views.cc_retry_in, imported when needed (TR-964 owns it).
+cc_retry_in (the text of the retry time) is views.cc_retry_in, imported when needed.
 
 Differences from bash
   * The kit upgrade (upgrade_station, TR-965) shares an `if ... elif` with the Claude Code move in the bash
@@ -45,6 +54,13 @@ Differences from bash
   * claude_move works with a client of its own, so the settings and the answer of /health it reads are new, as
     bash's subshell does (the caller's client is not touched). A CrewError or an OSError from a restart is
     reported with `say` and the exit code is 1, as bash's errexit does.
+  * cc_delay: a FACTORY_CC_BACKOFF that is not a whole number gives the maximum (bash's failed `[ ]` test ends the
+    doubling and its `d -le max` test then fails, so d becomes max); a FACTORY_CC_BACKOFF_MAX that is not a
+    whole number counts as unset (bash would echo the text and fail in the arithmetic after it).
+  * cc_retry_sync reads the Claude Code version and the session list with the binary the caller found. Tares
+    answering with an error, or not at all, is ignored, as curl's exit status is.
+  * `crew update`: a whole-number --wait is read as an integer (bash compares digits; 9 digits at most, so the
+    same numbers). The duplicate-session check stops with the bash text when the session list cannot be read.
   * cc_seen (the version the last round saw) is module state, set from `claude --version` the first time `step`
     runs, as cmd_watch does once when it starts. `reset` clears it (tests).
 
@@ -62,12 +78,13 @@ import time
 import psutil
 
 from . import claude, launch, lifecycle, state, watch_revive
-from .client import TaresClient
+from .client import TaresClient, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
 DEFAULT_TRIES = 3          # restarts of one version before the last, new-conversation one (FACTORY_CC_TRIES)
 DEFAULT_BACKOFF = 600      # seconds a station waits after a failed move (FACTORY_CC_BACKOFF)
+DEFAULT_BACKOFF_MAX = 14400  # the most it waits, however often the move failed (FACTORY_CC_BACKOFF_MAX)
 VERSION_POLLS = 6          # looks at a restarted station's version before it counts as unknowable
 _SPARE = re.compile(r"bg-pty-host.*--bg-spare.*\.claim\.sock")
 _SPARE_SOCKET = re.compile(r"--bg-spare (.+?\.claim\.sock)")   # the path may hold a space (a Windows profile name)
@@ -147,15 +164,20 @@ def prune_spares(paths: CrewPaths, target: str) -> None:
         state.event("spare-pruned", "", v, paths=paths)
 
 
-def duplicate_sessions(paths: CrewPaths, binary=None) -> list:
+def duplicate_sessions(paths: CrewPaths, binary=None, *, strict: bool = False) -> list:
     """A line "name: id, id" for each station that more than one live session answers to. An unreadable
-    session list or stations file gives none."""
+    session list or stations file gives none; with `strict` an unreadable session list is an error
+    (SessionListUnreadableError), for the caller that dies on it."""
     if not paths.stations.is_file():
         return []
     try:
         names = set(state.stations_load(paths))
         rows = claude.active_json(binary)
-    except (CrewError, SessionListUnreadableError, OSError):
+    except SessionListUnreadableError:
+        if strict:
+            raise
+        return []
+    except (CrewError, OSError):
         return []
     groups: dict = {}
     for r in rows:
@@ -192,6 +214,14 @@ def _pace_closed(client: TaresClient, *, fresh: bool = False) -> bool:
     return pace.current(client.paths, client.env).closed
 
 
+def _pace_until(client: TaresClient) -> str:
+    """The " until <when>" the limit's refusal text carries (bash: ${PACE_UNTIL:+ until $PACE_UNTIL}); "" when the
+    reading has no time. The same reading _pace_closed just took."""
+    from . import pace
+    until = pace.current(client.paths, client.env).until
+    return f" until {until}" if until else ""
+
+
 def upgrades_frozen(paths: CrewPaths, client: TaresClient, *, fresh: bool = False) -> bool:
     """Whether the crew's kit is frozen (kit.upgrades_frozen, TR-965). `fresh` reads the settings again
     (bash: SETTINGS="" first)."""
@@ -219,25 +249,110 @@ def tell_newer_claude(paths: CrewPaths, client: TaresClient, version: str, binar
     state.atomic_write_text(paths.cc_newer_file, version + "\n")
 
 
-# ---------- backoff stubs (TR-964 owns the real ones) ----------
+# ---------- backoff and retry ----------
+
+_WHOLE = re.compile(r"[ \t]*[+-]?[0-9]+[ \t]*")   # what bash's `[ a -lt b ]` takes for an integer
+
+
+def _whole(text) -> bool:
+    return isinstance(text, str) and _WHOLE.fullmatch(text) is not None
 
 
 def cc_backoff(paths: CrewPaths, station: str, target: str) -> bool:
-    """Whether the station is waiting out the backoff after a failed move onto target. STUB (TR-964): never."""
-    return False
+    """Whether the station is waiting out the backoff after a failed move onto target: its cc_failed names the
+    target and now is before its cc_retry_at. A cc_retry_at that is not a whole number is no wait (bash's test
+    fails)."""
+    if state.stations_get(station, "cc_failed", paths=paths) != target:
+        return False
+    at = state.stations_get(station, "cc_retry_at", paths=paths)
+    return _whole(at) and int(time.time()) < int(at)
+
+
+def cc_retrying(paths: CrewPaths, station: str, target: str) -> bool:
+    """Whether a move of the station onto target failed and the watch is retrying it."""
+    return state.stations_get(station, "cc_failed", paths=paths) == target
 
 
 def cc_delay(failed: int, env=None) -> int:
-    """The seconds a station waits before the watch tries to move it again. STUB (TR-964): FACTORY_CC_BACKOFF
-    (default 600) every time, no doubling."""
+    """The seconds a station waits before the watch tries to move it again, after `failed` failed moves onto the
+    same version: FACTORY_CC_BACKOFF (600), doubling each time, never past FACTORY_CC_BACKOFF_MAX (14400)."""
+    env = os.environ if env is None else env
+    raw_d = env.get("FACTORY_CC_BACKOFF") or str(DEFAULT_BACKOFF)
+    raw_max = env.get("FACTORY_CC_BACKOFF_MAX") or str(DEFAULT_BACKOFF_MAX)
+    top = int(raw_max) if _whole(raw_max) else DEFAULT_BACKOFF_MAX
+    if not _whole(raw_d):
+        return top
+    d = int(raw_d)
+    n = failed
+    while n > 1 and d < top:
+        d *= 2
+        n -= 1
+    return d if d <= top else top
+
+
+def cc_retry_in(paths: CrewPaths, station: str) -> str:
+    """How long until the watch tries a station's move again: "10 min", "3 h". At least a minute."""
+    at = state.stations_get(station, "cc_retry_at", paths=paths)
+    at = int(at) if at.isdigit() else 0
+    n = (at - int(time.time()) + 59) // 60
+    if n < 1:
+        n = 1
+    return f"{(n + 59) // 60} h" if n >= 120 else f"{n} min"
+
+
+def _number(text: str, default):
+    """jq's `tonumber? // default`: the number a text is, else default."""
+    text = text.strip()
+    if re.fullmatch(r"-?[0-9]+", text):
+        return int(text)
+    if re.fullmatch(r"-?([0-9]+\.[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?|-?[0-9]+[eE][+-]?[0-9]+", text):
+        return float(text)
+    return default
+
+
+def cc_retry_sync(paths: CrewPaths, client: TaresClient, claude_bin=None) -> None:
+    """Tell Tares which stations are retrying a move, so the Crew page can flag them (the CLI is the only one
+    that knows: the marks are in stations.json). Best effort. Only a mark for the Claude Code now installed
+    counts, on a station that is still behind it and not finished: a station that moved some other way, a
+    finished one or a mark for an older version is left out. The watch sends it every round, so the list never
+    outlives the mark."""
+    if not client.tares_on():
+        return
+    target = claude.claude_version(claude_bin)
     try:
-        return int((os.environ if env is None else env).get("FACTORY_CC_BACKOFF") or DEFAULT_BACKOFF)
-    except ValueError:
-        return DEFAULT_BACKOFF
-
-
-def cc_retry_sync(paths: CrewPaths, client: TaresClient) -> None:
-    """Tell Tares which stations are retrying a move. STUB (TR-964): nothing is sent."""
+        agents = claude.active_json(claude_bin)
+    except SessionListUnreadableError:
+        return
+    rows: dict = {}
+    try:
+        loaded = state.stations_load(paths)
+    except CrewError:
+        loaded = {}   # bash's jq fails with its errors hidden: an empty list goes out
+    for s, row in loaded.items():
+        if not isinstance(row, dict) or row.get("status") != "active":
+            continue
+        failed = row.get("cc_failed")
+        if failed is None or failed is False or failed == "":
+            continue
+        if paths.done_file(s).exists():
+            continue
+        t = state.stations_get(s, "cc_failed", paths=paths)
+        if t != target or not claude.older_than(station_cc(paths, s, agents), target):
+            continue
+        rows[s] = {"target": t,
+                   "fails": _number(state.stations_get(s, "cc_fails", paths=paths), 1),
+                   "next_at": _number(state.stations_get(s, "cc_retry_at", paths=paths), 0)}
+    body = state.dumps_compact({"stations": rows})
+    try:
+        name = state.crew_name(paths)
+    except CrewError:
+        name = ""
+    headers = {"Content-Type": "application/json", **client._auth(client.tares_token())}
+    try:
+        client._request("PUT", f"{client.tares}/api/crew/claude-retry?crew={uri(name)}", headers,
+                        body.encode("utf-8"), 3)
+    except CrewError:
+        pass   # best effort: the roster has the same marks
 
 
 # ---------- picking a station ----------
@@ -370,7 +485,7 @@ def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin
             if not v:
                 client.say(f"could not tell which Claude Code {s} runs; taking it for {target}")
             state.stations_put(s, {"cc_failed": None, "cc_fails": None, "cc_retry_at": None, "cc_fresh": None}, paths)
-            cc_retry_sync(paths, client)
+            cc_retry_sync(paths, client, claude_bin)
             state.event("claude-updated", s, v or target, paths=paths)
             return 0
         client.say(f"{s} came back on Claude Code {v}, an older spare from Claude Code's pool, not {target}; "
@@ -383,7 +498,7 @@ def _move(paths: CrewPaths, client: TaresClient, s: str, target: str, claude_bin
     fails += 1
     at = int(time.time()) + cc_delay(fails, env)
     state.stations_put(s, {"cc_failed": target, "cc_fails": fails, "cc_retry_at": at}, paths)
-    cc_retry_sync(paths, client)
+    cc_retry_sync(paths, client, claude_bin)
     state.event("claude-retry", s, target, paths=paths)
     return 5
 
@@ -409,8 +524,7 @@ def watch_claude_move(paths: CrewPaths, client: TaresClient, station: str, targe
     elif rc in (4, 6):
         pass
     elif rc == 5:
-        from . import views   # TR-964 owns cc_retry_in; views.cc_retry_in is the copy status and roster use
-        again = f"the watch tries again in {views.cc_retry_in(paths, station)}, and {ME} crew update tries again now"
+        again = f"the watch tries again in {cc_retry_in(paths, station)}, and {ME} crew update tries again now"
         if helper:
             client.say(f"{station} keeps coming back on an older Claude Code than {target} (an old pre-warmed spare "
                        f"in Claude Code's pool); a helper keeps its conversation, since its task is only there; {again}")
@@ -483,4 +597,182 @@ def step(paths: CrewPaths, *, env=None, claude_bin=None, kit_upgraded: bool = Fa
                 if candidate:
                     watch_claude_move(paths, client, candidate, cc_now, claude_bin=claude_bin)
         if settled and not down:
-            cc_retry_sync(paths, client)   # the Crew page's retry flags follow the marks every round
+            cc_retry_sync(paths, client, claude_bin)   # the Crew page's retry flags follow the marks every round
+
+
+# ---------- crew update and crew restart ----------
+
+UPDATE_USAGE = f"usage: {ME} crew update [--force] [--wait <seconds>]"
+DEFAULT_WAIT = 1800        # seconds `crew update` waits for a busy station before it gives up
+DEFAULT_POLL = 5           # seconds between its looks at the stations it is waiting for (FACTORY_UPDATE_POLL)
+
+
+def _wait_limit(args: list) -> tuple:
+    """(force, seconds) from the arguments of `crew update`. Errors are the bash text; 0 means no deadline."""
+    force, limit = False, str(DEFAULT_WAIT)
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--force":
+            force = True
+            i += 1
+        elif a == "--wait":
+            if len(args) - i < 2:
+                raise CrewError("--wait takes a number of seconds")
+            limit = args[i + 1]
+            if not (limit.isascii() and limit.isdigit()):
+                raise CrewError(f"--wait takes a number of seconds, not '{limit}'")
+            limit = limit.lstrip("0") or "0"   # 00 is 0, no deadline
+            if len(limit) > 9:
+                raise CrewError(f"--wait takes a number of seconds, at most 9 digits, not '{limit}'")
+            i += 2
+        else:
+            raise CrewError(UPDATE_USAGE)
+    return force, int(limit)
+
+
+def _poll(env) -> float:
+    try:
+        return float(env.get("FACTORY_UPDATE_POLL") or DEFAULT_POLL)
+    except ValueError:
+        return float(DEFAULT_POLL)
+
+
+def _full(client: TaresClient, tail: str) -> CrewError:
+    return CrewError(f"the plan's limit is full{_pace_until(client)}, and a restart is a model turn into it; {tail}")
+
+
+def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=None) -> None:
+    """`crew update [--force] [--wait <seconds>]`: every station onto the Claude Code now on PATH, each when idle,
+    the orchestrator last. `crew restart` is the same with --force: a station already on it is restarted too.
+    A busy station is waited for, up to --wait seconds (default 1800; 0 waits for ever). The station running
+    the command cannot wait for itself, so it is left to the watch or to another session. A refusal ends it
+    with exit 1."""
+    state.require_crew(paths)
+    force, limit = _wait_limit(args)
+    env = client.env
+    mine = env.get("FACTORY_STATION") or ""
+    if state.halted(paths):
+        raise CrewError(f"the crew is halted ({state.halt_reason(paths)}); {ME} crew resume first")
+    target = claude.claude_version(claude_bin)
+    if not target:
+        raise CrewError(f"could not read the Claude Code version ({claude_bin or 'claude'} --version)")
+    if _pace_closed(client):
+        raise _full(client, f"{ME} crew update again after it resets")
+    if not paths.stations.is_file():
+        client.say("no stations recorded")
+        return
+    agents = claude.active_json(claude_bin)   # an unreadable list ends the command with its own text
+    self_station = ""
+    others: list = []
+    orch: list = []
+    failed: list = []
+    for s in _active(paths):
+        if mine and s == mine:   # the station running this command can't wait for itself
+            v = station_cc(paths, s, agents)
+            if force or not v or claude.older_than(v, target):
+                self_station = s
+            else:
+                client.say(f"{s} already runs Claude Code {v}")
+            continue
+        if paths.done_file(s).exists() or not claude.is_alive(s, "", claude_bin, paths):
+            client.say(f"{s} is stopped; it starts on Claude Code {target} when the watch revives it")
+            continue
+        if state.stations_get(s, "sessionId", paths=paths) == "":
+            client.say(f"{s} has no conversation to resume; {ME} restart {s} --fresh starts it again")
+            failed.append(s)
+            continue
+        v = station_cc(paths, s, agents)
+        if not force and v and not claude.older_than(v, target):
+            client.say(f"{s} already runs Claude Code {v}")
+            continue
+        (orch if state.stations_get(s, "role", paths=paths) == "orchestrator" else others).append(s)
+    deadline = 0 if limit == 0 else int(time.time()) + limit
+    for group in (others, orch):
+        left = list(group)
+        told: list = []
+        while left:
+            if state.halted(paths):
+                raise CrewError(f"the crew was halted; nothing more was restarted ({ME} crew resume, then crew "
+                                "update again)")
+            still: list = []
+            for s in left:
+                if not claude.quiet(s, claude=claude_bin, paths=paths) or claude.attached(s, paths):
+                    still.append(s)
+                    continue
+                client.say(f"restarting {s} on Claude Code {target}, in the same conversation")
+                rc = claude_move(paths, client, s, target, claude_bin=claude_bin)
+                helper = state.stations_get(s, "role", paths=paths) == "helper"
+                if rc == 0:
+                    client.say(f"{s} runs Claude Code {target}")
+                elif rc == 4:
+                    still.append(s)
+                elif rc == 6:
+                    raise _full(client, f"nothing more was restarted ({ME} crew update again after it resets)")
+                elif rc == 5:
+                    if helper:
+                        client.say(f"{s} came back on an older Claude Code each time (an old pre-warmed spare in "
+                                   "Claude Code's pool); a helper keeps its conversation, since its task is only "
+                                   f"there; the watch tries again in {cc_retry_in(paths, s)}, or run {ME} crew "
+                                   "update again")
+                    else:
+                        client.say(f"{s} came back on an older Claude Code each time, even in a new conversation "
+                                   "(an old pre-warmed spare in Claude Code's pool); the watch tries again in "
+                                   f"{cc_retry_in(paths, s)}, or run {ME} crew update again")
+                    failed.append(s)
+                elif rc == 3:
+                    raise CrewError("Tares doesn't answer; nothing more was restarted")
+                else:
+                    if helper:
+                        client.say(f"could not restart {s} on Claude Code {target}; the watch does not revive "
+                                   f"helpers, so ask {state.stations_get(s, 'parent', paths=paths)} to spawn it "
+                                   "again if it is down")
+                    else:
+                        client.say(f"could not restart {s} on Claude Code {target}")
+                    failed.append(s)
+            left = still
+            if not left:
+                break
+            if deadline != 0 and int(time.time()) >= deadline:
+                client.say("gave up waiting for" + "".join(" " + s for s in left) + " to be idle")
+                failed.extend(left)
+                break
+            for s in left:
+                if s not in told:
+                    why = "someone has it open" if claude.attached(s, paths) else "it is working"
+                    client.say(f"waiting for {s} to be idle ({why})")
+                    told.append(s)
+            time.sleep(_poll(env))
+    try:
+        dup = duplicate_sessions(paths, claude_bin, strict=True)
+    except SessionListUnreadableError as e:
+        raise CrewError(f"{e}; could not check for two sessions under one station name") from None
+    for line in dup:
+        client.say(f"TWO SESSIONS named {line}; stop the one stations.json does not list (factory roster)")
+    if dup:
+        failed.append("two-sessions")
+    selfnote = (f"{self_station}, which ran this command, can only be restarted from another session: run {ME} "
+                f"restart {self_station} there")
+    # the watch moves a station that is behind, unless claude_update is off or the crew is frozen; one that is
+    # not behind, or whose version can't be read, stays
+    if (self_station and claude.older_than(station_cc(paths, self_station, agents), target)
+            and claude_auto(client) and not upgrades_frozen(paths, client)):
+        selfnote = (f"{self_station}, which ran this command, moves when {ME} crew watch finds it idle, or run "
+                    f"{ME} restart {self_station} from another session")
+    if failed:
+        if self_station:
+            client.say(selfnote)
+        raise CrewError(f"not every station runs Claude Code {target}:" + "".join(" " + f for f in failed))
+    if self_station:
+        client.say(f"every other station runs Claude Code {target}, one session each; {selfnote}")
+    else:
+        client.say(f"every station runs Claude Code {target}, one session each")
+
+
+def crew_restart(client: TaresClient, paths: CrewPaths, args: list, claude_bin=None) -> None:
+    """`crew restart`: bash runs it as `crew update --force`."""
+    crew_update(client, paths, ["--force", *args], claude_bin)
+
+
+cmd_crew_update = lifecycle._command(crew_update, local_only=False)
+cmd_crew_restart = lifecycle._command(crew_restart, local_only=False)

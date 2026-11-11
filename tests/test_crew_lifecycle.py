@@ -232,7 +232,8 @@ print("the dispatcher")
 for argv in (["revive", "x"], ["restart", "x"], ["retire", "x"], ["down"], ["halt", "why"], ["resume"],
              ["crew", "down"], ["crew", "halt"], ["crew", "resume"]):
     ck("dispatch.find " + " ".join(argv), dispatch.find(argv) is not None)
-ck("crew restart is not here: bash runs it as crew update --force", dispatch.find(["crew", "restart"]) is None)
+ck("crew update and crew restart are here (TR-964, tares/crew/cc_update.py)",
+   dispatch.find(["crew", "update"]) is not None and dispatch.find(["crew", "restart"]) is not None)
 ck("crew revive is not a command", dispatch.find(["crew", "revive"]) is None)
 
 # ---------------------------------------------------------------------------------------------
