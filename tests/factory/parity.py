@@ -7,6 +7,12 @@ and what they print and write must be the same.
     python tests/factory/parity.py --coverage            every scenario of every bash suite, and how
                                                          many of them pass against Python
     python tests/factory/parity.py --coverage --require-full   the same, exit 1 below 100%
+    python tests/factory/parity.py --python-only <scenario>    Python alone: its checks pass and what it prints and writes is
+                                                         what bash printed and wrote when it was recorded (parity_expected/)
+    python tests/factory/parity.py --python-only --coverage [--require-full]   the same for every scenario, against the
+                                                         labels of the bash suites recorded in parity_labels.json
+    python tests/factory/parity.py --record <scenario>   run the bash side and store what it printed and wrote as the
+                                                         expected result; --record-labels stores the suites' check labels
 
 A scenario is defined here, in Python (steps to run, checks on the result), so it runs on Windows too,
 where the bash suites cannot. It is run twice, each time in a throwaway crew with the Python fake
@@ -6166,6 +6172,72 @@ def evaluate(sc: Scenario, out=print) -> tuple:
 
 
 # ---------------------------------------------------------------------------------------------
+# Python alone: the expected result is what the bash engine printed and wrote, recorded once
+
+EXPECTED = HERE / "parity_expected"
+LABELS = HERE / "parity_labels.json"
+
+
+def expected_path(name: str) -> Path:
+    return EXPECTED / f"{name}.txt"
+
+
+def _lf(text: str) -> str:
+    return text.replace("\r\n", "\n")
+
+
+def record_scenario(sc: Scenario, out=print) -> int:
+    """Run the bash side of sc and store its normalised record as the expected result."""
+    side = run_side(sc, "bash")
+    if side.skip:
+        out(f"ERROR {sc.name}: the bash side cannot run here ({side.skip})")
+        return 1
+    if side.failed:
+        out(f"ERROR {sc.name}: the bash side fails {len(side.failed)} checks, nothing recorded")
+        for label in side.failed:
+            out(f"  FAIL {label}")
+        return 1
+    EXPECTED.mkdir(exist_ok=True)
+    expected_path(sc.name).write_text(side.text, encoding="utf-8", newline="\n")
+    out(f"recorded {sc.name}: {len(side.passed)} checks, {len(side.text.splitlines())} lines")
+    return 0
+
+
+def evaluate_python(sc: Scenario, out=print) -> tuple:
+    """Run sc on the Python engine alone: (exit code, whether it passes). Its checks must pass and its normalised
+    record must equal the one recorded from bash."""
+    out(f"== {sc.name}: {sc.about or sc.suite} ==")
+    side = run_side(sc, "python")
+    if side.skip:
+        out(f"SKIP python: {side.skip}")
+        return 0, False
+    if side.failed:
+        out(f"FAIL python: {len(side.failed)} of {len(side.failed) + len(side.passed)} checks failed")
+        for label in side.failed:
+            out(f"  FAIL {label}")
+        out(side.raw.rstrip("\n"))
+        return 1, False
+    out(f"PASS python: {len(side.passed)} checks")
+    path = expected_path(sc.name)
+    if not path.is_file():
+        out(f"FAIL python: no recorded result for {sc.name} (python tests/factory/parity.py --record {sc.name})")
+        return 1, False
+    want = _lf(path.read_text(encoding="utf-8"))
+    got = _lf(side.text)
+    if want != got:
+        out("FAIL python: output differs from the result recorded from bash (normalised), recorded first")
+        out("".join(difflib.unified_diff(want.splitlines(True), got.splitlines(True), "recorded", "python")).rstrip("\n"))
+        return 1, False
+    out("MATCH: python prints and writes what bash did")
+    return 0, True
+
+
+def recorded_labels() -> dict:
+    """suite -> the labels of its bash checks, as recorded in parity_labels.json."""
+    return json.loads(LABELS.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------------------------
 # Coverage
 
 CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
@@ -6200,6 +6272,8 @@ def suite_scenarios() -> dict:
 
 def passes_one(name: str) -> bool:
     """Whether scenario `name` passes against Python now (a worker of passes_now)."""
+    if os.environ.get("PARITY_PYTHON_ONLY"):
+        return evaluate_python(SCENARIOS[name], out=lambda _line: None)[1]
     return evaluate(SCENARIOS[name], out=lambda _line: None)[1]
 
 
@@ -6219,7 +6293,7 @@ def passes_now() -> dict:
 
 
 def coverage(require_full: bool, out=print) -> int:
-    found = suite_scenarios()
+    found = recorded_labels() if os.environ.get("PARITY_PYTHON_ONLY") else suite_scenarios()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
     for suite in found:
@@ -10292,9 +10366,16 @@ def main(argv: list) -> int:
                 pass
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
-    if flags - {"--coverage", "--require-full", "--list"}:
+    if flags - {"--coverage", "--require-full", "--list", "--python-only", "--record", "--record-labels"}:
         print(__doc__)
         return 2
+    if "--record-labels" in flags:
+        LABELS.write_text(json.dumps(suite_scenarios(), indent=1, ensure_ascii=False, sort_keys=True) + "\n",
+                          encoding="utf-8", newline="\n")
+        print(f"recorded the labels of {len(suite_scenarios())} suites")
+        return 0
+    if "--python-only" in flags:
+        os.environ["PARITY_PYTHON_ONLY"] = "1"
     if "--list" in flags:
         print("\n".join(SCENARIOS))
         return 0
@@ -10313,6 +10394,10 @@ def main(argv: list) -> int:
             print(f"parity: no scenario {pattern!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
             return 2
         names += [n for n in found if n not in names]
+    if "--record" in flags:
+        return max(record_scenario(SCENARIOS[n]) for n in names)
+    if "--python-only" in flags:
+        return max(evaluate_python(SCENARIOS[n])[0] for n in names)
     return max(run_scenario(SCENARIOS[n]) for n in names)
 
 

@@ -1,0 +1,12 @@
+== step: tidy {tmp}/crew/tmp/door/node_modules ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/crew/tmp/door/node_modules is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/crew/tmp/scratch ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: removed <TMP>/crew/tmp/scratch
