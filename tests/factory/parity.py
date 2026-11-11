@@ -2265,26 +2265,59 @@ def _settings(**kw):
     return setup
 
 
+def _settings_and_stations(**kw):
+    """The settings of `_settings`, and stations for `status` to list."""
+    def setup(tmp: Path, env: dict) -> None:
+        _settings(**kw)(tmp, env)
+        _setup_views(tmp, env)
+    return setup
+
+
+def _watching(tmp: Path) -> None:
+    """A watch that runs: a process whose command line says `crew watch`, named in watch.pid."""
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "tares", "factory", "crew", "watch"])
+    _WATCHING[str(tmp)] = p
+    (tmp / "crew").mkdir(parents=True, exist_ok=True)
+    (tmp / "crew" / "watch.pid").write_text(f"{p.pid}\n", encoding="utf-8")
+    time.sleep(0.5)
+
+
+def _unwatch(tmp: Path) -> bool:
+    p = _WATCHING.pop(str(tmp), None)
+    if p is not None:
+        p.terminate()
+        p.wait()
+    (tmp / "crew" / "watch.pid").unlink()
+    return p is not None
+
+
+_WATCHING: dict = {}
+
 scenario(Scenario(
     name="doctor_idle_wake",
     suite="idle_wake",
-    about="doctor: idle_wake off says nothing, on without a watch warns",
-    setup=_settings(),
-    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
-    checks=[("off: status and doctor have no wake line", lambda r: "idle_wake is on" not in r.out(0))],
+    about="status and doctor: idle_wake off says nothing",
+    setup=_settings_and_stations(),
+    steps=[Step(["status"], drop=DOCTOR_DROP), Step(["doctor"], drop=DOCTOR_DROP)],
+    checks=[("off: status and doctor have no wake line",
+             lambda r: "idle_wake: on" not in r.out(0) and "idle_wake is on" not in r.out(1))],
     covers=["off: status and doctor have no wake line"],
 ))
 
 scenario(Scenario(
     name="doctor_idle_wake_on",
     suite="idle_wake",
-    about="doctor: idle_wake on without a running watch warns",
-    setup=_settings(idle_wake=True),
-    steps=[Step(["doctor"], drop=DOCTOR_DROP)],
-    checks=[("on: doctor warns that no watch is running",
-             lambda r: "warn  idle_wake is on but the watch is not running" in r.out(0)
-             and "ok    idle_wake is on" not in r.out(0))],
-    covers=[],
+    about="status and doctor: idle_wake on says so, and doctor warns without a running watch and says ok with one",
+    setup=_settings_and_stations(idle_wake=True),
+    steps=[Step(["status"], drop=DOCTOR_DROP), Step(["doctor"], drop=DOCTOR_DROP),
+           Step(["doctor"], drop=DOCTOR_DROP, before=_watching, after=_unwatch)],
+    checks=[("on: status says so, and doctor warns that no watch is running",
+             lambda r: any(x.startswith("idle_wake: on") for x in r.out(0).splitlines())
+             and "warn  idle_wake is on but the watch is not running" in r.out(1)
+             and "ok    idle_wake is on" not in r.out(1)),
+            ("with the watch running, doctor says ok",
+             lambda r: r.snap(2) is True and "ok    idle_wake is on" in r.out(2) and "idle_wake is on but" not in r.out(2))],
+    covers=["on: status says so, and doctor warns that no watch is running", "with the watch running, doctor says ok"],
 ))
 
 scenario(Scenario(
@@ -5201,7 +5234,7 @@ def _quiet_world(setting) -> dict:
 
 
 def _head(h: str, verdict=None) -> list:
-    return [{"project": "p1", "project_name": "links-app", "ticket": "T1", "head": h, "verdict": verdict}]
+    return [{"project": "p1", "project_name": "Links App", "ticket": "T1", "head": h, "verdict": verdict}]
 
 
 B1 = "links-app-build-m1"
@@ -5224,17 +5257,25 @@ scenario(Scenario(
     about="with the setting unset, and then false, rounds hours apart wake no one and write no wake state",
     driver=LAUNCH_DRIVER,
     setup=_setup_wake,
-    steps=[_round(t, _quiet_world(None)) for t in (600, 1800, 3600, 7200, 14400)] + [_round(21600, _quiet_world(False))],
+    steps=[_round(t, _quiet_world(None)) for t in (600, 1800, 3600, 7200, 14400)] + [_round(21600, _quiet_world(False)),
+           lstep("restart", "crew-reviewer", world=_quiet_world(False), env={"FACTORY_STOP_WAIT": "3"})],
     checks=[
         ("unset: five rounds, hours apart, with an unreviewed PR: no wake",
-         lambda r: all(r.code(i) == 0 for i in range(6)) and _n(r) == 0 and r.launches() == 0),
+         lambda r: all(r.code(i) == 0 for i in range(6)) and _n(r, 5) == 0 and r.launches() == 1),
         ("unset: no wake state is written", lambda r: all(r.snap(i)["files"] == {} for i in range(5))),
-        ("false: the same", lambda r: r.snap(5)["files"] == {} and _n(r) == 0 and r.launches() == 0),
+        ("false: the same", lambda r: r.snap(5)["files"] == {} and _n(r, 5) == 0 and r.launches() == 1),
+        ("off: a restart still says to re-arm the schedule",
+         lambda r: r.code(6) == 0 and "re-arm your schedule if you have one" in _pc_prompts(r, "crew-reviewer")[-1]
+         and "idle_wake" not in _pc_prompts(r, "crew-reviewer")[-1]),
     ],
-    covers=["unset: five rounds, hours apart, with an unreviewed PR: no wake", "unset: no wake state is written", "false: the same"],
+    covers=["unset: five rounds, hours apart, with an unreviewed PR: no wake", "unset: no wake state is written", "false: the same",
+            "off: a restart still says to re-arm the schedule"],
 ))
 
-_LIVE_AT = [0, 840, 900, 1260, 1800, 2700, 3060, 3600, 5400, 5760, 6300]
+_LIVE_AT = [0, 840, 900, 1260, 1800, 2700, 3060, 3600, 5400, 5760, 6300, 7200,
+            # on from there: a round just before each wake is due, and one at it (the gap stays at 45 minutes)
+            8040, 8100, 8400, 8460, 8940, 9000, 10740, 10800, 11100, 11160, 11640, 11700, 12600]
+_LIVE_2H = 11   # the round at two hours
 scenario(Scenario(
     name="idle_wake_liveness",
     suite="idle_wake",
@@ -5250,16 +5291,35 @@ scenario(Scenario(
          lambda r: _times(r, 1, 10, "crew-reviewer") == [900, 2700, 5400]),
         ("orchestrator: 20, then 30, then 45 later", lambda r: _times(r, 1, 10, "crew-orchestrator") == [1260, 3060, 5760]),
         ("releaser: 30, then 30, then 45 later", lambda r: _times(r, 1, 10, "crew-releaser") == [1800, 3600, 6300]),
-        ("a builder with no ticket in review is not woken", lambda r: _n(r, -1, B1) == 0 and _times(r, 1, 10, B1) == []),
+        ("a builder with no ticket in review is not woken", lambda r: _n(r, _LIVE_2H, B1) == 0 and _times(r, 1, _LIVE_2H, B1) == []),
+        ("and the release prompt says to arm no tick and to delete the one it holds",
+         lambda r: _pc_prompts(r, "crew-reviewer")[0].startswith("idle_wake was switched on.")
+         and "CronList, then CronDelete" in _pc_prompts(r, "crew-reviewer")[0]),
+        ("no station is woken more than 3 times in two hours (reviewer: 8 ticks of 15 minutes before)",
+         lambda r: all(_n(r, _LIVE_2H, s, "liveness") <= 3 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))
+         and _n(r, _LIVE_2H, "crew-reviewer", "liveness") == 3),
         ("every one of them is a liveness wake",
-         lambda r: _n(r, -1, "crew-reviewer", "liveness") == 3 and _n(r) == 12),
+         lambda r: _n(r, _LIVE_2H, "crew-reviewer", "liveness") == 3 and _n(r, _LIVE_2H) == 12),
+        ("the liveness prompt says nothing is pending, and not to arm a tick",
+         lambda r: _pc_prompts(r, "crew-reviewer")[-1].startswith(
+             "Liveness check, nothing is known to be pending: check your queue once, then end the turn.")
+         and "do not arm a CronCreate tick" in _pc_prompts(r, "crew-reviewer")[-1]),
+        ("the gap stays at 45 minutes: reviewer next at 135 and 180 minutes, orchestrator 141 and 186, releaser 150 and 195",
+         lambda r: _times(r, _LIVE_2H + 1, len(_LIVE_AT) - 1, "crew-reviewer") == [8100, 10800]
+         and _times(r, _LIVE_2H + 1, len(_LIVE_AT) - 1, "crew-orchestrator") == [8460, 11160]
+         and _times(r, _LIVE_2H + 1, len(_LIVE_AT) - 1, "crew-releaser") == [9000, 11700]),
         ("each wake is a restart in the same conversation",
          lambda r: any("--resume" in c["args"] for c in r.calls()) and r.launches() >= 12),
     ],
     covers=["switched on under running stations: the first round tells each one that holds a tick to drop it, once (the builder has no ticket in review, so no tick)",
+            "and the release prompt says to arm no tick and to delete the one it holds",
             "reviewer: woken at 15, then 30 later, then 45 later (minutes 15, 45, 90)", "orchestrator: 20, then 30, then 45 later",
             "releaser: 30, then 30, then 45 later", "a builder with no ticket in review is not woken",
-            "every one of them is a liveness wake", "each wake is a restart in the same conversation"],
+            "no station is woken more than 3 times in two hours (reviewer: 8 ticks of 15 minutes before)",
+            "every one of them is a liveness wake",
+            "the liveness prompt says nothing is pending, and not to arm a tick",
+            "the gap stays at 45 minutes: reviewer next at 135 and 180 minutes, orchestrator 141 and 186, releaser 150 and 195",
+            "each wake is a restart in the same conversation"],
 ))
 
 scenario(Scenario(
@@ -5304,6 +5364,10 @@ scenario(Scenario(
     checks=[
         ("an unreviewed PR wakes the reviewer", lambda r: _n(r, 1, "crew-reviewer", "work") == 1),
         ("and only the reviewer", lambda r: _n(r, 1) == 4),
+        ("the prompt names the work and says not to arm a tick",
+         lambda r: any("There is work in the review queue: Links App T1 at 1111111 have no current verdict" in p
+                       and "idle_wake is on: the factory wakes you when there is work and holds your tick" in p
+                       for p in _pc_prompts(r, "crew-reviewer")[1:2])),
         ("the same head wakes it once, not every round", lambda r: _n(r, 3, "crew-reviewer", "work") == 1),
         ("a new head wakes it again", lambda r: _n(r, 4, "crew-reviewer", "work") == 2 and _n(r, 4) == 5),
         ("a reviewer in the middle of a turn is not woken", lambda r: _n(r, 5, "crew-reviewer", "work") == 2),
@@ -5311,7 +5375,8 @@ scenario(Scenario(
         ("the wake marks that head as told", lambda r: len(_wf(r, 6, "crew-reviewer", "seen")) == 1),
         ("a PR with a current verdict is no work for the reviewer", lambda r: _n(r, 7, "crew-reviewer", "work") == 3),
     ],
-    covers=["an unreviewed PR wakes the reviewer", "and only the reviewer", "the same head wakes it once, not every round",
+    covers=["an unreviewed PR wakes the reviewer", "and only the reviewer",
+            "the prompt names the work and says not to arm a tick", "the same head wakes it once, not every round",
             "a new head wakes it again", "a reviewer in the middle of a turn is not woken",
             "the next round, once it is idle, wakes it", "the wake marks that head as told",
             "a PR with a current verdict is no work for the reviewer"],
@@ -5391,6 +5456,8 @@ scenario(Scenario(
         ("the first look only sets the baseline",
          lambda r: _n(r, 0, "crew-orchestrator", "work") == 0 and bool(_wf(r, 0, "crew-orchestrator", "baseline"))),
         ("a RELEASE line outside Undelivered, or none inside it, wakes nobody", lambda r: _n(r, 1, "crew-releaser", "work") == 0),
+        # the daemon half (an open question is not in the answered list) is in idle_wake_daemon
+        ("an open question is not an answer", lambda r: _n(r, 1, "crew-orchestrator", "work") == 0),
         ("a desk answer wakes the orchestrator, and only it",
          lambda r: _n(r, 2, "crew-orchestrator", "work") == 1 and _n(r, 2) == _n(r, 1) + 1),
         ("once", lambda r: _n(r, 3, "crew-orchestrator", "work") == 1),
@@ -5404,7 +5471,7 @@ scenario(Scenario(
         ("a second line is a second wake", lambda r: _n(r, 9, "crew-releaser", "work") == 2),
     ],
     covers=["the first look only sets the baseline", "a RELEASE line outside Undelivered, or none inside it, wakes nobody",
-            "a desk answer wakes the orchestrator, and only it", "once",
+            "an open question is not an answer", "a desk answer wakes the orchestrator, and only it", "once",
             "an answer the orchestrator recorded itself is no news to it",
             "an allowed permission request is the watch's to act on, not a wake for the orchestrator",
             "a project handed over wakes the orchestrator", "a RELEASE line under Undelivered wakes the releaser, and only it",
@@ -5428,65 +5495,216 @@ def _undone(tmp: Path) -> None:
     (tmp / "crew" / "stations" / f"{B1}.done").unlink()
 
 
-def _add_helper(tmp: Path) -> None:
-    f = tmp / "crew" / "stations.json"
-    doc = json.loads(f.read_text(encoding="utf-8"))
-    doc[f"{B1}-probe"] = {**doc[B1], "role": "helper", "parent": B1, "id": "dddd0005", "sessionId": "sess-dddd0005"}
-    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
-    ag = tmp / "claude" / "agents.json"
-    rows = json.loads(ag.read_text(encoding="utf-8"))
-    rows.append({"id": "dddd0005", "name": f"{B1}-probe", "cwd": str(tmp), "state": "done", "pid": 40005})
-    ag.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
-    job = tmp / "home" / ".claude" / "jobs" / "dddd0005"
-    job.mkdir(parents=True, exist_ok=True)
-    (job / "state.json").write_text('{"sessionId":"sess-dddd0005"}\n', encoding="utf-8")
-
-
 _V6 = "6666666ffffffff"
+
+
+def _spawn_helper_step() -> Step:
+    """`spawn helper` under the builder, on a Tares that has the builder's project."""
+    st = lstep("spawn", "helper", B1, "probe", "look at T1", world=_world(), env={"FACTORY_STOP_WAIT": "3"})
+    st.after = lambda tmp: sorted(k for k, v in json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8")).items()
+                                  if v.get("role") == "helper")
+    return st
+
+
 scenario(Scenario(
     name="idle_wake_guards",
     suite="idle_wake",
-    about="a halted crew, a finished builder and a helper are never woken; a head with a current verdict is no work",
+    about="a halted crew, a station open in a terminal, a finished builder and a helper are never woken; a head with a current verdict is no work",
     driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
     setup=_setup_wake,
     steps=[_round(0, _world()),
            _round(3600, _world(), _halt), _round(7200, _world()),
-           _round(10800, _world(), _resume),
-           _round(11400, _world(), _done_mark),
+           _round(10800, _world(), _resume, _attach("crew-reviewer")),
+           _round(11400, _world(), _leave("crew-reviewer")),
            _round(12000, _world(queue=_head(_V6, {"current": True, "verdict": "changes"}),
                                 tickets=[_ticket("T1", "review", _V6, "success", "changes")]), _done_mark),
            _round(12060, _world(tickets=[_ticket("T1", "review", _V6, "success", "changes")]), _undone),
-           _round(40000, _world(), _add_helper)],
+           _spawn_helper_step(),
+           _round(40000, _world())],
     checks=[
         ("a halted crew is not woken", lambda r: _n(r, 2) == _n(r, 0) and _n(r, 1) == _n(r, 0)),
-        ("a crew that is not halted any more is woken", lambda r: _n(r, 3, "crew-reviewer", "liveness") == 1),
+        ("a station someone has open in a terminal is not woken, the others are",
+         lambda r: _n(r, 3, "crew-reviewer") == _n(r, 2, "crew-reviewer")
+         and _n(r, 3, "crew-orchestrator") == _n(r, 2, "crew-orchestrator") + 1),
+        ("it is, once they leave", lambda r: _n(r, 4, "crew-reviewer") == _n(r, 3, "crew-reviewer") + 1),
         ("a builder that is done is not woken, whatever its ticket says", lambda r: _n(r, 5, B1) == _n(r, 4, B1)),
         ("a head that already has a current verdict is no work for the reviewer, even though it was never seen",
-         lambda r: _n(r, 5, "crew-reviewer", "work") == 0),
-        ("(the ticket was real work: once it is not done, the builder is woken for it)", lambda r: _n(r, 6, B1) == _n(r, 4, B1) + 1),
-        ("a helper is never woken", lambda r: _n(r, 7, B1 + "-probe") == 0),
+         lambda r: _n(r, 5, "crew-reviewer", "work") == _n(r, 4, "crew-reviewer", "work")),
+        ("(the ticket was real work: once it is not done, the builder is woken for it)",
+         lambda r: _n(r, 6, B1) == _n(r, 4, B1) + 1 and "T1 (verdict changes)" in _pc_prompts(r, B1)[-1]),
+        ("setup: a helper is running", lambda r: r.code(7) == 0 and len(r.snap(7)) == 1),
+        ("a helper is never woken", lambda r: _n(r, 8, r.snap(7)[0]) == 0),
     ],
-    covers=["a halted crew is not woken", "a builder that is done is not woken, whatever its ticket says",
+    covers=["a halted crew is not woken", "a station someone has open in a terminal is not woken, the others are",
+            "it is, once they leave", "a builder that is done is not woken, whatever its ticket says",
             "a head that already has a current verdict is no work for the reviewer, even though it was never seen",
-            "(the ticket was real work: once it is not done, the builder is woken for it)", "a helper is never woken"],
+            "(the ticket was real work: once it is not done, the builder is woken for it)",
+            "setup: a helper is running", "a helper is never woken"],
 ))
+
+def _wakes_started(tmp: Path) -> dict:
+    """The wake state (see _wakes) and how many sessions have been started so far."""
+    f = tmp / "claude" / "calls.jsonl"
+    lines = f.read_text(encoding="utf-8").splitlines() if f.is_file() else []
+    return {**_wakes(tmp), "launches": sum(1 for x in lines if '"--bg"' in x)}
+
+
+def _round_started(sec: int, world: dict) -> Step:
+    st = _round(sec, world)
+    st.after = _wakes_started
+    return st
+
+
+def _restart_step(station: str, setting) -> Step:
+    """`restart <station>` on a Tares whose idle_wake is `setting`, with the wake files read after it."""
+    s = lstep("restart", station, world=_world(setting), env={"FACTORY_STOP_WAIT": "3", "FACTORY_NOW": str(IW_N0 + 140000)})
+    s.after = _wakes
+    return s
+
 
 scenario(Scenario(
     name="idle_wake_rearm",
     suite="idle_wake",
-    about="switched off again, each station that gave up its tick is woken once to take it back",
+    about="switched off again, each station that gave up its tick is woken once to take it back; a restart says to re-arm, or to arm no tick",
     driver=LAUNCH_DRIVER,
     setup=_setup_wake,
-    steps=[_round(0, _world()), _round(100, _world(False)), _round(200, _world(False)), _round(90000, _world(False)),
-           _round(130000, _world(False))],
+    steps=[_round(0, _world()), _round(100, _world(False)), _round(200, _world(False)), _round_started(90000, _world(False)),
+           _round_started(130000, _world(False)),
+           _restart_step("crew-releaser", False), _restart_step("crew-releaser", True)],
     checks=[
         ("off again: every station that gave up its tick is woken to re-arm it",
-         lambda r: all(_n(r, 1, s, "rearm") == 1 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))),
+         lambda r: all(_n(r, 1, s, "rearm") == 1 for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser", B1))),
+        ("the prompt tells it to re-arm as its manual says",
+         lambda r: _pc_prompts(r, "crew-releaser")[1].startswith("idle_wake is off again: re-arm your tick as your manual says.")),
         ("and once: nothing more is sent",
-         lambda r: _n(r, 3) == _n(r, 1) and _wf(r, 3, "crew-reviewer", "released") is False),
-        ("off: the watch is back to doing nothing", lambda r: _n(r, 4) == _n(r, 1)),
+         lambda r: _n(r, 3) == _n(r, 1) and _n(r, 3) == _n(r, 0) + 4 and _wf(r, 3, "crew-reviewer", "released") is False),
+        ("off: the watch is back to doing nothing",
+         lambda r: _n(r, 4) == _n(r, 1) and r.snap(4)["launches"] == r.snap(3)["launches"]),
+        ("a restart now says to re-arm the schedule",
+         lambda r: r.code(5) == 0 and "re-arm your schedule if you have one" in _pc_prompts(r, "crew-releaser")[-2]),
+        ("on: a restart says to arm no tick",
+         lambda r: r.code(6) == 0 and "arm no tick of your own" in _pc_prompts(r, "crew-releaser")[-1]
+         and "re-arm your schedule if you have one" not in _pc_prompts(r, "crew-releaser")[-1]
+         and _wf(r, 6, "crew-releaser", "released") is True),
     ],
-    covers=["and once: nothing more is sent", "off: the watch is back to doing nothing"],
+    covers=["off again: every station that gave up its tick is woken to re-arm it",
+            "the prompt tells it to re-arm as its manual says", "and once: nothing more is sent",
+            "off: the watch is back to doing nothing", "a restart now says to re-arm the schedule",
+            "on: a restart says to arm no tick"],
+))
+
+
+# The daemon's side of the idle wake: idle_wake_test.sh runs a real Tares and looks at what it says between the rounds
+# (the review queue, the setting, the desk). idle_wake_daemon.py runs the real daemon in its own process and prints
+# that, so no crew engine takes part and the two sides must print the same.
+def _iwd(r: Run, step: str) -> dict:
+    return next(json.loads(x) for x in r.out(0).splitlines() if x.startswith("{") and json.loads(x).get("step") == step)
+
+
+scenario(Scenario(
+    name="idle_wake_daemon",
+    suite="idle_wake",
+    about="the real daemon: the setting, the review queue with its head and verdict, and the desk's answered list",
+    driver="idle_wake_daemon.py",
+    steps=[Step(["run"])],
+    checks=[
+        ("the daemon ran", lambda r: r.code(0) == 0),
+        ("setup: a ticket waits in the review queue", lambda r: _iwd(r, "waiting")["queue"] == 1),
+        ("the setting starts unset", lambda r: _iwd(r, "unset")["idle_wake"] is None),
+        ("setup: the queue is empty", lambda r: _iwd(r, "emptied")["queue"] == 0),
+        ("the setting reads back true", lambda r: _iwd(r, "on")["idle_wake"] is True),
+        ("setup: the queue has the PR at its head", lambda r: _iwd(r, "head")["head"] == "1111111aaaaaaaa"),
+        ("setup: a current verdict is recorded", lambda r: _iwd(r, "verdict")["current"] is True),
+        ("an open question is not an answer",
+         lambda r: _iwd(r, "open_question")["answered"] == 0 and _iwd(r, "open_question")["open"] == 1),
+        ("setup: the question is answered", lambda r: _iwd(r, "answered")["answered"] == 1),
+        ("setup: a second question is answered", lambda r: _iwd(r, "answered_two")["answered"] == 2),
+        ("setup: a permission request is allowed in the console", lambda r: _iwd(r, "allowed")["permissions"] == 1),
+        ("setup: a head nobody has seen yet, with a current verdict",
+         lambda r: _iwd(r, "unseen")["head"] == "6666666ffffffff" and _iwd(r, "unseen")["current"] is True),
+    ],
+    covers=["setup: a ticket waits in the review queue", "the setting starts unset", "setup: the queue is empty",
+            "an open question is not an answer",
+            "the setting reads back true", "setup: the queue has the PR at its head", "setup: a current verdict is recorded",
+            "setup: the question is answered", "setup: a second question is answered",
+            "setup: a permission request is allowed in the console",
+            "setup: a head nobody has seen yet, with a current verdict"],
+))
+
+
+def _seen(r: Run, i: int, head: str) -> bool:
+    return any(h.endswith("@" + head) for h in (r.snap(i)["wake"]["files"].get(_PW_R, {}).get("seen") or []))
+
+
+_iwf = _PWRounds(base=200000)
+_iwfs: list = []
+_H7, _H8 = "7777777aaaaaaaa", "8888888bbbbbbbb"
+
+
+def _iwf_add(at: int, head: str = "", *mods, env=None, grants: str = "", drop: tuple = ()) -> int:
+    """A full round of the watch at `at` seconds on a Tares whose review queue holds a PR at `head` (none: empty)."""
+    st = _iwf(10, 10, *mods, at=at, pace=False, idle_wake=True, env=env, grants=grants, after=_pww_state, drop=drop)
+    put = st.run_before
+
+    def put_queue(run: Run) -> None:
+        put(run)
+        run.tares.routes["GET /api/review-queue?mine=1"] = (200, {"queue": _head(head) if head else []})
+    st.run_before = put_queue
+    _iwfs.append(st)
+    return len(_iwfs) - 1
+
+
+K_FRESH = _iwf_add(0)
+K_FAIL = _iwf_add(50, _H7, env=_PW_FAIL)                  # the restart of the wake fails
+_iwf_add(60, _H7)                                         # the first of these revives the station the failed restart left stopped
+K_SENT = _iwf_add(120, _H7)
+K_MID = _iwf_add(200, _H8, _pw_grants_in_the_way(_PW_R), drop=(r"Is a directory",))   # a restart fails deep inside
+_iwf_add(260, _H8, _pw_grants_in_the_way(_PW_R, on=False))
+K_SENT2 = _iwf_add(320, _H8)
+
+scenario(Scenario(
+    name="idle_wake_failed",
+    suite="idle_wake",
+    about="a wake whose restart fails, or fails midway, sends no wake event and marks nothing told; it is sent once the failure is gone",
+    setup=_setup_pw,
+    tares=_PW_TARES,
+    ignore_asked=_CC_NOT_YET,
+    ignore_calls=_CC_READS,
+    steps=_iwfs,
+    checks=[
+        ("a wake whose restart fails sends no wake event and marks nothing told",
+         lambda r: _pww_wakes(r, K_FAIL, _PW_R, "work") == 0 and not _seen(r, K_FAIL, _H7)
+         and "could not wake crew-reviewer" in r.out(K_FAIL)),
+        ("once it runs again the wake is delivered",
+         lambda r: _pww_wakes(r, K_SENT, _PW_R, "work") == 1 and _seen(r, K_SENT, _H7)),
+        ("a restart that fails midway is not marked delivered either",
+         lambda r: _pww_wakes(r, K_MID, _PW_R, "work") == 1 and not _seen(r, K_MID, _H8)
+         and "could not wake crew-reviewer" in r.out(K_MID)),
+        ("and it is sent once the failure is gone",
+         lambda r: _pww_wakes(r, K_SENT2, _PW_R, "work") == 2 and _seen(r, K_SENT2, _H8)),
+    ],
+    covers=["a wake whose restart fails sends no wake event and marks nothing told",
+            "once it runs again the wake is delivered", "a restart that fails midway is not marked delivered either",
+            "and it is sent once the failure is gone"],
+))
+
+
+scenario(Scenario(
+    name="idle_wake_up",
+    suite="idle_wake",
+    about="the crew's three stations and a builder are started: four sessions, the builder among the stations",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE,
+    steps=[
+        _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
+              setup={"gitrepos": ["{TMP}/links"]}),
+        *[_pcsp("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", "sonnet", "high", f"Boot as the {role} station")
+          for role in ("reviewer", "releaser")],
+        _pcsp_spawn("m1"),
+    ],
+    checks=[("the crew and a builder are up", lambda r: r.code(3) == 0 and r.snap(3)["launches"] == 4 and PC_B in r.snap(3)["ids"])],
+    covers=["the crew and a builder are up"],
 ))
 
 
