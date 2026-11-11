@@ -24,6 +24,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
+from . import merge_ready as merge_ready_mod
 from . import team as team_mod
 from .integrations import registry as integrations_registry
 from .integrations import resolve as integrations_resolve
@@ -1856,6 +1857,24 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 projects[t["project"]] = store.get_project(t["project"])
             return is_mine(t, me, projects[t["project"]])
         return {"queue": queue(keep), "now": now_utc()}
+
+    @app.get("/api/factory/merge-ready")
+    async def merge_ready(request: Request, pr: str = ""):
+        """May this pull request merge (TR-855)? One answer from the review gate, CI and the
+        guardrails of the project its ticket belongs to: {ready, reasons, head, pr, ticket, project,
+        review, ci, guardrails}. `pr` is a PR URL or `owner/repo#12`. A bad reference, a pull
+        request no ticket has, or a read that fails is `ready` false with a reason, not an
+        error. A crew station may read this; nothing is merged."""
+        parsed = factory_github.parse_pr(pr)
+        t = store.ticket_for_pr(*parsed) if parsed else None
+        if t is not None:
+            try:
+                h.project_or_404(t["project"])
+            except HTTPException:
+                # a private project the caller is not on answers like a PR no ticket has, so the
+                # reply does not say which PRs it tracks
+                return merge_ready_mod.no_ticket(*parsed)
+        return await merge_ready_mod.merge_ready(store, pr, source=h.cc_source())
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
     def pr_repo(t: dict) -> str | None:
