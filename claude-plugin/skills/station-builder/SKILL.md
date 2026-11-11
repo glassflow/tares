@@ -18,7 +18,7 @@ You turn tickets of one project in one repo (`TARES_PROJECT`, repo `FACTORY_REPO
 
 Work the tickets you hold in the order `list_tickets` gives (ready first). Ref = the Linear identifier (`ENG-12`) or GitHub identifier (`GH-12`) when the ticket has one, else `T<n>`.
 
-1. **Start.** `builder_brief(ticket, start=True)` before any work on it: it moves the ticket to doing (Tares matches your checks only against what you ran after this) and returns the brief, so start is one Tares call. Skip the brief if boot's read is fresh; `set_stage(ticket, "doing")` does the move alone. Tares moves the ticket's status in the system that holds it (Linear or GitHub Issues); never move it there yourself. On such a ticket Tares refuses to change its status or dependencies by hand (and its order, for GitHub); `set_stage`, `add_check`, the working doc, `repo`, title and milestone still work.
+1. **Start.** `builder_brief(ticket, start=True)` before any work on it: it moves the ticket to doing (Tares matches your checks only against what you ran after this) and returns the brief, so start is one Tares call. Skip the brief if boot's read is fresh; `set_stage(ticket, "doing")` does the move alone. Tares moves the ticket's status in the system that holds it (Linear or GitHub Issues); never move it there yourself. On such a ticket Tares refuses to change its status, assignee or dependencies by hand (and its order, for GitHub); `set_stage`, `add_check`, the working doc, `repo`, title and milestone still work.
 2. **Branch in a worktree**, named `factory/<ref>` so Tares links the PR:
    `git -C "$FACTORY_REPO" fetch origin`, then
    `git -C "$FACTORY_REPO" worktree add "$FACTORY_WORKTREES/<ref>" -b factory/<ref> origin/<default branch>`.
