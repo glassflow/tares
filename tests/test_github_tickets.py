@@ -714,11 +714,12 @@ async def api():
            and lk["credential"] == "cred-a" and lk["synced_at"] and lk["error"] is None and lk["issues"] == 4, lk)
         ck("(A) the github_issues source exists and is in the project",
            "github_issues" in app.state.runtime.catalog.sources and "github_issues" in store.project_sources(uid))
+        await asyncio.sleep(0.3)             # the source's own first poll, then the checks drive the polls
+        app.state.runtime._stop("github_issues")
+        await asyncio.sleep(0.2)             # a poll already writing finishes before the count reads
         n = store.con.execute("SELECT count(*) FROM events WHERE source = 'github_issues' AND "
                               "event_type = 'ticket_created'").fetchone()[0]
         ck("(A) one event per ticket found", n == 4, n)
-        await asyncio.sleep(0.3)             # the source's own first poll, then the checks drive the polls
-        app.state.runtime._stop("github_issues")
         r = await cx.get(f"/api/projects/{uid}/tickets")
         ck("(A) GET tickets shows the github link, and no linear one", r.json()["github"]["repo"] == "acme/app"
            and r.json()["github"]["issue_label"] == "tares:p" and r.json()["linear"] is None
