@@ -1,14 +1,20 @@
-"""Linear as the tickets integration (TR-845).
+"""Linear as the tickets integration (TR-845, TR-847).
 
 `sync` is today's Linear sync (tares/linear.py) behind the integration interface, and `set_status`
 moves the Linear issue, so Tares does it and an agent no longer needs Linear's own tools for it.
-Creating and changing issues is a later ticket: `create` and `update` say so.
+`create` makes a milestone or an issue of the project's Linear project (with its "blocks"
+relations), `update` changes an issue's title, order or milestone.
 
 A write Linear refuses, or cannot be reached for, never fails the caller. It leaves a row in
 `pending_writeback` (the status wanted, the error, the attempts), which is tried again each time
 `sync` runs. The fifth failure puts an item on the desk that names the ticket and the error. While
 the row exists the sync leaves the ticket's status as Tares has it, so a move that has not reached
 Linear yet is not undone by what Linear still shows.
+
+`create` and `update` raise when Linear refuses; they are not kept for a retry. A retry of `create` is
+safe: a milestone or issue with the same name or title is found first and returned, and the
+relations still missing are added. Linear limits how fast a connection may call it; `linear.query`
+waits that out for every call here (see MAX_WAIT and RATE_RETRIES in tares/linear.py).
 
 The integration needs the cell's store: `TicketsLinear(store)`. Without one (the settings page
 builds it bare to test the connection) only `check_connection` works.
@@ -39,6 +45,54 @@ _WORDS = {Status.todo: "to do", Status.in_progress: "in progress", Status.in_rev
 _STATES = """query($id: String!) {
   issue(id: $id) { id state { id name type }
     team { id name states { nodes { id name type position } } } }
+}"""
+
+# the team a Linear project belongs to (an issue is made in a team)
+_TEAMS = """query($id: String!) {
+  project(id: $id) { id teams(first: 10) { nodes { id name } } }
+}"""
+
+# the project's issues with exactly this title, any state; the server filters, `_same` checks
+_FIND_ISSUE = """query($id: String!, $title: String!, $after: String) {
+  project(id: $id) {
+    issues(first: 50, after: $after, filter: { title: { eq: $title } }) {
+      nodes { id identifier title url sortOrder createdAt state { name type } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}"""
+
+# the issues that block this one: a "blocks" relation points at it, the way the sync reads them
+_BLOCKERS = """query($id: String!, $after: String) {
+  issue(id: $id) {
+    id
+    inverseRelations(first: 50, after: $after) {
+      nodes { type issue { id } }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}"""
+
+_ISSUE_ID = "query($id: String!) { issue(id: $id) { id } }"
+
+_CREATE_ISSUE = """mutation($input: IssueCreateInput!) {
+  issueCreate(input: $input) {
+    success
+    issue { id identifier title url sortOrder state { name type } }
+  }
+}"""
+
+_CREATE_MILESTONE = """mutation($input: ProjectMilestoneCreateInput!) {
+  projectMilestoneCreate(input: $input) { success projectMilestone { id name description } }
+}"""
+
+# issueId blocks relatedIssueId: `blockers_of` reads it back on the blocked issue
+_CREATE_RELATION = """mutation($input: IssueRelationCreateInput!) {
+  issueRelationCreate(input: $input) { success }
+}"""
+
+_UPDATE = """mutation($id: String!, $input: IssueUpdateInput!) {
+  issueUpdate(id: $id, input: $input) { success issue { id } }
 }"""
 
 _MOVE = """mutation($id: String!, $state: String!) {
@@ -163,10 +217,58 @@ class TicketsLinear(tickets.TicketBackend):
         return landed
 
     async def create(self, project, milestones: list, tickets: list) -> list[TicketRef]:
-        raise NotImplementedError("creating Linear issues is not built yet")
+        """One milestone or one ticket per call. A milestone of the Linear project with the same
+        name, or an issue of the project (any state, archived ones not looked at) with the same
+        title, is found and returned instead of made again, so a retry gives one. A milestone item
+        holds `name` and `goal` (its description); a ticket item holds `title`, `body`, `milestone`
+        (its name in Linear) and `depends_on` (tickets of the project, refs this method returned,
+        or Linear issue ids; each becomes a "blocks" relation from the dependency to the new
+        issue). Relations that exist are left alone, and a found issue still gets the ones it
+        lacks, so a retry after a failure in between finishes the job.
+
+        "The same" is exact: the name or title as Linear returns it and the one sent are compared
+        after cutting the spaces at the start and end of both, and nothing else is changed. Inner
+        spaces, case and punctuation count, so "A  B" and "A B" are two titles.
+
+        The ref's id is the Linear id of the issue (or milestone), the `external_id` the sync
+        stores. The issue is made in the first team of the Linear project."""
+        milestones, tickets = _items(milestones), _items(tickets)
+        if len(milestones) + len(tickets) != 1:
+            raise ValueError("create takes one milestone or one ticket per call")
+        uid = self._project(project)
+        if milestones:
+            return [await self._create_milestone(uid, milestones[0])]
+        return [await self._create_ticket(uid, tickets[0])]
 
     async def update(self, ticket, fields: dict) -> None:
-        raise NotImplementedError("changing Linear issues is not built yet")
+        """Changes the ticket's issue: `title`, `order` (Linear's sort order, a number) and
+        `milestone` (its name in Linear; empty or None takes the issue out of its milestone). Only
+        the fields given are sent, in one write. A milestone Linear does not have is an error and
+        nothing is sent. Any other field is refused."""
+        if fields is not None and not isinstance(fields, dict):
+            raise ValueError("fields is a dict of what to change")
+        fields = dict(fields or {})
+        unknown = sorted(str(k) for k in set(fields) - {"title", "order", "milestone"})
+        if unknown:
+            raise ValueError("a Linear issue can change its title, order and milestone, not: "
+                             + ", ".join(unknown))
+        t = await asyncio.to_thread(self._ticket, ticket)
+        patch: dict = {}
+        if "title" in fields:
+            patch["title"] = _exact(fields["title"], "a ticket needs a title")
+        if "order" in fields:
+            patch["sortOrder"] = _number(fields["order"])
+        if "milestone" in fields:
+            name = _exact(fields["milestone"])
+            patch["projectMilestoneId"] = None
+            if name:
+                pid = await asyncio.to_thread(self._linear_id, t["project"])
+                patch["projectMilestoneId"] = await self._milestone_id(pid, name)
+        if not patch:
+            return
+        data = await linear.query(self.store, _UPDATE, {"id": t["external_id"], "input": patch})
+        if not (data.get("issueUpdate") or {}).get("success"):
+            raise linear.LinearError(f"Linear did not change {factory_mod.label(t)}")
 
     async def link(self, project, link_fields: dict) -> dict:
         raise NotImplementedError("linking a project to Linear is done from the project page")
@@ -232,6 +334,170 @@ class TicketsLinear(tickets.TicketBackend):
         self.store.add_desk_item(t["project"], q, ctx, opts, rec, why, "", [ref], False, "tares",
                                  [], now_utc(), to_person_id=to)
 
+    # ── creating ──────────────────────────────────────────────────────────────
+    async def _create_milestone(self, uid: str, item) -> TicketRef:
+        if not isinstance(item, dict):
+            raise ValueError("a milestone is a dict with a name and a goal")
+        name = _exact(item.get("name"), "a milestone needs a name")
+        pid = await asyncio.to_thread(self._linear_id, uid)
+        found = await self._find_milestone(pid, name)
+        if found is None:
+            goal = _exact(item.get("goal"))
+            data = await linear.query(self.store, _CREATE_MILESTONE, {"input": {
+                "projectId": pid, "name": name, **({"description": goal} if goal else {})}})
+            made = data.get("projectMilestoneCreate") or {}
+            found = made.get("projectMilestone") if made.get("success") else None
+            if not (found or {}).get("id"):
+                raise linear.LinearError(f"Linear did not create the milestone {name!r}")
+        return TicketRef(str(found["id"]), "", "")
+
+    async def _create_ticket(self, uid: str, item) -> TicketRef:
+        if not isinstance(item, dict):
+            raise ValueError("a ticket is a dict with a title")
+        title = _exact(item.get("title"), "a ticket needs a title")
+        pid = await asyncio.to_thread(self._linear_id, uid)
+        # everything that can be refused for what the caller sent comes before anything is made
+        blockers = await self._blockers(uid, item.get("depends_on"))
+        issue = await self._find_issue(pid, title)
+        fresh = issue is None
+        if fresh:
+            body = _exact(item.get("body") or item.get("description"))
+            ms = _exact(item.get("milestone"))
+            ms_id = await self._milestone_id(pid, ms) if ms else None
+            data = await linear.query(self.store, _CREATE_ISSUE, {"input": {
+                "teamId": await self._team_id(pid), "projectId": pid, "title": title,
+                **({"projectMilestoneId": ms_id} if ms_id else {}),
+                **({"description": body} if body else {})}})
+            made = data.get("issueCreate") or {}
+            issue = made.get("issue") if made.get("success") else None
+            if not (issue or {}).get("id"):
+                raise linear.LinearError(f"Linear did not create the issue {title!r}")
+        iid = str(issue["id"])
+        blockers = [b for b in blockers if b != iid]
+        if blockers:
+            # a retry finds the relations of the first try: only the missing ones are added
+            have = set() if fresh else await self._blocked_by(iid)
+            for blocker in blockers:
+                if blocker in have:
+                    continue
+                data = await linear.query(self.store, _CREATE_RELATION, {"input": {
+                    "issueId": blocker, "relatedIssueId": iid, "type": "blocks"}})
+                if not (data.get("issueRelationCreate") or {}).get("success"):
+                    raise linear.LinearError(
+                        f"Linear did not make {title!r} depend on {blocker}; try again")
+        return TicketRef(iid, str(issue.get("url") or ""), linear.status_of(issue.get("state")))
+
+    async def _blockers(self, uid: str, refs) -> list[str]:
+        """The Linear ids of what an issue is blocked by. A ref is a ticket of the project (its
+        label, id or identifier), or a Linear issue id; either may come as the ref `create`
+        returned. A ticket of the project must be one Linear owns. A Linear id Tares has no
+        ticket for is asked of Linear first, so a wrong one is refused before anything is made."""
+        known, bare = await asyncio.to_thread(self._dep_refs, uid, refs)
+        for ref in bare:
+            no_issue = (f"Linear has no issue {ref!r} to depend on, or this connection "
+                        "cannot see it")
+            try:
+                data = await linear.query(self.store, _ISSUE_ID, {"id": ref})
+            except linear.LinearError as e:
+                # Linear answers an id it does not know with "Entity not found"
+                if "not found" in str(e).lower():
+                    raise linear.LinearError(no_issue) from None
+                raise
+            found = str((data.get("issue") or {}).get("id") or "")
+            if not found:
+                raise linear.LinearError(no_issue)
+            if found not in known:
+                known.append(found)
+        return known
+
+    def _dep_refs(self, uid: str, refs) -> tuple[list[str], list[str]]:
+        """(Linear ids of the dependencies that are tickets of the project, refs of the rest).
+        Empty refs and repeats are dropped."""
+        if refs is None:
+            return [], []
+        if isinstance(refs, (str, dict, TicketRef)):
+            refs = [refs]
+        elif not isinstance(refs, (list, tuple)):
+            raise ValueError("depends_on is a list of tickets")
+        known: list[str] = []
+        bare: list[str] = []
+        for ref in refs:
+            if isinstance(ref, (dict, TicketRef)):
+                ref = ref.get("id") if isinstance(ref, dict) else ref.id
+                if not str(ref or "").strip():
+                    raise ValueError("a dependency given as a ticket needs its id")
+            ref = str(ref or "").strip()
+            if not ref:
+                continue
+            t = self.store.get_ticket(uid, ref)
+            if t is None:
+                if ref not in bare:
+                    bare.append(ref)
+            elif t["owner"] != "linear" or not t["external_id"]:
+                raise ValueError(f"{factory_mod.label(t)} does not live in Linear, so it cannot "
+                                 "be a dependency of a Linear issue")
+            elif t["external_id"] not in known:
+                known.append(t["external_id"])
+        return known, bare
+
+    async def _find_issue(self, pid: str, title: str) -> dict | None:
+        """The oldest issue of the Linear project with exactly this title, in any state. Linear
+        filters by title; the title it returns is compared here too (see `create`), and every
+        page is read."""
+        found: list[dict] = []
+        async for nodes in linear.pages(self.store, _FIND_ISSUE, {"id": pid, "title": title},
+                                        ("project", "issues"), missing=_GONE):
+            found += [i for i in nodes if isinstance(i, dict) and i.get("id")
+                      and _same(i.get("title"), title)]
+        # oldest first; an issue with no creation time is placed last, the first seen wins a tie
+        return min(found, key=lambda i: str(i.get("createdAt") or "\uffff"), default=None)
+
+    async def _find_milestone(self, pid: str, name: str) -> dict | None:
+        for m in await linear.fetch_milestones(self.store, pid):
+            if isinstance(m, dict) and m.get("id") and _same(m.get("name"), name):
+                return m
+        return None
+
+    async def _milestone_id(self, pid: str, name: str) -> str:
+        found = await self._find_milestone(pid, name)
+        if found is None:
+            raise linear.LinearError(f"the Linear project has no milestone {name!r}; "
+                                     "create it first")
+        return str(found["id"])
+
+    async def _blocked_by(self, iid: str) -> set[str]:
+        """The ids of the issues that already block this one, every page."""
+        have: set[str] = set()
+        async for nodes in linear.pages(self.store, _BLOCKERS, {"id": iid},
+                                        ("issue", "inverseRelations"),
+                                        missing=f"Linear has no issue {iid}, or this connection "
+                                                "cannot see it"):
+            have.update(linear.blockers_of({"inverseRelations": {"nodes": nodes}}))
+        return have
+
+    async def _team_id(self, pid: str) -> str:
+        """The team a new issue goes to: the first team of the Linear project (a project may have
+        several; this one is not asked which)."""
+        data = await linear.query(self.store, _TEAMS, {"id": pid})
+        proj = data.get("project")
+        if not isinstance(proj, dict):
+            raise linear.LinearError(_GONE)
+        teams = [t for t in ((proj.get("teams") or {}).get("nodes") or [])
+                 if isinstance(t, dict) and t.get("id")]
+        if not teams:
+            raise linear.LinearError("the Linear project has no team; add a team to the project "
+                                     "in Linear")
+        return str(teams[0]["id"])
+
+    def _linear_id(self, uid: str) -> str:
+        """The id of the Linear project the project is linked to."""
+        if self.store.get_project(uid) is None:
+            raise KeyError(f"no project {uid!r}")
+        link = self.store.get_project_linear(uid)
+        if not link or not link.get("id"):
+            raise linear.LinearError("this project is not linked to a Linear project yet")
+        return str(link["id"])
+
     # ── the ticket and the store ──────────────────────────────────────────────
     def _store(self):
         if self.store is None:
@@ -259,3 +525,38 @@ class TicketsLinear(tickets.TicketBackend):
         if t["owner"] != "linear" or not t["external_id"]:
             raise ValueError(f"{factory_mod.label(t)} does not live in Linear")
         return t
+
+
+_GONE = "the linked Linear project is gone, or this connection can no longer see it"
+
+
+def _items(value) -> list:
+    """The items of `create`'s milestones or tickets: a list, None as none, a lone dict as one."""
+    if value is None:
+        return []
+    if isinstance(value, dict):
+        return [value]
+    return list(value)
+
+
+def _exact(value, missing: str | None = None) -> str:
+    """`value` as text with the spaces at both ends cut and nothing else changed. Raises
+    ValueError(`missing`) when that is empty and a message is given."""
+    text = "" if value is None else str(value).strip()
+    if not text and missing:
+        raise ValueError(missing)
+    return text
+
+
+def _same(theirs, ours: str) -> bool:
+    """A title or name Linear returned against the one sent (already cut): equal after cutting
+    the spaces at both ends of Linear's, and nothing else."""
+    return _exact(theirs) == ours
+
+
+def _number(value) -> float:
+    """An order for Linear's sortOrder: a finite number (not True or False, not text)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != value \
+            or value in (float("inf"), float("-inf")):
+        raise ValueError("order is a number")
+    return float(value)
