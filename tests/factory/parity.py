@@ -1921,6 +1921,343 @@ scenario(Scenario(
 ))
 
 
+# freeze_test.sh, the watch's side of the freeze: a newer kit while frozen, a revive on the copy, the move after an
+# unfreeze, the copy's life, a Tares that cannot give its settings, and a watch that started from the copy. The
+# stations are written into the crew (as `crew up` leaves them), the fake Tares keeps the freeze, and a step that
+# is a looping watch goes through freeze_support.py (the steps that are not run the command as they are).
+FREEZE_DRIVER = "freeze_support.py"
+_FZ_SETTINGS = {"autonomy": "L3-review", "releaser": False, "challenger": False, "builders_max": 2, "claude_update": False}
+_FZ_WIN = "the looping watch is stopped by its process group and read through psutil, and the crew home is reached through a symbolic link"
+_FZ_O, _FZ_R = "crew-orchestrator", "crew-reviewer"
+
+
+def _fz_setup(tmp: Path, env: dict) -> None:
+    """A Tares that keeps the freeze, an orchestrator and a reviewer up and idle on the kit of a copy of the plugin
+    (outside any git checkout, as _cc_plugin makes it), and the crew home reached through a link."""
+    w = fake_tares.World(settings=_FZ_SETTINGS)
+    w.routes["/api/grants"] = {"all": ""}
+    _WORLDS[str(tmp)] = w
+    _doctor_world(w)(tmp, env)
+    _crew_json(tmp)
+    crew, state = tmp / "crew", tmp / "claude"
+    copy = _cc_plugin(tmp, env)
+    kit = _cc_kit(copy)
+    rows, agents = {}, []
+    for name, sid in ((_FZ_O, "aaaa0001"), (_FZ_R, "bbbb0002")):
+        role = name.split("-", 1)[1]
+        rows[name] = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high",
+                      "kit": kit, "plugin": str(copy), "role": role, "id": sid, "sessionId": f"old-{role}"}
+        agents.append(_row("idle", sid, name, cwd=str(crew), version="1.0.0"))
+    (crew / "stations.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    (state / "agents.json").write_text(json.dumps(agents, indent=2) + "\n", encoding="utf-8")
+    (state / "version").write_text("1.0.0\n", encoding="utf-8")
+    (state / "stamp-version").write_text("1\n", encoding="utf-8")
+    (tmp / "crewlink").symlink_to(crew)
+    env["FACTORY_CREW_HOME"] = str(tmp / "crewlink")
+
+
+def _fz_marks(tmp: Path) -> dict:
+    """What the suite reads after a step: the stations, the calls to Claude Code, the events and the copy."""
+    crew, kit = tmp / "crew", tmp / "kit" / "claude-plugin"
+    rows = json.loads((crew / "stations.json").read_text(encoding="utf-8"))
+    try:
+        calls = [json.loads(x)["args"] for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    except OSError:
+        calls = []
+    events: dict = {}
+    try:
+        for x in (crew / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            if x.strip():
+                name = json.loads(x).get("event")
+                events[name] = events.get(name, 0) + 1
+    except OSError:
+        pass
+
+    def last(s: str):
+        found = [a for a in calls if len(a) > 2 and a[2] == s]
+        return found[-1] if found else []
+
+    def plugin_dir(s: str):
+        a = last(s)    # the suite's plugin_dir: the word after --plugin-dir, or the last word when there is none
+        return (a[a.index("--plugin-dir") + 1] if "--plugin-dir" in a else a[-1]) if a else None
+
+    def resumed(s: str):
+        a = last(s)
+        return a[a.index("--resume") + 1] if "--resume" in a else None
+
+    def line(s: str):
+        try:
+            return json.loads((crew / "stations" / f"{s}.settings.json").read_text(encoding="utf-8"))["statusLine"]["command"]
+        except (OSError, ValueError, KeyError):
+            return ""
+
+    snap = crew / "frozen-kit"
+    return {"launches": sum(1 for a in calls if "--bg" in a), "resumes": sum(1 for a in calls if "--resume" in a),
+            "id": {s: v.get("id") for s, v in rows.items()}, "session": {s: v.get("sessionId") for s, v in rows.items()},
+            "plugin": {s: v.get("plugin") for s, v in rows.items()}, "kit": {s: v.get("kit") for s, v in rows.items()},
+            "line": {s: line(s) for s in rows},
+            "plugin_arg": {s: plugin_dir(s) for s in rows}, "resume_arg": {s: resumed(s) for s in rows},
+            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "factory", os.X_OK),
+            "same": _same_tree(snap, kit), "kept": (snap / ".kept").exists(), "marker": (crew / "freezing").exists(),
+            "checkout_file": (crew / "kit-checkout").exists()}
+
+
+def _fz_agents(names: tuple, change):
+    def before(tmp: Path) -> None:
+        ids = [json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))[n]["id"] for n in names]
+        p = tmp / "claude" / "agents.json"
+        rows = json.loads(p.read_text(encoding="utf-8"))
+        for row in rows:
+            if row.get("id") in ids:
+                change(row)
+        p.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    return before
+
+
+def _fz_idle_row(row: dict) -> None:
+    row["state"], row["status"] = "working", "idle"
+
+
+def _fz_stop_row(row: dict) -> None:
+    row["state"] = "stopped"
+    row.pop("pid", None)
+    row.pop("status", None)
+
+
+def _fz_do(*befores):
+    def before(tmp: Path) -> None:
+        for b in befores:
+            b(tmp)
+    return before
+
+
+def _fz_idle(*names: str):
+    return _fz_agents(names, _fz_idle_row)
+
+
+def _fz_stop(*names: str):
+    return _fz_do(_fz_agents(names, _fz_idle_row), _fz_agents(names, _fz_stop_row))
+
+
+def _fz_kit(tag: str):
+    def before(tmp: Path) -> None:
+        with open(tmp / "kit" / "claude-plugin" / "skills" / "factory-protocol" / "SKILL.md", "a", encoding="utf-8", newline="\n") as f:
+            f.write(f"<!-- {tag} -->\n")
+    return before
+
+
+def _fz_touch(rel: str, old: bool = False):
+    def before(tmp: Path) -> None:
+        f = tmp / rel
+        f.touch()
+        if old:
+            os.utime(f, (946684800, 946684800))   # 2000-01-01
+    return before
+
+
+def _fz_rm(rel: str):
+    return lambda tmp: (tmp / rel).unlink(missing_ok=True)
+
+
+def _fz_broken(on: bool):
+    return lambda tmp: setattr(_WORLDS[str(tmp)], "broken", on)
+
+
+def _fz_user() -> str:
+    import getpass
+    return getpass.getuser()
+
+
+def _fz_has(r: Run, i: int, pattern: str) -> bool:
+    return re.search(pattern, r.out(i), re.M) is not None
+
+
+def _fz_facts(r: Run, i: int) -> dict:
+    return json.loads(r.out(i).strip().splitlines()[-1])
+
+
+def _fz_snap(r: Run) -> str:
+    return os.path.realpath(r.crew / "frozen-kit")
+
+
+def _fz_checkout(r: Run) -> str:
+    return os.path.realpath(r.tmp / "kit" / "claude-plugin")
+
+
+_FZ_STEPS = [
+    Step(["crew", "status"], drop=DOCTOR_DROP),                                                      # 0 not frozen
+    Step(["crew", "freeze"], after=_fz_marks),                                                       # 1
+    Step(["crew", "status"]),                                                                        # 2
+    Step(["doctor"], drop=DOCTOR_DROP),                                                              # 3
+    Step(["@frozen-loop"], after=_fz_marks),                                                         # 4 a looping watch, a newer kit
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 5
+    Step(["crew", "status"]),                                                                        # 6
+    Step(["crew", "watch", "--once"], before=_fz_kit("v2")),                                         # 7
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 8
+    Step(["crew", "watch", "--once"], before=_fz_stop(_FZ_R), after=_fz_marks),                      # 9 revive on the copy
+    Step(["crew", "unfreeze"], before=_fz_idle(_FZ_R), after=_fz_marks),                             # 10
+    Step(["crew", "status"]),                                                                        # 11
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 12 one station moves
+    Step(["crew", "watch", "--once"], before=_fz_idle(_FZ_O), after=_fz_marks),                      # 13 the other
+    Step(["crew", "watch", "--once"], after=_fz_marks),                                              # 14 the copy goes
+    Step(["crew", "freeze"]),                                                                        # 15
+    Step(["crew", "watch", "--once"], before=_fz_stop(_FZ_R), after=_fz_marks),                      # 16 revive on the new copy
+    Step(["crew", "status"], before=_fz_idle(_FZ_R)),                                                # 17
+    Step(["crew", "unfreeze"], after=_fz_marks),                                                     # 18
+    Step(["crew", "watch", "--once"], env={"TARES_PLUGIN_DIR": "{tmp}/crew/frozen-kit"},
+         before=_fz_stop(_FZ_O), after=_fz_marks),                                                   # 19 by the copy's own factory
+    Step(["crew", "freeze"], before=_fz_do(_fz_idle(_FZ_O), _fz_touch("crew/frozen-kit/.kept")), after=_fz_marks),   # 20 the copy is kept
+    Step(["crew", "unfreeze"]),                                                                      # 21
+    Step(["crew", "freeze"], before=_fz_kit("v3"), after=_fz_marks),                                 # 22 refused
+    Step(["crew", "watch", "--once"], before=_fz_idle(_FZ_O, _FZ_R)),                                # 23
+    Step(["crew", "watch", "--once"], before=_fz_idle(_FZ_O, _FZ_R), after=_fz_marks),               # 24 the stations left the copy
+    Step(["crew", "watch", "--once"], before=_fz_touch("crew/freezing"), after=_fz_marks),           # 25 a freeze under way
+    Step(["crew", "watch", "--once"], before=_fz_touch("crew/freezing", old=True), after=_fz_marks),  # 26 a marker that old
+    Step(["crew", "freeze"], before=_fz_rm("crew/freezing"), after=_fz_marks),                       # 27 a fresh copy
+    # 28 Tares cannot give its settings. Bash's round says so on stderr (curl's line and "could not read the crew
+    # settings", from a subshell that dies); the Python round says nothing. Neither line is in an assertion.
+    Step(["crew", "watch", "--once"], before=_fz_do(_fz_kit("v4"), _fz_idle(_FZ_O, _FZ_R), _fz_broken(True)),
+         drop=(r"^curl: \(22\)", r"^tares factory: could not read the crew settings")),
+    Step(["crew", "status"], drop=(r"^curl: \(22\)",)),                                              # 29 (curl names its failure; Python does not)
+    Step(["crew", "unfreeze"], before=_fz_broken(False)),                                            # 30
+]
+
+scenario(Scenario(
+    name="freeze_watch",
+    suite="freeze",
+    about="a frozen crew's watch, a revive on the copy, the move after an unfreeze, the copy's life and a Tares that cannot give its settings",
+    driver=FREEZE_DRIVER,
+    # left out of the comparison: the session list and version reads, which the engines make in a different number,
+    # and the plan's /usage that bash's looping watch reads at its start (the Python watch does not read the plan yet)
+    ignore_calls=(("agents",), ("--version",), ("-p", "--no-session-persistence")),
+    setup=_fz_setup,
+    steps=_FZ_STEPS,
+    not_windows=_FZ_WIN,
+    checks=[
+        ("an unfrozen crew's status has no FROZEN line", lambda r: not _fz_has(r, 0, r"^FROZEN")),
+        ("status shows the freeze, when and by whom",
+         lambda r: _fz_has(r, 2, rf"^FROZEN: the kit since .* by {re.escape(_fz_user())}; stations that start or revive use it, running ones keep "
+                                 r"reading the checkout until they restart; the watch moves no station onto a newer kit$")),
+        ("doctor shows the freeze",
+         lambda r: _fz_has(r, 3, rf"ok    the kit is frozen since .* by {re.escape(_fz_user())}; the checkout has nothing newer")),
+        ("the watch reports the newer kit", lambda r: _fz_facts(r, 4)["reported"] is True),
+        ("the watch says so once, not every round", lambda r: _fz_facts(r, 4)["events"] == 1 and _fz_facts(r, 4)["said"] == 1),
+        ("the watch does not restart onto the new kit", lambda r: _fz_facts(r, 4)["restart_said"] is False and _fz_facts(r, 4)["alive"] is True),
+        ("no station restarts for a kit while frozen",
+         lambda r: (lambda a, b: a["launches"] == b["launches"] and a["resumes"] == b["resumes"] and a["events"].get("upgraded", 0) == 0
+                    and a["id"] == b["id"])(r.snap(4), r.snap(1))),
+        ("the report names the kit and the way out", lambda r: _fz_facts(r, 4)["way_out"] is True),
+        ("a later round, even a new watch, does not report it again",
+         lambda r: r.snap(5)["events"].get("kit-newer") == 1 and r.snap(5)["id"][_FZ_O] == r.snap(1)["id"][_FZ_O]),
+        ("status says a newer kit is available", lambda r: _fz_has(r, 6, r"^FROZEN: .*\(a newer kit is available\)$")),
+        ("status says the stations are held by the freeze",
+         lambda r: _fz_has(r, 6, r"^plugin: 2 station\(s\) run an older version; the freeze holds them")),
+        ("another newer kit is reported once more", lambda r: r.snap(8)["events"].get("kit-newer") == 2),
+        ("still nothing restarted", lambda r: r.snap(8)["launches"] == r.snap(1)["launches"] and r.snap(8)["events"].get("upgraded", 0) == 0),
+        ("a stopped station is revived while frozen",
+         lambda r: r.snap(9)["id"][_FZ_R] != r.snap(1)["id"][_FZ_R] and r.snap(9)["launches"] == r.snap(1)["launches"] + 1),
+        ("its plugin is the frozen copy",
+         lambda r: r.snap(9)["plugin_arg"][_FZ_R] == _fz_snap(r) and r.snap(9)["plugin"][_FZ_R] == _fz_snap(r)),
+        ("its status line is the frozen copy's",
+         lambda r: r.snap(9)["line"][_FZ_R] == f"tares hook statusline --plugin-root {_fz_snap(r)}"),
+        ("it records the frozen kit as its own", lambda r: r.snap(9)["kit"][_FZ_R] == r.snap(1)["frozen"]["version"]),
+        ("the revive resumed its conversation, and nothing else moved",
+         lambda r: r.snap(9)["resumes"] == r.snap(1)["resumes"] + 1 and r.snap(9)["id"][_FZ_O] == r.snap(1)["id"][_FZ_O]),
+        ("the copy stays while a station runs from it",
+         lambda r: r.snap(10)["copy"] and "frozen-kit once none runs from it" in r.out(10)),
+        ("an unfrozen crew's status has no FROZEN line, and the watch moves the stations again",
+         lambda r: not _fz_has(r, 11, r"^FROZEN") and _fz_has(r, 11, r"^plugin: 2 station\(s\) run an older version; .*crew watch moves each onto this one")),
+        ("unfrozen: one station moves onto the new kit",
+         lambda r: r.snap(12)["events"].get("upgraded") == 1 and r.snap(12)["id"][_FZ_O] != r.snap(1)["id"][_FZ_O]
+         and r.snap(12)["id"][_FZ_R] not in ("", None)),
+        ("in the same conversation, from the checkout",
+         lambda r: r.snap(12)["resume_arg"][_FZ_O] == r.snap(10)["session"][_FZ_O] and r.snap(12)["plugin_arg"][_FZ_O] == _fz_checkout(r)),
+        ("the copy stays while another station still runs from it", lambda r: r.snap(12)["copy"]),
+        ("the next round moves the other, off the frozen copy",
+         lambda r: r.snap(13)["events"].get("upgraded") == 2 and r.snap(13)["plugin_arg"][_FZ_R] == _fz_checkout(r)),
+        ("the copy is removed once no station runs from it", lambda r: not r.snap(14)["copy"]),
+        ("frozen again: a station revived on the new copy",
+         lambda r: r.snap(16)["plugin"][_FZ_R] == _fz_snap(r) and r.snap(16)["kit"][_FZ_R] == r.snap(16)["frozen"]["version"]),
+        ("with nothing newer, the freeze holds no station back",
+         lambda r: _fz_has(r, 17, r"^FROZEN: the kit since ") and "newer kit is available" not in r.out(17)
+         and not _fz_has(r, 17, r"^plugin:")),
+        ("the copy stays for the station on it", lambda r: r.snap(18)["copy"] and r.snap(18)["plugin"][_FZ_R] == _fz_snap(r)),
+        ("a start by the copy's own factory uses the checkout, not the copy",
+         lambda r: r.snap(19)["plugin_arg"][_FZ_O] == _fz_checkout(r) and r.snap(19)["plugin"][_FZ_O] == _fz_checkout(r)),
+        ("freeze keeps a copy in use when it is still the checkout's kit",
+         lambda r: r.code(20) == 0 and r.snap(20)["kept"] and r.snap(20)["frozen"]["version"] == r.snap(16)["frozen"]["version"]
+         and not r.snap(20)["marker"]),
+        ("freeze refuses while a station runs from a copy that is not the checkout's kit",
+         lambda r: r.code(22) != 0 and "still run from the kit copy" in r.out(22) and r.snap(22)["kept"]
+         and r.snap(22)["frozen"] is None and not r.snap(22)["marker"]),
+        ("the stations left the copy", lambda r: r.snap(24)["plugin"][_FZ_R] == _fz_checkout(r)),
+        ("a copy nothing runs from stays while a freeze is under way", lambda r: r.snap(25)["copy"]),
+        ("a marker that old is ignored and the copy goes", lambda r: not r.snap(26)["copy"] and not r.snap(26)["checkout_file"]),
+        ("freeze after that takes a fresh copy", lambda r: r.snap(27)["copy_bin"] and not r.snap(27)["kept"] and r.snap(27)["same"]),
+        ("with the settings unreadable and the copy there, the watch does not try to move a station",
+         lambda r: "could not restart" not in r.out(28) and "moves onto the new version once it does" not in r.out(28)
+         and r.launches() == r.snap(27)["launches"]),
+        ("and status says frozen, without blank fields",
+         lambda r: _fz_has(r, 29, r"^FROZEN: the kit \(Tares does not say since when\);")),
+    ],
+    covers=["an unfrozen crew's status has no FROZEN line", "status shows the freeze, when and by whom", "doctor shows the freeze",
+            "the watch reports the newer kit", "the watch says so once, not every round", "the watch does not restart onto the new kit",
+            "no station restarts for a kit while frozen", "the report names the kit and the way out",
+            "a later round, even a new watch, does not report it again", "status says a newer kit is available",
+            "status says the stations are held by the freeze", "another newer kit is reported once more", "still nothing restarted",
+            "a stopped station is revived while frozen", "its plugin is the frozen copy", "its status line is the frozen copy's",
+            "it records the frozen kit as its own", "the revive resumed its conversation, and nothing else moved",
+            "the copy stays while a station runs from it",
+            "an unfrozen crew's status has no FROZEN line, and the watch moves the stations again",
+            "unfrozen: one station moves onto the new kit", "in the same conversation, from the checkout",
+            "the copy stays while another station still runs from it", "the next round moves the other, off the frozen copy",
+            "the copy is removed once no station runs from it", "frozen again: a station revived on the new copy",
+            "with nothing newer, the freeze holds no station back", "the copy stays for the station on it",
+            "a start by the copy's own factory uses the checkout, not the copy",
+            "freeze keeps a copy in use when it is still the checkout's kit",
+            "freeze refuses while a station runs from a copy that is not the checkout's kit", "the stations left the copy",
+            "a copy nothing runs from stays while a freeze is under way", "a marker that old is ignored and the copy goes",
+            "freeze after that takes a fresh copy",
+            "with the settings unreadable and the copy there, the watch does not try to move a station",
+            "and status says frozen, without blank fields"],
+))
+
+# A watch started from the frozen copy and left running past the unfreeze: once the copy is gone, a kit change
+# restarts it on the checkout's CLI, not on the copy it came from (TR-686).
+scenario(Scenario(
+    name="freeze_copywatch",
+    suite="freeze",
+    about="a watch started from the frozen copy outlives it and restarts on the checkout's CLI (TR-686)",
+    driver=FREEZE_DRIVER,
+    # left out of the comparison: the session list and version reads, which the engines make in a different number,
+    # and the plan's /usage that bash's looping watch reads at its start (the Python watch does not read the plan yet)
+    ignore_calls=(("agents",), ("--version",), ("-p", "--no-session-persistence")),
+    setup=_fz_setup,
+    steps=[
+        Step(["crew", "freeze"]),                                                                    # 0
+        Step(["crew", "watch", "--once"], before=_fz_stop(_FZ_R)),                                   # 1 the station is revived on the copy
+        Step(["crew", "unfreeze"], before=_fz_idle(_FZ_R), after=_fz_marks),                         # 2 the copy stays for it
+        Step(["@copy-loop"], before=_fz_idle(_FZ_R), after=_fz_marks),                               # 3
+    ],
+    not_windows=_FZ_WIN,
+    checks=[
+        ("setup: a station is on the copy, which is kept after the unfreeze",
+         lambda r: r.snap(2)["copy_bin"] and r.snap(2)["plugin"][_FZ_R] == _fz_snap(r)),
+        ("the watch moves the station off the copy and removes it", lambda r: _fz_facts(r, 3)["copy_gone"] is True),
+        ("setup: the watch still runs, from the copy it started on",
+         lambda r: _fz_facts(r, 3)["alive"] is True and _fz_facts(r, 3)["from_copy"] is True),
+        ("the watch restarts on the new version", lambda r: _fz_facts(r, 3)["restarted"] is True),
+        ("and it keeps running, on the checkout's CLI, not the copy that is gone",
+         lambda r: (lambda f: f["alive_after"] is True and f["from_checkout"] is True and f["from_copy_after"] is False
+                    and f["no_such_file"] is False)(_fz_facts(r, 3))),
+    ],
+    covers=["setup: a station is on the copy, which is kept after the unfreeze",
+            "the watch moves the station off the copy and removes it",
+            "setup: the watch still runs, from the copy it started on", "the watch restarts on the new version",
+            "and it keeps running, on the checkout's CLI, not the copy that is gone"],
+))
+
+
 def _settings(**kw):
     def setup(tmp: Path, env: dict) -> None:
         _doctor_world(fake_tares.World(settings=kw))(tmp, env)
