@@ -17,8 +17,8 @@ from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths
 
-SPAWN_USAGE = 'usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"'
-HELPER_USAGE = 'usage: factory spawn helper <parent-station> <slug> "<task>"'
+SPAWN_USAGE = 'usage: tares factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"'
+HELPER_USAGE = 'usage: tares factory spawn helper <parent-station> <slug> "<task>"'
 
 
 def station_name(word: str, paths: CrewPaths | None = None) -> str:

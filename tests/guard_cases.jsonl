@@ -18,7 +18,7 @@
 {"role":"releaser","tool":"Bash","command":"helm -n app upgrade app ./chart","expect":"allow"}
 {"role":"builder","tool":"Bash","command":"docker build -t app .","expect":"deny"}
 {"role":"releaser","tool":"Bash","command":"cd app && docker build -t app:1 .","expect":"deny"}
-{"role":"builder","tool":"Bash","command":"factory-heavy 900 docker build -t app .","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory heavy 900 docker build -t app .","expect":"allow"}
 {"role":"builder","tool":"Bash","command":"echo \"docker build is heavy\" > notes.md","expect":"allow"}
 {"role":"builder","tool":"Bash","command":"factory spawn builder x \"y\"","expect":"deny"}
 {"role":"orchestrator","tool":"Bash","command":"factory spawn builder m1 \"do T1\"","expect":"allow"}
@@ -144,10 +144,11 @@
 {"role":"reviewer","tool":"Bash","command":"gh api -X PUT repos/o/r/pulls/1/merge","expect":"deny"}
 {"role":"builder","tool":"Bash","command":"git push origin HEAD:refs/tags/v1","expect":"deny"}
 {"role":"builder","tool":"Bash","command":"git push origin HEAD:factory/T1","expect":"allow"}
-{"role":"builder","tool":"Bash","command":"factory-heavy 10 true; docker build -t x .","expect":"deny"}
-{"role":"builder","tool":"Bash","command":"factory-heavy 10 true\ndocker build -t x .","expect":"deny"}
-{"role":"builder","tool":"Bash","command":"factory-heavy 900 docker build . && docker build -t y .","expect":"deny"}
-{"role":"builder","tool":"Bash","command":"cd app && factory-heavy 900 docker build -t app .","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"tares factory heavy 10 true; docker build -t x .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"tares factory heavy 10 true\ndocker build -t x .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"tares factory heavy 900 docker build . && docker build -t y .","expect":"deny"}
+{"role":"builder","tool":"Bash","command":"cd app && tares factory heavy 900 docker build -t app .","expect":"allow"}
+{"role":"builder","tool":"Bash","command":"factory-heavy 900 docker build .","expect":"deny"}
 {"role":"helper","parent":"crew-releaser","tool":"Bash","command":"kubectl --context kind-factory rollout undo deploy/app","expect":"allow"}
 {"role":"helper","parent":"crew-releaser","tool":"Bash","command":"gh pr merge 3","expect":"deny"}
 {"role":"helper","parent":"shop-build-m1","tool":"Bash","command":"gh pr merge 3 --squash","expect":"allow"}

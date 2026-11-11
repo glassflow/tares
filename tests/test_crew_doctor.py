@@ -1,16 +1,15 @@
 """tares factory doctor, in Python (TR-969): the checks bash does not make, the JSON output, and the
 helpers that read the machine.
 
-The parity harness (tests/factory/parity.py 'doctor_*') compares the checks both engines share. This file
-covers what only the Python doctor does:
+The bash crew is gone (TR-975): the doctor is Python only, and there is no engine line. This file covers it:
 
   - `--json` is one contract document {schema_version, ok, checks: [{id, ok, message, fix, level}]}; an unknown argument prints the usage and exits 2;
   - the exit code is 1 when any check is FIX, 0 when none is;
   - the tares version against the plugin's min_tares (TR-1064) and `tares` on PATH with `tares hook` (TR-1068);
   - the login key: in the keychain, in a file only the owner can read, or readable by others (TR-949);
   - the crew key file's permissions; on Windows the access list, read from a fake icacls;
-  - the engine line, Git for Windows, and that no cmux or language server line appears without a cmux file or a project repo (TR-970 has its own test);
-  - the watch's pid file, and that the checks stay in step with the parity harness's list of new lines;
+  - that there is no engine line (an engine setting is not read), Git for Windows, and that no cmux or language server line appears without a cmux file or a project repo (TR-970 has its own test);
+  - the watch's pid file, and that the checks marked new start with the labels in NEW_LABELS;
   - the module stays light: no DuckDB, FastAPI or daemon import.
 
 No keychain is touched: PYTHON_KEYRING_BACKEND is pinned to the failing backend. Standard library, psutil
@@ -176,7 +175,7 @@ for argv in (["doctor", "--json"], ["doctor"]):
                                                          for r in rows or []))
         ids = [r["id"] for r in rows or []]
         ck("--json: no two checks share an id", len(ids) == len(set(ids)), sorted({i for i in ids if ids.count(i) > 1}))
-        ck("--json holds the Python-only checks", {"engine", "min_tares", "tares_path", "git"} <= set(ids), ids)
+        ck("--json holds the Python-only checks", {"min_tares", "tares_path", "git"} <= set(ids) and "engine" not in ids, ids)
         ck("no Tares answers, so the doctor says so and exits 1", code == 1 and any(r["id"] == "tares" and not r["ok"] for r in rows or []), code)
         ck("a failing check carries a fix", all(r["fix"] for r in rows or [] if not r["ok"]), [r for r in rows or [] if not r["ok"] and not r["fix"]])
         ck("--json prints nothing but the JSON", out.getvalue().startswith('{"schema_version":1,'), out.getvalue()[:60])
@@ -238,14 +237,19 @@ d.check_tares_path()
 r = one(d, "tares_path")
 ck("a tares that will not run is still reported, not a crash", r and r.level == "warn" and str(exe).lower() in r.message.lower(), r)
 
-print("the engine line")
-d, *_ = make("eng", env={"TARES_FACTORY_ENGINE": "python"})
-d.check_engine()
-r = one(d, "engine")
-ck("it names python and the variable that asked for it", r and r.level == "ok" and "engine: python" in r.message and "TARES_FACTORY_ENGINE=python" in r.message, r)
-d, *_ = make("eng-default")
-d.check_engine()
-ck("with nothing set it says the default", "the default" in (one(d, "engine") or doctor.Check("", "", "")).message)
+print("no engine line (TR-975)")
+ck("the doctor has no check_engine and no engine label", not hasattr(doctor.Doctor, "check_engine") and "engine" not in doctor.NEW_LABELS)
+for label, env in (("TARES_FACTORY_ENGINE=bash", {"TARES_FACTORY_ENGINE": "bash"}), ("TARES_FACTORY_ENGINE=perl", {"TARES_FACTORY_ENGINE": "perl"})):
+    d, *_ = make("eng-" + label[-4:], env=env, run=fake_run({("--version",): res(0, "tares 1\n"), ("hook", "--help"): res(0)}))
+    d.check_basics()
+    ck(f"{label}: no engine check, and no line mentions an engine",
+       not by_id(d, "engine") and not any(re.search(r"engine", c.message, re.I) for c in d.checks), [c.line() for c in d.checks])
+d, home, *_ = make("eng-json")
+d.paths.home.mkdir(parents=True, exist_ok=True)
+(d.paths.home / "crew.json").write_text('{"engine": "bash"}', encoding="utf-8")
+d.check_basics()
+ck('an "engine" in crew.json is not read: no engine check', not by_id(d, "engine") and not any("engine" in c.message for c in d.checks),
+   [c.line() for c in d.checks])
 
 print("the login key (TR-949)")
 d, home, th, _p = make("lk-none")
@@ -440,29 +444,23 @@ ck("cc_retry_in: not a number is 1 min", doctor.cc_retry_in("", now=5) == "1 min
 ck("frozen_text with a time", doctor.frozen_text({"at": "2026-01-01", "by": "kiran"}) == "since 2026-01-01 by kiran")
 ck("frozen_text without a time", doctor.frozen_text({}) == "(Tares does not say since when)")
 
-print("the checks stay in step with the parity harness")
-sys.path.insert(0, str(ROOT / "tests" / "factory"))
-import parity  # noqa: E402
-
-pat = re.compile(parity.NEW_CHECKS[0])
-labels = set(re.search(r"\((engine[^)]*)\)", parity.NEW_CHECKS[0]).group(1).split("|"))
-ck("NEW_LABELS is the list the harness sets aside", labels == set(doctor.NEW_LABELS), (labels, doctor.NEW_LABELS))
-d, *_ = make("sync", env={"PATH": str(bindir), "TARES_FACTORY_ENGINE": "python"}, run=fake_run({("--version",): res(0, "tares 1\n"), ("hook", "--help"): res(0)}))
+print("the checks marked new start with the labels in NEW_LABELS")
+pat = re.compile(r"^  (ok|warn|FIX)\s+(" + "|".join(re.escape(x) for x in doctor.NEW_LABELS) + r")\b")
+d, *_ = make("sync", env={"PATH": str(bindir)}, run=fake_run({("--version",): res(0, "tares 1\n"), ("hook", "--help"): res(0)}))
 th_login = Path(d.env["TARES_HOME"])
 write_login(th_login, 0o600, cell_url="http://x", key="K")
 Path(d.paths.token_file).parent.mkdir(parents=True, exist_ok=True)
 Path(d.paths.token_file).write_text("t", encoding="utf-8")
 if not WIN:
     os.chmod(d.paths.token_file, 0o600)
-d.check_engine()
 d.check_tares_version()
 d.check_tares_path()
 d.check_key_files()
 d.check_git()
 newer = [c for c in d.checks if c.new]
-ck("every check marked new is a line the harness sets aside", newer and all(pat.match(c.line()) for c in newer), [c.line() for c in newer if not pat.match(c.line())])
-shared = [c for c in d.checks if not c.new]
-ck("no check bash also makes is marked new", not shared, [c.id for c in shared])
+ck("every check marked new starts with one of the labels", newer and all(pat.match(c.line()) for c in newer), [c.line() for c in newer if not pat.match(c.line())])
+ck("...and every label is used by some check", {m.group(2) for c in newer for m in [pat.match(c.line())] if m} >= {"tares version", "tares on PATH", "login key", "crew key file", "git"},
+   [c.line() for c in newer])
 
 print("check ids are unique (TR-1130)")
 # A project with several repos, two of them in folders of the same name, one listed twice and one missing:

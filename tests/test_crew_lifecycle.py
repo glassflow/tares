@@ -306,9 +306,9 @@ ck("with no Tares at all, retire still finishes", code == 0 and stations()["shop
 code, out, err, _ = run("retire", ["nobody"])
 ck("an unknown station is refused", code == 1 and "nobody is not a recorded station" in err, err)
 code, out, err, _ = run("retire", [])
-ck("no station: the usage line", code == 1 and "usage: factory retire <station>" in err, err)
+ck("no station: the usage line", code == 1 and "usage: tares factory retire <station>" in err, err)
 code, out, err, _ = run("retire", [""])
-ck("an empty station: the usage line", code == 1 and "usage: factory retire <station>" in err, err)
+ck("an empty station: the usage line", code == 1 and "usage: tares factory retire <station>" in err, err)
 reset({"crew-reviewer": station(role="reviewer", id="cccc0001")}, [fake_claude.agent_row("working", "cccc0001", "crew-reviewer", str(work))])
 code, out, err, _ = run("retire", ["reviewer"])
 ck("a role word is this crew's station", code == 0 and stations()["crew-reviewer"]["status"] == "retired", err)
@@ -475,7 +475,7 @@ print("revive refuses")
 reset({"shop-build-m1": station(status="retired")}, STOPPED)
 del launched[:]
 code, out, err, _ = run("revive", ["shop-build-m1"])
-ck("a retired station: spawn starts it again", code == 1 and said(err) == ["shop-build-m1 was retired; factory spawn starts it again"]
+ck("a retired station: spawn starts it again", code == 1 and said(err) == ["shop-build-m1 was retired; tares factory spawn starts it again"]
    and not launched, str(said(err)))
 reset({"shop-build-m1": station()}, [fake_claude.agent_row("working", "aaaa0001", "shop-build-m1", str(work))])
 code, out, err, _ = run("revive", ["shop-build-m1"])
@@ -483,9 +483,9 @@ ck("a running station: message it instead", code == 1 and said(err) == ["shop-bu
 code, out, err, _ = run("revive", ["nobody"])
 ck("an unknown station", code == 1 and said(err) == ["nobody is not a recorded station"], str(said(err)))
 code, out, err, _ = run("revive", [])
-ck("no station: the usage line", code == 1 and said(err) == ["usage: factory revive <station> [--fresh] [prompt]"], str(said(err)))
+ck("no station: the usage line", code == 1 and said(err) == ["usage: tares factory revive <station> [--fresh] [prompt]"], str(said(err)))
 code, out, err, _ = run("revive", [""])
-ck("an empty station: the usage line", code == 1 and said(err) == ["usage: factory revive <station> [--fresh] [prompt]"], str(said(err)))
+ck("an empty station: the usage line", code == 1 and said(err) == ["usage: tares factory revive <station> [--fresh] [prompt]"], str(said(err)))
 os.environ["FAKE_CLAUDE_AGENTS_FAIL"] = "1"
 code, out, err, _ = run("revive", ["shop-build-m1"])
 os.environ.pop("FAKE_CLAUDE_AGENTS_FAIL")
@@ -553,7 +553,7 @@ LC.state.write_json = real_write
 ck("an unwritable stations.json while keeping the earlier session does not crash", kept, "OSError escaped")
 reset({"shop-build-m1": station(status="retired")}, RUNNING)
 code, out, err, _ = run("restart", ["shop-build-m1"])
-ck("a retired station is stopped, then revive refuses it", code == 1 and "was retired; factory spawn starts it again" in err, err)
+ck("a retired station is stopped, then revive refuses it", code == 1 and "was retired; tares factory spawn starts it again" in err, err)
 
 L.launch = real_launch
 print(f"{P} passed, {F} failed")

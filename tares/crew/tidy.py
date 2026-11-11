@@ -27,7 +27,7 @@ from .client import TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths, default_home, home_dir
 
-USAGE = "usage: factory tidy [--force] <worktree or scratch folder>..."
+USAGE = "usage: tares factory tidy [--force] <worktree or scratch folder>..."
 REPARSE_POINT = 0x400  # FILE_ATTRIBUTE_REPARSE_POINT: a symlink or a junction on Windows
 RETRIES = 4            # a file another process just closed is released a moment later on Windows
 RETRY_PAUSE = 0.05
@@ -267,7 +267,7 @@ def _tidy(args: list, env: dict) -> int:
             continue
         if not t.inside_roots(resolved):
             raise CrewError(
-                f"{p} is outside the crew's folders. factory tidy removes only inside {t.crew_home}/worktrees, "
+                f"{p} is outside the crew's folders. tares factory tidy removes only inside {t.crew_home}/worktrees, "
                 f"{t.crew_home}/tmp, the projects' .factory/worktrees and your job's scratch folder.")
         common = None
         if not is_link(resolved) and os.path.isfile(os.path.join(resolved, ".git")):
@@ -290,7 +290,7 @@ def _remove(p: str, resolved: str, common, force: bool) -> None:
         if not force and worktree_has_work(resolved):
             raise CrewError(
                 f"{p} has uncommitted changes or commits no remote has. If it's your own worktree and the "
-                f"work is done (merged, or a review you've finished), run factory tidy --force {p}")
+                f"work is done (merged, or a review you've finished), run tares factory tidy --force {p}")
         r = _git([f"--git-dir={common}", "worktree", "remove", "--force", resolved])
         if r is None or r.returncode != 0:
             why = (r.stderr.strip().splitlines() or [""])[-1] if r is not None else "git did not run"

@@ -1,5 +1,5 @@
 """Starting a station: the settings file it launches with, the `claude --bg` command line, and the first
-prompt. Ports these functions of `claude-plugin/bin/factory`, with the same output: grant_rules,
+prompt. Port of these functions from the old bash crew (removed in TR-975), with the same output: grant_rules,
 check_model, level_text, level_rank, parent_role, write_settings, plugin_flags, kit_dir (in part),
 compact_window, kit_version, launch, boot_prompt, idle_wake_on and idle_wake_note. Where this module and
 the bash differ, the bash is right; every difference is listed under "Differences from bash" below.
@@ -28,8 +28,8 @@ Notes written at a start
   The idle-wake file is written by iw_launch_note (TR-961), the pace file by pace.launch_note (TR-962).
 
 Differences from bash
-  * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` runs
-    bin/factory from, symlinks resolved). Given the client it is bash's kit_dir: the crew's frozen copy of
+  * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` found
+    by its hooks/hooks.json, symlinks resolved). Given the client it is the crew's frozen copy of
     the kit while the crew is frozen and the copy is there (kit.kit_dir, TR-965).
   * statusLine: bash writes the path with printf %q; here it is shlex.quote. They differ only for a path
     with a character the shell must escape (a space: `a\\ b` against `'a b'`); both read back as the same
@@ -150,15 +150,15 @@ def _forward(path: str) -> str:
 
 
 def kit_dir(client=None) -> str:
-    """The kit a station starts on: the plugin folder `tares factory` runs bin/factory from (TARES_PLUGIN_DIR
-    wins), symlinks resolved, as bash's KIT_PLUGIN is. With a client, bash's kit_dir: the frozen copy while the
-    crew is frozen and the copy is there. Without one, the checkout (a fingerprint of the kit, say)."""
+    """The kit a station starts on: the plugin folder `tares factory` found (TARES_PLUGIN_DIR wins), symlinks
+    resolved. With a client, the frozen copy while the crew is frozen and the copy is there. Without one, the
+    checkout (a fingerprint of the kit, say)."""
     from ..cli import plugin_dir  # not at import time: a settings file needs it, a roster does not
     try:
         d = plugin_dir()
     except SystemExit as e:
         raise CrewError(str(e).removeprefix("tares: ")) from None
-    checkout = str(Path(os.path.realpath(d / "bin" / "factory")).parent.parent)
+    checkout = str(Path(os.path.realpath(d / "hooks" / "hooks.json")).parent.parent)
     if client is None:
         return checkout
     from . import kit   # here, not at the top: kit imports crew modules that import this one
@@ -401,12 +401,12 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     soft_deny = [f"Deploying to, or changing, any environment, kube context or namespace whose name matches the "
                  f"pattern {prod_pattern}. That needs {human} directly."]
 
-    # each command is allowed as `factory ...` and as `tares factory ...` (the Python engine's name, TR-1069)
-    cmds = ["tidy *"]
+    # each command is allowed as `tares factory ...` (the bare `factory` of the old bash crew is gone, TR-975)
+    cmds = ["tidy *", "heavy *"]
     if role == "orchestrator":
-        cmds = ["tidy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
+        cmds = ["tidy *", "heavy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
                 "crew halt", "crew halt *", "crew resume"]
-    perms = {"allow": [f"Bash({pre}factory {c})" for c in cmds for pre in ("", "tares ")]}
+    perms = {"allow": [f"Bash(tares factory {c})" for c in cmds]}
 
     wt = f"{repo_f}/.factory/worktrees" if repo else f"{home}/worktrees"
     tok_file = ""

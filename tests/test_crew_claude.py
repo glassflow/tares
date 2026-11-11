@@ -1,10 +1,9 @@
 """tares.crew.claude, the process layer: finding Claude Code, reading its sessions, telling a quiet station.
 
-It is checked against the Python fake Claude Code (tests/factory/fake_claude.py) in a throwaway HOME, and,
-where bash, jq and a `sort -V` are there (not on Windows), against the real bash functions of
-claude-plugin/bin/factory, cut out of the script by text and run on the same fake data: turn_state,
-find_live_job, is_alive, quiet and between_turns on a matrix of sessions and job files, parse_bg_id
-on the same inputs, older_than against `sort -V`, station_updated against jq.
+It is checked against the Python fake Claude Code (tests/factory/fake_claude.py) in a throwaway HOME: turn_state,
+find_live_job, is_alive, quiet and between_turns on tables of sessions and job files, parse_bg_id on a list of
+outputs, and, where `sort -V` and jq are there (not on Windows), older_than against `sort -V` and station_updated
+against jq.
 
 Untested on real Windows: the tests named windows_branch_* pass the platform in ("win32") and so run on any
 machine. They check which file is chosen (claude.exe, claude.cmd), the install folders and the command line
@@ -40,7 +39,6 @@ from tares.crew import claude as cc  # noqa: E402
 from tares.crew.errors import (ClaudeNotFoundError, JobStateUnreadableError,  # noqa: E402
                                SessionListUnreadableError)
 
-FACTORY = ROOT / "claude-plugin" / "bin" / "factory"
 WIN = sys.platform == "win32"
 
 P = F = 0
@@ -218,16 +216,6 @@ def parse_bg_id():
         got = cc.parse_bg_id(text)
         ck(f"parse_bg_id({text[:46]!r}) = {want!r}", got == want, short(got))
     ck("parse_bg_id gives a str, never None", all(isinstance(cc.parse_bg_id(t), str) for t, _ in BG_CASES))
-    if not (shutil.which("bash") and shutil.which("jq")) or WIN:
-        skip("parse_bg_id against bash", "bash or jq is missing")
-        return
-    bad = []
-    for text, _ in BG_CASES:
-        r = subprocess.run(["bash", str(FACTORY), "_parse-bg-id"], input=text, capture_output=True, text=True,
-                           encoding="utf-8", cwd=str(T), env={**os.environ, "CLAUDE_BIN": "claude"})
-        if r.stdout.strip() != cc.parse_bg_id(text):
-            bad.append((text, r.stdout, cc.parse_bg_id(text)))
-    ck("parse_bg_id answers what bash's _parse-bg-id answers on every input", not bad, short(bad))
 
 
 # ============================================================ claude_bin and the install folders
@@ -258,7 +246,7 @@ def claude_bin_override_and_errors():
     except ClaudeNotFoundError as err:
         e = err
     ck("nothing found: ClaudeNotFoundError", e is not None)
-    ck("...with bash's text", e is not None and str(e) == "claude not found on PATH (set CLAUDE_BIN to its path)", short(str(e)))
+    ck("...with the text", e is not None and str(e) == "claude not found on PATH (set CLAUDE_BIN to its path)", short(str(e)))
     ck("...which is a CrewError and prints as `tares factory: <text>`",
        isinstance(e, CrewError) and e.line == "tares factory: claude not found on PATH (set CLAUDE_BIN to its path)")
 
@@ -457,7 +445,7 @@ def active_json_is_never_empty_when_unreadable():
     finally:
         cc.AGENTS_TIMEOUT = old
     ck("a claude that hangs with a child running is cut off at the timeout, child included", r == "SessionListUnreadableError" and time.time() - t0 < 4, f"{r} {time.time() - t0:.1f}s")
-    ck("the unreadable message is bash's UNREAD",cc.UNREAD == "could not read Claude Code's session list (claude agents --json)")
+    ck("the unreadable message is UNREAD",cc.UNREAD == "could not read Claude Code's session list (claude agents --json)")
     reset()
     fake_claude.write_agents(STATE, [])
     with env(FAKE_CLAUDE_AGENTS_FAIL="1"):
@@ -467,7 +455,7 @@ def active_json_is_never_empty_when_unreadable():
 # ============================================================ GONE and TURN
 
 
-# (label, row fields, gone, turn). The same table as bash's GONE and TURN; the cases of tests/factory/crew_test.sh
+# (label, row fields, gone, turn). The cases of tests/factory/crew_test.sh
 # (a schedule armed, a prompt waiting, no process while waiting) are in it.
 TABLE = [
     ("working, idle, pid: between turns", dict(state="working", status="idle", pid=1), False, "done"),
@@ -527,7 +515,7 @@ def gone_and_turn_mapping():
     ck("turn_state looks up by id: the other session's turn is its own", (cc.turn_state("0000000a"), cc.turn_state("0000000b")) == ("done", "working"))
     ck("an id nobody has gives ''", cc.turn_state("0000000f") == "" and cc.turn_state("") == "")
     with env(FAKE_CLAUDE_AGENTS_FAIL="1"):
-        ck("turn_state on an unreadable list raises (bash prints nothing and exits non-zero)", attempt(cc.turn_state, "0000000a") == "SessionListUnreadableError")
+        ck("turn_state on an unreadable list raises", attempt(cc.turn_state, "0000000a") == "SessionListUnreadableError")
 
 
 # ============================================================ find_live_job and is_alive
@@ -594,7 +582,7 @@ def is_alive_by_name_folder_or_id():
             got = None
         except SessionListUnreadableError as e:
             got = e
-        ck("an unreadable list dies with bash's message",
+        ck("an unreadable list dies with the message",
            got is not None and str(got) == "could not read Claude Code's session list (claude agents --json); not guessing whether crew-reviewer runs", short(str(got)))
         ck("...as `tares factory: ...`", got is not None and got.line.startswith("tares factory: could not read"))
 
@@ -633,7 +621,7 @@ def transcript_of_finds_the_conversation():
     ck("a session id with a path separator is refused (gives '')", cc.transcript_of("st4", paths=PATHS) == "")
     station("st5", sessionId="*")
     ck("a bare * does not match every transcript", cc.transcript_of("st5", paths=PATHS) == "")
-    # TR-1155: the job's state.json names the live session first, as in bash. After a /clear the list and
+    # TR-1155: the job's state.json names the live session first. After a /clear the list and
     # the recorded id may still show the old one.
     station("st6", id="0000000d", sessionId="sess-recorded")
     agents(sess(id="0000000d", sessionId="sess-list"))
@@ -805,7 +793,7 @@ def station_updated_reads_updatedAt():
         got = cc.station_updated("st", paths=PATHS)
         if out != ("" if got is None else str(got)):
             bad.append((v, out, got))
-    ck("station_updated gives what the bash jq expression gives on the same updatedAt values", not bad, short(bad))
+    ck("station_updated gives what the jq expression gives on the same updatedAt values", not bad, short(bad))
 
 
 # ============================================================ attached and running_version (real processes)
@@ -953,7 +941,7 @@ def running_version_from_the_list_or_the_process():
     ck("a pid that is not a process gives ''", cc.running_version("0000000a", [{"id": "0000000a", "pid": 2 ** 22 + 12345}]) == "")
     ck("an empty list passed in is still the list (no id in it)", cc.running_version("0000000a", []) == "")
     with env(FAKE_CLAUDE_AGENTS_FAIL="1"):
-        ck("an unreadable list gives '' (bash: return 0 with no output)", cc.running_version("0000000a") == "")
+        ck("an unreadable list gives ''", cc.running_version("0000000a") == "")
     if PY_VERSIONS:
         skip("running_version from a process command line", "this Python's own path holds /versions/, which would be found first")
         return
@@ -974,7 +962,7 @@ def running_version_from_the_list_or_the_process():
         parent3, child3 = spawn(["/a/versions/1.0.0/claude"], ["/b/versions/2.0.0/claude"], True)
         settle(parent3)
         settle(child3)
-        ck("when both name a version the parent's is taken (bash tries the parent first)",
+        ck("when both name a version the parent's is taken",
            cc.running_version("0000000a", [{"id": "0000000a", "pid": child3}]) == "2.0.0")
         parent4, child4 = spawn(["bg-spare"], ["holder"], True)
         settle(parent4)
@@ -1089,141 +1077,6 @@ def claude_version_reads_the_first_line():
         except Exception as e:  # noqa: BLE001
             why += f" ({type(e).__name__}: {e}, launcher {launcher!r})"
     ck("a claude that is given as an argument is the one run", got == "2.5.6", why)
-
-
-# ============================================================ bash as the oracle
-
-
-def cut_bash():
-    """The bash harness: the functions cut out of the real script by text."""
-    src = FACTORY.read_text(encoding="utf-8")
-    lines = src.split("\n")
-
-    def func(name):
-        start = next(i for i, ln in enumerate(lines) if ln.startswith(name + "() {"))
-        ln = lines[start].rstrip()
-        if re.match(r"^\w+\(\) \{ [^#].*\}( #.*)?$", ln):
-            return ln
-        i = start
-        while lines[i].rstrip() != "}":
-            i += 1
-        return "\n".join(lines[start:i + 1])
-
-    def assign(name):
-        return re.search(r"^%s=(['\"]).*?\1" % name, src, re.S | re.M).group(0)
-
-    body = "\n".join([
-        "set -uo pipefail",
-        f'CREW_HOME={CREW.as_posix()!r}', 'STATIONS="$CREW_HOME/stations.json"', f"CLAUDE={FAKE!r}",
-        'die() { echo "tares factory: $*" >&2; exit 1; }',
-        assign("UNREAD"), assign("GONE"), assign("TURN"),
-        *[func(n) for n in ("stations_get", "active_json", "job_state", "turn_state", "find_live_job", "is_alive", "quiet", "between_turns")],
-        '"$@"', ""])
-    f = T / "oracle.sh"
-    f.write_text(body, encoding="utf-8")
-    return str(f)
-
-
-def bash_call(oracle, args, **extra):
-    e = {**os.environ, **extra}
-    r = subprocess.run(["bash", oracle, *args], capture_output=True, text=True, encoding="utf-8", env=e, stdin=subprocess.DEVNULL, timeout=60)
-    return r.returncode, r.stdout.strip(), r.stderr.strip()
-
-
-# (label, rows, job file for 0000000a, environment). The rows are what the fake lists.
-SCEN = [
-    ("idle live", [sess()], None, {}),
-    ("busy", [sess(status="busy")], {}, {}),
-    ("waiting for a person, just now", [sess(status="waiting")], {"updatedAt": "NOW-30"}, {}),
-    ("waiting for an hour", [sess(status="waiting")], {"updatedAt": "NOW-3600"}, {}),
-    ("waiting an hour, wait var 99999", [sess(status="waiting")], {"updatedAt": "NOW-3600"}, {"FACTORY_QUIET_WAIT": "99999"}),
-    ("waiting, wait var 0", [sess(status="waiting")], {"updatedAt": "NOW-30"}, {"FACTORY_QUIET_WAIT": "0"}),
-    ("waiting, no updatedAt", [sess(status="waiting")], {}, {}),
-    ("blocked no pid", [sess(state_="blocked", status=None, pid=False)], {"updatedAt": "NOW-4000"}, {}),
-    ("blocked no pid, no job", [sess(state_="blocked", status="waiting", pid=False)], None, {}),
-    ("schedule armed, process gone", [sess(pid=False)], {}, {}),
-    ("stopped with pid", [sess(state_="stopped", status=None, pid=9)], {}, {}),
-    ("failed", [sess(state_="failed", status="idle", pid=9)], {}, {}),
-    ("a subagent", [sess()], {"inFlight": {"tasks": 2, "queued": 0, "kinds": ["local_agent"]}}, {}),
-    ("cron only", [sess()], {"inFlight": {"tasks": 1, "queued": 0, "kinds": ["session_cron"]}}, {}),
-    ("cron and subagent", [sess()], {"inFlight": {"tasks": 2, "queued": 0, "kinds": ["local_agent", "session_cron"]}}, {}),
-    ("cron with wake", [sess()], {"inFlight": {"tasks": 1, "kinds": ["session_cron"], "wake": {"at": 1}}}, {}),
-    ("queued", [sess()], {"inFlight": {"queued": 2}}, {}),
-    ("tasks and no kinds", [sess()], {"inFlight": {"tasks": 1}}, {}),
-    ("empty kinds, no tasks", [sess()], {"inFlight": {"kinds": [], "tasks": 0}}, {}),
-    ("inFlight null", [sess()], {"inFlight": None}, {}),
-    ("job file broken", [sess()], "{oops", {}),
-    ("wait var not a number", [sess(status="waiting")], {"updatedAt": "NOW-4000"}, {"FACTORY_QUIET_WAIT": "soon"}),
-    ("no status, working with pid", [sess(status=None)], {}, {}),
-    ("unknown status", [sess(status="thinking")], {}, {}),
-    ("no state at all, with pid", [{"id": "0000000a", "name": "s1", "cwd": "/w", "pid": 5}], {}, {}),
-    ("two with one name, newest wins", [sess(startedAt=5), sess("0000000b", startedAt=9), sess("0000000c", startedAt=7)], None, {}),
-    ("newest is gone", [sess(startedAt=5), sess("0000000b", pid=False, startedAt=9)], None, {}),
-    ("other folder", [sess(cwd="/elsewhere")], None, {}),
-    ("another name, same id", [sess(name="renamed")], None, {}),
-    ("empty list", [], None, {}),
-    ("list unreadable", [sess()], None, {"FAKE_CLAUDE_AGENTS_FAIL": "1"}),
-    ("unicode name", [sess(name="Zoë 名前")], None, {}),
-]
-
-
-def bash_state_text(code, out):
-    return f"rc{code}:{out}"
-
-
-@test
-def bash_oracle_matrix():
-    if WIN or not (shutil.which("bash") and shutil.which("jq")) or not needs_fake("the bash oracle"):
-        skip("the bash oracle", "bash or jq is missing, or this is Windows")
-        return
-    oracle = cut_bash()
-    bad = []
-    n = 0
-    for label, rows, jobv, ev in SCEN:
-        reset()
-        now = time.time()
-        rows = json.loads(json.dumps(rows))
-        agents(*rows)
-        station("s1", id="0000000a", cwd="/w")
-        station("unlisted", id="0000000f")
-        if jobv is not None:
-            if isinstance(jobv, dict) and isinstance(jobv.get("updatedAt"), str) and jobv["updatedAt"].startswith("NOW-"):
-                jobv = {**jobv, "updatedAt": iso(int(jobv["updatedAt"][4:]))}
-            job("0000000a", jobv)
-        names = ["s1", "renamed", "Zoë 名前"]
-        pyenv = {k: ev.get(k) for k in set(ev)}
-        with env(**pyenv):
-            def py(fn, *a, **k):
-                try:
-                    return fn(*a, **k)
-                except SessionListUnreadableError:
-                    return "ERR"
-
-            def b_str(args):
-                code, out, err = bash_call(oracle, args, **ev)
-                return "ERR" if code != 0 and out == "" else out
-
-            def b_bool(args):
-                code, out, err = bash_call(oracle, args, **ev)
-                return code == 0
-
-            checks = [("turn_state", py(cc.turn_state, "0000000a"), b_str(["turn_state", "0000000a"]))]
-            for nm in names:
-                checks.append((f"find_live_job {nm} /w", py(cc.find_live_job, nm, "/w"), b_str(["find_live_job", nm, "/w"])))
-                checks.append((f"find_live_job {nm} ''", py(cc.find_live_job, nm, ""), b_str(["find_live_job", nm, ""])))
-            a_py = py(cc.is_alive, "s1", paths=PATHS)
-            code, out, err = bash_call(oracle, ["is_alive", "s1"], **ev)
-            a_b = "ERR" if code != 0 and "not guessing whether s1 runs" in err else code == 0
-            checks.append(("is_alive s1", a_py, a_b))
-            for stn in ("unlisted", "s1"):
-                for fnn, pyfn in (("quiet", cc.quiet), ("between_turns", cc.between_turns)):
-                    pyv = pyfn(stn if stn != "unlisted" else "unlisted", paths=PATHS)
-                    checks.append((f"{fnn} {stn}", pyv, b_bool([fnn, stn])))
-        for what, got, want in checks:
-            n += 1
-            if got != want:
-                bad.append((label, what, got, want))
-    ck(f"turn_state, find_live_job, is_alive, quiet and between_turns give bash's answers on {len(SCEN)} scenarios ({n} comparisons)", not bad, short(bad[:5]))
 
 
 # ============================================================ main

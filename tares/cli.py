@@ -294,12 +294,12 @@ def plugin_dir() -> Path:
     override = os.environ.get("TARES_PLUGIN_DIR")
     if override:
         d = Path(override)
-        if not (d / "bin" / "factory").is_file():
-            raise SystemExit(f"tares: TARES_PLUGIN_DIR ({override}) has no bin/factory")
+        if not (d / "hooks" / "hooks.json").is_file():
+            raise SystemExit(f"tares: TARES_PLUGIN_DIR ({override}) has no hooks/hooks.json")
         return d
     here = Path(__file__).resolve().parent
     for d in (here / "claude-plugin", here.parent / "claude-plugin"):
-        if (d / "bin" / "factory").is_file():
+        if (d / "hooks" / "hooks.json").is_file():
             return d
     raise SystemExit("tares: the Claude Code plugin is missing from this install "
                      f"(looked in {here / 'claude-plugin'} and {here.parent / 'claude-plugin'})")
@@ -313,11 +313,11 @@ def _hook(argv: list[str]):
 
 
 def _factory(argv: list[str]):
-    """`tares factory ...`: the tares-factory crew, run by the factory CLI the plugin ships. It
+    """`tares factory ...`: the tares-factory crew (tares/crew). It
     finds this Tares through TARESD_URL and the token in TARES_AUTH_TOKEN, else the workspace
     `tares login` saved, else the local daemon; stations get the same address."""
     from .login import resolve
-    script = plugin_dir() / "bin" / "factory"
+    plugin_dir()   # fails now, with its message, when the plugin is missing from this install
     env = dict(os.environ)
     # The environment first, then `tares login`'s saved workspace (with its key), then the local
     # daemon. TARES_FACTORY_SOURCE tells `doctor` which one it got.
@@ -353,7 +353,7 @@ def _factory(argv: list[str]):
         if not setup(env["TARES_FACTORY_URL"].rstrip("/"), env.get("TARES_AUTH_TOKEN", ""), home, claude):
             raise SystemExit(1)
     from .crew.dispatch import run
-    run(argv, env, script)
+    run(argv, env)
 
 
 def main():

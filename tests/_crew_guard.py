@@ -8,7 +8,7 @@ home is refused:
 
   * any process whose HOME or USERPROFILE is the real home, or whose FACTORY_CREW_HOME or FACTORY_HOME is the real
     ~/factory or inside it;
-  * a process that looks like the crew (`python -m tares.crew`, the plugin's bin/factory, `tares factory`) and
+  * a process that looks like the crew (`python -m tares.crew`, `tares factory`) and
     gets no HOME, or no FACTORY_CREW_HOME: it would fall back to the real home's folders.
 
 The refusal raises RealHomeReached and is also written down, and an exit hook then ends the run non-zero, so a
@@ -69,7 +69,7 @@ class RealHomeReached(AssertionError):
 
 
 def crew_like(argv) -> bool:
-    """Whether a command line is a crew process: the module (`-m tares.crew`), the plugin's script (bin/factory) or
+    """Whether a command line is a crew process: the module (`-m tares.crew`), a command named `factory` or
     the tares command (`tares factory`). The code after `-c` is not looked at: a probe that imports tares.crew is not one."""
     parts = [os.fspath(a) if isinstance(a, (str, os.PathLike)) else "" for a in (argv if isinstance(argv, (list, tuple)) else [argv])]
     for i, a in enumerate(parts):

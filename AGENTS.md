@@ -58,7 +58,7 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_MCP_HOST`, `TARES_MCP_PORT`, `TARES_MCP_TRANSPORT` | the MCP endpoint (127.0.0.1:8788, streamable-http) |
 | `TARESD_URL` | where `tares-mcp` finds the daemon |
 | `TARES_AUTH_TOKEN` | turns auth on; also the token `tares-mcp` presents |
-| `TARES_KEYRING` | `on` lets `tares login` keep its key in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `login.json`; off by default, because the plugin's MCP header helper, `ship.py` and the bash doctor still read the file |
+| `TARES_KEYRING` | `on` lets `tares login` keep its key in the OS keychain (macOS Keychain, Windows Credential Manager, Linux Secret Service) instead of `login.json`; off by default, because the plugin's MCP header helper and `ship.py` still read the file |
 | `TARES_CATALOG` | a catalog file to import on first boot (only while the catalog is empty) |
 | `ANTHROPIC_API_KEY` | model key for Tares agents and Ask; a key saved in the console wins |
 | `ANTHROPIC_AUTH_TOKEN` | a bearer token instead of the key, for a gateway that wants `Authorization: Bearer`; beats the key when both are set |
@@ -83,15 +83,14 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_FACTORY_CRED_FILE` | path of the crew's token file, read by the plugin's MCP header helper (`claude-plugin/scripts/mcp_headers.py`); same file as `TARES_FACTORY_TOKEN_FILE` |
 | `TARES_METRICS_TOKEN` | when set, `/metrics` wants `Authorization: Bearer <token>` and answers 401 without it; unset keeps it public (the cell's auth token is not accepted there) |
 | `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
-| `TARES_FACTORY_ENGINE` | which engine runs `tares factory`: unset runs Python, and a command not yet ported falls back to bash; `python` allows Python only (an unported command exits 2); `bash` runs bash for every command. `"engine": "bash"` in `~/factory/crew.json` is the same as `bash` when the variable is not set. `tares factory doctor` shows the active engine |
 | `TARES_SECRETS_KEY` | turns on project secrets (TR-775): any long random string, from the cell's environment only; the values are sealed with a key made from it, so a changed one leaves stored secrets unreadable until they are set again |
-| `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` hand to bash, instead of the one in the install or checkout |
+| `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` use instead of the one in the install or checkout |
 | `TARES_FAKE_PS_DIR` | test hook: a folder a suite's fake `ps` (`tests/factory/fake-ps`) answers from, with `ps/<pid>.<field>` files and a `ps-list` file; the Python engine reads processes with psutil, which cannot see a fake `ps` on PATH, so with this set it reads those files instead of the machine's processes, and runs the `sort-hook` file once between `crew update`'s two spare checks |
 | `TARES_URL_LOG` | test hook: a file the Python crew engine appends each Tares request URL to, one per line; the idle wake scenarios read the file to check which addresses the watch asked for |
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 
-## Crew engine port
+## Crew on Windows
 
 The crew checks are parity scenarios (`tests/factory/parity.py`, run by `tests/test_parity.py`): each one runs the Python
 engine alone and compares what it prints and writes with the result recorded once from the bash engine, stored in
@@ -101,9 +100,7 @@ scenario; re-record it with `python tests/factory/parity.py --record <scenario>`
 (`tests/factory/parity_labels.json`) has a scenario. The spare-session scenarios (`cc_*`) list the machine's real Claude
 processes, so on a machine with real spare sessions they can differ; run them alone (`PARITY_JOBS=1`).
 
-Once a crew command is ported to Python, change both engines in the same PR: CI (`port-drift`, its own workflow) fails a PR that edits a ported bash function without touching its Python module file. It looks at the file, not the function: any edit to `tares/crew/client.py` satisfies every function ported there, so the reviewer still checks that the matching Python changed. It also fails when it cannot find a ported function at all. The `port-drift-ok` label skips it; add or remove the label and the job runs again.
-
-The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity harness on Windows (`python tests/ci_windows.py`, which fails if it ran no test); it is advisory for now, so a red run does not block a merge, but read it: a Windows break shows up in the PR that causes it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason.
+The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test); it is advisory for now, so a red run does not block a merge, but read it: a Windows break shows up in the PR that causes it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason.
 
 ## Release
 
