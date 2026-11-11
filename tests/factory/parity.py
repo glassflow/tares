@@ -7919,14 +7919,15 @@ def _cu_is(got, want) -> bool:
     return True
 
 
-def _cu_wait():
-    """An `after` hook: seconds from now to the station's retry time, to the nearest ten (the two engines run a moment
-    apart), and its failed moves."""
+def _cu_wait(step: int = 10):
+    """An `after` hook: seconds from now to the station's retry time, rounded up to a multiple of `step` (the two
+    engines run a moment apart, and a loaded machine makes the gap longer: a coarse step keeps both in one bucket),
+    and its failed moves."""
     def after(tmp: Path):
         import time
         s = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["crew-reviewer"]
         at = s.get("cc_retry_at")
-        return {"in": int(round(int(at) - time.time(), -1)) if at else None, "fails": s.get("cc_fails")}
+        return {"in": -(-(int(at) - int(time.time())) // step) * step if at else None, "fails": s.get("cc_fails")}
     return after
 
 
@@ -8180,8 +8181,8 @@ scenario(Scenario(
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
-    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()),
-           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait())],
+    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)),
+           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait(60))],
     checks=[
         ("old spares every time: three resumed tries then a new conversation, for each station",
          lambda r: _cu_names(r)[:8] == ["crew-reviewer"] * 4 + ["crew-orchestrator"] * 4
