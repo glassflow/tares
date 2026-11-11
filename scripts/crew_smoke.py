@@ -27,7 +27,7 @@ Isolation, so a smoke run cannot touch the live crew (TR-1164):
     <crew>-*, and only the scratch daemon and MCP processes this script started.
 
 The one edit outside the scratch folder: Claude Code starts no session in a folder it has not trusted, so
-the script adds the scratch crew home, the clone's folder and the worktrees folder to ~/.claude.json
+the script adds the scratch crew home, the clone itself (its parent folder does not count) and the worktrees folder to ~/.claude.json
 (hasTrustDialogAccepted) and removes those entries at the end. Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok.
 """
 from __future__ import annotations
@@ -335,7 +335,7 @@ class Smoke:
         """The orchestrator runs in the crew home, the builder in the clone and in its worktrees, and Claude Code
         refuses a session in a folder it has not trusted. Our own folders only; teardown removes every entry."""
         trust = self.hdir / ".claude.json"
-        for folder in (self.crew_home, self.work / "repos", self.crew_home / "worktrees"):
+        for folder in (self.crew_home, self.work / "repos" / self.repo.split("/")[-1], self.crew_home / "worktrees"):
             Path(folder).mkdir(parents=True, exist_ok=True)
             trust_folder(trust, str(folder))
             self.trusted.append((trust, str(folder)))

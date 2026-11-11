@@ -86,8 +86,8 @@ try:
     sm.hdir.mkdir()
     sm.trust_folders()
     got = set(json.loads((sm.hdir / ".claude.json").read_text(encoding="utf-8"))["projects"])
-    check("trust covers the crew home, the repos folder and the worktrees",
-          got == {str(sm.crew_home), str(sm.work / "repos"), str(sm.crew_home / "worktrees")}, str(got))
+    check("trust covers the crew home, the clone itself and the worktrees",
+          got == {str(sm.crew_home), str(sm.work / "repos" / "r"), str(sm.crew_home / "worktrees")}, str(got))
     for entry in sm.trusted:
         smoke.untrust_folder(*entry)
     check("untrusting every entry empties the file", json.loads((sm.hdir / ".claude.json").read_text(encoding="utf-8"))["projects"] == {})
