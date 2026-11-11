@@ -81,10 +81,12 @@ class LaunchSpec:
 
 @dataclass
 class TicketRef:
-    """A ticket in a ticket system: its id there, its url and its status."""
+    """A ticket in a ticket system: its id there, its url, its status and its identifier (ENG-12,
+    GH-7; empty for a milestone)."""
     id: str
     url: str = ""
     status: str = ""
+    identifier: str = ""
 
 
 class Status(str, enum.Enum):

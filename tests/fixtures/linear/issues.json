@@ -1,0 +1,38 @@
+[
+  {
+    "id": "i1",
+    "identifier": "FAC-1",
+    "title": "Parse invoices",
+    "url": "https://linear.app/acme/issue/FAC-1",
+    "sortOrder": 1.0,
+    "updatedAt": "2026-11-09T10:00:00Z",
+    "state": {
+      "name": "Todo",
+      "type": "unstarted"
+    }
+  },
+  {
+    "id": "i2",
+    "identifier": "FAC-2",
+    "title": "Store invoices",
+    "url": "https://linear.app/acme/issue/FAC-2",
+    "sortOrder": 2.0,
+    "updatedAt": "2026-11-09T10:00:00Z",
+    "state": {
+      "name": "Todo",
+      "type": "unstarted"
+    }
+  },
+  {
+    "id": "i3",
+    "identifier": "FAC-3",
+    "title": "Email invoices",
+    "url": "https://linear.app/acme/issue/FAC-3",
+    "sortOrder": 3.0,
+    "updatedAt": "2026-11-09T10:00:00Z",
+    "state": {
+      "name": "In Progress",
+      "type": "started"
+    }
+  }
+]

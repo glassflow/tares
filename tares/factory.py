@@ -362,8 +362,9 @@ def activity_at(updated_at, tickets: list[dict]):
 # ── the ledger (M4): who holds a ticket and where it stands ───────────────────
 
 STAGES = ("todo", "doing", "review", "changes", "merged", "shipped", "blocked")
-# a Tares-owned ticket's status follows its stage; a Linear or GitHub one keeps its home's
-STATUS_OF_STAGE = {"todo": "todo", "doing": "in_progress", "review": "in_progress",
+# the status each stage asks of the ticket system (a `tares.integrations.types.Status` value): every
+# ticket's status follows its stage, whichever system holds the ticket (TR-848)
+STATUS_OF_STAGE = {"todo": "todo", "doing": "in_progress", "review": "in_review",
                    "changes": "in_progress", "blocked": "in_progress", "merged": "done",
                    "shipped": "done"}
 

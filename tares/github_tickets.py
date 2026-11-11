@@ -257,9 +257,9 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         if cur is None:
             who = {} if mapped is None else {"assignee_person_id": mapped[0],
                                              "assignee_raw": mapped[1]}
-            store.create_ticket(uid, "github", iss.get("title") or ident, status, pos,
-                                external_id=iss["id"], identifier=ident, url=iss.get("url"),
-                                milestone=ms, **who)
+            # find-or-insert in one locked step: a write_ticket may have adopted it since the read
+            store.adopt_ticket(uid, "github", iss["id"], iss.get("title") or ident, status, ident,
+                               iss.get("url"), position=pos, milestone=ms, **who)
             if mapped is not None:
                 team.assignee_sync_join(store, project, mapped[0], status)
             out.append(_env(project, link, iss, "created",
@@ -271,11 +271,14 @@ async def sync_project(store, uid: str) -> list[Envelope]:
             out.append(_env(project, link, iss, "renamed",
                             f"{ident} renamed in GitHub: {cur['title']} -> {iss.get('title')}",
                             {"from": cur["title"], "to": iss.get("title")}))
+        moved = None
         if cur["status"] != status:
-            changes["status"] = status
-            out.append(_env(project, link, iss, "status",
-                            f"{ident} moved to {status.replace('_', ' ')} in GitHub",
-                            {"from": cur["status"], "to": status}))
+            # written apart from the rest: a status change of this ticket waiting to reach GitHub
+            # (TR-846) must not be undone by what GitHub still shows
+            moved = _env(project, link, iss, "status",
+                         f"{ident} moved to {status.replace('_', ' ')} in GitHub",
+                         {"from": cur["status"], "to": status})
+            out.append(moved)
         if cur["position"] != pos:
             changes["position"] = pos
             out.append(_env(project, link, iss, "reordered", f"{ident} reordered in GitHub",
@@ -287,9 +290,12 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         if mapped is not None and (cur["assignee_person_id"], cur["assignee_raw"]) != mapped:
             changes.update(assignee_person_id=mapped[0], assignee_raw=mapped[1])
             team.assignee_sync_join(store, project, mapped[0], status)
+        why = f"GitHub shows the issue {status.replace('_', ' ')}"
         if changes:
-            store.update_ticket(cur["id"], why=f"GitHub shows the issue {status.replace('_', ' ')}",
-                                **changes)
+            store.update_ticket(cur["id"], why=why, **changes)
+        if moved is not None and not store.update_ticket(cur["id"], why=why, status=status,
+                                                         unless_pending=True):
+            out.remove(moved)      # a status change is waiting to reach GitHub: Tares's stands
     # "blocked by" becomes dependencies, once every issue has its ticket
     by_ext = {t["external_id"]: t for t in store.list_tickets(uid) if t["owner"] == "github"}
     for iss in issues:
@@ -308,6 +314,7 @@ async def sync_project(store, uid: str) -> list[Envelope]:
         # here, not dropped, so its working doc stays reachable
         store.update_ticket(cur["id"], status="canceled",
                             why="the issue no longer carries the label, or left the repo")
+        store.pending_writeback_clear(cur["id"])     # nothing left in GitHub to write to
         out.append(_env(project, link,
                         {"id": ext, "identifier": cur["identifier"], "title": cur["title"]},
                         "removed", f"{cur['identifier']} no longer carries {label}",
@@ -341,9 +348,9 @@ def _sync_milestones(store, uid: str, milestones: list[dict], issues: list[dict]
                                        position=pos)
                 ids[gm["id"]] = same["id"]
                 continue
-            ids[gm["id"]] = store.create_milestone(
-                uid, name, " ".join(str(gm.get("description") or "").split())[:500], [], pos,
-                owner="github", external_id=gm["id"])
+            ids[gm["id"]] = store.adopt_milestone(
+                uid, "github", gm["id"], name, None, None, pos,
+                " ".join(str(gm.get("description") or "").split())[:500])
             continue
         ids[gm["id"]] = cur["id"]
         clash = store.get_milestone(uid, name)

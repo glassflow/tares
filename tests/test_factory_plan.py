@@ -57,10 +57,19 @@ LIN = {
 
 
 def fake_linear(request: httpx.Request) -> httpx.Response:
-    q = json.loads(request.content)["query"]
+    body = json.loads(request.content)
+    q = body["query"]
     if "viewer" in q:
         return httpx.Response(200, json={"data": {"viewer": {
             "id": "u", "name": "Ada", "email": "a@x", "organization": {"name": "Acme", "urlKey": "acme"}}}})
+    if "projectMilestoneCreate" in q:
+        inp = body["variables"]["input"]
+        n = len(LIN["milestones"]) + 1
+        ms = {"id": f"lm{n}", "name": inp["name"], "description": inp.get("description") or "",
+              "sortOrder": n}
+        LIN["milestones"].append(ms)
+        return httpx.Response(200, json={"data": {"projectMilestoneCreate": {
+            "success": True, "projectMilestone": ms}}})
     if "projectMilestones" in q:
         return httpx.Response(200, json={"data": {"project": {
             "projectMilestones": {"nodes": LIN["milestones"]}}}})
@@ -207,7 +216,7 @@ async def main():
             await cx.post("/api/linear", json={"api_key": "lin_api_x"})
             lp = json.loads(await m.create_project("Billing", "Bill customers"))["id"]
             await mf.write_milestone("Report", "", [{"check": "open /report", "expect": "a chart"}], project=lp)
-            r = await cx.post(f"/api/projects/{lp}/linear", json={"project": "Billing"})
+            r = await cx.put(f"/api/projects/{lp}/tickets/link", json={"integration": "linear", "link_fields": {"project": "Billing"}})
             ck("linking runs a first sync", r.status_code == 200, r.text)
         ms = json.loads(await mf.list_milestones(project=lp))
         ck("Linear's milestones show in Linear's order",
@@ -223,8 +232,20 @@ async def main():
         ck("only FAC-1 is ready", [k for k, t in lt.items() if t["ready"]] == ["FAC-1"], lt)
         bad = await m.write_ticket("", depends_on=[], id="FAC-2", project=lp)
         ck("a Linear ticket's dependencies are changed in Linear", "lives in Linear" in bad, bad)
-        bad = await mf.write_milestone("Launch", "", [], project=lp)
-        ck("a new milestone on a Linear project is added in Linear", "live in Linear" in bad, bad)
+        made = json.loads(await mf.write_milestone("Launch", "Go live", [], project=lp))
+        ck("a new milestone on a Linear project is created in Linear and owned by it",
+           made["name"] == "Launch"
+           and [x["name"] for x in LIN["milestones"]] == ["Ingest", "Report", "Launch"]
+           and LIN["milestones"][2]["description"] == "Go live", (made, LIN["milestones"]))
+        again = json.loads(await mf.write_milestone("Launch", "Go live", [], project=lp))
+        ck("and writing it again finds it: still one in Linear",
+           len(LIN["milestones"]) == 3 and again["id"] == made["id"], (again, LIN["milestones"]))
+        async with cx_factory() as cx:
+            r = await cx.put(f"/api/projects/{lp}/milestones/Launch", json={"name": "Go"})
+            ck("the new milestone is Linear's: it is renamed there, not here", r.status_code == 409, r.text)
+        LIN["milestones"].pop()
+        async with cx_factory() as cx:
+            await cx.post(f"/api/projects/{lp}/linear/sync")
         ok = json.loads(await mf.write_milestone("Ingest", "", [{"check": "make e2e"}], project=lp))
         ck("checks of a Linear milestone are written on Tares", ok["checks"] == [{"check": "make e2e", "expect": ""}], ok)
         async with cx_factory() as cx:

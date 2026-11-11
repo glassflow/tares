@@ -136,6 +136,15 @@ def dist(name, points):
 
 sys.path.insert(0, tmp)
 
+# The registry reads entry points through `metadata.entry_points`, which scans all of sys.path, so
+# the entry points of an installed Tares (tickets.tares, tickets.linear) would join every case.
+# The cases see only the dist-info folders of their own temporary folder.
+import importlib.metadata, types as _types
+def _only_tmp(group):
+    return [ep for d in importlib.metadata.distributions(path=[tmp])
+            for ep in d.entry_points if ep.group == group]
+registry.metadata = _types.SimpleNamespace(entry_points=_only_tmp)
+
 def fresh(builtins, points):
     """A clean registry for one case: the dist-info set is rewritten and the logs are emptied."""
     for entry in os.listdir(tmp):
@@ -150,6 +159,16 @@ def fresh(builtins, points):
     registry.load(refresh=True)
 
 import fake_integ_mod as M
+
+# the integrations Tares ships are in BUILTINS (TR-846: GitHub Issues joins Tares and Linear)
+ck("BUILTINS holds the shipped tickets integrations",
+   {"tares.integrations.builtin.tickets_tares:TicketsTares",
+    "tares.integrations.builtin.tickets_linear:TicketsLinear",
+    "tares.integrations.builtin.tickets_github:TicketsGithub"} <= set(registry.BUILTINS),
+   registry.BUILTINS)
+registry.load(refresh=True)
+ck("the shipped tickets integrations load by name",
+   all(registry.get("tickets", n) is not None for n in ("tares", "linear", "github")))
 
 # built-ins and an entry point integration both come back
 fresh(["fake_integ_mod:FakeMemory"], {"fake-ci": "fake_integ_mod:FakeCI"})

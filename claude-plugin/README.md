@@ -113,14 +113,13 @@ new Tares project:
 - the spec, the plan, the AGENTS.md of the build and a starting prompt (docs, kept in Tares)
 - the tickets, in order, each with a working doc (context, steps, files, how to verify)
 
-The tickets live in Tares, or in Linear when you want Linear: Claude creates them there with
-Linear's own MCP tools, links the Linear project, and Tares keeps its ticket list in sync (it
-polls about once a minute). Working docs stay in Tares either way. For Linear, connect it once in
-the Tares console (Settings, Linear) and give this session Linear's MCP server.
-
-Or in GitHub Issues: Claude creates them with `gh` in one repo under an issue label, links them
-with `link_github_issues`, and Tares keeps the list in sync with the GitHub credentials stored on
-it. Tares refuses to change a GitHub ticket's title, status, order, milestone or dependencies; change those with `gh`.
+The tickets live in Tares, in Linear or in GitHub Issues, as you choose. For Linear or GitHub,
+the session links the project with `link_tickets` (the Linear project, or the repo and an issue
+label), then `write_milestone` and `write_ticket` create the milestones and tickets there, and Tares
+keeps its ticket list in sync (it polls about once a minute). Working docs stay in Tares either way.
+Connect Linear or GitHub once in the Tares console first: the cell's own connection does the
+writing, so the session needs no Linear or GitHub tools of its own. A ticket's status, assignee and
+dependencies change in Linear or GitHub.
 
 The spec session's whole recording lands on the project. A later session told
 `Work on Tares project "<name>"` reads the starting prompt, the tickets and their working docs

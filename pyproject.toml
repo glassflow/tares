@@ -63,6 +63,14 @@ postgres-state = ["psycopg[binary]>=3.1"]
 [project.entry-points."tares.ee"]
 team = "tares_ee.team:Team"
 
+# The built-in integrations register the way a package installed next to Tares does. The registry
+# also lists them itself (BUILTINS), so a source checkout works before a reinstall; the same class
+# twice is ignored.
+[project.entry-points."tares.integrations"]
+"tickets.tares" = "tares.integrations.builtin.tickets_tares:TicketsTares"
+"tickets.linear" = "tares.integrations.builtin.tickets_linear:TicketsLinear"
+"tickets.github" = "tares.integrations.builtin.tickets_github:TicketsGithub"
+
 [project.scripts]
 tares = "tares.cli:main"
 taresd = "tares.cli:run_daemon"

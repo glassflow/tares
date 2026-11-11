@@ -73,8 +73,10 @@ def handler(request: httpx.Request) -> httpx.Response:
     if "issues(" in q:
         if v["id"] != PROJECT["id"]:
             return httpx.Response(200, json={"data": {"project": None}})
+        more = bool(STATE.get("more_pages"))   # Linear says there is a next page, whatever we read
         return httpx.Response(200, json={"data": {"project": {"issues": {
-            "nodes": STATE["issues"], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}})
+            "nodes": STATE["issues"],
+            "pageInfo": {"hasNextPage": more, "endCursor": "c1" if more else None}}}}})
     if "project(id" in q:
         hit = v["id"] in (PROJECT["id"], PROJECT["slugId"])
         if not hit:
@@ -175,9 +177,9 @@ async def main():
         print("== linking a project ==")
         uid = (await cx.post("/api/projects", json={"template": "custom", "name": "Invoices",
                                                     "objects": []})).json()["id"]
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": "https://linear.app/acme/nope-000"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "linear", "link_fields": {"project": "https://linear.app/acme/nope-000"}})
         ck("an unknown Linear project -> 400", r.status_code == 400, r.text)
-        r = await cx.post(f"/api/projects/{uid}/linear", json={"project": PROJECT["url"] + "/overview"})
+        r = await cx.put(f"/api/projects/{uid}/tickets/link", json={"integration": "linear", "link_fields": {"project": PROJECT["url"] + "/overview"}})
         tickets = r.json()["tickets"]
         ck("link by URL: three tickets in Linear's order", r.status_code == 200
            and [t["identifier"] for t in tickets] == ["FAC-1", "FAC-2", "FAC-3"]
@@ -189,11 +191,17 @@ async def main():
         ck("the linear source exists and is in the project",
            "linear" in app.state.runtime.catalog.sources
            and "linear" in store.project_sources(uid))
-        n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
-                                      "event_type = 'ticket_created'").fetchone()[0]
+        with store._lock:                    # the source's first poll writes under this lock, from its own thread
+            n_created = store.con.execute("SELECT count(*) FROM events WHERE source = 'linear' AND "
+                                          "event_type = 'ticket_created'").fetchone()[0]
         ck("one event per ticket found", n_created == 3, n_created)
+        r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x", "status": "done"})
+        ck("a status is not set when a ticket is made: 409, Linear's to change", r.status_code == 409
+           and "Linear" in r.json()["detail"], r.text)
         r = await cx.post(f"/api/projects/{uid}/tickets", json={"title": "x"})
-        ck("no Tares tickets on it", r.status_code == 409, r.text)
+        ck("a new ticket goes to Linear, never made in Tares alone: its refusal is passed on and nothing is added",
+           r.status_code >= 400 and "team" in r.json()["detail"]
+           and len((await cx.get(f"/api/projects/{uid}/tickets")).json()["tickets"]) == 3, r.text)
 
         print("== changes made in Linear ==")
         iss = STATE["issues"]
@@ -246,6 +254,42 @@ async def main():
         except linear.LinearError:
             ck("the poll fails so the source's health shows it", True)
 
+        print("== a project Linear answers for in part, or not at all (TR-1024) ==")
+        STATE["valid_tokens"].add(GOOD_KEY)
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("sync works again with the key back", r.status_code == 200, r.text)
+        before = store.list_tickets(uid)
+        real_cap, linear.MAX_ISSUES = linear.MAX_ISSUES, 2   # the fake's one page is 4 issues
+        STATE["more_pages"] = True
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("more pages than the cap: the sync is refused and says why", r.status_code == 400
+           and "more than 2 issues" in r.json()["detail"], r.text)
+        ck("the error is on the link", "more than 2 issues" in
+           ((await cx.get(f"/api/projects/{uid}/tickets")).json()["linear"]["error"] or ""))
+        ck("no ticket changed, none canceled", store.list_tickets(uid) == before)
+        STATE["more_pages"] = False
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("a project that fits the cap exactly still syncs", r.status_code == 200
+           and r.json()["linear"]["error"] is None, r.text)
+        linear.MAX_ISSUES = real_cap
+        kept, STATE["issues"] = STATE["issues"], []
+        before = store.list_tickets(uid)
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("an empty answer: the sync is refused and says why", r.status_code == 400
+           and "no issues" in r.json()["detail"], r.text)
+        ck("the empty answer is on the link", "no issues" in
+           ((await cx.get(f"/api/projects/{uid}/tickets")).json()["linear"]["error"] or ""))
+        ck("no ticket changed, none canceled", store.list_tickets(uid) == before)
+        try:
+            await conn_src.poll()
+            ck("the poll fails so the source's health shows it", False)
+        except linear.LinearError:
+            ck("the poll fails so the source's health shows it", True)
+        STATE["issues"] = kept
+        r = await cx.post(f"/api/projects/{uid}/linear/sync")
+        ck("once Linear answers again the error clears", r.status_code == 200
+           and r.json()["linear"]["error"] is None, r.text)
+
         print("== unlink and disconnect ==")
         STATE["valid_tokens"].add("Bearer oauth-access-2")
         r = await cx.delete(f"/api/projects/{uid}/linear")
@@ -256,7 +300,7 @@ async def main():
         uid2 = (await cx.post("/api/projects", json={"template": "custom", "name": "Other",
                                                      "objects": []})).json()["id"]
         await cx.post(f"/api/projects/{uid2}/tickets", json={"title": "mine"})
-        r = await cx.post(f"/api/projects/{uid2}/linear", json={"project": PROJECT["id"]})
+        r = await cx.put(f"/api/projects/{uid2}/tickets/link", json={"integration": "linear", "link_fields": {"project": PROJECT["id"]}})
         ck("a project with its own tickets cannot be linked", r.status_code == 409, r.text)
         r = await cx.delete("/api/linear")
         ck("disconnect", r.json()["connected"] is False and linear.get_connection(store) is None,

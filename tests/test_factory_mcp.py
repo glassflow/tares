@@ -161,17 +161,17 @@ async def main():
 
         print("== tickets in Linear ==")
         pid = json.loads(await m.create_project("Billing"))["id"]
-        r = await m.link_linear_project("https://linear.app/acme/project/billing-aa11",
-                                        project="Billing")
+        r = await m.link_tickets("linear", {"project": "https://linear.app/acme/project/billing-aa11"},
+                                 project="Billing")
         ck("link before Linear is connected says how", "connect" in r.lower(), r)
         linear._save_connection(app.state.store, {"kind": "api_key", "token": "k",
                                                   "account": {"org": "Acme"}})
-        r = json.loads(await m.link_linear_project("https://linear.app/acme/project/billing-aa11",
-                                                   project="Billing"))
-        ck("link_linear_project -> the tickets found", [t["identifier"] for t in r["tickets"]]
+        r = json.loads(await m.link_tickets(
+            "linear", {"project": "https://linear.app/acme/project/billing-aa11"}, project="Billing"))
+        ck("link_tickets (linear) -> the tickets found", [t["identifier"] for t in r["tickets"]]
            == ["FAC-1", "FAC-2"] and r["linear"]["name"] == "Billing", r)
-        no = await m.write_ticket("x", project="Billing")
-        ck("write_ticket refused: change it in Linear", no.startswith("error 409")
+        no = await m.write_ticket("x", status="done", project="Billing")
+        ck("a status on a new ticket is refused: it changes in Linear", no.startswith("error 409")
            and "Linear" in no, no)
         no = await m.write_ticket("", status="done", id="FAC-1", project="Billing")
         ck("status change refused on a Linear ticket", no.startswith("error 409"), no)
@@ -185,13 +185,15 @@ async def main():
 
         print("== tickets in GitHub ==")
         pid = json.loads(await m.create_project("Issues"))["id"]
-        r = await m.link_github_issues("acme/app", "tares:issues", project="Issues")
+        r = await m.link_tickets("github", {"repo": "acme/app", "issue_label": "tares:issues"},
+                                 project="Issues")
         ck("link before a GitHub credential is stored says how", r.startswith("error 400")
            and "credential" in r.lower(), r)
         app.state.store.upsert_github_credential("cred-a", "tok-a")
-        r = json.loads(await m.link_github_issues("https://github.com/acme/app.git", "tares:issues",
-                                                  project="Issues"))
-        ck("link_github_issues -> the tickets found", [t["identifier"] for t in r["tickets"]]
+        r = json.loads(await m.link_tickets(
+            "github", {"repo": "https://github.com/acme/app.git", "issue_label": "tares:issues"},
+            project="Issues"))
+        ck("link_tickets (github) -> the tickets found", [t["identifier"] for t in r["tickets"]]
            == ["GH-1", "GH-2"] and r["tickets"][0]["title"] == "Parse"
            and r["tickets"][0]["status"] == "todo", r)
         ck("and the link: repo, issue label, url, synced", r["github"]["repo"] == "acme/app"
