@@ -15,7 +15,7 @@ is a list of plain sentences, one per thing that holds the merge back; it is emp
 The pull request must belong to a ticket (its ticket names the project, so which integrations
 apply). Nothing here raises: an empty or bad reference, no ticket, a failed GitHub read, a
 review gate or CI source that cannot be reached, a bad `required` list, all come back as
-`ready` False with a reason. Nothing merges; the builder does.
+`ready` False with a reason. Nothing merges here; the merge queue (merge_queue.py) does that.
 """
 from __future__ import annotations
 

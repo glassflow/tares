@@ -24,6 +24,27 @@ _PR_URL = re.compile(r"github\.com/([^/\s]+/[^/\s]+)/pull/(\d+)")
 # swappable in tests: (method, url, token) -> (status, json)
 _transport: httpx.AsyncBaseTransport | None = None
 
+# API base -> the calls GitHub says are left in the current window, from the last response that
+# carried the header (TR-856). The merge queue stands down while any value is below RATE_FLOOR.
+rate_remaining: dict[str, int] = {}
+RATE_FLOOR = 100
+
+
+def note_rate(api: str, resp) -> None:
+    """Remember `x-ratelimit-remaining` of a response; a response without the header, or with a
+    value that is not a number, changes nothing."""
+    try:
+        raw = resp.headers.get("x-ratelimit-remaining")
+        if raw is not None and str(raw).strip() != "":
+            rate_remaining[api] = int(str(raw).strip())
+    except Exception:
+        pass
+
+
+def rate_low() -> dict[str, int]:
+    """The API bases whose remaining calls are below RATE_FLOOR."""
+    return {a: n for a, n in rate_remaining.items() if n < RATE_FLOOR}
+
 
 def parse_pr(ref: str) -> tuple[str, int] | None:
     """(owner/repo, number) of a PR URL or `owner/repo#12`; None otherwise."""
@@ -140,6 +161,7 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
         try:
             async with httpx.AsyncClient(timeout=8, transport=_transport, headers=headers) as cx:
                 r = await cx.get(f"{api}/repos/{repo}/pulls/{number}")
+                note_rate(api, r)
                 if r.status_code in (401, 403, 404):
                     limited = r.status_code == 403 and r.headers.get("x-ratelimit-remaining") == "0"
                     last_err = (f"GitHub's rate limit is spent; trying {repo}#{number} again later"
@@ -197,6 +219,79 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
             last_err = f"could not read {repo}#{number}: {type(e).__name__}"
     out["error"] = last_err or "could not read it"
     return out
+
+
+def _headers(tok: str) -> dict:
+    return {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {tok}",
+            "X-GitHub-Api-Version": "2022-11-28"}
+
+
+async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squash") -> dict:
+    """Merge the pull request through GitHub, trying each credential in turn. `sha` is the head
+    the caller evaluated: GitHub refuses (409) when the branch has moved on. Never raises.
+
+    Returns {ok, status, message, no_write, rate_limited}: `ok` is a 200; `status` and `message`
+    are GitHub's last answer (405, 409 and 422 end the search: the pull request itself is the
+    problem, not the credential); `no_write` is true when no credential was allowed to (every
+    answer was 401, 403 or 404, or there was no credential) and none of them was a spent rate
+    limit; `rate_limited` is true when one was."""
+    out = {"ok": False, "status": 0, "message": "", "no_write": False, "rate_limited": False}
+    tokens = await _tokens(store, repo)
+    refused = 0
+    for tok, api in tokens:
+        try:
+            async with httpx.AsyncClient(timeout=15, transport=_transport,
+                                         headers=_headers(tok)) as cx:
+                r = await cx.put(f"{api}/repos/{repo}/pulls/{number}/merge",
+                                 json={"merge_method": method, "sha": sha})
+        except Exception as e:
+            out["message"] = f"could not reach GitHub: {type(e).__name__}"
+            continue
+        note_rate(api, r)
+        out["status"] = r.status_code
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        msg = str(body.get("message") or "") if isinstance(body, dict) else ""
+        if r.status_code == 200:
+            out.update(ok=True, message=msg, no_write=False, rate_limited=False)
+            return out
+        if r.status_code in (405, 409, 422):
+            out.update(message=msg or f"GitHub answered {r.status_code}", no_write=False,
+                       rate_limited=False)
+            return out
+        if r.status_code in (401, 403, 404):
+            if r.status_code == 403 and r.headers.get("x-ratelimit-remaining") == "0":
+                out["rate_limited"] = True
+            refused += 1
+            out["message"] = msg or f"GitHub answered {r.status_code}"
+            continue
+        out["message"] = msg or f"GitHub answered {r.status_code}"
+    out["no_write"] = (not tokens or refused == len(tokens)) and not out["rate_limited"]
+    if not tokens:
+        out["message"] = "no GitHub credential on this Tares"
+    return out
+
+
+async def delete_branch(store, repo: str, branch: str) -> bool:
+    """Delete the merged pull request's branch. Best effort: a 422 (already gone, or protected)
+    and every failure are ignored. True when GitHub deleted it."""
+    if not branch:
+        return False
+    for tok, api in await _tokens(store, repo):
+        try:
+            async with httpx.AsyncClient(timeout=8, transport=_transport,
+                                         headers=_headers(tok)) as cx:
+                r = await cx.delete(f"{api}/repos/{repo}/git/refs/heads/{branch}")
+        except Exception:
+            continue
+        note_rate(api, r)
+        if r.status_code == 204:
+            return True
+        if r.status_code in (404, 422):
+            return False
+    return False
 
 
 # (repo, ref) -> whether the commit has workflow files; a commit's files never change, so an

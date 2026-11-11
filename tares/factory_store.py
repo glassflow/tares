@@ -400,6 +400,31 @@ FACTORY_SCHEMA = [
       updated_at  TIMESTAMPTZ,
       updated_by  TEXT
     )""",
+    # The merge queue (TR-856): one row per pull request Tares itself will merge, in order per
+    # (repo, base). state: queued, waiting_ci, waiting_approval, merging, merged, sent_back, blocked.
+    """CREATE TABLE IF NOT EXISTS merge_queue (
+      id            TEXT PRIMARY KEY,
+      repo          TEXT,
+      base          TEXT,
+      pr            INTEGER,
+      head          TEXT,
+      ticket        TEXT,
+      project_uid   TEXT,
+      state         TEXT,
+      reason        TEXT,
+      desk_item     TEXT,
+      approved_head TEXT,
+      entered_at    TIMESTAMPTZ,
+      updated_at    TIMESTAMPTZ
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
+    # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
+    """CREATE TABLE IF NOT EXISTS project_merge_method (
+      project     TEXT PRIMARY KEY,
+      method      TEXT,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -519,6 +544,8 @@ class FactoryStore:
         self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", [uid])
         self.sc.execute("DELETE FROM project_secrets WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM merge_queue WHERE project_uid = ?", [uid])
+        self.sc.execute("DELETE FROM project_merge_method WHERE project = ?", [uid])
         self._secrets_changed()
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -1971,6 +1998,117 @@ class FactoryStore:
                 "commands = excluded.commands, updated_at = excluded.updated_at, "
                 "updated_by = excluded.updated_by", [uid, json.dumps(saved), now_utc(), by])
         return saved
+
+    # ── merge queue (TR-856) ──────────────────────────────────────────────────
+    MERGE_METHODS = ("squash", "merge", "rebase")
+    MERGE_OPEN = ("queued", "waiting_ci", "waiting_approval", "merging", "blocked")
+    _MQ_COLS = ("id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
+                "approved_head, entered_at, updated_at")
+    _MQ_FIELDS = ("repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
+                  "desk_item", "approved_head")
+
+    @staticmethod
+    def _mq_row(r) -> dict:
+        return {"id": r[0], "repo": r[1], "base": r[2], "pr": r[3], "head": r[4], "ticket": r[5],
+                "project_uid": r[6], "state": r[7], "reason": r[8], "desk_item": r[9],
+                "approved_head": r[10], "entered_at": r[11], "updated_at": r[12]}
+
+    def merge_queue_add(self, repo: str, base: str, pr: int, head: str, ticket: str | None,
+                        project_uid: str | None, state: str = "queued",
+                        reason: str | None = None) -> dict:
+        mid = "mq_" + uuid.uuid4().hex[:10]
+        now = now_utc()
+        marks = ", ".join("?" for _ in self.MERGE_OPEN)
+        with self._swrite:
+            # one open row per pull request: two ticks that both saw it ready add it once
+            have = self.sc.execute(
+                f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND pr = ? AND "
+                f"state IN ({marks})", [repo, pr, *self.MERGE_OPEN]).fetchone()
+            if have:
+                return self._mq_row(have)
+            self.sc.execute(
+                f"INSERT INTO merge_queue ({self._MQ_COLS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [mid, repo, base, pr, head, ticket, project_uid, state, reason, None, None, now,
+                 now])
+        return self.merge_queue_get(mid)
+
+    def merge_queue_get(self, mid: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE id = ?",
+                                [mid]).fetchone()
+        return self._mq_row(r) if r else None
+
+    def merge_queue_list(self, repo: str, base: str) -> list[dict]:
+        """The rows of one (repo, base), oldest entry first (the queue's own order is the
+        caller's)."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
+                                    "base = ? ORDER BY entered_at, id", [repo, base]).fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_queue_open(self) -> list[dict]:
+        """Every row that is not finished: queued, waiting_ci, waiting_approval, merging, blocked."""
+        marks = ", ".join("?" for _ in self.MERGE_OPEN)
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state IN "
+                                    f"({marks}) ORDER BY entered_at, id",
+                                    list(self.MERGE_OPEN)).fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_queue_update(self, mid: str, **fields) -> None:
+        bad = [k for k in fields if k not in self._MQ_FIELDS]
+        if bad:
+            raise ValueError(f"not a merge queue field: {', '.join(bad)}")
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields) + ", updated_at = ?"
+        with self._swrite:
+            self.sc.execute(f"UPDATE merge_queue SET {sets} WHERE id = ?",
+                             [*fields.values(), now_utc(), mid])
+
+    def merge_queue_delete(self, mid: str) -> None:
+        with self._swrite:
+            self.sc.execute("DELETE FROM merge_queue WHERE id = ?", [mid])
+
+    def merge_queue_claim(self, mid: str, approved_only: bool = False) -> bool:
+        """Take the row for merging: it becomes `merging` only when it is `queued` and no other
+        row of its (repo, base) is `merging` (one merge at a time across the cell). With
+        `approved_only` (autonomy L3-review) the row also needs approved_head == head. One
+        write-locked step, so two ticks cannot both take it."""
+        with self._swrite:
+            r = self.sc.execute("SELECT repo, base, state, head, approved_head FROM merge_queue "
+                                "WHERE id = ?", [mid]).fetchone()
+            if not r or r[2] != "queued":
+                return False
+            if approved_only and (not r[4] or r[4] != r[3]):
+                return False
+            busy = self.sc.execute("SELECT 1 FROM merge_queue WHERE repo = ? AND base = ? AND "
+                                   "state = 'merging' AND id != ?", [r[0], r[1], mid]).fetchone()
+            if busy:
+                return False
+            self.sc.execute("UPDATE merge_queue SET state = 'merging', updated_at = ? WHERE "
+                             "id = ?", [now_utc(), mid])
+        return True
+
+    def get_merge_method(self, uid: str) -> str:
+        """squash, merge or rebase; squash when the project never chose."""
+        with self._sread:
+            r = self.sc.execute("SELECT method FROM project_merge_method WHERE project = ?",
+                                [uid]).fetchone()
+        return r[0] if r and r[0] in self.MERGE_METHODS else "squash"
+
+    def set_merge_method(self, uid: str, method: str, by: str) -> str:
+        method = (method or "").strip().lower()
+        if method not in self.MERGE_METHODS:
+            raise ValueError("merge_method is squash, merge or rebase")
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO project_merge_method (project, method, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
+                "method = excluded.method, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by", [uid, method, now_utc(), by])
+        return method
 
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, secrets redacted, as get_choice; None when it

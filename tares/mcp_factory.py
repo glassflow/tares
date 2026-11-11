@@ -117,7 +117,7 @@ async def merge_ready(pr: str, project: str = "") -> str:
     passed or the project has none, and no guardrail blocks), `reasons` (a sentence for each thing
     holding the merge back; empty when ready), the head commit, and the `review`, `ci` and
     `guardrails` answers. A bad reference, a PR no ticket has or a failed read comes back as
-    ready false with a reason. It changes nothing: the builder merges. `project` is accepted for
+    ready false with a reason. It changes nothing: it only answers; Tares's merge queue does the merging. `project` is accepted for
     consistency with the other tools; the project comes from the pull request's ticket."""
     async with _cx(30) as cx:
         r = await cx.get(f"{TARESD}/api/factory/merge-ready", params={"pr": pr})
@@ -523,7 +523,7 @@ SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "chal
 @mcp.tool()
 async def get_crew_settings() -> str:
     """The tares-factory crew's settings for every project: `autonomy` (L3-review: the person
-    approves each merge; L4-ship: a builder merges after the reviewer's pass and green CI),
+    approves each merge; L4-ship: Tares merges after the review gate passes and CI is green),
     `releaser` (whether the crew runs a releaser; without one a ticket ends at merged),
     `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
     Codex challenger), `builders_max`, `claude_update` (whether the watch moves stations onto a

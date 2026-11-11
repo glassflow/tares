@@ -47,7 +47,7 @@ def crew_questions(missing: list[str]) -> list[Question]:
     qs = {
         "autonomy": Question("autonomy", "Merging", "Who merges pull requests?", [
             Option("L4-ship", "The crew, once its reviewer approves and tests pass",
-                   "Builders merge on their own; you answer only what the crew can't decide."),
+                   "Tares merges on its own; you answer only what the crew can't decide."),
             Option("L3-review", "You, each one",
                    "Every merge waits for your yes in the orchestrator's session."),
         ]),

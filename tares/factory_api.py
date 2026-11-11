@@ -112,6 +112,7 @@ async def sync_prs(store, stop: asyncio.Event) -> None:
     turns it off."""
     every = os.getenv("TARES_PR_SYNC_SECONDS", "120").strip().lower()
     if every in ("off", "0", "none"):
+        print("[tares] the merge queue does not run: TARES_PR_SYNC_SECONDS is off", flush=True)
         return
     while not stop.is_set():
         try:
@@ -132,6 +133,13 @@ async def sync_prs(store, stop: asyncio.Event) -> None:
             raise
         except Exception as e:
             print(f"[tares] pull request sync failed: {type(e).__name__}: {e}", flush=True)
+        try:   # the merge queue (TR-856) runs after the refresh, on what it just read
+            from . import merge_queue
+            await merge_queue.tick(store)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[tares] merge queue failed: {type(e).__name__}: {e}", flush=True)
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
@@ -142,6 +150,49 @@ def merged_fields(t: dict, pr: dict) -> dict:
     if not pr.get("merged") or t["stage"] in ("merged", "shipped"):
         return {}
     return {"stage": "merged"}
+
+
+def stored_crew_setting(store, key: str) -> dict:
+    """The crew settings saved under `key` (the cell's default or a person's own), with the
+    defaults under what was never set."""
+    try:
+        cur = json.loads(store.get_setting(key) or "{}")
+    except ValueError:
+        cur = {}
+    return {k: cur.get(k, d) for k, d in factory_mod.CREW_DEFAULTS.items()}
+
+
+def crew_settings(store, person: dict | None = None, system: bool = False) -> dict:
+    """The cell's crew settings, with `person`'s own over them where they set one (a request's
+    caller, or a hand-over's person for the merge queue, which has no request). The cell's
+    default alone for no person, the person `local` and the system credential. The team's
+    autonomy and challenger are a ceiling, also when the team tightened them after the person
+    chose theirs."""
+    out = {**factory_mod.CREW_DEFAULTS, **stored_crew_setting(store, CREW_SETTING)}
+    if person and person.get("id") and person.get("id") != "local" and not system:
+        mine = stored_crew_setting(store, f"{CREW_SETTING}:{person['id']}")
+        out.update({k: v for k, v in mine.items() if v is not None and k != "kit"})   # the kit is the crew's
+        out.update({k: v for k, v in factory_mod.stricter_than_team(
+            stored_crew_setting(store, CREW_SETTING), out).items()
+            if k in ("autonomy", "challenger")})
+    return out
+
+
+async def mark_merged(store, uid: str, t: dict, reason: str, by: str = "github",
+                      role: str = "github", pr: dict | None = None) -> dict:
+    """The ticket's stage becomes merged, in the history too, and its status follows in the
+    system that holds it (as set_stage does). `pr` is the pull request as it is now, kept on
+    the ticket (the sync no longer reads a merged ticket's pull request). Nothing when the ticket
+    already is merged or shipped. Returns the ticket as it is now."""
+    if t.get("stage") in ("merged", "shipped"):
+        return t
+    def write():
+        store.update_ticket(t["id"], stage="merged", **({"pr": pr} if pr else {}))
+        store.add_ticket_history(t["id"], uid, "stage", "merged", reason, by, role, now_utc())
+        return store.get_ticket(uid, t["id"]) or t
+    after = await asyncio.to_thread(write)
+    await write_status(store, uid, after, "merged")
+    return after
 
 
 STATUS_WAIT = 10.0      # seconds a route waits for the ticket system before it hands the write on
@@ -518,11 +569,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     # ── crew settings (TR-419, TR-624): the cell's default, and each person's own over it ──
     def stored(key: str) -> dict:
-        try:
-            cur = json.loads(store.get_setting(key) or "{}")
-        except ValueError:
-            cur = {}
-        return {k: cur.get(k, d) for k, d in factory_mod.CREW_DEFAULTS.items()}
+        return stored_crew_setting(store, key)
 
     def personal_key(person: dict) -> str:
         return f"{CREW_SETTING}:{person['id']}"
@@ -537,16 +584,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     def settings(request: Request | None = None) -> dict:
         """The cell's default, with the caller's own settings over it where they set one."""
-        out = {**factory_mod.CREW_DEFAULTS, **stored(CREW_SETTING)}
         person = h.current_person(request) if request is not None else None
-        if person and person.get("id") != "local" and not h.is_system(request):
-            mine = stored(personal_key(person))
-            out.update({k: v for k, v in mine.items() if v is not None and k != "kit"})   # the kit is the crew's
-            # the team's autonomy and challenger are a ceiling, also when the team tightened
-            # them after the person chose theirs
-            out.update({k: v for k, v in factory_mod.stricter_than_team(
-                stored(CREW_SETTING), out).items() if k in ("autonomy", "challenger")})
-        return out
+        return crew_settings(store, person, system=request is not None and h.is_system(request))
 
     @app.get("/api/crew/settings")
     def get_crew_settings(request: Request):
@@ -2730,6 +2769,49 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The person's answers on this project, newest first."""
         h.project_or_404(uid)
         return {"decisions": store.list_decisions(uid)}
+
+    def lead_or_admin(request: Request, uid: str | None) -> None:
+        """403 unless the caller is an admin or the project's lead."""
+        pid = (h.current_person(request) or {}).get("id")
+        lead = (store.get_project(uid) or {}).get("lead_person_id") if uid else None
+        if not (h.is_admin(request) or (pid and lead == pid)):
+            h.err(PermissionError("this is for an admin or the project's lead"), 403)
+
+    @app.post("/api/factory/merge-queue/{mid}/approve")
+    async def merge_queue_approve(mid: str, request: Request):
+        """Approve the merge of a queued pull request that waits for a person (autonomy
+        L3-review), without answering its desk item by hand: the same as a yes there. Only an
+        admin or the project's lead. The merge follows within one sync interval. A new commit
+        on the pull request voids the approval."""
+        from . import merge_queue as merge_queue_mod
+        row = await asyncio.to_thread(store.merge_queue_get, mid)
+        if row is None:
+            h.err(KeyError(f"no merge queue entry {mid!r}"), 404)
+        lead_or_admin(request, row["project_uid"])
+        if row["state"] != "waiting_approval":
+            h.err(ValueError(f"the merge of PR #{row['pr']} is {row['state']}, "
+                             "not waiting for approval"), 409)
+        person = h.current_person(request) or {}
+        out = await asyncio.to_thread(merge_queue_mod.approve, store, row, person.get("id"))
+        return out
+
+    @app.put("/api/projects/{uid}/merge-method")
+    def set_merge_method(uid: str, request: Request, body: dict = Body(...)):
+        """{merge_method: squash|merge|rebase}: how Tares merges this project's pull requests
+        (squash when never set). Only an admin or the project's lead."""
+        h.project_or_404(uid)
+        lead_or_admin(request, uid)
+        try:
+            method = store.set_merge_method(uid, str(body.get("merge_method") or ""),
+                                            h.by(request, body))
+        except ValueError as e:
+            h.err(e, 422)
+        return {"merge_method": method}
+
+    @app.get("/api/projects/{uid}/merge-method")
+    def get_merge_method(uid: str):
+        h.project_or_404(uid)
+        return {"merge_method": store.get_merge_method(uid)}
 
     @app.post("/api/projects/{uid}/handover")
     def hand_over(uid: str, request: Request, body: dict = Body(default={})):
