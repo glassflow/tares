@@ -335,7 +335,7 @@ def verdict_now(t: dict, last: dict | None) -> dict | None:
         return None
     head = ((t.get("pr") or {}).get("head") or "").lower()
     mine = (last["head"] or "").lower()
-    current = not head or head.startswith(mine) or mine.startswith(head)
+    current = not head or not mine or factory_mod.same_commit(head, mine)
     return {"verdict": last["verdict"], "head": last["head"], "round": last["round"],
             "at": last["at"], "current": bool(current),
             "note": None if current else

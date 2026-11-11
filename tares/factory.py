@@ -463,6 +463,14 @@ def add_check_to_doc(body: str, line: str) -> str:
 # ── review and merge (M6) ─────────────────────────────────────────────────────
 
 VERDICTS = ("pass", "changes", "block")
+
+
+def same_commit(a, b) -> bool:
+    """Whether two commit hashes name the same commit. A hash may be short, so one that starts
+    the other counts, in any case. An empty or missing hash is the same as nothing: False."""
+    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
+    return bool(a) and bool(b) and (a.startswith(b) or b.startswith(a))
+
 SEVERITIES = ("P1", "P2", "P3")
 
 
