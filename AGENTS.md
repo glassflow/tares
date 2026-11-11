@@ -84,7 +84,7 @@ Every knob is a `TARES_*` variable read at start. The ones you will meet most:
 | `TARES_METRICS_TOKEN` | when set, `/metrics` wants `Authorization: Bearer <token>` and answers 401 without it; unset keeps it public (the cell's auth token is not accepted there) |
 | `TARES_INSTANCE_NAME` | prefix of the trace `service.name` (`<instance>/<agent>`); default the hostname |
 | `TARES_PLUGIN_DIR` | test hook: the Claude Code plugin `tares factory` and `python -m tares.crew` hand to bash, instead of the one in the install or checkout; the factory suites set it to their edited copy of the kit when `FACTORY_BIN` is set |
-| `TARES_FAKE_PS_DIR` | test hook: a folder a suite's fake `ps` (`tests/factory/fake-ps`) answers from, with `ps/<pid>.<field>` files and a `ps-list` file; the Python engine reads processes with psutil, which cannot see a fake `ps` on PATH, so with this set it reads those files instead of the machine's processes |
+| `TARES_FAKE_PS_DIR` | test hook: a folder a suite's fake `ps` (`tests/factory/fake-ps`) answers from, with `ps/<pid>.<field>` files and a `ps-list` file; the Python engine reads processes with psutil, which cannot see a fake `ps` on PATH, so with this set it reads those files instead of the machine's processes, and runs the `sort-hook` file once between `crew update`'s two spare checks, where bash's fake `sort` would |
 
 `grep -rhoE "TARES_[A-Z_]+" tares/*.py | sort -u` is the authoritative list.
 
