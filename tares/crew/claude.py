@@ -518,8 +518,48 @@ def station_updated(station: str, paths=None):
 # ---------- processes ----------
 
 
+def _fake_ps_file(pid, field: str):
+    """Test hook TARES_FAKE_PS_DIR: the folder a suite's fake `ps` answers from (tests/factory/fake-ps), where
+    <dir>/ps/<pid>.<field> holds what `ps -o <field>= -p <pid>` prints. None when the hook is off or the file
+    is not there, so the real process is read, as the fake `ps` hands such a pid to the real one."""
+    d = os.environ.get("TARES_FAKE_PS_DIR")
+    if not d:
+        return None
+    try:
+        return (Path(d) / "ps" / f"{int(pid)}.{field}").read_text(encoding="utf-8").strip()
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def process_listing() -> list:
+    """[(pid, command line)] of the processes this user can see; the command line joined by spaces, as
+    `ps -axo pid=,command=` shows it. With TARES_FAKE_PS_DIR set it is the folder's ps-list file (empty when
+    there is none), so a test never reads the machine's real processes."""
+    d = os.environ.get("TARES_FAKE_PS_DIR")
+    out = []
+    if d:
+        try:
+            text = (Path(d) / "ps-list").read_text(encoding="utf-8")
+        except OSError:
+            return out
+        for line in text.splitlines():
+            pid, _, cmd = line.strip().partition(" ")
+            if pid.isdigit():
+                out.append((int(pid), cmd.strip()))
+        return out
+    for pid in psutil.pids():
+        try:   # one process at a time: psutil on macOS can raise SystemError for one that is just ending
+            out.append((pid, " ".join(psutil.Process(pid).cmdline())))
+        except (psutil.Error, OSError, SystemError):
+            continue
+    return out
+
+
 def _command_line(pid) -> str:
     """A process's command line as `ps -o command=` shows it; "" when it is gone or may not be read."""
+    fake = _fake_ps_file(pid, "command")
+    if fake is not None:
+        return fake
     try:
         return " ".join(psutil.Process(int(pid)).cmdline())
     except (psutil.Error, ValueError, TypeError, OSError):
@@ -569,10 +609,14 @@ def running_version(session_id: str, agents=None, claude=None) -> str:
     pid = _val(row.get("pid"), "")
     if pid == "":
         return ""
-    try:
-        ppid = psutil.Process(int(pid)).ppid()
-    except (psutil.Error, ValueError, TypeError, OSError):
-        ppid = None
+    fake = _fake_ps_file(pid, "ppid")
+    if fake is not None and fake.isdigit():
+        ppid = int(fake)
+    else:
+        try:
+            ppid = psutil.Process(int(pid)).ppid()
+        except (psutil.Error, ValueError, TypeError, OSError):
+            ppid = None
     for p in (ppid, pid):
         if p is None:
             continue

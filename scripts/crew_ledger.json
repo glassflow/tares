@@ -1727,7 +1727,7 @@
       "dropped": false,
       "python": "tares.crew.cc_update:prune_spares",
       "ported": true,
-      "note": "Called from claude_move (TR-963) to stop older spare sessions before each try of a move. TR-963 ports the stopping here; TR-964 adds the retry handling."
+      "note": "Called from claude_move to stop older spare sessions before each try of a move (TR-963). The bash has nothing more for TR-964 to add: the retry handling is in claude_move, cc_backoff and cc_retry_sync."
     },
     {
       "name": "duplicate_sessions",
@@ -1780,9 +1780,9 @@
       "what": "is a station waiting out a retry backoff",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by cc_movable and cc_pick (TR-963): TR-963 stubs it as never waiting (the watch has not failed a move yet) until TR-964 ports the real check."
+      "python": "tares.crew.cc_update:cc_backoff",
+      "ported": true,
+      "note": "TR-964: the real check. cc_movable and cc_pick call it (TR-963); a retry time that is no whole number is no wait, as bash's failed test is."
     },
     {
       "name": "cc_movable",
@@ -1813,9 +1813,9 @@
       "what": "backoff seconds for failed moves",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by claude_move (TR-963) after a failed move: TR-963 stubs it as a fixed delay of FACTORY_CC_BACKOFF seconds until TR-964 ports the doubling."
+      "python": "tares.crew.cc_update:cc_delay",
+      "ported": true,
+      "note": "Called by claude_move (TR-963) after a failed move. TR-964: FACTORY_CC_BACKOFF doubling for each failure up to FACTORY_CC_BACKOFF_MAX. A FACTORY_CC_BACKOFF that is not a whole number gives the cap and a cap that is not one counts as unset (bash would fail its tests or its arithmetic)."
     },
     {
       "name": "cc_retry_in",
@@ -1824,9 +1824,9 @@
       "what": "time until the next retry",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "TR-957 keeps a read-only copy in tares/crew/views.py (cc_retry_in) for status and roster; this ticket's port moves it and keeps views.py calling it. doctor (TR-969) keeps its own copy too: tares.crew.doctor.cc_retry_in reads it for doctor (TR-969)."
+      "python": "tares.crew.cc_update:cc_retry_in",
+      "ported": true,
+      "note": "TR-964 moved it into cc_update and tares/crew/views.py imports it for status and roster. doctor (TR-969) keeps its own copy: tares.crew.doctor.cc_retry_in."
     },
     {
       "name": "cc_retrying",
@@ -1835,9 +1835,9 @@
       "what": "is a failed move being retried",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.cc_update:cc_retrying",
+      "ported": true,
+      "note": "TR-964. Nothing calls it yet: bash has no caller of its own either."
     },
     {
       "name": "cc_retry_sync",
@@ -1846,9 +1846,9 @@
       "what": "keep retry records in step with reality",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": "Called by claude_move (TR-963) after a move: TR-963 stubs it as a no-op until TR-964 ports the retry records."
+      "python": "tares.crew.cc_update:cc_retry_sync",
+      "ported": true,
+      "note": "Called by claude_move (TR-963) after a move, and by the watch's round. TR-964: PUT /api/crew/claude-retry with the stations still behind that failed for the installed version; best effort."
     },
     {
       "name": "claude_move",
@@ -1879,9 +1879,9 @@
       "what": "crew update and crew restart",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
-      "note": ""
+      "python": "tares.crew.cc_update:crew_update",
+      "ported": true,
+      "note": "TR-964: crew update, and crew restart as crew update --force (dispatch keys (crew, update) and (crew, restart); the commands are cmd_crew_update and cmd_crew_restart). It calls the upgrades_frozen stub until TR-965."
     },
     {
       "name": "cmd_halt",
@@ -4361,6 +4361,16 @@
       "note": ""
     },
     {
+      "name": "claude_update_mixed_test.sh",
+      "kind": "suite",
+      "what": "claude_update_test.sh on the Python engine in mixed mode (engine unset); any FAIL fails it",
+      "ticket": "TR-1156",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "CI wrapper: sets FACTORY_BIN; the suite sets TARES_FAKE_PS_DIR. Replace by the TARES_FACTORY_ENGINE=python form once TR-964 merges."
+    },
+    {
       "name": "compat_test.sh",
       "kind": "suite",
       "what": "crew up refuses a cell without the integrations capability; status and down still work",
@@ -4764,7 +4774,7 @@
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
-      "line": 905,
+      "line": 908,
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
       "ticket": "TR-953",
       "dropped": false,
