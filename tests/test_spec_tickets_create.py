@@ -360,11 +360,12 @@ def rows(store, uid):
 
 
 def row_count(store, uid):
-    """Raw, and under the store's lock: the rows, and how many carry an external id twice."""
-    with store._lock:
-        n = store.con.execute("SELECT count(*) FROM tickets WHERE project = ?", [uid]).fetchone()[0]
-        dup = store.con.execute("SELECT count(*) - count(DISTINCT external_id) FROM tickets "
-                                "WHERE project = ? AND external_id IS NOT NULL", [uid]).fetchone()[0]
+    """Raw, on the state store (store.sc: DuckDB, or Postgres), under its read lock: the rows, and
+    how many carry an external id twice."""
+    with store._sread:
+        n = store.sc.execute("SELECT count(*) FROM tickets WHERE project = ?", [uid]).fetchone()[0]
+        dup = store.sc.execute("SELECT count(*) - count(DISTINCT external_id) FROM tickets "
+                               "WHERE project = ? AND external_id IS NOT NULL", [uid]).fetchone()[0]
     return n, dup
 
 
