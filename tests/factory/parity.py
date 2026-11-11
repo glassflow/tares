@@ -5445,6 +5445,123 @@ scenario(Scenario(
 ))
 
 
+# usage_test.sh, the watch's readings (TR-1163)
+# The watch answers the Crew page's asks for a /context reading and reads the plan's limits between its rounds
+# (readings_support.py runs it and stops it once the fake Tares has served the asks route a number of times).
+# The fake Tares below does what Tares does: an ask goes away once the reading comes in.
+
+class _UsageWatchRoutes(dict):
+    """The routes of a fake Tares that lists the Crew page's asks; the reading that is posted answers the ask of the
+    orchestrator's own session, and /ticks says how many times the asks were listed."""
+
+    def __init__(self, routes, asks):
+        super().__init__(routes)
+        self.asks = list(asks)
+        self.listed = 0
+
+    def get(self, key, default=None):
+        if key == "GET /api/crew/context/asks":
+            self.listed += 1
+            return (200, {"asks": self.asks})
+        if key == "GET /ticks":
+            return (200, {"n": self.listed})
+        if key == "POST /ingest/claude_code":
+            self.asks = [a for a in self.asks if a["session"] != "sess-orch-1"]
+        return super().get(key, default)
+
+
+# What the rounds of the watch do around the readings (both engines do their own: pace, retry, settings) is left out
+# of the comparison; the asks listed and the readings posted are in it.
+_UW_ROUND = (("agents",), ("--version",))
+_UW_ASKED = ("GET /ticks", "GET /health", "GET /api/crew/settings", "GET /api/crew/pace", "PUT ")
+
+
+def _usage_watch_asks(*asks):
+    def prepare(r):
+        r.tares.routes = _UsageWatchRoutes(r.tares.routes, [{"station": s, "session": x} for s, x in asks])
+    return prepare
+
+
+def _usage_asks_left(r) -> list:
+    return [(a["station"], a["session"]) for a in r.tares.routes.asks]
+
+
+def _usage_calls_with(r, needle: str) -> list:
+    return [c for c in r.calls() if needle in c["args"]]
+
+
+def _usage_posted(r, kind: str) -> list:
+    return [b for b in (json.loads(q["body"]) for q in r.tares.asked("POST /ingest/claude_code")) if b.get("type") == kind]
+
+
+scenario(Scenario(
+    name="usage_watch_readings",
+    suite="usage",
+    about="the watch reads a station's /context when the Crew page asks, leaves an ask for another station alone, and reads no plan when told not to",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(("crew-orchestrator", "sess-orch-1"), ("foreign-station", "s-foreign")),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"], env={"FACTORY_PLAN_EVERY": "0"})],
+    checks=[
+        ("the watch reads what the Crew page asked for",
+         lambda r: r.code(0) == 0 and ("crew-orchestrator", "sess-orch-1") not in _usage_asks_left(r)
+         and len(_usage_calls_with(r, "/context")) == 1 and len(_usage_posted(r, "session_context")) == 1),
+        ("and leaves another crew's ask alone",
+         lambda r: _usage_asks_left(r) == [("foreign-station", "s-foreign")]
+         and not any("s-foreign" in c["args"] for c in r.calls())),
+        ("and reads no plan when told not to",
+         lambda r: not _usage_calls_with(r, "/usage") and not _usage_posted(r, "claude_plan")),
+    ],
+    covers=["the watch reads what the Crew page asked for", "and leaves another crew's ask alone",
+            "and reads no plan when told not to"],
+))
+
+scenario(Scenario(
+    name="usage_watch_other_crew",
+    suite="usage",
+    about="an ask for a station of the same name that another crew plays (another session) is not read",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(("crew-orchestrator", "s-other-crew")),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"], env={"FACTORY_PLAN_EVERY": "0"})],
+    checks=[
+        ("an ask for the same name in another crew is left alone",
+         lambda r: r.code(0) == 0 and _usage_asks_left(r) == [("crew-orchestrator", "s-other-crew")]
+         and not _usage_calls_with(r, "/context")),
+    ],
+    covers=["an ask for the same name in another crew is left alone"],
+))
+
+scenario(Scenario(
+    name="usage_watch_plan",
+    suite="usage",
+    about="the watch reads the plan's limits at its first tick and sends them; with no plan to read it says so once",
+    tares={"POST /ingest/claude_code": (200, {"ok": True})},
+    setup=_setup_usage,
+    prepare=_usage_watch_asks(),
+    driver="readings_support.py",
+    ignore_asked=_UW_ASKED,
+    ignore_calls=_UW_ROUND,
+    steps=[Step(["watch", "3"]), Step(["watch", "6"], env={"FAKE_CLAUDE_NO_PLAN": "1"})],
+    checks=[
+        ("the first tick reads the plan and sends it once",
+         lambda r: r.code(0) == 0 and len(_usage_posted(r, "claude_plan")) == 1 and "could not read" not in r.out(0)),
+        ("with no plan to read it is said once, and said plainly",
+         lambda r: r.code(1) == 0 and r.out(1).count("could not read the plan's limits (") == 1
+         and "plan says why); trying again every 600s" in r.out(1)),
+        ("and each watch reads the plan once",
+         lambda r: len(_usage_calls_with(r, "/usage")) == 2),
+    ],
+    covers=[],
+))
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
