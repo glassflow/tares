@@ -319,7 +319,8 @@ if HAVE_BASH:
 else:   # no bash (Windows): the stations cannot be started yet (TR-953), so it stops before the watch line
     ck("without bash it says the stations cannot be started here and exits 2",
        r.returncode == 2 and "cannot start the stations here" in out and "started the watch" not in out, (r.returncode, out[-400:]))
-ck("never asks Claude Code for the language server list", ["plugin", "list", "--json"] not in c.calls(), c.calls())
+ck("asks Claude Code for the language server list, as bash does, and offers nothing when no project has a repo",
+   ["plugin", "list", "--json"] in c.calls() and "Code intelligence" not in out, c.calls())
 if HAVE_BASH:
     ck("exits 0 and starts the three stations", r.returncode == 0 and sum(1 for a in c.calls() if a[:1] == ["--bg"]) == 3,
        (r.returncode, out[-400:]))
