@@ -200,10 +200,17 @@ def norm_repo(repo) -> str:
     return r
 
 
+def crew_key(person_id: str | None, crew: str | None) -> str:
+    """Whose folder a repo path is: the person and their crew's name. A path is only true on the
+    machine of the crew that handed it over, so each crew keeps its own (TR-1222)."""
+    return f"{person_id or 'local'}/{crew or 'crew'}"
+
+
 def handover_repos(repos) -> list[dict]:
-    """The repos a project is handed over with, each {path, name}: the folder it is checked out
-    in on the crew's machine and its GitHub name (owner/name, may be empty). Takes strings (a
-    path, or owner/name) or {path, name} objects. DocError for a bad one."""
+    """The repos a project is handed over with, each {path, name, paths?}: the folder it is
+    checked out in on the crew's machine and its GitHub name (owner/name, may be empty). `paths`
+    is each crew's own folder ({crew_key: path}); `path` is the first one handed over. Takes
+    strings (a path, or owner/name) or {path, name} objects. DocError for a bad one."""
     if repos is None:
         return []
     if isinstance(repos, (str, dict)):
@@ -226,6 +233,9 @@ def handover_repos(repos) -> list[dict]:
                            "is cloned in on the crew's machine")
         path = os.path.normpath(path)[:500] if path else None
         name = repo_ok(x.get("name"))
+        paths = x.get("paths")
+        paths = ({str(k): str(v) for k, v in paths.items() if k and v}
+                 if isinstance(paths, dict) else {})
         if not path and not name:
             continue
         same = next((o for o in out if (path and o["path"] == path)
@@ -233,8 +243,10 @@ def handover_repos(repos) -> list[dict]:
         if same:
             same["path"] = same["path"] or path
             same["name"] = same["name"] or name
+            if paths:
+                same["paths"] = {**same.get("paths", {}), **paths}   # a crew's newer folder wins
         else:
-            out.append({"path": path, "name": name})
+            out.append({"path": path, "name": name, **({"paths": paths} if paths else {})})
     if len(out) > 20:
         raise DocError(f"{len(out)} repos; a project handed to the crew takes up to 20")
     return out
@@ -270,6 +282,17 @@ def map_ok(body, note) -> tuple[str, str]:
 def merge_repos(old: list[dict], new: list[dict]) -> list[dict]:
     """A later hand-over adds its repos to the ones already handed over, never replaces them."""
     return handover_repos([*(old or []), *(new or [])])
+
+
+def own_paths(repos: list[dict], key: str) -> list[dict]:
+    """`repos` as given to the crew `key`, each with the folder that crew handed over, else
+    the first one any crew did (another machine's, which the crew finds out is not its own)."""
+    out = []
+    for r in repos or []:
+        row = {k: v for k, v in r.items() if k != "paths"}
+        row["path"] = (r.get("paths") or {}).get(key) or r.get("path")
+        out.append(row)
+    return out
 
 
 def find_loop(deps: dict[str, list[str]], start: str) -> list[str] | None:

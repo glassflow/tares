@@ -1103,6 +1103,17 @@
       "note": "Ported as tares.crew.up:cmd_crew_up and the default for `crew up` since TR-1069 (the gate behind TARES_FACTORY_ENGINE=python is gone; engine=bash still runs bash). It makes the language server offer (lsp_offer, TR-970), starts the Python watch (TR-958) and starts the stations through the bash `_start-stations` bridge until launch is ported (TR-953)."
     },
     {
+      "name": "remote_repo",
+      "kind": "function",
+      "line": 1106,
+      "what": "a checkout's origin as its GitHub owner/name, for spawn's repo check",
+      "ticket": "TR-954",
+      "dropped": false,
+      "python": "tares.crew.stations:remote_repo",
+      "ported": true,
+      "note": "Added with TR-1222: a teammate's crew builds in its own clone of the project's GitHub repo, not the folder another machine handed over."
+    },
+    {
       "name": "cmd_spawn",
       "kind": "function",
       "line": 1104,

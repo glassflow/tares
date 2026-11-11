@@ -8,6 +8,7 @@ Standard library only, plus the crew modules (no duckdb, fastapi or daemon).
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 
@@ -41,6 +42,18 @@ def _git(*args: str) -> str:
 
 def _real(path: str) -> str:
     return os.path.realpath(path)
+
+
+_GITHUB_REMOTE = re.compile(r"^(?:(?:https?|ssh)://(?:[^@/]+@)?(?:www\.)?github\.com[:/]|git@github\.com:)([^/]+)/([^/?#]+)/?$")
+
+
+def remote_repo(repo: str) -> str:
+    """The checkout's GitHub repo as owner/name, lowercase, from its origin remote; "" when it has none."""
+    m = _GITHUB_REMOTE.match(_git("-C", repo, "remote", "get-url", "origin").lower())
+    if not m:
+        return ""
+    name = m.group(2)
+    return f"{m.group(1)}/{name[:-4] if name.endswith('.git') else name}"
 
 
 def _repo_label(repo: dict) -> str:
@@ -96,6 +109,11 @@ def _builder_plan(client: TaresClient, paths: CrewPaths, args: list) -> dict:
     real = _real(repo)
     repos = row.get("repos") or []
     ok = any(isinstance(r, dict) and r.get("path") and os.path.isdir(r["path"]) and _real(r["path"]) == real for r in repos)
+    if not ok:
+        # another machine's folder is not this one: a clone of the project's GitHub repo is (TR-1222)
+        gh = remote_repo(repo)
+        ok = bool(gh) and any(isinstance(r, dict) and isinstance(r.get("name"), str) and r["name"].lower() == gh
+                              for r in repos)
     if not ok:
         raise CrewError(f"{repo} is not one of {project}'s repos on Tares ({', '.join(_repo_label(r) for r in repos)}); "
                         "a repo joins the project at its hand-over")

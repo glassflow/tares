@@ -344,7 +344,7 @@ CREW_PROJECTS=""; CREW_PROJECTS_ERR=""
 crew_projects() {
   if [ -z "$CREW_PROJECTS" ]; then
     local out
-    if out=$(tares_http GET /api/crew/projects 2>&1) && CREW_PROJECTS=$(jq -c '.projects // []' <<<"$out" 2>/dev/null) && [ -n "$CREW_PROJECTS" ]; then
+    if out=$(tares_http GET "/api/crew/projects?crew=$(uri "$(crew_name)")" 2>&1) && CREW_PROJECTS=$(jq -c '.projects // []' <<<"$out" 2>/dev/null) && [ -n "$CREW_PROJECTS" ]; then
       CREW_PROJECTS_ERR=""
     else
       CREW_PROJECTS="[]"; CREW_PROJECTS_ERR=$(tail -1 <<<"$out")
@@ -1103,6 +1103,11 @@ The crew takes a few minutes to check in. Next:
 NEXT
 }
 
+remote_repo() { # checkout -> its origin's GitHub repo as owner/name, lowercase; nothing when it has none
+  git -C "$1" remote get-url origin 2>/dev/null | tr 'A-Z' 'a-z' \
+    | sed -nE 's#^((https?|ssh)://([^@/]+@)?(www\.)?github\.com[:/]|git@github\.com:)([^/]+)/([^/?#]+)/?$#\5/\6#p' | sed 's/\.git$//' || true
+}
+
 cmd_spawn() {
   require_crew
   require_mcp
@@ -1136,6 +1141,11 @@ cmd_spawn() {
       while IFS= read -r rp; do
         [ -n "$rp" ] && [ -d "$rp" ] && [ "$(cd -P "$rp" && pwd)" = "$real" ] && ok=1
       done < <(jq -r '.repos[] | .path // empty' <<<"$row")
+      # another machine's folder is not this one: a clone of the project's GitHub repo is (TR-1222)
+      if [ -z "$ok" ]; then
+        local gh; gh=$(remote_repo "$repo")
+        [ -n "$gh" ] && jq -e --arg g "$gh" 'any(.repos[]; (.name // "" | ascii_downcase) == $g)' <<<"$row" >/dev/null && ok=1
+      fi
       [ -n "$ok" ] || die "$repo is not one of $project's repos on Tares ($(jq -r '[.repos[] | .path // .name] | join(", ")' <<<"$row")); a repo joins the project at its hand-over"
       role=builder; parent=$(crew_orchestrator); station=$(builder_name "$(slugify "$project")" "$slug"); cwd=$repo
       model=$(ccfg '.stations.builder.model'); effort=$(ccfg '.stations.builder.effort')
