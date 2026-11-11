@@ -121,6 +121,33 @@ ck("changes gives changes", v.state == "changes", v)
 ck("the findings come as text", v.findings == ["No test for the empty case (P2, tares/a.py:12)"], v.findings)
 ck("findings() is the same text", run(gate.findings(ref(t, OLD))) == v.findings)
 
+print("== findings stay open across rounds ==")
+t = ticket("two rounds")
+review(t, OLD, "changes", "round 1", [
+    {"severity": "P2", "file": "tares/a.py", "line": 3, "blocking": True, "text": "Kept open"},
+    {"severity": "P2", "file": "tares/b.py", "line": 4, "blocking": True, "text": "Gets fixed"}])
+s.add_review("p1", t, "https://github.com/o/r/pull/1", NEW, "changes", "round 2", "", "crew-reviewer",
+             [{"severity": "P3", "file": "", "line": 0, "blocking": False, "text": "A new one"}],
+             {"F1": "open", "F2": "fixed"}, factory_mod.finding_kind, NOW)
+want = ["Kept open (P2, tares/a.py:3)", "A new one (P3)"]
+v = verdict(t, NEW)
+ck("the verdict lists the open finding of round 1 and the new one of round 2, not the fixed one",
+   v.state == "changes" and v.findings == want, v.findings)
+ck("findings() gives the same", run(gate.findings(ref(t, NEW))) == want, run(gate.findings(ref(t, NEW))))
+ck("a stale verdict still lists what is open", verdict(t, OLD).state == "stale" and verdict(t, OLD).findings == want)
+s.add_review("p1", t, "https://github.com/o/r/pull/1", NEW, "pass", "round 3", "", "crew-reviewer", [],
+             {"F1": "fixed", "F3": "fixed"}, factory_mod.finding_kind, NOW)
+v = verdict(t, NEW)
+ck("once every finding is fixed the pass has none", v.state == "approved" and v.findings == []
+   and run(gate.findings(ref(t, NEW))) == [], v)
+
+print("== a long head against a short one, through the gate ==")
+t = ticket("long record head")
+review(t, OLD, "pass")
+ck("a record with the long head matches a PR with the short one",
+   verdict(t, OLD[:7]).state == "approved" and verdict(t, OLD[:7].upper()).state == "approved")
+ck("and a different short head is stale", verdict(t, NEW[:7]).state == "stale")
+
 t = ticket("block")
 review(t, OLD, "block", "it deletes data")
 ck("block gives changes", verdict(t, OLD).state == "changes")
