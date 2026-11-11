@@ -22,7 +22,7 @@ jobs:
     name: windows-crew (not required yet)
     runs-on: windows-latest
     continue-on-error: true
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8

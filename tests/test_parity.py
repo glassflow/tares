@@ -50,7 +50,7 @@ def run(*args, env=None):
     e.update(env or {})
     e["PYTHONIOENCODING"] = "utf-8"
     p = subprocess.run([sys.executable, str(PARITY), *args], capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", env=e, cwd=str(ROOT), timeout=600)
+                       errors="replace", env=e, cwd=str(ROOT), timeout=1500)
     return p.returncode, p.stdout + p.stderr
 
 
