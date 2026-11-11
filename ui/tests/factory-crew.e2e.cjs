@@ -351,6 +351,19 @@ async function waitFor(url, tries = 100) {
           ck(`${tag}: a card opens to its input and output, each with Copy`,
              (await convo.getByTestId("tool-input").count()) === 1 && /unknown flag --known/.test(await convo.getByTestId("tool-output").innerText())
              && (await convo.getByTestId("tool-copy").count()) === 2);
+          const bashInput = convo.getByTestId("tool-input");
+          ck(`${tag}: the input is JSON in colour: keys, strings and numbers each their own span`,
+             (await bashInput.getAttribute("data-look")) === "json" && (await bashInput.locator("span").count()) >= 4
+             && /"command": "bash tests\/factory\/claude_update_test.sh"/.test(await bashInput.innerText()));
+          await convo.getByTestId("tool-head").nth(0).click();
+          const editIn = convo.getByTestId("tool-input").first();
+          ck(`${tag}: an Edit call's input reads as a change, taken out red and put in green`,
+             (await editIn.getAttribute("data-look")) === "diff" && /^-check cc_frozen_midround/m.test(await editIn.innerText())
+             && /^\+check cc_frozen_midround --known/m.test(await editIn.innerText()));
+          ck(`${tag}: an output that is a diff is coloured too, and plain output stays plain`,
+             (await convo.getByTestId("tool-output").first().getAttribute("data-look")) === "diff"
+             && (await convo.getByTestId("tool-output").nth(1).getAttribute("data-look")) === "plain");
+          await convo.getByTestId("tool-head").nth(0).click();
           await convo.getByTestId("group-head").click();
           await convo.getByTestId("tool-group").getByTestId("tool-head").nth(1).click();
           await p.waitForFunction(() => /case 120/.test(document.querySelector("[data-testid=tool-group] [data-testid=tool-output]")?.textContent || ""));

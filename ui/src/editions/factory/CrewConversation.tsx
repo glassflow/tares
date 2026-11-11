@@ -3,6 +3,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronRight, Pencil, Search, Terminal } from "../../components/icons";
 import type { ConvoItem, ConvoTool } from "./FactoryCrew.api";
+import { changeOf, DiffText, JsonText, looksLikeDiff } from "./codeColours";
 
 // "Show what it did" on the Crew page as a conversation (TR-1177). What the member said is on the left,
 // what it was sent is on the right with who sent it, and each tool call is a card: its kind, its name, a
@@ -122,16 +123,18 @@ function Copy({ text }: { text: string }) {
   );
 }
 
-function Block({ label, text, testid }: { label: string; text: string; testid: string }) {
+type Look = "json" | "diff" | "plain";
+
+function Block({ label, text, testid, look, copy }: { label: React.ReactNode; text: string; testid: string; look: Look; copy?: string }) {
   return (
     <div className="px-3 pb-3">
       <div className="mb-1 flex items-center justify-between">
         <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">{label}</span>
-        <Copy text={text} />
+        <Copy text={copy ?? text} />
       </div>
-      <pre data-words-exempt data-testid={testid}
+      <pre data-words-exempt data-testid={testid} data-look={look}
            className={cn("m-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border border-border px-3 py-2 font-mono text-xs leading-normal", DARK)}>
-        {text || " "}
+        {!text ? " " : look === "json" ? <JsonText text={text} /> : look === "diff" ? <DiffText text={text} /> : text}
       </pre>
     </div>
   );
@@ -150,6 +153,7 @@ function ToolCard({ t, open, onToggle, loadFull }: {
     }
   }, [open, t.more, t.id, full, loading, missed, loadFull]);
   const output = full ?? t.output;
+  const change = React.useMemo(() => (open ? changeOf(t.name, t.input) : null), [open, t.name, t.input]);
   const meta = [took(t.ms), hm(t.at)].filter(Boolean).join(" · ");
   return (
     <div className={cn("border bg-card", t.failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-card"
@@ -174,10 +178,15 @@ function ToolCard({ t, open, onToggle, loadFull }: {
       </button>
       {open && (
         <div className="border-t border-border pt-2" data-testid="tool-body">
-          <Block label="Input" text={t.input} testid="tool-input" />
+          {change ? (
+            <Block label={<>Change{change.file && <> to <span className="normal-case" data-words-exempt>{change.file}</span></>}</>} text={change.diff} copy={t.input} testid="tool-input" look="diff" />
+          ) : (
+            <Block label="Input" text={t.input} testid="tool-input" look="json" />
+          )}
           {t.output !== null ? (
             <>
-              <Block label={loading ? "Output (loading the rest...)" : "Output"} text={output ?? ""} testid="tool-output" />
+              <Block label={loading ? "Output (loading the rest...)" : "Output"} text={output ?? ""} testid="tool-output"
+                     look={looksLikeDiff(output ?? "") ? "diff" : "plain"} />
               {missed && <p className="m-0 px-3 pb-3 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the output did not load.</p>}
             </>
           ) : (
