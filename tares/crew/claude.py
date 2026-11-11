@@ -531,6 +531,23 @@ def _fake_ps_file(pid, field: str):
         return None
 
 
+def fake_ps_step(version: str) -> None:
+    """Test hook, with TARES_FAKE_PS_DIR set: run the folder's `sort-hook` file once (a shell command) when a spare
+    of version 0.9.9 is looked at. The bash engine orders versions with `sort -V`, and the suite puts a fake `sort`
+    on PATH that runs that command at this step, so something happens between reading the listing and acting on
+    it; Python orders them itself, so it takes the step here."""
+    d = os.environ.get("TARES_FAKE_PS_DIR")
+    if not d or "0.9.9" not in version:
+        return
+    hook = Path(d) / "sort-hook"
+    try:
+        cmd = hook.read_text(encoding="utf-8")
+        hook.unlink()
+    except OSError:
+        return
+    subprocess.run(["bash", "-c", cmd], check=False)
+
+
 def process_listing() -> list:
     """[(pid, command line)] of the processes this user can see; the command line joined by spaces, as
     `ps -axo pid=,command=` shows it. With TARES_FAKE_PS_DIR set it is the folder's ps-list file (empty when

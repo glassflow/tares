@@ -4361,14 +4361,14 @@
       "note": ""
     },
     {
-      "name": "claude_update_mixed_test.sh",
+      "name": "claude_update_python_test.sh",
       "kind": "suite",
-      "what": "claude_update_test.sh on the Python engine in mixed mode (engine unset); any FAIL fails it",
-      "ticket": "TR-1156",
+      "what": "claude_update_test.sh on the Python engine alone (TARES_FACTORY_ENGINE=python); any FAIL fails it",
+      "ticket": "TR-1157",
       "dropped": false,
       "python": "",
       "ported": false,
-      "note": "CI wrapper: sets FACTORY_BIN; the suite sets TARES_FAKE_PS_DIR. Replace by the TARES_FACTORY_ENGINE=python form once TR-964 merges."
+      "note": "CI wrapper: sets FACTORY_BIN and the engine; the suite sets TARES_FAKE_PS_DIR. Replaces the mixed-mode wrapper (TR-1156)."
     },
     {
       "name": "compat_test.sh",
