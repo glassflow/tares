@@ -332,6 +332,19 @@ def parse_bg_id(text: str) -> str:
     return ""
 
 
+def cmd_parse_bg_id(argv: list, env: dict) -> int:
+    """The hidden `_parse-bg-id`: read `claude --bg` output on stdin and print the session id (bash's
+    `parse_bg_id`, which tests and scripts call). Like bash it checks no crew name, merges the crew.json
+    defaults and prints nothing when there is no id."""
+    from .paths import default_home
+    from .state import merge_crew_defaults
+    merge_crew_defaults(CrewPaths(env.get("FACTORY_CREW_HOME") or default_home(env)))
+    found = parse_bg_id(sys.stdin.buffer.read().decode("utf-8", errors="replace"))
+    if found:
+        print(found)
+    return 0
+
+
 def _jq_order(v):
     """A sort key in jq's order: null, false, true, numbers, strings, arrays, objects."""
     if v is None:

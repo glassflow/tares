@@ -31,7 +31,8 @@ does not count in --coverage.
 Coverage. A "scenario" of a bash suite (the suites named in tests/factory/ci_list.txt) is one `check
 "<label>"` call: a source line that starts, after any indentation, with `check "`. A check in a loop
 counts once. A suite with no such line (guard, heavy, parse) counts as one scenario, named after the
-suite. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
+suite, except a wrapper (WRAPPERS below): a suite that runs another suite on Python only, has no check line of
+its own and counts for nothing, since its checks belong to the suite it runs. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
 when its run passes on the Python side (a SKIP does not count). Percentage = passing / all scenarios.
 
 Test hooks (for tests/test_parity.py): PARITY_CMD_BASH and PARITY_CMD_PYTHON replace the command a side
@@ -212,9 +213,6 @@ PROD = "(^|[-_.])(prod|production)([-_.]|$)"
 SAVED = {"autonomy": "L3-review", "releaser": True, "release_profile": "kind", "prod_pattern": PROD,
          "challenger": False, "builders_max": 3}
 ROLES = ("orchestrator", "reviewer", "releaser")
-# The language-server offer (TR-970) is not ported: the bash side asks Claude Code which plugins are on, the
-# Python side does not, so that one call is left out of the compared record.
-LSP_PROBE = (("plugin", "list"),)
 
 
 def mark(name):
@@ -280,7 +278,6 @@ def role_checks():
 
 scenario(Scenario(
     name="crew_up_basic",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up stops plainly in an untrusted crew home, and warns of another installed tares plugin",
     stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
@@ -304,7 +301,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="crew_up_yes",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up --yes uses the answers saved on Tares and asks nothing; a second run starts nothing",
     stand_in={"settings": dict(SAVED), "grants": ['- "%s" (%s)' % (GRANT, TODAY)]},
@@ -349,7 +345,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="crew_up_questions",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="the first crew up asks the settings one at a time and keeps the answers and one grant on Tares",
     stand_in={},
@@ -453,7 +448,6 @@ scenario(Scenario(
     about="a Tares that does not list the integrations capability: crew up stops with the upgrade message, starting nothing",
     stand_in={"settings": {**SAVED, "releaser": False}, "capabilities": []},
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
     steps=[Step(["crew", "up", "--yes"], stdin="")],
     checks=[
         ("crew up fails and names the missing capability",
@@ -475,7 +469,6 @@ scenario(Scenario(
     about="two named crews and the default crew side by side; the name comes from FACTORY_CREW_NAME, then crew.json",
     stand_in={"settings": {**SAVED, "releaser": False}},
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
     steps=[
         Step(["crew", "up", "--yes"], stdin=""),                                   # 0 the default crew
         Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),                 # 1
@@ -541,7 +534,6 @@ scenario(Scenario(
     about="the roster warns when the orchestrator's session title is not the name messages go to",
     stand_in={"settings": {**SAVED, "releaser": False}},
     prepare=trust_all,
-    ignore_calls=LSP_PROBE,
     steps=[
         Step(["crew", "up", "--yes"], env=crew_at("a"), stdin=""),
         Step(["crew", "up", "--yes"], env=crew_at("b"), stdin=""),
@@ -4881,6 +4873,15 @@ def evaluate(sc: Scenario, out=print) -> tuple:
 
 CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
 
+# Suites that only run another suite on the Python engine. They have no `check "` line of their own, so
+# --coverage leaves them out of the total and prints "wrapper of <suite>"; the suite they run counts their
+# checks. suite -> (the suite it runs, why). Pinned in tests/test_parity.py: a suite with checks of its own
+# cannot be listed here (coverage fails on it), so a real suite cannot drop out of the count.
+WRAPPERS = {
+    "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
+    "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
+}
+
 
 def suites() -> list:
     return [ln.strip() for ln in CI_LIST.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
@@ -4923,6 +4924,10 @@ def coverage(require_full: bool, out=print) -> int:
     found = suite_scenarios()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
+    for suite in found:
+        if suite in WRAPPERS and not found[suite][0].startswith("(the whole"):
+            out(f"ERROR {suite} is listed as a wrapper but has checks of its own: {len(found[suite])}")
+            bad = 1
     results = passes_now()
     for sc in SCENARIOS.values():
         ok = results[sc.name]
@@ -4933,7 +4938,13 @@ def coverage(require_full: bool, out=print) -> int:
             elif ok:
                 passing[(sc.suite, label)] = sc.name
     total = done = 0
+    counted = 0
     for suite, labels in found.items():
+        if suite in WRAPPERS and labels[0].startswith("(the whole"):
+            of, why = WRAPPERS[suite]
+            out(f"{suite}: wrapper of {of} ({why})")
+            continue
+        counted += 1
         n = sum(1 for label in labels if (suite, label) in passing)
         total += len(labels)
         done += n
@@ -4942,7 +4953,7 @@ def coverage(require_full: bool, out=print) -> int:
             mark = f"PASS python  ({passing[(suite, label)]})" if (suite, label) in passing else "todo"
             out(f"  {mark:<28} {label}")
     pct = 100.0 * done / total if total else 100.0
-    out(f"coverage: {done} of {total} scenarios pass against Python ({pct:.1f}%) in {len(found)} suites")
+    out(f"coverage: {done} of {total} scenarios pass against Python ({pct:.1f}%) in {counted} suites")
     if require_full and done < total:
         out(f"FAIL: --require-full wants every scenario ported, {total - done} are not")
         return 1
@@ -4967,7 +4978,6 @@ def g1_line(r: Run, pattern: str, i: int = -1) -> bool:
 
 scenario(Scenario(
     name="crew_g1_up_endpoints",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up gives every crew station the same Tares address; `settings` shows the MCP endpoint too",
     stand_in={"settings": dict(SAVED)},
@@ -5147,7 +5157,6 @@ def g1_hand_made(r: Run) -> None:
 
 scenario(Scenario(
     name="crew_g1_hand_made_crewjson",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="a crew.json written by hand keeps its choice, gains the template's defaults, and a crew without a releaser starts two stations",
     stand_in={"settings": {**SAVED, "releaser": False}},
@@ -5203,7 +5212,6 @@ G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integration
 
 scenario(Scenario(
     name="crew_g1_no_mcp",
-    ignore_calls=LSP_PROBE,
     suite="crew",
     about="crew up stops and names the URL and the command when no MCP server answers; taresd itself is not one",
     tares=G1_HEALTH,
@@ -6137,7 +6145,7 @@ scenario(Scenario(
     name="crew_g4_up_watch",
     suite="crew",
     about="crew up starts the watch in the background and logs; a second crew up keeps it; crew down stops it; --no-watch starts none",
-    ignore_calls=LSP_PROBE + _CC_READS,
+    ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
     # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
@@ -6343,7 +6351,7 @@ scenario(Scenario(
     name="crew_g4_watch_update",
     suite="crew",
     about="a watch that crew up started restarts itself on the new version when the plugin is updated",
-    ignore_calls=LSP_PROBE + _CC_READS,
+    ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
@@ -6992,6 +7000,941 @@ scenario(Scenario(
          lambda r: len(_usage_calls_with(r, "/usage")) == 2),
     ],
     covers=[],
+))
+
+
+# crewname_test.sh (TR-1162)
+# The crew's name: refused names, the roster's first line, spawn and adoption under each crew's names, the hooks
+# that follow the crew. Steps that need a Tares ask a fake one for the projects, and `crew up` the stand-in.
+
+CN_ENV = {"FACTORY_CREW_HOME": "{tmp}/empty"}
+
+
+def _cn_bad_names() -> list:
+    return ["Bad_Name", "-x", "UPPER", "a b", "x-build-y", "build", "a" * 32]
+
+
+scenario(Scenario(
+    name="crewname_names",
+    suite="crewname",
+    about="the name is read before anything else: a roster of an empty home says which crew it is; a bad name is refused by any command",
+    steps=[
+        Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "a"}),
+        *[Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": bad}) for bad in _cn_bad_names()],
+        Step(["roster"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "a" * 31}),
+        Step(["status"], env={**CN_ENV, **NO_TARES, "FACTORY_CREW_NAME": "Bad_Name"}),
+    ],
+    checks=[
+        ("FACTORY_CREW_NAME=a: roster names a-orchestrator",
+         lambda r: r.out(0).splitlines()[0] == "crew: a (orchestrator: a-orchestrator)"),
+        ("crew name '$bad' is refused",
+         lambda r: all(r.code(i + 1) != 0 and "is not valid: it is 1 to 31 characters" in r.out(i + 1)
+                       for i in range(len(_cn_bad_names())))),
+        ("a 31 character name is accepted",
+         lambda r: r.out(-2).splitlines()[0] == "crew: %s (orchestrator: %s-orchestrator)" % ("a" * 31, "a" * 31)),
+        ("a command other than roster refuses an invalid crew name",
+         lambda r: r.code(-1) != 0 and "is not valid: it is 1 to 31 characters" in r.out(-1)),
+    ],
+    covers=["FACTORY_CREW_NAME=a: roster names a-orchestrator", "crew name '$bad' is refused",
+            "a 31 character name is accepted", "a command other than roster refuses an invalid crew name"],
+))
+
+
+def _cn_url(extra, up: bool):
+    """A step's env: the crew `extra` names, and either the stand-in Tares (`crew up`) or the fake one that holds the projects."""
+    def env(r):
+        base = extra(r) if callable(extra) else dict(extra)
+        if up:
+            return {**base, "TARESD_URL": r.stand_in.url, "TARES_FACTORY_MCP_URL": r.stand_in.mcp_url}
+        return {**base, "TARESD_URL": r.tares.url, "TARES_FACTORY_MCP_URL": r.tares.url + "/mcp"}
+    return env
+
+
+def _cn_default(r):
+    return {}
+
+
+def _cn_setup(tmp: Path, env: dict) -> None:
+    _mkrepo(tmp, "shop")
+
+
+def _cn_stand_in_releaser(r):
+    """The releaser is only started when the crew asks for one: record a stand-in so the helper path can run."""
+    home = r.tmp / "crew-a"
+    f = home / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc["a-releaser"] = {"role": "releaser", "status": "active", "project": "", "repo": "", "cwd": str(home), "model": "", "effort": ""}
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def _cn_add_sessions(*rows):
+    """A session the crew did not record, listed by the fake Claude Code."""
+    def run_before(r):
+        f = r.state / "agents.json"
+        cur = json.loads(f.read_text(encoding="utf-8"))
+        for row in rows:
+            cur.append({**row, "cwd": str(r.tmp / "shop")})
+        f.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
+    return run_before
+
+
+def _cn_agents(r) -> list:
+    try:
+        return json.loads((r.state / "agents.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+
+def _cn_sent(r, station: str, text: str) -> bool:
+    return any(c["args"][2:3] == [station] and any(text in a for a in c["args"]) for c in r.calls() if "--bg" in c["args"])
+
+
+_CN_TARES = {
+    "GET /api/crew/settings": (200, {"settings": {**SAVED, "releaser": False, "builders_max": 5}}),
+    "GET /api/crew/projects": (200, {"projects": [
+        {"id": "uc_shop", "name": "shop", "repos": [{"path": "{tmp}/shop"}]},
+        {"id": "uc_atools", "name": "a-tools", "repos": [{"path": "{tmp}/shop"}]}]}),
+    "GET /api/grants": (200, {"all": ""}),
+    "POST /mcp": (200, {"result": {"serverInfo": {"name": "tares"}}}),
+}
+
+_CN_REPO = "{tmp}/shop"
+_CN_A = crew_at_unnamed("a")
+_CN_B = crew_at_unnamed("b")
+CN_ORCH_LINE = "a-orchestrator\torchestrator\t\tworking\t"
+
+scenario(Scenario(
+    name="crewname_stations",
+    suite="crewname",
+    about="the default crew and two named crews build the same project side by side, each under its own names; the roster adopts only its own",
+    stand_in={"settings": {**SAVED, "releaser": False}},
+    tares=_CN_TARES,
+    setup=_cn_setup,
+    prepare=trust_all,
+    steps=[
+        Step(["crew", "up", "--yes"], env=_cn_url(_cn_default, True), stdin=""),                                  # 0
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 1
+        Step(["spawn", "helper", "crew-reviewer", "probe", "look"], env=_cn_url(_cn_default, False)),              # 2
+        Step(["crew", "up", "--yes"], env=_cn_url(crew_at("a"), True), stdin=""),                                  # 3
+        Step(["crew", "up", "--yes"], env=_cn_url(crew_at("b"), True), stdin=""),                                  # 4
+        Step(["roster"], env=_cn_url(_CN_A, False)),                                                               # 5
+        Step(["roster"], env=_cn_url(_CN_B, False)),                                                               # 6
+        Step(["settings", "a-reviewer", "reviewer"], env=_cn_url(_CN_A, False)),                                   # 7
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_cn_default, False)),            # 8
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_CN_A, False)),                  # 9
+        Step(["spawn", "builder", "shop", "m1", _CN_REPO, "work T1"], env=_cn_url(_CN_B, False)),                  # 10
+        Step(["roster"], env=_cn_url(_CN_A, False)),                                                               # 11
+        Step(["spawn", "helper", "a-reviewer", "probe", "look"], env=_cn_url(_CN_A, False)),                       # 12
+        Step(["spawn", "builder", "a-tools", "m1", _CN_REPO, "x"], env=_cn_url(_CN_A, False)),                     # 13
+        Step(["spawn", "releaser-helper", "probe", "look"], env=_cn_url(_CN_A, False), run_before=_cn_stand_in_releaser),   # 14
+        Step(["roster"], env=_cn_url(_CN_A, False), run_before=_cn_add_sessions(
+            {"id": "0000a002", "name": "a-shop-build-m2", "state": "working", "sessionId": "s-a002", "startedAt": 98, "pid": 4242},
+            {"id": "0000b009", "name": "b-shop-build-m9", "state": "working", "sessionId": "s-b009", "startedAt": 99, "pid": 4243})),  # 15
+        Step(["roster"], env=_cn_url(_cn_default, False), run_before=_cn_add_sessions(
+            {"id": "0000d005", "name": "shop-build-m5", "state": "working", "sessionId": "s-d005", "startedAt": 100, "pid": 4244})),  # 16
+    ],
+    checks=[
+        ("default crew: a builder is <project>-build-<slug>", lambda r: r.station("shop-build-m1", "role") == "builder"),
+        ("default crew: its parent is crew-orchestrator",
+         lambda r: env_of(r, "shop-build-m1", "FACTORY_PARENT") == "crew-orchestrator"),
+        ("default crew: its env carries the crew",
+         lambda r: env_of(r, "shop-build-m1", "FACTORY_CREW") == "crew"
+         and env_of(r, "shop-build-m1", "FACTORY_ORCHESTRATOR") == "crew-orchestrator"),
+        ("default crew: a helper keeps its suffix rule", lambda r: r.station("crew-reviewer-probe", "parent") == "crew-reviewer"),
+        ("default crew: the boot prompt sends READY to crew-orchestrator",
+         lambda r: _cn_sent(r, "shop-build-m1", "send crew-orchestrator READY")),
+        ("crew $c: roster names the crew (a)", lambda r: r.out(5).splitlines()[0] == "crew: a (orchestrator: a-orchestrator)"),
+        ("crew $c: roster names the crew (b)", lambda r: r.out(6).splitlines()[0] == "crew: b (orchestrator: b-orchestrator)"),
+        ("crew $c: roster lists its orchestrator working (a)", lambda r: CN_ORCH_LINE in r.out(5).replace("\r", "")),
+        ("crew $c: roster lists its orchestrator working (b)", lambda r: "b-orchestrator\torchestrator\t\tworking\t" in r.out(6)),
+        ("crew.json names the crew with no variable",
+         lambda r: json.loads(r.results[7]["stdout"]).get("env", {}).get("FACTORY_CREW") == "a"),
+        ("crew a: the builder is a-shop-build-m1",
+         lambda r: r.station("a-shop-build-m1", "role", home_of(r, "a")) == "builder"
+         and r.station("shop-build-m1", "role", home_of(r, "a")) == ""),
+        ("crew a: its parent is a-orchestrator",
+         lambda r: r.station("a-shop-build-m1", "parent", home_of(r, "a")) == "a-orchestrator"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_PARENT") == "a-orchestrator"),
+        ("crew a: its env carries the crew and the orchestrator",
+         lambda r: env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_CREW") == "a"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_ORCHESTRATOR") == "a-orchestrator"
+         and env_of_in(r, home_of(r, "a"), "a-shop-build-m1", "FACTORY_STATION") == "a-shop-build-m1"),
+        ("crew a: its boot prompt sends READY to a-orchestrator",
+         lambda r: _cn_sent(r, "a-shop-build-m1", "send a-orchestrator READY")),
+        ("crew b: the same project builds as b-shop-build-m1, beside a's",
+         lambda r: r.station("b-shop-build-m1", "role", home_of(r, "b")) == "builder"
+         and sum(1 for n in agent_names(r) if n in ("a-shop-build-m1", "b-shop-build-m1")) == 2),
+        ("the default crew keeps its builder name beside them",
+         lambda r: r.station("shop-build-m1", "role") == "builder" and agent_names(r).count("shop-build-m1") == 1),
+        ("crew a: roster lists its builder and not b's",
+         lambda r: "a-shop-build-m1\tbuilder\tshop\tworking\t" in r.out(11) and "b-shop-build-m1" not in r.out(11)),
+        ("crew a: a helper of a-reviewer keeps its suffix rule and parent",
+         lambda r: r.station("a-reviewer-probe", "parent", home_of(r, "a")) == "a-reviewer"
+         and r.station("a-reviewer-probe", "role", home_of(r, "a")) == "helper"),
+        ("crew a: a helper of a-reviewer is told to load station-reviewer",
+         lambda r: any(c["args"][2:3] == ["a-reviewer-probe"]
+                       and any("station-reviewer" in x and "send a-reviewer DONE" in x for x in c["args"])
+                       for c in r.calls() if "--bg" in c["args"])),
+        ("crew a: a project can not be named like the crew",
+         lambda r: "can't start with \"a\"" in r.out(13) and r.station("a-tools-build-m1", "role", home_of(r, "a")) == ""),
+        ("crew a: a releaser helper hangs under a-releaser",
+         lambda r: r.station("a-releaser-probe", "parent", home_of(r, "a")) == "a-releaser"
+         and r.station("a-releaser-probe", "role", home_of(r, "a")) == "helper"),
+        ("crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator",
+         lambda r: r.station("a-shop-build-m2", "role", home_of(r, "a")) == "builder"
+         and r.station("a-shop-build-m2", "parent", home_of(r, "a")) == "a-orchestrator"
+         and r.station("a-shop-build-m2", "project", home_of(r, "a")) == "shop"),
+        ("crew a: b's unrecorded builder is not adopted", lambda r: r.station("b-shop-build-m9", "role", home_of(r, "a")) == ""),
+        ("default crew: an unrecorded shop-build-m5 is adopted",
+         lambda r: r.station("shop-build-m5", "role") == "builder" and r.station("shop-build-m5", "parent") == "crew-orchestrator"),
+        ("default crew: a- and b- builders on the same repo are not adopted",
+         lambda r: r.station("a-shop-build-m2", "role") == "" and r.station("b-shop-build-m9", "role") == ""
+         and r.station("a-shop-build-m1", "role") == ""),
+    ],
+    covers=["crew $c: roster names the crew", "crew $c: roster lists its orchestrator working",
+            "default crew: a builder is <project>-build-<slug>", "default crew: its parent is crew-orchestrator",
+            "default crew: its env carries the crew", "default crew: a helper keeps its suffix rule",
+            "default crew: the boot prompt sends READY to crew-orchestrator", "crew.json names the crew with no variable",
+            "crew a: the builder is a-shop-build-m1", "crew a: its parent is a-orchestrator",
+            "crew a: its env carries the crew and the orchestrator", "crew a: its boot prompt sends READY to a-orchestrator",
+            "crew b: the same project builds as b-shop-build-m1, beside a's", "the default crew keeps its builder name beside them",
+            "crew a: roster lists its builder and not b's", "crew a: a helper of a-reviewer keeps its suffix rule and parent",
+            "crew a: a helper of a-reviewer is told to load station-reviewer", "crew a: a project can not be named like the crew",
+            "crew a: a releaser helper hangs under a-releaser",
+            "crew a: an unrecorded a-shop-build-m2 is adopted, under a-orchestrator", "crew a: b's unrecorded builder is not adopted",
+            "default crew: an unrecorded shop-build-m5 is adopted",
+            "default crew: a- and b- builders on the same repo are not adopted"],
+))
+
+
+CN_HOOKS = "crewname_support.py"
+_CN_MERGE = "gh pr merge 3"
+_CN_UNDO = "kubectl --context kind-factory rollout " + "undo deploy/app"
+
+
+def _cn_guard(parent: str, command: str, crew: str) -> Step:
+    return Step(["guard", parent, command, crew])
+
+
+def _cn_start(parent: str, crew: str) -> Step:
+    return Step(["start", parent, crew])
+
+
+scenario(Scenario(
+    name="crewname_hooks",
+    suite="crewname",
+    about="the hooks follow the crew: a helper of a-reviewer is a reviewer, a helper of a builder is a builder; the plugin sends the crew's name",
+    driver=CN_HOOKS,
+    steps=[
+        _cn_guard("a-releaser", _CN_MERGE, "a"),                                                     # 0
+        _cn_guard("a-releaser", _CN_UNDO, "a"),                                                      # 1
+        _cn_guard("a-shop-build-m1", "factory restart a-reviewer", "a"),                             # 2
+        _cn_guard("crew-releaser", _CN_MERGE, ""),                                                   # 3
+        _cn_guard("crew-releaser-build-x", _CN_MERGE, ""),                                           # 4
+        _cn_guard("a-releaser-build-x", _CN_MERGE, "a"),                                             # 5
+        _cn_start("a-reviewer", "a"),                                                                # 6
+        _cn_start("a-shop-build-m1", "a"),                                                           # 7
+        _cn_start("crew-releaser", ""),                                                              # 8
+        _cn_start("crew-reviewer-build-x", ""),                                                      # 9
+        _cn_start("a-reviewer-build-x", "a"),                                                        # 10
+    ],
+    checks=[
+        ("guard: a helper of a-releaser acts as a releaser (named crew)",
+         lambda r: r.out(0).strip() == "deny" and r.out(1).strip() == "allow"),
+        ("guard: a helper of a-shop-build-m1 acts as a builder", lambda r: r.out(2).strip() == "deny"),
+        ("guard: the default crew still works with no FACTORY_CREW", lambda r: r.out(3).strip() == "deny"),
+        ("guard: a helper whose name has -build- under crew-releaser is still a releaser's",
+         lambda r: r.out(4).strip() == "deny" and r.out(5).strip() == "deny"),
+        ("session start: a helper of a-reviewer loads station-reviewer (named crew)",
+         lambda r: r.out(6).strip() == "station-reviewer" and r.out(7).strip() == "station-builder"
+         and r.out(8).strip() == "station-releaser"),
+        ("session start: a helper whose name has -build- under crew-reviewer loads station-reviewer",
+         lambda r: r.out(9).strip() == "station-reviewer" and r.out(10).strip() == "station-reviewer"),
+        ("the plugin sends X-Tares-Crew from FACTORY_CREW",
+         lambda r: json.loads((ROOT / "claude-plugin" / ".mcp.json").read_text(encoding="utf-8"))
+         ["mcpServers"]["tares"]["headers"]["X-Tares-Crew"] == "${FACTORY_CREW:-}"),
+    ],
+    covers=["guard: a helper of a-releaser acts as a releaser (named crew)", "guard: a helper of a-shop-build-m1 acts as a builder",
+            "guard: the default crew still works with no FACTORY_CREW",
+            "guard: a helper whose name has -build- under crew-releaser is still a releaser's",
+            "session start: a helper of a-reviewer loads station-reviewer (named crew)",
+            "session start: a helper whose name has -build- under crew-reviewer loads station-reviewer",
+            "the plugin sends X-Tares-Crew from FACTORY_CREW"],
+))
+
+
+# spec_test.sh (TR-1162)
+# The parts of the suite that ran on a real Tares: the fixtures are checked against the fake Tares the scenarios
+# use (the same projects as spec_contributor, read over HTTP as a command would), and the session-start hook and
+# the skill text are the plugin's own files, so both engines run them the same (spec_hook_support.py).
+
+SPEC_ASHISH_VIEW = {"projects": [dict(p, kind="software_factory") if p["name"] == "Secret plan" else p
+                                 for p in SPEC_PROJECTS["projects"]]}
+
+
+def _spec_get(r: Run, path: str) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.tares.url + path, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _spec_row(doc: dict, name: str) -> dict:
+    return [p for p in doc["projects"] if p["name"] == name][0]
+
+
+_spec_scenario(
+    "spec_fixtures", "the people and projects the contributor scenarios rely on are what their labels say",
+    {"GET /api/projects": (200, SPEC_PROJECTS), "GET /api/projects?viewer=ashish": (200, SPEC_ASHISH_VIEW),
+     "GET /api/whoami": (200, {"person": {"id": "u_kir", "name": "Kiran"}})},
+    [_sstep("spec", "--project", "Secret plan")],
+    [("fixture: Ashish leads Acme web, Nobody leads has no lead",
+      lambda r: (_spec_row(_spec_get(r, "/api/projects"), "Acme web")["lead"] or {}).get("name") == "Ashish"
+      and _spec_row(_spec_get(r, "/api/projects"), "Nobody leads").get("lead") is None),
+     ("fixture: Plain notes is led by Ashish and is not a software factory project",
+      lambda r: _spec_row(_spec_get(r, "/api/projects"), "Plain notes")["lead"]["name"] == "Ashish"
+      and _spec_row(_spec_get(r, "/api/projects"), "Plain notes").get("kind") != "software_factory"),
+     ("fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind",
+      lambda r: (lambda row: [row.get("hidden"), row["lead"]["name"], row.get("kind", "none")])(
+          _spec_row(_spec_get(r, "/api/projects"), "Secret plan")) == [True, "Ashish", "none"]
+      and _spec_row(_spec_get(r, "/api/projects?viewer=ashish"), "Secret plan").get("kind") == "software_factory")],
+    ["fixture: Ashish leads Acme web, Nobody leads has no lead",
+     "fixture: Plain notes is led by Ashish and is not a software factory project",
+     "fixture: Kiran's list shows Ashish's private project only as a hidden row with a lead and no kind"])
+
+
+def _hookstep(op: str, source: str, *sets: str) -> Step:
+    return Step([op, source, *sets])
+
+
+def _ctx(r: Run, i: int) -> str:
+    return r.out(i)
+
+
+def _contributor_ok(ctx: str) -> bool:
+    return (re.search(r"contributes to the Tares project .Acme web. led by someone else", ctx) is not None
+            and re.search(r"spec-project. skill, section Contributor", ctx) is not None
+            and "Do not build tickets" in ctx and "`session` skill" not in ctx
+            and re.search(r"re-read the project.s tickets", ctx) is None)
+
+
+def _plain_bound_ok(ctx: str) -> bool:
+    return (re.search(r"Follow the .session. skill|load the .session. skill again", ctx) is not None
+            and "Contributor" not in ctx)
+
+
+def _contributor_section() -> str:
+    text = (ROOT / "claude-plugin" / "skills" / "spec-project" / "SKILL.md").read_text(encoding="utf-8")
+    start = text.index("\n## Contributor")
+    end = text.index("\n## Light mode", start)
+    return re.sub(r"[ \n]+", " ", text[start:end])
+
+
+_CONTRIB = ("TARES_PROJECT=Acme web", "TARES_SESSION_KIND=contributor")
+
+scenario(Scenario(
+    name="spec_hooks",
+    suite="spec",
+    about="the session-start hook of a contributor session says to follow the Contributor section, a plain bound one the session skill",
+    driver="spec_hook_support.py",
+    steps=[_hookstep("hook", "startup", *_CONTRIB), _hookstep("hook", "compact", *_CONTRIB),
+           _hookstep("hook", "resume", *_CONTRIB),
+           _hookstep("hook", "startup", "TARES_PROJECT=Acme web"), _hookstep("hook", "compact", "TARES_PROJECT=Acme web"),
+           _hookstep("bare", "startup", "TARES_SESSION_KIND=contributor", "CLAUDE_PLUGIN_ROOT={tmp}")],
+    checks=[
+        ("contributor hook ($src): spec-project, section Contributor, no building",
+         lambda r: all(_contributor_ok(_ctx(r, i)) for i in (0, 1, 2))),
+        ("contributor hook: no resume text on a fresh start", lambda r: "resumed or compacted" not in _ctx(r, 0)),
+        ("contributor hook: after compaction it says to load the skill again",
+         lambda r: re.search(r"resumed or compacted: load the .spec-project. skill again, section Contributor", _ctx(r, 1)) is not None),
+        ("a plain bound session ($src) still follows the session skill",
+         lambda r: _plain_bound_ok(_ctx(r, 3)) and _plain_bound_ok(_ctx(r, 4))),
+        ("a marker without a project: the hook is silent", lambda r: r.out(5) == ""),
+        ("the Contributor section asks my_work for this project's questions (Q numbers restart per project)",
+         lambda r: re.search(r"Call .my_work\(project=<project>\). and read .person. \(who this is\) and .spec_questions.",
+                             _contributor_section()) is not None and "restart in each project" in _contributor_section()),
+    ],
+    covers=["contributor hook ($src): spec-project, section Contributor, no building",
+            "contributor hook: no resume text on a fresh start",
+            "contributor hook: after compaction it says to load the skill again",
+            "a plain bound session ($src) still follows the session skill",
+            "a marker without a project: the hook is silent",
+            "the Contributor section asks my_work for this project's questions (Q numbers restart per project)"],
+))
+
+
+# session_test.sh (TR-1162)
+# The last two checks of the crew-held part look at what Tares kept: with a plain fake Tares that is a table the
+# scenario changes itself, the way Tares moves a project from the crew's list to "releasing" when the
+# takeover is posted (the table below answers the takeover POST by making that change).
+
+class _SessionTakeoverRoutes(dict):
+    """The routes of a fake Tares, which move Shop from the crew's projects to `releasing` once the takeover is posted."""
+
+    def get(self, key, default=None):
+        found = super().get(key, default)
+        if key == "POST /api/projects/p_shop/takeover":
+            self["GET /api/crew/projects"] = RELEASING["GET /api/crew/projects"]
+        return found
+
+
+def _session_stateful(r: Run) -> None:
+    r.tares.routes = _SessionTakeoverRoutes(r.tares.routes)
+
+
+def _session_crew(r: Run) -> dict:
+    import urllib.request
+    with urllib.request.urlopen(r.tares.url + "/api/crew/projects", timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _session_keep_mark(r: Run) -> None:
+    doc = _session_crew(r)
+    r.marks["kept"] = {"projects": [p["name"] for p in doc["projects"]], "releasing": len(doc["releasing"]),
+                       "takeovers": len(r.tares.asked("POST /api/projects/p_shop/takeover"))}
+
+
+scenario(Scenario(
+    name="session_crew_state",
+    suite="session",
+    about="Enter leaves the project on the crew's list and records nothing; yes takes it off the list and into releasing",
+    tares={**MCP_ROUTE, **LISTED, **HELD, **SHOP_REPO, "POST /api/projects/p_shop/takeover": (200, {"ok": True})},
+    setup=_setup_session,
+    prepare=_session_stateful,
+    steps=[_ss("session", "Shop", stdin="\n"),
+           Step(["session", "Shop"], env={**WITH_MCP}, cwd="{tmp}/elsewhere", stdin="1\nsmall, I will finish it myself\n",
+                after=_claude_after, run_before=_session_keep_mark)],
+    checks=[
+        ("and nothing is recorded",
+         lambda r: "Shop" in r.marks["kept"]["projects"] and r.marks["kept"]["releasing"] == 0
+         and r.marks["kept"]["takeovers"] == 0),
+        ("off the crew's list, releasing",
+         lambda r: ",".join(p["name"] for p in _session_crew(r)["releasing"]) == "Shop"
+         and "Shop" not in [p["name"] for p in _session_crew(r)["projects"]]
+         and [json.loads(q["body"]) for q in r.tares.asked("POST /api/projects/p_shop/takeover")]
+         == [{"words": "small, I will finish it myself"}]),
+    ],
+    covers=["and nothing is recorded", "off the crew's list, releasing"],
+))
+
+
+# usage_test.sh (TR-1162)
+# crew up writes each station's settings (where it compacts, the status line command); the status line is run
+# the way Claude Code runs it, with the settings' own command and environment and the session's state on
+# stdin (usage_support.py), against the stand-in Tares, which keeps what it is sent.
+
+def _usage_ingested(r) -> list:
+    """The lines the status line sent to Tares's claude_code source, in order."""
+    return [w["body"] for w in r.stand_in.written() if w["path"] == "/ingest/claude_code"]
+
+
+def _usage_mark(r):
+    r.marks.setdefault("sent", []).append(len(_usage_ingested(r)))
+
+
+def _usage_sid(r) -> str:
+    return r.station("crew-orchestrator", "sessionId")
+
+
+scenario(Scenario(
+    name="usage_statusline",
+    suite="usage",
+    about="a station is told where it compacts and runs the plugin's status line, which prints a line and tells Tares only when something changed",
+    stand_in={"settings": {**SAVED, "releaser": False, "challenger": False, "builders_max": 2}},
+    prepare=trust_crew,
+    driver="usage_support.py",
+    steps=[Step(["crew", "up", "--yes"]),
+           Step(["status", "48", "31"]),
+           Step(["status", "48", "31"], run_before=_usage_mark),
+           Step(["status", "52", "33"], run_before=_usage_mark),
+           Step(["raw"], stdin="not json\n", run_before=_usage_mark),
+           Step(["notares", "52", "33"])],
+    checks=[
+        ("a station is told where it compacts",
+         lambda r: str(env_of(r, "crew-orchestrator", "FACTORY_AUTOCOMPACT")) == "200000"),
+        ("a station runs the plugin's status line",
+         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command")
+         == f"tares hook statusline --plugin-root {KIT}"
+         and r.station_settings("crew-orchestrator").get("statusLine", {}).get("type") == "command"),
+        ("the status line prints the window and the plan",
+         lambda r: r.code(1) == 0 and r.out(1).strip() == "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%"),
+        # The stand-in Tares keeps what the hook sent to ingest; bash's suite also reads what Tares made of it.
+        # So the next two checks compare the payload, not Tares's reading of it.
+        ("and Tares has the station's window, and how near it is to compacting",
+         lambda r: (lambda s: [s["sessionId"], s["status"]["context_window"]["used_percentage"],
+                               s["status"]["autocompact_tokens"]])(_usage_ingested(r)[0])
+         == [_usage_sid(r), 48, 200000]),
+        ("and the plan's limits",
+         lambda r: (lambda rl: [rl["five_hour"]["used_percentage"], rl["seven_day"]["used_percentage"]])(
+             _usage_ingested(r)[0]["status"]["rate_limits"]) == [31, 6]),
+        ("an unchanged report within the minute is not sent again",
+         lambda r: r.marks["sent"][:2] == [1, 1] and r.code(2) == 0),
+        ("a changed one is",
+         lambda r: r.marks["sent"][2] == 2
+         and _usage_ingested(r)[1]["status"]["context_window"]["used_percentage"] == 52),
+        ("bad input: a plain line, no failure", lambda r: r.code(4) == 0 and r.out(4).strip() == "Claude"),
+        ("no Tares: the line still prints",
+         lambda r: r.code(5) == 0 and "Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%" in r.out(5)),
+    ],
+    covers=["a station is told where it compacts", "a station runs the plugin's status line",
+            "the status line prints the window and the plan",
+            "and Tares has the station's window, and how near it is to compacting", "and the plan's limits",
+            "an unchanged report within the minute is not sent again", "a changed one is",
+            "bad input: a plain line, no failure", "no Tares: the line still prints"],
+))
+
+
+# tares_test.sh (TR-1162)
+# The crew against a Tares with auth on. The stand-in Tares (fake_up_tares.py) is given the key and answers 401 to any
+# other; `projects` are the documents of GET /api/crew/projects, kept in place of the project the bash suite hands over
+# through the real API (the checks that ask the API read it from the stand-in).
+
+TARES_KEY = "stub-token"
+TARES_STALE = "nvf_dead0000_revoked"
+TARES_ASK = "L4-ship\nno\nyes\n2\nthe reviewer may comment on draft PRs\n\n"
+TARES_WORDS = "the reviewer may comment on draft PRs"
+
+
+def tares_keyed(**kw) -> dict:
+    """The person's shell: the key of the Tares with auth on."""
+    return {"TARES_AUTH_TOKEN": TARES_KEY, **kw}
+
+
+def tares_setup_tools(tmp: Path, env: dict) -> None:
+    _fake_tool(tmp, "gh")
+    _fake_tool(tmp, "tares")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
+
+
+def tares_trust_two(r) -> None:
+    r.trust(r.crew, r.tmp / "crew-two")
+
+
+def tares_token_file(r) -> Path:
+    return r.crew / ".tares-token"
+
+
+def tares_mode_600(f: Path) -> bool:
+    """Only the person reads the key file. Windows keeps no such mode: there the file's content is all that is checked."""
+    return is_windows() or (f.stat().st_mode & 0o777) == 0o600
+
+
+def tares_bare(text: str, home: Path) -> str:
+    """A settings file with the crew home written as CREW (as the JSON file writes the path)."""
+    return text.replace(json.dumps(str(home))[1:-1], "CREW")
+
+
+def tares_no_token_in(folder: Path) -> bool:
+    return not any(TARES_KEY in f.read_text(encoding="utf-8", errors="replace") for f in folder.rglob("*") if f.is_file())
+
+
+scenario(Scenario(
+    name="tares_up_auth",
+    suite="tares",
+    about="crew up against a Tares with auth on: a wrong key stops it, the key is kept in a file only the person reads, "
+          "a second machine asks nothing",
+    stand_in={"token": TARES_KEY},
+    prepare=tares_trust_two,
+    setup=tares_setup_tools,
+    steps=[
+        # bash lets curl's own complaint through (curl: (22) ... 401); it is not the crew's message, so it is set aside
+        Step(["crew", "up", "--yes"], env={"TARES_AUTH_TOKEN": "wrong"}, drop=(r"^curl: \(22\)",),
+             after=lambda tmp: (tmp / "claude" / "calls.jsonl").exists()),
+        Step(["crew", "up"], env=tares_keyed(), stdin=TARES_ASK),
+        Step(["crew", "up", "--yes"], env=tares_keyed(TARES_FACTORY_MCP_URL="http://127.0.0.1:9/mcp")),
+        Step(["doctor"], env=tares_keyed(), drop=DOCTOR_DROP,
+             run_before=lambda r: r.marks.update(probes=len(r.stand_in.mcp_auth))),
+        Step(["crew", "up"], env=lambda r: tares_keyed(**crew_at_unnamed("two")(r)), stdin="",
+             run_before=lambda r: r.marks.update(probed=r.stand_in.mcp_auth[r.marks["probes"]:])),
+    ],
+    checks=[
+        ("a wrong token stops crew up plainly",
+         lambda r: "could not read the crew settings from Tares" in r.out(0) and r.snap(0) is False),
+        ("first crew up exits 0", lambda r: r.code(1) == 0 and "started crew-reviewer" in r.out(1)),
+        ("without a releaser, two stations", lambda r: "started crew-releaser" not in r.out(1)),
+        ("the release questions are not asked without a releaser", lambda r: "How does the releaser ship" not in r.out(1)),
+        ("settings saved on Tares",
+         lambda r: [r.stand_in.settings.get(k) for k in ("autonomy", "releaser", "challenger", "builders_max")]
+         == ["L4-ship", False, True, 2]),
+        ("grant saved on Tares", lambda r: any(TARES_WORDS in g for g in r.stand_in.grants)),
+        ("the token is kept in a file only the person reads",
+         lambda r: tares_token_file(r).read_text(encoding="utf-8").rstrip("\n") == TARES_KEY and tares_mode_600(tares_token_file(r))),
+        ("stations are told where the token is",
+         lambda r: fwd(env_of(r, "crew-reviewer", "TARES_FACTORY_TOKEN_FILE")) == fwd(tares_token_file(r))),
+        ("the plugin's header helper gets the same token file",
+         lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_CRED_FILE") != ""
+         and env_of(r, "crew-reviewer", "TARES_FACTORY_CRED_FILE") == env_of(r, "crew-reviewer", "TARES_FACTORY_TOKEN_FILE")),
+        ("no token in settings files", lambda r: tares_no_token_in(r.crew / "stations")),
+        ("stations reach the same Tares", lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_URL") == r.stand_in.url),
+        ("grant from Tares quoted with its date",
+         lambda r: allow_has(r, "crew-reviewer", 'granted this on %s for all projects, in their own words: "%s". Acting'
+                             % (TODAY, TARES_WORDS))),
+        ("no undated or doubly quoted grants",
+         lambda r: not any("undated" in x or '""' in x for x in allow_of(r, "crew-reviewer"))),
+        ("no MCP server with auth on: the command carries a token placeholder, never the token",
+         lambda r: "TARES_AUTH_TOKEN=<your token> tares mcp --transport streamable-http" in r.out(2) and TARES_KEY not in r.out(2)),
+        ("the MCP probe carries the token (auth on)",
+         lambda r: "  ok    MCP endpoint answers at %s" % r.stand_in.mcp_url in r.out(3).splitlines()
+         and r.marks["probed"] != [] and set(r.marks["probed"]) == {"Bearer " + TARES_KEY}),
+        ("second machine asks nothing", lambda r: "Choice [" not in r.out(4) and "started crew-reviewer" in r.out(4)),
+        ("same settings for crew-$r",
+         lambda r: all(tares_bare((r.crew / "stations" / f"crew-{role}.settings.json").read_text(encoding="utf-8"), r.crew)
+                       == tares_bare((r.tmp / "crew-two" / "stations" / f"crew-{role}.settings.json").read_text(encoding="utf-8"),
+                                     r.tmp / "crew-two") for role in ("orchestrator", "reviewer"))),
+    ],
+    covers=["a wrong token stops crew up plainly", "first crew up exits 0", "without a releaser, two stations",
+            "the release questions are not asked without a releaser", "settings saved on Tares", "grant saved on Tares",
+            "the token is kept in a file only the person reads", "stations are told where the token is",
+            "the plugin's header helper gets the same token file", "no token in settings files",
+            "stations reach the same Tares", "grant from Tares quoted with its date",
+            "no undated or doubly quoted grants",
+            "no MCP server with auth on: the command carries a token placeholder, never the token",
+            "the MCP probe carries the token (auth on)", "second machine asks nothing", "same settings for crew-$r"],
+))
+
+
+TARES_EMOJI = "\U0001F504 Emoji App"
+TARES_PROJECTS = [
+    {"id": "uc_links", "name": "Links App", "tickets_done": 1, "tickets_total": 2,
+     "milestone": {"name": "Links", "done": 1, "total": 2}, "repos": [{"path": "{tmp}/links"}]},
+    {"id": "uc_emoji", "name": TARES_EMOJI, "tickets_done": 0, "tickets_total": 0, "milestone": None,
+     "repos": [{"path": "{tmp}/emoji"}]},
+]
+TARES_PROJECT_GRANT = "builders may bump patch versions of dependencies"
+
+
+def tares_setup_repos(tmp: Path, env: dict) -> None:
+    for name in ("links", "emoji"):
+        (tmp / name).mkdir(parents=True, exist_ok=True)
+        _git(tmp, "init", "-q", cwd=tmp / name)
+
+
+def tares_orch(**extra):
+    """A step's env: the orchestrator runs `factory spawn` with its settings env, not the person's shell."""
+    return lambda r: {**{k: str(v) for k, v in r.station_settings("crew-orchestrator").get("env", {}).items()}, **extra}
+
+
+def tares_api(r, path: str):
+    """What the Tares behind the run answers to a GET, with the key (the bash suite's `api GET`)."""
+    import urllib.request
+    req = urllib.request.Request(r.stand_in.url + path, headers={"Authorization": "Bearer " + TARES_KEY})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def tares_set_token_aside(tmp: Path) -> None:
+    (tmp / "crew" / ".tares-token").replace(tmp / "token.bak")
+
+
+def tares_put_token_back(tmp: Path) -> None:
+    (tmp / "token.bak").replace(tmp / "crew" / ".tares-token")
+
+
+def tares_sign_out(tmp: Path) -> None:
+    tares_set_token_aside(tmp)
+    (tmp / "crew" / ".tares-token").write_text("", encoding="utf-8")
+
+
+def tares_back_after_sign_out(tmp: Path) -> None:
+    (tmp / "crew" / ".tares-token").unlink()
+    tares_put_token_back(tmp)
+
+
+def tares_drop_project_id(tmp: Path) -> None:
+    """A station recorded by name only, as one was before TR-534."""
+    f = tmp / "crew" / "stations.json"
+    doc = json.loads(f.read_text(encoding="utf-8"))
+    doc["emoji-app-build-m1"].pop("project_id", None)
+    f.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+
+def tares_last_env(tmp: Path) -> dict:
+    """What the last Claude Code started was given: whether it was given anything, a key, or the stale key."""
+    try:
+        text = (tmp / "claude" / "last.env").read_text(encoding="utf-8")
+    except OSError:
+        text = ""
+    return {"given": text != "", "key": any(x.startswith("TARES_AUTH_TOKEN=") for x in text.splitlines()),
+            "stale": TARES_STALE in text}
+
+
+def tares_stations_env(r, station: str, key: str):
+    return r.station_settings(station).get("env", {}).get(key, "<none>")
+
+
+def tares_out(r, i: int) -> list:
+    """The lines on stdout of step i (the suite reads status and projects with 2>/dev/null)."""
+    return r.results[i]["stdout"].splitlines()
+
+
+TARES_BUILDER = ["spawn", "builder"]
+# the projects table pads the name by bytes in bash 3 and by characters in bash 5 and Python: the emoji row is left out
+TARES_WIDE_ROW = (r"^\U0001F504 Emoji App ",)
+
+scenario(Scenario(
+    name="tares_spawn_auth",
+    suite="tares",
+    about="builders against a Tares with auth on: their project's grants, an emoji project by id, the orchestrator's own "
+          "spawn through the token file, and a key the person's shell holds never reaches a station",
+    stand_in={"token": TARES_KEY, "projects": TARES_PROJECTS,
+              "settings": {**SAVED, "autonomy": "L4-ship", "releaser": False, "challenger": True, "builders_max": 2},
+              "grants": ['- "%s" (%s)' % (TARES_WORDS, TODAY)],
+              "project_grants": {"uc_links": ['- "%s" (%s)' % (TARES_PROJECT_GRANT, TODAY)]}},
+    prepare=trust_crew,
+    setup=tares_setup_repos,
+    steps=[
+        Step(["crew", "up", "--yes"], env=tares_keyed()),                                                      # 0
+        Step(TARES_BUILDER + ["Links App", "m1", "{tmp}/links", "work T1"], env=tares_keyed()),                # 1
+        Step(["retire", "links-app-build-m1"], env=tares_keyed()),                                             # 2
+        Step(TARES_BUILDER + [TARES_EMOJI, "m1", "{tmp}/emoji", "work T1"], env=tares_keyed()),                # 3
+        Step(["settings", "emoji-app-build-m1"], env=tares_keyed(), before=tares_drop_project_id),             # 4
+        Step(["retire", "emoji-app-build-m1"], env=tares_keyed()),                                             # 5
+        Step(TARES_BUILDER + ["Links App", "m3", "{tmp}/links", "work T3"], env=tares_orch()),                 # 6
+        Step(["retire", "links-app-build-m3"], env=tares_keyed()),                                             # 7
+        Step(TARES_BUILDER + ["Links App", "m4", "{tmp}/links", "work T4"], env=tares_orch(),                  # 8
+             before=tares_set_token_aside, drop=(r"^curl: \(22\)",)),
+        Step(TARES_BUILDER + ["Links App", "m5", "{tmp}/links", "work T5"], env=tares_keyed(),                 # 9
+             before=tares_put_token_back, after=tares_last_env),
+        Step(["retire", "links-app-build-m5"], env=tares_keyed()),                                             # 10
+        Step(TARES_BUILDER + ["Links App", "m6", "{tmp}/links", "work T6"], env=tares_orch(TARES_AUTH_TOKEN=TARES_STALE),
+             after=tares_last_env),                                                                            # 11
+        Step(["retire", "links-app-build-m6"], env=tares_keyed()),                                             # 12
+        Step(["projects"], env={}, drop=TARES_WIDE_ROW),                                                       # 13
+        Step(TARES_BUILDER + ["Links App", "m7", "{tmp}/links", "work T7"], env=tares_orch(),                  # 14
+             before=tares_sign_out, drop=(r"^curl: \(22\)",)),
+        Step(["crew", "status"], env=tares_keyed(), before=tares_back_after_sign_out),                         # 15
+        Step(["projects"], env=tares_keyed(), drop=TARES_WIDE_ROW),                                            # 16
+        Step(["settings", "crew-reviewer"], env=NO_TARES),                                                     # 17
+    ],
+    checks=[
+        ("project grant quoted for the builder",
+         lambda r: allow_has(r, "links-app-build-m1", 'for project Links App, in their own words: "%s". Acting' % TARES_PROJECT_GRANT)),
+        ("and the grants for all",
+         lambda r: allow_has(r, "links-app-build-m1", 'in their own words: "%s"' % TARES_WORDS)),
+        ("L4: builder may merge on the gate",
+         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "links-app-build-m1"))),
+        ("a builder for an emoji project starts", lambda r: "started emoji-app-build-m1" in r.out(3)),
+        ("its TARES_PROJECT is the project id", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT") == "uc_emoji"),
+        ("and the name is kept for reading", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT_NAME") == TARES_EMOJI),
+        ("the header value is plain ASCII",
+         lambda r: re.fullmatch(r"[ -~]*", env_of(r, "emoji-app-build-m1", "TARES_PROJECT")) is not None),
+        ("Tares resolves the id the header carries",
+         lambda r: tares_api(r, "/api/projects/" + env_of(r, "emoji-app-build-m1", "TARES_PROJECT")).get("name") == TARES_EMOJI),
+        ("a station kept by name gets the id when its settings are written again",
+         lambda r: json.loads(r.results[4]["stdout"])["env"]["TARES_PROJECT"] == "uc_emoji"),
+        ("orchestrator's own spawn reaches Tares with the token file", lambda r: "started links-app-build-m3" in r.out(6)),
+        ("its builder gets the token file too",
+         lambda r: fwd(env_of(r, "links-app-build-m3", "TARES_FACTORY_TOKEN_FILE")) == fwd(r.crew / ".tares-token")),
+        ("unreadable crew settings stop a spawn plainly",
+         lambda r: "could not read the crew settings" in r.out(8) and "integer expression" not in r.out(8)
+         and not (r.crew / "stations" / "links-app-build-m4.settings.json").exists()),
+        ("claude is started without the person's key", lambda r: r.snap(9)["given"] and not r.snap(9)["key"]),
+        ("station settings blank an inherited key",
+         lambda r: tares_stations_env(r, "links-app-build-m5", "TARES_AUTH_TOKEN") == ""),
+        ("a station with a stale inherited key reaches Tares through the crew file",
+         lambda r: "started links-app-build-m6" in r.out(11)),
+        ("and leaves the crew file as it was",
+         lambda r: (r.crew / ".tares-token").read_text(encoding="utf-8").rstrip("\n") == TARES_KEY),
+        ("the station passes the stale key to nobody", lambda r: not r.snap(11)["stale"]),
+        ("the watch, started without a key, reads the crew file",
+         lambda r: any(x.startswith("Links App") for x in r.out(13).splitlines())),
+        ("a station whose person signed out says so",
+         lambda r: "the person signed out of Tares: they run tares login" in r.out(14)),
+        ("status has a line per project from Tares",
+         lambda r: any(x.startswith("project Links App: 1/2 tickets done, on Links 1/2") for x in tares_out(r, 15))),
+        ("projects reads the same",
+         lambda r: any(re.match(r"Links App +1/2 +Links 1/2 ", x) for x in tares_out(r, 16))),
+        ("unreachable Tares is reported, with how to start one",
+         lambda r: "no Tares answers at" in r.results[17]["stderr"] and "tares up" in r.results[17]["stderr"]
+         and r.results[17]["stdout"] == ""),
+    ],
+    covers=["project grant quoted for the builder", "and the grants for all", "L4: builder may merge on the gate",
+            "a builder for an emoji project starts", "its TARES_PROJECT is the project id", "and the name is kept for reading",
+            "the header value is plain ASCII", "Tares resolves the id the header carries",
+            "a station kept by name gets the id when its settings are written again",
+            "orchestrator's own spawn reaches Tares with the token file", "its builder gets the token file too",
+            "unreadable crew settings stop a spawn plainly", "claude is started without the person's key",
+            "station settings blank an inherited key",
+            "a station with a stale inherited key reaches Tares through the crew file", "and leaves the crew file as it was",
+            "the station passes the stale key to nobody", "the watch, started without a key, reads the crew file",
+            "a station whose person signed out says so", "status has a line per project from Tares", "projects reads the same",
+            "unreachable Tares is reported, with how to start one"],
+))
+
+
+# lsp_test.sh (TR-1162): the crew up part, the offer of the language servers and the install on a yes. The doctor
+# part of that suite is lsp_missing and lsp_servers above. The installers a yes runs (npm, go, rustup) are stand-ins
+# that log the call and make the binary they would install, in the one folder the servers are looked up in
+# (FACTORY_LSP_PATH), as in the bash suite; they are shell scripts, so the Python side is not run on Windows.
+
+LSP_INSTALLER = """#!/bin/sh
+echo "$(basename "$0") $*" >> "$(dirname "$0")/installs.log"
+for a in "$@"; do
+  case "$a" in
+    pyright) touch "$(dirname "$0")/pyright-langserver" ;;
+    typescript-language-server) touch "$(dirname "$0")/typescript-language-server" ;;
+    golang.org/x/tools/gopls@latest) touch "$(dirname "$0")/gopls" ;;
+    rust-analyzer) touch "$(dirname "$0")/rust-analyzer" ;;
+  esac
+done
+chmod +x "$(dirname "$0")"/* 2>/dev/null
+exit 0
+"""
+LSP_REPOS = ("api", "gw", "docs", "engine", "site", "gw2")
+
+
+def lsp_prepare(r: "Run") -> None:
+    """Claude Code trusts the crew home and every repo; Tares has one project with all six repos."""
+    r.trust(r.crew, *[r.tmp / n for n in LSP_REPOS])
+    r.stand_in.projects.append({"name": "Mix", "repos": [{"path": str(r.tmp / n)} for n in
+                                                         ("api", "gw", "docs", "engine", "gw2", "site")]})
+
+
+def lsp_setup(tmp: Path, env: dict) -> None:
+    _lsp_repos(tmp)
+    folder = tmp / "lspbin"
+    folder.mkdir(parents=True, exist_ok=True)
+    for tool in ("npm", "go", "rustup"):
+        f = folder / tool
+        f.write_text(LSP_INSTALLER, encoding="utf-8", newline="\n")
+        f.chmod(0o755)
+    _crew_json(tmp)
+    _lsp_plugins(tmp, [])
+    _fake_tool(tmp, "gh")
+    _fake_tool(tmp, "tares")
+    env["FACTORY_LSP_PATH"] = str(folder)
+    env["PATH"] = str(folder) + os.pathsep + env.get("PATH", "")
+    env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
+
+
+def lsp_after(tmp: Path) -> dict:
+    """What the installers and Claude Code were asked so far: the log of installs, the plugins on."""
+    try:
+        log = (tmp / "lspbin" / "installs.log").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        log = []
+    calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    plugins = json.loads((tmp / "claude" / "plugins.json").read_text(encoding="utf-8"))
+    return {"installs": log, "plugin_installs": sum(1 for c in calls if c["args"][:2] == ["plugin", "install"]),
+            "plugins": sorted(p["id"] for p in plugins)}
+
+
+def lsp_crew_up_checks() -> list:
+    def api(r):
+        return str(r.tmp / "api")
+
+    def installs(r, i):
+        return len(r.snap(i)["installs"])
+
+    def nothing_installed(r, i):
+        return installs(r, i) == 0 and r.snap(i)["plugin_installs"] == 0
+
+    def log(r):
+        return "\n".join(r.snap(4)["installs"]) + "\n"
+    return [
+        ("when claude cannot list its plugins crew up offers no install",
+         lambda r: "Code intelligence" not in r.out(0)),
+        ("crew up --yes recommends and installs nothing",
+         lambda r: "Code intelligence" in r.out(1) and f"Python in {api(r)}" in r.out(1)
+         and "not installing language servers without a yes" in r.out(1) and nothing_installed(r, 1)),
+        ("a closed input is a no",
+         lambda r: "no language servers installed" in r.out(2) and nothing_installed(r, 2)),
+        ("answering no installs nothing",
+         lambda r: "no language servers installed" in r.out(3) and nothing_installed(r, 3)),
+        ("a yes installs each binary",
+         lambda r: re.search(r"^npm install -g pyright", log(r), re.M) is not None
+         and re.search(r"^npm install -g typescript-language-server typescript", log(r), re.M) is not None
+         and re.search(r"^go install golang.org/x/tools/gopls@latest", log(r), re.M) is not None),
+        ("a yes installs each binary once, however many repos need it",
+         lambda r: len(re.findall(r"^go install", log(r), re.M)) == 1
+         and len(re.findall(r"^npm install -g typescript-language-server", log(r), re.M)) == 1),
+        ("a yes installs each plugin once",
+         lambda r: all(r.snap(4)["plugins"].count(f"{p}@claude-plugins-official") == 1
+                       for p in ("pyright-lsp", "typescript-lsp", "gopls-lsp", "rust-analyzer-lsp"))),
+        ("doctor finds Python, TypeScript and Go ready after the yes",
+         lambda r: re.search(r"ok .*Python in " + re.escape(api(r)) + " has a language server", r.out(5)) is not None
+         and re.search(r"ok .*TypeScript in " + re.escape(api(r)) + " has a language server", r.out(5)) is not None
+         and re.search(r"ok .*Go in " + re.escape(str(r.tmp / "gw")) + " has a language server", r.out(5)) is not None),
+        ("crew up offers nothing for languages that have a server",
+         lambda r: "Python in" not in r.out(6) and f"Go in {r.tmp / 'gw'}" not in r.out(6)),
+    ]
+
+
+scenario(Scenario(
+    name="lsp_crew_up",
+    suite="lsp",
+    about="crew up offers the missing language servers, installs only on a yes, and offers nothing once they are there",
+    stand_in={"settings": {**SAVED, "releaser": False, "builders_max": 2}},
+    prepare=lsp_prepare,
+    setup=lsp_setup,
+    not_windows="the installers a yes runs are shell scripts",
+    steps=[Step(["crew", "up", "--yes"], env={"FAKE_CLAUDE_PLUGIN_FAIL": "1"}, stdin="", after=lsp_after),     # 0
+           Step(["crew", "up", "--yes"], stdin="", after=lsp_after),                                       # 1
+           Step(["crew", "up"], stdin="", after=lsp_after),                                                # 2 a closed input
+           Step(["crew", "up"], stdin="no\n", after=lsp_after),                                            # 3
+           Step(["crew", "up"], stdin="yes\n", after=lsp_after),                                           # 4
+           Step(["doctor"], drop=DOCTOR_DROP, after=lsp_after),                                            # 5
+           Step(["crew", "up", "--yes"], stdin="", after=lsp_after)],                                      # 6
+    checks=lsp_crew_up_checks(),
+    covers=["when claude cannot list its plugins crew up offers no install",
+            "crew up --yes recommends and installs nothing",
+            "a closed input is a no",
+            "answering no installs nothing",
+            "a yes installs each binary",
+            "a yes installs each binary once, however many repos need it",
+            "a yes installs each plugin once",
+            "doctor finds Python, TypeScript and Go ready after the yes",
+            "crew up offers nothing for languages that have a server"],
+))
+
+
+# guard_test.sh (TR-1162): the whole suite. The guard has one implementation (hooks/guard.sh is a shim for
+# `tares hook guard`), so both sides run the same code; guard_support.py runs the 154 cases of
+# tests/guard_cases.jsonl in one process, after checking the file still holds the suite's own cases.
+
+scenario(Scenario(
+    name="guard_all",
+    suite="guard",
+    about="every case of guard_test.sh: what each role may run, the halted crew, a session without a role",
+    driver="guard_support.py",
+    steps=[Step(["run"])],
+    checks=[("(the whole guard suite)", lambda r: r.code(0) == 0 and r.out(0).strip() == "guard: all cases pass")],
+    covers=["(the whole guard suite)"],
+))
+
+
+# heavy_test.sh (TR-1162): the whole suite. factory-heavy is its own script on the bash side and
+# `tares factory heavy` on the Python side; heavy_support.py runs the suite against the one it is given.
+
+scenario(Scenario(
+    name="heavy_all",
+    suite="heavy",
+    about="two heavy commands never overlap, a command past its timeout is killed (142) and the lock is released",
+    driver="heavy_support.py",
+    steps=[Step(["run"])],
+    checks=[("(the whole heavy suite)", lambda r: r.code(0) == 0
+             and r.out(0).strip() == "factory-heavy: serialises and times out")],
+    covers=["(the whole heavy suite)"],
+))
+
+
+# parse_test.sh (TR-1162): the whole suite. The session id is read from the output of `claude --bg`, with and without
+# colour codes, and is empty when Claude Code did not start a session.
+
+PARSE_CASES = [
+    ("backgrounded · feb401c6 · tfspike-alpha\n", "feb401c6"),
+    ("backgrounded · \033[36m3bd5cd67\033[39m · vetme-build-t1\n\033[2m  claude agents   list sessions\033[22m\n",
+     "3bd5cd67"),
+    ("Workspace not trusted. Run `claude` in /x once\n", ""),
+]
+
+scenario(Scenario(
+    name="parse_all",
+    suite="parse",
+    about="the session id is read from `claude --bg` output, with and without colour codes",
+    steps=[Step(["_parse-bg-id"], stdin=text) for text, _want in PARSE_CASES],
+    checks=[("(the whole parse suite)",
+             lambda r: all(r.out(i).strip() == want for i, (_text, want) in enumerate(PARSE_CASES)))],
+    covers=["(the whole parse suite)"],
 ))
 
 

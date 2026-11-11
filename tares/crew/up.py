@@ -30,7 +30,7 @@ Differences from bash (each one a decision, none an accident):
     Python whatever TARES_FACTORY_ENGINE says unless that is "bash" (then bash's own error answers).
  2. The watch is started here (watch.start, TR-958, wired in TR-1155): the Python watch with
     TARES_FACTORY_ENGINE=python, as `crew watch` is routed. The language server offer (lsp_offer,
-    TR-970) is not wired into crew up yet: it is skipped without a word.
+    TR-970) is Up.lsp_offer, which calls tares.crew.doctor_lsp.offer.
  3. Starting the stations (launch, boot_prompt, write_settings, is_alive: TR-950 and TR-953, not ported
     yet) is the one step that still runs bash: `start_stations` hands the roles to the bash internal
     command `_start-stations`, which is the second half of bash's own cmd_crew_up, cut out unchanged
@@ -60,7 +60,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import contract, state
+from . import contract, doctor_lsp, state
 from . import watch as watch_mod
 from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
 from .errors import CrewError
@@ -272,6 +272,16 @@ class Up:
 
     def say(self, msg: str) -> None:
         _err(f"{ME}: {msg}\n")
+
+    def lsp_offer(self, claude_path: str) -> list:
+        """Recommend the missing language servers of the handed-over repos; install only on a yes (bash lsp_offer).
+        Claude Code is asked which plugins are on first, as bash does, even when no project has a repo."""
+        plugins = doctor_lsp.read_plugins(claude_path)
+        try:
+            rows = self.client.project_repo_rows()
+        except CrewError:
+            rows = []
+        return doctor_lsp.offer(doctor_lsp.missing(rows, plugins, self.env), self.assume_yes, claude_path, say=self.say)
 
     @property
     def kit(self) -> str:
@@ -667,7 +677,7 @@ def _crew_up(argv: list, env: dict) -> int:
     up.setup_crew_name()
     up.ensure_settings()
     c.prime()
-    # the language server offer (lsp_offer, TR-970) is not ported: skipped
+    up.lsp_offer(claude)
     if not roles:
         roles = c.crew_roles()
     code = start_stations(env, roles)

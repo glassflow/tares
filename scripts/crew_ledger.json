@@ -4669,6 +4669,56 @@
       "python": "",
       "ported": false,
       "note": "Used by the usage_watch_* scenarios of parity.py; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "usage_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the station's status line the way Claude Code does (usage_statusline scenario)",
+      "ticket": "TR-1162",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the usage_statusline scenario of parity.py; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "guard_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the guard cases of guard_test.sh in one process on either engine",
+      "ticket": "TR-1162",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the guard scenario of parity.py; both engines run the same tares.crew.hooks code; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "heavy_support.py",
+      "kind": "suite",
+      "what": "a driver that runs heavy_test.sh against the bash factory-heavy or the Python port",
+      "ticket": "TR-1162",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the heavy scenario of parity.py; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "crewname_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the plugin's guard and session-start hooks for a helper, as crewname_test.sh does",
+      "ticket": "TR-1162",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the crewname_* scenarios of parity.py; the hooks are shared by both engines; standard library only; it goes when the bash engine does."
+    },
+    {
+      "name": "spec_hook_support.py",
+      "kind": "suite",
+      "what": "a driver that runs the plugin's session-start hook the way spec_test.sh does",
+      "ticket": "TR-1162",
+      "dropped": false,
+      "python": "",
+      "ported": false,
+      "note": "Used by the spec_hooks scenario of parity.py; the hook is shared by both engines; standard library only; it goes when the bash engine does."
     }
   ],
   "cmux_touchpoints": [
@@ -4794,7 +4844,7 @@
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
-      "line": 908,
+      "line": 901,
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED), ported from crew_test.sh",
       "ticket": "TR-953",
       "dropped": false,
