@@ -291,6 +291,18 @@ FACTORY_SCHEMA = [
       consents         TEXT,
       state            TEXT
     )""",
+    # Your own deny rules for the crew's guardrails (TR-862): a sentence a station's soft_deny list
+    # gets, for every project (scope factory, project NULL) or one project. Allow rules are the
+    # grants above, read in place; there is no allow row here.
+    """CREATE TABLE IF NOT EXISTS guardrail_rules (
+      id         TEXT PRIMARY KEY,
+      scope      TEXT,
+      project    TEXT,
+      kind       TEXT,
+      text       TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ
+    )""",
     # a project grant from someone who is neither the project's lead nor an admin also waits
     # for the lead (for an admin when the project has none)
     "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
@@ -565,6 +577,7 @@ class FactoryStore:
         self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
@@ -1848,6 +1861,51 @@ class FactoryStore:
             if consents is not None:
                 self.sc.execute("UPDATE grants SET consents = ? WHERE id = ?",
                                  [json.dumps(consents), gid])
+
+    # ── your own guardrail rules (TR-862) ─────────────────────────────────────
+    _RULE_COLS = "id, scope, project, kind, text, created_by, created_at"
+
+    @staticmethod
+    def _rule_row(r) -> dict:
+        return {"id": r[0], "scope": r[1], "project": r[2], "kind": r[3], "text": r[4],
+                "created_by": r[5], "created_at": r[6]}
+
+    def add_guardrail_rule(self, scope: str, project: str | None, kind: str, text: str,
+                           by: str | None = None) -> dict:
+        """One rule, numbered R1, R2... for the cell; nothing is checked here."""
+        with self._swrite:
+            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM guardrail_rules"
+                                   ).fetchone()[0] or 0
+            rid = f"R{top + 1}"
+            self.sc.execute(
+                f"INSERT INTO guardrail_rules ({self._RULE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [rid, scope, project, kind, text, by, now_utc()])
+        return self.get_guardrail_rule(rid)
+
+    def get_guardrail_rule(self, rid: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules WHERE id = ?",
+                                 [str(rid or "").strip().upper()]).fetchone()
+        return self._rule_row(r) if r else None
+
+    def list_guardrail_rules(self) -> list[dict]:
+        """Every rule of every scope, oldest first."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules").fetchall()
+        return sorted((self._rule_row(r) for r in rows), key=lambda g: int(g["id"][1:]))
+
+    def set_guardrail_rule_text(self, rid: str, text: str) -> dict | None:
+        with self._swrite:
+            self.sc.execute("UPDATE guardrail_rules SET text = ? WHERE id = ?",
+                             [text, str(rid or "").strip().upper()])
+        return self.get_guardrail_rule(rid)
+
+    def delete_guardrail_rule(self, rid: str) -> bool:
+        """True when a rule was removed."""
+        with self._swrite:
+            gone = self.sc.execute("DELETE FROM guardrail_rules WHERE id = ? RETURNING id",
+                                    [str(rid or "").strip().upper()]).fetchone()
+        return gone is not None
 
     # ── integration choices and their settings (TR-839) ───────────────────────
     # Secrets are stored as they come, in the state database, exactly as connector secrets are
