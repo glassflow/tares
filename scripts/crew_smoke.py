@@ -29,7 +29,8 @@ Isolation, so a smoke run cannot touch the live crew (TR-1164):
 The one edit outside the scratch folder: Claude Code starts no session in a folder it has not trusted, so
 the script adds the scratch crew home, the clone itself (its parent folder does not count) and the worktrees folder to ~/.claude.json
 (hasTrustDialogAccepted) and removes those entries at the end. A real run therefore rewrites that file (a
-symlink is followed, and a change made by a running Claude Code meanwhile is re-read and kept). Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok.
+symlink is followed, and a change made by a running Claude Code meanwhile is re-read and kept). Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok,
+124 the hard-deadline watchdog stopped the run.
 """
 from __future__ import annotations
 
@@ -54,20 +55,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 FACTORY_DIR = ROOT / "tests" / "factory"
 DEFAULT_REPO = "glassflow/tares-crew-smoke"
-EXIT_OK, EXIT_FAIL, EXIT_REFUSED, EXIT_TIMEOUT, EXIT_DRY_OK = 0, 1, 2, 3, 10
+EXIT_OK, EXIT_FAIL, EXIT_REFUSED, EXIT_TIMEOUT, EXIT_DRY_OK, EXIT_WATCHDOG = 0, 1, 2, 3, 10, 124
 MAX_POLL_ERRORS = 5
 PROJECT_NAME = "hello-smoke"
 TARES = [sys.executable, "-c", "import sys; sys.argv[0] = 'tares'; from tares.cli import main; main()"]
 
 
+def _swallow(signum, _frame=None):
+    """Do nothing with the signal."""
+
+
 @contextlib.contextmanager
 def ignoring_signals():
     """No SIGTERM or Ctrl-C while the body runs: a second one must not cut the teardown short and leave the
-    trust entries and the scratch daemons behind. Only the main thread can change handlers."""
+    trust entries and the scratch daemons behind. Only the main thread can change handlers.
+
+    The handler is a Python no-op, not SIG_IGN: an ignored signal stays ignored in a child after exec, so the
+    commands the teardown starts (crew down, claude stop) would not answer SIGTERM or Ctrl-C. A caught signal
+    goes back to the default in a child."""
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    old = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGTERM, signal.SIGINT)}
+    old = {sig: signal.signal(sig, _swallow) for sig in (signal.SIGTERM, signal.SIGINT)}
     try:
         yield
     finally:
@@ -412,7 +421,8 @@ class Smoke:
     def github_pr(self) -> dict | None:
         """This run's pull request: from a factory/ branch, opened since the run began, and adding the line
         `smoke run <pid>` the ticket asks for. A second smoke run, or another crew on the same test repo, opens
-        pull requests that fail the last test. A gh error raises Failed (wait_for_pr tolerates a few in a row)."""
+        pull requests that fail the last test. A gh error on the list raises Failed (wait_for_pr tolerates a few in a
+        row). A diff that cannot be read skips that candidate; Failed only when no candidate could be read."""
         r = run(["gh", "pr", "list", "-R", self.repo, "--state", "all", "--limit", "30", "--json",
                  "number,url,headRefName,createdAt,state"], self.env, 60)
         if r.returncode:
@@ -423,14 +433,23 @@ class Smoke:
             prs = json.loads(r.stdout or "[]")
         except ValueError:
             raise Failed("gh pr list printed no JSON") from None
+        bad = []
+        read = 0
         for pr in prs:
             if not (pr["headRefName"].startswith("factory/") and pr["createdAt"] >= since):
                 continue
             d = run(["gh", "pr", "diff", str(pr["number"]), "-R", self.repo], self.env, 60)
             if d.returncode:
-                raise Failed(f"gh pr diff {pr['number']} failed: {(d.stderr or d.stdout).strip()[:200]}")
+                # one candidate that cannot be read (closed meanwhile, a gh hiccup) must not hide the others
+                bad.append(f"gh pr diff {pr['number']} failed: {(d.stderr or d.stdout).strip()[:200]}")
+                say(f"skipping PR {pr['number']}: {bad[-1]}")
+                continue
+            read += 1
             if mine.search(d.stdout):
                 return pr
+        if bad and not read:
+            # no candidate could be read: that is an error (wait_for_pr counts it), not "no pull request yet"
+            raise Failed(bad[-1])
         return None
 
     def wait_for_pr(self, seconds: float) -> dict:
@@ -613,7 +632,7 @@ def main(argv: list | None = None) -> int:
             else:
                 shutil.rmtree(s.work, ignore_errors=True)
     if s.watchdog_fired:
-        code = 124
+        code = EXIT_WATCHDOG
     if pr:
         print(f"PR: {pr['url']}")
     return code
