@@ -191,11 +191,13 @@ try:
     old = "2020-01-01T00:00:00Z"
 
     def fake_gh(prs, diffs, list_rc=0, diff_rc=0):
+        """diff_rc: one exit code for every diff, or {pr number as text: code} for some of them."""
         def _run(cmd, env, timeout, cwd=None):
             if cmd[:3] == ["gh", "pr", "list"]:
                 return subprocess.CompletedProcess(cmd, list_rc, json.dumps(prs), "boom")
             if cmd[:3] == ["gh", "pr", "diff"]:
-                return subprocess.CompletedProcess(cmd, diff_rc, diffs.get(cmd[3], ""), "boom")
+                rc = diff_rc.get(cmd[3], 0) if isinstance(diff_rc, dict) else diff_rc
+                return subprocess.CompletedProcess(cmd, rc, diffs.get(cmd[3], ""), "boom")
             raise AssertionError(cmd)
         return _run
     sm = new_smoke("gh")
@@ -218,14 +220,32 @@ try:
         check("a pull request from before the run does not count", sm.github_pr() is None)
         smoke.run = fake_gh([pr(1, branch="main-fix")], {"1": mine})
         check("a pull request from a branch outside factory/ does not count", sm.github_pr() is None)
-        for kw in ({"list_rc": 1}, {"diff_rc": 1}):
-            smoke.run = fake_gh([pr(1)], {"1": mine}, **kw)
+        smoke.run = fake_gh([pr(1)], {"1": mine}, list_rc=1)
+        try:
+            sm.github_pr()
+            got = "returned"
+        except smoke.Failed:
+            got = "failed"
+        check("a gh error on the list raises Failed, it is not 'no pull request yet'", got == "failed")
+        # TR-1227 gap 4: one candidate whose diff cannot be read is skipped, the others are still looked at
+        def found():
             try:
-                sm.github_pr()
-                got = "returned"
-            except smoke.Failed:
-                got = "failed"
-            check(f"a gh error ({list(kw)[0]}) raises Failed, it is not 'no pull request yet'", got == "failed")
+                return (sm.github_pr() or {}).get("number")
+            except smoke.Failed as e:
+                return f"Failed: {e}"
+        smoke.run = fake_gh([pr(1), pr(2)], {"1": mine, "2": mine}, diff_rc={"1": 1})
+        got = found()
+        check("a candidate whose diff fails is skipped and the next one is found", got == 2, str(got))
+        smoke.run = fake_gh([pr(1), pr(2)], {"1": other, "2": mine}, diff_rc={"2": 1})
+        got = found()
+        check("a candidate whose diff fails does not end the run when another was read", got is None, str(got))
+        smoke.run = fake_gh([pr(1)], {"1": mine}, diff_rc=1)
+        got = found()
+        check("a lone candidate whose diff cannot be read is 'no pull request yet', not an error (PR 616 F4)",
+              got is None, str(got))
+        smoke.run = fake_gh([pr(1), pr(2)], {"1": mine, "2": mine}, diff_rc=1)
+        got = found()
+        check("every candidate diff unreadable is still 'no pull request yet'", got is None, str(got))
         # the sessions a run stops at the end are this crew's, not a longer crew name that starts with it
         sm.env = {"CLAUDE_BIN": "/bin/echo"}
         names = ["smoke-9-orchestrator", "smoke-9-reviewer", "smoke-9-hello-smoke-build-m1", "smoke-9-1-orchestrator",
@@ -237,6 +257,12 @@ try:
               left == ["smoke-9-hello-smoke-build-m1", "smoke-9-orchestrator", "smoke-9-reviewer"], str(left))
     finally:
         smoke.run = real_run
+
+    # TR-1227 F2 (PR 645 review): a command run() starts is in its own session, so a terminal Ctrl-C (which goes to
+    # the whole foreground process group) does not reach the teardown's children
+    if os.name == "posix":
+        r = smoke.run([sys.executable, "-c", "import os; print(os.getsid(0) == os.getpid())"], dict(os.environ), 30)
+        check("a command run() starts leads its own session", r.stdout.strip() == "True", r.stdout + r.stderr)
 
     # F4: a second SIGTERM or Ctrl-C during the teardown does not cut it short
     sm = new_smoke("sig")
@@ -277,6 +303,61 @@ try:
     finally:
         for sig, h in before.items():
             signal.signal(sig, h)
+
+    # TR-1227 gaps 1 to 3, each in a child Python so a signal never reaches this test
+    # gap 3: the teardown's own commands start with the default signals, not an inherited SIG_IGN
+    # (Python itself gives a fresh process its own SIGINT handler unless SIGINT was ignored, so test for "not ignored")
+    probe = ("import signal; print(signal.getsignal(signal.SIGTERM) == signal.SIG_DFL and "
+             "signal.getsignal(signal.SIGINT) != signal.SIG_IGN)")
+    with smoke.ignoring_signals():
+        inside = signal.getsignal(signal.SIGTERM)
+        child = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60)
+    check("signals are not SIG_IGN while ignoring_signals runs", inside != signal.SIG_IGN, str(inside))
+    check("a command started inside ignoring_signals can still be stopped by SIGTERM and SIGINT",
+          child.stdout.strip() == "True", f"{child.stdout!r} {child.stderr[-300:]!r}")
+
+    driver = tmp / "driver.py"
+    driver.write_text('''
+import importlib.util, os, signal, sys, threading, time
+spec = importlib.util.spec_from_file_location("crew_smoke", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+scenario, marker, work = sys.argv[2:5]
+
+def start_tares(self):
+    if scenario == "watchdog":
+        threading.Timer(0.2, m.fire_watchdog, [self]).start()
+        time.sleep(30)
+    raise m.Failed("the scenario fails the run")
+
+def teardown(self):
+    if scenario == "finally":
+        os.kill(os.getpid(), signal.SIGTERM)
+        os.kill(os.getpid(), signal.SIGINT)
+    open(marker, "w").write("teardown finished")
+
+m.Smoke.start_tares = start_tares
+m.Smoke.teardown = teardown
+sys.exit(m.main(["--workdir", work, "--crew-home", work + "/crew", "--timeout", "60"]))
+''', encoding="utf-8")
+
+    def drive(scenario):
+        marker = tmp / f"marker-{scenario}"
+        r = subprocess.run([sys.executable, str(driver), str(SCRIPT), scenario, str(marker), str(tmp / f"drv-{scenario}")],
+                           capture_output=True, text=True, timeout=120)
+        return r, marker
+
+    # gap 1: a watchdog stop exits 124, not the 1 of a plain failure
+    r, marker = drive("watchdog")
+    check("a watchdog stop exits 124", r.returncode == smoke.EXIT_WATCHDOG == 124, f"{r.returncode}\n{r.stdout[-400:]}{r.stderr[-400:]}")
+    check("the watchdog run still ran its teardown", marker.is_file())
+    r, marker = drive("fail")
+    check("a plain failure exits 1, not 124", r.returncode == 1, f"{r.returncode}\n{r.stdout[-400:]}{r.stderr[-400:]}")
+    # gap 2: a TERM and a Ctrl-C that land inside main's finally do not cut it short
+    r, marker = drive("finally")
+    check("a TERM and a Ctrl-C inside main's finally do not stop it",
+          marker.is_file() and r.returncode == 1 and "Traceback" not in r.stderr,
+          f"{r.returncode} marker={marker.is_file()}\n{r.stdout[-400:]}{r.stderr[-400:]}")
 
     # F5: the trust edit keeps a change made under it, and follows a symlinked file
     cj = tmp / "race.json"

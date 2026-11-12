@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- On Windows, two crew commands or threads writing an event at the same moment could mix their lines or lose one in `events.jsonl` (TR-1229). Each event is now written under a lock, so every line stays whole and none is dropped. macOS and Linux were not affected.
 - `tares factory doctor` now warns when git has no global `user.name` or `user.email`. On a fresh Windows machine a builder's first commit in a repo that sets none of its own stopped with "Author identity unknown", and `crew up` named the person "the user"; the warn gives the two `git config --global` commands.
 
 ## [1.57.0] - 2026-11-12
