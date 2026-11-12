@@ -22,5 +22,6 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
           LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        shell: bash   # bash -eo pipefail: a failing git diff fails the step, it never reads as "no files changed"
         run: |
-          git diff --name-status "origin/$BASE_REF...HEAD" | python3 scripts/check_changelog.py --labels "$LABELS"
+          git -c core.quotePath=false diff --name-status "origin/$BASE_REF...HEAD" | python3 scripts/check_changelog.py --labels "$LABELS"

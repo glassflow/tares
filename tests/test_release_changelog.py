@@ -111,6 +111,10 @@ ck("changelog.yml checks out the full history", any(s.get("with", {}).get("fetch
 run = next(s for s in steps if "run" in s)
 ck("changelog.yml passes the base branch and labels by env, never inside the script text",
    "${{" not in run["run"] and {"BASE_REF", "LABELS"} <= set(run["env"]) and "check_changelog.py" in run["run"] and "--name-status" in run["run"], str(run))
+ck("changelog.yml runs bash with pipefail, so a failing git diff fails the step (it never reads as no changed files)",
+   run.get("shell") == "bash", str(run.get("shell")))
+ck("changelog.yml lists names as they are (quotePath off), so a path with a non-ASCII letter is read right",
+   "core.quotePath=false" in run["run"] and run["run"].index("core.quotePath=false") < run["run"].index("diff"), run["run"])
 ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 ck("ci.yml does not run on a label (that would start the heavy jobs): `labeled` is only in changelog.yml", "labeled" not in ci)
 
