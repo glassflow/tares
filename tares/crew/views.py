@@ -2,8 +2,7 @@
 
 Ports cmd_desk, cmd_status, cmd_roster, cmd_attach and cmd_logs of claude-plugin/bin/factory, with the
 read-only helpers they lean on (the kit fingerprint, the grants and Claude Code version checks, the pace
-line, the watch's pid, adopt_unrecorded). Each prints what bash prints, in the same order. Keep the two in
-step: CI (port-drift) fails a PR that edits one of these bash functions without touching this file.
+line, the watch's pid, adopt_unrecorded). Each prints its lines in a fixed order.
 
 Helpers that a later ticket owns (the kit freeze, the Claude Code move, the pace) are read-only copies
 here, so the default output of a command that runs in Python is the same as bash's. The ticket that ports
@@ -227,15 +226,17 @@ def _flag(flags, name: str) -> str:
     return ""
 
 
-def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> None:
+def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list | None:
     """Record a live station session stations.json does not list (a spawn whose output could not be
-    read), so status, roster and the duplicate check see it. It asks Claude Code for the sessions itself,
-    as bash does (the command asks again afterwards); when they cannot be read nothing is recorded."""
+    read), so status, roster and the duplicate check see it. It asks Claude Code for the sessions itself;
+    when they cannot be read nothing is recorded. It returns the list it read (adopting changes
+    stations.json, not that list), so a command that needs the sessions next can use it instead of
+    starting Claude Code again; None when there was no crew or the list could not be read."""
     if not paths.crew_cfg.is_file():
-        return
+        return None
     live = _sessions_or_none(binary)
     if live is None:
-        return
+        return None
     crew = state.crew_name(paths)
     pattern = re.compile("^" + re.escape(crew) + "-|-build-")
     rows = None
@@ -280,6 +281,7 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> None
             "model": _flag(flags, "--model"), "effort": _flag(flags, "--effort"), "cwd": cwd,
             "settings": f"{paths.raw}/stations/{name}.settings.json", "status": "active",
             "startedAt": state.utc_stamp(), "adopted": True}, paths)
+    return live
 
 
 # ---------- status ----------
@@ -358,7 +360,7 @@ def cmd_status(argv: list, env: dict) -> int:
     for name in sorted(groups):
         if len(groups[name]) > 1:
             out.write(f"TWO SESSIONS named {name}: {', '.join(groups[name])}; "
-                      "stop the one stations.json does not list (factory roster)\n")
+                      "stop the one stations.json does not list (tares factory roster)\n")
     is_frozen = frozen.on
     doc["plugin"] = {"older": old}
     if old == 0:
@@ -453,7 +455,7 @@ def cmd_roster(argv: list, env: dict) -> int:
         sys.stdout.write(f"crew: {state.crew_name(paths)} (orchestrator: {state.crew_orchestrator(paths)})\n")
     state.require_crew(paths)
     binary = claude.claude_bin(env)
-    adopt_unrecorded(paths, client, binary)
+    listed = adopt_unrecorded(paths, client, binary)
     doc = {"crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "stations": []}
     if not paths.stations.is_file():
         if js:
@@ -461,7 +463,9 @@ def cmd_roster(argv: list, env: dict) -> int:
         else:
             print("no stations")
         return 0
-    agents = _sessions_or_none(binary)
+    # the list adopt_unrecorded read is still the list (a Claude Code start is most of this command's time);
+    # when it could not be read, ask once more, as before
+    agents = listed if listed is not None else _sessions_or_none(binary)
     if agents is None:
         raise SessionListUnreadableError(claude.UNREAD)
     stations = state.stations_load(paths)

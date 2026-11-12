@@ -1,14 +1,15 @@
 """`tares factory doctor [--json]`: check everything the crew needs and say what to fix.
 
-The port of cmd_doctor, doctor_keys and doctor_kit. The text output is the bash output for every check
-bash makes: a header, one `  ok`, `  warn` or `  FIX` line per check, then `all good` or
+The port of cmd_doctor, doctor_keys and doctor_kit from the old bash crew (removed in TR-975). An `engine` key
+in crew.json is ignored. The text output is the old bash output for every check
+bash made: a header, one `  ok`, `  warn` or `  FIX` line per check, then `all good` or
 `fix the items marked FIX`, and exit 1 when any line is FIX. `--json` prints the same checks as one
 contract document, {schema_version, ok, checks: [{id, ok, message, fix, level}]} (schemas/doctor.json), for the desktop
 app, and exits the same way: 1 when a check is FIX, with the document still on stdout. `ok` is false only for FIX
 (a warning is still ok); `level` says which of the three it is; `fix` is what to do, "" for an ok line.
 
 Checks bash does not make are marked `new` and their text starts with a fixed label (NEW_LABELS), so a
-test can set them aside when it compares the two engines line by line: the engine in use, the installed
+test can set them aside when it compares the output with the old bash doctor line by line: the installed
 tares against the plugin's min_tares (TR-1064), `tares` and `tares hook` on PATH (TR-1068), the login key
 in the keychain or in a file only its owner reads (TR-949), the crew key file's permissions, git, and
 Git for Windows on Windows.
@@ -45,7 +46,7 @@ from .paths import ME, CrewPaths
 USAGE = f"usage: {ME} doctor [--json]"
 LABELS = {"ok": "ok   ", "warn": "warn ", "fix": "FIX  "}
 # What the new checks' text starts with (after the level word), for a test that sets them aside.
-NEW_LABELS = ("engine", "tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows")
+NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows")
 TEMP_FLAGS = re.compile(r"/var/folders/|/tmp/cmux|cmux-claude-settings")
 RUN_TIMEOUT = 60
 WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "OWNER RIGHTS", "CREATOR OWNER")
@@ -315,23 +316,8 @@ class Doctor:
             first = (r.stdout.splitlines() or [""])[0] if r is not None else ""
             self.ok("claude", f"claude: {self.claude_path} ({first})")
         self.ok("crew_home", f"crew home: {self.paths.raw}")
-        self.check_engine()
         self.check_tares_version()
         self.check_tares_path()
-
-    def check_engine(self) -> None:
-        from . import dispatch
-        engine, source = dispatch.engine_setting(self.env)
-        if engine == "bash":
-            where = "TARES_FACTORY_ENGINE=bash" if source == dispatch.ENGINE_VAR else 'engine: bash in crew.json'
-            self.ok("engine", f"engine: bash ({where}; unset it to use the Python engine)", True)
-            return
-        if engine not in ("", "python"):
-            self.no("engine", f'engine: "{engine}" is not an engine', 'use "python" or "bash"', True)
-            return
-        why = {dispatch.ENGINE_VAR: "TARES_FACTORY_ENGINE=python", "crew.json": "engine: python in crew.json"}.get(
-            source, "the default")
-        self.ok("engine", f"engine: python ({why}; TARES_FACTORY_ENGINE=bash or engine: bash in crew.json runs bash instead)", True)
 
     def check_tares_version(self) -> None:
         need = version.plugin_min_version(self.root)
@@ -625,7 +611,7 @@ class Doctor:
                         "or no access); builders open PRs there", "gh auth login, and add a GitHub remote")
             else:
                 self.no(f"project_{p}_{rid}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
-                        "push and merge", "ask for write access to the repo")
+                        "push branches and open PRs", "ask for write access to the repo")
 
     def check_cmux(self) -> None:
         found = doctor_lsp.cmux_check(self.env)
@@ -672,7 +658,7 @@ class Doctor:
             else:
                 self.no("gh", "gh not signed in: gh auth login", "gh auth login")
         else:
-            self.no("gh", "gh not installed (needed for PRs, reviews and merges): brew install gh", "brew install gh")
+            self.no("gh", "gh not installed (needed for PRs and reviews): brew install gh", "brew install gh")
 
     def check_stations(self) -> None:
         if not self.paths.stations.is_file():

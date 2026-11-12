@@ -3,7 +3,6 @@ does first (the workspace address and key from `tares login`). The environment i
 import os
 import sys
 
-from ..cli import plugin_dir
 from .dispatch import run
 
-run(sys.argv[1:], dict(os.environ), plugin_dir() / "bin" / "factory")
+run(sys.argv[1:], dict(os.environ))

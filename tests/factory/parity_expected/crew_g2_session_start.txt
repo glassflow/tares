@@ -67,12 +67,11 @@ exit: 0
       "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project Links App:  or under <TMP>/crew/worktrees, is expected work for this crew station.",
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
-      "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that the user authorized.",
-      "Merging a pull request in the repositories of the projects handed to this crew on Tares (crew_projects), that this crew opened from a `factory/*` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) and the orchestrator has relayed the user's yes for that pull request, quoted verbatim from the desk."
+      "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that the user authorized."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `links-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in . the user chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `links-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in . the user chose autonomy level L3-review, meaning: builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -104,8 +103,10 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {

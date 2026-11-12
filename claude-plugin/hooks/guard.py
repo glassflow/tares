@@ -61,7 +61,7 @@ HALTED = _re(
 HALTED_SESSION = _re(FACTORY_CLI + "(spawn|revive)" + FACTORY_END)
 HEAVY = _re(
     r"(^|\s)(docker\s+(build|buildx)|govulncheck|kind\s+create\s+cluster|trivy|snyk\s+test)(\s|$)")
-HEAVY_WRAPPER = _re(r"^\s*factory-heavy(\s|$)")
+HEAVY_WRAPPER = _re(r"^\s*([^\s;&|\"']*/)?tares\s+factory\s+heavy(\s|$)")
 FINISH = _re(FACTORY_CLI + "finish" + FACTORY_END)
 PR_REVIEW = _re(r"gh\s+pr\s+review")
 PR_MERGE = _re(r"gh\s+pr\s+merge|gh\s+api[^;&|]*pulls/[0-9]+/merge")
@@ -81,7 +81,7 @@ SLACK_SEND = _re(
 
 MESSAGE_PEOPLE = ("Crew stations don't message people. The person reads the crew in the orchestrator's session "
                   "and on Tares; send the orchestrator an ASK instead.")
-HEAVY_REASON = ("Heavy command: run it through `factory-heavy <timeout-seconds> <command...>` so only one runs "
+HEAVY_REASON = ("Heavy command: run it through `tares factory heavy <timeout-seconds> <command...>` so only one runs "
                 "at a time with a hard timeout.")
 FINISH_REASON = ("Only the person marks a project done from their terminal. Ask them on the desk, record their "
                  "answer with desk_answer, then call finish_project.")
@@ -229,10 +229,10 @@ def decide(env, tool: str, cmd: str) -> None:
     if halt_file and os.path.isfile(halt_file):
         if grep(HALTED, scan) or grep(HALTED_SESSION, scan):
             raise Deny(f"The crew is halted ({halt_reason(halt_file)}). Finish your current step safely and "
-                       "start nothing new; `factory crew resume` lifts the halt.")
+                       "start nothing new; `tares factory crew resume` lifts the halt.")
 
-    # Heavy commands must go through factory-heavy (one at a time, hard timeout), checked per command in
-    # a chain, so `factory-heavy 9 true; docker build .` does not carry the second one past the lock.
+    # Heavy commands must go through `tares factory heavy` (one at a time, hard timeout), checked per command in
+    # a chain, so `tares factory heavy 9 true; docker build .` does not carry the second one past the lock.
     for part in COMMAND_SPLIT.sub("\n", scan).split("\n"):
         if HEAVY_WRAPPER.search(part):
             continue

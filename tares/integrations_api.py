@@ -13,6 +13,8 @@ one applies in tares/integrations/resolve.py; this module is the HTTP face of bo
   PUT    /api/projects/{uid}/integrations/{slot}    admin or the project's lead
   DELETE /api/projects/{uid}/integrations/{slot}    admin or the project's lead: back to the factory's choice
   POST   /api/projects/{uid}/integrations/{slot}/test   admin or the project's lead
+  GET    /api/projects/{uid}/required-checks        the commands the local ci integration requires
+  PUT    /api/projects/{uid}/required-checks        admin or the project's lead: {commands: [...]}
 
 A request that carries X-Tares-Station (a crew station) may use only the `effective` read, which
 never holds integration settings. No response holds a secret value: a read shows each secret as ""
@@ -278,6 +280,24 @@ def register(app, store, h):
         cleared = store.clear_project_choice(p["id"], slot)
         licence.current(store)
         return {**entry(slot, p["id"]), "cleared": cleared}
+
+    # ── the commands the local ci integration requires ──
+    @app.get("/api/projects/{uid}/required-checks")
+    def get_required_checks(uid: str, request: Request):
+        p = h.project_or_404(h.resolve_project(uid))
+        return {"project": p["id"], "commands": store.get_required_checks(p["id"])}
+
+    @app.put("/api/projects/{uid}/required-checks")
+    def put_required_checks(uid: str, request: Request, body: dict = Body(...)):
+        no_station(request)
+        p = h.project_or_404(h.resolve_project(uid))
+        may_write_project(request, p)
+        try:
+            commands = store.set_required_checks(p["id"], body.get("commands"),
+                                                 h.by(request, body))
+        except ValueError:
+            refuse(422, "commands is a list of command strings")
+        return {"project": p["id"], "commands": commands}
 
     @app.post("/api/projects/{uid}/integrations/{slot}/test")
     async def test_project_integration(uid: str, slot: str, request: Request,

@@ -13,8 +13,10 @@ import ast
 # CAPABILITIES in tares/daemon.py itself, so the stand-in lists what a real cell lists.
 
 COMPAT_MSG = "This needs a newer Tares on the cell (missing integrations). Upgrade Tares, then run this again."
+COMPAT_MSGQ = "This needs a newer Tares on the cell (missing merge_queue). Upgrade Tares, then run this again."
 OLD_CELL = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "version": "1.0.0"}
 OTHER_CELL = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "capabilities": ["merge_queue"]}
+NOMQ_CELL = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "capabilities": ["integrations"]}
 
 
 def _daemon_capabilities() -> list:
@@ -75,6 +77,9 @@ scenario(Scenario(
         Step(["crew", "status"], run_before=_cell(OLD_CELL)),                                              # 4 old cell
         Step(["crew", "down"]),                                                                            # 5 old cell
         Step(["crew", "status"], run_before=_cell(OTHER_CELL)),                                            # 6 other capabilities
+        Step(["crew", "up", "--yes"], stdin="", run_before=_cell(NOMQ_CELL, "before_nomq")),               # 7 integrations, no merge_queue
+        Step(["crew", "status"], run_before=_cell(NOMQ_CELL, "after_nomq")),                               # 8 the same cell
+        Step(["crew", "down"]),                                                                            # 9 the same cell
     ],
     checks=[
         ("crew up against a cell with no capabilities stops with the upgrade message",
@@ -94,6 +99,13 @@ scenario(Scenario(
          and re.search(r"stopped|down", r.out(5)) is not None),
         ("crew status works against a cell with other capabilities",
          lambda r: r.code(6) == 0 and "needs a newer Tares" not in r.out(6)),
+        ("crew up against a cell without merge_queue stops and names it",
+         lambda r: r.code(7) != 0 and COMPAT_MSGQ in r.out(7) and r.marks["after_nomq"] == r.marks["before_nomq"]),
+        ("crew status works against a cell without merge_queue",
+         lambda r: r.code(8) == 0 and "needs a newer Tares" not in r.out(8)),
+        ("crew down works against a cell without merge_queue",
+         lambda r: r.code(9) == 0 and "needs a newer Tares" not in r.out(9)),
+        ("a real cell lists merge_queue on /health", lambda r: "merge_queue" in r.marks["real_health"]["capabilities"]),
         ("the CLI never asks for a capability in status or down", _never_asks_for_a_capability),
     ],
     covers=["crew up against a cell with no capabilities stops with the upgrade message",
@@ -105,6 +117,10 @@ scenario(Scenario(
             "crew status works against a cell without the capability",
             "crew down works against a cell without the capability",
             "crew status works against a cell with other capabilities",
+            "crew up against a cell without merge_queue stops and names it",
+            "crew status works against a cell without merge_queue",
+            "crew down works against a cell without merge_queue",
+            "a real cell lists merge_queue on /health",
             "the CLI never asks for a capability in status or down"],
 ))
 

@@ -60,7 +60,7 @@ def bash(cmd):
 
 print("the cases of guard_test.sh")
 cases = [json.loads(line) for line in CASES.read_text(encoding="utf-8").splitlines() if line.strip()]
-ck("the case file has the 154 cases of guard_test.sh", len(cases) == 154, len(cases))
+ck("the case file has 155 cases", len(cases) == 155, len(cases))
 bad = 0
 for c in cases:
     env = {"FACTORY_ROLE": c["role"], "FACTORY_HOME": "/nonexistent", "FACTORY_STATION": "test"}
@@ -75,7 +75,7 @@ ck(f"all {len(cases)} cases decide as guard.sh decided", bad == 0, f"{bad} diffe
 
 print("the cases that pin a branch of guard.py (tests/guard_extra_cases.jsonl)")
 # Each one fails against a guard.py with the branch broken (the heredoc delimiter backreference, the
-# reader lookahead, the factory-heavy anchor, the helper's crew-owner prefix, `-` ending a factory verb,
+# reader lookahead, the `tares factory heavy` anchor, the helper's crew-owner prefix, `-` ending a factory verb,
 # `git tag -x`, the per-line grep, the trailing newline of the tool name, the Slack full match, the
 # claude anchor, the `.factory` folder) and two pin ASCII-only \w and \s. The expected decision is
 # guard.sh's: they were taken from it before it was removed.

@@ -11,8 +11,8 @@ What is not here: the pace (pace.py, TR-962). The watch itself is watch.py (TR-9
 rearm_text reads the pace with pace.read.
 
 Differences from bash
-  * A missing station argument (`factory revive` with nothing after it) is refused with
-    "tares factory: usage: factory revive <station> [--fresh] [prompt]". Bash prints the shell's own
+  * A missing station argument (`tares factory revive` with nothing after it) is refused with
+    "tares factory: usage: tares factory revive <station> [--fresh] [prompt]". Bash prints the shell's own
     "<script>: line N: 1: usage: ..." and exits 1.
   * A Python watch is asked to stop with a stop file and given time to finish its round before it is terminated
     (watch.stop); a process that is gone or may not be stopped is left alone, as bash's `kill ... || true` does.
@@ -29,9 +29,9 @@ from .client import TaresClient, TaresHTTPError, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
 
-REVIVE_USAGE = "usage: factory revive <station> [--fresh] [prompt]"
+REVIVE_USAGE = "usage: tares factory revive <station> [--fresh] [prompt]"
 RESTART_USAGE = f"usage: {ME} restart <station>"
-RETIRE_USAGE = "usage: factory retire <station>"
+RETIRE_USAGE = "usage: tares factory retire <station>"
 
 
 # ---------- the watch (the real one is watch.py, TR-958) ----------
@@ -120,7 +120,7 @@ def revive(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
         prompt = f"You were revived by the factory under the same name. {again}"
     locks.station_lock(station, paths)
     if get("status") == "retired":
-        raise CrewError(f"{station} was retired; factory spawn starts it again")
+        raise CrewError(f"{station} was retired; tares factory spawn starts it again")
     if claude.is_alive(station, "", claude_bin, paths):
         raise CrewError(f"{station} is running; message it instead")
     launch.launch(client, station, role, parent, project, repo, cwd, model, effort, prompt,

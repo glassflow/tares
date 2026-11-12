@@ -201,6 +201,27 @@ function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClos
   );
 }
 
+/** What waits on someone else in this project (a team cell): their questions and permission
+ *  requests, each named for them. Nothing to press: only the person it is for may answer it. */
+function WaitingOthers({ items }: { items: HomeItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section aria-label="Waiting for others" className="min-w-0" data-testid="waiting-others">
+      <SectionHead title="Waiting for others"
+                   aside={<span className={MUTED} data-testid="waiting-others-count">{plural(items.length, "thing", "things")}</span>} />
+      <div className={CARD}>
+        {items.map((it) => (
+          <div key={it.id} className={cn(ROW, "min-w-0")} data-testid="waiting-other-row" data-kind={it.kind}>
+            <div className={KIND} data-user-text>{it.label}</div>
+            <div className="mt-0.5" data-user-text>{it.detail}</div>
+            {it.meta && <div className={cn(MUTED, "mt-0.5")}>{it.meta}</div>}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function Waiting({ items, onClose, onKeep, onAllow }: {
   items: HomeItem[]; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void;
 }) {
@@ -976,6 +997,7 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
         <div className="grid min-w-0 gap-6">
           <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} onKeep={onKeep}
                    onAllow={onAllowed && ((item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); })} />
+          {!finished && <WaitingOthers items={d.waiting_others ?? []} />}
           <Moving d={d} />
           <RecentPrs d={d} />
           <section id="milestones" aria-label="Milestones" className="min-w-0 scroll-mt-4" data-testid="milestones">

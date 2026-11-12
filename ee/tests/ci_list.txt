@@ -5,6 +5,7 @@ test_areas_licence
 test_brain_lore_client
 test_console_answers
 test_crew_page_by_person
+test_crew_split
 test_crewname_team
 test_crews
 test_desk_person
@@ -34,6 +35,7 @@ test_private_routes
 test_private_services
 test_private_writes
 test_project_access
+test_project_page_others
 test_project_secrets
 test_recording_person_team
 test_setup_flow_team

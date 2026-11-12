@@ -1,5 +1,5 @@
 """Starting a station: the settings file it launches with, the `claude --bg` command line, and the first
-prompt. Ports these functions of `claude-plugin/bin/factory`, with the same output: grant_rules,
+prompt. Port of these functions from the old bash crew (removed in TR-975), with the same output: grant_rules,
 check_model, level_text, level_rank, parent_role, write_settings, plugin_flags, kit_dir (in part),
 compact_window, kit_version, launch, boot_prompt, idle_wake_on and idle_wake_note. Where this module and
 the bash differ, the bash is right; every difference is listed under "Differences from bash" below.
@@ -28,8 +28,8 @@ Notes written at a start
   The idle-wake file is written by iw_launch_note (TR-961), the pace file by pace.launch_note (TR-962).
 
 Differences from bash
-  * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` runs
-    bin/factory from, symlinks resolved). Given the client it is bash's kit_dir: the crew's frozen copy of
+  * kit_dir is the checkout's plugin folder (TARES_PLUGIN_DIR, else the folder `tares factory` found
+    by its hooks/hooks.json, symlinks resolved). Given the client it is the crew's frozen copy of
     the kit while the crew is frozen and the copy is there (kit.kit_dir, TR-965).
   * statusLine: bash writes the path with printf %q; here it is shlex.quote. They differ only for a path
     with a character the shell must escape (a space: `a\\ b` against `'a b'`); both read back as the same
@@ -77,9 +77,10 @@ def check_model(model: str, station: str) -> None:
 
 def level_text(level: str) -> str:
     if level == "L3-review":
-        return ("builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; "
+        return ("builders open PRs and Tares merges each one after the human's yes on the desk; "
                 "nothing is deployed to production")
-    return "builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production"
+    return ("builders open PRs and Tares merges them after the review gate passes and CI is green; "
+            "nothing is deployed to production")
 
 
 def level_rank(level: str):
@@ -150,15 +151,15 @@ def _forward(path: str) -> str:
 
 
 def kit_dir(client=None) -> str:
-    """The kit a station starts on: the plugin folder `tares factory` runs bin/factory from (TARES_PLUGIN_DIR
-    wins), symlinks resolved, as bash's KIT_PLUGIN is. With a client, bash's kit_dir: the frozen copy while the
-    crew is frozen and the copy is there. Without one, the checkout (a fingerprint of the kit, say)."""
+    """The kit a station starts on: the plugin folder `tares factory` found (TARES_PLUGIN_DIR wins), symlinks
+    resolved. With a client, the frozen copy while the crew is frozen and the copy is there. Without one, the
+    checkout (a fingerprint of the kit, say)."""
     from ..cli import plugin_dir  # not at import time: a settings file needs it, a roster does not
     try:
         d = plugin_dir()
     except SystemExit as e:
         raise CrewError(str(e).removeprefix("tares: ")) from None
-    checkout = str(Path(os.path.realpath(d / "bin" / "factory")).parent.parent)
+    checkout = str(Path(os.path.realpath(d / "hooks" / "hooks.json")).parent.parent)
     if client is None:
         return checkout
     from . import kit   # here, not at the top: kit imports crew modules that import this one
@@ -371,21 +372,6 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     elif work_role == "builder":
         allow.append(f"Pushing `factory/*` branches to {where}, and opening pull requests there, is expected "
                      f"work that {human} authorized.")
-        if level != "L3-review":
-            allow.append(
-                f"Merging a pull request in {where}, that this crew opened from a `factory/*` branch is expected "
-                f"work that {human} pre-authorized at level {level}, once CI on its head commit is green (or the "
-                "repository has no CI checks configured, in which case the reviewer's run of the tests stands in "
-                "for CI) and the crew reviewer station's `factory/review` commit status on that head commit is "
-                f"`success`. The reviewer station's verdict is the review {human} chose to rely on. Deleting the "
-                "merged `factory/*` branch is expected.")
-        if level == "L3-review":
-            allow.append(
-                f"Merging a pull request in {where}, that this crew opened from a `factory/*` branch is expected "
-                "work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of "
-                "the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) "
-                f"and the orchestrator has relayed {human}'s yes for that pull request, quoted verbatim from the "
-                "desk.")
     elif work_role == "reviewer":
         allow.append(
             f"Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in "
@@ -401,12 +387,14 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     soft_deny = [f"Deploying to, or changing, any environment, kube context or namespace whose name matches the "
                  f"pattern {prod_pattern}. That needs {human} directly."]
 
-    # each command is allowed as `factory ...` and as `tares factory ...` (the Python engine's name, TR-1069)
+    # each command is allowed as `tares factory ...` (the bare `factory` of the old bash crew is gone, TR-975)
     cmds = ["tidy *"]
     if role == "orchestrator":
         cmds = ["tidy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
                 "crew halt", "crew halt *", "crew resume"]
-    perms = {"allow": [f"Bash({pre}factory {c})" for c in cmds for pre in ("", "tares ")]}
+    perms = {"allow": [f"Bash(tares factory {c})" for c in cmds],
+             # Tares merges pull requests (the merge queue); a crew station never does (TR-860)
+             "deny": ["Bash(gh pr merge:*)"]}
 
     wt = f"{repo_f}/.factory/worktrees" if repo else f"{home}/worktrees"
     tok_file = ""

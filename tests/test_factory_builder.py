@@ -316,6 +316,14 @@ async def main():
     ck("a revive reads the brief too", "revive" in boot, boot)
     ck("the review request carries the checks", "checks=[...]" in manual)
 
+    print("== the builder manual: an outside review tool skips the crew reviewer (TR-857) ==")
+    step8 = re.search(r"\n8\. \*\*Ask for review(.*?)\n9\. ", manual, re.S).group(1)
+    ck("the builder checks the gate with get_integrations", "get_integrations(project)" in step8, step8[:400])
+    ck("REVIEW goes out only for the Tares gates", "`tares` or `tares+input`" in step8, step8[:600])
+    ck("with an outside tool only set_stage goes out",
+       "CodeRabbit" in step8 and "no `REVIEW` goes out" in step8, step8)
+    ck("Tares reads the tool's verdict and moves the ticket", "moves the ticket to `changes`" in step8, step8)
+
 
 unit()
 asyncio.run(main())

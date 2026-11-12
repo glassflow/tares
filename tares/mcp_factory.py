@@ -109,6 +109,38 @@ async def get_integrations(project: str = "") -> str:
     return _out(r)
 
 
+@mcp.tool()
+async def merge_ready(pr: str, project: str = "") -> str:
+    """May this pull request merge? One answer from the review gate, CI and the guardrails of
+    the project its ticket belongs to. `pr` is a PR URL or `owner/repo#12`. Returns `ready`
+    (true only when the PR is open, not a draft, the review gate approved its current head, CI
+    passed or the project has none, and no guardrail blocks), `reasons` (a sentence for each thing
+    holding the merge back; empty when ready), the head commit, and the `review`, `ci` and
+    `guardrails` answers. A bad reference, a PR no ticket has or a failed read comes back as
+    ready false with a reason. It changes nothing: it only answers; Tares's merge queue does the merging. `project` is accepted for
+    consistency with the other tools; the project comes from the pull request's ticket."""
+    async with _cx(30) as cx:
+        r = await cx.get(f"{TARESD}/api/factory/merge-ready", params={"pr": pr})
+    return _out(r)
+
+
+@writable()
+async def set_required_checks(commands: list[str], project: str = "") -> str:
+    """Set the commands a pull request of this project must have recorded as passing checks
+    when its CI is the local integration (the `ci` slot is `local`): the test and lint commands
+    from the project's AGENTS.md, exactly as a builder runs them. Replaces the list; an empty
+    list means the project requires none. For the project's lead or an admin, not a crew
+    station."""
+    project = (project or "").strip() or _default_project()
+    async with _cx(10) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.put(f"{TARESD}/api/projects/{uid}/required-checks",
+                         json={"commands": commands})
+    return _out(r, ("project", "commands"))
+
+
 # ── the ledger (TR-427, TR-428, TR-410) ───────────────────────────────────────
 
 @writable()
@@ -491,7 +523,7 @@ SETTING_KEYS = ("autonomy", "releaser", "release_profile", "prod_pattern", "chal
 @mcp.tool()
 async def get_crew_settings() -> str:
     """The tares-factory crew's settings for every project: `autonomy` (L3-review: the person
-    approves each merge; L4-ship: a builder merges after the reviewer's pass and green CI),
+    approves each merge; L4-ship: Tares merges after the review gate passes and CI is green),
     `releaser` (whether the crew runs a releaser; without one a ticket ends at merged),
     `release_profile`, `prod_pattern` (what counts as prod), `challenger` (builders run the
     Codex challenger), `builders_max`, `claude_update` (whether the watch moves stations onto a
@@ -753,7 +785,9 @@ async def set_later(later: bool = True, project: str = "") -> str:
 async def my_work(crew: str = "", project: str = "") -> str:
     """What belongs to the person whose key this is, across the projects handed to a crew that
     they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
-    (their tickets a station holds, with the holder and stage), `led_projects` (projects they
+    (their tickets a station holds, with the holder and stage), `bouncing` (those of them that
+    came back from review three or more times: `count`, `ladder` 3 or 5 and the last `reason`),
+    `led_projects` (projects they
     lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
     `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
     spec asked them as the owner of a repo, always empty without an enterprise licence: answer each

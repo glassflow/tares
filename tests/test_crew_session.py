@@ -1,6 +1,6 @@
 """`tares factory spec` and `tares factory session` in Python (tares/crew/person.py, TR-966).
 
-The word-for-word match with bash is the parity scenarios (spec_*, session_*). This checks what they
+The commands' printed text is covered by the parity scenarios (spec_*, session_*). This checks what they
 cannot see from outside: the small helpers (the numbered question, git, project matching, the two lists
 Tares gives, the plugin clash text) and the usage errors, plus that both commands are routed to person.py.
 
@@ -65,7 +65,7 @@ def asking(answers):
 
 
 def run(env, *argv, fake=None, stdin="", **extra):
-    e = {**env, "TARES_FACTORY_ENGINE": "python", "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
+    e = {**env, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
     if fake is not None:
         e["TARESD_URL"] = fake.url
     e.update(extra)

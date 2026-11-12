@@ -307,7 +307,7 @@ async def main():
                set(a) == {"id", "name", "icon", "can_edit_icon", "goal", "stage", "stage_label", "state", "state_label", "waiting",
                           "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
                           "decisions", "calls", "calls_past", "docs", "terminal", "linked", "can_close", "now",
-                          "people", "docs_total", "later", "can_later", "prs_total", "prs_recent", "secrets"}, sorted(a))
+                          "people", "docs_total", "later", "can_later", "prs_total", "prs_recent", "secrets", "waiting_others"}, sorted(a))
             ck("no ticket lists under the milestones and no no_milestone", "no_milestone" not in a
                and all("tickets" not in m for m in a["milestones"]), sorted(a))
             ck("identity and stage", a["id"] == px and a["name"] == "project-x"

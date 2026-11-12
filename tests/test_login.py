@@ -165,7 +165,7 @@ import tares.cli as C  # noqa: E402
 got = {}
 import tares.crew.dispatch as D  # noqa: E402
 # Take the environment where tares hands it to the engine, so the test holds whichever engine runs doctor.
-D.run = lambda argv, env, script: got.update(env) or (_ for _ in ()).throw(SystemExit(0))
+D.run = lambda argv, env: got.update(env) or (_ for _ in ()).throw(SystemExit(0))
 try:
     C._factory(["doctor"])
 except SystemExit:

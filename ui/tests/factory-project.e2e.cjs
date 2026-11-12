@@ -33,7 +33,7 @@ const esbuild = require(path.join(UI_DIR, "node_modules", "esbuild"));
 const PORT = Number(process.env.TARES_E2E_PORT || 8330);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
-const SAMPLES = ["building", "spec", "ready", "dialog", "fail", "finished", "empty", "long", "many", "load", "err"];
+const SAMPLES = ["building", "spec", "ready", "dialog", "fail", "finished", "empty", "long", "many", "team", "load", "err"];
 const SERVER_WORDS = "Two tickets are still open, so the project cannot close yet.";
 const THEME_MS = 600;
 
@@ -506,6 +506,11 @@ async function waitFor(url, tries = 100) {
                (await txt(q("waiting-count"))) === "5 things" && (await q("moving-row").count()) === 5 && (await txt(q("moving-more"))).startsWith("13 more tickets are moving.")
                && (await q("milestone-row").count()) === 6 && (await q("decision-row").count()) === 3 && (await txt(q("decisions-all"))) === "All 40 decisions ›");
             ck("many: three commands, two behind a button", (await q("command").count()) === 3 && (await txt(q("terminal-more").locator("summary"))) === "2 more commands");
+          } else if (name === "team") {
+            ck("team: another person's question is under Waiting for others, named for them, nothing to press",
+               (await q("waiting-others").count()) === 1 && (await raw(q("waiting-other-row"))).startsWith("Question for Adam")
+               && (await q("waiting-others").locator("button").count()) === 0
+               && !(await txt(q("waiting"))).includes("Docker and Rust"));
           } else if (name === "load") {
             ck("load: the skeleton, and no project", (await q("project-loading").isVisible()) && (await q("factory-project").count()) === 0);
           } else if (name === "err") {

@@ -392,6 +392,43 @@ FACTORY_SCHEMA = [
       used_at     TIMESTAMPTZ,
       PRIMARY KEY (project, name)
     )""",
+    # The commands a project's local ci integration wants recorded as passing on a pull request's
+    # head (TR-854): one row per project, the commands as a JSON list.
+    """CREATE TABLE IF NOT EXISTS project_required_checks (
+      project     TEXT PRIMARY KEY,
+      commands    JSON,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
+    # The merge queue (TR-856): one row per pull request Tares itself will merge, in order per
+    # (repo, base). state: queued, waiting_ci, waiting_approval, merging, merged, sent_back, blocked.
+    """CREATE TABLE IF NOT EXISTS merge_queue (
+      id            TEXT PRIMARY KEY,
+      repo          TEXT,
+      base          TEXT,
+      pr            INTEGER,
+      head          TEXT,
+      ticket        TEXT,
+      project_uid   TEXT,
+      state         TEXT,
+      reason        TEXT,
+      desk_item     TEXT,
+      approved_head TEXT,
+      entered_at    TIMESTAMPTZ,
+      updated_at    TIMESTAMPTZ
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
+    # TR-858: the files (and head) a pull request had before its branch was brought up to date,
+    # as JSON, and how many ticks in a row GitHub could not say whether it merges.
+    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS before_files TEXT",
+    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS unknown_ticks INTEGER",
+    # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
+    """CREATE TABLE IF NOT EXISTS project_merge_method (
+      project     TEXT PRIMARY KEY,
+      method      TEXT,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT
+    )""",
 ]
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
@@ -447,6 +484,29 @@ class FactoryStore:
         return rows
 
     # ── upgrade and clean-up ──────────────────────────────────────────────────
+    def _merge_split_crews(self) -> None:
+        """A person's crew recorded without its machine, before the cell had a licence, and the same
+        crew recorded with one since are one crew (TR-1223): its sessions move to the crew with the
+        machine and the bare record goes. Only when the person has exactly one crew of that name with
+        a machine; with several it can't be told which. Lock held (or no other thread yet)."""
+        rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen FROM crews").fetchall()
+        groups: dict = {}
+        for r in rows:
+            groups.setdefault((r[2], r[1]), []).append(r)
+        for crews in groups.values():
+            bare = [c for c in crews if not c[3]]
+            named = [c for c in crews if c[3]]
+            if len(named) != 1 or not bare:
+                continue
+            keep = named[0]
+            firsts = [c[4] for c in [keep, *bare] if c[4] is not None]
+            lasts = [c[5] for c in [keep, *bare] if c[5] is not None]
+            for b in bare:
+                self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id = ?", [keep[0], b[0]])
+                self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
+            self.sc.execute("UPDATE crews SET first_seen = ?, last_seen = ? WHERE id = ?",
+                            [min(firsts) if firsts else None, max(lasts) if lasts else None, keep[0]])
+
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
@@ -455,6 +515,7 @@ class FactoryStore:
             cid = self._crew_id("crew", "local", "", now_utc())
             self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
                              [cid])
+        self._merge_split_crews()
         # an override kept before the log existed is its first entry (TR-640); one with no time of
         # its own takes the hand-over's, else now, so a log entry always has a time
         self.sc.execute(
@@ -511,6 +572,8 @@ class FactoryStore:
         self.sc.execute("DELETE FROM signoffs WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", [uid])
         self.sc.execute("DELETE FROM project_secrets WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM merge_queue WHERE project_uid = ?", [uid])
+        self.sc.execute("DELETE FROM project_merge_method WHERE project = ?", [uid])
         self._secrets_changed()
 
     # ── milestones (TR-411) ───────────────────────────────────────────────────
@@ -678,6 +741,24 @@ class FactoryStore:
             if at is not None and (r[1] is None or at > r[1]):
                 self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
             return r[0]
+        # A crew recorded without its machine (a cell with no licence keeps none) and the same crew
+        # named with one (once a licence is on, or off again) are one crew (TR-1223): the line joins
+        # the person's only other crew of that name, and a crew without a machine takes the one this
+        # line names. With several machines it can't be told which one it was: a new crew is made.
+        others = self.sc.execute("SELECT id, last_seen, machine FROM crews WHERE person_id = ? AND name = ?",
+                                 [person_id, name]).fetchall()
+        bare = [o for o in others if not o[2]]
+        named = [o for o in others if o[2]]
+        pick = None
+        if machine and bare and not named:
+            pick = bare[0]
+            self.sc.execute("UPDATE crews SET machine = ? WHERE id = ?", [machine, pick[0]])
+        elif not machine and len(named) == 1:
+            pick = named[0]
+        if pick is not None:
+            if at is not None and (pick[1] is None or at > pick[1]):
+                self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, pick[0]])
+            return pick[0]
         cid = "c_" + uuid.uuid4().hex[:10]
         self.sc.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
                          "VALUES (?, ?, ?, ?, ?, ?)", [cid, name, person_id, machine, at, at])
@@ -1927,6 +2008,173 @@ class FactoryStore:
             for n in names:
                 self.sc.execute("UPDATE project_secrets SET used_by = ?, used_at = ? WHERE project = ? "
                                 "AND name = ?", [by, at, uid, n])
+
+    # ── the project's required checks (TR-854) ────────────────────────────────
+    @staticmethod
+    def clean_commands(commands) -> list[str]:
+        """The command strings of a list a person or a station gave: each trimmed, blanks and
+        repeats dropped, in the order given. ValueError for anything but a list of strings."""
+        if commands is None:
+            return []
+        if not isinstance(commands, (list, tuple)) or not all(isinstance(c, str) for c in commands):
+            raise ValueError("commands is a list of command strings")
+        out: list[str] = []
+        for c in commands:
+            c = " ".join(c.split())
+            if c and c not in out:
+                out.append(c)
+        return out
+
+    def get_required_checks(self, uid: str) -> list[str]:
+        """The commands the project requires recorded as passing; [] when it has none."""
+        with self._sread:
+            r = self.sc.execute("SELECT commands FROM project_required_checks WHERE project = ?",
+                                [uid]).fetchone()
+        v = json.loads(r[0]) if r and isinstance(r[0], str) else (r[0] if r else None)
+        return [c for c in v if isinstance(c, str)] if isinstance(v, list) else []
+
+    def set_required_checks(self, uid: str, commands, by: str) -> list[str]:
+        """Replace the project's required checks with `commands` (cleaned as clean_commands);
+        an empty list is "no required checks". Returns what was saved."""
+        saved = self.clean_commands(commands)
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO project_required_checks (project, commands, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
+                "commands = excluded.commands, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by", [uid, json.dumps(saved), now_utc(), by])
+        return saved
+
+    # ── merge queue (TR-856) ──────────────────────────────────────────────────
+    MERGE_METHODS = ("squash", "merge", "rebase")
+    MERGE_OPEN = ("queued", "waiting_ci", "waiting_approval", "merging", "blocked")
+    _MQ_COLS = ("id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
+                "approved_head, entered_at, updated_at, before_files, unknown_ticks")
+    _MQ_FIELDS = ("repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
+                  "desk_item", "approved_head", "before_files", "unknown_ticks")
+
+    @staticmethod
+    def _mq_row(r) -> dict:
+        return {"id": r[0], "repo": r[1], "base": r[2], "pr": r[3], "head": r[4], "ticket": r[5],
+                "project_uid": r[6], "state": r[7], "reason": r[8], "desk_item": r[9],
+                "approved_head": r[10], "entered_at": r[11], "updated_at": r[12],
+                "before_files": r[13], "unknown_ticks": r[14] or 0}
+
+    def merge_queue_add(self, repo: str, base: str, pr: int, head: str, ticket: str | None,
+                        project_uid: str | None, state: str = "queued",
+                        reason: str | None = None) -> dict:
+        mid = "mq_" + uuid.uuid4().hex[:10]
+        now = now_utc()
+        marks = ", ".join("?" for _ in self.MERGE_OPEN)
+        with self._swrite:
+            # one open row per pull request: two ticks that both saw it ready add it once
+            have = self.sc.execute(
+                f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND pr = ? AND "
+                f"state IN ({marks})", [repo, pr, *self.MERGE_OPEN]).fetchone()
+            if have:
+                return self._mq_row(have)
+            self.sc.execute(
+                f"INSERT INTO merge_queue ({self._MQ_COLS}) VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [mid, repo, base, pr, head, ticket, project_uid, state, reason, None, None, now,
+                 now, None, 0])
+        return self.merge_queue_get(mid)
+
+    def merge_queue_get(self, mid: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE id = ?",
+                                [mid]).fetchone()
+        return self._mq_row(r) if r else None
+
+    def merge_queue_list(self, repo: str, base: str) -> list[dict]:
+        """The rows of one (repo, base), oldest entry first (the queue's own order is the
+        caller's)."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
+                                    "base = ? ORDER BY entered_at, id", [repo, base]).fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_queue_open(self) -> list[dict]:
+        """Every row that is not finished: queued, waiting_ci, waiting_approval, merging, blocked."""
+        marks = ", ".join("?" for _ in self.MERGE_OPEN)
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state IN "
+                                    f"({marks}) ORDER BY entered_at, id",
+                                    list(self.MERGE_OPEN)).fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_queue_sent_back(self) -> list[dict]:
+        """Every row that was sent back to its builder (or ended with the ticket's review)."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state = "
+                                    "'sent_back' ORDER BY entered_at, id").fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_queue_last_merged(self, repo: str, base: str, not_pr: int | None = None) -> dict | None:
+        """The row of the pull request merged most recently into (repo, base), or None. `not_pr`
+        leaves one pull request out."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
+                                    "base = ? AND state = 'merged' ORDER BY updated_at DESC, id "
+                                    "DESC", [repo, base]).fetchall()
+        for r in rows:
+            if not_pr is None or r[3] != not_pr:
+                return self._mq_row(r)
+        return None
+
+    def merge_queue_update(self, mid: str, **fields) -> None:
+        bad = [k for k in fields if k not in self._MQ_FIELDS]
+        if bad:
+            raise ValueError(f"not a merge queue field: {', '.join(bad)}")
+        if not fields:
+            return
+        sets = ", ".join(f"{k} = ?" for k in fields) + ", updated_at = ?"
+        with self._swrite:
+            self.sc.execute(f"UPDATE merge_queue SET {sets} WHERE id = ?",
+                             [*fields.values(), now_utc(), mid])
+
+    def merge_queue_delete(self, mid: str) -> None:
+        with self._swrite:
+            self.sc.execute("DELETE FROM merge_queue WHERE id = ?", [mid])
+
+    def merge_queue_claim(self, mid: str, approved_only: bool = False) -> bool:
+        """Take the row for merging: it becomes `merging` only when it is `queued` and no other
+        row of its (repo, base) is `merging` (one merge at a time across the cell). With
+        `approved_only` (autonomy L3-review) the row also needs approved_head == head. One
+        write-locked step, so two ticks cannot both take it."""
+        with self._swrite:
+            r = self.sc.execute("SELECT repo, base, state, head, approved_head FROM merge_queue "
+                                "WHERE id = ?", [mid]).fetchone()
+            if not r or r[2] != "queued":
+                return False
+            if approved_only and (not r[4] or r[4] != r[3]):
+                return False
+            busy = self.sc.execute("SELECT 1 FROM merge_queue WHERE repo = ? AND base = ? AND "
+                                   "state = 'merging' AND id != ?", [r[0], r[1], mid]).fetchone()
+            if busy:
+                return False
+            self.sc.execute("UPDATE merge_queue SET state = 'merging', updated_at = ? WHERE "
+                             "id = ?", [now_utc(), mid])
+        return True
+
+    def get_merge_method(self, uid: str) -> str:
+        """squash, merge or rebase; squash when the project never chose."""
+        with self._sread:
+            r = self.sc.execute("SELECT method FROM project_merge_method WHERE project = ?",
+                                [uid]).fetchone()
+        return r[0] if r and r[0] in self.MERGE_METHODS else "squash"
+
+    def set_merge_method(self, uid: str, method: str, by: str) -> str:
+        method = (method or "").strip().lower()
+        if method not in self.MERGE_METHODS:
+            raise ValueError("merge_method is squash, merge or rebase")
+        with self._swrite:
+            self.sc.execute(
+                "INSERT INTO project_merge_method (project, method, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (project) DO UPDATE SET "
+                "method = excluded.method, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by", [uid, method, now_utc(), by])
+        return method
 
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
         """The project's own choice for the slot, secrets redacted, as get_choice; None when it

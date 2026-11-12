@@ -192,6 +192,33 @@ ck("it would run tests/test_crew_packaging.py and the parity coverage here", cod
 ck("test_crew_standup.py is the only crew test it skips", [ln for ln in out.splitlines() if ln.startswith("skip ")] != []
    and len([ln for ln in out.splitlines() if ln.startswith("skip ")]) == 1, out)
 
+print("slices (--shard N --of M)")
+sh_tests = {"test_crew_state.py": PASSING, "test_crew_views.py": PASSING}
+t = tree(sh_tests, parity(("alpha", "beta", "gamma")))
+ran, covs, ok_all = 0, 0, True
+for i in (1, 2, 3):
+    code, out = runner(t, "--shard", str(i), "--of", "3")
+    ok_all = ok_all and code == 0
+    covs += out.count("parity.py --coverage")
+    ran += len([ln for ln in out.splitlines() if ln.startswith("ok ")])
+ck("every slice passes", ok_all)
+ck("the slices together run every test and scenario once, and the coverage report once", ran == 3 + 3 + 1, ran)
+ck("the coverage report runs in slice 1 only", covs == 1, covs)
+code, out = runner(t, "--shard", "2", "--of", "3")
+ck("a slice says which one it is", "slice 2 of 3" in out, out)
+code, out = runner(t, "--shard", "4", "--of", "3")
+ck("a slice outside 1..M is refused", code == 2, out)
+code, out = runner(t, "--list", "--shard", "1", "--of", "2")
+code2, out2 = runner(t, "--list", "--shard", "2", "--of", "2")
+l1 = [ln for ln in out.splitlines() if ln.startswith("test  ")]
+l2 = [ln for ln in out2.splitlines() if ln.startswith("test  ")]
+ck("--list shows each slice, with no run in both", not (set(l1) & set(l2)) and l1 and l2, (l1, l2))
+all_list = [ln for ln in runner(t, "--list")[1].splitlines() if ln.startswith("test  ")]
+ck("...and the two slices together are the whole list", sorted(l1 + l2) == sorted(all_list), (l1, l2, all_list))
+ft = tree({"test_crew_state.py": FAILING}, parity())
+codes = [runner(ft, "--shard", str(i), "--of", "2")[0] for i in (1, 2)]
+ck("a failing run fails the slice it is in, and only that one", sorted(codes) == [0, 1], codes)
+
 shutil.rmtree(BASE, ignore_errors=True)
 print("\n%d passed, %d failed" % (P, F))
 sys.exit(1 if F else 0)
