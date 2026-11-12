@@ -201,7 +201,7 @@ ck("same grant on Tares", c1.tares.grants == c2.tares.grants and len(c2.tares.gr
    (c1.tares.grants, c2.tares.grants))
 ck("the same requests, in the same order", c1.tares.written() == c2.tares.written(), (c1.tares.written(), c2.tares.written()))
 ck("the terminal path asked the questions the contract lists",
-   all(q in t.stdout + t.stderr for q in ("Who merges pull requests?", "How many builders may work at the same time?")))
+   all(q in t.stdout + t.stderr for q in ("Who approves merging pull requests?", "How many builders may work at the same time?")))
 ck("a second --questions after --answers: nothing outstanding", questions(c2)[1] == [])
 c1.close()
 c2.close()
@@ -373,9 +373,14 @@ r = c.run(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": "http://127.0.0
 ck("an old Tares with no MCP server up: the upgrade message wins over the MCP one",
    "missing integrations" in r.stderr and "no MCP server answers" not in r.stderr, (r.returncode, r.stderr[-300:]))
 c.close()
-c = Case(capabilities=["integrations", "other"])
+c = Case(capabilities=["integrations", "merge_queue", "other"])
 r = c.run(["crew", "up", "--yes", "--no-watch"])
-ck("a Tares that lists integrations among others is not refused", "needs a newer Tares" not in r.stderr, r.stderr[-300:])
+ck("a Tares that lists integrations and merge_queue among others is not refused", "needs a newer Tares" not in r.stderr, r.stderr[-300:])
+c.close()
+c = Case(capabilities=["integrations"])
+r = c.run(["crew", "up", "--yes", "--no-watch"])
+ck("a Tares without merge_queue refuses crew up and names it", r.returncode != 0 and "missing merge_queue" in r.stderr, (r.returncode, r.stderr[-300:]))
+ck("it started nothing", c.tares.written() == [] or not any("--bg" in str(x) for x in c.tares.written()), c.tares.written())
 c.close()
 
 # ====================================================================================

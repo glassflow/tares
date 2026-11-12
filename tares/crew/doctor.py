@@ -611,7 +611,7 @@ class Doctor:
                         "or no access); builders open PRs there", "gh auth login, and add a GitHub remote")
             else:
                 self.no(f"project_{p}_{rid}_github", f"project {p}: gh has {perm} on {name}; builders need write access to "
-                        "push and merge", "ask for write access to the repo")
+                        "push branches and open PRs", "ask for write access to the repo")
 
     def check_cmux(self) -> None:
         found = doctor_lsp.cmux_check(self.env)
@@ -658,7 +658,7 @@ class Doctor:
             else:
                 self.no("gh", "gh not signed in: gh auth login", "gh auth login")
         else:
-            self.no("gh", "gh not installed (needed for PRs, reviews and merges): brew install gh", "brew install gh")
+            self.no("gh", "gh not installed (needed for PRs and reviews): brew install gh", "brew install gh")
 
     def check_stations(self) -> None:
         if not self.paths.stations.is_file():

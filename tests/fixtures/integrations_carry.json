@@ -68,14 +68,22 @@
       "slot": "tickets"
     },
     {
-      "available": [],
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "tares",
+          "settings_schema": [],
+          "title": "Tares reviewer"
+        }
+      ],
       "choice": null,
       "effective": {
         "integration": "tares",
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "tares"
+        "title": "Tares reviewer"
       },
       "slot": "review"
     },
@@ -96,6 +104,13 @@
             }
           ],
           "title": "GitHub Actions"
+        },
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "local",
+          "settings_schema": [],
+          "title": "Local checks"
         }
       ],
       "choice": null,
@@ -104,7 +119,7 @@
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "local"
+        "title": "Local checks"
       },
       "slot": "ci"
     },
@@ -206,7 +221,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "github",
@@ -260,7 +275,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "github",
@@ -314,7 +329,7 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "github",
@@ -368,14 +383,14 @@
           "reason": "",
           "slot": "review",
           "source": "default",
-          "title": "tares"
+          "title": "Tares reviewer"
         },
         {
           "integration": "local",
           "reason": "",
           "slot": "ci",
           "source": "default",
-          "title": "local"
+          "title": "Local checks"
         },
         {
           "integration": "tares",

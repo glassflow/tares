@@ -20,7 +20,9 @@ test_challenger_workflow
 test_check_ledger
 test_ci_check
 test_ci_e2e
+test_ci_github
 test_ci_list
+test_ci_local
 test_ci_windows
 test_ci_workflows
 test_claude_usage
@@ -147,6 +149,8 @@ test_mcp_ee_tools
 test_mcp_remote
 test_mcp_setup
 test_mcp_station_headers
+test_merge_queue
+test_merge_ready
 test_metrics
 test_milestone_checks
 test_model_provider
@@ -183,6 +187,7 @@ test_rca_callback_anchor
 test_recording_person
 test_release_block
 test_resources
+test_review_gate
 test_rius_rca
 test_run_results
 test_schedule_trigger

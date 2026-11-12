@@ -547,6 +547,14 @@ def add_check_to_doc(body: str, line: str) -> str:
 # ── review and merge (M6) ─────────────────────────────────────────────────────
 
 VERDICTS = ("pass", "changes", "block")
+
+
+def same_commit(a, b) -> bool:
+    """Whether two commit hashes name the same commit. A hash may be short, so one that starts
+    the other counts, in any case. An empty or missing hash is the same as nothing: False."""
+    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
+    return bool(a) and bool(b) and (a.startswith(b) or b.startswith(a))
+
 SEVERITIES = ("P1", "P2", "P3")
 
 
@@ -639,6 +647,11 @@ def _same_command(claimed: str, ran: str) -> bool:
         return True
     last = re.split(r"\s*(?:&&|;|\|\|)\s*", r)[-1].strip()
     return last == c
+
+
+# the two comparisons the checks use, for code outside this module (the local ci integration)
+same_command = _same_command
+says_failed = _says_failed
 
 
 def match_check(check: dict, commands: list[dict], since=None) -> tuple[str, str | None]:
@@ -865,7 +878,7 @@ ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
 CREW_ROLES = ("orchestrator", "reviewer", "releaser")
 AUTONOMY = {
     "L3-review": "you approve each merge",
-    "L4-ship": "a builder merges after the reviewer's pass and green CI",
+    "L4-ship": "Tares merges after the review gate passes and CI is green",
 }
 MAX_NAME = 120
 
