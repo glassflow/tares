@@ -143,9 +143,11 @@ check "builder TARES_PROJECT is the project id, the name beside it" '[ "$(envof 
 check "builder FACTORY_PARENT" '[ "$(envof $b FACTORY_PARENT)" = crew-orchestrator ]'
 check "builder FACTORY_REPO" '[ "$(envof $b FACTORY_REPO)" = "$repo" ]'
 check "builder worktrees in its repo" '[ "$(envof $b FACTORY_WORKTREES)" = "$repo/.factory/worktrees" ]'
-check "L3: builder waits for the relayed yes" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
-check "L3: the no-CI clause holds at L3 too" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\") and contains(\"no CI checks configured\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
-check "L3: no pre-authorized merge" '! jq -e ".autoMode.allow | any(test(\"pre-authorized at level\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
+check "L3: the autonomy text says Tares merges after the yes on the desk" 'jq -e ".autoMode.environment | any(test(\"builders open PRs and Tares merges each one after the human.s yes on the desk; nothing is deployed to production\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
+check "L3: no allow sentence merges a pull request" '! jq -e ".autoMode.allow | any(test(\"Merging a pull request|pre-authorized|relayed\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
+check "L3: the builder keeps its push and open-PR allow" 'jq -e "[.autoMode.allow[] | select(test(\"^Pushing\"))] | length == 1" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
+check "L3: the builder's permissions deny gh pr merge" 'jq -e ".permissions.deny == [\"Bash(gh pr merge:*)\"]" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
+check "every station denies gh pr merge and keeps its own commands" 'for s in crew-orchestrator crew-reviewer crew-releaser; do jq -e "(.permissions.deny | index(\"Bash(gh pr merge:*)\")) != null and (.permissions.allow | length) > 0 and (.autoMode.allow | any(test(\"Merging a pull request\")) | not)" "$FACTORY_CREW_HOME/stations/$s.settings.json" >/dev/null || exit 1; done'
 "$F" spawn builder "Links App" m1 "$repo" "again" >/dev/null 2>&1
 check "no duplicate builder" '[ "$(launches)" = 4 ]'
 "$F" spawn builder "Nobody's" m1 "$repo" "x" >"$T/unknown.out" 2>&1
@@ -641,16 +643,17 @@ SP=$(hand_over strict "$core1")
 api POST "/api/projects/$SP/handover" '{"autonomy": "L3-review"}' >/dev/null
 trust "$L4"; FACTORY_CREW_HOME="$L4" "$F" crew up --yes >/dev/null 2>&1
 FACTORY_CREW_HOME="$L4" "$F" spawn builder strict m1 "$core1" "T1" >/dev/null 2>&1
-check "a project handed over stricter keeps it" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$L4/stations/strict-build-m1.settings.json" >/dev/null'
+check "a project handed over stricter keeps it" 'jq -e ".autoMode.environment | any(contains(\"yes on the desk\"))" "$L4/stations/strict-build-m1.settings.json" >/dev/null'
 FACTORY_CREW_HOME="$L4" "$F" spawn builder --autonomy L5-dark strict m2 "$core1" "T2" >"$T/l5.out" 2>&1
 check "L5 is no level any more" 'grep -q "autonomy must be L3-review or L4-ship" "$T/l5.out"'
 FACTORY_CREW_HOME="$L4" "$F" retire strict-build-m1 >/dev/null 2>&1
 LP=$(hand_over loose "$core1")
 FACTORY_CREW_HOME="$L4" "$F" spawn builder loose m1 "$core1" "T1" >/dev/null 2>&1
-check "L4: the builder merges on the gate" 'jq -e ".autoMode.allow | any(test(\"pre-authorized at level L4-ship\"))" "$L4/stations/loose-build-m1.settings.json" >/dev/null'
+check "L4: the text says Tares merges after the review gate and green CI" 'jq -e ".autoMode.environment | any(contains(\"builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production\"))" "$L4/stations/loose-build-m1.settings.json" >/dev/null'
+check "L4: no allow sentence merges a pull request, and gh pr merge is denied" 'jq -e "(.autoMode.allow | any(test(\"Merging a pull request|pre-authorized\")) | not) and (.permissions.deny == [\"Bash(gh pr merge:*)\"])" "$L4/stations/loose-build-m1.settings.json" >/dev/null'
 api PUT /api/crew/settings '{"autonomy": "L3-review"}' >/dev/null
 FACTORY_CREW_HOME="$L4" "$F" settings loose-build-m1 >"$T/b.json" 2>/dev/null
-check "a crew lowered later takes the project down with it" 'jq -e ".autoMode.allow | any(test(\"relayed .*yes\"))" "$T/b.json" >/dev/null'
+check "a crew lowered later takes the project down with it" 'jq -e ".autoMode.environment | any(contains(\"yes on the desk\"))" "$T/b.json" >/dev/null'
 
 # One project, several repos: each repo gets its own builder, scoped to that repo; the crew stations,
 # doctor and adoption see every repo.
@@ -662,7 +665,7 @@ trust "$M"; FACTORY_CREW_HOME="$M" "$F" crew up --yes >/dev/null 2>&1
 FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-core "$core" "T1" >/dev/null 2>&1
 FACTORY_CREW_HOME="$M" "$F" spawn builder argus m1-charts "$charts" "T2 after T1" >/dev/null 2>&1
 check "multi: each builder runs in its repo" '[ "$(jq -r .env.FACTORY_REPO "$M/stations/argus-build-m1-charts.settings.json")" = "$charts" ]'
-check "multi: a builder may push and merge only in its own repo" 'jq -e --arg c "$core" --arg h "$charts" "[.autoMode.allow[] | select(test(\"^(Pushing|Merging)\"))] | length == 2 and all(contains(\$h) and (contains(\$c) | not))" "$M/stations/argus-build-m1-charts.settings.json" >/dev/null'
+check "multi: a builder may push only in its own repo" 'jq -e --arg c "$core" --arg h "$charts" "[.autoMode.allow[] | select(test(\"^(Pushing|Merging)\"))] | length == 1 and all(contains(\$h) and (contains(\$c) | not))" "$M/stations/argus-build-m1-charts.settings.json" >/dev/null'
 check "multi: a builder's worktrees stay within its project" 'jq -e --arg l "$repo" --arg c "$core" ".autoMode.allow[1] | contains(\"repositories of project argus: \") and contains(\$c) and (contains(\$l) | not)" "$M/stations/argus-build-m1-charts.settings.json" >/dev/null'
 FACTORY_CREW_HOME="$M" "$F" settings crew-reviewer >"$T/rev.json" 2>/dev/null
 check "multi: the reviewer's grant names every repo" 'jq -e --arg c "$core" --arg h "$charts" ".autoMode.allow | any(contains(\$c) and contains(\$h) and contains(\"factory/review\"))" "$T/rev.json" >/dev/null'
