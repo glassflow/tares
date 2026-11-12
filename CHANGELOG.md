@@ -5,6 +5,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.57.0] - 2026-11-12
+
+Tares now merges ready pull requests itself through a merge queue, and the crew no longer merges.
+The Software Factory gets an integrations framework: Linear and GitHub Issues tickets are written
+through from Tares, and the review gate and CI checks plug in per project. The crew runs on the
+Python engine only, projects can hold secrets for their builders, and "Show what it did" on the
+Crew page reads as a conversation.
+
 ### Added
 - The merge queue (TR-856): Tares merges a ready pull request itself, with no agent and no tokens. Per repo and branch it merges one at a time, in milestone then ticket order, and a ticket whose dependency has not merged waits while later ones that do not need it go ahead. At L4-ship it merges once the review gate passes and CI is green, with the project's merge method (`PUT /api/projects/{uid}/merge-method`: squash by default, merge or rebase) and deletes the branch. At L3-review it asks the person on the desk first (or an admin or the project's lead approves with `POST /api/factory/merge-queue/{id}/approve`), and a new commit voids the approval. If no GitHub credential can write to the repo it asks once for one in Settings, GitHub. It stands down while GitHub's rate limit is low, and `/health` lists the `merge_queue` capability. The L4-ship text now says Tares merges, not a builder.
 - The merge queue handles pull requests that conflict or are behind (TR-858). One that conflicts goes back to its builder (stage changes) with a reason naming the files it shares with the last pull request merged into that branch. On a project whose ci integration is GitHub Actions, one that is behind is brought up to date, waits for a check on the new commit, and then merges without a new review when its changes are the same as the commit that was reviewed; different changes go back for review. A reviewed pull request whose CI fails or a guardrail blocks goes back once per commit, and a merge GitHub refuses (405), or a pull request GitHub cannot tell is mergeable for ten ticks, puts one item on the desk.
