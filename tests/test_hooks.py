@@ -385,7 +385,7 @@ async def main():
             say(None)
             r = await rel(project=shop, commit="abc123", repo="acme/shop", milestone="M4",
                           merged_prs="acme/shop#7, acme/shop#8,,")
-            ck("nothing to say: ready", r.status_code == 200 and r.json() == {"ready": True, "reasons": [], "warnings": []},
+            ck("nothing to say: ready", r.status_code == 200 and r.json() == {"ready": True, "reasons": [], "warnings": [], "guardrails": []},
                (r.status_code, r.text))
             seen = RAIL["seen"][0]
             ck("asked at pre_release with the commit, the milestone and the PRs split and trimmed",
@@ -401,7 +401,9 @@ async def main():
             say(warn())
             r = await rel(project=shop, commit="abc123")
             ck("a warning: ready, and shown", r.json() == {"ready": True, "reasons": [],
-                                                              "warnings": ["size: Large diff"]}, r.text)
+                                                              "warnings": ["size: Large diff"],
+                                                              "guardrails": [{"allow": False, "reason": "Large diff",
+                                                                              "integration": "size", "warn_only": True}]}, r.text)
             say(RuntimeError("the policy service is down"))
             r = await rel(project=shop, commit="abc123")
             ck("an unreachable guardrail: not ready, says so",

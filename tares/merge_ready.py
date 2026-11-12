@@ -141,7 +141,7 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
                        "deletions": int(f.get("deletions") or 0)} for f in files or []],
             "ticket": base["ticket"], "url": ref.url,
             "review": {"state": review["state"], "by": review["by"]},
-            "ci": {"state": ci["state"], "failing": list(ci["failing"])}})
+            "ci": {"state": ci["state"], "failing": list(ci["failing"])}}, ticket=t["id"])
         for d in decisions or []:
             rails.append({"allow": bool(d.allow), "reason": d.reason,
                           "integration": d.integration, "warn_only": bool(d.warn_only)})
