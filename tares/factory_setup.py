@@ -13,9 +13,7 @@ import select
 import shutil
 import subprocess
 import sys
-import termios
 import textwrap
-import tty
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -277,6 +275,8 @@ def read_key(fd: int) -> str:
 
 def run_form(form: Form) -> Form:
     """Shows the box until the person saves or cancels; redraws it in place."""
+    import termios   # here, not at the top: Windows has no termios, and the daemon imports this module (TR-862)
+    import tty
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     color = not os.environ.get("NO_COLOR")
