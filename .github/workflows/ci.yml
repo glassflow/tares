@@ -107,6 +107,8 @@ jobs:
   # (tests/factory/parity_expected). Split into shards, one scenario at a time per runner (PARITY_JOBS=1: the cc_*
   # scenarios share session ids). The 43 scenarios marked not_windows run only here. tests/test_parity.py (in the
   # test job) checks that every recorded check label (parity_labels.json) has a scenario, without running them again.
+  # Linux runs them on every push and PR. macOS runners are few and queue for hours, so the macOS shards run on a PR
+  # only when it changes the crew engine or what it runs on (crew-changes below), and on every push.
   parity:
     name: parity (${{ matrix.os }} ${{ matrix.shard }}/12)
     runs-on: ${{ matrix.os }}
@@ -114,11 +116,60 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest]
         shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
     env:
       PARITY_JOBS: "1"
       PYTHONUNBUFFERED: "1"     # the log shows each scenario as it finishes, so a slow or stuck one is seen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install
+        run: pip install -e .
+      - name: Parity scenarios
+        run: python tests/factory/parity.py --shard=${{ matrix.shard }}/12
+
+  # Does this PR change the crew engine or what it runs on? A push always counts as yes.
+  crew-changes:
+    runs-on: ubuntu-latest
+    outputs:
+      crew: ${{ steps.diff.outputs.crew }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then echo "crew=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          changed=$(git diff --name-only "$BASE"...HEAD)
+          echo "$changed"
+          if grep -qE '^(tares/crew/|claude-plugin/|tests/factory/|tares/cli\.py$|pyproject\.toml$|\.github/workflows/ci\.yml$)' <<<"$changed"; then
+            echo "crew=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "crew=false" >> "$GITHUB_OUTPUT"
+            echo "no crew engine change: the macOS parity shards are skipped"
+          fi
+
+  parity-macos:
+    name: parity (macos-latest ${{ matrix.shard }}/12)
+    needs: crew-changes
+    if: needs.crew-changes.outputs.crew == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    env:
+      PARITY_JOBS: "1"
+      PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
