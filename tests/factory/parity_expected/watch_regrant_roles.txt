@@ -142,7 +142,6 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -209,7 +208,6 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -276,7 +274,6 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

@@ -716,7 +716,7 @@ ck("0: it says what it does and that the station runs the version", ran and msgs
 world(one, [row("idle", "aaaa0001", "shop-build-m1", NEW), row("idle", "aaaa0009", "shop-build-m1", NEW)])
 msgs, ran = watch_move(0)
 ck("0: two sessions under the name are said and recorded", msgs[-1] == "TWO SESSIONS named shop-build-m1: aaaa0001, aaaa0009; "
-   "stop the one stations.json does not list (factory roster)" and kinds() == [
+   "stop the one stations.json does not list (tares factory roster)" and kinds() == [
        ("two-sessions", "shop-build-m1", "shop-build-m1: aaaa0001, aaaa0009")], str((msgs, kinds())))
 world(one, old_row)
 msgs, ran = watch_move(3)
@@ -1432,7 +1432,7 @@ world(TREE, [row("idle", "aaaa0001", "crew-orchestrator", NEW), row("idle", "aaa
              row("idle", "aaaa0003", "shop-build-m2", NEW), row("idle", "aaaa0009", "shop-build-m2", NEW)])
 rc, said, _ = cu()
 ck("two sessions under one station name are said, and fail the run", rc == 1 and said[-2:] == [
-    "TWO SESSIONS named shop-build-m2: aaaa0003, aaaa0009; stop the one stations.json does not list (factory roster)",
+    "TWO SESSIONS named shop-build-m2: aaaa0003, aaaa0009; stop the one stations.json does not list (tares factory roster)",
     f"not every station runs Claude Code {NEW}: two-sessions"], str(said))
 
 shutil.rmtree(SCRATCH, ignore_errors=True)

@@ -33,7 +33,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"
+tares factory: usage: tares factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"
 == step: spawn helper links-app-build-m1 rebase rebase T2 ==
 exit: 0
 -- stdout --
@@ -51,7 +51,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
+tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>"
 == step: spawn sprite ==
 exit: 1
 -- stdout --
@@ -157,7 +157,6 @@ tares factory: spawn takes builder or helper
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -219,7 +218,6 @@ tares factory: spawn takes builder or helper
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

@@ -3,7 +3,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: <TMP>/crew/worktrees/p-pr1 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run factory tidy --force <TMP>/crew/worktrees/p-pr1
+tares factory: <TMP>/crew/worktrees/p-pr1 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run tares factory tidy --force <TMP>/crew/worktrees/p-pr1
 -- after --
 true
 == step: tidy --force {tmp}/crew/worktrees/p-pr1 ==
@@ -23,7 +23,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: <TMP>/repo/.factory/worktrees/T2 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run factory tidy --force <TMP>/repo/.factory/worktrees/T2
+tares factory: <TMP>/repo/.factory/worktrees/T2 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run tares factory tidy --force <TMP>/repo/.factory/worktrees/T2
 -- after --
 true
 == step: tidy {tmp}/repo/.factory/worktrees/T2 ==
@@ -31,7 +31,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: <TMP>/repo/.factory/worktrees/T2 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run factory tidy --force <TMP>/repo/.factory/worktrees/T2
+tares factory: <TMP>/repo/.factory/worktrees/T2 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run tares factory tidy --force <TMP>/repo/.factory/worktrees/T2
 -- after --
 true
 == step: tidy --force {tmp}/repo/.factory/worktrees/T2 ==
@@ -47,7 +47,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: <TMP>/repo/.factory/worktrees/T3 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run factory tidy --force <TMP>/repo/.factory/worktrees/T3
+tares factory: <TMP>/repo/.factory/worktrees/T3 has uncommitted changes or commits no remote has. If it's your own worktree and the work is done (merged, or a review you've finished), run tares factory tidy --force <TMP>/repo/.factory/worktrees/T3
 -- after --
 true
 == step: tidy --force {tmp}/repo/.factory/worktrees/T3 ==

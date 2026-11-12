@@ -34,6 +34,6 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: <TMP>/job/tmp/v2 is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+tares factory: <TMP>/job/tmp/v2 is outside the crew's folders. tares factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
 == file crew/tmp/inner/keep ==
 keep

@@ -1,11 +1,11 @@
-"""`tares factory heavy <timeout-seconds> <command...>`: the port of claude-plugin/bin/factory-heavy.
+"""`tares factory heavy <timeout-seconds> <command...>`: the port of the old `factory-heavy` wrapper (removed in TR-975).
 
 Runs a heavy command (a docker build, a build across many modules, a scan) under a machine-wide lock,
 so one runs at a time, and kills it, with everything it started, once the timeout passes. A Claude
 Code Bash timeout does not kill the process.
 
-The lock is the same folder the bash script makes, `<TMPDIR or /tmp>/tares-factory-heavy.lock`, with
-a `pid` file and a `what` file, so a bash holder and a Python holder make each other wait. A holder
+The lock is the folder the bash script made, `<TMPDIR or /tmp>/tares-factory-heavy.lock`, with
+a `pid` file and a `what` file. A holder
 whose process is gone is cleared. A waiter says who it waits for at once and every minute, and gives
 up after an hour (exit 75).
 
@@ -30,7 +30,7 @@ import time
 from .locks import pid_alive
 
 LOCK_NAME = "tares-factory-heavy.lock"
-USAGE = "usage: factory-heavy <timeout-seconds> <command...>"
+USAGE = "usage: tares factory heavy <timeout-seconds> <command...>"
 WAIT_LIMIT = 3600.0     # seconds a waiter gives up after
 SAY_EVERY = 60.0        # seconds between "waiting for ..." lines
 POLL = 0.25             # seconds between tries at the lock

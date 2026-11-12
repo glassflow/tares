@@ -1,36 +1,24 @@
-"""Which engine runs a `tares factory` command: the Python one when the command is ported, else bash.
+"""`tares factory <command>`: which function runs a command, and what is printed for no command, `help`, a
+command that does not exist and a bad `crew` subcommand.
 
-Commands move from `claude-plugin/bin/factory` to Python one ticket at a time. A ported command adds
-itself to PORTED; every other command still goes to bash, exactly as before.
-
-  TARES_FACTORY_ENGINE   unset or empty  the engine crew.json names, else the default: each command on its own
-                                         engine (Python if ported, else bash)
-                         python          Python only: a command that is not ported fails with exit 2
-                         bash            bash only, even for a ported command
-                         anything else   an error, exit 2
-  "engine": "bash"       in crew.json (FACTORY_CREW_HOME, default ~/factory) is the same as
-                         TARES_FACTORY_ENGINE=bash when the variable is not set; "python" there is the
-                         default. Python is the default engine (TR-1069); this is the one setting that brings
-                         bash back. Running stations pick it up when they are restarted.
+Every command is in PORTED (named for the move from bash), a map from the command word (or the command word and its subcommand) to a
+function. The old bash crew (`claude-plugin/bin/factory`) was removed in TR-975; its help text moved to
+usage.py and its exit codes are kept: help exits 0, an unknown command prints the help and exits 1, and a
+`crew` subcommand that does not exist says which ones there are on stderr and exits 1.
 
 Standard library only (no duckdb, fastapi, tares.daemon or tares.store), so `tares factory roster`
-stays quick: nothing here is imported that bash does not need.
+stays quick: each command's module is imported when the command runs.
 """
 from __future__ import annotations
 
-import os
-import shutil
 import sys
-from pathlib import Path
 from typing import Callable
 
 ME = "tares factory"
-ENGINE_VAR = "TARES_FACTORY_ENGINE"
-ENGINES = ("python", "bash")
 
-# A ported command: its key (the command word, or the command word and its subcommand) to
+# A command: its key (the command word, or the command word and its subcommand) to
 # fn(argv, env) -> exit code. argv is everything after `tares factory`, the key words included;
-# env is the environment the command runs in. Later tickets add entries.
+# env is the environment the command runs in.
 PORTED: dict[tuple[str, ...], Callable[[list[str], dict], int]] = {}
 
 
@@ -156,15 +144,6 @@ def _parse_bg_id(argv: list[str], env: dict) -> int:
 
 
 PORTED[("_parse-bg-id",)] = _parse_bg_id
-WATCH_VAR = "TARES_FACTORY_WATCH"  # "bash" keeps the bash watch while everything else is Python (TR-1069)
-
-
-def _bash_watch(argv: list[str], env: dict) -> bool:
-    """True for `watch` / `crew watch` asked to stay bash with TARES_FACTORY_WATCH=bash. The Python watch is
-    the default now; the engine setting (bash) is handled by route. Windows has no bash to keep."""
-    if argv[:1] == ["crew"]:
-        argv = argv[1:]
-    return argv[:1] == ["watch"] and env.get(WATCH_VAR) == "bash" and bash_exe(env) is not None
 
 
 def _view(name: str):
@@ -209,26 +188,6 @@ def _doctor(argv: list[str], env: dict) -> int:
 PORTED[("doctor",)] = _doctor
 
 
-def is_windows() -> bool:
-    """True where bash is not there to fall back on. A function so a test can patch it."""
-    return sys.platform == "win32"
-
-
-def bash_exe(env: dict) -> str | None:
-    """The bash that can run a command not ported yet, or None where there is none: Windows, or a Mac or Linux
-    without bash (a slim container, a minimal image). The platform is detected, never assumed (TR-1069, D73)."""
-    if is_windows():
-        return None
-    if os.path.exists("/bin/bash"):
-        return "/bin/bash"
-    return shutil.which("bash", path=env.get("PATH"))
-
-
-def no_bash_reason(env: dict) -> str:
-    """Why there is no bash to fall back on, in the words of the message that names it."""
-    return "bash is not available on Windows" if is_windows() else "bash was not found on this system (PATH)"
-
-
 def find(argv: list[str]) -> Callable[[list[str], dict], int] | None:
     """The ported function for argv: the longest key that starts argv wins, so `crew status` and
     `crew` can both be keys. None when the command is not ported."""
@@ -237,59 +196,6 @@ def find(argv: list[str]) -> Callable[[list[str], dict], int] | None:
         if fn is not None:
             return fn
     return None
-
-
-def command_name(argv: list[str]) -> str:
-    """The command as a person typed it, for messages: `crew up`, `roster`, `help` for none."""
-    if not argv:
-        return "help"
-    if len(argv) > 1 and not argv[1].startswith("-"):
-        return f"{argv[0]} {argv[1]}"
-    return argv[0]
-
-
-def _crew_json_engine(env: dict) -> str:
-    """The "engine" of crew.json in the crew home: "" when the file, the key or a text value is not there.
-    Standard library only, and read only when TARES_FACTORY_ENGINE is not set."""
-    import json
-    from .paths import default_home
-    home = env.get("FACTORY_CREW_HOME") or default_home(env)
-    try:
-        with open(os.path.join(home, "crew.json"), encoding="utf-8") as f:
-            value = json.load(f).get("engine")
-    except (OSError, ValueError, AttributeError):
-        return ""
-    return value if isinstance(value, str) else ""
-
-
-def engine_setting(env: dict) -> tuple[str, str]:
-    """(engine, source). engine is "" (the default: Python where ported), "python" or "bash"; source is
-    "TARES_FACTORY_ENGINE", "crew.json" or "" for the default. An unknown value comes back as it is, for route
-    to refuse. The variable wins over crew.json. "python" in crew.json is the default, not the strict mode:
-    only the variable asks for Python alone."""
-    asked = env.get(ENGINE_VAR) or ""
-    if asked:
-        return asked, ENGINE_VAR
-    filed = _crew_json_engine(env)
-    if filed == "python":
-        return "", "crew.json"
-    return filed, "crew.json" if filed else ""
-
-
-def route(argv: list[str], env: dict) -> tuple[str, Callable[[list[str], dict], int] | None, str]:
-    """(kind, function, message). kind is "python" (call the function), "bash" (run the script) or
-    "error" (print the message, exit 2)."""
-    engine, source = engine_setting(env)
-    if engine not in ("", *ENGINES):
-        where = ENGINE_VAR if source == ENGINE_VAR else '"engine" in crew.json'
-        return "error", None, f'{where} must be "python" or "bash" (or unset), not "{engine}"'
-    fn = find(argv)
-    if engine == "bash" or (fn is None and engine == "") or (fn is not None and engine == "" and _bash_watch(argv, env)):
-        return "bash", None, ""
-    if fn is None:  # engine == "python"
-        return "error", None, (f'"{command_name(argv)}" is not yet ported to the Python engine '
-                               f"({ENGINE_VAR}=python); unset {ENGINE_VAR} to let bash run it")
-    return "python", fn, ""
 
 
 def force_utf8() -> None:
@@ -302,11 +208,6 @@ def force_utf8() -> None:
                 reconfigure(encoding="utf-8", errors="replace")
             except (OSError, ValueError):
                 pass
-
-
-def _fail(message: str) -> None:
-    print(f"{ME}: {message}", file=sys.stderr)
-    raise SystemExit(2)
 
 
 def _call(fn: Callable[[list[str], dict], int], argv: list[str], env: dict) -> int:
@@ -328,25 +229,43 @@ def _call(fn: Callable[[list[str], dict], int], argv: list[str], env: dict) -> i
         return contract.EXIT_FAILED
 
 
-def run(argv: list[str], env: dict, script: str | Path) -> None:
-    """Run `tares factory <argv>`: call the Python command and exit with its code, or replace this
-    process with `bash <script> <argv>` under env. Does not return."""
-    kind, fn, message = route(argv, env)
-    if kind == "error":
-        _fail(message)
-    if kind == "python":
-        force_utf8()
-        code = _call(fn, list(argv), env)
+CREW_TAKES = "up, down, status, desk, attach, logs, watch, halt, resume, freeze, unfreeze, update or restart"
+
+
+def _no_command(argv: list[str]) -> tuple[str, str, int]:
+    """(stdout, stderr, exit code) for argv that is no command: what the bash crew printed. `help`, `-h`,
+    `--help` and no argument (or an empty one) print the help and exit 0; any other word prints the help and
+    exits 1; a `crew` subcommand that does not exist says which ones there are, on stderr, and exits 1."""
+    from .usage import USAGE
+    word = argv[0] if argv else ""
+    if word in ("", "help", "-h", "--help"):
+        return USAGE, "", 0
+    if word == "crew":
+        return "", f"{ME}: {ME} crew takes {CREW_TAKES}\n", 1
+    return USAGE, "", 1
+
+
+def run(argv: list[str], env: dict) -> None:
+    """Run `tares factory <argv>`: call the command and exit with its code. A command that does not exist
+    (and `help`) prints what the bash crew printed. Does not return."""
+    force_utf8()
+    if argv == ["crew"]:        # a bare `crew` is `crew status`
+        argv = ["crew", "status"]
+    fn = find(argv)
+    if fn is None:
+        out, err, code = _no_command(argv)
+        sys.stdout.write(out)
+        sys.stderr.write(err)
         for stream in (sys.stdout, sys.stderr):
             try:
                 stream.flush()
             except (OSError, ValueError):
                 pass
-        raise SystemExit(code or 0)
-    exe = bash_exe(env)
-    if exe is None:
-        if engine_setting(env)[0] == "bash":
-            _fail(f'the bash engine needs bash, which is not available {"on Windows" if is_windows() else "on this system"}; '
-                  f'unset {ENGINE_VAR} and remove "engine": "bash" from crew.json to use the Python engine')
-        _fail(f'"{command_name(argv)}" is not yet ported to the Python engine, and {no_bash_reason(env)}')
-    os.execve(exe, ["bash", str(script), *argv], env)
+        raise SystemExit(code)
+    code = _call(fn, list(argv), env)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            pass
+    raise SystemExit(code or 0)

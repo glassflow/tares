@@ -1,6 +1,9 @@
 # The crew tests and the parity harness on Windows, from the first milestone (TR-1066), so a Windows
-# break shows up in the PR that causes it. Advisory for now: continue-on-error keeps a red run from
-# blocking a merge, and the job name says so. Its own workflow, so ci.yml (and the required checks) stay as they are.
+# break shows up in the PR that causes it. Its own workflow, so ci.yml stays as it is.
+# One run of everything took longer than the 60 minute job limit (235 runs ok, then cancelled), so the runs are
+# split over 4 shards (`--shard N --of 4`, round robin, the parity coverage report in shard 1). The matrix jobs are
+# named windows-crew (shard N); the job `windows-crew` below waits for all of them and fails unless every shard
+# passed, so one stable check name can be required.
 # The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_ci_windows.py and the parity scenarios, and fails
 # if it ran no test, if a test printed no summary, or (--floors) if a test passed fewer checks than its floor (TR-976).
 name: windows-crew
@@ -35,11 +38,14 @@ permissions:
   contents: read
 
 jobs:
-  windows-crew:
-    name: windows-crew (not required yet)
+  shard:
+    name: windows-crew (shard ${{ matrix.shard }})
     runs-on: windows-latest
-    continue-on-error: true
-    timeout-minutes: 90
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
@@ -70,10 +76,25 @@ jobs:
       # FACTORY_CREW_HOME is the crew's own folder under that profile, so every path the engine builds from it has the
       # space and the e-acute in it. Tests that make their own crew home override it; the ones that read the
       # environment get this one.
-      - name: Crew tests and parity
+      - name: Crew tests and parity (shard ${{ matrix.shard }} of 4)
         shell: pwsh
         env:
           FACTORY_CREW_HOME: ${{ env.USERPROFILE }}\factory
         run: |
           .venv\Scripts\activate.ps1
-          python tests/ci_windows.py --floors --timeout 1200
+          python tests/ci_windows.py --floors --timeout 1200 --shard ${{ matrix.shard }} --of 4
+
+  # The one check to require: green only when all four shards are.
+  windows-crew:
+    name: windows-crew
+    needs: shard
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        run: |
+          if [ "${{ needs.shard.result }}" != "success" ]; then
+            echo "windows-crew shards: ${{ needs.shard.result }}"
+            exit 1
+          fi

@@ -41,7 +41,7 @@ crew = Path(env["FACTORY_CREW_HOME"])
 station = {"role": "builder", "status": "active", "project": PROJECT, "repo": "", "cwd": "", "model": "opus",
            "effort": "high", "id": "aaaa0001"}
 (crew / "stations.json").write_text(json.dumps({"shop-build-m1": station}, ensure_ascii=False), encoding="utf-8")
-env.update(PYTHONPATH=str(ROOT), PYTHONUTF8="0", PYTHONIOENCODING="cp1252", TARES_FACTORY_ENGINE="python")
+env.update(PYTHONPATH=str(ROOT), PYTHONUTF8="0", PYTHONIOENCODING="cp1252")
 env.pop("PYTHONSTARTUP", None)
 
 

@@ -178,27 +178,16 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)",
-      "Bash(factory spawn *)",
       "Bash(tares factory spawn *)",
-      "Bash(factory revive *)",
       "Bash(tares factory revive *)",
-      "Bash(factory restart *)",
       "Bash(tares factory restart *)",
-      "Bash(factory retire *)",
       "Bash(tares factory retire *)",
-      "Bash(factory roster)",
       "Bash(tares factory roster)",
-      "Bash(factory projects)",
       "Bash(tares factory projects)",
-      "Bash(factory crew status)",
       "Bash(tares factory crew status)",
-      "Bash(factory crew halt)",
       "Bash(tares factory crew halt)",
-      "Bash(factory crew halt *)",
       "Bash(tares factory crew halt *)",
-      "Bash(factory crew resume)",
       "Bash(tares factory crew resume)"
     ]
   },
@@ -254,7 +243,6 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -400,27 +388,16 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)",
-      "Bash(factory spawn *)",
       "Bash(tares factory spawn *)",
-      "Bash(factory revive *)",
       "Bash(tares factory revive *)",
-      "Bash(factory restart *)",
       "Bash(tares factory restart *)",
-      "Bash(factory retire *)",
       "Bash(tares factory retire *)",
-      "Bash(factory roster)",
       "Bash(tares factory roster)",
-      "Bash(factory projects)",
       "Bash(tares factory projects)",
-      "Bash(factory crew status)",
       "Bash(tares factory crew status)",
-      "Bash(factory crew halt)",
       "Bash(tares factory crew halt)",
-      "Bash(factory crew halt *)",
       "Bash(tares factory crew halt *)",
-      "Bash(factory crew resume)",
       "Bash(tares factory crew resume)"
     ]
   },
@@ -476,7 +453,6 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -622,27 +598,16 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)",
-      "Bash(factory spawn *)",
       "Bash(tares factory spawn *)",
-      "Bash(factory revive *)",
       "Bash(tares factory revive *)",
-      "Bash(factory restart *)",
       "Bash(tares factory restart *)",
-      "Bash(factory retire *)",
       "Bash(tares factory retire *)",
-      "Bash(factory roster)",
       "Bash(tares factory roster)",
-      "Bash(factory projects)",
       "Bash(tares factory projects)",
-      "Bash(factory crew status)",
       "Bash(tares factory crew status)",
-      "Bash(factory crew halt)",
       "Bash(tares factory crew halt)",
-      "Bash(factory crew halt *)",
       "Bash(tares factory crew halt *)",
-      "Bash(factory crew resume)",
       "Bash(tares factory crew resume)"
     ]
   },
@@ -698,7 +663,6 @@ tares factory: this crew is already running under the name crew, but FACTORY_CRE
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

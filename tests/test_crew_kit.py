@@ -4,7 +4,7 @@ the watch's round.
 Each check runs in a throwaway crew home with a small kit of its own (TARES_PLUGIN_DIR), the Python fake Claude Code
 (tests/factory/fake_claude.py) and a fake Tares that keeps what a PUT of the settings saves. The restart of a station
 is replaced by a recorder, and so is the watch's restart of itself, so nothing here starts a session or signals a
-process. The bash and the Python run side by side in the bash suite tests/factory/freeze_test.sh and the parity harness.
+process.
 
 The test runs in a fresh HOME with no keyring: nothing of the person's is read or written.
 
@@ -173,9 +173,9 @@ def station(**over) -> dict:
 
 def make_kit(files=None) -> None:
     shutil.rmtree(KITDIR.parent, ignore_errors=True)
-    (KITDIR / "bin").mkdir(parents=True)
+    (KITDIR / "hooks").mkdir(parents=True)
     (KITDIR / "skills" / "x").mkdir(parents=True)
-    (KITDIR / "bin" / "factory").write_text("#!/bin/sh\necho kit\n", encoding="utf-8")
+    (KITDIR / "hooks" / "hooks.json").write_text("{\"hooks\": {}}\n", encoding="utf-8")
     (KITDIR / "skills" / "x" / "SKILL.md").write_text("skill one\n", encoding="utf-8")
     for rel, text in (files or {}).items():
         (KITDIR / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -301,7 +301,7 @@ world({"crew-orchestrator": station(role="orchestrator", id="aaaa0002")})
 with FakeTares() as ft:
     raised, said = freeze_here()
     ck("freeze does not raise", raised is None, str(raised))
-    ck("the copy is the kit as it was", tree(CP.frozen_kit) == tree(KITDIR) and (CP.frozen_kit / "bin" / "factory").is_file())
+    ck("the copy is the kit as it was", tree(CP.frozen_kit) == tree(KITDIR) and (CP.frozen_kit / "hooks" / "hooks.json").is_file())
     ck("the checkout is written down", CP.checkout_file.read_text().strip() == str(KITDIR))
     ck("no marker, no half-made copy", not CP.freezing.exists() and not Path(f"{CP.frozen_kit}.new").exists())
     put = ft.puts()
@@ -374,8 +374,8 @@ with FakeTares():
 print("freeze: a copy still in use")
 world({"s1": station(plugin=kit.frozen_phys(CP))})
 CP.frozen_kit.mkdir()
-(CP.frozen_kit / "bin").mkdir()
-(CP.frozen_kit / "bin" / "factory").write_text("#!/bin/sh\necho kit\n", encoding="utf-8")
+(CP.frozen_kit / "hooks").mkdir()
+(CP.frozen_kit / "hooks" / "hooks.json").write_text("{\"hooks\": {}}\n", encoding="utf-8")
 (CP.frozen_kit / "skills" / "x").mkdir(parents=True)
 (CP.frozen_kit / "skills" / "x" / "SKILL.md").write_text("skill one\n", encoding="utf-8")
 with FakeTares() as ft:
@@ -384,14 +384,14 @@ with FakeTares() as ft:
        and ft.settings["kit"]["frozen"]["version"] == kit.kit_version(CP.frozen_kit), str(raised))
 world({"s1": station(plugin=kit.frozen_phys(CP))})
 CP.frozen_kit.mkdir()
-(CP.frozen_kit / "bin").mkdir()
-(CP.frozen_kit / "bin" / "factory").write_text("#!/bin/sh\necho OLD kit\n", encoding="utf-8")
+(CP.frozen_kit / "hooks").mkdir()
+(CP.frozen_kit / "hooks" / "hooks.json").write_text("{\"hooks\": {\"old\": 1}}\n", encoding="utf-8")
 with FakeTares() as ft:
     raised, _ = freeze_here()
     ck("...but a changed checkout is refused, naming the way out", raised is not None and "stations still run from the kit copy of an earlier freeze, "
        "and the checkout has changed since: wait until tares factory crew watch has moved them (tares factory crew status), then freeze again"
        in raised.line, str(raised))
-    ck("...the old copy and its station stay, the marker goes, Tares is untouched", (CP.frozen_kit / "bin" / "factory").read_text().startswith("#!/bin/sh\necho OLD")
+    ck("...the old copy and its station stay, the marker goes, Tares is untouched", "old" in (CP.frozen_kit / "hooks" / "hooks.json").read_text()
        and not CP.freezing.exists() and ft.settings["kit"]["frozen"] is None and ft.puts() == [])
 
 # ---------------------------------------------------------------------------------------------
@@ -493,7 +493,7 @@ _lf(CP.checkout_file, f"{KITDIR}\n")
 ck("a factory run from the copy means the checkout", kit.map_checkout(CP, Path(kit.frozen_phys(CP))) == KITDIR)
 FP = kit.frozen_phys(CP)
 ck("_within: the copy itself, a file in it, a sibling that shares the prefix, and a ../ out of it",
-   kit._within(FP, FP) and kit._within(Path(FP) / "bin" / "factory", FP) and not kit._within(FP + "2", FP)
+   kit._within(FP, FP) and kit._within(Path(FP) / "hooks" / "hooks.json", FP) and not kit._within(FP + "2", FP)
    and not kit._within(Path(FP) / ".." / "x", FP))
 ck("a run from a sibling of the copy means itself", kit.map_checkout(CP, Path(FP + "2")) == Path(FP + "2"))
 ck("...a path elsewhere means itself", kit.map_checkout(CP, Path("/x/y")) == Path("/x/y"))
@@ -601,7 +601,7 @@ ck("...and not again", len(kinds("kit-newer")) == 1 and not [m for m in said if 
 
 world({"shop-build-m1": station()}, IDLE)
 res, said, _ = round_(health=False)
-ck("Tares down: nothing moves, it says so, and the round still counts as a kit round (bash: the if, not its result)", res is True and restarts == [] and
+ck("Tares down: nothing moves, it says so, and the round still counts as a kit round", res is True and restarts == [] and
    any("Tares doesn't answer; shop-build-m1 moves onto the new version once it does" == m for m in said), str((res, said)))
 
 world({"shop-build-m1": station()}, IDLE)
@@ -618,8 +618,7 @@ with patched(kit, "upgrade_station", froze_since):
     res, _, _ = round_()
 ck("a crew that froze since the round began restarts no one", restarts == [], str(restarts))
 
-# a station that is not in the session list is down: no move this round, whatever the revive step saw (bash: the
-# round's own down check)
+# a station that is not in the session list is down: no move this round, whatever the revive step saw
 world({"shop-build-m1": station(), "shop-build-m2": station(id="bbbb0002", sessionId="sess-2")}, IDLE)
 watch_revive.last = watch_revive.Round()
 res, _, _ = round_()
@@ -745,7 +744,7 @@ class _OS:
 execs: list = []
 world()
 # The environment the new watch would get: a scratch home too, or a patch that missed would start a watch on ~/factory
-env_ = {"PATH": os.environ.get("PATH", ""), "TARES_FACTORY_ENGINE": "python", "HOME": os.environ["HOME"],
+env_ = {"PATH": os.environ.get("PATH", ""), "HOME": os.environ["HOME"],
         "USERPROFILE": os.environ["HOME"], "FACTORY_HOME": str(CREW), "FACTORY_CREW_HOME": str(CREW)}
 
 
@@ -781,7 +780,7 @@ try:
     failed = None
 except OSError as e:
     failed = e
-ck("a failed exec raises, so follow_engine keeps this watch", failed is not None, str(failed))
+ck("a failed exec raises, so this watch keeps running", failed is not None, str(failed))
 back = lock_pid.read_text().strip() if lock_pid.exists() else "no pid file"
 ck("...and the watch takes back the lock it let go", back == str(os.getpid()), back)
 locks.release_locks()

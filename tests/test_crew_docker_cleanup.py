@@ -302,10 +302,10 @@ check("doctor warns when the setting is off", any(s == "warn" and "off" in t for
 check("doctor says when cleanup has not started yet", any("a day of image use" in t for _, _, t, _ in early))
 
 print("== onboarding ==")
-note = dc.onboarding_note({"FACTORY_DOCKER": "docker", "TARES_FACTORY_ENGINE": "python"})
+note = dc.onboarding_note({"FACTORY_DOCKER": "docker"})
 check("crew up says once that the watch cleans up Docker", note and "docker_cleanup turns it off" in note, note)
-check("not with the bash watch, which does not", dc.onboarding_note({"FACTORY_DOCKER": "docker",
-                                                                      "TARES_FACTORY_ENGINE": "bash"}) is None)
+check("the engine switch is gone: TARES_FACTORY_ENGINE=bash changes nothing", dc.onboarding_note(
+    {"FACTORY_DOCKER": "docker", "TARES_FACTORY_ENGINE": "bash"}) == note)
 check("not without Docker", dc.onboarding_note({"FACTORY_DOCKER": "", "PATH": "/nonexistent"}) is None)
 
 print(f"{P} passed, {F} failed")

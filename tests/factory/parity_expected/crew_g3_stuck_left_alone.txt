@@ -202,7 +202,6 @@ tares factory: crew-releaser stopped; reviving it under the same name, in a new 
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
