@@ -114,6 +114,9 @@ ck("...elsewhere case still matters", "<TMP>" not in nc, nc)
 with mock.patch.object(parity, "is_windows", lambda: True):
     q1 = parity.norm_text('tares hook statusline --plugin-root "<TMP>/kit"')
     q2 = parity.norm_text('tares hook statusline --plugin-root "<TMP>\\kit" and <TMP>\\bin\\claude.cmd (2.1.0)')
+with mock.patch.object(parity, "is_windows", lambda: True):
+    qx = parity.norm_text('<TMP>\\bin\\claude.exe (2.1.0) and <TMP>/bin/claude.exe')
+ck("on Windows claude.exe reads as bash printed it too (TR-1183)", qx == "<TMP>/bin/claude (2.1.0) and <TMP>/bin/claude", qx)
 ck("on Windows a quoted kit path and claude.cmd read as bash printed them",
    q1 == "tares hook statusline --plugin-root <TMP>/kit" and q2 == "tares hook statusline --plugin-root <TMP>/kit and <TMP>/bin/claude (2.1.0)", (q1, q2))
 with mock.patch.object(parity, "is_windows", lambda: False):
