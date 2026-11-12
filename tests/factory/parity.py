@@ -7596,9 +7596,17 @@ def g4_wait(seconds: float, ok) -> bool:
 
 def g4_up_after(tmp: Path) -> dict:
     """After a crew up: the watch's pid, whether it runs, and whether its log has the banner (given up to 6 seconds)."""
-    pid = g4_pid(tmp)
     log = tmp / "crew" / "watch.log"
     banner = g4_wait(6, lambda: log.is_file() and "watching the crew" in log.read_text(encoding="utf-8", errors="replace"))
+    # On Windows the pid file first names the venv launcher; the loop writes its own pid over it in its first round,
+    # just after the banner. So the pid counts once it has stayed the same for a second.
+    seen: list = []
+
+    def settled() -> bool:
+        seen.append(g4_pid(tmp))
+        return len(seen) >= 5 and len(set(seen[-5:])) == 1 and seen[-1] != 0
+    g4_wait(6, lambda: (time.sleep(0.2), settled())[1])
+    pid = g4_pid(tmp)
     return {"pid": pid, "alive": g4_alive(pid), "log": banner}
 
 
@@ -8971,8 +8979,8 @@ scenario(Scenario(
         ("a station is told where it compacts",
          lambda r: str(env_of(r, "crew-orchestrator", "FACTORY_AUTOCOMPACT")) == "200000"),
         ("a station runs the plugin's status line",
-         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command")
-         == f"tares hook statusline --plugin-root {KIT}"
+         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command", "").replace('"', "")
+         == f"tares hook statusline --plugin-root {fwd(KIT)}"  # Windows: forward slashes, in quotes when the path has a space
          and r.station_settings("crew-orchestrator").get("statusLine", {}).get("type") == "command"),
         ("the status line prints the window and the plan",
          lambda r: r.code(1) == 0 and r.out(1).strip() == "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%"),
@@ -9062,7 +9070,10 @@ def tares_mode_600(f: Path) -> bool:
 
 def tares_bare(text: str, home: Path) -> str:
     """A settings file with the crew home written as CREW (as the JSON file writes the path)."""
-    return text.replace(json.dumps(str(home))[1:-1], "CREW")
+    for form in (str(home), fwd(home)):  # Windows: the engine writes forward slashes and keeps non-ASCII as it is
+        for ascii_only in (True, False):
+            text = text.replace(json.dumps(form, ensure_ascii=ascii_only)[1:-1], "CREW")
+    return text
 
 
 def tares_no_token_in(folder: Path) -> bool:
