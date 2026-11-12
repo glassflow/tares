@@ -194,6 +194,25 @@ function Single({ title, m, actions, empty }: { title: string; m: CrewMember | n
   );
 }
 
+/** The crews on the cell, the live ones first; the ones that ended over a day ago behind a button. */
+function People({ crews, actions }: { crews: CrewOfPerson[]; actions: CrewActions }) {
+  const [showEnded, setShowEnded] = React.useState(false);
+  const live = crews.filter((c) => !c.ended);
+  const ended = crews.filter((c) => c.ended);
+  return (
+    <div className="grid min-w-0 gap-3" data-testid="crew-people">
+      {live.map((c) => <PersonCrew key={c.id ?? "none"} c={c} actions={actions} />)}
+      {ended.length > 0 && (
+        <button type="button" className={cn(FOLD_BTN, "justify-self-start")} aria-expanded={showEnded}
+                onClick={() => setShowEnded(!showEnded)} data-testid="crew-ended-toggle">
+          {showEnded ? "Hide" : "Show"} {ended.length} ended {ended.length === 1 ? "crew" : "crews"}
+        </button>
+      )}
+      {showEnded && ended.map((c) => <PersonCrew key={c.id ?? "none"} c={c} actions={actions} />)}
+    </div>
+  );
+}
+
 /** Which crews the reader folded or opened, kept in this browser only (a convenience: without it the
  *  reader's own crew opens and the others start folded). */
 const FOLD_KEY = "taresCrewFolds";
@@ -210,7 +229,7 @@ function writeFold(id: string, open: boolean) {
 function PersonCrew({ c, actions }: { c: CrewOfPerson; actions: CrewActions }) {
   const name = c.person.name ?? "A crew with no person";
   const key = c.id ?? "none";
-  const [open, setOpen] = React.useState<boolean>(() => readFolds()[key] ?? c.mine);
+  const [open, setOpen] = React.useState<boolean>(() => readFolds()[key] ?? (c.mine && !c.ended));
   const toggle = () => { setOpen(!open); writeFold(key, !open); };
   const live = c.builders.reduce((n, g) => n + g.members.filter((m) => m.state !== "ended").length, 0);
   const builders = live === 0 ? "no builder on it" : live === 1 ? "1 builder on it" : `${live} builders on it`;
@@ -224,9 +243,14 @@ function PersonCrew({ c, actions }: { c: CrewOfPerson; actions: CrewActions }) {
             <span className="min-w-0 flex-1">
               <span className="text-lg font-semibold">
                 <span data-user-text>{name}</span>{c.mine && <span className="font-normal text-muted-foreground"> (you)</span>}
-                {c.machine_shown && c.machine && <span className="font-normal text-muted-foreground"> on <span data-user-text>{c.machine}</span></span>}
+                {c.name && c.name !== "crew" && <span className="font-normal text-muted-foreground">, crew <span data-user-text>{c.name}</span></span>}
+                {c.machine_shown && (c.machine
+                  ? <span className="font-normal text-muted-foreground"> on <span data-user-text>{c.machine}</span></span>
+                  : <span className="font-normal text-muted-foreground"> on an unknown machine</span>)}
               </span>
-              <span className="block text-sm font-normal text-muted-foreground" data-testid="crew-of-person-summary">{c.summary}, {builders}</span>
+              <span className="block text-sm font-normal text-muted-foreground" data-testid="crew-of-person-summary">
+                {c.ended ? `Ended, last heard ${c.last_heard ?? "a while ago"}` : `${c.summary}, ${builders}`}
+              </span>
             </span>
           </span>
         </button>
@@ -412,9 +436,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
               {(data.crews ?? []).length > 1 ? (
-                <div className="grid min-w-0 gap-3" data-testid="crew-people">
-                  {(data.crews ?? []).map((c) => <PersonCrew key={c.id ?? "none"} c={c} actions={actions} />)}
-                </div>
+                <People crews={data.crews ?? []} actions={actions} />
               ) : (
                 <>
                   <Single title="Orchestrator" m={data.talk_to} actions={actions} empty={<NotStarted />} />
