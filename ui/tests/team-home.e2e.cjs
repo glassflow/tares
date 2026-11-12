@@ -40,19 +40,6 @@ const ck = (label, cond, detail = "") => {
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
 };
 
-// The Yours / All dropdown on the home's Projects (TR-1023): what it shows, its two options, and choosing one.
-const switchLabel = async (page) => (await page.getByTestId("projects-switch").innerText()).trim();
-async function switchOptions(page) {
-  await page.getByTestId("projects-switch").click();
-  const texts = (await page.getByRole("option").allInnerTexts()).map((x) => x.trim());
-  await page.keyboard.press("Escape");
-  return texts;
-}
-async function switchTo(page, view) {
-  await page.getByTestId("projects-switch").click();
-  await page.getByRole("option", { name: view === "team" ? /^All/ : /^Yours/ }).click();
-}
-
 async function waitFor(url, tries = 150) {
   for (; tries > 0; tries--) {
     const ok = await new Promise((res) => http.get(url, (r) => { r.resume(); res(true); }).on("error", () => res(false)));
@@ -221,8 +208,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     }
 
 
-    // ── TR-761, live: what Alex waits on, Projects (Mine and Team), the side column; Kim's view of Shop ──
-    const TEAM_NAMES = ["Shop", "Portal", "Notes", "Billing", "Search", "Mobile"];
+    // ── TR-761, live: what Alex waits on, no Projects on Home (TR-1275), the side column; Kim's view of Shop ──
     let kim = null;   // Kim's page at 1440 stays open: she reads Shop again once Alex has answered
     for (const width of [390, 1440]) {
       const t = (s) => `live @${width}: ${s}`;
@@ -276,37 +262,13 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         await other.ctx.close();
       }
 
-      // d. Projects: Mine and Team
-      const rowsN = () => page.getByTestId("project-row").count();
-      const prow = (name) => page.getByTestId("project-row").filter({ hasText: name });
-      const everything = () => page.evaluate(() => document.body.innerText);
-      const opts = await switchOptions(page);
-      ck(t("the dropdown offers Yours (3) and All (6)"), JSON.stringify(opts) === JSON.stringify(["Yours (3)", "All (6)"]), JSON.stringify(opts));
-      ck(t("Yours is chosen and lists Shop, Portal and Notes"), (await switchLabel(page)) === "Yours (3)" && (await rowsN()) === 3
-         && (await prow("Shop").count()) === 1 && (await prow("Portal").count()) === 1 && (await prow("Notes").count()) === 1, String(await rowsN()));
-      ck(t("Mine has one line about the hidden project and no stub row"), (await n("hidden-summary")) === 1 && (await n("hidden-row")) === 0
-         && (await texts("hidden-summary"))[0].trim() === "1 private project you are not on, led by Lee", JSON.stringify(await texts("hidden-summary")));
+      // d. no Projects on Home (TR-1275): the list is one click away on Projects; the private project still leaks nowhere
       const private_ = ids.private;
-      let bodyText = await everything();
-      const leaks = async () => [private_.name, private_.goal].filter((w) => bodyText.includes(w));
-      ck(t("Mine names nothing of the private project"), (await leaks()).length === 0 && !JSON.stringify(alexHome).includes(private_.name) && !JSON.stringify(alexHome).includes(private_.goal), (await leaks()).join());
-      await shot(page, "live-projects-mine", width);
-      await checkWords(page, ck, t("live mine"));
-      const asked = page.waitForRequest((r) => r.url().endsWith("/api/home?projects=team"), { timeout: 5000 }).then(() => true, () => false);
-      await switchTo(page, "team");
-      ck(t("choosing All makes the page read /api/home?projects=team"), await asked);
-      await page.waitForFunction(() => document.querySelectorAll('[data-testid="project-row"]').length === 6, null, { timeout: 4000 }).catch(() => {});
-      ck(t("Team lists six projects"), (await rowsN()) === 6 && (await Promise.all(TEAM_NAMES.map((x) => prow(x).count()))).every((c) => c === 1), String(await rowsN()));
-      ck(t("Team has the stub, Private, led by Lee, and no summary line"), (await n("hidden-row")) === 1 && (await texts("hidden-row"))[0].trim() === "Private, led by Lee"
-         && (await n("hidden-summary")) === 0, JSON.stringify(await texts("hidden-row")));
-      bodyText = await everything();
-      ck(t("Team names nothing of the private project either"), (await leaks()).length === 0, (await leaks()).join());
-      const rowText = async (name) => ((await prow(name).count()) ? prow(name).first().innerText() : "");
-      ck(t("Team shows Led by Lee on Search and Mobile and Led by Kim on Shop"), /Led by Lee/.test(await rowText("Search")) && /Led by Lee/.test(await rowText("Mobile"))
-         && /Led by Kim/.test(await rowText("Shop")));
-      ck(t("no horizontal scroll"), (await overflow(page)) <= 0, `${await overflow(page)}px over`);
-      await shot(page, "live-projects-team", width);
-      await checkWords(page, ck, t("live team"));
+      const bodyText = await page.evaluate(() => document.body.innerText);
+      ck(t("no Projects section and no project rows on Home"), (await page.getByRole("region", { name: "Projects" }).count()) === 0
+         && (await n("project-row")) === 0 && (await n("projects-switch")) === 0 && (await n("hidden-row")) === 0 && (await n("hidden-summary")) === 0);
+      ck(t("the page and the home read name nothing of the private project"), ![private_.name, private_.goal].some((w) => bodyText.includes(w))
+         && !JSON.stringify(alexHome).includes(private_.name) && !JSON.stringify(alexHome).includes(private_.goal));
 
       // e. the side column
       const crewRows = await texts("team-crew-row");
@@ -643,8 +605,6 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await settle(page);
       ck(t("the home no longer waits on Kim for Portal"), (await page.getByTestId("waiting-on-row").filter({ hasText: "Portal" }).count()) === 0
          && (await page.getByTestId("waiting-on-row").filter({ hasText: "Notes" }).count()) === 1);
-      ck(t("Portal is not among the project rows"), (await page.getByTestId("project-row").filter({ hasText: "Portal" }).count()) === 0);
-      ck(t("All projects says one is for later"), /, 1 for later/.test(await page.getByTestId("all-projects-link").innerText()), await page.getByTestId("all-projects-link").innerText());
       await page.goto(`${BASE}/projects?state=later`, { waitUntil: "load" });
       await page.getByText("Portal").first().waitFor({ timeout: 10000 }).catch(() => {});
       ck(t("All projects lists it under Later"), (await page.getByText("Portal").count()) >= 1);
@@ -728,93 +688,6 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("no repo chips, no Hand over anyway and no Remind"), (await page.getByTestId("waiting-on-chip").count()) === 0
          && (await page.getByRole("button", { name: "Hand over anyway" }).count()) === 0
          && (await page.getByRole("button", { name: "Remind" }).count()) === 0);
-      await ctx.close();
-    }
-    // ── Projects, from the sample states: Mine and Team, the lock, the lead line and the hidden line ──
-    for (const width of [390, 1440]) {
-      const t = (s) => `@${width}: ${s}`;
-      const ctx = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
-      await ctx.addInitScript((tok) => { try { localStorage.setItem("taresSamples", "1"); localStorage.setItem("tares_token", tok); } catch { /* blocked */ } }, ids.keys.alex);
-      const page = await ctx.newPage();
-      const calls = [];
-      page.on("request", (req) => { if (new URL(req.url()).pathname.startsWith("/api/") && new URL(req.url()).pathname !== "/api/licence") calls.push(req.url()); });
-      const go = async (sample, view) => {
-        await page.goto(`${BASE}/?sample=${sample}`, { waitUntil: "load" });
-        await page.getByTestId("projects").waitFor();
-        await settle(page);
-        if (view === "team") await switchTo(page, "team");
-      };
-      const prow = (name) => page.getByTestId("project-row").filter({ hasText: name });
-      const rowsN = () => page.getByTestId("project-row").count();
-
-      await go("threePeople", "mine");
-      ck(t("the dropdown shows both counts"), JSON.stringify(await switchOptions(page)) === JSON.stringify(["Yours (3)", "All (6)"]));
-      ck(t("Yours is the one chosen and lists three projects"), (await switchLabel(page)) === "Yours (3)" && (await rowsN()) === 3, String(await rowsN()));
-      const before = calls.length;
-      await switchTo(page, "team");
-      ck(t("Team lists all six"), (await rowsN()) === 6, String(await rowsN()));
-      ck(t("All is now the one chosen"), (await switchLabel(page)) === "All (6)", await switchLabel(page));
-      ck(t("a sample switches without calling the cell"), calls.length === before, calls.slice(before).join(", "));
-      ck(t("a private project has a lock and the others none"), (await page.getByTestId("project-lock").count()) === 1 && (await prow("project-y").getByTestId("project-lock").count()) === 1);
-      ck(t("a row says who leads it"), (await prow("project-x").getByTestId("project-lead").innerText()).trim() === "Led by Kim" && /^Led by (you|Alex)$/.test((await prow("project-y").getByTestId("project-lead").innerText()).trim()));
-      ck(t("a row shows the members besides the lead"), (await prow("project-x").getByTestId("project-member").evaluateAll((els) => els.map((e) => e.getAttribute("aria-label")))).join() === "Alex");
-      ck(t("a row says how many tickets are yours"), (await prow("project-x").innerText()).includes("3 tickets yours, 4 Kim's"));
-      ck(t("no line about hidden projects when none are hidden"), (await page.getByTestId("hidden-summary").count()) === 0);
-      await shot(page, "projects-team", width);
-      await go("onePerson", "mine");
-      ck(t("a cell of one has no switch, lock or lead line"), (await page.getByTestId("projects-switch").count()) === 0 && (await page.getByTestId("project-lock").count()) === 0 && (await page.getByTestId("project-lead").count()) === 0);
-
-      for (const view of ["mine", "team"]) {
-        await go("privateNotOn", view);
-        const label = t(`privateNotOn, ${view}`);
-        ck(`${label}: the hidden project is not a project row`, (await rowsN()) === (view === "mine" ? 3 : 6), String(await rowsN()));
-        if (view === "team") {
-          ck(`${label}: it stands as one quiet row, lock, lead and nothing else`, (await page.getByTestId("hidden-row").count()) === 1
-             && (await page.getByTestId("hidden-row").innerText()).trim() === "Private, led by Lee", await page.getByTestId("hidden-row").allInnerTexts().then(String));
-          ck(`${label}: the row comes after every project row`, await page.getByTestId("projects").evaluate((el) => {
-            const rows = [...el.querySelectorAll('[data-testid="project-row"]')], stub = el.querySelector('[data-testid="hidden-row"]');
-            return !!stub && rows.every((r) => r.compareDocumentPosition(stub) & Node.DOCUMENT_POSITION_FOLLOWING);
-          }));
-          ck(`${label}: the row is not counted, six projects need no Show all`, (await page.getByRole("button", { name: /Show all/ }).count()) === 0);
-          ck(`${label}: no summary line besides the row`, (await page.getByTestId("hidden-summary").count()) === 0);
-        } else {
-          ck(`${label}: one line says how many are hidden and who leads them`, (await page.getByTestId("hidden-summary").count()) === 1
-             && (await page.getByTestId("hidden-summary").innerText()).trim() === "1 private project you are not on, led by Lee");
-          ck(`${label}: no stub row`, (await page.getByTestId("hidden-row").count()) === 0);
-        }
-        ck(`${label}: the switch counts leave the hidden one out`, (await switchOptions(page))[1] === "All (6)");
-        ck(`${label}: no horizontal scroll`, (await overflow(page)) <= 0, `${await overflow(page)}px over`);
-        await shot(page, `projects-private-${view}`, width);
-        await checkWords(page, ck, label);
-      }
-      // F9: a Team list of nothing but private projects is quiet rows, not an empty list
-      await go("privateOnly", "team");
-      ck(t("privateOnly, team: only the quiet row, and no project row"), (await page.getByTestId("hidden-row").count()) === 1 && (await rowsN()) === 0, `${await page.getByTestId("hidden-row").count()} / ${await rowsN()}`);
-      ck(t("privateOnly, team: it does not say No projects yet."), (await page.getByText("No projects yet.").count()) === 0 && (await page.getByText("Start one and hand it to the crew.").count()) === 0);
-      await shot(page, "projects-private-only-team", width);
-      await checkWords(page, ck, t("privateOnly, team"));
-      await go("privateOnly", "mine");
-      ck(t("privateOnly, mine: No projects of yours yet., and the one line about the hidden project"), (await page.getByText("No projects of yours yet.").count()) === 1
-         && (await page.getByTestId("hidden-summary").count()) === 1 && (await page.getByTestId("hidden-row").count()) === 0);
-      await checkWords(page, ck, t("privateOnly, mine"));
-
-      for (const view of ["mine", "team"]) {
-        await go("longText", view);
-        ck(t(`longText, ${view}: a long name and a long lead wrap and never push the page wider`), (await overflow(page)) <= 0 && (await rowsN()) === (view === "mine" ? 1 : 2), `${await overflow(page)}px over`);
-        await shot(page, `projects-long-${view}`, width);
-        await checkWords(page, ck, t(`longText, ${view}`));
-        await go("manyItems", view);
-        const n = view === "mine" ? 4 : 12;
-        ck(t(`manyItems, ${view}: ${Math.min(n, 6)} rows${n > 6 ? " and Show all 12 projects" : ""}`), (await rowsN()) === Math.min(n, 6)
-           && (await page.getByRole("button", { name: /Show all 12 projects/ }).count()) === (n > 6 ? 1 : 0), String(await rowsN()));
-        if (n > 6) {
-          await page.getByRole("button", { name: /Show all 12 projects/ }).click();
-          ck(t("Show all lists every project"), (await rowsN()) === 12, String(await rowsN()));
-        }
-        ck(t(`manyItems, ${view}: no horizontal scroll`), (await overflow(page)) <= 0);
-        await shot(page, `projects-many-${view}`, width);
-        await checkWords(page, ck, t(`manyItems, ${view}`));
-      }
       await ctx.close();
     }
     // ── the side column, from the sample states: your crew's limit, the team's crews, the repos you own ──

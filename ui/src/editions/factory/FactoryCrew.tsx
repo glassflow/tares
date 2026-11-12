@@ -333,7 +333,7 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
       .catch(() => setFailed(id));
   };
   return (
-    <section data-testid="crew-rules">
+    <section id="rules" className="scroll-mt-4" data-testid="crew-rules">
       <SectionHead title="Rules the crew proposes" aside={<Count>{shown.length}</Count>} />
       <div className={CARD}>
         {shown.length === 0 && <div className="px-4 py-5 text-muted-foreground">No rules are proposed.</div>}

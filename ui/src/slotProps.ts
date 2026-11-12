@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import type { Ctx } from "./components/project/common";
 import type { FactoryPeopleData, PersonRow } from "./editions/factory/FactoryPeople.api";
 import type {
-  HomeCrewLimitProps, HomeHiddenRowsProps, HomeProjectLeadProps, HomeProjectsSwitchProps, HomeReposProps,
+  HomeCrewLimitProps, HomeReposProps,
   HomeSample, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "./editions/factory/home.types";
 import type {
@@ -47,10 +47,6 @@ export interface SlotProps {
   "home.waiting": HomeWaitingProps;
   "home.waitingOn": HomeWaitingOnProps;
   "home.teamActions": HomeTeamActionsProps;
-  "home.projectsSwitch": HomeProjectsSwitchProps;
-  "home.projectLock": NoProps;
-  "home.projectLead": HomeProjectLeadProps;
-  "home.hiddenRows": HomeHiddenRowsProps;
   "home.crewLimit": HomeCrewLimitProps;
   "home.teamCrews": HomeTeamCrewsProps;
   "home.reposYouOwn": HomeReposProps;

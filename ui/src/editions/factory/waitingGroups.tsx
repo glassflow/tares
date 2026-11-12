@@ -19,6 +19,23 @@ export function groupWaiting(items: HomeItem[]): WaitingGroups {
   return now.length + rest.length === 0 ? { now, rest: older, older: [] } : { now, rest, older };
 }
 
+/** The decision on top of the list: the first item the page draws, from what holds the crew up,
+ *  else the rest. Its main action is Home's one primary button (TR-1275); none when nothing waits. */
+export function topItem(items: HomeItem[]): HomeItem | undefined {
+  const g = groupWaiting(items);
+  return g.now[0] ?? g.rest[0];
+}
+
+/** What a button does, for a screen reader, when its label alone does not say it. Allow grants
+ *  the command the crew asked for, so its name carries that command (TR-1275). */
+export function actionName(action: HomeAction, item?: HomeItem): string | undefined {
+  if (action.do !== "allow" || !item) return undefined;
+  const cmd = /`([\s\S]+)`/.exec(item.detail)?.[1].split(/\s+/).join(" ").trim();
+  if (!cmd) return undefined;
+  const where = item.project ? ` in ${item.project.name}` : "";
+  return `${action.label}: let the crew run ${cmd}${where}`; // words-ok
+}
+
 /** One button per option of a desk question, and the crew's recommendation above them. A click
  *  is an action `choose` with the option's own text, which the page sends as the answer. */
 export function QuestionChoices({ item, render }: {

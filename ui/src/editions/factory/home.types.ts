@@ -13,7 +13,8 @@ export type HomeItemKind =
   | "milestone_to_check"
   | "signoff"
   | "grant"
-  | "desk";
+  | "desk"
+  | "rule";
 
 // What a button does on the page when it is not a link.
 export type HomeVerb =
@@ -231,11 +232,6 @@ export type HomeSample = HomeData | ((view: ProjectsView) => HomeData);
 // What the core home gives each slot of the team home (ee/home). The map of slot names to these is
 // SlotProps in src/slotProps.ts; the ee components take the same types through ee/home/home.types.ts.
 
-export interface HomeProjectsSwitchProps {
-  view: ProjectsView; counts: { mine: number; team: number }; onView?: (v: ProjectsView) => void;
-}
-export interface HomeProjectLeadProps { p: HomeProject; me?: string }
-export interface HomeHiddenRowsProps { stubs: HomeHiddenProject[]; hidden?: string; view: ProjectsView }
 export interface HomeCrewLimitProps { limit: HomeCrewLimit }
 export interface HomeTeamCrewsProps { crews: HomeTeamCrew[]; quiet: string[] }
 export interface HomeReposProps { areas: HomeArea[] }

@@ -20,7 +20,7 @@ import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
 import { ProjectIconHeader } from "./ProjectIcon";
 import { ProjectSecrets } from "./ProjectSecrets";
-import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
+import { actionName, GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
 import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
 
 // One factory project, from one read (GET /api/factory/projects/{id}): what waits for you, the few
@@ -134,7 +134,8 @@ function Detail({ text }: { text: string }) {
   );
 }
 
-function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (a: HomeAction) => void }) {
+function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: HomeAction; item?: HomeItem; onClose?: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (a: HomeAction) => void }) {
+  const named = actionName(action, item);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
   const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px]! max-sm:flex-1 max-sm:justify-center max-sm:text-center";
@@ -158,7 +159,7 @@ function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction
     );
   }
   if (action.do === "allow" && onAllow) {
-    return <Button variant={variant} className={cn(cls, strong)} onClick={() => onAllow(action)} data-testid="waiting-allow">{action.label}</Button>;
+    return <Button variant={variant} className={cn(cls, strong)} onClick={() => onAllow(action)} aria-label={named} data-testid="waiting-allow">{action.label}</Button>;
   }
   if (action.href) {
     const external = !action.href.startsWith("/");
@@ -171,7 +172,7 @@ function ActionButton({ action, onClose, onKeep, onAllow }: { action: HomeAction
   // something the page does on Home: the arrow says so
   return (
     <Button asChild variant={variant} className={cn(cls, strong)}>
-      <Link to="/" title="Opens Home, where this is done">{action.label} <span aria-hidden className="not-italic text-[color:var(--accent-deep)]">{"↗"}</span></Link>
+      <Link to="/" title="Opens Home, where this is done" aria-label={named && `${named}, on Home`}>{action.label} <span aria-hidden className="not-italic text-[color:var(--accent-deep)]">{"↗"}</span></Link>
     </Button>
   );
 }
@@ -194,7 +195,7 @@ function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClos
       </div>
       {actions.length > 0 && (
         <div className="flex max-w-full flex-none flex-wrap gap-2 max-sm:w-full">
-          {actions.map((a) => <ActionButton key={a.label} action={a} onClose={onClose} onKeep={onKeep} onAllow={onAllow && ((x) => onAllow(item, x))} />)}
+          {actions.map((a) => <ActionButton key={a.label} action={a} item={item} onClose={onClose} onKeep={onKeep} onAllow={onAllow && ((x) => onAllow(item, x))} />)}
         </div>
       )}
     </div>
