@@ -61,6 +61,8 @@ tares factory: shop-build-m1 stopped; reviving it under the same name
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "shop-build-m1"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "shop-build-m1"}
+== file crew/rules/shop-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/shop-build-m1.grants ==
 
 @project 

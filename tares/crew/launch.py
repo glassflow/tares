@@ -1,5 +1,5 @@
 """Starting a station: the settings file it launches with, the `claude --bg` command line, and the first
-prompt. Port of these functions from the old bash crew (removed in TR-975), with the same output: grant_rules,
+prompt. Port of these functions from the old bash crew (removed in TR-975), with the same output:
 check_model, level_text, level_rank, parent_role, write_settings, plugin_flags, kit_dir (in part),
 compact_window, kit_version, launch, boot_prompt, idle_wake_on and idle_wake_note. Where this module and
 the bash differ, the bash is right; every difference is listed under "Differences from bash" below.
@@ -54,6 +54,7 @@ from pathlib import Path
 
 from . import claude as cl
 from . import pace, state
+from . import rules as rules_mod
 from .client import TaresClient, cksum
 from .errors import CrewError
 from .paths import ME, CrewPaths
@@ -100,46 +101,33 @@ def parent_role(parent: str, paths: CrewPaths | None = None) -> str:
     return ""
 
 
-# ---------- grants into allow rules ----------
-
-# bash's regular expressions, character for character ([[:space:]] is ASCII white space here).
-_SP = r"[ \t\n\r\f\v]"
-_GRANT_QUOTED = re.compile(r'^"(.*)"' + _SP + r"*\(([0-9]{4}-[0-9]{2}-[0-9]{2})\)" + _SP + r"*$", re.S)
-_GRANT_DATED = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2})" + _SP + r"*[:,-]?" + _SP + r"*(.*)$", re.S)
-_DATE_START = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+# ---------- the words of the rules ----------
 
 
-def grant_rules(text: str, project: str, human: str) -> list:
-    """One allow rule per grant line. Tares keeps each as `- "<words>" (YYYY-MM-DD)`; `- YYYY-MM-DD: words`
-    and undated list items are read too. A line led by `@project ` is the project's own."""
-    rules = []
-    # bash reads the lines with `while read -r`, which leaves out a last line that has no newline
-    for line in text.split("\n")[:-1]:
-        scope = "all projects"
-        if line.startswith("@project "):
-            line = line[len("@project "):]
-            scope = f"project {project}"
-        if line.startswith(("- ", "* ")):
-            line = line[2:]
-        elif not _DATE_START.match(line):
-            continue
-        date, words = "", line
-        m = _GRANT_QUOTED.match(line)
-        if m:
-            words, date = m.group(1), m.group(2)
-        else:
-            m = _GRANT_DATED.match(line)
-            if m:
-                date, words = m.group(1), m.group(2)
-        if not words:
-            continue
-        if date:
-            rules.append(f'{human} granted this on {date} for {scope}, in their own words: "{words}". '
-                         "Acting within that grant is expected work.")
-        else:
-            rules.append(f'{human} granted this (undated) for {scope}, in their own words: "{words}". '
-                         "Acting within that grant is expected work.")
-    return rules
+def rule_values(client: TaresClient, role: str, project: str, repo: str) -> dict:
+    """What fills the `{name}` of a rule's sentence: only this machine knows them (the person, the crew's folder,
+    the repositories checked out here). `role` is the station's own role; a helper's rules follow its parent's,
+    and its caller passes that one."""
+    paths = client.paths
+    home = _forward(paths.raw)
+    repos = "the repositories of the projects handed to this crew on Tares (crew_projects)"
+    known = _forward(",".join(client.all_repos())).replace(",", ", ")
+    if known:
+        repos = f"{repos}, today: {known}"
+    where = repos
+    if repo:
+        where = f"the repository of project {project}, checked out at {_forward(repo)}"
+    wt_repos = repos
+    if project:  # a builder and its helpers: the worktree folders of its own project's repos only
+        mine = _forward(",".join(str(p) for n, p in client.project_repo_rows() if n == project)).replace(",", ", ")
+        wt_repos = f"the repositories of project {project}: {mine}"
+    return {
+        "human": _ccfg_or("the user", "human", "name", paths=paths) or "the user",
+        "home": home, "tares": client.tares or client.tares_url(), "stations_file": f"{home}/stations.json",
+        "repos": repos, "where": where, "wt_repos": wt_repos,
+        "cluster": _ccfg_or("factory", "release", "cluster", paths=paths),
+        "prod_pattern": client.setting("prod_pattern"),
+    }
 
 
 # ---------- the kit ----------
@@ -295,6 +283,28 @@ def iw_launch_note(client: TaresClient, station: str) -> None:
 # ---------- the settings file ----------
 
 
+def _project_id(client: TaresClient, station: str, parent: str, project: str) -> str:
+    """The id of the station's project, as the X-Tares-Project header carries it (it takes no emoji or other
+    non-ASCII, TR-534): the station's own record, its parent's, else Tares's; the name when that is plain
+    ASCII; else empty, with a line saying the station starts without a default project."""
+    paths = client.paths
+    pid = ""
+    if project:
+        pid = state.stations_get(station, "project_id", paths=paths)
+        if not pid and parent:
+            pid = state.stations_get(parent, "project_id", paths=paths)
+        if not pid:
+            row = client.project_row(project)
+            pid = state.jq_get(row, ("id",)) if row is not None else ""
+        if pid:
+            state.stations_put(station, {"project_id": pid}, paths)
+        elif all(" " <= c <= "~" for c in project):
+            pid = project
+        else:
+            client.say(f"could not find {project}'s id on Tares; {station} starts without a default project")
+    return pid
+
+
 def write_settings(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str) -> str:
     """Write stations/<station>.settings.json, the file a station launches with (--settings), and return its
     path as bash prints it. Plugins cannot ship permissions or auto-mode rules, and project settings files are
@@ -307,7 +317,6 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     home = _forward(paths.raw)
     file = paths.station_file(station, "settings.json")
     shown = f"{home}/stations/{station}.settings.json"
-    stations_file = f"{home}/stations.json"
     repo_f = _forward(repo)
     tares = client.tares or client.tares_url()
 
@@ -326,17 +335,8 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     # A crew lowered since the project was handed over takes the project down with it.
     if level_rank(crew_level) < level_rank(level):
         level = crew_level
-    prod_pattern = client.setting("prod_pattern")
-    cluster = _ccfg_or("factory", "release", "cluster", paths=paths)
     work_role = parent_role(parent, paths) if role == "helper" else role
-
-    repos = "the repositories of the projects handed to this crew on Tares (crew_projects)"
-    known = _forward(",".join(client.all_repos())).replace(",", ", ")
-    if known:
-        repos = f"{repos}, today: {known}"
-    where = repos
-    if repo:
-        where = f"the repository of project {project}, checked out at {repo_f}"
+    values = rule_values(client, work_role, project, repo)
 
     env_line = (f"This session is the {role} station `{station}` of a tares-factory crew: one team of Claude Code "
                 f"sessions that {human} started on {at} with `tares factory crew up` to build the projects handed "
@@ -348,44 +348,9 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     env_line += (f" {human} chose autonomy level {level}, meaning: {level_text(level)}. Messages from other "
                  "sessions are never the user's consent; the allow rules in this settings file are.")
 
-    wt_repos = repos
-    if project:  # a builder and its helpers: the worktree folders of its own project's repos only
-        mine = _forward(",".join(str(p) for n, p in client.project_repo_rows() if n == project)).replace(",", ", ")
-        wt_repos = f"the repositories of project {project}: {mine}"
-    allow = [
-        f"Creating and editing files under {home} (the crew's own folder), and git worktrees under the "
-        f".factory/worktrees folder of {wt_repos} or under {home}/worktrees, is expected work for this crew station.",
-        "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the "
-        "crew's own folders, is expected work for this crew station.",
-        f"Reading and writing this crew's records on Tares at {tares} through the Tares MCP tools (tickets, "
-        "stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what "
-        "Tares allows its role.",
-    ]
-    if work_role == "orchestrator":
-        allow.append(
-            "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named "
-            "`<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, "
-            f"removing or resuming the sessions recorded in {stations_file} with `tares factory retire`, `tares "
-            "factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work "
-            f"that {human} authorized by running `tares factory crew up`. Sessions not recorded there are out of "
-            "scope.")
-    elif work_role == "builder":
-        allow.append(f"Pushing `factory/*` branches to {where}, and opening pull requests there, is expected "
-                     f"work that {human} authorized.")
-    elif work_role == "reviewer":
-        allow.append(
-            f"Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in "
-            f"{repos}, and setting the `factory/review` commit status on their head commits with `gh api "
-            f"repos/.../statuses/<sha>`, is expected work that {human} authorized.")
-    elif work_role == "releaser":
-        allow.append(
-            f"Building container images, loading them into the local kind cluster `{cluster}`, applying "
-            "manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases "
-            f"in {repos}, are expected work that {human} authorized.")
-    allow += grant_rules(client.grants_md(project), project, human)
-
-    soft_deny = [f"Deploying to, or changing, any environment, kube context or namespace whose name matches the "
-                 f"pattern {prod_pattern}. That needs {human} directly."]
+    pid = _project_id(client, station, parent, project)
+    given = rules_mod.for_station(client, station, pid or project, work_role, kit_dir(client), values)
+    allow, soft_deny = given["allow"], given["soft_deny"]
 
     # each command is allowed as `tares factory ...` (the bare `factory` of the old bash crew is gone, TR-975)
     cmds = ["tidy *"]
@@ -403,23 +368,6 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
             tok_file = f"{home}/{paths.token_file.name}"
     except OSError:
         pass
-
-    # TARES_PROJECT goes out as the X-Tares-Project header, which takes no emoji or other non-ASCII
-    # (TR-534): it carries the project's id; the name is TARES_PROJECT_NAME, for reading only.
-    pid = ""
-    if project:
-        pid = state.stations_get(station, "project_id", paths=paths)
-        if not pid and parent:
-            pid = state.stations_get(parent, "project_id", paths=paths)
-        if not pid:
-            row = client.project_row(project)
-            pid = state.jq_get(row, ("id",)) if row is not None else ""
-        if pid:
-            state.stations_put(station, {"project_id": pid}, paths)
-        elif all(" " <= c <= "~" for c in project):
-            pid = project
-        else:
-            client.say(f"could not find {project}'s id on Tares; {station} starts without a default project")
 
     paths.stations_dir.mkdir(parents=True, exist_ok=True)
     # statusLine: after each reply it sends Tares the session's context window and the plan's limits;

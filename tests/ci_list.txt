@@ -54,6 +54,7 @@ test_crew_packaging
 test_crew_person
 test_crew_readings
 test_crew_regrant
+test_crew_rules
 test_crew_scratch_home
 test_crew_session
 test_crew_session_start
@@ -71,6 +72,7 @@ test_crew_watch_revive
 test_crew_with_secrets
 test_crews_single
 test_decision_answers
+test_default_rules_in_sync
 test_degraded
 test_delete_cascade
 test_docs

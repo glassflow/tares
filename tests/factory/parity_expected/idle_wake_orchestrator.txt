@@ -821,6 +821,12 @@ tares factory: waking crew-releaser (work); restarting it in the same conversati
 ## Undelivered
 - RELEASE Links App milestone M1 (T1, T2)
 - RELEASE Links App milestone M2 (T3)
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

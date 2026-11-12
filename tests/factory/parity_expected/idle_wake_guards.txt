@@ -708,6 +708,16 @@ tares factory: waking crew-releaser (liveness); restarting it in the same conver
 {"at": "<TS>", "detail": "0000000b", "event": "started", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "0000000b", "event": "revived", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "liveness: wake 2 with nothing pending", "event": "idle_wake", "station": "crew-releaser"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m1-probe.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

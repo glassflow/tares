@@ -108,6 +108,10 @@ tares factory: spawn takes builder or helper
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "links-app-build-m1"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "links-app-build-m1-rebase"}
+== file crew/rules/links-app-build-m1-rebase.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/links-app-build-m1-rebase.grants ==
 
 @project 

@@ -79,6 +79,8 @@ tares factory: crew-reviewer stopped; reviving it under the same name
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.grants ==
 
 == file crew/stations/crew-reviewer.settings.json ==

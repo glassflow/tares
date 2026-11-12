@@ -8,7 +8,7 @@ The driver runs in a throwaway crew (the environment parity.crew_env gives: the 
 <tmp>/crew, the fake Claude Code is CLAUDE_BIN). It starts a fake Tares on a free port of its own, makes
 <tmp>/kit as a copy of claude-plugin, and then calls the function of tares.crew.launch with a TaresClient on
 the same fake Tares. It prints what the function prints and exits as it does. Functions:
-write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
+write_settings, launch, boot_prompt, compact_window, kit_version, parent_role,
 level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
 watch round), pace_down (what the revive step asks of the pace for stations that are down or up), idle_wake_round (the
 idle-wake pass of one watch round), and the whole commands `spawn` (cmd_spawn of tares.crew.stations), `revive`,
@@ -38,6 +38,8 @@ from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
+sys.path.insert(0, str(HERE))
+from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 PLUGIN = ROOT / "claude-plugin"
 
 DEFAULT_WORLD = {
@@ -50,6 +52,9 @@ DEFAULT_WORLD = {
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
+    "capabilities": ["integrations", "merge_queue", "guardrail_rules"],   # what /health lists
+    "rules_status": 200,     # the status of GET /api/factory/guardrails/rules
+    "rules": None,           # its body; None: Tares renders the defaults and the world's grants (fake_rules.py)
     "routes": {},            # any other GET: "<path>[?query]" -> [status, body] (the full path with its query wins over the path)
 }
 
@@ -88,7 +93,7 @@ class FakeTares:
                 u = urlparse(self.path)
                 outer.log.append({"path": self.path, "auth": self.headers.get("Authorization")})
                 if u.path == "/health":
-                    return self._send(200 if w["health"] else 503, {"status": "ok"})
+                    return self._send(200 if w["health"] else 503, {"status": "ok", "capabilities": list(w["capabilities"])})
                 if w["token"] and self.headers.get("Authorization") != f"Bearer {w['token']}":
                     return self._send(401, {"detail": "unauthorized"})
                 if u.path == "/api/crew/settings":
@@ -105,6 +110,17 @@ class FakeTares:
                             return self._send(404, {"detail": "unknown project"})
                         return self._send(200, {"all": w["grants"]["all"], "project": mine[q["project"][0]]})
                     return self._send(200, {"all": w["grants"]["all"]})
+                if u.path == RULES_PATH:
+                    if w["rules_status"] != 200:
+                        return self._send(w["rules_status"], {"detail": "rules"})
+                    if w["rules"] is not None:
+                        return self._send(200, w["rules"])
+                    q = parse_qs(u.query)
+                    ref = (q.get("project") or [""])[0]
+                    named = [p for p in w["projects"] if ref in (p.get("id"), p.get("name"))]
+                    name = named[0]["name"] if named else ref
+                    return self._send(200, rules_answer((q.get("station") or [""])[0], (q.get("role") or ["builder"])[0], name,
+                                                        w["grants"]["all"], w["grants"]["projects"].get(name, "")))
                 hit = w["routes"].get(self.path) or w["routes"].get(u.path)
                 if hit:
                     return self._send(hit[0], hit[1])
@@ -188,7 +204,7 @@ def _sub_json(text: str, tmp: Path) -> str:
 # ---------------------------------------------------------------------------------------------
 # The functions
 
-FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
+FUNCTIONS = {"write_settings", "launch", "boot_prompt", "compact_window", "kit_version",
              "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
              "idle_wake_note", "spawn", "revive", "restart", "retire", "pace_round", "pace_down", "watch_regrant",
              "idle_wake_round"}
@@ -215,9 +231,6 @@ def run_python(fn: str, args: list) -> int:
             L.launch(client, *args)
         elif fn == "boot_prompt":
             print(L.boot_prompt(client, *args))
-        elif fn == "grant_rules":
-            for rule in L.grant_rules(sys.stdin.read(), *args):
-                print(rule)
         elif fn == "compact_window":
             print(L.compact_window(paths, client.say))
         elif fn == "kit_version":

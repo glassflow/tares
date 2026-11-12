@@ -64,6 +64,8 @@ tares factory: could not start crew-reviewer
     "url": null
   }
 }
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.settings.json ==
 {
   "autoMode": {

@@ -55,6 +55,8 @@ tares factory: crew-releaser stopped; reviving it under the same name, in a new 
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "00000001", "event": "restarted-fresh", "station": "crew-releaser"}
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-releaser.grants ==
 
 == file crew/stations/crew-releaser.settings.json ==

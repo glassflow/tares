@@ -785,7 +785,7 @@ scenario(Scenario(
     covers=[],
 ))
 
-# launch_*: building and starting a station (write_settings, launch, boot_prompt, grant_rules,
+# launch_*: building and starting a station (write_settings, launch, boot_prompt,
 # compact_window). Not a command yet, so each runs through tests/factory/launch_support.py, which calls
 # the function of the bash engine (sourced from a copy of the kit) or of tares.crew.launch, on a fake
 # Tares of its own. The assertions are those of crew_test.sh, read off the files the station is given.
@@ -1078,20 +1078,13 @@ scenario(Scenario(
 scenario(Scenario(
     name="launch_grants_compact",
     suite="crew",
-    about="grant lines into allow rules (all-project and project, dated, undated, noise), and the autocompact window",
+    about="the autocompact window",
     driver=LAUNCH_DRIVER,
-    steps=[lstep("grant_rules", "Links App", "Pat", stdin=(
-               '- "restart staging" (2026-01-02)\n@project - "push to main on Fridays" (2026-02-03)\n'
-               '* 2026-03-04: deploy the docs\n2026-03-05 - tidy the cache\n- no date at all\nnot a grant\n- ""\n'
-               '- "dropped, the last line has no newline" (2026-04-05)'),
-                 world=lworld()),
-           lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": 100000}}}),
+    steps=[lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": 100000}}}),
            lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": "auto"}}}),
            lstep("compact_window", world=lworld(), setup={"crew": {"limits": {"autocompact_tokens": "oops"}}})],
-    checks=[("grants read as bash reads them", lambda r: r.out(0).count("granted this") == 6 and "(undated)" in r.out(0)
-             and "for project Links App" in r.out(0) and "dropped" not in r.out(0)),
-            ("a window under 150k is raised and said", lambda r: "stations use 150000" in r.out(1) and r.results[1]["stdout"].strip() == "150000"),
-            ("auto stays auto, junk gives 200000", lambda r: r.out(2).strip() == "auto" and r.out(3).strip() == "200000")],
+    checks=[("a window under 150k is raised and said", lambda r: "stations use 150000" in r.out(0) and r.results[0]["stdout"].strip() == "150000"),
+            ("auto stays auto, junk gives 200000", lambda r: r.out(1).strip() == "auto" and r.out(2).strip() == "200000")],
     covers=[],
 ))
 
@@ -1405,6 +1398,7 @@ scenario(Scenario(
 
 sys.path.insert(0, str(HERE))
 import fake_tares  # noqa: E402
+import fake_rules  # noqa: E402
 
 NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows)\b",)
 DOCTOR_DROP = NEW_CHECKS
@@ -2371,7 +2365,8 @@ class FakeTares:
     def __init__(self, routes: dict):
         import http.server
         import threading
-        self.routes = {"GET /health": (200, {"ok": True}), "GET /api/crew/settings": (200, {"settings": {}})}
+        self.routes = {"GET /health": (200, {"ok": True, "capabilities": ["guardrail_rules"]}),
+                       "GET /api/crew/settings": (200, {"settings": {}})}
         self.routes.update(routes)
         self.requests: list = []
         self.state: dict = {}   # what a stateful route (a callable answer) keeps between two requests
@@ -2388,6 +2383,8 @@ class FakeTares:
                 fake.requests.append({"route": key, "auth": bool(self.headers.get("Authorization")), "body": body})
                 # a route named without its query answers it too (the crew names itself on /api/crew/projects)
                 status, doc = fake.routes.get(key) or fake.routes.get(key.split("?", 1)[0], (404, {"detail": "not found"}))
+                if status == 404 and key.split("?", 1)[0] == "GET " + fake_rules.RULES_PATH:
+                    status, doc = 200, fake.rules_for(key)   # the rules Tares renders from the grants the scenario names (TR-864)
                 if callable(doc):   # a stateful answer: doc(request body, the fake)
                     doc = doc(body, fake)
                 data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")
@@ -2403,6 +2400,19 @@ class FakeTares:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def rules_for(self, key: str) -> dict:
+        """The body of the rules route for a request: Tares's defaults of the role and the grants of this fake's
+        /api/grants routes (the team's, and the project's under ?project=), as fake_rules.rules_answer renders them."""
+        from urllib.parse import parse_qs, urlparse
+        q = parse_qs(urlparse(key.split(" ", 1)[1]).query)
+        ref = (q.get("project") or [""])[0]
+        team = (self.routes.get("GET /api/grants") or (200, {}))[1]
+        mine = (self.routes.get(f"GET /api/grants?project={ref}") or (200, {}))[1] if ref else {}
+        team = team if isinstance(team, dict) else {}
+        mine = mine if isinstance(mine, dict) else {}
+        return fake_rules.rules_answer((q.get("station") or [""])[0], (q.get("role") or [""])[0], ref,
+                                       team.get("all", ""), mine.get("project", ""))
 
     def stop(self) -> None:
         self.server.shutdown()
@@ -3837,8 +3847,10 @@ def _touch_done(station: str):
 
 
 def _forget_kept(station: str):
+    """The station kept nothing of its last start: no grants text, and (TR-864) no copy of its rules."""
     def run(tmp: Path) -> None:
         (tmp / "crew" / "stations" / f"{station}.grants").unlink()
+        (tmp / "crew" / "rules" / f"{station}.json").unlink(missing_ok=True)
     return run
 
 
@@ -6131,6 +6143,19 @@ def _files_under(base: Path) -> list:
     return sorted(found, key=lambda p: p.relative_to(base).parts)
 
 
+def _rules_copy_line(text: str) -> str:
+    """One line for `<crew home>/rules/<station>.json` (TR-864): whether the copy of Tares's rules holds allow and
+    soft_deny sentences. The sentences are the cell's, and tests/test_crew_rules.py checks them; a change to a default
+    would otherwise re-record every scenario that starts a station."""
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return "rules copy: not JSON\n"
+    doc = doc if isinstance(doc, dict) else {}
+    return (f"rules copy: allow sentences {'yes' if doc.get('allow') else 'no'}, "
+            f"soft_deny sentences {'yes' if doc.get('soft_deny') else 'no'}\n")
+
+
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
@@ -6151,6 +6176,8 @@ def snapshot(run: Run) -> dict:
                         text = _without_calls(text, run.ignore_calls)
                         if not text:
                             continue    # a run that made only left-out calls has no calls file, as one that made none
+                    if "/rules/" in rel and p.suffix == ".json":
+                        text = _rules_copy_line(text)   # the copy of a station's rules: what it holds, not the sentences
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
@@ -6694,7 +6721,7 @@ scenario(Scenario(
 # --- no MCP server at the endpoint -----------------------------------------------------------------------------
 
 G1_NOMCP = "http://127.0.0.1:9/mcp"
-G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue"]})}
+G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules"]})}
 
 scenario(Scenario(
     name="crew_g1_no_mcp",
@@ -7609,7 +7636,7 @@ def g4_up_after(tmp: Path) -> dict:
     return {"pid": pid, "alive": g4_alive(pid), "log": banner}
 
 
-G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue"]}),
+G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules"]}),
                "GET /api/crew/settings": (200, {**SAVED, "releaser": False}),
                "GET /api/people": (200, {"people": [{"id": "local", "name": "Local"}]}),
                "GET /api/grants": (200, {"all": ""}),

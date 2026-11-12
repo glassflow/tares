@@ -244,6 +244,10 @@ tares factory: crew-releaser runs Claude Code 1.12.4
 {"at": "<TS>", "detail": "00000006", "event": "started", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "00000006", "event": "revived", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "1.12.4", "event": "claude-updated", "station": "crew-releaser"}
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-releaser.grants ==
 
 == file crew/stations/crew-releaser.settings.json ==
