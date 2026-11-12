@@ -5,6 +5,20 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- On Windows, two crew commands or threads writing an event at the same moment could mix their lines or lose one in `events.jsonl` (TR-1229). Each event is now written under a lock, so every line stays whole and none is dropped. macOS and Linux were not affected.
+- The crew's messages were listed two to four times on a ticket (each REVIEW, VERDICT, FYI). The plugin's async hooks shipped the same transcript lines side by side, and Claude Code 2.1.3xx writes `api-request-blob` lines that copy the last assistant message with no timestamp, which Tares stored as new tool calls at the moment they arrived. One shipper per transcript now holds a lock (a turn's end waits up to 5 s for it), the `api-request*` lines are not shipped and are dropped at ingest, and the message list shows each tool call once.
+- A project handed over from a person's session on a named crew went to the wrong crew: `hand_over` recorded it under `crew` and said `crew-orchestrator` was not running, while the person's own crew (for example `kiran-windows-crew`) was up and never got the `[TF:SHIP]` nudge. `tares factory spec` and `session` now tell the plugin the crew's name, and a session that names no crew (a plain `claude` with the plugin) hands over to the person's one running crew.
+- `tares factory doctor` now warns when git has no global `user.name` or `user.email`. On a fresh Windows machine a builder's first commit in a repo that sets none of its own stopped with "Author identity unknown", and `crew up` named the person "the user"; the warn gives the two `git config --global` commands.
+
+## [1.57.0] - 2026-11-12
+
+Tares now merges ready pull requests itself through a merge queue, and the crew no longer merges.
+The Software Factory gets an integrations framework: Linear and GitHub Issues tickets are written
+through from Tares, and the review gate and CI checks plug in per project. The crew runs on the
+Python engine only, projects can hold secrets for their builders, and "Show what it did" on the
+Crew page reads as a conversation.
+
 ### Added
 - The Tares guardrails are now readable rules (TR-862): `GET /api/factory/guardrails/rules` lists the defaults a crew station runs under (each with its role and a reason; nothing edits or removes one, a write that names one is 403) and your own rules. A deny rule is added, changed and removed by an admin, for the factory or for one project (`POST`, `PUT` and `DELETE` on the same address); an allow rule is a grant, read in place and written with the grants. `GET ...?station=<name>&project=<id>` returns the allow and soft_deny sentences that station runs under, with the crew's production pattern filled in. `/health` lists the `guardrail_rules` capability. The crew engine still writes its own sentences; it reads these in a later ticket.
 - The crew reviewer's verdict is posted as the cell's GitHub App (TR-1244). When Settings, GitHub holds an App that can write to the pull request's repo, `record_review` also posts one comment (verdict, verified, not verified, findings with the blocking ones first, and the reviewer's station and crew in text, no @-mention) and a `factory/review` check run on the reviewed head, and says whether it did. With no such App it says it did not post and the reviewer posts with `gh` as before. The review gate and the pull request read accept the verdict as a commit status or a check run, and a new head still makes it stale.

@@ -745,20 +745,29 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     pick up their own tickets on their next tick. Needs a key with a person. A project kept for
     later (set_later) starts with it. A guardrail that blocks refuses the hand-over with its reason;
     one that only warns is shown in the reply."""
-    crew_name = _caller("crew") or "crew"
-    body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
-    if repo:
-        body["repo"] = repo
-    if autonomy:
-        body["autonomy"] = autonomy
+    live = ("working", "idle", "waiting", "quiet")
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
+        crew = await cx.get(f"{TARESD}/api/crew", params={"mine": 1})   # the caller's own crews (TR-633)
+        crew_name = _caller("crew")
+        if not crew_name and crew.status_code == 200:
+            # a session that names no crew (a plain `claude` with the plugin) means the caller's one
+            # running crew when there is exactly one; else the default, as before
+            running = {s.get("crew") for s in crew.json().get("stations") or []
+                       if s.get("role") == "orchestrator" and s.get("state") in live and s.get("crew")}
+            if len(running) == 1:
+                crew_name = running.pop()
+        crew_name = crew_name or "crew"
+        body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
+        if repo:
+            body["repo"] = repo
+        if autonomy:
+            body["autonomy"] = autonomy
         r = await cx.post(f"{TARESD}/api/projects/{uid}/handover", json=body)
         if r.status_code >= 400:
             return _out(r)
-        crew = await cx.get(f"{TARESD}/api/crew", params={"mine": 1})   # the caller's own crews (TR-633)
     ho = r.json().get("handover") or {}
     warned = "".join(f"\nGuardrail warning: {w}" for w in r.json().get("warnings") or [])
     crew_name = ho.get("crew") or crew_name
@@ -770,7 +779,7 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
             and s.get("name") == orch_name and s.get("crew") == crew_name
-            and s.get("state") in ("working", "idle", "waiting", "quiet")] if crew.status_code == 200 else []
+            and s.get("state") in live] if crew.status_code == 200 else []
     if not orch:
         return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + f"\nNo orchestrator "
                 f"of crew {crew_name} ({orch_name}) is running: tell the person to run `tares "
