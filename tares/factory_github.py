@@ -314,35 +314,55 @@ async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squas
     return out
 
 
+REVIEW_POST_TIMEOUT = 45    # seconds the whole post may take; the MCP call waits longer than this
 REVIEW_TITLE_MAX = 100     # GitHub shows a check run's title in one line; the status text had this too
 _VERDICT_CONCLUSION = {"pass": "success", "changes": "failure", "block": "failure"}
 _VERDICT_WORDS = {"pass": "Pass", "changes": "Changes requested", "block": "Blocked"}
 
 
+def _plain(text) -> str:
+    """User text for a comment: an `@name` in it would notify that GitHub user, so a zero-width
+    space after the @ keeps the words and drops the mention."""
+    return re.sub(r"@(?=[A-Za-z0-9_])", "@\u200b", str(text or ""))
+
+
+def _finding_line(f: dict, n) -> str:
+    where = str(f.get("file") or "").strip()
+    if where and f.get("line"):
+        where += f":{f['line']}"
+    tag = ", ".join(x for x in (str(f.get("severity") or "").strip(),
+                                "blocking" if f.get("blocking") else "", where) if x)
+    return f"- **{f.get('label') or n}** {_plain(f.get('text')).strip()}" + (f" ({tag})" if tag else "")
+
+
 def review_comment(verdict: str, by: str, person: str, verified: str, not_verified: str,
-                   findings: list[dict], head: str) -> str:
+                   findings: list[dict], head: str, fixed: list[str] | None = None,
+                   earlier_open: list[dict] | None = None) -> str:
     """The PR comment for one review: who reviewed (named in text, no @-mention), the verdict,
-    what was verified and what was not, and the findings with the blocking ones first."""
+    what was verified and what was not, this round's findings with the blocking ones first (each
+    under its F label, so a later round's "Fixed" and "Still open" lines point at it), the
+    earlier findings this round marked fixed, and those still open."""
     who = f"{by} ({person}'s crew)" if person else by
     lines = [f"**{_VERDICT_WORDS.get(verdict, verdict)}** on `{str(head)[:7]}`", "",
-             f"Reviewed by {who}.", ""]
+             f"Reviewed by {_plain(who)}.", ""]
     if verified:
-        lines += ["**Verified**", "", str(verified).strip(), ""]
+        lines += ["**Verified**", "", _plain(verified).strip(), ""]
     if not_verified:
-        lines += ["**Not verified**", "", str(not_verified).strip(), ""]
+        lines += ["**Not verified**", "", _plain(not_verified).strip(), ""]
     rows = sorted(findings or [], key=lambda f: (not f.get("blocking"), str(f.get("severity") or "")))
     if rows:
         lines += ["**Findings**", ""]
-        for i, f in enumerate(rows, 1):
-            where = str(f.get("file") or "").strip()
-            if where and f.get("line"):
-                where += f":{f['line']}"
-            tag = ", ".join(x for x in (str(f.get("severity") or "").strip(),
-                                        "blocking" if f.get("blocking") else "", where) if x)
-            lines.append(f"{i}. {str(f.get('text') or '').strip()}" + (f" ({tag})" if tag else ""))
+        lines += [_finding_line(f, i) for i, f in enumerate(rows, 1)]
         lines.append("")
     else:
         lines += ["No findings.", ""]
+    if fixed:
+        lines += [f"**Fixed since the last review:** {', '.join(str(x) for x in fixed)}", ""]
+    still = sorted(earlier_open or [], key=lambda f: (not f.get("blocking"), str(f.get("severity") or "")))
+    if still:
+        lines += ["**Still open from earlier reviews**", ""]
+        lines += [_finding_line(f, i) for i, f in enumerate(still, 1)]
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

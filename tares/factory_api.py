@@ -1823,12 +1823,26 @@ def register(app, store, h: Host) -> SimpleNamespace:
         blocking = sum(1 for f in rv["findings"] if f.get("blocking"))
         title = factory_github._VERDICT_WORDS.get(rv["verdict"], rv["verdict"])
         title += f", {blocking} blocking" if blocking else ""
-        comment = factory_github.review_comment(
-            rv["verdict"], by, str(person.get("name") or ""), rv.get("verified") or "",
-            rv.get("not_verified") or "", rv["findings"], rv["head"])
+        this_round = {f["label"] for f in rv["findings"]}
         try:
-            return await factory_github.post_review(store, repo, int(number), rv["head"],
-                                                    rv["verdict"], comment, title)
+            earlier = [f for f in await asyncio.to_thread(store.open_findings, t["id"])
+                       if f["label"] not in this_round]
+            comment = factory_github.review_comment(
+                rv["verdict"], by, str(person.get("name") or ""), rv.get("verified") or "",
+                rv.get("not_verified") or "", rv["findings"], rv["head"],
+                fixed=rv.get("fixed") or [], earlier_open=earlier)
+            # the check run goes on the full commit when the PR knows it (the reviewer may give a
+            # short one)
+            full = str(pr.get("head") or "").strip()
+            sha = full if factory_mod.same_commit(full, rv["head"]) else rv["head"]
+            return await asyncio.wait_for(
+                factory_github.post_review(store, repo, int(number), sha, rv["verdict"], comment,
+                                           title),
+                factory_github.REVIEW_POST_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": "GitHub did not answer in time: check the PR, and post with gh "
+                           "what is missing"}
         except Exception as e:   # the record is kept whatever GitHub does
             return {"posted": False, "posted_check": False, "posted_comment": False,
                     "why": f"could not post to GitHub: {type(e).__name__}"}

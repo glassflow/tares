@@ -83,6 +83,12 @@ def fake_github(request: httpx.Request) -> httpx.Response:
 factory_github._transport = httpx.MockTransport(fake_github)
 
 
+def mf_timeout() -> int:
+    """The timeout `mf.record_review` opens its client with."""
+    import inspect, re
+    return int(re.search(r"_cx\((\d+)\)", inspect.getsource(mf.record_review)).group(1))
+
+
 def posts(kind):
     return [s for s in SEEN if s[0] == "POST" and s[1].split("/")[4] == kind]
 
@@ -106,6 +112,26 @@ def unit():
         ck(f"findings {empty!r} say there are none", "No findings." in t and "Findings" not in t, t)
     ck("with no person the reviewer stands alone", "Reviewed by r." in t, t)
     ck("no not-verified section when there is none", "Not verified" not in t, t)
+
+    print("== the comment is readable on its own in a later round ==")
+    t = factory_github.review_comment(
+        "pass", "r", "", "ran it", "", [{"label": "F3", "severity": "P3", "text": "naming", "blocking": False}],
+        "aaaaaaa1111", fixed=["F1", "F2"],
+        earlier_open=[{"label": "F0", "severity": "P2", "text": "old gap", "blocking": False}])
+    ck("each finding is printed under its F label", "**F3** naming" in t, t)
+    ck("it says which earlier findings were fixed", "Fixed since the last review:** F1, F2" in t, t)
+    ck("it lists what is still open, with its label and text",
+       "Still open from earlier reviews" in t and "**F0** old gap" in t, t)
+    t = factory_github.review_comment("pass", "r", "", "ran it", "", [], "aaaaaaa1111")
+    ck("a first round has no fixed or still-open lines", "Fixed since" not in t and "Still open" not in t, t)
+    t = factory_github.review_comment(
+        "changes", "r", "", "asked @alice and @bob_1", "cc @carol",
+        [{"severity": "P2", "text": "ping @dave about this", "blocking": True}], "aaaaaaa1111",
+        earlier_open=[{"label": "F1", "severity": "P3", "text": "see @erin", "blocking": False}])
+    ck("a name typed with @ never notifies: the words stay, the mention goes",
+       all(f"@{n}" not in t for n in ("alice", "bob_1", "carol", "dave", "erin"))
+       and "alice" in t and "dave" in t and "erin" in t, t)
+    ck("an @ that names nobody is left alone", factory_github._plain("a @ b, mail x@") == "a @ b, mail x@")
 
     print("== a verdict from a status or a check run, the later one ==")
     s_ok = {"context": "factory/review", "state": "success", "description": "Pass",
@@ -255,18 +281,64 @@ async def api_cases(app, store):
        and comment.index("missing null check") < comment.index("naming"), (out, comment))
     ck("the run's title says how many block", RUNS[-1]["output"]["title"] == "Changes requested, 1 blocking", RUNS[-1])
 
+    # round 2 on GitHub reads on its own: F1 and F2 are named with their labels
+    ck("a round's findings carry their labels on GitHub",
+       "**F1** naming" in comment and "**F2** missing null check" in comment, comment)
+
+    # round 3: F1 fixed, F2 not, one new finding. The comment says what was fixed and what is
+    # still open, and the check run goes on the full commit the PR knows, not the short one given
+    full = HEAD + "f" * (40 - len(HEAD))
+    t1 = store.get_ticket(shop, "T1")
+    store.update_ticket(t1["id"], pr={**t1["pr"], "head": full})
+    SEEN.clear()
+    out = json.loads(await mf.record_review(
+        "T1", HEAD, "changes", "ran it again", "",
+        [{"severity": "P3", "text": "typo in the docs", "blocking": False}], {"F1": "fixed"},
+        project="Shop"))
+    comment = [s for s in SEEN if s[1].endswith("/issues/7/comments")][0][3]["body"]
+    ck("round 3 is recorded and posted", out["round"] == 3 and out["github"]["posted"], out)
+    ck("it names the new finding by its label", "**F3** typo in the docs" in comment, comment)
+    ck("it says F1 was fixed", "Fixed since the last review:** F1" in comment, comment)
+    ck("it lists F2 as still open with its text",
+       "Still open from earlier reviews" in comment and "**F2** missing null check" in comment
+       and "**F1** naming" not in comment.split("Still open")[1], comment)
+    ck("the check run is on the full commit", RUNS[-1]["head_sha"] == full, RUNS[-1])
+    t1 = store.get_ticket(shop, "T1")
+    store.update_ticket(t1["id"], pr={**t1["pr"], "head": "ccccccc9999" + "0" * 29})
+    SEEN.clear()
+    await mf.record_review("T1", HEAD, "changes", "x", "", [], {"F3": "open"}, project="Shop")
+    ck("a PR head that is a different commit is not used", RUNS[-1]["head_sha"] == HEAD, RUNS[-1])
+    t1 = store.get_ticket(shop, "T1")
+    store.update_ticket(t1["id"], pr={**t1["pr"], "head": full})
+
+    # GitHub that does not answer: the record is kept, the answer says so within the limit, and
+    # the MCP call (which waits longer than the route) gets that answer
+    ck("the MCP call waits longer than the post may take",
+       factory_github.REVIEW_POST_TIMEOUT < mf_timeout(), (factory_github.REVIEW_POST_TIMEOUT, mf_timeout()))
+    real_post, real_limit = factory_github.post_review, factory_github.REVIEW_POST_TIMEOUT
+
+    async def hang(*a, **kw):
+        await asyncio.sleep(30)
+    factory_github.post_review, factory_github.REVIEW_POST_TIMEOUT = hang, 0.2
+    out = json.loads(await mf.record_review("T1", HEAD, "changes", "slow github", "", [], project="Shop"))
+    factory_github.post_review, factory_github.REVIEW_POST_TIMEOUT = real_post, real_limit
+    ck("a GitHub that never answers: recorded, not posted, and why",
+       out["round"] == 5 and out["github"]["posted"] is False and "did not answer in time" in out["github"]["why"], out)
+    ck("a second record is a second round, not a retry of the first (the reviewer is not left waiting)",
+       json.loads(await mf.record_review("T1", HEAD, "changes", "after", "", [], project="Shop"))["round"] == 6)
+
     # no App can write: the round is still recorded, nothing is posted, and the answer says why
     DENY["check"] = {"app-app1"}
     SEEN.clear()
     out = json.loads(await mf.record_review(
-        "T1", HEAD, "pass", "again", "", [], {"F1": "fixed", "F2": "fixed"}, project="Shop"))
+        "T1", HEAD, "pass", "again", "", [], {"F2": "fixed"}, project="Shop"))
     ck("refused by GitHub: recorded, not posted, with the reason",
-       out["round"] == 3 and out["github"]["posted"] is False and "403" in out["github"]["why"], out)
+       out["round"] == 7 and out["github"]["posted"] is False and "403" in out["github"]["why"], out)
     DENY["check"] = set()
     store.delete_github_credential("app1")
     out = json.loads(await mf.record_review("T1", HEAD, "pass", "once more", project="Shop"))
     ck("no App: recorded, not posted, the reviewer posts with gh",
-       out["round"] == 4 and out["github"]["posted"] is False and "no GitHub App" in out["github"]["why"], out)
+       out["round"] == 8 and out["github"]["posted"] is False and "no GitHub App" in out["github"]["why"], out)
 
     # a ticket with no pull request has nowhere to post
     as_station("shop-build-m1", "builder", "crew-orchestrator")

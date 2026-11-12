@@ -293,7 +293,7 @@ async def record_review(ticket: str, head: str, verdict: str, verified: str,
     when something did not, `why`: post that part with `gh`."""
     body = {"head": head, "verdict": verdict, "verified": verified,
             "not_verified": not_verified, "findings": findings or [], "resolved": resolved or {}}
-    async with _cx(15) as cx:
+    async with _cx(60) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
