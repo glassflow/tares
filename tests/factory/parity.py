@@ -4966,9 +4966,9 @@ I_BACK = _pw_add(_pw(85, 10))
 _pw_add(_pw(10, 10))
 _pw_add(_pw(10, 10, grants="the reviewer may label pull requests"))
 _pw_add(_pw(10, 10, grants="the reviewer may label pull requests"))
-# (the shell's own words for the failure, and Python's, are left out of the comparison)
+# (the shell's own words for the failure, and Python's and Windows's, are left out of the comparison)
 I_MID = _pw_add(_pw(85, 10, _pw_grants_in_the_way(_PW_R), grants="the reviewer may label pull requests",
-                    drop=(r"Is a directory",)))
+                    drop=(r"Is a directory", r"Access is denied")))
 _pw_add(_pw(85, 10, _pw_grants_in_the_way(_PW_R, False), grants="the reviewer may label pull requests"))
 I_SENT = _pw_add(_pw(85, 10, grants="the reviewer may label pull requests"))
 
@@ -5742,7 +5742,7 @@ K_FRESH = _iwf_add(0)
 K_FAIL = _iwf_add(50, _H7, env=_PW_FAIL)                  # the restart of the wake fails
 _iwf_add(60, _H7)                                         # the first of these revives the station the failed restart left stopped
 K_SENT = _iwf_add(120, _H7)
-K_MID = _iwf_add(200, _H8, _pw_grants_in_the_way(_PW_R), drop=(r"Is a directory",))   # a restart fails deep inside
+K_MID = _iwf_add(200, _H8, _pw_grants_in_the_way(_PW_R), drop=(r"Is a directory", r"Access is denied"))   # a restart fails deep inside
 _iwf_add(260, _H8, _pw_grants_in_the_way(_PW_R, on=False))
 K_SENT2 = _iwf_add(320, _H8)
 
@@ -5947,8 +5947,9 @@ def _settings_arg(row):
         for i, a in enumerate(args[:-1]):
             if a == "--settings" and isinstance(args[i + 1], str) and not args[i + 1].lstrip().startswith("{"):
                 args[i + 1] = "<SETTINGS-FILE>"
-                if is_windows() and args[:2] == ["-p", "--no-session-persistence"]:
-                    # cmd.exe cannot take JSON in a claude.cmd command line: a reading passes the same settings as a file
+                if is_windows() and args[:2] == ["-p", "--no-session-persistence"] and args[-1] == "/usage":
+                    # cmd.exe cannot take JSON in a claude.cmd command line: a plan reading (/usage) passes the same
+                    # settings as a file; a /context reading passes a file on every platform, so it stays a placeholder
                     args[i + 1] = '{"disableAllHooks": true}'
     return row
 

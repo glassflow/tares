@@ -119,12 +119,14 @@ ck("on Windows a quoted kit path and claude.cmd read as bash printed them",
 with mock.patch.object(parity, "is_windows", lambda: False):
     q3 = parity.norm_text('--plugin-root "<TMP>/kit"')
 ck("...and elsewhere the quotes stay", q3 == '--plugin-root "<TMP>/kit"', q3)
-_use = {"args": ["-p", "--no-session-persistence", "--settings", "C:/t/x.json", "--verbose"]}
+_use = {"args": ["-p", "--no-session-persistence", "--settings", "C:/t/x.json", "--verbose", "/usage"]}
+_ctx = {"args": ["-p", "--no-session-persistence", "--settings", "C:/t/x.json", "--verbose", "/context"]}
 _bg = {"args": ["--bg", "--settings", "C:/t/x.json"]}
 with mock.patch.object(parity, "is_windows", lambda: True):
     _u, _b = parity._settings_arg(json.loads(json.dumps(_use))), parity._settings_arg(json.loads(json.dumps(_bg)))
-ck("on Windows a usage read's settings file reads as the JSON text bash passed; a launch's file stays a placeholder",
-   _u["args"][3] == '{"disableAllHooks": true}' and _b["args"][2] == "<SETTINGS-FILE>", (_u, _b))
+    _c = parity._settings_arg(json.loads(json.dumps(_ctx)))
+ck("on Windows a plan read's settings file reads as the JSON text bash passed; a context read's and a launch's file stay a placeholder",
+   _u["args"][3] == '{"disableAllHooks": true}' and _b["args"][2] == "<SETTINGS-FILE>" and _c["args"][3] == "<SETTINGS-FILE>", (_u, _b, _c))
 _ft = Path(tempfile.mkdtemp(prefix="parity-files-"))
 for _n in ("crew.json", "HALT", "a-b", "a/b"):
     (_ft / _n).parent.mkdir(parents=True, exist_ok=True)
