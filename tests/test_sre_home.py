@@ -326,10 +326,15 @@ async def main():
         store.set_service("service-a", "test", display=None)
 
         print("== one incident open ==")
-        store.append([_otlp(NOW, 35, "service-a", "ERROR", "job 41 failed"),
-                      _otlp(NOW, 31, "service-a", "ERROR", "job 42 failed")])
         first = incident(store, "service-a", 30, failing="Jobs fail after the retry.",
                          likely_cause="The retry change.", next_step="Roll back the retry change.")
+        h = home()
+        eq("a deploy but no error yet: no chart, a flat line would say nothing failed (TR-1272)",
+           h["incidents"][0]["chart"], None)
+        ck("the deploy still counts in what the story rests on",
+           "the latest deploy" in (h["incidents"][0]["based_on"] or ""), h["incidents"][0]["based_on"])
+        store.append([_otlp(NOW, 35, "service-a", "ERROR", "job 41 failed"),
+                      _otlp(NOW, 31, "service-a", "ERROR", "job 42 failed")])
         h = home()
         eq("Slack has not been told: nothing posted", h["incidents"][0]["posted"], None)
         said_ts = f"{int((NOW - timedelta(minutes=29)).timestamp())}.000100"
@@ -352,7 +357,10 @@ async def main():
            == ("Jobs fail after the retry.", "The retry change.", "Roll back the retry change."),
            (inc["failing"], inc["likely_cause"], inc["next_step"]))
         ch = inc["chart"]
-        eq("the chart has 60 points", len(ch["points"]), 60)
+        eq("the chart stops at now: an hour before plus the 30 minutes since, in 2-minute buckets",
+           len(ch["points"]), 45)
+        ck("no bucket after now (TR-1272)", ch["points"][-1][0] <= NOW.isoformat(), ch["points"][-1])
+        eq("and says so", ch["label"], "Errors, from 1 hour before it opened until now")
         ck("each is a time and a count", all(len(p) == 2 and isinstance(p[1], int) for p in ch["points"]))
         ck("the errors are in it", sum(p[1] for p in ch["points"]) >= 2, ch["points"])
         ck("a deploy mark with a label", len(ch["deploys"]) >= 1 and all(d["at"] and d["label"] for d in ch["deploys"]),

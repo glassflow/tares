@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 sys.path.insert(0, os.getcwd())
 sys.path.insert(0, os.path.join(os.getcwd(), "tests"))
 
-from fixtures.sre_cell import seed_cell  # noqa: E402
+from fixtures.sre_cell import _otlp, seed_cell  # noqa: E402
 from tares import edition as edition_mod  # noqa: E402
 from tares.store import Store  # noqa: E402
 
@@ -70,6 +70,8 @@ try:
                  likely_cause=f"{service} restarted after a push to main.",
                  next_step=f"Roll back the last deploy of {service}.")
         store.add_incident_note(inc["id"], rid, opened)
+        # the 502s the finding speaks of, so the incident chart has errors to draw (TR-1272)
+        store.append([_otlp(now, m, service, "ERROR", "GET /api 502") for m in range(minutes_ago, 0, -3)])
         if slack:
             store.set_incident_slack(inc["id"], "ops-alerts", f"{int(opened.timestamp()) + 60}.000100")
         return inc

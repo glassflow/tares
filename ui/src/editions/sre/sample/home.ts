@@ -172,14 +172,17 @@ const WATCHER_OFF_MONTHLY: SreHome = {
 function chartAround(openedAt: string, deploys: { minutesBefore: number; label: string }[]): HomeChart {
   const opened = new Date(openedAt).getTime();
   const points: [string, number][] = [];
+  let toNow = false;
   for (let i = -30; i <= 30; i++) {
     const t = opened + i * 2 * MIN;
+    // the series stops at now, as the daemon's does: a bucket still to come is not 0 errors (TR-1272)
+    if (t > Date.now()) { toNow = true; break; }
     const after = Math.max(0, i);
-    const n = t > Date.now() ? 0 : i < 0 ? 1 + ((i * i) % 3) : 3 + after * 2 + (i % 4);
+    const n = i < 0 ? 1 + ((i * i) % 3) : 3 + after * 2 + (i % 4);
     points.push([new Date(t).toISOString(), n]);
   }
   return {
-    label: "Errors, 2 hours around when it opened", points,
+    label: toNow ? "Errors, from 1 hour before it opened until now" : "Errors, 2 hours around when it opened", points,
     deploys: deploys.map((d) => ({ at: new Date(opened - d.minutesBefore * MIN).toISOString(), label: d.label })),
   };
 }
