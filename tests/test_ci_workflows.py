@@ -39,7 +39,19 @@ ck("ci.yml: the test matrix is duckdb alone on a draft, all three suites otherwi
 for name in ("test-ee", "wheel-clean", "e2e"):
     ck(f"ci.yml: {name} is skipped on a draft", DRAFT in str(jobs[name].get("if", "")) and "!" in str(jobs[name].get("if", "")), str(jobs[name].get("if")))
 for name in ("console", "test", "parity", "wheel", "secrets"):
-    ck(f"ci.yml: {name} runs on a draft (the light set)", "if" not in jobs[name], str(jobs[name].get("if")))
+    ck(f"ci.yml: {name} runs on a draft (the light set)", DRAFT not in str(jobs[name].get("if", "")), str(jobs[name].get("if")))
+
+# ---- ci.yml: a push to main whose tree already passed on its PR (TR-1234)
+cov = jobs["covered"]
+ck("ci.yml: `covered` runs on a push to main only", "push" in cov["if"] and "refs/heads/main" in cov["if"], str(cov.get("if")))
+ck("ci.yml: `covered` can read runs and PRs, and nothing more", cov["permissions"] == {"contents": "read", "actions": "read", "pull-requests": "read"}, str(cov.get("permissions")))
+ck("ci.yml: `covered` hands over the previous tip of main", any("github.event.before" in str(s.get("env", {})) for s in cov["steps"]))
+ck("ci.yml: `covered` looks for the full set (the e2e job) of ci.yml", any("--workflow ci.yml" in s.get("run", "") and "--marker e2e" in s.get("run", "") for s in cov["steps"]))
+for name in ("console", "test", "parity", "test-ee", "wheel", "wheel-clean", "e2e"):
+    c = " ".join(str(jobs[name].get("if", "")).split())
+    ck(f"ci.yml: {name} waits for `covered` and skips only when it said true (a skipped or failed `covered` runs it)",
+       jobs[name].get("needs") == "covered" and "!cancelled()" in c and "needs.covered.outputs.covered != 'true'" in c, f"{jobs[name].get('needs')} {c}")
+ck("ci.yml: `secrets` is never skipped for a covered tree", "needs" not in jobs["secrets"] and "if" not in jobs["secrets"])
 ck("ci.yml: the Linux parity shards stay", jobs["parity"]["runs-on"] == "${{ matrix.os }}" and jobs["parity"]["strategy"]["matrix"]["os"] == ["ubuntu-latest"])
 
 # ---- parity-macos.yml: after a merge, or when asked
@@ -64,6 +76,8 @@ ck("windows-crew.yml: marking a PR ready runs the workflow", "ready_for_review" 
 ck("windows-crew.yml: jobs are changes, shard and windows-crew", list(wj) == ["changes", "shard", "windows-crew"], str(list(wj)))
 ck("windows-crew.yml: the shards wait for `changes` and run only when it says so",
    wj["shard"]["needs"] == "changes" and wj["shard"]["if"] == "needs.changes.outputs.run == 'true'", str(wj["shard"].get("if")))
+ck("windows-crew.yml: `changes` asks ci_covered.py about the windows-crew run, on a push only",
+   any(s.get("id") == "covered" and "--workflow windows-crew.yml" in s["run"] and "push" in s["if"] for s in wj["changes"]["steps"]))
 ck("windows-crew.yml: the aggregate keeps its name, always runs and waits for both", wj["windows-crew"]["name"] == "windows-crew"
    and wj["windows-crew"]["needs"] == ["changes", "shard"] and "always()" in wj["windows-crew"]["if"])
 
@@ -97,11 +111,15 @@ for changes, run, shards, want in [
     ck(f"windows-crew aggregate: changes {changes}, run {run!r}, shards {shards} -> {'green' if want else 'red'}",
        (r.returncode == 0) == want, f"exit {r.returncode}: {r.stdout}{r.stderr}")
 
+r = sh(agg, {"CHANGES": "success", "RUN": "false", "SHARDS": "skipped", "NOTE": "same tree as PR 7 head abcd1234, whose windows-crew.yml run passed: https://x/runs/9"}, ROOT)
+ck("windows-crew aggregate: skipped because the PR run covered it -> green, and it names that run",
+   r.returncode == 0 and "https://x/runs/9" in r.stdout, f"exit {r.returncode}: {r.stdout}{r.stderr}")
+
 # the diff: a throwaway repo with a base commit, then a PR commit that touches one path
 diff = step_script("changes", step_id="diff")
 
 
-def decide(event, draft, path):
+def decide(event, draft, path, covered=""):
     with tempfile.TemporaryDirectory() as d:
         g = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=d, check=True, capture_output=True, text=True)
         g("init", "-q", "-b", "main")
@@ -114,15 +132,19 @@ def decide(event, draft, path):
         g("add", "-A"); g("commit", "-q", "-m", "pr")
         out = Path(d, "..", "out-%d" % os.getpid()).resolve()
         out.write_text("")
-        r = sh(diff, {"EVENT": event, "DRAFT": draft, "BASE": base, "GITHUB_OUTPUT": str(out)}, d)
+        r = sh(diff, {"EVENT": event, "DRAFT": draft, "BASE": base, "COVERED": covered, "GITHUB_OUTPUT": str(out)}, d)
         got = out.read_text().strip()
         out.unlink()
         return got, r
 
 
-for event, draft, path, want in [
+for event, draft, path, want, *cov_ in [
     ("push", "", "ui/src/x.ts", "run=true"),                      # a push to main always runs
     ("workflow_dispatch", "", "ui/src/x.ts", "run=true"),
+    ("push", "", "ui/src/x.ts", "run=true", "false"),             # asked, not covered: runs
+    ("push", "", "tares/crew/state.py", "run=false", "true"),     # covered by the PR run: skipped
+    ("workflow_dispatch", "", "ui/src/x.ts", "run=true", "true"), # a manual run is never covered
+    ("pull_request", "false", "tares/crew/state.py", "run=true", "true"),  # nor is a PR event
     ("pull_request", "false", "tares/crew/state.py", "run=true"),
     ("pull_request", "false", "claude-plugin/skills/x.md", "run=true"),
     ("pull_request", "false", "tests/factory/parity.py", "run=true"),
@@ -142,8 +164,8 @@ for event, draft, path, want in [
     ("pull_request", "false", ".github/workflows/ci.yml", "run=false"),
     ("pull_request", "true", "tares/crew/state.py", "run=false"),  # a draft waits for ready_for_review
 ]:
-    got, r = decide(event, draft, path)
-    ck(f"windows-crew changes: {event} draft={draft or '-'} touching {path} -> {want}", got == want and r.returncode == 0, f"{got!r} {r.stderr}")
+    got, r = decide(event, draft, path, *cov_)
+    ck(f"windows-crew changes: {event} draft={draft or '-'} touching {path}{' covered=' + cov_[0] if cov_ else ''} -> {want}", got == want and r.returncode == 0, f"{got!r} {r.stderr}")
 
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)

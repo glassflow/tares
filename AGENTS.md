@@ -109,6 +109,7 @@ One push to a crew PR is hours of runner time, so the heavy checks run once, not
 - A draft PR runs the light set: `test (duckdb)`, Linux parity, `console`, `wheel` and `secrets`. Marking it ready runs the full set once, and every later push to it runs the full set.
 - The macOS parity shards (`parity-macos.yml`) run after a merge to main, not on PR pushes. To get them on a PR, add the label `macos-parity` (they run now and on every later push until the label is removed), or run `gh workflow run parity-macos.yml --ref <branch>`.
 - `windows-crew` is skipped on a draft and on a PR that changes none of the crew engine's paths.
+- A push to main that merges a PR skips `ci.yml` and the `windows-crew` shards when the merge commit has the same tree as the PR head, the PR head already had everything main had, and the newest run on the head passed with the full set (`scripts/ci_covered.py`, TR-1234). The `covered` job (CI) and the `changes` job (windows-crew) say which PR run covered it. Anything else, an API error included, runs everything. The macOS shards and `secrets` always run on main, and so does a manual run. To see why a push ran in full, read the `covered` job's summary.
 
 ## Release
 

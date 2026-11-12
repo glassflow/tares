@@ -31,7 +31,35 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # A push to main after a squash merge of a PR that was up to date with main has the tree the PR run already
+  # tested. This job says so (scripts/ci_covered.py, TR-1234) and the heavy jobs below then skip. Any doubt, an
+  # API error included, means they run. It runs on a push to main only; on a PR and a manual run it is skipped
+  # and everything runs. `secrets` and the macOS shards (parity-macos.yml) always run on main.
+  covered:
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      covered: ${{ steps.covered.outputs.covered }}
+      note: ${{ steps.covered.outputs.note }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      - id: covered
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          python3 scripts/ci_covered.py --workflow ci.yml --marker e2e | tee -a "$GITHUB_STEP_SUMMARY"
+
   console:
+    needs: covered
+    if: ${{ !cancelled() && needs.covered.outputs.covered != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,6 +82,8 @@ jobs:
   # Postgres as a cloud cell keeps it: tests/pg_harness gives each Store its own schema.
   test:
     name: test (${{ matrix.suite }} ${{ matrix.shard }}/5)
+    needs: covered
+    if: ${{ !cancelled() && needs.covered.outputs.covered != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -114,6 +144,8 @@ jobs:
   # merge to main, and on a PR only when someone asks.
   parity:
     name: parity (${{ matrix.os }} ${{ matrix.shard }}/12)
+    needs: covered
+    if: ${{ !cancelled() && needs.covered.outputs.covered != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -140,7 +172,8 @@ jobs:
   # state in DuckDB and in Postgres. They run with a test licence the test root signed.
   test-ee:
     name: test-ee (${{ matrix.db }})
-    if: ${{ !github.event.pull_request.draft }}
+    needs: covered
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.covered.outputs.covered != 'true' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -189,6 +222,8 @@ jobs:
   # checkout, import tares_ee from it, and start the daemon with no licence key and with a bad one.
   # The cell must come up either way and say what it found at /api/licence.
   wheel:
+    needs: covered
+    if: ${{ !cancelled() && needs.covered.outputs.covered != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -243,7 +278,8 @@ jobs:
   # without the console that installs and runs. TARES_REQUIRE_CONSOLE=1 must turn that into an error.
   wheel-clean:
     name: wheel from a clean checkout (${{ matrix.os }})
-    if: ${{ !github.event.pull_request.draft }}
+    needs: covered
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.covered.outputs.covered != 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -296,7 +332,8 @@ jobs:
   # Chromium comes with it. Screenshots are uploaded only when a shard fails.
   e2e:
     name: e2e (${{ matrix.shard }}/2)
-    if: ${{ !github.event.pull_request.draft }}
+    needs: covered
+    if: ${{ !cancelled() && !github.event.pull_request.draft && needs.covered.outputs.covered != 'true' }}
     # Pinned: Playwright does not install Chromium on the Ubuntu that ubuntu-latest points at now.
     runs-on: ubuntu-24.04
     # The runner kills a silent suite after 10 minutes; this stops the job itself if something else hangs.

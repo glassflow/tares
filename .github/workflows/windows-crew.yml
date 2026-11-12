@@ -5,7 +5,8 @@
 # named windows-crew (shard N); the job `windows-crew` below waits for all of them and fails unless every shard
 # passed, so one stable check name can be required.
 # A PR runs the shards only when it changes the crew engine or what it runs on (the `changes` job below), and not
-# while it is a draft: marking it ready (ready_for_review) runs them once (TR-1233). A push to main always runs them.
+# while it is a draft: marking it ready (ready_for_review) runs them once (TR-1233). A push to main runs them, except
+# when it merges a PR whose same tree already passed them (TR-1234); the job `windows-crew` then names that PR run.
 # The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_ci_windows.py and the parity scenarios, and fails
 # if it ran no test, if a test printed no summary, or (--floors) if a test passed fewer checks than its floor (TR-976).
 name: windows-crew
@@ -41,23 +42,42 @@ permissions:
   contents: read
 
 jobs:
-  # Does this PR need the Windows run? A push to main and a manual run: yes. A draft PR: no. Any other PR: yes
+  # Does this PR need the Windows run? A manual run: yes. A push to main: yes, unless the merged tree already passed
+  # these shards on its PR (scripts/ci_covered.py, TR-1234; any doubt means yes). A draft PR: no. Any other PR: yes
   # when it changes the crew engine, its tests, the harness or this workflow.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
     outputs:
       run: ${{ steps.diff.outputs.run }}
+      note: ${{ steps.covered.outputs.note }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - id: covered
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          python3 scripts/ci_covered.py --workflow windows-crew.yml --marker "windows-crew (shard" | tee -a "$GITHUB_STEP_SUMMARY"
       - id: diff
         env:
           EVENT: ${{ github.event_name }}
           DRAFT: ${{ github.event.pull_request.draft }}
           BASE: ${{ github.event.pull_request.base.sha }}
+          COVERED: ${{ steps.covered.outputs.covered }}
         run: |
+          if [ "$EVENT" = "push" ] && [ "$COVERED" = "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "already tested on its PR: the Windows shards are skipped"
+            exit 0
+          fi
           if [ "$EVENT" != "pull_request" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ "$DRAFT" = "true" ]; then
             echo "run=false" >> "$GITHUB_OUTPUT"
@@ -135,6 +155,7 @@ jobs:
         env:
           CHANGES: ${{ needs.changes.result }}
           RUN: ${{ needs.changes.outputs.run }}
+          NOTE: ${{ needs.changes.outputs.note }}
           SHARDS: ${{ needs.shard.result }}
         run: |
           if [ "$CHANGES" != "success" ]; then
@@ -149,6 +170,8 @@ jobs:
           elif [ "$SHARDS" != "skipped" ]; then
             echo "windows-crew shards: $SHARDS, expected skipped"
             exit 1
+          elif [ -n "$NOTE" ]; then
+            echo "windows-crew: no shard needed, $NOTE"
           else
             echo "windows-crew: no shard needed for this PR"
           fi

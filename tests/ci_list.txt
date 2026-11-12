@@ -19,6 +19,7 @@ test_catalog_sync
 test_challenger_workflow
 test_check_ledger
 test_ci_check
+test_ci_covered
 test_ci_e2e
 test_ci_github
 test_ci_list
