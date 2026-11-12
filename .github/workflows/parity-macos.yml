@@ -1,31 +1,24 @@
 # The crew's parity scenarios on macOS (the same ones ci.yml runs on Linux). macOS runners are few and queue for
-# hours, and a crew PR is pushed many times, so these shards run after a merge (push to main and factory-modular/*),
-# not on every PR push (TR-1233). A PR can ask for them:
-#   - add the label `macos-parity` to the PR: the shards run at once and again on every later push, until the label is removed;
-#   - or run this workflow by hand on the branch: gh workflow run parity-macos.yml --ref <branch>
+# hours, so these shards never run on a push to main (TR-1235). They run:
+#   - when a release tag `v*` is pushed (rc tags included), beside the release, which does not wait for them;
+#   - when someone runs this workflow by hand on any ref: gh workflow run parity-macos.yml --ref <branch>;
+#   - on a PR that asks: add the label `macos-parity` and the shards run at once and again on every later push, until
+#     the label is removed.
 # Adding any other label starts nothing and cancels nothing: its run is skipped and sits in its own concurrency group.
 name: parity-macos
 
 on:
   push:
-    branches: [main, "factory-modular/*"]
-    paths-ignore:
-      - "README.md"
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - "SECURITY.md"
-      - "THIRD_PARTY_NOTICES.md"
-      - "docs/**"
-      - ".github/ISSUE_TEMPLATE/**"
+    tags: ["v*"]
   pull_request:
     types: [labeled, synchronize]
   workflow_dispatch:
 
-# A newer push to the same PR cancels the run it replaces; runs on main always finish. A label that is not
+# A newer push to the same PR cancels the run it replaces; a tag run and a manual run always finish. A label that is not
 # macos-parity gets a group of its own, so it cannot cancel a run in progress.
 concurrency:
   group: parity-macos-${{ github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name != 'macos-parity' && 'other-label' || 'run' }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   parity:
