@@ -10410,7 +10410,8 @@ _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is res
        ["the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
         "below the limit, crew update moves them", "and the restart says to re-arm at 45 minutes",
         "the limit fills while crew update waits: it stops, says until when, and restarts nothing more"],
-       _cc_setup(have="1.11.0", installed="1.11.1"))
+       _cc_setup(have="1.11.0", installed="1.11.1"),
+       not_windows="the limit fills on timers of 2.5 and 3.5 seconds, and a Windows process start takes longer than the gap between them")
 
 
 # A helper follows its station onto a new Claude Code, but its task lives only in its spawn prompt, so it is never started in a new
