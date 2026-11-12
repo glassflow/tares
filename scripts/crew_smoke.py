@@ -24,15 +24,18 @@ Isolation, so a smoke run cannot touch the live crew (TR-1164):
     called "crew" or does not start with "smoke-";
   - the keyring is pinned to the fail backend, so nothing reaches the Keychain;
   - the teardown stops only this crew's recorded stations (crew down), then any session still named
-    <crew>-*, and only the scratch daemon and MCP processes this script started.
+    <crew>-orchestrator, -reviewer, -releaser or <crew>-hello-smoke-build-* (never a longer crew name that merely starts with this one), and only the scratch daemon and MCP processes this script started.
 
 The one edit outside the scratch folder: Claude Code starts no session in a folder it has not trusted, so
 the script adds the scratch crew home, the clone itself (its parent folder does not count) and the worktrees folder to ~/.claude.json
-(hasTrustDialogAccepted) and removes those entries at the end. Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok.
+(hasTrustDialogAccepted) and removes those entries at the end. A real run therefore rewrites that file (a
+symlink is followed, and a change made by a running Claude Code meanwhile is re-read and kept). Exit codes: 0 PR exists, 1 failed, 2 refused to start, 3 timed out, 10 dry run ok.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
+import re
 import json
 import os
 import pwd
@@ -52,7 +55,24 @@ ROOT = Path(__file__).resolve().parent.parent
 FACTORY_DIR = ROOT / "tests" / "factory"
 DEFAULT_REPO = "glassflow/tares-crew-smoke"
 EXIT_OK, EXIT_FAIL, EXIT_REFUSED, EXIT_TIMEOUT, EXIT_DRY_OK = 0, 1, 2, 3, 10
+MAX_POLL_ERRORS = 5
+PROJECT_NAME = "hello-smoke"
 TARES = [sys.executable, "-c", "import sys; sys.argv[0] = 'tares'; from tares.cli import main; main()"]
+
+
+@contextlib.contextmanager
+def ignoring_signals():
+    """No SIGTERM or Ctrl-C while the body runs: a second one must not cut the teardown short and leave the
+    trust entries and the scratch daemons behind. Only the main thread can change handlers."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    old = {sig: signal.signal(sig, signal.SIG_IGN) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        yield
+    finally:
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
 
 
 class Refused(Exception):
@@ -112,32 +132,55 @@ def scratch_env(base: dict, *, crew_home: Path, crew_name: str, tares_home: Path
 # ---------------------------------------------------------------------------------------------
 # Claude Code's trust file
 
-def _write_claude_json(path: Path, doc: dict) -> None:
-    tmp = path.with_name(path.name + f".smoke{os.getpid()}")
-    tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+def _stamp(path: Path):
     try:
-        shutil.copymode(path, tmp)
+        st = path.stat()
     except OSError:
-        pass
-    os.replace(tmp, path)
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def edit_claude_json(path: Path, mutate) -> None:
+    """Read Claude Code's config, let mutate(doc) change it (it returns True when it did), replace the file atomically.
+
+    A running Claude Code rewrites this file too, so the file is read again when it changed between the read and
+    the replace (up to 5 tries), which leaves only the gap between that last check and os.replace. A symlinked
+    file is edited where it points, so the link stays a link."""
+    for _ in range(5):
+        real = Path(os.path.realpath(path))
+        before = _stamp(real)
+        doc = {}
+        if before is not None:
+            doc = json.loads(real.read_text(encoding="utf-8") or "{}")
+        if not mutate(doc):
+            return
+        tmp = real.with_name(real.name + f".smoke{os.getpid()}")
+        tmp.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        try:
+            shutil.copymode(real, tmp)
+        except OSError:
+            pass
+        if _stamp(real) == before:
+            os.replace(tmp, real)
+            return
+        tmp.unlink()
+    raise OSError(f"{path} kept changing under the edit")
 
 
 def trust_folder(claude_json: Path, folder: str) -> None:
-    """Mark folder trusted in Claude Code's config: read, change one key, replace atomically, in one step."""
-    doc = {}
-    if claude_json.is_file():
-        doc = json.loads(claude_json.read_text(encoding="utf-8") or "{}")
-    doc.setdefault("projects", {}).setdefault(folder, {})["hasTrustDialogAccepted"] = True
-    _write_claude_json(claude_json, doc)
+    """Mark folder trusted in Claude Code's config (hasTrustDialogAccepted)."""
+    def add(doc):
+        doc.setdefault("projects", {}).setdefault(folder, {})["hasTrustDialogAccepted"] = True
+        return True
+    edit_claude_json(claude_json, add)
 
 
 def untrust_folder(claude_json: Path, folder: str) -> None:
     """Remove the entry trust_folder added (the folder is ours alone, so the whole entry goes)."""
-    if not claude_json.is_file():
+    if not claude_json.exists():
         return
-    doc = json.loads(claude_json.read_text(encoding="utf-8") or "{}")
-    if isinstance(doc.get("projects"), dict) and doc["projects"].pop(folder, None) is not None:
-        _write_claude_json(claude_json, doc)
+    edit_claude_json(claude_json, lambda doc: isinstance(doc.get("projects"), dict)
+                     and doc["projects"].pop(folder, None) is not None)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -232,6 +275,8 @@ class Smoke:
         self.project = ""
         self.lock = threading.Lock()
         self.torn_down = False
+        self.watchdog_fired = False
+        self.poll = 30
 
     # -- setup --
 
@@ -306,7 +351,7 @@ class Smoke:
         return dest
 
     def hand_over(self, repo_dir: Path) -> None:
-        name = "hello-smoke"
+        name = PROJECT_NAME
         p = http("POST", self.url + "/api/projects", {"template": "custom", "kind": "software_factory", "name": name,
                                                       "objects": [], "goal": "Smoke test of the crew engine"})
         self.project = p["id"]
@@ -365,30 +410,56 @@ class Smoke:
             return []
 
     def github_pr(self) -> dict | None:
-        """A pull request on the repo from a factory/ branch, opened since this run began."""
+        """This run's pull request: from a factory/ branch, opened since the run began, and adding the line
+        `smoke run <pid>` the ticket asks for. A second smoke run, or another crew on the same test repo, opens
+        pull requests that fail the last test. A gh error raises Failed (wait_for_pr tolerates a few in a row)."""
         r = run(["gh", "pr", "list", "-R", self.repo, "--state", "all", "--limit", "30", "--json",
                  "number,url,headRefName,createdAt,state"], self.env, 60)
         if r.returncode:
-            return None
+            raise Failed(f"gh pr list failed: {(r.stderr or r.stdout).strip()[:200]}")
         since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.started - 5))
-        for pr in json.loads(r.stdout or "[]"):
-            if pr["headRefName"].startswith("factory/") and pr["createdAt"] >= since:
+        mine = re.compile(rf"^\+[`\s]*smoke run {self.pid}[`\s]*$", re.M)
+        try:
+            prs = json.loads(r.stdout or "[]")
+        except ValueError:
+            raise Failed("gh pr list printed no JSON") from None
+        for pr in prs:
+            if not (pr["headRefName"].startswith("factory/") and pr["createdAt"] >= since):
+                continue
+            d = run(["gh", "pr", "diff", str(pr["number"]), "-R", self.repo], self.env, 60)
+            if d.returncode:
+                raise Failed(f"gh pr diff {pr['number']} failed: {(d.stderr or d.stdout).strip()[:200]}")
+            if mine.search(d.stdout):
                 return pr
         return None
 
     def wait_for_pr(self, seconds: float) -> dict:
+        """Poll until this run's pull request exists. One failed poll (a scratch Tares hiccup, a gh or roster
+        timeout) is logged and tried again; MAX_POLL_ERRORS in a row end the run with Failed, so a lasting
+        error (gh logged out) fails in minutes instead of waiting out the timeout."""
         end = time.time() + seconds
         last = ""
         gone = 0
         idle = 0
+        errors = 0
         while time.time() < end:
-            pr = self.github_pr()
-            if pr:
-                return pr
-            stations = self.roster()
-            stages = {t.get("label") or t.get("id"): t.get("stage") for t in self.tickets()}
+            try:
+                pr = self.github_pr()
+                if pr:
+                    return pr
+                stations = self.roster()
+                stages = {t.get("label") or t.get("id"): t.get("stage") for t in self.tickets()}
+                desk = len(self.desk())
+            except Failed as e:
+                errors += 1
+                say(f"poll {errors} of {MAX_POLL_ERRORS} failed: {e}")
+                if errors >= MAX_POLL_ERRORS:
+                    raise Failed(f"{errors} polls in a row failed, the last: {e}") from None
+                time.sleep(self.poll)
+                continue
+            errors = 0
             line = (f"stations {', '.join(s['station'].replace(self.crew_name + '-', '') + ':' + str(s.get('turn')) for s in stations) or 'none'}"
-                    f" | tickets {stages or 'none'} | desk {len(self.desk())}")
+                    f" | tickets {stages or 'none'} | desk {desk}")
             if line != last:
                 say(line)
                 last = line
@@ -403,7 +474,7 @@ class Smoke:
             if gone >= 3:
                 raise Failed("every station of the scratch crew has ended and no pull request was opened "
                              "(the watch is off, so nothing revives them)")
-            time.sleep(30)
+            time.sleep(self.poll)
         raise TimeoutError(f"no pull request after {int(seconds)}s")
 
     # -- the end --
@@ -414,11 +485,16 @@ class Smoke:
             return []
         r = run([claude, "agents", "--json"], self.env, 60)
         try:
-            return [x for x in rows(json.loads(r.stdout), "agents") if str(x.get("name", "")).startswith(self.crew_name + "-")]
+            mine = re.compile(re.escape(self.crew_name) + r"-(orchestrator|reviewer|releaser|" + re.escape(PROJECT_NAME) + r"-build-.+)$")
+            return [x for x in rows(json.loads(r.stdout), "agents") if mine.match(str(x.get("name", "")))]
         except ValueError:
             return []
 
     def teardown(self) -> None:
+        with ignoring_signals():
+            self._teardown()
+
+    def _teardown(self) -> None:
         with self.lock:
             if self.torn_down:
                 return
@@ -464,6 +540,14 @@ class Smoke:
         say(f"closed PR {pr['url']}" if not r.returncode else f"could not close {pr['url']}: {r.stderr.strip()}")
 
 
+def fire_watchdog(s: "Smoke") -> None:
+    """The hard deadline: tell the main thread to stop (SIGTERM, which interrupts a sleep or a wait for a command),
+    so the one teardown that runs is main's, in the main thread, and the process cannot exit under it."""
+    say("watchdog: hard deadline, stopping")
+    s.watchdog_fired = True
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 def main(argv: list | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").split("\n\n")[0])
     ap.add_argument("--repo", default=DEFAULT_REPO, help=f"the throwaway GitHub repo (default {DEFAULT_REPO})")
@@ -488,8 +572,7 @@ def main(argv: list | None = None) -> int:
         raise KeyboardInterrupt(f"signal {signum}")
 
     signal.signal(signal.SIGTERM, stop)
-    watchdog = threading.Timer(args.timeout + 600, lambda: (say("watchdog: hard deadline, tearing down"),
-                                                              s.teardown(), os._exit(124)))
+    watchdog = threading.Timer(args.timeout + 600, fire_watchdog, [s])
     watchdog.daemon = True
     watchdog.start()
     code, pr = EXIT_FAIL, None
@@ -504,7 +587,7 @@ def main(argv: list | None = None) -> int:
         if not any(n == f"{s.crew_name}-orchestrator" for n in names):
             raise Failed("the orchestrator is not on the scratch crew's roster")
         if s.dry:
-            if not any(p.get("name") == "hello-smoke" or p.get("id") == s.project for p in
+            if not any(p.get("name") == PROJECT_NAME or p.get("id") == s.project for p in
                        rows(http("GET", s.url + "/api/crew/projects"), "projects")):
                 raise Failed("the handed-over project is not on GET /api/crew/projects")
             say("dry run ok: plumbing works, no pull request checked")
@@ -520,14 +603,17 @@ def main(argv: list | None = None) -> int:
         say(f"failed: {e}")
         code = EXIT_FAIL
     finally:
-        watchdog.cancel()
-        s.teardown()
-        if pr and args.close_pr:
-            s.close_pr(pr)
-        if args.keep or code not in (EXIT_OK, EXIT_DRY_OK):
-            say(f"scratch folder kept: {s.work}")
-        else:
-            shutil.rmtree(s.work, ignore_errors=True)
+        with ignoring_signals():
+            watchdog.cancel()
+            s.teardown()
+            if pr and args.close_pr:
+                s.close_pr(pr)
+            if args.keep or code not in (EXIT_OK, EXIT_DRY_OK):
+                say(f"scratch folder kept: {s.work}")
+            else:
+                shutil.rmtree(s.work, ignore_errors=True)
+    if s.watchdog_fired:
+        code = 124
     if pr:
         print(f"PR: {pr['url']}")
     return code
