@@ -11,6 +11,7 @@ where the time goes.
 
 Run: .venv/bin/python tests/test_crew_startup_time.py
 """
+import json
 import os
 import shutil
 import statistics
@@ -83,6 +84,14 @@ else:
        f"median {statistics.median(ms):.0f} ms; dispatcher alone {statistics.median(d_ms):.0f} ms")
 ck(f"the dispatcher's own share (interpreter, imports, exec) is under {LIMIT_MS // 2} ms", statistics.median(d_ms) < LIMIT_MS // 2,
    f"median {statistics.median(d_ms):.0f} ms")
+
+# What the time is spent on: each call to Claude Code is a process start (the fake one is a second Python), a
+# third to half of the roster. One `claude agents --json` per roster, not one for adopting and one for listing.
+calls = Path(ENV["FAKE_CLAUDE_STATE"]) / "calls.jsonl"
+calls.unlink(missing_ok=True)
+subprocess.run(FACTORY, capture_output=True, env=ENV, cwd=str(T))
+asked = [json.loads(line)["args"] for line in calls.read_text(encoding="utf-8").splitlines() if line.strip()] if calls.is_file() else []
+ck("a roster asks Claude Code for the session list once", asked.count(["agents", "--json"]) == 1, str(asked))
 
 shutil.rmtree(T, ignore_errors=True)
 print(f"\n{P} passed, {F} failed")
