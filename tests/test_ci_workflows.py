@@ -130,6 +130,11 @@ for event, draft, path, want in [
     ("pull_request", "false", "tests/ci_windows.py", "run=true"),
     ("pull_request", "false", "tests/test_ci_windows.py", "run=true"),
     ("pull_request", "false", "tares/cli.py", "run=true"),
+    ("pull_request", "false", "tests/_crew_fake.py", "run=true"),    # helpers the crew tests import
+    ("pull_request", "false", "tests/_crew_guard.py", "run=true"),
+    ("pull_request", "false", "tests/_env.py", "run=true"),
+    ("pull_request", "false", "tares/login.py", "run=true"),
+    ("pull_request", "false", "tares/__init__.py", "run=true"),
     ("pull_request", "false", "pyproject.toml", "run=true"),
     ("pull_request", "false", ".github/workflows/windows-crew.yml", "run=true"),
     ("pull_request", "false", "ui/src/x.ts", "run=false"),         # nothing the shards test
