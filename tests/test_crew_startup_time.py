@@ -89,10 +89,15 @@ show("dispatcher + help    ", d_ms)
 ck("every run exits 0", codes == [0] * RUNS, str(codes))
 ck("...and prints the roster", first == "crew: crew (orchestrator: crew-orchestrator)", first)
 ck("the dispatcher alone (interpreter, imports, usage) exits 0 every time", d_codes == [0] * RUNS, str(d_codes))
-limit = min(CAP_MS, max(LIMIT_MS, RATIO * statistics.median(d_ms)))
-why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the dispatcher alone on this slower machine, at most {CAP_MS} ms)")
-if os.name == "nt":  # roster runs the fake Claude Code: claude.cmd, then a second Python (about 2 s here), so the limit says nothing
-    print(f"  skip  median of {RUNS} runs of `tares factory roster` is under {why}: on Windows the fake Claude Code costs a Python start and a cmd.exe")
+limit, why = LIMIT_MS, f"{LIMIT_MS} ms"
+if os.name == "nt":
+    # roster asks the fake Claude Code once, and the fake costs claude.cmd and a second Python (about 2 s here), so
+    # the roster's own share is its median less the median of the same call to the fake alone
+    f_ms, _, _ = timed([ENV["CLAUDE_BIN"], "agents", "--json"])
+    show("fake claude agents  ", f_ms)
+    own = statistics.median(ms) - statistics.median(f_ms)
+    ck(f"median of {RUNS} runs of `tares factory roster`, less the fake Claude Code's own call, is under {why}", own < limit,
+       f"{own:.0f} ms: roster {statistics.median(ms):.0f} ms less fake {statistics.median(f_ms):.0f} ms")
 else:
     ck(f"median of {RUNS} runs of `tares factory roster` is under {why}", statistics.median(ms) < limit,
        f"median {statistics.median(ms):.0f} ms; dispatcher alone {statistics.median(d_ms):.0f} ms")

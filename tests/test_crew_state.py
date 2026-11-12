@@ -57,8 +57,11 @@ GITCFG.write_text("[user]\n\tname = Zoë Ørsted 名前\n", encoding="utf-8")
 EMPTYGIT = T / "gitconfig-empty"
 EMPTYGIT.write_text("", encoding="utf-8")
 # a gh that answers like `gh api user -q .login`, or fails (FAKE_GH=fail)
-(BIN / "gh").write_text('#!/bin/sh\n[ "${FAKE_GH:-ok}" = ok ] && echo zoe-gh || exit 1\n')
-(BIN / "gh").chmod(0o755)
+if os.name == "nt":  # a batch file; the engine finds it through shutil.which, as CreateProcess would only find gh.exe
+    (BIN / "gh.cmd").write_text('@echo off\r\nif "%FAKE_GH%"=="fail" exit /b 1\r\necho zoe-gh\r\n')
+else:
+    (BIN / "gh").write_text('#!/bin/sh\n[ "${FAKE_GH:-ok}" = ok ] && echo zoe-gh || exit 1\n')
+    (BIN / "gh").chmod(0o755)
 
 for k in list(os.environ):
     if k.startswith("FACTORY_") or k in ("TARES_FACTORY_TOKEN_FILE", "TARES_FACTORY_URL"):
@@ -208,11 +211,8 @@ for label, e, gh, who in (("git name, gh login", {}, "zoe-gh", "Zoë Ørsted 名
         state.ensure_crew_home(CrewPaths.at(hp))
     cfg = json.loads(read_bytes(hp / "crew.json"))
     ck(f"ensure_crew_home ({label}): the folders", all((hp / d).is_dir() for d in ("stations", "reports", "worktrees")))
-    if os.name == "nt":  # the stub gh is a sh script, and CreateProcess finds the runner's own gh.exe first: check the name alone
-        ck(f"ensure_crew_home ({label}): the person is {who!r}", cfg["human"]["name"] == who and cfg["authorized"]["by"] == who, short(cfg["human"]))
-    else:
-        ck(f"ensure_crew_home ({label}): the person is {who!r}, the login {gh!r}",
-           cfg["human"] == {"name": who, "github": gh} and cfg["authorized"]["by"] == who, short(cfg["human"]))
+    ck(f"ensure_crew_home ({label}): the person is {who!r}, the login {gh!r}",
+       cfg["human"] == {"name": who, "github": gh} and cfg["authorized"]["by"] == who, short(cfg["human"]))
     ck(f"ensure_crew_home ({label}): the rest is the template's", merge(template, {"human": cfg["human"], "authorized": cfg["authorized"]}) == cfg)
 hp = newhome("ens-p")
 state.ensure_crew_home(CrewPaths.at(hp))
@@ -220,7 +220,7 @@ raw = read_bytes(hp / "crew.json")
 ck("crew.json: non-ASCII is written as is, not escaped", "Zoë Ørsted 名前".encode() in raw and b"\\u" not in raw)
 ck("crew.json: LF only, ends with one newline", b"\r" not in raw and raw.endswith(b"}\n") and not raw.endswith(b"\n\n"))
 ck("ccfg reads it back", state.ccfg("human", "name", paths=CrewPaths.at(hp)) == "Zoë Ørsted 名前"
-   and (os.name == "nt" or state.ccfg("human", "github", paths=CrewPaths.at(hp)) == "zoe-gh")
+   and state.ccfg("human", "github", paths=CrewPaths.at(hp)) == "zoe-gh"
    and state.ccfg("stations", "orchestrator", "model", paths=CrewPaths.at(hp)) == template["stations"]["orchestrator"]["model"])
 hh = newhome("req")
 try:
