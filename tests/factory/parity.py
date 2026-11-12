@@ -864,7 +864,7 @@ scenario(Scenario(
          lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
         ("orchestrator may spawn",
          lambda r: "Bash(factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
-        ("orchestrator may spawn as tares factory too (TR-1069)",
+        ("orchestrator may spawn as tares factory",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
          # on Windows the resolved path is tares.exe (any case), so compare the file name without its extension
@@ -880,7 +880,8 @@ scenario(Scenario(
     covers=["crew-$r env FACTORY_STATION", "crew-$r env FACTORY_ROLE", "crew-$r env FACTORY_PARENT empty",
             "crew-$r has no TARES_PROJECT", "crew-$r is told the shared MCP endpoint", "no Rius, no comms",
             "stations turn the plugin on, whatever the person's settings say", "orchestrator may spawn",
-            "nothing goes to production without the person", "grant quoted in the allow rules"],
+            "orchestrator may spawn as tares factory", "nothing goes to production without the person",
+            "grant quoted in the allow rules"],
 ))
 
 _LINKS = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
@@ -5954,6 +5955,19 @@ def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
     return path
 
 
+def _no_docker(path: Path) -> Path:
+    """A `docker` that is installed but not running (every call exits 1), first on PATH for both engines.
+    The Python crew engine cleans Docker up (doctor lists its disk use, the watch prunes), the bash engine
+    does not; without this stub a scenario's output would depend on the Docker on the machine running it."""
+    if sys.platform == "win32":
+        path = path.with_suffix(".cmd")
+        path.write_bytes(b"@exit /b 1\r\n")
+    else:
+        path.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        path.chmod(0o755)
+    return path
+
+
 # What the person's own shell must not lend a scenario: the crew's and Tares' settings, Claude Code's
 # config and job folders, the XDG folders and GitHub's CLI settings (all of them move state or a login).
 STRIPPED_PREFIXES = ("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_", "PARITY_", "FAKE_CLAUDE_",
@@ -5967,6 +5981,7 @@ def crew_env(tmp: Path, engine: str) -> dict:
     for d in (home, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
     claude = make_launcher(bindir / "claude", [])  # claude.cmd on Windows, which is also what `claude` finds on PATH
+    _no_docker(bindir / "docker")
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
@@ -7385,6 +7400,9 @@ g3_scn(
 
 # FACTORY_PLAN_EVERY=0: the bash watch reads the plan's limits (/usage) between rounds and answers the console's /context asks;
 # the Python watch does not do that yet (no serve_readings in tares/crew/watch.py), so the scenarios here leave it out on both sides.
+# The Python `crew up` says once that the watch also cleans Docker up (tares/crew/docker_cleanup.py, where Docker is on
+# PATH, and the scenarios put a stub there); the bash engine does not clean Docker up and says nothing. Set aside on both sides.
+DOCKER_NOTE_DROP = (r"once a day the watch also removes Docker's leftovers",)
 G4_WATCH_ENV = {"FACTORY_NO_WATCH": "", "FACTORY_WATCH_INTERVAL": "1", "FACTORY_ASK_POLL": "0.2", "FACTORY_PLAN_EVERY": "0",
                 "TARES_FACTORY_MCP_URL": "{tares}/mcp"}
 
@@ -7448,12 +7466,12 @@ scenario(Scenario(
     # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
-    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_up_after),
-           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=lambda tmp: {"pid": g4_pid(tmp)}),
-           Step(["crew", "status"], env=G4_WATCH_ENV),
-           Step(["crew", "down"], env=G4_WATCH_ENV),
-           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV),
-           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_up_after),
+           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=lambda tmp: {"pid": g4_pid(tmp)}),
+           Step(["crew", "status"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP),
+           Step(["crew", "down"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP),
+           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP),
+           Step(["crew", "down"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_quiet)],
     checks=[
         ("crew up starts the watch in the background",
          lambda r: "started the watch" in r.out(0) and bool(r.snap(0)["pid"]) and r.snap(0)["alive"]),
@@ -7565,6 +7583,68 @@ scenario(Scenario(
             "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
 ))
 
+# crew_test.sh, "A builder that has finished: only a new grant that names it brings it back (TR-645)": two idle shop
+# builders, both with a `.done` file. A project grant that names neither is noted as skipped, once per builder and
+# once per change; a grant that names one restarts that one and takes its `.done` file away, the other sleeps on.
+G4_LINT = "The builder may run npm run lint in shop"
+G4_BUILD = "shop-build-m2 may run npm run build in shop"
+G4_DONE_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+G4_DONE_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": '- "%s" (2026-02-06)\n' % G4_LINT})
+G4_DONE_W2 = lworld("L3-review", grants=LAUNCH_GRANT,
+                    project_grants={"shop": '- "%s" (2026-02-06)\n- "%s" (2026-02-07)\n' % (G4_LINT, G4_BUILD)})
+G4_DONE_BUILDERS = ("shop-build-m1", "shop-build-m2")
+
+
+def g4_done_state(tmp: Path) -> dict:
+    """After a step: the sessions started, each builder's id, whether its .done file is there, and the skips noted."""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+    ev = tmp / "crew" / "events.jsonl"
+    text = ev.read_text(encoding="utf-8") if ev.is_file() else ""
+    return {"started": _sessions_started(tmp),
+            "ids": {n: rows[n]["id"] for n in G4_DONE_BUILDERS},
+            "done": {n: (tmp / "crew" / "stations" / f"{n}.done").is_file() for n in G4_DONE_BUILDERS},
+            "skips": text.replace(" ", "").count('"event":"regrant-skipped"')}
+
+
+def g4_done_recording(step: Step) -> Step:
+    step.after = g4_done_state
+    return step
+
+
+def g4_done_asleep(r: "Run", i: int) -> bool:
+    """Neither builder was restarted by step i: the ids and the number of sessions are those of the start."""
+    return r.snap(i)["ids"] == r.snap(1)["ids"] and r.snap(i)["started"] == r.snap(1)["started"]
+
+
+scenario(Scenario(
+    name="crew_g4_regrant_done",
+    suite="crew",
+    about="a done builder sleeps through a grant that does not name it (noted once per builder), and is restarted, no longer done, by one that does",
+    driver=LAUNCH_DRIVER,
+    not_windows=WIN_NO_MULTILINE_REGRANT,
+    steps=[_launch("shop-build-m1", "builder", G4_DONE_W0, parent="crew-orchestrator", project="shop"),              # 0
+           g4_done_recording(_launch("shop-build-m2", "builder", G4_DONE_W0, parent="crew-orchestrator", project="shop")),  # 1
+           wstep(G4_DONE_W1, before=_both(_idle(*G4_DONE_BUILDERS), _touch_done("shop-build-m1"), _touch_done("shop-build-m2")),
+                 after=g4_done_state),                                                                             # 2: names neither
+           wstep(G4_DONE_W1, after=g4_done_state),                                                                 # 3: the same again
+           wstep(G4_DONE_W2, after=g4_done_state)],                                                                # 4: names m2
+    checks=[
+        ("a done builder sleeps through a grant that does not name it", lambda r: r.code(2) == 0 and g4_done_asleep(r, 2)),
+        ("the watch notes the skip for each", lambda r: r.snap(2)["skips"] == 2),
+        ("and only once", lambda r: r.code(3) == 0 and g4_done_asleep(r, 3) and r.snap(3)["skips"] == 2),
+        ("a done builder a new grant names is restarted with it",
+         lambda r: r.code(4) == 0 and r.snap(4)["ids"]["shop-build-m2"] != r.snap(1)["ids"]["shop-build-m2"]
+         and r.snap(4)["started"] == r.snap(1)["started"] + 1
+         and any("shop-build-m2 may run npm run build" in a for a in allow_of(r, "shop-build-m2"))),
+        ("and is no longer marked done", lambda r: r.snap(2)["done"]["shop-build-m2"] and not r.snap(4)["done"]["shop-build-m2"]),
+        ("the other done builder stays asleep",
+         lambda r: r.snap(4)["ids"]["shop-build-m1"] == r.snap(1)["ids"]["shop-build-m1"] and r.snap(4)["done"]["shop-build-m1"]),
+    ],
+    covers=["a done builder sleeps through a grant that does not name it", "the watch notes the skip for each", "and only once",
+            "a done builder a new grant names is restarted with it", "and is no longer marked done",
+            "the other done builder stays asleep"],
+))
+
 # crew_test.sh, the same story seen from the person's side: `crew desk` shows a refused command and where to allow it,
 # and `crew status` says a station has new permissions waiting, or waits for the person to leave its session.
 G4_ITEM = {"label": "D1", "blocking": False, "project_name": "shop", "station": "shop-build-m1", "command": "gh pr merge 12 --squash",
@@ -7654,9 +7734,9 @@ scenario(Scenario(
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
     setup=g4_setup_kit,
-    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_first_banner),
-           Step(["crew", "status"], env=G4_WATCH_ENV, before=g4_update_kit, after=g4_restarted),
-           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_first_banner),
+           Step(["crew", "status"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, before=g4_update_kit, after=g4_restarted),
+           Step(["crew", "down"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_quiet)],
     checks=[
         ("the watch restarts itself on an updated plugin",
          lambda r: r.snap(0)["banners"] == 1 and r.snap(1)["said"] and r.snap(1)["banners"] >= 2 and r.snap(1)["alive"]),
@@ -7839,14 +7919,15 @@ def _cu_is(got, want) -> bool:
     return True
 
 
-def _cu_wait():
-    """An `after` hook: seconds from now to the station's retry time, to the nearest ten (the two engines run a moment
-    apart), and its failed moves."""
+def _cu_wait(step: int = 10):
+    """An `after` hook: seconds from now to the station's retry time, rounded up to a multiple of `step` (the two
+    engines run a moment apart, and a loaded machine makes the gap longer: a coarse step keeps both in one bucket),
+    and its failed moves."""
     def after(tmp: Path):
         import time
         s = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["crew-reviewer"]
         at = s.get("cc_retry_at")
-        return {"in": int(round(int(at) - time.time(), -1)) if at else None, "fails": s.get("cc_fails")}
+        return {"in": -(-(int(at) - int(time.time())) // step) * step if at else None, "fails": s.get("cc_fails")}
     return after
 
 
@@ -8100,8 +8181,8 @@ scenario(Scenario(
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
-    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()),
-           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait())],
+    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)),
+           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait(60))],
     checks=[
         ("old spares every time: three resumed tries then a new conversation, for each station",
          lambda r: _cu_names(r)[:8] == ["crew-reviewer"] * 4 + ["crew-orchestrator"] * 4
