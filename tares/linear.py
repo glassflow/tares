@@ -84,12 +84,28 @@ def _usable(conn: dict | None) -> bool:
     return bool(conn and conn.get("token") and conn.get("kind") in ("api_key", "cloud"))
 
 
-def _note_write_refused(store) -> None:
+def _is_write(gql: str) -> bool:
+    return gql.lstrip().lower().startswith("mutation")
+
+
+def _scope_refused(text: str) -> bool:
+    return "invalid scope" in (text or "").lower()
+
+
+def _note_write_refused(store, token: str) -> None:
     """Linear refused a write for its scope: keep that on the saved connection so Settings can say
-    so. Cleared when a new connection is saved (connect_api_key, set_cloud_connection)."""
+    so, but only while the saved connection still holds the credential the write used (a key saved
+    meanwhile is a new connection). Cleared by a write that goes through, and when a new connection
+    is saved (connect_api_key, set_cloud_connection)."""
     conn = get_connection(store)
-    if _usable(conn) and not conn.get("write_refused_at"):
+    if _usable(conn) and conn.get("token") == token and not conn.get("write_refused_at"):
         _save_connection(store, {**conn, "write_refused_at": now_utc().isoformat()})
+
+
+def _clear_write_refused(store, token: str) -> None:
+    conn = get_connection(store)
+    if _usable(conn) and conn.get("token") == token and conn.get("write_refused_at"):
+        _save_connection(store, {k: v for k, v in conn.items() if k != "write_refused_at"})
 
 
 def public_connection(store) -> dict:
@@ -211,6 +227,9 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
         raise LinearError("Linear did not accept the credential; check the key or connect "
                           "again in Settings")
     if r.status_code >= 400:
+        # Linear answers a write its scope does not allow with HTTP 400 and the error in the body
+        if _is_write(gql) and conn is saved and _scope_refused(r.text):
+            _note_write_refused(store, conn["token"])
         raise LinearError(f"Linear answered {r.status_code}: {r.text[:200]}")
     try:
         body = r.json()
@@ -224,9 +243,11 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
         if "authentication" in msg.lower():
             raise LinearError("Linear did not accept the credential; check the key or connect "
                               "again in Settings")
-        if "invalid scope" in msg.lower() and store is not None and conn is saved:
-            _note_write_refused(store)
+        if _is_write(gql) and conn is saved and _scope_refused(msg):
+            _note_write_refused(store, conn["token"])
         raise LinearError(f"Linear: {msg}")
+    if _is_write(gql) and conn is saved:
+        _clear_write_refused(store, conn["token"])
     return body.get("data") or {}
 
 

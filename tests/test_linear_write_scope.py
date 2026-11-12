@@ -38,7 +38,15 @@ def ck(label, cond, detail=""):
 
 GOOD_KEY = "lin_api_good"
 MUTATION = "mutation($id: String!) { issueUpdate(id: $id, input: {}) { success } }"
-STATE = {"write_error": "Invalid scope: `write` required"}
+SCOPE = "Invalid scope: `write` required"
+STATE = {"write_error": SCOPE, "swap": None}
+STORE = None
+
+
+def refusal(msg):
+    # what Linear sends for a refused call: HTTP 400, the reason in the errors body
+    return httpx.Response(400, json={"errors": [{"message": msg, "extensions": {
+        "type": "forbidden", "code": "FORBIDDEN", "userPresentableMessage": msg}}]})
 
 
 def handler(request: httpx.Request) -> httpx.Response:
@@ -52,11 +60,25 @@ def handler(request: httpx.Request) -> httpx.Response:
             "id": "u1", "name": "Ada", "email": "ada@acme.dev",
             "organization": {"name": "Acme", "urlKey": "acme"}}}})
     if q.startswith("mutation"):
-        return httpx.Response(200, json={"errors": [{"message": STATE["write_error"]}]})
+        if STATE["swap"]:
+            STATE["swap"]()
+        if STATE["write_error"] is None:
+            return httpx.Response(200, json={"data": {"issueUpdate": {"success": True}}})
+        return refusal(STATE["write_error"])
+    if "issues" in q:
+        return refusal(SCOPE)
     return httpx.Response(400, json={"errors": [{"message": "unexpected query"}]})
 
 
 linear._transport = httpx.MockTransport(handler)
+
+
+async def read(store, **kw):
+    try:
+        await linear.query(store, "{ issues { nodes { id } } }", None, **kw)
+        return None
+    except linear.LinearError as e:
+        return str(e)
 
 
 async def write(store, **kw):
@@ -70,7 +92,8 @@ async def write(store, **kw):
 async def main():
     from tares.daemon import make_app
     app = make_app()
-    store = app.state.store
+    global STORE
+    store = STORE = app.state.store
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers={"Authorization": f"Bearer {TOKEN}"})
@@ -113,12 +136,32 @@ async def main():
         err = await write(store)
         ck("another refusal raises", err is not None and "Entity not found" in err, err)
         ck("and leaves the connection alone", "write_error" not in (await cx.get("/api/linear")).json())
-        STATE["write_error"] = "Invalid scope: `write` required"
+        STATE["write_error"] = SCOPE
         other = {"kind": "api_key", "token": GOOD_KEY}
         err = await write(store, conn=other)
         ck("a write made with a credential that is not the saved one raises",
            err is not None and "Invalid scope" in err, err)
         ck("and does not mark the saved connection", "write_error" not in (await cx.get("/api/linear")).json())
+        err = await read(store)
+        ck("a refused read raises but is not a refused write", err is not None and "Invalid scope" in err, err)
+        ck("and does not mark the connection", "write_error" not in (await cx.get("/api/linear")).json())
+        r = await cx.post("/api/linear", json={"api_key": GOOD_KEY})
+        STATE["swap"] = lambda: linear._save_connection(STORE, {**linear.get_connection(STORE), "token": "lin_api_newer"})
+        err = await write(store)
+        STATE["swap"] = None
+        ck("a write refused with a key that was replaced meanwhile raises", err is not None and "Invalid scope" in err, err)
+        ck("and does not mark the new key", "write_refused_at" not in linear.get_connection(store))
+
+        print("== a write that goes through clears it ==")
+        r = await cx.post("/api/linear", json={"api_key": GOOD_KEY})
+        await write(store)
+        ck("marked again by a refusal", "only read" in (await cx.get("/api/linear")).json().get("write_error", ""))
+        STATE["write_error"] = None
+        ck("a write that goes through returns no error", await write(store) is None)
+        ck("and clears the reason", "write_error" not in (await cx.get("/api/linear")).json()
+           and "write_refused_at" not in linear.get_connection(store))
+        STATE["write_error"] = SCOPE
+
         await cx.delete("/api/linear")
         err = await write(store)
         ck("with no connection there is nothing to mark", err is not None and "not connected" in err, err)
