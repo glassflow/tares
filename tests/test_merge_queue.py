@@ -1446,6 +1446,248 @@ async def main():
            len([x for x in out.getvalue().splitlines() if x.strip()]) == 1
            and "merge queue does not run" in out.getvalue(), out.getvalue())
 
+        print("== TR-1092: the bounce ladder ==")
+        MQ = "merge-queue"
+
+        def bounce_review(uid, tid, repo, n, verdict="changes", text="Fix the parser", v=0):
+            """A review round that sends the ticket back (or, with `pass`, one that does not)."""
+            fs = [{"severity": "high", "file": "a.py", "line": 1, "blocking": True, "text": text}] \
+                if text else []
+            store.add_review(uid, tid, f"https://github.com/{repo}/pull/{n}", sha(n, 50 + v), verdict,
+                             "Ran the tests", "", "crew-reviewer", fs, {}, factory_mod.finding_kind,
+                             now_utc())
+
+        def back(uid, tid, value="conflict:abc", reason="Conflicts with main"):
+            store.add_ticket_history(tid, uid, "send_back", value, reason, MQ, MQ, now_utc())
+
+        def ladder_rows(tid):
+            return history(tid, "ladder")
+
+        def mine(uid):
+            return [d for d in store.list_desk("open", uid) if d["asked_by"] == MQ and "come back" in d["question"]]
+
+        # a ticket that no PR enters: in review and not approved, so the queue never touches it
+        def stuck(name, n=1, stage_="review", autonomy="L4-ship"):
+            repo = f"acme/{name}"
+            up = project(name, autonomy)
+            tid = ticket(up, repo, "Keeps coming back", n, stage=stage_)
+            NOT_APPROVED.add((repo, n))
+            return up, tid, repo
+
+        up, t, repo = stuck("lad-units")
+        ck("a ticket with no reviews and no history has 0 bounces",
+           merge_queue.bounces(store, t) == 0 and merge_queue.last_bounce_reason(store, t) == ""
+           and merge_queue.ladder_step(store, t) == 0)
+        ck("no ticket, an empty id and an unknown id are 0",
+           merge_queue.bounces(store, None) == 0 and merge_queue.bounces(store, "") == 0
+           and merge_queue.bounces(store, "no-such") == 0 and merge_queue.last_bounce_reason(store, None) == ""
+           and merge_queue.ladder_step(store, "") == 0)
+        bounce_review(up, t, repo, 1, "pass", "")
+        ck("a pass is not a bounce", merge_queue.bounces(store, t) == 0)
+        bounce_review(up, t, repo, 1, "changes", "Fix the parser", 1)
+        bounce_review(up, t, repo, 1, "block", "Do not touch payments", 2)
+        ck("a changes review and a block each count once", merge_queue.bounces(store, t) == 2)
+        back(up, t, "conflict:", "Conflicts with main")
+        ck("a send_back whose value has no head counts, the first line of the last reason is kept",
+           merge_queue.bounces(store, t) == 3 and merge_queue.last_bounce_reason(store, t) == "Conflicts with main")
+        store.add_ticket_history(t, up, "send_back", None, None, MQ, MQ, now_utc())
+        ck("a send_back with no value and no reason counts too, and the reason is then empty",
+           merge_queue.bounces(store, t) == 4 and merge_queue.last_bounce_reason(store, t) == "")
+        store.add_ticket_history(t, up, "merge_queue", "needs_review", "the update changed it", MQ, MQ, now_utc())
+        store.add_ticket_history(t, up, "stage", "changes", "x", MQ, MQ, now_utc())
+        ck("the queue's needs_review row and stage rows are not bounces", merge_queue.bounces(store, t) == 4)
+        bounce_review(up, t, repo, 1, "changes", "  Fix the\n   parser \u2014 now  ", 3)
+        ck("the latest bounce's reason is one plain line with no em dash",
+           merge_queue.last_bounce_reason(store, t) == "Fix the parser, now", merge_queue.last_bounce_reason(store, t))
+        bounce_review(up, t, repo, 1, "changes", "x" * 400, 4)
+        ck("a long reason is cut", len(merge_queue.last_bounce_reason(store, t)) == merge_queue.REASON_SHOWN
+           and merge_queue.last_bounce_reason(store, t).endswith("..."))
+        bounce_review(up, t, repo, 1, "block", "", 5)
+        ck("a bounce with no findings has no reason", merge_queue.last_bounce_reason(store, t) == "")
+        store.add_ticket_history(t, up, "ladder", "3", None, MQ, MQ, now_utc())
+        store.add_ticket_history(t, up, "ladder", "x", None, MQ, MQ, now_utc())
+        ck("ladder_step is the highest numeric ladder row", merge_queue.ladder_step(store, t) == 3)
+        store.add_ticket_history(t, up, "ladder", "5", None, MQ, MQ, now_utc())
+        ck("and 5 after the second", merge_queue.ladder_step(store, t) == 5)
+
+        print("== TR-1092: three send backs of any kind reach the orchestrator ==")
+        up, t, repo = stuck("lad3")
+        bounce_review(up, t, repo, 1, "changes", "Rename the flag")
+        back(up, t, f"conflict:{sha(1)}", "Conflicts with main in a.py")
+        await tick()
+        ck("two bounces write nothing", ladder_rows(t) == [] and mine(up) == [], ladder_rows(t))
+        back(up, t, f"ci_failure:{sha(1)}", "CI is failing on abc1234: test")
+        await tick()
+        r3 = ladder_rows(t)
+        ck("the third writes one ladder row, value 3, by merge-queue, with the last reason",
+           len(r3) == 1 and r3[0]["value"] == "3" and r3[0]["by"] == MQ and r3[0]["role"] == MQ
+           and r3[0]["reason"] == "CI is failing on abc1234: test", r3)
+        await tick()
+        await tick()
+        ck("ticks later add no second row, and no desk item yet", len(ladder_rows(t)) == 1 and mine(up) == [])
+        back(up, t, f"guardrail:{sha(1)}", "Blocked by policy: payments")
+        await tick()
+        ck("a fourth bounce adds nothing", len(ladder_rows(t)) == 1 and mine(up) == [], ladder_rows(t))
+
+        print("== TR-1092: at five, one desk item for the hand-over's person ==")
+        back(up, t, f"ci_failure:{sha(1, 9)}", "CI is failing on abc1239: lint")
+        await tick()
+        rows5 = [x["value"] for x in ladder_rows(t)]
+        d5 = mine(up)
+        label = factory_mod.label(store.get_ticket(up, t))
+        ck("the fifth writes the 5 row", rows5 == ["3", "5"], rows5)
+        ck("one desk item, the agreed words, not blocking, the ticket on it, to the hand-over's person",
+           len(d5) == 1 and d5[0]["question"] == f"{label} has come back 5 times: CI is failing on abc1239: lint. What should happen?"
+           and d5[0]["blocking"] is False and d5[0]["tickets"] == [label]
+           and d5[0]["to_person_id"] == person["id"] and d5[0]["asked_by"] == MQ, d5)
+        await tick()
+        await tick()
+        ck("more ticks add no row and no second item", len(ladder_rows(t)) == 2 and len(mine(up)) == 1)
+        back(up, t, f"conflict:{sha(1, 8)}", "Conflicts again")
+        await tick()
+        ck("a sixth bounce adds nothing", len(ladder_rows(t)) == 2 and len(mine(up)) == 1)
+        store.close_desk_item(mine(up)[0]["id"], "answered", None, now_utc())
+        await tick()
+        ck("an answered item is not asked again", len(ladder_rows(t)) == 2 and mine(up) == []
+           and len(store.list_desk("answered", up)) == 1)
+
+        print("== TR-1092: five at once writes both rows and one item ==")
+        up, t, repo = stuck("lad05", stage_="changes")
+        for i in range(5):
+            back(up, t, f"conflict:{sha(1, i)}", f"Conflict {i}")
+        await tick()
+        ck("both rows, one item, in a ticket in changes",
+           [x["value"] for x in ladder_rows(t)] == ["3", "5"] and len(mine(up)) == 1)
+
+        print("== TR-1092: an item written before its row is not written twice ==")
+        up, t, repo = stuck("ladretry")
+        for i in range(5):
+            back(up, t, f"conflict:{sha(1, i)}", f"Conflict {i}")
+        merge_queue._desk_five(store, up, store.get_ticket(up, t), 5, "Conflict 4")
+        ck("the item is there and the 5 row is not", len(mine(up)) == 1 and ladder_rows(t) == [])
+        await tick()
+        ck("the next tick writes the rows and no second item",
+           [x["value"] for x in ladder_rows(t)] == ["3", "5"] and len(mine(up)) == 1, mine(up))
+
+        print("== TR-1092: a hand-over with no person, and bounces with no reason ==")
+        up, t, repo = stuck("ladnoone")
+        store.set_handover(up, [{"path": "/w/a", "name": "ladnoone"}], "L4-ship", None, now_utc())
+        for i in range(5):
+            bounce_review(up, t, repo, 1, "changes", "", i)
+        await tick()
+        d = mine(up)
+        label = factory_mod.label(store.get_ticket(up, t))
+        ck("no person: the item has no addressee and the ladder still climbs",
+           len(d) == 1 and d[0]["to_person_id"] is None and [x["value"] for x in ladder_rows(t)] == ["3", "5"], d)
+        ck("no reason: the question has no colon part and ends with the question",
+           d and d[0]["question"] == f"{label} has come back 5 times. What should happen?"
+           and ladder_rows(t)[0]["reason"] is None, (d, ladder_rows(t)))
+
+        print("== TR-1092: who is looked at ==")
+        up, t, repo = stuck("ladstage", stage_="doing")
+        for i in range(5):
+            back(up, t, f"conflict:{sha(1, i)}", "x")
+        await tick()
+        ck("a ticket in doing is left alone", ladder_rows(t) == [] and mine(up) == [])
+        up2 = project("ladnocrew", handed=False)
+        t2 = ticket(up2, "acme/ladnocrew", "No crew", 1)
+        for i in range(5):
+            back(up2, t2, f"conflict:{sha(1, i)}", "x")
+        await tick()
+        ck("a project no crew has is left alone", ladder_rows(t2) == [] and mine(up2) == [])
+
+        repo = "acme/ladmerge"
+        up = project("ladmerge", "L4-ship")
+        t = ticket(up, repo, "Came back three times, then merged", 1, stage="review")
+        for i in range(3):
+            back(up, t, f"conflict:{sha(1, i)}", f"Conflict {i}")
+        reviewed(up, t, repo, 1)
+        await tick()
+        ck("a ticket the queue merges in the tick gets no ladder row, though it had three bounces",
+           stage(up, t) == "merged" and ladder_rows(t) == [] and mine(up) == [], (stage(up, t), ladder_rows(t)))
+
+        print("== TR-1092: a return that is the queue's own does not count ==")
+        repo = "acme/ladsame"
+        up = project("ladsame", "L4-ship", review=None, ci="github")
+        t = ticket(up, repo, "Behind, twice sent back before", 1, stage="review")
+        bounce_review(up, t, repo, 1, "changes", "First round")
+        bounce_review(up, t, repo, 1, "changes", "Second round", 1)
+        reviewed(up, t, repo, 1)
+        h0 = PRS[(repo, 1)]["head"]
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", HUNK_MOVED)], "later")
+        await tick()
+        ck("a row waiting on CI after the branch update adds nothing",
+           row(repo, 1)["state"] == "waiting_ci" and merge_queue.bounces(store, t) == 2, merge_queue.bounces(store, t))
+        new = land(repo, 1)
+        CHECKED.add(new)
+        await tick()
+        mq = [x for x in store.ticket_reviews(t) if x["by"] == MQ]
+        ck("Tares's same-changes review of the new head is a pass and is not counted",
+           len(mq) == 1 and mq[0]["verdict"] == "pass" and merge_queue.bounces(store, t) == 2, (mq, merge_queue.bounces(store, t)))
+        await tick()
+        ck("the pull request merges, and no ladder row was written", stage(up, t) == "merged"
+           and ladder_rows(t) == [] and mine(up) == [])
+        repo = "acme/ladneeds"
+        up = project("ladneeds", "L4-ship", review=None, ci="github")
+        t = ticket(up, repo, "Behind, different changes", 1, stage="review")
+        bounce_review(up, t, repo, 1, "changes", "First round")
+        bounce_review(up, t, repo, 1, "changes", "Second round", 1)
+        reviewed(up, t, repo, 1)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", DIFFERENT)], "later")
+        await tick()
+        CHECKED.add(land(repo, 1))
+        await tick()
+        ck("a branch update that needs a new review is not a bounce either",
+           history(t, "merge_queue")[-1]["value"] == "needs_review" and merge_queue.bounces(store, t) == 2
+           and ladder_rows(t) == [], (history(t, "merge_queue"), merge_queue.bounces(store, t)))
+        repo = "acme/ladwait"
+        up = project("ladwait", "L3-review")
+        t = ticket(up, repo, "Waits for a person", 1)
+        bounce_review(up, t, repo, 1, "changes", "First round")
+        bounce_review(up, t, repo, 1, "changes", "Second round", 1)
+        reviewed(up, t, repo, 1)
+        await tick()
+        ck("a row waiting for approval is not a bounce", row(repo, 1)["state"] == "waiting_approval"
+           and merge_queue.bounces(store, t) == 2 and ladder_rows(t) == [])
+
+        print("== TR-1092: my_work lists the ones that climbed ==")
+        up3, t3, repo3 = stuck("lad3only")
+        for i in range(3):
+            back(up3, t3, f"conflict:{sha(1, i)}", f"Conflict {i}")
+        await tick()
+        up0, t0, repo0 = stuck("ladnone")
+        async with mk() as cx:
+            wk = (await cx.get("/api/crew/my-work")).json()
+        by_proj = {b["project"]: b for b in wk["bouncing"]}
+        ck("bouncing is a list on the route, with each ticket in the shape",
+           isinstance(wk["bouncing"], list) and wk["bouncing"]
+           and all(set(b) == {"project", "ticket", "title", "holder", "stage", "count", "ladder", "reason"}
+                   for b in wk["bouncing"]), wk["bouncing"][:1])
+        ck("the ticket at six bounces is there at step 5 with its count and last reason",
+           by_proj["lad3"]["count"] == 6 and by_proj["lad3"]["ladder"] == 5
+           and by_proj["lad3"]["reason"] == "Conflicts again" and by_proj["lad3"]["stage"] == "review",
+           by_proj.get("lad3"))
+        ck("the ticket at three bounces is there at step 3",
+           by_proj["lad3only"]["count"] == 3 and by_proj["lad3only"]["ladder"] == 3
+           and by_proj["lad3only"]["reason"] == "Conflict 2", by_proj.get("lad3only"))
+        ck("a ticket in changes with five bounces is there too", by_proj["lad05"]["count"] == 5
+           and by_proj["lad05"]["ladder"] == 5 and by_proj["lad05"]["stage"] == "changes", by_proj.get("lad05"))
+        ck("a ticket with no bounces, and tickets with bounces but no ladder row, are not listed",
+           not ({"ladnone", "ladsame", "ladneeds", "ladwait", "ladstage"} & set(by_proj)), sorted(by_proj))
+        nobody = store.create_person("Nobody", email="nobody@example.com")
+        async with mk() as cx:
+            nkey = (await cx.post("/api/keys", json={"name": "user:nobody", "scopes": ["admin"],
+                                                     "person_id": nobody["id"]})).json()["secret"]
+        async with mk({"Authorization": f"Bearer {nkey}"}) as cx:
+            theirs = (await cx.get("/api/crew/my-work")).json()
+        ck("a person with no ticket that bounced gets an empty list, not a missing one",
+           theirs.get("bouncing") == [], theirs)
+        store.update_ticket(t3, stage="merged")
+        async with mk() as cx:
+            wk = (await cx.get("/api/crew/my-work")).json()
+        ck("a ticket that has merged leaves the list", "lad3only" not in {b["project"] for b in wk["bouncing"]},
+           [b["project"] for b in wk["bouncing"]])
+
         print("== health, and what Tares says ==")
         async with mk() as cx:
             h = (await cx.get("/health")).json()

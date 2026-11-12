@@ -208,8 +208,8 @@ async def main():
             hdr = (await cx.get("/api/crew/my-work", headers={**keys["Q"], "X-Tares-Crew": "qq"})).json()
         ck("the crew comes from the X-Tares-Crew header when no parameter says", hdr["crew"] == "qq", hdr)
         ck("the shape has desk and spec_questions, empty", wp["desk"] == [] and wp["spec_questions"] == []
-           and set(wp) == {"person", "crew", "ready", "in_progress", "led_projects", "desk",
-                           "spec_questions"}, set(wp))
+           and set(wp) == {"person", "crew", "ready", "in_progress", "bouncing", "led_projects",
+                           "desk", "spec_questions"}, set(wp))
 
         print("== a ticket that is only assigned to a station (stage todo) is in progress, not ready ==")
         store.update_ticket(t2["id"], holder="a-shop-build-m1")
