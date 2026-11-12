@@ -386,17 +386,57 @@ for t in ths:
     t.start()
 for t in ths:
     t.join()
-lines = read_bytes(hc / "events.jsonl").decode().split("\n")[:-1]
-ok = True
-for ln in lines:
-    try:
-        json.loads(ln)
-    except ValueError:
-        ok = False
-if os.name == "nt":  # Windows emulates O_APPEND, so threads of one process overwrite and mix lines (281 of 360 seen): a follow-up
-    print("  skip  events: 6 threads x 60 lines: Windows does not append atomically between threads")
-else:
-    ck("events: 6 threads x 60 lines, every line whole", ok and len(lines) == 6 * 60, f"{len(lines)} lines, parse ok={ok}")
+def whole(path, want):
+    """Every line of the file parses as an event, and the set of (station, n) is exactly `want`."""
+    got = []
+    bad = 0
+    for ln in read_bytes(path).decode().split("\n")[:-1]:
+        try:
+            r = json.loads(ln)
+            got.append((r["station"], int(r["detail"].split()[0])))
+        except (ValueError, KeyError, IndexError):
+            bad += 1
+    return bad, len(got), sorted(got) == sorted(want)
+
+
+bad, n_lines, same = whole(hc / "events.jsonl", [(f"t{n}", i) for n in range(6) for i in range(60)])
+ck("events: 6 threads x 60 lines, every line whole and none lost", bad == 0 and n_lines == 6 * 60 and same, f"{n_lines} lines, {bad} broken")
+# a write that lands in two pieces (what Windows' emulated append does under load) still keeps lines apart
+hs = newhome("ev-split")
+hs.mkdir()
+_real_write = os.write
+
+
+def split_write(fd, data):
+    h = len(data) // 2
+    n = _real_write(fd, data[:h])
+    time.sleep(0.001)
+    return n + _real_write(fd, data[h:])
+
+
+os.write = split_write
+try:
+    ths = [threading.Thread(target=lambda n=n: [state.event("w", f"t{n}", f"{i} {big}", paths=CrewPaths.at(hs)) for i in range(20)]) for n in range(6)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join()
+finally:
+    os.write = _real_write
+bad, n_lines, same = whole(hs / "events.jsonl", [(f"t{n}", i) for n in range(6) for i in range(20)])
+ck("events: writes that land in two pieces never mix a line", bad == 0 and n_lines == 120 and same, f"{n_lines} lines, {bad} broken")
+# and several processes at once (a crew command per process)
+hq = newhome("ev-procs")
+hq.mkdir()
+child = ("import sys; from tares.crew import state; from tares.crew.paths import CrewPaths\n"
+         "p = CrewPaths.at(sys.argv[1])\n"
+         "for i in range(40): state.event('w', 'p' + sys.argv[2], str(i) + ' ' + 'x' * 3000, paths=p)\n")
+procs = [subprocess.Popen([sys.executable, "-c", child, str(hq), str(n)], cwd=str(ROOT)) for n in range(4)]
+rcs = [pr.wait(timeout=120) for pr in procs]
+bad, n_lines, same = whole(hq / "events.jsonl", [(f"p{n}", i) for n in range(4) for i in range(40)])
+ck("events: 4 processes x 40 lines, every line whole and none lost", rcs == [0] * 4 and bad == 0 and n_lines == 160 and same,
+   f"{n_lines} lines, {bad} broken, exit codes {rcs}")
+
 
 # ====================================================================================
 print("\n== HALT, pace, wake, token ==")
