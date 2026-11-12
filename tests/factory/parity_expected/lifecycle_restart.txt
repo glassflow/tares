@@ -73,6 +73,8 @@ tares factory: nobody is not a recorded station
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-reviewer"}
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.grants ==
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer.settings.json ==

@@ -66,6 +66,8 @@ tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the on
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "1.5.0", "event": "claude-updated", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "crew-reviewer: dup00001, 00000001", "event": "two-sessions", "station": "crew-reviewer"}
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.grants ==
 
 == file crew/stations/crew-reviewer.settings.json ==

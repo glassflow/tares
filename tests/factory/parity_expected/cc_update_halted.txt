@@ -73,6 +73,8 @@ tares factory: crew resumed
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "1.5.6", "event": "claude-updated", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "", "event": "resume", "station": ""}
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-releaser.grants ==
 
 == file crew/stations/crew-releaser.settings.json ==

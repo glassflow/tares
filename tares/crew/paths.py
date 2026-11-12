@@ -101,6 +101,14 @@ class CrewPaths:
     def worktrees_dir(self) -> Path:
         return self.home / "worktrees"
 
+    @property
+    def rules_dir(self) -> Path:
+        """rules/, the rules Tares gave each station, kept for a start while Tares is down (TR-864)."""
+        return self.home / "rules"
+
+    def rules_file(self, station: str) -> Path:
+        return self.rules_dir / f"{station}.json"
+
     def station_file(self, station: str, suffix: str) -> Path:
         return self.stations_dir / f"{station}.{suffix}"
 

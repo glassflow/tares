@@ -51,6 +51,8 @@ exit: 0
     "url": null
   }
 }
+== file crew/rules/links-app-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/links-app-build-m1.settings.json ==
 {
   "autoMode": {

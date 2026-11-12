@@ -1203,6 +1203,10 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 {"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

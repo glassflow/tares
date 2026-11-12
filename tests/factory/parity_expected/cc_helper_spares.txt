@@ -638,6 +638,14 @@ tares factory: could not restart crew-reviewer-probe on Claude Code 1.12.2; the 
 {"at": "<TS>", "detail": "00000018", "event": "restarted-fresh", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "1.12.0", "event": "stale-spare", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "1.12.2", "event": "claude-retry", "station": "crew-orchestrator"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer-probe.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

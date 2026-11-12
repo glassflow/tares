@@ -6774,6 +6774,16 @@ exit: 0
 {"at": "<TS>", "detail": "00000042", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000042", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "stretch", "event": "pace", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m2.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 the reviewer may label pull requests
 == file crew/stations/crew-orchestrator.pace ==

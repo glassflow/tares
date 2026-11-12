@@ -124,6 +124,14 @@ tares factory: crew-reviewer-probe runs Claude Code 1.1.0
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer-probe"}
 {"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer-probe"}
 {"at": "<TS>", "detail": "1.1.0", "event": "claude-updated", "station": "crew-reviewer-probe"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer-probe.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

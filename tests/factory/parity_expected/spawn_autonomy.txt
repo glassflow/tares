@@ -79,6 +79,12 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "strict-build-m1"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "loose-build-m1"}
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "loose-build-m2"}
+== file crew/rules/loose-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/loose-build-m2.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/strict-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/loose-build-m1.grants ==
 
 @project 

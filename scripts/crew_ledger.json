@@ -527,10 +527,10 @@
       "kind": "function",
       "what": "turn grants into auto mode allow rules",
       "ticket": "TR-953",
-      "dropped": false,
-      "python": "tares.crew.launch:grant_rules",
-      "ported": true,
-      "note": "Pure text transform used only by write_settings, so it goes with settings generation although grants come from TR-949."
+      "dropped": "A station takes its rules from Tares now (TR-864): tares/crew/rules.py fetches the sentences Tares renders from the grants, so the crew no longer turns grants into rules.",
+      "python": "",
+      "ported": false,
+      "note": ""
     },
     {
       "name": "station_name",
