@@ -82,9 +82,9 @@ def register(app, store, h, ctx):
         # the crew's folders stay on the crew's machine
         hidden = {}
         for r in (store.get_handover(uid) or {}).get("repos") or []:
-            base = (r.get("path") or "").rstrip("/")
+            base = factory_mod.hidden_key(r.get("path"))
             if base:
-                hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
+                hidden[base] = r.get("name") or factory_mod.folder_name(base) or "the repo"
 
         def by_words(station, role=None) -> str | None:
             name = str(station or "").strip()
@@ -107,9 +107,7 @@ def register(app, store, h, ctx):
                       if stations else None)
 
         def clean(text):
-            out = str(text or "")
-            for path in sorted(hidden, key=len, reverse=True):
-                out = out.replace(path, hidden[path])
+            out = factory_mod.hide_paths(text, hidden)
             out = _HOME_PATH.sub(lambda m: m.group(0).rstrip("/").rsplit("/", 1)[-1], out)
             if station_re:
                 out = station_re.sub(lambda m: by_words(m.group(0)) or "the crew", out)
@@ -141,8 +139,8 @@ def register(app, store, h, ctx):
             else:
                 state_text = {"fixed": "fixed"}.get(f["state"], f["state"])
             path = clean(f.get("file"))
-            if path.startswith(("/", "~")):                # a path that is not the repo's own
-                path = path.rsplit("/", 1)[-1]
+            if path.startswith(("/", "~")) or factory_mod.is_windows_path(path):   # a path that is not the repo's own
+                path = path.replace("\\", "/").rsplit("/", 1)[-1]
             return {"label": f["label"], "text": clean(f["text"]), "file": path or None,
                     "line": f.get("line"), "blocking": bool(f["blocking"]), "state_text": state_text}
 

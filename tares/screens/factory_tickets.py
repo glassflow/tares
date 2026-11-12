@@ -109,15 +109,12 @@ def register(app, store, h, ctx):
             # the crew's folders stay on the crew's machine: a title that names one shows the repo
             hidden = {}
             for r in (store.get_handover(p["id"]) or {}).get("repos") or []:
-                base = (r.get("path") or "").rstrip("/")
+                base = factory_mod.hidden_key(r.get("path"))
                 if base:
-                    hidden[base] = r.get("name") or base.rsplit("/", 1)[-1] or "the repo"
+                    hidden[base] = r.get("name") or factory_mod.folder_name(base) or "the repo"
 
             def clean(text):
-                out = str(text or "")
-                for path in sorted(hidden, key=len, reverse=True):
-                    out = out.replace(path, hidden[path])
-                return out
+                return factory_mod.hide_paths(text, hidden)
             return clean
 
         needle = (q or "").strip().lower()
