@@ -100,7 +100,15 @@ scenario; re-record it with `python tests/factory/parity.py --record <scenario>`
 (`tests/factory/parity_labels.json`) has a scenario. The spare-session scenarios (`cc_*`) list the machine's real Claude
 processes, so on a machine with real spare sessions they can differ; run them alone (`PARITY_JOBS=1`).
 
-The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test), split over 4 shards (`--shard N --of 4`) to stay inside the job limit. Its `windows-crew` job is green only when every shard is, and a red run is a real break: read it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason.
+The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test), split over 4 shards (`--shard N --of 4`) to stay inside the job limit. Its `windows-crew` job is green only when every shard is, and a red run is a real break: read it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason. On a PR the shards run only when it changes the crew engine, its tests, the harness or the workflow (the `changes` job), and not while it is a draft; `windows-crew` is green when they were skipped on purpose.
+
+## CI cost
+
+One push to a crew PR is hours of runner time, so the heavy checks run once, not on every push (TR-1233):
+
+- A draft PR runs the light set: `test (duckdb)`, Linux parity, `console`, `wheel` and `secrets`. Marking it ready runs the full set once, and every later push to it runs the full set.
+- The macOS parity shards (`parity-macos.yml`) run after a merge to main, not on PR pushes. To get them on a PR, add the label `macos-parity` (they run now and on every later push until the label is removed), or run `gh workflow run parity-macos.yml --ref <branch>`.
+- `windows-crew` is skipped on a draft and on a PR that changes none of the crew engine's paths.
 
 ## Release
 
