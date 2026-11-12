@@ -57,8 +57,10 @@ def decide(api, repo, sha, before, workflow, marker, event="push", ref="refs/hea
     if behind != 0:
         return False, f"PR {pr['number']} head was {behind} commits behind main: everything runs"
     runs = api(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={head}&event=pull_request&per_page=50").get("workflow_runs", [])
+    # a head sha can also sit under another PR (a branch opened twice): only runs of this PR count
+    runs = [r for r in runs if pr["number"] in [x.get("number") for x in r.get("pull_requests") or []]]
     if not runs:
-        return False, f"no {workflow} run on PR {pr['number']} head {head[:8]}: everything runs"
+        return False, f"no {workflow} run of PR {pr['number']} on head {head[:8]}: everything runs"
     run = max(runs, key=lambda r: (r.get("created_at") or "", r.get("run_number") or 0))
     if run.get("status") != "completed" or run.get("conclusion") != "success":
         return False, f"the newest {workflow} run on PR {pr['number']} is {run.get('status')}/{run.get('conclusion')}: everything runs"
@@ -79,6 +81,7 @@ def main():
                                e.get("GITHUB_EVENT_NAME", ""), e.get("GITHUB_REF", ""))
     except Exception as ex:  # an API fault must never skip a run
         covered, note = False, f"could not tell ({type(ex).__name__}: {ex}): everything runs"
+    note = " ".join(note.split())  # one line: a newline in it would break the GITHUB_OUTPUT file
     print(("covered: " if covered else "not covered: ") + note)
     out = e.get("GITHUB_OUTPUT")
     if out:

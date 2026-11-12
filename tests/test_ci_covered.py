@@ -25,7 +25,7 @@ def world(**kw):
     w = {
         "prs": [{"number": 7, "merged_at": "2026-11-12T10:00:00Z", "base": {"ref": "main"}, "head": {"sha": HEAD}}],
         "tree_main": "T1", "tree_head": "T1", "behind_by": 0,
-        "runs": [{"id": 11, "run_number": 5, "created_at": "2026-11-12T09:00:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/11"}],
+        "runs": [{"id": 11, "run_number": 5, "created_at": "2026-11-12T09:00:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/11", "pull_requests": [{"number": 7}]}],
         "jobs": [{"name": "test (duckdb 1/5)", "conclusion": "success"}, {"name": "e2e (1/2)", "conclusion": "success"}],
         "boom": None,
     }
@@ -76,7 +76,9 @@ for label, w, kw in [
     ("the run was the draft's light set (no e2e job)", world(jobs=[{"name": "test (duckdb 1/5)", "conclusion": "success"}]), {}),
     ("the e2e job was skipped", world(jobs=[{"name": "e2e (1/2)", "conclusion": "skipped"}]), {}),
     ("a run of the workflow is the newest one and it failed (an older green run does not count)",
-     world(runs=[dict(world()["runs"][0]), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "failure", "html_url": "u"}]), {}),
+     world(runs=[dict(world()["runs"][0]), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "failure", "html_url": "u", "pull_requests": [{"number": 7}]}]), {}),
+    ("the only run belongs to another PR that shares the head sha", world(runs=[dict(world()["runs"][0], pull_requests=[{"number": 9}])]), {}),
+    ("the only run lists no PR (a fork run)", world(runs=[dict(world()["runs"][0], pull_requests=[])]), {}),
     ("the event is a manual run", world(), {"event": "workflow_dispatch", "ref": "refs/heads/main"}),
     ("the push is to another branch", world(), {"ref": "refs/heads/factory-modular/x"}),
     ("the event is a pull request", world(), {"event": "pull_request"}),
@@ -89,7 +91,7 @@ ck("not covered: no previous tip of main", not c, note)
 c, note = ask(world(), before="0" * 40)
 ck("not covered: the previous tip is the null sha (a new branch)", not c, note)
 
-newest = world(runs=[dict(world()["runs"][0], conclusion="failure"), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/12"}],
+newest = world(runs=[dict(world()["runs"][0], conclusion="failure"), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/12", "pull_requests": [{"number": 7}]}],
                jobs_other=[{"name": "e2e (2/2)", "conclusion": "success"}])
 c, note = ask(newest)
 ck("covered when the newest run passed, although an older one failed (a fix was pushed)", c and "https://x/runs/12" in note, note)
@@ -97,7 +99,7 @@ ck("covered when the newest run passed, although an older one failed (a fix was 
 # main() never lets an API fault skip a run: any error is "not covered"
 fake = Path(tempfile.mkdtemp()) / "bin"
 fake.mkdir()
-(fake / "gh").write_text("#!/bin/sh\necho 'HTTP 502' >&2\nexit 1\n")
+(fake / "gh").write_text("#!/bin/sh\necho 'HTTP 502' >&2\necho 'try again later' >&2\nexit 1\n")
 (fake / "gh").chmod(0o755)
 out = Path(tempfile.mkdtemp()) / "out"
 env = {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "GITHUB_REPOSITORY": REPO, "GITHUB_SHA": SHA, "BEFORE": BEFORE,
@@ -105,7 +107,7 @@ env = {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "GITHUB_REPOSITORY": R
 r = subprocess.run([sys.executable, str(ROOT / "scripts" / "ci_covered.py"), "--workflow", "ci.yml", "--marker", "e2e"], env=env, capture_output=True, text=True)
 lines = out.read_text().splitlines()
 ck("an API error exits 0 and writes covered=false with the reason", r.returncode == 0 and lines[0] == "covered=false" and lines[1].startswith("note=could not tell"), f"{r.returncode} {lines} {r.stderr}")
-ck("the output file holds exactly the two lines the workflows read", len(lines) == 2 and all("\n" not in x for x in lines), str(lines))
+ck("the output file holds exactly the two lines the workflows read, although gh said its error on two lines", len(lines) == 2 and "try again later" in lines[1], str(lines))
 
 # a gh that answers with the fake data end to end
 w = world()
@@ -123,6 +125,16 @@ out.write_text("")
 r = subprocess.run([sys.executable, str(ROOT / "scripts" / "ci_covered.py"), "--workflow", "ci.yml", "--marker", "e2e"], env=env, capture_output=True, text=True)
 lines = out.read_text().splitlines()
 ck("through `gh api` end to end -> covered=true and a note naming the run", r.returncode == 0 and lines[0] == "covered=true" and "https://x/runs/11" in lines[1], f"{r.stdout} {r.stderr} {lines}")
+
+# break test: without the newline cleaning a two-line gh error would put a third line in the output file
+src = (ROOT / "scripts" / "ci_covered.py").read_text()
+bare = src.replace('note = " ".join(note.split())', 'pass')
+assert bare != src
+(fake / "ci_covered_bare.py").write_text(bare)
+(fake / "gh").write_text("#!/bin/sh\necho 'HTTP 502' >&2\necho 'try again later' >&2\nexit 1\n")
+out.write_text("")
+subprocess.run([sys.executable, str(fake / "ci_covered_bare.py"), "--workflow", "ci.yml", "--marker", "e2e"], env=env, capture_output=True, text=True)
+ck("break test: without the cleaning the two-line gh error would break the output file", len(out.read_text().splitlines()) != 2)
 
 # break test: a decide() that skips the tree comparison is caught by the "different tree" case
 src = (ROOT / "scripts" / "ci_covered.py").read_text()
