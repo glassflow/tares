@@ -260,12 +260,8 @@ export default function Home() {
     </>
   );
 
-  return (
-    <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
-      {banner}
-      {!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}
-      {failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}
-      {failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
+  const start = (
+    <>
       {home.start?.show && (
         <StartChecklist block={home.start} title={START_TITLE} onHidden={reload} onDo={canAct ? doStart : undefined} doing={doing} notice={startNote}
                         hide={sample ? () => Promise.resolve() : undefined} />
@@ -274,8 +270,21 @@ export default function Home() {
         <StartChecklistHidden block={home.start} title={START_TITLE} onShown={reload}
                               show={sample ? () => Promise.resolve() : undefined} />
       )}
+    </>
+  );
+  // An open incident is why the on-call reader came: it goes first and setup waits below it (TR-1272).
+  const firing = home.incidents.length > 0;
+
+  return (
+    <div className="grid gap-6 md:gap-8" data-testid="sre-home" data-tone={home.headline.tone}>
+      {banner}
+      {!canAct && <Banner data-testid="home-read-only">{readOnlyWords(credentialName)}</Banner>}
+      {failed === "read_only" && canAct && <Banner tone="error" data-testid="home-action-error">{readOnlyWords(credentialName)}</Banner>}
+      {failed === "error" && <Banner tone="error" data-testid="home-action-error">That did not go through. Try again in a moment.</Banner>}
+      {!firing && start}
       <Head title={home.headline.text} sub={home.headline.sub} />
       <Columns main={main} aside={aside} />
+      {firing && start}
     </div>
   );
 }

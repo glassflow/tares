@@ -176,6 +176,10 @@ function cleanEnv(home, dist) {
         }
       }
       if (state === "all-quiet") {
+        ck("all-quiet: with nothing open, the start checklist sits above the headline", await page.evaluate(() => {
+          const a = document.querySelector("[data-testid=start-checklist], [data-testid=start-hidden]"), b = document.querySelector("[data-testid=home-headline]");
+          return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        }));
         // Read the note (TR-894): it opens the incident the check was filed under, not the check
         // The link shows for a person who cannot answer (a read key): the same home, with can_answer off
         const ro = await ctx.newPage();
@@ -223,6 +227,13 @@ function cleanEnv(home, dist) {
           return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
         }));
         ck("one-incident: no Today panel missing, no watcher-off panel", (await page.getByTestId("watch-off").count()) === 0 && sec.today === 1);
+        // TR-1272: the incident first, setup below it
+        ck("one-incident: the incident comes before the start checklist", await page.evaluate(() => {
+          const a = document.querySelector("[data-testid=incident-card]"), b = document.querySelector("[data-testid=start-checklist], [data-testid=start-hidden]");
+          return !!(a && b && a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+        }));
+        ck("one-incident: the chart draws the errors it counted, not a flat 0",
+           (await card.getByTestId("incident-chart").count()) === 1);
       }
       if (state === "many-incidents") {
         ck("many-incidents: the headline counts them", headline === "5 incidents open", headline);
