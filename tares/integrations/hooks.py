@@ -19,7 +19,7 @@ Guardrail pairs (the `guardrail_pairs` table) add to that. A pair is a hook poin
 integration with its own integration settings, and `on_fail` says what a "no" means: `block` stops the
 action, `warn` only shows it. After the slot's guardrail, `run` runs the factory's pairs for the hook,
 then the project's own, each in the order they were added; a project pair that is the same as a
-factory pair (same hook, integration and settings) runs once. Each pair gets `PAIR_SECONDS` to
+factory pair (same hook, integration, settings and on_fail) runs once. Each pair gets `PAIR_SECONDS` to
 answer. A guardrail that denies keeps its `on_fail`; one that raises, times out, is no longer
 installed or needs a licence the cell lacks did not answer, and that follows `on_fail` as well
 ("guardrail did not answer: <integration>"; the cause and the settings are never put in the reason).
@@ -119,7 +119,8 @@ async def _run_pairs(stage: str, project: str, shaped: dict) -> list[Decision]:
     out: list[Decision] = []
     seen: set[tuple] = set()
     for pair in _store.guardrail_pairs_for_run(stage, project or None):
-        key = (pair["hook"], pair["integration"], json.dumps(pair["settings"], sort_keys=True))
+        key = (pair["hook"], pair["integration"], pair["on_fail"],
+               json.dumps(pair["settings"], sort_keys=True))
         if pair["scope"] == "project" and key in seen:
             continue                     # the factory already runs exactly this
         seen.add(key)

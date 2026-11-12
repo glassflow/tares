@@ -275,6 +275,14 @@ def register(app, store, h):
                             f"it takes {', '.join(schema) or 'none'}")
             kind_ok(refuse, f, v)
         stored = existing["settings"] if existing and existing["integration"] == name else {}
+        # the old secret never goes to a new address (the same refusal as the slot's settings)
+        moved = [f for f in cls.settings_schema if f.kind == "url"
+                 and (posted.get(f.name) or "") not in ("", stored.get(f.name))]
+        carried = [f for f in cls.settings_schema if f.kind == "secret"
+                   and posted.get(f.name, "") == "" and stored.get(f.name) not in (None, "")]
+        if stored and moved and carried:
+            refuse(422, f"re-enter the secret when changing the address: {carried[0].name} "
+                        f"is stored for the old {moved[0].name}")
         try:
             merged = FactoryStore._merge_integration_settings(
                 {f.name for f in cls.settings_schema if f.kind == "secret"}, posted, stored)
