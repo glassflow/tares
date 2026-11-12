@@ -252,7 +252,10 @@ active_json >/dev/null || exit 0
 for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
   case "$(stations_get "$s" '.role')" in
     helper) if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi; continue ;;
-    builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
+    builder) if [ -f "$CREW_HOME/stations/$s.done" ]; then
+        if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi
+        continue
+      fi ;;
   esac
   is_alive "$s" || continue
   stuck_on_context "$s" && continue
