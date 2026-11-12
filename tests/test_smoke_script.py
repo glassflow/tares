@@ -220,14 +220,13 @@ try:
         check("a pull request from before the run does not count", sm.github_pr() is None)
         smoke.run = fake_gh([pr(1, branch="main-fix")], {"1": mine})
         check("a pull request from a branch outside factory/ does not count", sm.github_pr() is None)
-        for kw in ({"list_rc": 1}, {"diff_rc": 1}):
-            smoke.run = fake_gh([pr(1)], {"1": mine}, **kw)
-            try:
-                sm.github_pr()
-                got = "returned"
-            except smoke.Failed:
-                got = "failed"
-            check(f"a gh error ({list(kw)[0]}) raises Failed, it is not 'no pull request yet'", got == "failed")
+        smoke.run = fake_gh([pr(1)], {"1": mine}, list_rc=1)
+        try:
+            sm.github_pr()
+            got = "returned"
+        except smoke.Failed:
+            got = "failed"
+        check("a gh error on the list raises Failed, it is not 'no pull request yet'", got == "failed")
         # TR-1227 gap 4: one candidate whose diff cannot be read is skipped, the others are still looked at
         def found():
             try:
@@ -240,13 +239,13 @@ try:
         smoke.run = fake_gh([pr(1), pr(2)], {"1": other, "2": mine}, diff_rc={"2": 1})
         got = found()
         check("a candidate whose diff fails does not end the run when another was read", got is None, str(got))
+        smoke.run = fake_gh([pr(1)], {"1": mine}, diff_rc=1)
+        got = found()
+        check("a lone candidate whose diff cannot be read is 'no pull request yet', not an error (PR 616 F4)",
+              got is None, str(got))
         smoke.run = fake_gh([pr(1), pr(2)], {"1": mine, "2": mine}, diff_rc=1)
-        try:
-            sm.github_pr()
-            got = "returned"
-        except smoke.Failed:
-            got = "failed"
-        check("every candidate diff failing still raises Failed (a lasting gh error)", got == "failed")
+        got = found()
+        check("every candidate diff unreadable is still 'no pull request yet'", got is None, str(got))
         # the sessions a run stops at the end are this crew's, not a longer crew name that starts with it
         sm.env = {"CLAUDE_BIN": "/bin/echo"}
         names = ["smoke-9-orchestrator", "smoke-9-reviewer", "smoke-9-hello-smoke-build-m1", "smoke-9-1-orchestrator",
@@ -258,6 +257,12 @@ try:
               left == ["smoke-9-hello-smoke-build-m1", "smoke-9-orchestrator", "smoke-9-reviewer"], str(left))
     finally:
         smoke.run = real_run
+
+    # TR-1227 F2 (PR 645 review): a command run() starts is in its own session, so a terminal Ctrl-C (which goes to
+    # the whole foreground process group) does not reach the teardown's children
+    if os.name == "posix":
+        r = smoke.run([sys.executable, "-c", "import os; print(os.getsid(0) == os.getpid())"], dict(os.environ), 30)
+        check("a command run() starts leads its own session", r.stdout.strip() == "True", r.stdout + r.stderr)
 
     # F4: a second SIGTERM or Ctrl-C during the teardown does not cut it short
     sm = new_smoke("sig")

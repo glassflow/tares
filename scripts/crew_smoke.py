@@ -238,7 +238,10 @@ def wait_until(what: str, fn, seconds: float, every: float = 0.5):
 
 def run(cmd: list, env: dict, timeout: float, cwd=None) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+        # A new session: the teardown's commands start with default signals (see ignoring_signals), so a terminal
+        # Ctrl-C, which goes to the whole foreground process group, must not reach them.
+        return subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                              start_new_session=True)
     except subprocess.TimeoutExpired as e:
         raise Failed(f"{' '.join(map(str, cmd[:6]))} timed out after {int(timeout)}s") from e
 
@@ -422,7 +425,7 @@ class Smoke:
         """This run's pull request: from a factory/ branch, opened since the run began, and adding the line
         `smoke run <pid>` the ticket asks for. A second smoke run, or another crew on the same test repo, opens
         pull requests that fail the last test. A gh error on the list raises Failed (wait_for_pr tolerates a few in a
-        row). A diff that cannot be read skips that candidate; Failed only when no candidate could be read."""
+        row). A diff that cannot be read skips that candidate (never Failed)."""
         r = run(["gh", "pr", "list", "-R", self.repo, "--state", "all", "--limit", "30", "--json",
                  "number,url,headRefName,createdAt,state"], self.env, 60)
         if r.returncode:
@@ -433,23 +436,17 @@ class Smoke:
             prs = json.loads(r.stdout or "[]")
         except ValueError:
             raise Failed("gh pr list printed no JSON") from None
-        bad = []
-        read = 0
         for pr in prs:
             if not (pr["headRefName"].startswith("factory/") and pr["createdAt"] >= since):
                 continue
             d = run(["gh", "pr", "diff", str(pr["number"]), "-R", self.repo], self.env, 60)
             if d.returncode:
-                # one candidate that cannot be read (closed meanwhile, a gh hiccup) must not hide the others
-                bad.append(f"gh pr diff {pr['number']} failed: {(d.stderr or d.stdout).strip()[:200]}")
-                say(f"skipping PR {pr['number']}: {bad[-1]}")
+                # a candidate that cannot be read (another run's PR gh refuses, one closed meanwhile) is not ours to
+                # wait on: skip it, and the next poll looks again. A lasting gh error shows in `gh pr list` above.
+                say(f"skipping PR {pr['number']}: gh pr diff failed: {(d.stderr or d.stdout).strip()[:200]}")
                 continue
-            read += 1
             if mine.search(d.stdout):
                 return pr
-        if bad and not read:
-            # no candidate could be read: that is an error (wait_for_pr counts it), not "no pull request yet"
-            raise Failed(bad[-1])
         return None
 
     def wait_for_pr(self, seconds: float) -> dict:
