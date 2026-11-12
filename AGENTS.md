@@ -47,6 +47,39 @@ cd ui && npm ci && npx tsc --noEmit && npm run build   # produces ui/dist
 Rebuild after any change under `ui/src`; the daemon serves whatever is in `ui/dist`.
 `TARES_UI_DIST` points the daemon at another build directory.
 
+## Console design
+
+The console is paper: cream surfaces, brown ink, amber for action only, square corners, 1px rules
+instead of shadows. The rules and the reasons are in the comment at the top of `ui/src/styles.css`.
+Copy from the edition screens (`ui/src/editions`), never from `ui/src/pages`, whose inline styles
+predate the kit.
+
+- **Build from the kit.** Import from `@/components/edition` (barrel `index.ts`): `Button`,
+  `Input`, `Select`, `Textarea`, `Checkbox`, `Switch`, `Dialog`, `Panel`, `ListSection`, `ListRow`,
+  `StatusLabel`, `EmptyState`, `Skeleton`, `Stat`, `Tabs`, `Banner`, `Toaster`. Look at
+  `/dev/components` (`ui/src/pages/dev/Components.tsx`) before writing a component. A new shared
+  component goes in `components/edition`, with a gallery section and a check in
+  `ui/tests/component-gallery.e2e.cjs` in the same PR. `components/ui` holds the primitives the kit
+  wraps; screens do not import them.
+- **No raw controls, no inline styles** in edition code: no `<button>`, `<input>`, `<select>` or
+  `<textarea>`, and no `style={{}}` except for a value computed at run time (a bar's width).
+- **Colour from the semantic utilities**, which `@theme inline` in `styles.css` maps from the
+  tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
+  `bg-primary`, `text-ok`, `text-warn`, `text-err`. No hex, no `rgb()`, no Tailwind palette colours
+  (`text-red-500`), and no `--kit-*` outside the token block. Reach for `var(--…)` only when no
+  utility exists.
+- **Shape and type.** No `rounded-*` other than `rounded-full` (dots, switches). No drop shadow on
+  anything in the page: a panel is a 1px `border-border`, not a card. Floating layers (sheets, menus,
+  popovers) cast `var(--sheet-shadow)`, and the selected-item bar is an inset shadow in the accent
+  (`shadow-[inset_3px_0_0_var(--accent)]`). Inter for text, `font-mono` for labels, badges and code,
+  the pixel font for headline numerals only.
+- **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`, and no em dash anywhere.
+- **Before you push** a console change: `cd ui && npx tsc --noEmit && npm run test:words && npm run build`,
+  and the gallery suite when you touched `components/edition`. A lint gate for these rules is
+  coming; until it lands, a reviewer checks them.
+- A change to one of these conventions changes this section in the same PR, and the check that
+  enforces it when there is one.
+
 ## Environment contract
 
 Every knob is a `TARES_*` variable read at start. The ones you will meet most:
