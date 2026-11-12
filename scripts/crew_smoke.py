@@ -5,7 +5,7 @@ It builds a throwaway crew end to end and exits 0 only when the crew opened a pu
 
   1. a scratch Tares (its own port, data dir and MCP endpoint, auth off, never the hosted cell),
   2. `tares factory crew up --yes` with a scratch crew home and a crew called smoke-<pid>,
-  3. a one-ticket project handed over on a throwaway GitHub repo (default glassflow/factory-test-api),
+  3. a one-ticket project handed over on a throwaway GitHub repo (default glassflow/tares-crew-smoke),
   4. wait for the ticket's pull request (confirmed on GitHub, not only on the ticket),
   5. `tares factory crew down` for that scratch crew, then the scratch Tares is stopped.
 
@@ -50,7 +50,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 FACTORY_DIR = ROOT / "tests" / "factory"
-DEFAULT_REPO = "glassflow/factory-test-api"
+DEFAULT_REPO = "glassflow/tares-crew-smoke"
 EXIT_OK, EXIT_FAIL, EXIT_REFUSED, EXIT_TIMEOUT, EXIT_DRY_OK = 0, 1, 2, 3, 10
 TARES = [sys.executable, "-c", "import sys; sys.argv[0] = 'tares'; from tares.cli import main; main()"]
 
