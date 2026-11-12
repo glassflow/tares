@@ -15,9 +15,12 @@ The connection is one of two kinds:
 A connection from the cell's own Linear sign-in (kind 'oauth', before TR-538) is no longer used:
 it shows as needing to be connected again.
 
-The sync only reads from Linear. A ticket with a status change waiting to reach Linear
-(a pending_writeback row, TR-845) keeps the status Tares gave it until the write lands.
-The writes themselves are tares/integrations/builtin/tickets_linear.py.
+The sync only reads from Linear; Tares also writes to it: status moves, new issues and their
+order (tares/integrations/builtin/tickets_linear.py). A ticket with a status change waiting to
+reach Linear (a pending_writeback row, TR-845) keeps the status Tares gave it until the write
+lands. A connection that can only read gets its writes refused with Linear's "Invalid scope"
+error: `query` notes that on the connection (`write_refused_at`), `public_connection` says so
+with the way to fix it, and saving a new connection clears it (TR-1243).
 """
 from __future__ import annotations
 
@@ -40,6 +43,12 @@ SOURCE_NAME = "linear"
 MAX_ISSUES = 1000             # per project per sync; a factory project is far smaller
 
 RECONNECT = "connect Linear again in Settings"
+
+# what the console shows for a connection Linear refused a write on, by the kind of connection
+WRITE_REFUSED = {
+    "cloud": "Linear lets Tares only read. Connect Linear again to give it write access.",
+    "api_key": "Linear lets Tares only read with this key. Connect with a key that has write access.",
+}
 
 # Linear's rate limit is waited out here, for every call: at most MAX_WAIT seconds each time (and
 # at least 1), RATE_DEFAULT_WAIT when Linear names no wait, and RATE_RETRIES tries again at most.
@@ -75,6 +84,14 @@ def _usable(conn: dict | None) -> bool:
     return bool(conn and conn.get("token") and conn.get("kind") in ("api_key", "cloud"))
 
 
+def _note_write_refused(store) -> None:
+    """Linear refused a write for its scope: keep that on the saved connection so Settings can say
+    so. Cleared when a new connection is saved (connect_api_key, set_cloud_connection)."""
+    conn = get_connection(store)
+    if _usable(conn) and not conn.get("write_refused_at"):
+        _save_connection(store, {**conn, "write_refused_at": now_utc().isoformat()})
+
+
 def public_connection(store) -> dict:
     """What the console may see: never a token. A connection that cannot be used any more (the
     cell's own sign-in from before TR-538, or a Tares Cloud one Linear refused to renew) is not
@@ -84,6 +101,8 @@ def public_connection(store) -> dict:
     if conn:
         out.update({"kind": conn.get("kind"), "account": conn.get("account") or {},
                     "connected_at": conn.get("connected_at"), "error": conn.get("error")})
+        if _usable(conn) and conn.get("write_refused_at"):
+            out["write_error"] = WRITE_REFUSED.get(conn.get("kind"), WRITE_REFUSED["cloud"])
         if conn.get("kind") == "oauth":
             out["error"] = ("Linear sign-in from this workspace is no longer supported; "
                             "connect again with a personal API key")
@@ -166,7 +185,8 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
     A rate limited request (HTTP 429, or a RATELIMITED error) is waited out and sent again, alone,
     at most RATE_RETRIES times: Linear refuses it before it runs, so even a mutation is not made
     twice. Anything else that goes wrong is not retried. Raises LinearError."""
-    conn = conn or get_connection(store)
+    saved = get_connection(store) if conn is None and store is not None else None
+    conn = conn or saved
     if not conn:
         raise LinearError("Linear is not connected; connect it in Settings")
     if not _usable(conn):
@@ -204,6 +224,8 @@ async def query(store, gql: str, variables: dict | None = None, conn: dict | Non
         if "authentication" in msg.lower():
             raise LinearError("Linear did not accept the credential; check the key or connect "
                               "again in Settings")
+        if "invalid scope" in msg.lower() and store is not None and conn is saved:
+            _note_write_refused(store)
         raise LinearError(f"Linear: {msg}")
     return body.get("data") or {}
 
