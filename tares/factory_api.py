@@ -26,6 +26,7 @@ from . import factory_github
 from . import factory_home
 from . import merge_ready as merge_ready_mod
 from . import team as team_mod
+from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
 from .integrations import resolve as integrations_resolve
 from .integrations.review import CREW_REVIEWED_GATES
@@ -1933,6 +1934,23 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 return merge_ready_mod.no_ticket(*parsed)
         return await merge_ready_mod.merge_ready(store, pr, source=h.cc_source())
 
+    @app.get("/api/factory/release-ready")
+    async def release_ready(request: Request, project: str = "", repo: str = "", commit: str = "",
+                            milestone: str = "", merged_prs: str = ""):
+        """May this commit be shipped (TR-861)? Asks the project's guardrails at the pre_release hook:
+        {ready, reasons, warnings}. `merged_prs` is a comma separated list. `ready` is false for a
+        guardrail that blocks or cannot be reached, and for a missing project or commit. A crew
+        station may read this; nothing is shipped or recorded."""
+        if not project.strip():
+            return {"ready": False, "reasons": ["Name the project to check"], "warnings": []}
+        p = h.project_or_404(h.resolve_project(project.strip()))
+        if not commit.strip():
+            return {"ready": False, "reasons": ["Name the commit to ship"], "warnings": []}
+        gate = await integrations_hooks.gate("pre_release", p["id"], {
+            "repo": repo.strip(), "commit": commit.strip(), "milestone": milestone.strip(),
+            "merged_prs": [x.strip() for x in merged_prs.split(",") if x.strip()]})
+        return {"ready": gate["ok"], "reasons": gate["reasons"], "warnings": gate["warnings"]}
+
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
     def pr_repo(t: dict) -> str | None:
         """The repo of a ticket's PR, once GitHub has answered for it: a repo typed into a PR link is
@@ -2842,7 +2860,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"merge_method": store.get_merge_method(uid)}
 
     @app.post("/api/projects/{uid}/handover")
-    def hand_over(uid: str, request: Request, body: dict = Body(default={})):
+    async def hand_over(uid: str, request: Request, body: dict = Body(default={})):
         """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands
         the project to the crew. Each repo is the folder it is checked out in on the crew's
         machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
@@ -2876,6 +2894,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
         old = store.get_handover(uid) or {}
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
+        # the pre_build hook (TR-861): a guardrail that blocks refuses the hand-over before anything is recorded
+        spec = next(iter(store.list_docs(uid, "spec")), None)
+        spec_text = str((store.get_doc(uid, spec["id"]) or {}).get("body") or "") if spec else ""
+        gate = await integrations_hooks.gate("pre_build", uid, {
+            "project": uid, "goal": p.get("goal") or "", "spec_text": spec_text,
+            "repos": [{"path": r.get("path") or "", "name": r.get("name") or ""} for r in repos],
+            "autonomy": autonomy or ""})
+        if not gate["ok"]:
+            h.err(ValueError("The project was not handed to the crew. " + " ".join(gate["reasons"])), 409)
         store.set_handover(uid, repos, autonomy, by_of(request, body), now_utc(),
                            person_of(request), crew)
         # more work on a finished project opens it again; one kept for later starts now
