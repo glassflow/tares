@@ -5,7 +5,8 @@ fresh interpreter: start Python, import tares.cli, resolve the address, dispatch
 the roster. Against a throwaway crew (tests/_crew_fake.py): no stations, a fake Claude Code, no Tares.
 
 Five timed runs after one untimed warm-up (the first run reads the modules from disk); the median must
-be under 300 ms and every run must exit 0. The five timings are printed, with the same five for the
+be under 300 ms (or, on a machine where the dispatcher alone is slow, 6.5 times its median) and every run
+must exit 0. The five timings are printed, with the same five for the
 dispatcher alone (`help`, which prints the usage and does nothing else), so a slow machine shows
 where the time goes.
 
@@ -28,6 +29,12 @@ from _crew_fake import fake_crew_env  # noqa: E402
 
 LIMIT_MS = 300
 RUNS = 5
+# A slower machine (a CI runner) takes proportionally longer to start Python and import the engine, so the limit
+# grows with the dispatcher-alone median measured in the same run. Measured on Linux CI (TR-1276), the roster
+# median is 4.5 to 4.9 times the dispatcher-alone median (186/41, 223/46, 271/56, 272/55, 281/56, 283/59 and
+# 310/64 ms); 6.5 keeps about a third of margin over that. On a fast machine the limit stays 300 ms, so the
+# M1 check keeps its meaning there, and a roster that got a third slower still fails on CI.
+RATIO = 6.5
 
 P = F = 0
 
@@ -76,7 +83,8 @@ show("dispatcher + help    ", d_ms)
 ck("every run exits 0", codes == [0] * RUNS, str(codes))
 ck("...and prints the roster", first == "crew: crew (orchestrator: crew-orchestrator)", first)
 ck("the dispatcher alone (interpreter, imports, usage) exits 0 every time", d_codes == [0] * RUNS, str(d_codes))
-limit, why = LIMIT_MS, f"{LIMIT_MS} ms"
+limit = max(LIMIT_MS, RATIO * statistics.median(d_ms))
+why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the dispatcher alone on this slower machine)")
 if os.name == "nt":  # roster runs the fake Claude Code: claude.cmd, then a second Python (about 2 s here), so the limit says nothing
     print(f"  skip  median of {RUNS} runs of `tares factory roster` is under {why}: on Windows the fake Claude Code costs a Python start and a cmd.exe")
 else:
