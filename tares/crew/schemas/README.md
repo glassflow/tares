@@ -18,9 +18,7 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `tidy --json` | nothing on success; the error shape on a refusal | `error.json` |
 | any of them, when it fails with `--json` | one document | `error.json` |
 
-Only the Python engine prints JSON. With `TARES_FACTORY_ENGINE=bash`, `status`, `roster` and `desk` print their
-text, as before, and `events` has no bash version: it prints its usage on stderr and exits 1. A command run
-without `--json` is unchanged. `tidy --json` shapes failures only: on success it prints nothing on stdout, as
+A command run without `--json` prints its text, unchanged. `tidy --json` shapes failures only: on success it prints nothing on stdout, as
 `tidy` does without it.
 
 `settings <station>` prints the Claude Code settings file a station launches with. Claude Code reads that file, so
@@ -45,7 +43,7 @@ its types from them.
 |---|---|
 | 0 | The command ran. `status --json` and `roster --json` say 0 for a crew with no stations too. |
 | 1 | The command ran and failed. With `--json` stdout holds `{"schema_version": 1, "error": {"code": "...", "message": "..."}}`; without it the same message is a line on stderr. |
-| 2 | A usage error or a refusal before the command ran: an unknown argument, a cursor that is not one, `events` without `--json`, an unknown `TARES_FACTORY_ENGINE`, a command the Python engine does not have yet. The message is text on stderr; with `--json`, a usage error of a command that has JSON is the error shape. |
+| 2 | A usage error or a refusal before the command ran: an unknown argument, a cursor that is not one, `events` without `--json`. The message is text on stderr; with `--json`, a usage error of a command that has JSON is the error shape. |
 
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
 `station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `tares_error`

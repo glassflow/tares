@@ -519,7 +519,7 @@ def watch_claude_move(paths: CrewPaths, client: TaresClient, station: str, targe
         client.say(f"{station} runs Claude Code {target}")
         dup = "\n".join(duplicate_sessions(paths, claude_bin))
         if dup:
-            client.say(f"TWO SESSIONS named {dup}; stop the one stations.json does not list (factory roster)")
+            client.say(f"TWO SESSIONS named {dup}; stop the one stations.json does not list (tares factory roster)")
             state.event("two-sessions", station, dup, paths=paths)
     elif rc == 3:
         client.say(f"Tares doesn't answer; {station} moves onto Claude Code {target} once it does")
@@ -753,7 +753,7 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
     except SessionListUnreadableError as e:
         raise CrewError(f"{e}; could not check for two sessions under one station name") from None
     for line in dup:
-        client.say(f"TWO SESSIONS named {line}; stop the one stations.json does not list (factory roster)")
+        client.say(f"TWO SESSIONS named {line}; stop the one stations.json does not list (tares factory roster)")
     if dup:
         failed.append("two-sessions")
     selfnote = (f"{self_station}, which ran this command, can only be restarted from another session: run {ME} "

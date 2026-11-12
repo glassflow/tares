@@ -156,7 +156,8 @@ for rel in SHIMS:
     code = [l for l in t.splitlines() if l and not l.startswith("#")]
     ck(f"claude-plugin/{rel} is a shim: one `tares hook` call, and no bash shebang",
        len(code) == 1 and bool(re.match(r"(exec )?tares hook ", code[0])) and not re.match(r"#!.*bash", t), t)
-ck("bin/factory-heavy stays (the crew's heavy-command wrapper, not a hook)", (plugin / "bin" / "factory-heavy").is_file())
+ck("bin/factory and bin/factory-heavy are gone (`tares factory` and `tares factory heavy` replace them)",
+   not (plugin / "bin" / "factory").exists() and not (plugin / "bin" / "factory-heavy").exists())
 mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["tares"]
 ck(".mcp.json starts its header helper with `tares hook mcp-headers`", mcp["headersHelper"].startswith("tares hook mcp-headers "), mcp["headersHelper"])
 words = shlex.split(mcp["headersHelper"].replace("${CLAUDE_PLUGIN_ROOT}", "/p q"))

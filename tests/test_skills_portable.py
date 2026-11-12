@@ -6,7 +6,7 @@ station to pipe to `jq` or read `ps -` output breaks there.
 
 Inventory of the shell a skill or command tells Claude to run (checked by hand, 2026-11-09):
   OK in Git Bash   git, gh (also `-q` filters, which gh evaluates itself), docker, kind, npm, node, cd, &&,
-                   factory / tares factory commands, factory-heavy, rm named only as something never to run,
+                   tares factory commands (heavy too), rm named only as something never to run,
                    `touch "$FACTORY_HOME/stations/$FACTORY_STATION.done"` (coreutils touch, mixed paths ok),
                    `git log --format=%at ... | sort -n | head -1` (coreutils sort and head)
   not OK           jq, ps, pgrep, pkill, nohup, perl, setsid, flock, lsof, osascript, pbcopy, `date -`,

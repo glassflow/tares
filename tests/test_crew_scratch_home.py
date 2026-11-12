@@ -75,7 +75,7 @@ ck("a scratch home for a watch is fine", _crew_guard.problems(WATCH, SCRATCH_ENV
 ck("...with or without FACTORY_HOME (the Python engine reads FACTORY_CREW_HOME)",
    _crew_guard.problems(WATCH, {k: v for k, v in SCRATCH_ENV.items() if k != "FACTORY_HOME"}) == [])
 ck("a watch with no home at all is refused (the environment test_crew_kit.py handed restart_self)",
-   len(_crew_guard.problems(WATCH, {"PATH": "/usr/bin", "TARES_FACTORY_ENGINE": "python"})) == 2)
+   len(_crew_guard.problems(WATCH, {"PATH": "/usr/bin"})) == 2)
 ck("a watch with a scratch HOME but no FACTORY_CREW_HOME is refused: it would use ~/factory",
    any("FACTORY_CREW_HOME" in p for p in _crew_guard.problems(WATCH, {k: v for k, v in SCRATCH_ENV.items() if "CREW" not in k})))
 ck("a watch whose HOME is the real home is refused", any("HOME is the real home" in p for p in _crew_guard.problems(WATCH, {**SCRATCH_ENV, "HOME": REAL})))
@@ -89,19 +89,18 @@ ck("a process that is not the crew needs no home of its own", _crew_guard.proble
 ck("...but still may not carry the real one", _crew_guard.problems([sys.executable, "-c", "pass"], {"HOME": REAL}) != [])
 ck("a probe that only imports tares.crew in its -c code is not the crew",
    not _crew_guard.crew_like([sys.executable, "-I", "-c", "import tares.crew; print(1)"]))
-ck("the plugin's script and `tares factory` are the crew",
-   _crew_guard.crew_like(["bash", "/x/claude-plugin/bin/factory", "crew", "watch"]) and _crew_guard.crew_like(["tares", "factory", "roster"]))
+ck("`python -m tares.crew` and `tares factory` are the crew",
+   _crew_guard.crew_like(WATCH) and _crew_guard.crew_like(["tares", "factory", "roster"]))
+ck("a bare `factory` command (an old install's) is looked at too", _crew_guard.crew_like(["/usr/local/bin/factory", "roster"]))
 ck("no env given: this process's own environment is looked at, and it is scratch", _crew_guard.problems(WATCH) == [])
 
 print("the guard on the real calls")
 _crew_guard.install()
 _crew_guard.install()   # twice is the same as once
-OLD_KIT_ENV = {"PATH": os.environ.get("PATH", ""), "TARES_FACTORY_ENGINE": "python"}   # test_crew_kit.py:744 before TR-1164
+OLD_KIT_ENV = {"PATH": os.environ.get("PATH", "")}   # what test_crew_kit.py handed restart_self before TR-1164
 paths = CrewPaths.at(CREW)
 ck("the real restart_self handed no home is refused before it execs",
    refused(lambda: watch.restart_self(paths, 7, OLD_KIT_ENV)))
-ck("the real restart_self onto the bash watch is refused the same way",
-   refused(lambda: watch.restart_self(paths, 7, {**OLD_KIT_ENV, "TARES_FACTORY_ENGINE": "bash"})))
 ck("watch.start handed no home is refused before it spawns, and writes no pid file",
    refused(lambda: watch.start(paths, OLD_KIT_ENV)) and not (CREW / "watch.pid").exists())
 ck("a Popen of the watch on the real home is refused", refused(lambda: subprocess.Popen(WATCH, env={**SCRATCH_ENV, "FACTORY_CREW_HOME": REAL_F})))

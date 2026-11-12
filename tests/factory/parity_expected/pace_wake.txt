@@ -1533,27 +1533,16 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)",
-      "Bash(factory spawn *)",
       "Bash(tares factory spawn *)",
-      "Bash(factory revive *)",
       "Bash(tares factory revive *)",
-      "Bash(factory restart *)",
       "Bash(tares factory restart *)",
-      "Bash(factory retire *)",
       "Bash(tares factory retire *)",
-      "Bash(factory roster)",
       "Bash(tares factory roster)",
-      "Bash(factory projects)",
       "Bash(tares factory projects)",
-      "Bash(factory crew status)",
       "Bash(tares factory crew status)",
-      "Bash(factory crew halt)",
       "Bash(tares factory crew halt)",
-      "Bash(factory crew halt *)",
       "Bash(tares factory crew halt *)",
-      "Bash(factory crew resume)",
       "Bash(tares factory crew resume)"
     ]
   },
@@ -1611,7 +1600,6 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -1669,7 +1657,6 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -1732,7 +1719,6 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

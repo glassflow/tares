@@ -1,6 +1,6 @@
 """The kit and its freeze: `crew freeze`, `crew unfreeze`, and the kit part of the watch's round (TR-965).
 
-Ports these functions of `claude-plugin/bin/factory`: cmd_freeze, cmd_unfreeze, freeze_fail, frozen_text, tell_newer_kit,
+Port of these functions from the old bash crew (removed in TR-975): cmd_freeze, cmd_unfreeze, freeze_fail, frozen_text, tell_newer_kit,
 freezing, reap_frozen_copy, frozen_copy_in_use, on_frozen_copy, upgrades_frozen, frozen_field, frozen_phys, kit_dir,
 kit_clean, kit_version, stale_kit, movable and upgrade_station, and the kit half of cmd_watch's round (`step`). The
 functions that only read the freeze (`Frozen`, `plugin_root`, `kit_version`, `frozen_phys`, `stale_kit`) lived in
@@ -119,7 +119,7 @@ def plugin_root(paths: CrewPaths, env: Mapping) -> Path:
         here = Path(__file__).resolve().parent.parent
         root = here / "claude-plugin"
         for c in (here / "claude-plugin", here.parent / "claude-plugin"):
-            if (c / "bin" / "factory").is_file():
+            if (c / "hooks" / "hooks.json").is_file():
                 root = c
                 break
     return map_checkout(paths, root)
@@ -343,7 +343,7 @@ def _unreadable(client: TaresClient) -> CrewError:
 
 
 def freeze(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str = "") -> None:
-    """factory crew freeze: keep the crew on today's kit."""
+    """tares factory crew freeze: keep the crew on today's kit."""
     state.require_crew(paths)
     client._settings = None
     try:
@@ -399,7 +399,7 @@ def freeze(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
 
 
 def unfreeze(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str = "") -> None:
-    """factory crew unfreeze: let the stations follow the checkout's kit again."""
+    """tares factory crew unfreeze: let the stations follow the checkout's kit again."""
     state.require_crew(paths)
     client._settings = None
     try:

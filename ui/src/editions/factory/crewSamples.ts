@@ -135,8 +135,11 @@ export function sampleLoad(name: string): Promise<CrewPage> {
         builders: [group("factory-is-modular", X())] };
       const theirs = { id: "c2", person: { id: "p2", name: "Adam" }, machine: "adam-mbp", machine_shown: false, mine: false,
         summary: "Not running", talk_to: ended(LEAD()), reviewer: ended(REVIEWER()), releaser: null, builders: [] };
-      return Promise.resolve(page({ crews: [mine, theirs], summary: mine.summary, talk_to: mine.talk_to, reviewer: mine.reviewer,
-        builders: mine.builders }));
+      // the same person's crew from before the cell had a licence: no machine, ended two days ago
+      const before = { id: "c3", person: { id: "p1", name: "Ashish" }, machine: "", machine_shown: true, mine: true, name: "crew",
+        ended: true, last_heard: "2 days ago", summary: "Not running", talk_to: ended(LEAD()), reviewer: null, releaser: null, builders: [] };
+      return Promise.resolve(page({ crews: [{ ...mine, name: "ashish-mbp", machine_shown: true }, theirs, before], summary: mine.summary,
+        talk_to: mine.talk_to, reviewer: mine.reviewer, builders: mine.builders }));
     }
     case "long":
       return Promise.resolve(page({

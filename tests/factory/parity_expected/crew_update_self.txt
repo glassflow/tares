@@ -122,7 +122,6 @@ tares factory: every other station runs Claude Code 2.1.200, one session each; c
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

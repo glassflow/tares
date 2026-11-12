@@ -30,7 +30,7 @@ tares factory: tell the orchestrator too (tares factory crew attach orchestrator
 -- after --
 [
   true,
-  "{\n  \"hookSpecificOutput\": {\n    \"hookEventName\": \"PreToolUse\",\n    \"permissionDecision\": \"deny\",\n    \"permissionDecisionReason\": \"The crew is halted (testing). Finish your current step safely and start nothing new; `factory crew resume` lifts the halt.\"\n  }\n}\n"
+  "{\n  \"hookSpecificOutput\": {\n    \"hookEventName\": \"PreToolUse\",\n    \"permissionDecision\": \"deny\",\n    \"permissionDecisionReason\": \"The crew is halted (testing). Finish your current step safely and start nothing new; `tares factory crew resume` lifts the halt.\"\n  }\n}\n"
 ]
 == step: crew resume ==
 exit: 0
@@ -91,7 +91,7 @@ tares factory: crew resumed
 {"at": "<TS>", "detail": "tares is down", "event": "halt", "station": ""}
 {"at": "<TS>", "detail": "", "event": "resume", "station": ""}
 {"at": "<TS>", "detail": "testing", "event": "halt", "station": ""}
-{"at": "<TS>", "event": "guard-deny", "reason": "The crew is halted (testing). Finish your current step safely and start nothing new; `factory crew resume` lifts the halt.", "station": "?", "tool": "Bash"}
+{"at": "<TS>", "event": "guard-deny", "reason": "The crew is halted (testing). Finish your current step safely and start nothing new; `tares factory crew resume` lifts the halt.", "station": "?", "tool": "Bash"}
 {"at": "<TS>", "detail": "", "event": "resume", "station": ""}
 == file crew/stations.json ==
 {

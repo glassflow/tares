@@ -1,14 +1,13 @@
 {
   "version": 1,
-  "source": "claude-plugin/bin/factory",
+  "source": "claude-plugin/bin/factory (removed in TR-975)",
   "functions": [
     {
       "name": "die",
       "kind": "function",
-      "line": 18,
       "what": "print error, exit 1",
       "ticket": "TR-948",
-      "dropped": false,
+      "dropped": "Python raises CrewError, which the command's entry point prints and turns into exit 1.",
       "python": "",
       "ported": false,
       "note": ""
@@ -16,10 +15,9 @@
     {
       "name": "say",
       "kind": "function",
-      "line": 19,
       "what": "print a status line to stderr",
       "ticket": "TR-948",
-      "dropped": false,
+      "dropped": "Python prints its status lines where it needs them (each module has its own small _say), nothing to port as one function.",
       "python": "",
       "ported": false,
       "note": ""
@@ -27,21 +25,19 @@
     {
       "name": "usage",
       "kind": "function",
-      "line": 21,
       "what": "print the help text",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.usage:USAGE",
+      "ported": true,
       "note": "The help text; the dispatcher prints it. Docs for the new commands are TR-979."
     },
     {
       "name": "need",
       "kind": "function",
-      "line": 125,
       "what": "require a tool on PATH",
       "ticket": "TR-948",
-      "dropped": false,
+      "dropped": "Python checks for a tool with shutil.which at the place that needs it and raises CrewError.",
       "python": "",
       "ported": false,
       "note": ""
@@ -49,7 +45,6 @@
     {
       "name": "claude_bin",
       "kind": "function",
-      "line": 130,
       "what": "find the real claude binary, skipping terminal shims",
       "ticket": "TR-950",
       "dropped": false,
@@ -60,7 +55,6 @@
     {
       "name": "frozen_phys",
       "kind": "function",
-      "line": 155,
       "what": "physical path of the frozen kit copy",
       "ticket": "TR-965",
       "dropped": false,
@@ -71,117 +65,106 @@
     {
       "name": "ccfg",
       "kind": "function",
-      "line": 173,
       "what": "read a value from crew.json",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:ccfg",
+      "ported": true,
       "note": ""
     },
     {
       "name": "crew_name_ok",
       "kind": "function",
-      "line": 178,
       "what": "is this a valid crew name",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:crew_name_ok",
+      "ported": true,
       "note": ""
     },
     {
       "name": "crew_name",
       "kind": "function",
-      "line": 183,
       "what": "resolve the crew name (env, crew.json, default)",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:crew_name",
+      "ported": true,
       "note": ""
     },
     {
       "name": "crew_orchestrator",
       "kind": "function",
-      "line": 193,
       "what": "the orchestrator station name",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:crew_orchestrator",
+      "ported": true,
       "note": ""
     },
     {
       "name": "slugify",
       "kind": "function",
-      "line": 194,
       "what": "lowercase, hyphen-only slug",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:slugify",
+      "ported": true,
       "note": ""
     },
     {
       "name": "now_s",
       "kind": "function",
-      "line": 196,
       "what": "epoch seconds, FACTORY_NOW in tests",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:now_s",
+      "ported": true,
       "note": ""
     },
     {
       "name": "event",
       "kind": "function",
-      "line": 197,
       "what": "append a line to events.jsonl",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:event",
+      "ported": true,
       "note": ""
     },
     {
       "name": "merge_crew_defaults",
       "kind": "function",
-      "line": 201,
       "what": "merge template defaults under crew.json",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:merge_crew_defaults",
+      "ported": true,
       "note": ""
     },
     {
       "name": "ensure_crew_home",
       "kind": "function",
-      "line": 208,
       "what": "create the crew home and crew.json",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:ensure_crew_home",
+      "ported": true,
       "note": ""
     },
     {
       "name": "require_crew",
       "kind": "function",
-      "line": 219,
       "what": "die when there is no crew yet",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:require_crew",
+      "ported": true,
       "note": ""
     },
     {
       "name": "in_crew_session",
       "kind": "function",
-      "line": 230,
       "what": "is this a station or crew session",
       "ticket": "TR-949",
       "dropped": false,
@@ -192,7 +175,6 @@
     {
       "name": "crew_key",
       "kind": "function",
-      "line": 231,
       "what": "the crew key a station reads from its token file",
       "ticket": "TR-949",
       "dropped": false,
@@ -203,7 +185,6 @@
     {
       "name": "tares_token",
       "kind": "function",
-      "line": 236,
       "what": "the key to use for Tares calls",
       "ticket": "TR-949",
       "dropped": false,
@@ -214,7 +195,6 @@
     {
       "name": "no_key_hint",
       "kind": "function",
-      "line": 241,
       "what": "text telling how to get a key",
       "ticket": "TR-949",
       "dropped": false,
@@ -225,7 +205,6 @@
     {
       "name": "tares_url",
       "kind": "function",
-      "line": 246,
       "what": "address of the Tares",
       "ticket": "TR-949",
       "dropped": false,
@@ -236,7 +215,6 @@
     {
       "name": "mcp_url",
       "kind": "function",
-      "line": 255,
       "what": "address of the Tares MCP endpoint",
       "ticket": "TR-949",
       "dropped": false,
@@ -247,7 +225,6 @@
     {
       "name": "tares_on",
       "kind": "function",
-      "line": 263,
       "what": "does Tares answer /health",
       "ticket": "TR-949",
       "dropped": false,
@@ -258,7 +235,6 @@
     {
       "name": "require_tares",
       "kind": "function",
-      "line": 270,
       "what": "die when no Tares answers",
       "ticket": "TR-949",
       "dropped": false,
@@ -269,7 +245,6 @@
     {
       "name": "need_capability",
       "kind": "function",
-      "line": 278,
       "what": "die with an upgrade message when the cell's /health does not list a capability; /health is read once per command",
       "ticket": "TR-949",
       "dropped": false,
@@ -280,7 +255,6 @@
     {
       "name": "mcp_on",
       "kind": "function",
-      "line": 289,
       "what": "does the MCP endpoint answer",
       "ticket": "TR-949",
       "dropped": false,
@@ -291,7 +265,6 @@
     {
       "name": "require_mcp",
       "kind": "function",
-      "line": 301,
       "what": "die when no MCP server answers",
       "ticket": "TR-949",
       "dropped": false,
@@ -302,7 +275,6 @@
     {
       "name": "tares_http",
       "kind": "function",
-      "line": 307,
       "what": "HTTP call to Tares with the key on stdin",
       "ticket": "TR-949",
       "dropped": false,
@@ -313,7 +285,6 @@
     {
       "name": "uri",
       "kind": "function",
-      "line": 313,
       "what": "percent-encode a string",
       "ticket": "TR-949",
       "dropped": false,
@@ -324,7 +295,6 @@
     {
       "name": "key_ok",
       "kind": "function",
-      "line": 316,
       "what": "does Tares accept a key",
       "ticket": "TR-949",
       "dropped": false,
@@ -335,7 +305,6 @@
     {
       "name": "key_name",
       "kind": "function",
-      "line": 321,
       "what": "the name Tares gives a key",
       "ticket": "TR-949",
       "dropped": false,
@@ -346,7 +315,6 @@
     {
       "name": "keep_token",
       "kind": "function",
-      "line": 331,
       "what": "copy the person key to the crew token file",
       "ticket": "TR-949",
       "dropped": false,
@@ -357,7 +325,6 @@
     {
       "name": "crew_projects",
       "kind": "function",
-      "line": 344,
       "what": "projects handed to the crew, from Tares",
       "ticket": "TR-949",
       "dropped": false,
@@ -368,7 +335,6 @@
     {
       "name": "crew_projects_or_die",
       "kind": "function",
-      "line": 356,
       "what": "the same, dies when Tares cannot say",
       "ticket": "TR-949",
       "dropped": false,
@@ -379,7 +345,6 @@
     {
       "name": "project_row",
       "kind": "function",
-      "line": 360,
       "what": "one project row by name",
       "ticket": "TR-949",
       "dropped": false,
@@ -390,7 +355,6 @@
     {
       "name": "project_repo_rows",
       "kind": "function",
-      "line": 362,
       "what": "project and repo path pairs",
       "ticket": "TR-949",
       "dropped": false,
@@ -401,7 +365,6 @@
     {
       "name": "all_repos",
       "kind": "function",
-      "line": 363,
       "what": "every repo path of every project",
       "ticket": "TR-949",
       "dropped": false,
@@ -412,7 +375,6 @@
     {
       "name": "settings_defaults",
       "kind": "function",
-      "line": 367,
       "what": "default crew settings",
       "ticket": "TR-949",
       "dropped": false,
@@ -423,7 +385,6 @@
     {
       "name": "settings_raw",
       "kind": "function",
-      "line": 373,
       "what": "crew settings as saved on Tares",
       "ticket": "TR-949",
       "dropped": false,
@@ -434,7 +395,6 @@
     {
       "name": "settings_missing",
       "kind": "function",
-      "line": 378,
       "what": "crew setting keys not set yet",
       "ticket": "TR-949",
       "dropped": false,
@@ -445,7 +405,6 @@
     {
       "name": "crew_settings",
       "kind": "function",
-      "line": 385,
       "what": "crew settings with defaults, cached",
       "ticket": "TR-949",
       "dropped": false,
@@ -456,7 +415,6 @@
     {
       "name": "setting",
       "kind": "function",
-      "line": 393,
       "what": "one crew setting value",
       "ticket": "TR-949",
       "dropped": false,
@@ -467,7 +425,6 @@
     {
       "name": "releaser_on",
       "kind": "function",
-      "line": 394,
       "what": "is the releaser setting on",
       "ticket": "TR-949",
       "dropped": false,
@@ -478,7 +435,6 @@
     {
       "name": "crew_roles",
       "kind": "function",
-      "line": 395,
       "what": "the roles this crew runs",
       "ticket": "TR-949",
       "dropped": false,
@@ -489,7 +445,6 @@
     {
       "name": "ask",
       "kind": "function",
-      "line": 398,
       "what": "ask one setup question with a recommendation",
       "ticket": "TR-956",
       "dropped": false,
@@ -500,7 +455,6 @@
     {
       "name": "choose",
       "kind": "function",
-      "line": 414,
       "what": "ask a numbered choice",
       "ticket": "TR-956",
       "dropped": false,
@@ -511,7 +465,6 @@
     {
       "name": "ask_settings",
       "kind": "function",
-      "line": 434,
       "what": "ask the missing crew settings and save them",
       "ticket": "TR-956",
       "dropped": false,
@@ -522,7 +475,6 @@
     {
       "name": "ask_grants",
       "kind": "function",
-      "line": 470,
       "what": "ask standing grants for all projects",
       "ticket": "TR-956",
       "dropped": false,
@@ -533,7 +485,6 @@
     {
       "name": "ensure_settings",
       "kind": "function",
-      "line": 482,
       "what": "ask settings when any are missing",
       "ticket": "TR-956",
       "dropped": false,
@@ -544,7 +495,6 @@
     {
       "name": "grants_read",
       "kind": "function",
-      "line": 489,
       "what": "read grants from Tares as markdown",
       "ticket": "TR-949",
       "dropped": false,
@@ -555,7 +505,6 @@
     {
       "name": "grants_md",
       "kind": "function",
-      "line": 500,
       "what": "grants markdown, or nothing when unreadable",
       "ticket": "TR-949",
       "dropped": false,
@@ -566,7 +515,6 @@
     {
       "name": "grants_sum",
       "kind": "function",
-      "line": 504,
       "what": "fingerprint of a grants text",
       "ticket": "TR-949",
       "dropped": false,
@@ -577,7 +525,6 @@
     {
       "name": "grant_rules",
       "kind": "function",
-      "line": 509,
       "what": "turn grants into auto mode allow rules",
       "ticket": "TR-953",
       "dropped": false,
@@ -588,7 +535,6 @@
     {
       "name": "station_name",
       "kind": "function",
-      "line": 526,
       "what": "full station name from a role or name",
       "ticket": "TR-948",
       "dropped": false,
@@ -599,40 +545,36 @@
     {
       "name": "builder_name",
       "kind": "function",
-      "line": 531,
       "what": "name of a builder for a project and slug",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:builder_name",
+      "ported": true,
       "note": ""
     },
     {
       "name": "stations_get",
       "kind": "function",
-      "line": 535,
       "what": "read a field of a station in stations.json",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:stations_get",
+      "ported": true,
       "note": ""
     },
     {
       "name": "stations_put",
       "kind": "function",
-      "line": 536,
       "what": "merge fields into a station in stations.json",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:stations_put",
+      "ported": true,
       "note": ""
     },
     {
       "name": "active_json",
       "kind": "function",
-      "line": 545,
       "what": "list live Claude Code sessions",
       "ticket": "TR-950",
       "dropped": false,
@@ -643,7 +585,6 @@
     {
       "name": "job_state",
       "kind": "function",
-      "line": 550,
       "what": "a session's state.json",
       "ticket": "TR-950",
       "dropped": false,
@@ -654,7 +595,6 @@
     {
       "name": "turn_state",
       "kind": "function",
-      "line": 557,
       "what": "done, working or blocked for a session",
       "ticket": "TR-950",
       "dropped": false,
@@ -665,7 +605,6 @@
     {
       "name": "parse_bg_id",
       "kind": "function",
-      "line": 563,
       "what": "read the session id from claude --bg output",
       "ticket": "TR-950",
       "dropped": false,
@@ -676,7 +615,6 @@
     {
       "name": "find_live_job",
       "kind": "function",
-      "line": 573,
       "what": "newest live session with a name in a folder",
       "ticket": "TR-950",
       "dropped": false,
@@ -687,7 +625,6 @@
     {
       "name": "is_alive",
       "kind": "function",
-      "line": 579,
       "what": "is a station's session running or waiting",
       "ticket": "TR-950",
       "dropped": false,
@@ -698,29 +635,26 @@
     {
       "name": "station_lock",
       "kind": "function",
-      "line": 590,
       "what": "per-station lock held by one command",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.locks:station_lock",
+      "ported": true,
       "note": ""
     },
     {
       "name": "release_locks",
       "kind": "function",
-      "line": 615,
       "what": "release the station locks this shell holds",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.locks:release_locks",
+      "ported": true,
       "note": ""
     },
     {
       "name": "adopt_unrecorded",
       "kind": "function",
-      "line": 621,
       "what": "record live crew sessions missing from stations.json",
       "ticket": "TR-957",
       "dropped": false,
@@ -731,7 +665,6 @@
     {
       "name": "check_model",
       "kind": "function",
-      "line": 659,
       "what": "refuse a model that cannot run auto mode",
       "ticket": "TR-953",
       "dropped": false,
@@ -742,7 +675,6 @@
     {
       "name": "level_text",
       "kind": "function",
-      "line": 665,
       "what": "words describing an autonomy level",
       "ticket": "TR-953",
       "dropped": false,
@@ -753,7 +685,6 @@
     {
       "name": "level_rank",
       "kind": "function",
-      "line": 672,
       "what": "number for an autonomy level",
       "ticket": "TR-953",
       "dropped": false,
@@ -764,7 +695,6 @@
     {
       "name": "parent_role",
       "kind": "function",
-      "line": 674,
       "what": "the role a helper works under",
       "ticket": "TR-953",
       "dropped": false,
@@ -775,7 +705,6 @@
     {
       "name": "write_settings",
       "kind": "function",
-      "line": 685,
       "what": "generate a station's settings file",
       "ticket": "TR-953",
       "dropped": false,
@@ -786,7 +715,6 @@
     {
       "name": "plugin_flags",
       "kind": "function",
-      "line": 792,
       "what": "the --plugin-dir flags for a launch",
       "ticket": "TR-953",
       "dropped": false,
@@ -797,7 +725,6 @@
     {
       "name": "upgrades_frozen",
       "kind": "function",
-      "line": 797,
       "what": "is the kit frozen",
       "ticket": "TR-965",
       "dropped": false,
@@ -808,7 +735,6 @@
     {
       "name": "frozen_field",
       "kind": "function",
-      "line": 801,
       "what": "a field the freeze recorded",
       "ticket": "TR-965",
       "dropped": false,
@@ -819,7 +745,6 @@
     {
       "name": "kit_dir",
       "kind": "function",
-      "line": 804,
       "what": "the kit folder stations start on",
       "ticket": "TR-965",
       "dropped": false,
@@ -830,7 +755,6 @@
     {
       "name": "on_frozen_copy",
       "kind": "function",
-      "line": 807,
       "what": "does a station run from the frozen copy",
       "ticket": "TR-965",
       "dropped": false,
@@ -841,7 +765,6 @@
     {
       "name": "frozen_copy_in_use",
       "kind": "function",
-      "line": 810,
       "what": "is any active station on the frozen copy",
       "ticket": "TR-965",
       "dropped": false,
@@ -852,7 +775,6 @@
     {
       "name": "installed_tares",
       "kind": "function",
-      "line": 814,
       "what": "installed tares plugins of another version",
       "ticket": "TR-956",
       "dropped": false,
@@ -863,7 +785,6 @@
     {
       "name": "clash_text",
       "kind": "function",
-      "line": 819,
       "what": "what to do about a plugin clash",
       "ticket": "TR-956",
       "dropped": false,
@@ -874,7 +795,6 @@
     {
       "name": "compact_window",
       "kind": "function",
-      "line": 827,
       "what": "the autocompact value for a launch",
       "ticket": "TR-953",
       "dropped": false,
@@ -885,7 +805,6 @@
     {
       "name": "transcript_of",
       "kind": "function",
-      "line": 839,
       "what": "a station's transcript file",
       "ticket": "TR-950",
       "dropped": false,
@@ -896,7 +815,6 @@
     {
       "name": "stuck_on_context",
       "kind": "function",
-      "line": 848,
       "what": "is a station stuck on its context notice",
       "ticket": "TR-959",
       "dropped": false,
@@ -907,7 +825,6 @@
     {
       "name": "kit_version",
       "kind": "function",
-      "line": 856,
       "what": "fingerprint of the kit stations run on",
       "ticket": "TR-965",
       "dropped": false,
@@ -918,7 +835,6 @@
     {
       "name": "kit_clean",
       "kind": "function",
-      "line": 862,
       "what": "is the plugin checkout free of local edits",
       "ticket": "TR-965",
       "dropped": false,
@@ -929,7 +845,6 @@
     {
       "name": "quiet",
       "kind": "function",
-      "line": 870,
       "what": "is a station quiet",
       "ticket": "TR-950",
       "dropped": false,
@@ -940,7 +855,6 @@
     {
       "name": "launch",
       "kind": "function",
-      "line": 882,
       "what": "start a station with its flags and settings",
       "ticket": "TR-953",
       "dropped": false,
@@ -951,7 +865,6 @@
     {
       "name": "boot_prompt",
       "kind": "function",
-      "line": 933,
       "what": "the first prompt of a station",
       "ticket": "TR-953",
       "dropped": false,
@@ -962,7 +875,6 @@
     {
       "name": "halted",
       "kind": "function",
-      "line": 944,
       "what": "is the crew halted",
       "ticket": "TR-954",
       "dropped": false,
@@ -973,7 +885,6 @@
     {
       "name": "prime",
       "kind": "function",
-      "line": 948,
       "what": "decide Tares and settings once per command",
       "ticket": "TR-949",
       "dropped": false,
@@ -984,7 +895,6 @@
     {
       "name": "home_trusted",
       "kind": "function",
-      "line": 960,
       "what": "does Claude Code trust the crew home",
       "ticket": "TR-956",
       "dropped": false,
@@ -995,7 +905,6 @@
     {
       "name": "ensure_home_trusted",
       "kind": "function",
-      "line": 966,
       "what": "offer to trust the crew home",
       "ticket": "TR-956",
       "dropped": false,
@@ -1006,7 +915,6 @@
     {
       "name": "watch_pid",
       "kind": "function",
-      "line": 987,
       "what": "pid of the background watch",
       "ticket": "TR-958",
       "dropped": false,
@@ -1017,7 +925,6 @@
     {
       "name": "start_watch",
       "kind": "function",
-      "line": 991,
       "what": "start the watch in the background",
       "ticket": "TR-958",
       "dropped": false,
@@ -1028,7 +935,6 @@
     {
       "name": "stop_watch",
       "kind": "function",
-      "line": 1000,
       "what": "stop the background watch",
       "ticket": "TR-958",
       "dropped": false,
@@ -1039,7 +945,6 @@
     {
       "name": "store_crew_name",
       "kind": "function",
-      "line": 1009,
       "what": "save the crew name in crew.json",
       "ticket": "TR-956",
       "dropped": false,
@@ -1050,7 +955,6 @@
     {
       "name": "people_count",
       "kind": "function",
-      "line": 1014,
       "what": "people on this Tares besides the local one",
       "ticket": "TR-956",
       "dropped": false,
@@ -1061,7 +965,6 @@
     {
       "name": "suggest_crew_name",
       "kind": "function",
-      "line": 1019,
       "what": "suggest first-name-host crew name",
       "ticket": "TR-956",
       "dropped": false,
@@ -1072,7 +975,6 @@
     {
       "name": "setup_crew_name",
       "kind": "function",
-      "line": 1030,
       "what": "settle the crew name at crew up",
       "ticket": "TR-956",
       "dropped": false,
@@ -1083,18 +985,16 @@
     {
       "name": "start_stations",
       "kind": "function",
-      "line": 1058,
       "what": "start each crew role's station, orchestrator first",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.up:start_stations",
+      "ported": true,
       "note": "The second half of cmd_crew_up, extracted by TR-956 so the Python crew up (cmd_crew_up, TR-956) can call it through the hidden `_start-stations` command until launch, boot_prompt and write_settings are ported. TR-953 ports it with launch and removes the bridge."
     },
     {
       "name": "cmd_crew_up",
       "kind": "function",
-      "line": 1078,
       "what": "crew up",
       "ticket": "TR-956",
       "dropped": false,
@@ -1116,7 +1016,6 @@
     {
       "name": "cmd_spawn",
       "kind": "function",
-      "line": 1111,
       "what": "spawn a builder or helper",
       "ticket": "TR-954",
       "dropped": false,
@@ -1127,7 +1026,6 @@
     {
       "name": "cmd_revive",
       "kind": "function",
-      "line": 1181,
       "what": "revive a stopped station",
       "ticket": "TR-955",
       "dropped": false,
@@ -1138,7 +1036,6 @@
     {
       "name": "cmd_restart",
       "kind": "function",
-      "line": 1216,
       "what": "restart a station with fresh settings",
       "ticket": "TR-955",
       "dropped": false,
@@ -1149,7 +1046,6 @@
     {
       "name": "cmd_retire",
       "kind": "function",
-      "line": 1228,
       "what": "retire a station",
       "ticket": "TR-955",
       "dropped": false,
@@ -1160,7 +1056,6 @@
     {
       "name": "tell_tares_ended",
       "kind": "function",
-      "line": 1244,
       "what": "tell Tares a station ended",
       "ticket": "TR-955",
       "dropped": false,
@@ -1171,7 +1066,6 @@
     {
       "name": "cmd_down",
       "kind": "function",
-      "line": 1257,
       "what": "stop the watch and every station",
       "ticket": "TR-955",
       "dropped": false,
@@ -1182,7 +1076,6 @@
     {
       "name": "cmd_watch",
       "kind": "function",
-      "line": 1274,
       "what": "the watch loop",
       "ticket": "TR-958",
       "dropped": false,
@@ -1193,7 +1086,6 @@
     {
       "name": "grants_now",
       "kind": "function",
-      "line": 1395,
       "what": "a station's grants fingerprint on Tares now",
       "ticket": "TR-960",
       "dropped": false,
@@ -1204,7 +1096,6 @@
     {
       "name": "regranted",
       "kind": "function",
-      "line": 1399,
       "what": "did a station's grants change",
       "ticket": "TR-960",
       "dropped": false,
@@ -1215,7 +1106,6 @@
     {
       "name": "between_turns",
       "kind": "function",
-      "line": 1404,
       "what": "is a station between turns",
       "ticket": "TR-950",
       "dropped": false,
@@ -1226,7 +1116,6 @@
     {
       "name": "attached",
       "kind": "function",
-      "line": 1405,
       "what": "does someone have the session open",
       "ticket": "TR-950",
       "dropped": false,
@@ -1237,7 +1126,6 @@
     {
       "name": "regrant_due",
       "kind": "function",
-      "line": 1408,
       "what": "is a regrant restart due",
       "ticket": "TR-960",
       "dropped": false,
@@ -1259,7 +1147,6 @@
     {
       "name": "regrant_station",
       "kind": "function",
-      "line": 1426,
       "what": "restart a station with new grants",
       "ticket": "TR-960",
       "dropped": false,
@@ -1270,7 +1157,6 @@
     {
       "name": "idle_wake_on",
       "kind": "function",
-      "line": 1468,
       "what": "is idle wake on",
       "ticket": "TR-953",
       "dropped": false,
@@ -1281,7 +1167,6 @@
     {
       "name": "idle_wake_state",
       "kind": "function",
-      "line": 1469,
       "what": "on, off or unknown",
       "ticket": "TR-961",
       "dropped": false,
@@ -1292,7 +1177,6 @@
     {
       "name": "idle_wake_note",
       "kind": "function",
-      "line": 1474,
       "what": "what the watch says about idle wake",
       "ticket": "TR-953",
       "dropped": false,
@@ -1303,18 +1187,16 @@
     {
       "name": "rearm_text",
       "kind": "function",
-      "line": 1477,
       "what": "what a restart tells a station about its schedule",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.lifecycle:rearm_text",
+      "ported": true,
       "note": "Used by revive, restart, pace, idle wake and the Claude Code move; the idle wake ticket owns it because it changes with the idle_wake setting. Called first by cmd_revive and cmd_restart (TR-955), which ported it in tares.crew.lifecycle:rearm_text and TR-962 replaced its stub for pace_read with pace.read; TR-961 completes it. Also called by regrant_station (TR-960), which calls it from the start with the pace.read of TR-962; TR-961 completes it."
     },
     {
       "name": "pace_read",
       "kind": "function",
-      "line": 1495,
       "what": "read the plan pace from Tares",
       "ticket": "TR-962",
       "dropped": false,
@@ -1325,7 +1207,6 @@
     {
       "name": "pace_closed",
       "kind": "function",
-      "line": 1506,
       "what": "is a plan limit full",
       "ticket": "TR-962",
       "dropped": false,
@@ -1336,7 +1217,6 @@
     {
       "name": "pace_json",
       "kind": "function",
-      "line": 1509,
       "what": "the crew pace file with defaults",
       "ticket": "TR-962",
       "dropped": false,
@@ -1347,7 +1227,6 @@
     {
       "name": "pace_json_update",
       "kind": "function",
-      "line": 1513,
       "what": "rewrite the pace file",
       "ticket": "TR-962",
       "dropped": false,
@@ -1358,7 +1237,6 @@
     {
       "name": "pace_stopped",
       "kind": "function",
-      "line": 1518,
       "what": "did a station stop at a full limit",
       "ticket": "TR-962",
       "dropped": false,
@@ -1369,7 +1247,6 @@
     {
       "name": "pace_tried",
       "kind": "function",
-      "line": 1519,
       "what": "did its resume fail twice",
       "ticket": "TR-962",
       "dropped": false,
@@ -1380,7 +1257,6 @@
     {
       "name": "pace_mark_tried",
       "kind": "function",
-      "line": 1520,
       "what": "record a failed resume",
       "ticket": "TR-962",
       "dropped": false,
@@ -1391,7 +1267,6 @@
     {
       "name": "pace_hold_down",
       "kind": "function",
-      "line": 1521,
       "what": "remember a station down at a full limit",
       "ticket": "TR-962",
       "dropped": false,
@@ -1402,7 +1277,6 @@
     {
       "name": "pace_revived",
       "kind": "function",
-      "line": 1528,
       "what": "forget a station that runs again",
       "ticket": "TR-962",
       "dropped": false,
@@ -1413,7 +1287,6 @@
     {
       "name": "pace_tidy",
       "kind": "function",
-      "line": 1534,
       "what": "forget stations that will not be revived",
       "ticket": "TR-962",
       "dropped": false,
@@ -1424,7 +1297,6 @@
     {
       "name": "pace_resume_prompt",
       "kind": "function",
-      "line": 1547,
       "what": "prompt for a resume after the limit",
       "ticket": "TR-962",
       "dropped": false,
@@ -1435,7 +1307,6 @@
     {
       "name": "pace_fresh_prompt",
       "kind": "function",
-      "line": 1550,
       "what": "prompt for a fresh start after the limit",
       "ticket": "TR-962",
       "dropped": false,
@@ -1446,7 +1317,6 @@
     {
       "name": "pace_station_file",
       "kind": "function",
-      "line": 1554,
       "what": "path of a station's pace file",
       "ticket": "TR-962",
       "dropped": false,
@@ -1457,7 +1327,6 @@
     {
       "name": "pace_station_read",
       "kind": "function",
-      "line": 1555,
       "what": "read a station's pace state",
       "ticket": "TR-962",
       "dropped": false,
@@ -1468,7 +1337,6 @@
     {
       "name": "pace_station_put",
       "kind": "function",
-      "line": 1560,
       "what": "write a station's pace state",
       "ticket": "TR-962",
       "dropped": false,
@@ -1479,7 +1347,6 @@
     {
       "name": "pace_launch_note",
       "kind": "function",
-      "line": 1567,
       "what": "pace note added to a start",
       "ticket": "TR-962",
       "dropped": false,
@@ -1490,7 +1357,6 @@
     {
       "name": "pace_plan",
       "kind": "function",
-      "line": 1576,
       "what": "decide whether to restart a station with a pace note",
       "ticket": "TR-962",
       "dropped": false,
@@ -1501,7 +1367,6 @@
     {
       "name": "pace_send",
       "kind": "function",
-      "line": 1619,
       "what": "restart a station with the pace note",
       "ticket": "TR-962",
       "dropped": false,
@@ -1512,7 +1377,6 @@
     {
       "name": "pace_status_line",
       "kind": "function",
-      "line": 1641,
       "what": "pace in one line for status",
       "ticket": "TR-962",
       "dropped": false,
@@ -1523,7 +1387,6 @@
     {
       "name": "wake_file",
       "kind": "function",
-      "line": 1656,
       "what": "path of a station's wake file",
       "ticket": "TR-961",
       "dropped": false,
@@ -1534,7 +1397,6 @@
     {
       "name": "wake_read",
       "kind": "function",
-      "line": 1657,
       "what": "read a station's wake state",
       "ticket": "TR-961",
       "dropped": false,
@@ -1545,7 +1407,6 @@
     {
       "name": "wake_update",
       "kind": "function",
-      "line": 1662,
       "what": "rewrite a station's wake state",
       "ticket": "TR-961",
       "dropped": false,
@@ -1556,7 +1417,6 @@
     {
       "name": "iw_launch_note",
       "kind": "function",
-      "line": 1668,
       "what": "idle wake note added to a start",
       "ticket": "TR-961",
       "dropped": false,
@@ -1567,7 +1427,6 @@
     {
       "name": "wake_base_min",
       "kind": "function",
-      "line": 1676,
       "what": "base wake interval by role",
       "ticket": "TR-961",
       "dropped": false,
@@ -1578,7 +1437,6 @@
     {
       "name": "station_updated",
       "kind": "function",
-      "line": 1677,
       "what": "when a session last did anything",
       "ticket": "TR-950",
       "dropped": false,
@@ -1589,7 +1447,6 @@
     {
       "name": "iw_scan_reviewer",
       "kind": "function",
-      "line": 1683,
       "what": "reviewer work to wake for",
       "ticket": "TR-961",
       "dropped": false,
@@ -1600,7 +1457,6 @@
     {
       "name": "iw_scan_builder",
       "kind": "function",
-      "line": 1690,
       "what": "builder work to wake for",
       "ticket": "TR-961",
       "dropped": false,
@@ -1611,7 +1467,6 @@
     {
       "name": "iw_scan_releaser",
       "kind": "function",
-      "line": 1705,
       "what": "releaser work to wake for",
       "ticket": "TR-961",
       "dropped": false,
@@ -1622,7 +1477,6 @@
     {
       "name": "iw_scan_orchestrator",
       "kind": "function",
-      "line": 1714,
       "what": "orchestrator work to wake for",
       "ticket": "TR-961",
       "dropped": false,
@@ -1633,7 +1487,6 @@
     {
       "name": "iw_work_prompt",
       "kind": "function",
-      "line": 1738,
       "what": "prompt telling a woken station its work",
       "ticket": "TR-961",
       "dropped": false,
@@ -1644,7 +1497,6 @@
     {
       "name": "idle_wake_plan",
       "kind": "function",
-      "line": 1749,
       "what": "decide whether to wake a station now",
       "ticket": "TR-961",
       "dropped": false,
@@ -1655,7 +1507,6 @@
     {
       "name": "idle_wake_send",
       "kind": "function",
-      "line": 1808,
       "what": "wake a station by restarting it",
       "ticket": "TR-961",
       "dropped": false,
@@ -1666,7 +1517,6 @@
     {
       "name": "stale_kit",
       "kind": "function",
-      "line": 1836,
       "what": "does a station run another kit version",
       "ticket": "TR-965",
       "dropped": false,
@@ -1677,7 +1527,6 @@
     {
       "name": "movable",
       "kind": "function",
-      "line": 1839,
       "what": "may a station be moved onto a new kit",
       "ticket": "TR-965",
       "dropped": false,
@@ -1688,7 +1537,6 @@
     {
       "name": "upgrade_station",
       "kind": "function",
-      "line": 1843,
       "what": "restart a station on the new kit",
       "ticket": "TR-965",
       "dropped": false,
@@ -1699,7 +1547,6 @@
     {
       "name": "claude_version",
       "kind": "function",
-      "line": 1870,
       "what": "the Claude Code version on PATH",
       "ticket": "TR-950",
       "dropped": false,
@@ -1710,7 +1557,6 @@
     {
       "name": "older_than",
       "kind": "function",
-      "line": 1874,
       "what": "compare Claude Code versions",
       "ticket": "TR-950",
       "dropped": false,
@@ -1721,7 +1567,6 @@
     {
       "name": "running_version",
       "kind": "function",
-      "line": 1880,
       "what": "the Claude Code version a session runs",
       "ticket": "TR-950",
       "dropped": false,
@@ -1732,7 +1577,6 @@
     {
       "name": "station_cc",
       "kind": "function",
-      "line": 1895,
       "what": "the Claude Code version of a station",
       "ticket": "TR-963",
       "dropped": false,
@@ -1743,7 +1587,6 @@
     {
       "name": "prune_spares",
       "kind": "function",
-      "line": 1899,
       "what": "stop spare sessions after a move",
       "ticket": "TR-964",
       "dropped": false,
@@ -1754,7 +1597,6 @@
     {
       "name": "duplicate_sessions",
       "kind": "function",
-      "line": 1913,
       "what": "stations with more than one live session",
       "ticket": "TR-963",
       "dropped": false,
@@ -1765,7 +1607,6 @@
     {
       "name": "claude_auto",
       "kind": "function",
-      "line": 1922,
       "what": "is the claude_update setting on",
       "ticket": "TR-963",
       "dropped": false,
@@ -1776,7 +1617,6 @@
     {
       "name": "cc_behind",
       "kind": "function",
-      "line": 1927,
       "what": "how many stations run an older Claude Code",
       "ticket": "TR-963",
       "dropped": false,
@@ -1787,7 +1627,6 @@
     {
       "name": "tell_newer_claude",
       "kind": "function",
-      "line": 1938,
       "what": "tell the person of a newer Claude Code",
       "ticket": "TR-963",
       "dropped": false,
@@ -1798,7 +1637,6 @@
     {
       "name": "cc_backoff",
       "kind": "function",
-      "line": 1949,
       "what": "is a station waiting out a retry backoff",
       "ticket": "TR-964",
       "dropped": false,
@@ -1809,7 +1647,6 @@
     {
       "name": "cc_movable",
       "kind": "function",
-      "line": 1953,
       "what": "may the watch move a station now",
       "ticket": "TR-963",
       "dropped": false,
@@ -1820,7 +1657,6 @@
     {
       "name": "cc_pick",
       "kind": "function",
-      "line": 1961,
       "what": "pick the next station to move",
       "ticket": "TR-963",
       "dropped": false,
@@ -1831,7 +1667,6 @@
     {
       "name": "cc_delay",
       "kind": "function",
-      "line": 1983,
       "what": "backoff seconds for failed moves",
       "ticket": "TR-964",
       "dropped": false,
@@ -1842,7 +1677,6 @@
     {
       "name": "cc_retry_in",
       "kind": "function",
-      "line": 1990,
       "what": "time until the next retry",
       "ticket": "TR-964",
       "dropped": false,
@@ -1853,7 +1687,6 @@
     {
       "name": "cc_retrying",
       "kind": "function",
-      "line": 1996,
       "what": "is a failed move being retried",
       "ticket": "TR-964",
       "dropped": false,
@@ -1864,7 +1697,6 @@
     {
       "name": "cc_retry_sync",
       "kind": "function",
-      "line": 2005,
       "what": "keep retry records in step with reality",
       "ticket": "TR-964",
       "dropped": false,
@@ -1875,7 +1707,6 @@
     {
       "name": "claude_move",
       "kind": "function",
-      "line": 2032,
       "what": "move a station onto the new Claude Code",
       "ticket": "TR-963",
       "dropped": false,
@@ -1886,7 +1717,6 @@
     {
       "name": "watch_claude_move",
       "kind": "function",
-      "line": 2079,
       "what": "the watch's turn at claude_move",
       "ticket": "TR-964",
       "dropped": false,
@@ -1897,7 +1727,6 @@
     {
       "name": "cmd_crew_update",
       "kind": "function",
-      "line": 2104,
       "what": "crew update and crew restart",
       "ticket": "TR-964",
       "dropped": false,
@@ -1908,7 +1737,6 @@
     {
       "name": "cmd_halt",
       "kind": "function",
-      "line": 2200,
       "what": "halt the crew",
       "ticket": "TR-955",
       "dropped": false,
@@ -1919,7 +1747,6 @@
     {
       "name": "cmd_resume",
       "kind": "function",
-      "line": 2207,
       "what": "lift a halt",
       "ticket": "TR-955",
       "dropped": false,
@@ -1930,7 +1757,6 @@
     {
       "name": "frozen_text",
       "kind": "function",
-      "line": 2209,
       "what": "since when and by whom frozen",
       "ticket": "TR-965",
       "dropped": false,
@@ -1941,7 +1767,6 @@
     {
       "name": "tell_newer_kit",
       "kind": "function",
-      "line": 2214,
       "what": "tell the person of a newer kit",
       "ticket": "TR-965",
       "dropped": false,
@@ -1952,7 +1777,6 @@
     {
       "name": "freezing",
       "kind": "function",
-      "line": 2225,
       "what": "is a freeze in progress",
       "ticket": "TR-965",
       "dropped": false,
@@ -1963,7 +1787,6 @@
     {
       "name": "reap_frozen_copy",
       "kind": "function",
-      "line": 2226,
       "what": "remove the frozen copy when unused",
       "ticket": "TR-965",
       "dropped": false,
@@ -1974,7 +1797,6 @@
     {
       "name": "freeze_fail",
       "kind": "function",
-      "line": 2231,
       "what": "clean up after a failed freeze",
       "ticket": "TR-965",
       "dropped": false,
@@ -1985,7 +1807,6 @@
     {
       "name": "cmd_freeze",
       "kind": "function",
-      "line": 2235,
       "what": "crew freeze",
       "ticket": "TR-965",
       "dropped": false,
@@ -1996,7 +1817,6 @@
     {
       "name": "cmd_unfreeze",
       "kind": "function",
-      "line": 2263,
       "what": "crew unfreeze",
       "ticket": "TR-965",
       "dropped": false,
@@ -2007,7 +1827,6 @@
     {
       "name": "desk_json",
       "kind": "function",
-      "line": 2279,
       "what": "open desk items from Tares",
       "ticket": "TR-957",
       "dropped": false,
@@ -2018,7 +1837,6 @@
     {
       "name": "desk_block",
       "kind": "function",
-      "line": 2281,
       "what": "one desk item as text",
       "ticket": "TR-957",
       "dropped": false,
@@ -2029,7 +1847,6 @@
     {
       "name": "cmd_desk",
       "kind": "function",
-      "line": 2291,
       "what": "print the desk",
       "ticket": "TR-957",
       "dropped": false,
@@ -2040,7 +1857,6 @@
     {
       "name": "cmd_status",
       "kind": "function",
-      "line": 2299,
       "what": "crew status",
       "ticket": "TR-957",
       "dropped": false,
@@ -2051,7 +1867,6 @@
     {
       "name": "tidy_roots",
       "kind": "function",
-      "line": 2369,
       "what": "folders tidy may remove inside",
       "ticket": "TR-968",
       "dropped": false,
@@ -2062,7 +1877,6 @@
     {
       "name": "inside_tidy_roots",
       "kind": "function",
-      "line": 2377,
       "what": "is a path inside the tidy roots",
       "ticket": "TR-968",
       "dropped": false,
@@ -2073,7 +1887,6 @@
     {
       "name": "worktree_has_work",
       "kind": "function",
-      "line": 2391,
       "what": "does a worktree hold unsaved work",
       "ticket": "TR-968",
       "dropped": false,
@@ -2084,7 +1897,6 @@
     {
       "name": "cmd_tidy",
       "kind": "function",
-      "line": 2396,
       "what": "tidy a worktree or scratch folder",
       "ticket": "TR-968",
       "dropped": false,
@@ -2095,7 +1907,6 @@
     {
       "name": "read_quiet",
       "kind": "function",
-      "line": 2434,
       "what": "run a session copy and read its output",
       "ticket": "TR-967",
       "dropped": false,
@@ -2106,7 +1917,6 @@
     {
       "name": "send_meter",
       "kind": "function",
-      "line": 2440,
       "what": "send a reading to Tares",
       "ticket": "TR-967",
       "dropped": false,
@@ -2117,7 +1927,6 @@
     {
       "name": "cmd_context",
       "kind": "function",
-      "line": 2444,
       "what": "read a station's /context",
       "ticket": "TR-967",
       "dropped": false,
@@ -2128,7 +1937,6 @@
     {
       "name": "cmd_plan",
       "kind": "function",
-      "line": 2468,
       "what": "read the plan limits",
       "ticket": "TR-967",
       "dropped": false,
@@ -2139,7 +1947,6 @@
     {
       "name": "serve_readings",
       "kind": "function",
-      "line": 2481,
       "what": "answer the Crew page's reading asks",
       "ticket": "TR-1163",
       "dropped": false,
@@ -2150,7 +1957,6 @@
     {
       "name": "nap",
       "kind": "function",
-      "line": 2500,
       "what": "wait between watch rounds, serving readings",
       "ticket": "TR-958",
       "dropped": false,
@@ -2161,7 +1967,6 @@
     {
       "name": "cmd_roster",
       "kind": "function",
-      "line": 2508,
       "what": "compact station list",
       "ticket": "TR-957",
       "dropped": false,
@@ -2172,7 +1977,6 @@
     {
       "name": "cmd_attach",
       "kind": "function",
-      "line": 2538,
       "what": "attach to a station",
       "ticket": "TR-957",
       "dropped": false,
@@ -2183,7 +1987,6 @@
     {
       "name": "cmd_logs",
       "kind": "function",
-      "line": 2539,
       "what": "show a station's logs",
       "ticket": "TR-957",
       "dropped": false,
@@ -2194,7 +1997,6 @@
     {
       "name": "cmd_settings",
       "kind": "function",
-      "line": 2541,
       "what": "print a station's settings",
       "ticket": "TR-957",
       "dropped": false,
@@ -2205,29 +2007,26 @@
     {
       "name": "cmd_crew",
       "kind": "function",
-      "line": 2549,
       "what": "crew subcommand dispatcher",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.dispatch:find",
+      "ported": true,
       "note": "The crew subcommand case; each arm is listed under dispatcher_cases."
     },
     {
       "name": "trusted",
       "kind": "function",
-      "line": 2571,
       "what": "does Claude Code trust a path",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.trusted",
+      "ported": true,
       "note": "Neither spec nor session calls it (TR-966 checked the bash): they only check a repo has a commit. It belongs with the crew home trust check (home_trusted, TR-956). tares.crew.doctor.Doctor.trusted reads the trust record for doctor (TR-969)."
     },
     {
       "name": "has_commit",
       "kind": "function",
-      "line": 2579,
       "what": "does a repo have a commit",
       "ticket": "TR-966",
       "dropped": false,
@@ -2238,7 +2037,6 @@
     {
       "name": "repos_in",
       "kind": "function",
-      "line": 2581,
       "what": "git repos directly under a folder",
       "ticket": "TR-966",
       "dropped": false,
@@ -2249,7 +2047,6 @@
     {
       "name": "spec_contributor",
       "kind": "function",
-      "line": 2590,
       "what": "is the caller a contributor to a project",
       "ticket": "TR-966",
       "dropped": false,
@@ -2260,7 +2057,6 @@
     {
       "name": "cmd_spec",
       "kind": "function",
-      "line": 2611,
       "what": "spec session",
       "ticket": "TR-966",
       "dropped": false,
@@ -2271,7 +2067,6 @@
     {
       "name": "person_claude",
       "kind": "function",
-      "line": 2667,
       "what": "run Claude Code for the person with the crew env",
       "ticket": "TR-966",
       "dropped": false,
@@ -2282,7 +2077,6 @@
     {
       "name": "factory_projects",
       "kind": "function",
-      "line": 2690,
       "what": "software factory projects on Tares",
       "ticket": "TR-966",
       "dropped": false,
@@ -2293,7 +2087,6 @@
     {
       "name": "releasing_projects",
       "kind": "function",
-      "line": 2694,
       "what": "projects the releaser is on",
       "ticket": "TR-966",
       "dropped": false,
@@ -2304,7 +2097,6 @@
     {
       "name": "match_project",
       "kind": "function",
-      "line": 2695,
       "what": "find a project by name or id",
       "ticket": "TR-966",
       "dropped": false,
@@ -2315,7 +2107,6 @@
     {
       "name": "session_dir",
       "kind": "function",
-      "line": 2700,
       "what": "folder a session opens in",
       "ticket": "TR-966",
       "dropped": false,
@@ -2326,7 +2117,6 @@
     {
       "name": "session_project",
       "kind": "function",
-      "line": 2710,
       "what": "start a session on a project",
       "ticket": "TR-966",
       "dropped": false,
@@ -2337,7 +2127,6 @@
     {
       "name": "session_idea",
       "kind": "function",
-      "line": 2748,
       "what": "start a session on a new idea",
       "ticket": "TR-966",
       "dropped": false,
@@ -2348,7 +2137,6 @@
     {
       "name": "cmd_session",
       "kind": "function",
-      "line": 2761,
       "what": "session command",
       "ticket": "TR-966",
       "dropped": false,
@@ -2359,7 +2147,6 @@
     {
       "name": "cmd_finish",
       "kind": "function",
-      "line": 2816,
       "what": "mark a project done",
       "ticket": "TR-967",
       "dropped": false,
@@ -2370,7 +2157,6 @@
     {
       "name": "cmd_projects",
       "kind": "function",
-      "line": 2834,
       "what": "list projects handed to the crew",
       "ticket": "TR-967",
       "dropped": false,
@@ -2381,7 +2167,6 @@
     {
       "name": "lsp_langs",
       "kind": "function",
-      "line": 2857,
       "what": "language server table",
       "ticket": "TR-970",
       "dropped": false,
@@ -2392,7 +2177,6 @@
     {
       "name": "lsp_detect",
       "kind": "function",
-      "line": 2867,
       "what": "languages a repo uses",
       "ticket": "TR-970",
       "dropped": false,
@@ -2403,7 +2187,6 @@
     {
       "name": "lsp_read_plugins",
       "kind": "function",
-      "line": 2880,
       "what": "installed Claude Code plugins",
       "ticket": "TR-970",
       "dropped": false,
@@ -2414,7 +2197,6 @@
     {
       "name": "lsp_have_bin",
       "kind": "function",
-      "line": 2886,
       "what": "is a language server binary installed",
       "ticket": "TR-970",
       "dropped": false,
@@ -2425,7 +2207,6 @@
     {
       "name": "lsp_state",
       "kind": "function",
-      "line": 2888,
       "what": "state of a language server for a repo",
       "ticket": "TR-970",
       "dropped": false,
@@ -2436,7 +2217,6 @@
     {
       "name": "lsp_fix",
       "kind": "function",
-      "line": 2898,
       "what": "commands that fix a language server",
       "ticket": "TR-970",
       "dropped": false,
@@ -2447,7 +2227,6 @@
     {
       "name": "lsp_missing",
       "kind": "function",
-      "line": 2903,
       "what": "repo languages with no working server",
       "ticket": "TR-970",
       "dropped": false,
@@ -2458,7 +2237,6 @@
     {
       "name": "cmux_config",
       "kind": "function",
-      "line": 2920,
       "what": "path of cmux's config file",
       "ticket": "TR-970",
       "dropped": false,
@@ -2469,7 +2247,6 @@
     {
       "name": "cmux_idle_reminder",
       "kind": "function",
-      "line": 2921,
       "what": "read cmux's idle reminder setting",
       "ticket": "TR-970",
       "dropped": false,
@@ -2480,7 +2257,6 @@
     {
       "name": "doctor_cmux",
       "kind": "function",
-      "line": 2925,
       "what": "doctor check for cmux's idle reminder",
       "ticket": "TR-970",
       "dropped": false,
@@ -2491,7 +2267,6 @@
     {
       "name": "doctor_lsp",
       "kind": "function",
-      "line": 2934,
       "what": "doctor check for language servers",
       "ticket": "TR-970",
       "dropped": false,
@@ -2502,7 +2277,6 @@
     {
       "name": "lsp_offer",
       "kind": "function",
-      "line": 2956,
       "what": "offer to install language servers at crew up",
       "ticket": "TR-970",
       "dropped": false,
@@ -2513,7 +2287,6 @@
     {
       "name": "doctor_keys",
       "kind": "function",
-      "line": 2994,
       "what": "doctor check of the keys",
       "ticket": "TR-969",
       "dropped": false,
@@ -2524,7 +2297,6 @@
     {
       "name": "doctor_kit",
       "kind": "function",
-      "line": 3014,
       "what": "doctor check of the kit and freeze",
       "ticket": "TR-969",
       "dropped": false,
@@ -2535,7 +2307,6 @@
     {
       "name": "cmd_doctor",
       "kind": "function",
-      "line": 3025,
       "what": "doctor",
       "ticket": "TR-969",
       "dropped": false,
@@ -2546,40 +2317,36 @@
     {
       "name": "ok",
       "kind": "function",
-      "line": 3027,
       "what": "doctor line for a passed check",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.ok",
+      "ported": true,
       "note": "Nested inside cmd_doctor, so the drift check cannot see it. tares.crew.doctor.Doctor.ok is its port, ported with cmd_doctor (TR-969)."
     },
     {
       "name": "no",
       "kind": "function",
-      "line": 3028,
       "what": "doctor line for a failed check",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.no",
+      "ported": true,
       "note": "Nested inside cmd_doctor, so the drift check cannot see it. tares.crew.doctor.Doctor.no is its port, ported with cmd_doctor (TR-969)."
     },
     {
       "name": "warn",
       "kind": "function",
-      "line": 3029,
       "what": "doctor line for a warning",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.warn",
+      "ported": true,
       "note": "Nested inside cmd_doctor, so the drift check cannot see it. tares.crew.doctor.Doctor.warn is its port, ported with cmd_doctor (TR-969)."
     },
     {
       "name": "local_only",
       "kind": "function",
-      "line": 3133,
       "what": "commands that work while Tares is down",
       "ticket": "TR-951",
       "dropped": false,
@@ -2593,7 +2360,6 @@
       "name": "factory-heavy",
       "kind": "script",
       "file": "claude-plugin/bin/factory-heavy",
-      "line": 1,
       "what": "run a heavy command under a machine-wide lock with a timeout",
       "ticket": "TR-972",
       "dropped": false,
@@ -2605,24 +2371,22 @@
       "name": "_factory",
       "kind": "python",
       "file": "tares/cli.py",
-      "line": 298,
       "what": "tares/cli.py: resolve the workspace and key, then exec bash on the factory script",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.cli:_factory",
+      "ported": true,
       "note": "Sets TARESD_URL, TARES_FACTORY_URL, TARES_FACTORY_KEY_SOURCE, TARES_AUTH_TOKEN, TARES_FACTORY_SOURCE and PATH, and runs the first crew up setup box (tares/factory_setup.py, TR-956). The os.execve of /bin/bash is what the mixed-mode dispatcher replaces; the key resolution is TR-949."
     },
     {
       "name": "plugin_dir",
       "kind": "python",
       "file": "tares/cli.py",
-      "line": 287,
       "what": "tares/cli.py: find the plugin folder holding bin/factory",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.cli:plugin_dir",
+      "ported": true,
       "note": "Packaging of the plugin in the wheel is TR-1064."
     }
   ],
@@ -2632,13 +2396,12 @@
       "kind": "case",
       "scope": "early",
       "arm": "help|-h|--help",
-      "line": 123,
       "local_only": true,
       "what": "print usage, exit 0",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.usage:USAGE",
+      "ported": true,
       "note": ""
     },
     {
@@ -2646,13 +2409,12 @@
       "kind": "case",
       "scope": "main",
       "arm": "crew",
-      "line": 3145,
       "local_only": false,
       "what": "crew subcommands (see the crew rows)",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.dispatch:find",
+      "ported": true,
       "note": ""
     },
     {
@@ -2660,7 +2422,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "status",
-      "line": 3146,
       "local_only": false,
       "what": "same as crew status",
       "ticket": "TR-957",
@@ -2674,7 +2435,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "desk",
-      "line": 3147,
       "local_only": false,
       "what": "same as crew desk",
       "ticket": "TR-957",
@@ -2688,7 +2448,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "watch",
-      "line": 3148,
       "local_only": false,
       "what": "same as crew watch",
       "ticket": "TR-958",
@@ -2702,7 +2461,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "halt",
-      "line": 3149,
       "local_only": true,
       "what": "same as crew halt",
       "ticket": "TR-955",
@@ -2716,7 +2474,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "resume",
-      "line": 3150,
       "local_only": true,
       "what": "same as crew resume",
       "ticket": "TR-955",
@@ -2730,7 +2487,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "attach",
-      "line": 3151,
       "local_only": true,
       "what": "same as crew attach",
       "ticket": "TR-957",
@@ -2744,7 +2500,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "logs",
-      "line": 3152,
       "local_only": true,
       "what": "same as crew logs",
       "ticket": "TR-957",
@@ -2758,7 +2513,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "down",
-      "line": 3153,
       "local_only": true,
       "what": "same as crew down",
       "ticket": "TR-955",
@@ -2772,7 +2526,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "roster",
-      "line": 3154,
       "local_only": true,
       "what": "compact station list for stations",
       "ticket": "TR-957",
@@ -2786,13 +2539,12 @@
       "kind": "case",
       "scope": "main",
       "arm": "spawn",
-      "line": 3155,
       "local_only": false,
       "what": "start a builder or helper",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:cmd_spawn",
+      "ported": true,
       "note": ""
     },
     {
@@ -2800,7 +2552,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "revive",
-      "line": 3156,
       "local_only": false,
       "what": "start a stopped station again",
       "ticket": "TR-955",
@@ -2814,7 +2565,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "restart",
-      "line": 3157,
       "local_only": false,
       "what": "restart a station with fresh settings",
       "ticket": "TR-955",
@@ -2828,7 +2578,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "retire",
-      "line": 3158,
       "local_only": true,
       "what": "stop a station for good",
       "ticket": "TR-955",
@@ -2842,7 +2591,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "spec",
-      "line": 3159,
       "local_only": false,
       "what": "plan a project with Claude",
       "ticket": "TR-966",
@@ -2856,7 +2604,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "session",
-      "line": 3160,
       "local_only": false,
       "what": "work on a project in the person's own session",
       "ticket": "TR-966",
@@ -2870,7 +2617,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "projects",
-      "line": 3161,
       "local_only": false,
       "what": "list projects handed to the crew",
       "ticket": "TR-967",
@@ -2884,7 +2630,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "finish",
-      "line": 3162,
       "local_only": false,
       "what": "mark a project done",
       "ticket": "TR-967",
@@ -2898,13 +2643,12 @@
       "kind": "case",
       "scope": "main",
       "arm": "settings",
-      "line": 3163,
       "local_only": false,
       "what": "print a station's settings",
       "ticket": "TR-957",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:cmd_settings",
+      "ported": true,
       "note": "Stays in bash until write_settings is ported (TR-953); the Python views do not register it."
     },
     {
@@ -2912,7 +2656,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "context",
-      "line": 3164,
       "local_only": false,
       "what": "read a station's /context",
       "ticket": "TR-967",
@@ -2926,7 +2669,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "plan",
-      "line": 3165,
       "local_only": false,
       "what": "read the plan's limits",
       "ticket": "TR-967",
@@ -2940,7 +2682,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "tidy",
-      "line": 3166,
       "local_only": true,
       "what": "remove a worktree or scratch folder",
       "ticket": "TR-968",
@@ -2954,13 +2695,12 @@
       "kind": "case",
       "scope": "main",
       "arm": "_parse-bg-id",
-      "line": 3167,
       "local_only": true,
       "what": "hidden: read a session id from claude --bg output on stdin",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:cmd_parse_bg_id",
+      "ported": true,
       "note": "Hidden test hook used by tests/factory/parse_test.sh. Keep it until the parity harness (TR-952) calls the Python parser directly."
     },
     {
@@ -2968,7 +2708,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "_mcp-url",
-      "line": 3168,
       "local_only": true,
       "what": "hidden: print the MCP address",
       "ticket": "TR-949",
@@ -2982,11 +2721,10 @@
       "kind": "case",
       "scope": "main",
       "arm": "_start-stations",
-      "line": 3169,
       "local_only": false,
       "what": "hidden: start the crew's stations",
       "ticket": "TR-953",
-      "dropped": false,
+      "dropped": "hidden bridge the bash crew up used to reach start_stations; the Python crew up calls start_stations directly.",
       "python": "",
       "ported": false,
       "note": "Hidden bridge: the Python crew up (TR-956) runs it for the launch loop until launch is ported (TR-953). Remove it with start_stations when TR-953 lands."
@@ -2996,7 +2734,6 @@
       "kind": "case",
       "scope": "main",
       "arm": "doctor",
-      "line": 3170,
       "local_only": true,
       "what": "check everything the crew needs",
       "ticket": "TR-969",
@@ -3010,13 +2747,12 @@
       "kind": "case",
       "scope": "main",
       "arm": "*",
-      "line": 3171,
       "local_only": false,
       "what": "unknown command: print usage, exit 1",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.dispatch:_no_command",
+      "ported": true,
       "note": ""
     },
     {
@@ -3024,13 +2760,12 @@
       "kind": "case",
       "scope": "crew",
       "arm": "up",
-      "line": 2552,
       "local_only": false,
       "what": "start the crew",
       "ticket": "TR-956",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.up:entry_crew_up",
+      "ported": true,
       "note": ""
     },
     {
@@ -3038,7 +2773,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "down",
-      "line": 2553,
       "local_only": true,
       "what": "stop the watch and every station",
       "ticket": "TR-955",
@@ -3052,7 +2786,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "status",
-      "line": 2554,
       "local_only": false,
       "what": "stations, desk, projects",
       "ticket": "TR-957",
@@ -3066,7 +2799,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "desk",
-      "line": 2555,
       "local_only": false,
       "what": "questions waiting for the person",
       "ticket": "TR-957",
@@ -3080,7 +2812,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "attach",
-      "line": 2556,
       "local_only": true,
       "what": "open a station in this terminal",
       "ticket": "TR-957",
@@ -3094,7 +2825,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "logs",
-      "line": 2557,
       "local_only": true,
       "what": "a station's recent output",
       "ticket": "TR-957",
@@ -3108,7 +2838,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "watch",
-      "line": 2558,
       "local_only": false,
       "what": "the watch loop",
       "ticket": "TR-958",
@@ -3122,7 +2851,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "halt",
-      "line": 2559,
       "local_only": true,
       "what": "halt the crew",
       "ticket": "TR-955",
@@ -3136,7 +2864,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "resume",
-      "line": 2560,
       "local_only": true,
       "what": "lift a halt",
       "ticket": "TR-955",
@@ -3150,7 +2877,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "freeze",
-      "line": 2561,
       "local_only": false,
       "what": "freeze the kit",
       "ticket": "TR-965",
@@ -3164,7 +2890,6 @@
       "kind": "case",
       "scope": "crew",
       "arm": "unfreeze",
-      "line": 2562,
       "local_only": false,
       "what": "lift the freeze",
       "ticket": "TR-965",
@@ -3178,13 +2903,12 @@
       "kind": "case",
       "scope": "crew",
       "arm": "update",
-      "line": 2563,
       "local_only": false,
       "what": "move every station onto the Claude Code now installed",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:cmd_crew_update",
+      "ported": true,
       "note": ""
     },
     {
@@ -3192,13 +2916,12 @@
       "kind": "case",
       "scope": "crew",
       "arm": "restart",
-      "line": 2564,
       "local_only": false,
       "what": "same as update --force",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:cmd_crew_restart",
+      "ported": true,
       "note": ""
     },
     {
@@ -3206,13 +2929,12 @@
       "kind": "case",
       "scope": "crew",
       "arm": "*",
-      "line": 2565,
       "local_only": false,
       "what": "unknown crew subcommand: error",
       "ticket": "TR-951",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.dispatch:_no_command",
+      "ported": true,
       "note": ""
     },
     {
@@ -3220,13 +2942,12 @@
       "kind": "case",
       "scope": "spawn",
       "arm": "builder",
-      "line": 1118,
       "local_only": false,
       "what": "spawn a builder",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:_builder_plan",
+      "ported": true,
       "note": ""
     },
     {
@@ -3234,13 +2955,12 @@
       "kind": "case",
       "scope": "spawn",
       "arm": "helper|releaser-helper",
-      "line": 1158,
       "local_only": false,
       "what": "spawn a helper",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:_helper_plan",
+      "ported": true,
       "note": "releaser-helper is an older spelling of helper that still works."
     },
     {
@@ -3248,13 +2968,12 @@
       "kind": "case",
       "scope": "spawn",
       "arm": "*",
-      "line": 1165,
       "local_only": false,
       "what": "unknown spawn kind: error",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:spawn",
+      "ported": true,
       "note": ""
     }
   ],
@@ -3267,8 +2986,8 @@
       "what": "path of the claude binary; overrides the PATH search",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:claude_bin",
+      "ported": true,
       "note": ""
     },
     {
@@ -3279,8 +2998,8 @@
       "what": "a Claude Code job's folder; its tmp is a tidy root",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:Tidy.roots",
+      "ported": true,
       "note": ""
     },
     {
@@ -3291,8 +3010,8 @@
       "what": "seconds between answers to the Crew page's asks in the watch nap",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
       "note": ""
     },
     {
@@ -3303,8 +3022,8 @@
       "what": "written to station settings (autocompact point); read by claude-plugin/scripts/statusline.py",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3315,8 +3034,8 @@
       "what": "first backoff in seconds after a failed Claude Code move",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:cc_delay",
+      "ported": true,
       "note": ""
     },
     {
@@ -3327,8 +3046,8 @@
       "what": "longest backoff in seconds",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:cc_delay",
+      "ported": true,
       "note": ""
     },
     {
@@ -3339,8 +3058,8 @@
       "what": "tries per Claude Code move",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:DEFAULT_TRIES",
+      "ported": true,
       "note": ""
     },
     {
@@ -3351,8 +3070,8 @@
       "what": "written to station settings (crew name); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3363,8 +3082,8 @@
       "what": "crew home folder (default ~/factory); written to station settings; set by tares/cli.py reader",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.from_env",
+      "ported": true,
       "note": ""
     },
     {
@@ -3375,8 +3094,8 @@
       "what": "crew name override",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:crew_name",
+      "ported": true,
       "note": ""
     },
     {
@@ -3387,8 +3106,8 @@
       "what": "written to station settings (crew home); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3399,8 +3118,8 @@
       "what": "folders searched for language server binaries instead of PATH (tests)",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:have_bin",
+      "ported": true,
       "note": ""
     },
     {
@@ -3411,8 +3130,8 @@
       "what": "fixed epoch seconds for tests",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:now_s",
+      "ported": true,
       "note": ""
     },
     {
@@ -3423,8 +3142,8 @@
       "what": "do not start the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.watch:start",
+      "ported": true,
       "note": ""
     },
     {
@@ -3435,8 +3154,8 @@
       "what": "written to station settings (orchestrator station name)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3447,8 +3166,8 @@
       "what": "written to station settings (parent station); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3459,8 +3178,8 @@
       "what": "seconds to wait after starting a session before reading its id; also pauses between starts and Claude Code move checks",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:_pause",
+      "ported": true,
       "note": ""
     },
     {
@@ -3471,8 +3190,8 @@
       "what": "seconds between plan readings in the watch nap",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.readings:plan_every",
+      "ported": true,
       "note": ""
     },
     {
@@ -3483,8 +3202,8 @@
       "what": "written to station settings (project slug)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3495,8 +3214,8 @@
       "what": "seconds a session must be quiet; between_turns sets it to 0 for one call",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:_quiet_wait",
+      "ported": true,
       "note": ""
     },
     {
@@ -3507,8 +3226,8 @@
       "what": "written to station settings (repo path); read by tidy_roots and the session-start hook",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3519,8 +3238,8 @@
       "what": "written to station settings (role); read by the guard and session-start hooks (guard.py, session_start.py)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3531,8 +3250,8 @@
       "what": "written to station settings (station name); read to tell a station from a person",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3567,8 +3286,8 @@
       "what": "seconds between checks during crew update",
       "ticket": "TR-964",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.cc_update:_poll",
+      "ported": true,
       "note": ""
     },
     {
@@ -3579,8 +3298,8 @@
       "what": "seconds a woken station is left alone",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.idle_wake:_settle",
+      "ported": true,
       "note": ""
     },
     {
@@ -3591,8 +3310,8 @@
       "what": "seconds between watch rounds",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.watch:cmd_watch",
+      "ported": true,
       "note": ""
     },
     {
@@ -3603,8 +3322,8 @@
       "what": "written to station settings (worktree folder); read by tidy_roots",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3615,8 +3334,8 @@
       "what": "set to 0 for the claude child process",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:run_claude",
+      "ported": true,
       "note": ""
     },
     {
@@ -3627,8 +3346,8 @@
       "what": "home folder: ~/factory, ~/.claude, ~/.claude.json, ~/.config/cmux, ~/.tares",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:home_dir",
+      "ported": true,
       "note": ""
     },
     {
@@ -3639,8 +3358,8 @@
       "what": "set to 1 for the claude child process",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:_child_env",
+      "ported": true,
       "note": ""
     },
     {
@@ -3651,8 +3370,8 @@
       "what": "searched for claude, tools and language servers; tares/cli.py puts tares-mcp's folder on it",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:claude_candidates",
+      "ported": true,
       "note": ""
     },
     {
@@ -3663,8 +3382,8 @@
       "what": "where the Tares daemon is; written to station settings and by tares/cli.py",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -3675,8 +3394,8 @@
       "what": "the person's key; kept as a script variable only, blanked in station settings",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_token",
+      "ported": true,
       "note": ""
     },
     {
@@ -3687,8 +3406,8 @@
       "what": "crew token file path under a name Claude Code does not hide; read by the MCP header helper (mcp_headers.py)",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3698,10 +3417,10 @@
       "writes": false,
       "what": "which engine runs `tares factory`: unset is Python with bash for commands not ported yet, `python` is Python only, `bash` is bash for every command",
       "ticket": "TR-1069",
-      "dropped": false,
-      "python": "tares.crew.dispatch:engine_setting",
-      "ported": true,
-      "note": "`\"engine\": \"bash\"` in ~/factory/crew.json is the same when the variable is unset; `tares factory doctor` shows the active engine."
+      "dropped": "the switch between the bash and the Python engine is removed in TR-975; only Python is left.",
+      "python": "",
+      "ported": false,
+      "note": "`\"engine\": \"bash\"` in ~/factory/crew.json is the same when the variable is unset; `tares factory doctor` shows the active engine. Was ported to tares.crew.dispatch:engine_setting."
     },
     {
       "name": "TARES_FACTORY_KEY_SOURCE",
@@ -3711,8 +3430,8 @@
       "what": "where the key came from, for doctor; set by tares/cli.py",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.keep_token",
+      "ported": true,
       "note": ""
     },
     {
@@ -3723,8 +3442,8 @@
       "what": "the crew's MCP endpoint; written to station settings and by tares/cli.py",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.mcp_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -3735,8 +3454,8 @@
       "what": "where the Tares address came from, for doctor; set by tares/cli.py",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.cli:_factory",
+      "ported": true,
       "note": ""
     },
     {
@@ -3747,8 +3466,8 @@
       "what": "crew token file path; written to station settings and exported for the person's Claude sessions",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3759,8 +3478,8 @@
       "what": "the Tares address stations are given; written to station settings and by tares/cli.py",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -3771,8 +3490,8 @@
       "what": "Tares data folder; login.json lives there (the MCP header helper, doctor)",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.login_path",
+      "ported": true,
       "note": ""
     },
     {
@@ -3783,8 +3502,8 @@
       "what": "MCP host for the default MCP address",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.mcp_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -3795,8 +3514,8 @@
       "what": "MCP port for the default MCP address",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.mcp_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -3807,8 +3526,8 @@
       "what": "project id sent as X-Tares-Project; written to station settings and by session and spec; read by the session-start hook",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_project",
+      "ported": true,
       "note": ""
     },
     {
@@ -3819,8 +3538,8 @@
       "what": "project name for reading; written to station settings and by session; read by the session-start hook",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -3831,8 +3550,8 @@
       "what": "contributor for a spec session on someone else's project; read by the session-start hook",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:_spec",
+      "ported": true,
       "note": ""
     },
     {
@@ -3843,8 +3562,8 @@
       "what": "name given to the person's session",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_project",
+      "ported": true,
       "note": ""
     },
     {
@@ -3855,8 +3574,8 @@
       "what": "set when the person took a project over from the crew; read by the session-start hook",
       "ticket": "TR-966",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.person:session_project",
+      "ported": true,
       "note": ""
     },
     {
@@ -3866,7 +3585,7 @@
       "writes": true,
       "what": "shell variable of factory: on or off, whether Tares answered",
       "ticket": "TR-949",
-      "dropped": false,
+      "dropped": "a shell variable of the bash script only; the Python client keeps the same answer in TaresClient.tares_state.",
       "python": "",
       "ported": false,
       "note": ""
@@ -3879,8 +3598,8 @@
       "what": "last fallback for the Tares address",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.client:TaresClient.tares_url",
+      "ported": true,
       "note": ""
     },
     {
@@ -3907,8 +3626,8 @@
       "what": "crew config: human, authorization, crew_name, models, release",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.crew_cfg",
+      "ported": true,
       "note": "Merged with templates/crew.json defaults on every command."
     },
     {
@@ -3921,8 +3640,8 @@
       "what": "one record per station: id, session, cwd, settings, grants",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.stations",
+      "ported": true,
       "note": "Written under the station lock."
     },
     {
@@ -3935,8 +3654,8 @@
       "what": "append-only event log",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.events",
+      "ported": true,
       "note": "guard.py also appends guard-deny lines (TR-971)."
     },
     {
@@ -3977,8 +3696,8 @@
       "what": "the newer kit the watch last told the person about",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.newer_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -4005,8 +3724,8 @@
       "what": "the newer Claude Code the watch last told the person about while frozen",
       "ticket": "TR-963",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.cc_newer_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -4019,8 +3738,8 @@
       "what": "the checkout the frozen copy was taken from",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.checkout_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -4033,8 +3752,8 @@
       "what": "the person's key copied for the stations (mode 600)",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.token_file",
+      "ported": true,
       "note": "The key stays a 0600 file (owner-only ACL on Windows) for stations; the OS keychain holds the person's login key (TR-949), stations never read it."
     },
     {
@@ -4061,8 +3780,8 @@
       "what": "pid of the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.watch:PID_FILE",
+      "ported": true,
       "note": "TR-958 also owns the stop file idea for a portable stop (no signals on Windows)."
     },
     {
@@ -4075,8 +3794,8 @@
       "what": "output of the background watch",
       "ticket": "TR-958",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.watch:LOG_FILE",
+      "ported": true,
       "note": ""
     },
     {
@@ -4089,8 +3808,8 @@
       "what": "folder of per-station files",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.stations_dir",
+      "ported": true,
       "note": ""
     },
     {
@@ -4103,8 +3822,8 @@
       "what": "the settings file a station launches with",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.launch:write_settings",
+      "ported": true,
       "note": ""
     },
     {
@@ -4117,8 +3836,8 @@
       "what": "mkdir lock holding pid; one starts or stops a station at a time",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.locks:station_lock",
+      "ported": true,
       "note": "A takeover sibling folder <station>.lock.takeover guards stale clearing."
     },
     {
@@ -4131,8 +3850,8 @@
       "what": "marks a builder finished so the watch leaves it stopped",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.done_file",
+      "ported": true,
       "note": "Created by a builder's own session: claude-plugin/skills/station-builder/SKILL.md runs touch on it (TR-974 makes that safe in Git Bash). factory removes it at spawn and reads it."
     },
     {
@@ -4159,8 +3878,8 @@
       "what": "a station's idle wake state",
       "ticket": "TR-961",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.wake_file",
+      "ported": true,
       "note": ""
     },
     {
@@ -4173,8 +3892,8 @@
       "what": "the grants text a station started with, to say what changed",
       "ticket": "TR-960",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.regrant:regrant_station",
+      "ported": true,
       "note": ""
     },
     {
@@ -4187,8 +3906,8 @@
       "what": "folder of station reports (<crew>-orchestrator.md)",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.reports_dir",
+      "ported": true,
       "note": "Written by the stations; the idle wake reads the orchestrator's RELEASE lines (TR-961)."
     },
     {
@@ -4201,8 +3920,8 @@
       "what": "worktrees for stations without a repo",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.paths:CrewPaths.worktrees_dir",
+      "ported": true,
       "note": "tidy may remove inside it (TR-968)."
     },
     {
@@ -4215,8 +3934,8 @@
       "what": "scratch folder that tidy may remove inside",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.tidy:Tidy.roots",
+      "ported": true,
       "note": ""
     },
     {
@@ -4230,8 +3949,8 @@
       "what": "worktrees of a project's builders, inside the project's own repo",
       "ticket": "TR-968",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:_builder_plan",
+      "ported": true,
       "note": "Made by spawn builder (TR-954); tidy may remove inside it, and tidy_roots lists it for every repo."
     },
     {
@@ -4245,8 +3964,8 @@
       "what": "spawn builder appends a .factory/ line so git ignores the worktrees folder",
       "ticket": "TR-954",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.stations:_builder_plan",
+      "ported": true,
       "note": "Found through git rev-parse --git-common-dir, so it is the shared exclude file of a linked worktree too; appended only when the line is missing."
     },
     {
@@ -4260,8 +3979,8 @@
       "what": "template of crew.json defaults",
       "ticket": "TR-948",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.state:kit_templates",
+      "ported": true,
       "note": "Must ship in the wheel (TR-1064)."
     },
     {
@@ -4275,8 +3994,8 @@
       "what": "plugin version, part of the kit fingerprint",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.version:plugin_min_version",
+      "ported": true,
       "note": ""
     },
     {
@@ -4290,8 +4009,8 @@
       "what": "Claude Code's record of trusted folders",
       "ticket": "TR-956",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.up:home_trusted",
+      "ported": true,
       "note": "Read by home_trusted (TR-956), trusted (TR-966) and doctor (TR-969)."
     },
     {
@@ -4305,8 +4024,8 @@
       "what": "Claude Code's state of a background session",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:job_state",
+      "ported": true,
       "note": "Includes respawnFlags, which doctor checks for cmux shim leftovers."
     },
     {
@@ -4320,8 +4039,8 @@
       "what": "installed Claude Code plugins",
       "ticket": "TR-965",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.up:installed_tares",
+      "ported": true,
       "note": "Read for a clashing tares plugin and by lsp_read_plugins (TR-970)."
     },
     {
@@ -4335,8 +4054,8 @@
       "what": "a session's transcript",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:transcript_of",
+      "ported": true,
       "note": ""
     },
     {
@@ -4350,8 +4069,8 @@
       "what": "cmux settings (JSONC); doctor reads agentIdleReminder, never edits",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:cmux_config",
+      "ported": true,
       "note": ""
     },
     {
@@ -4365,8 +4084,8 @@
       "what": "the key and cell URL `tares login` saved",
       "ticket": "TR-949",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:Doctor.login_path",
+      "ported": true,
       "note": "Since TR-949 tares login can keep the key in the OS keychain (opt-in with TARES_KEYRING=on) and login.json then keeps only the non-secret fields. Off by default: doctor, mcp-headers (TR-972) and ship.py still read .key from the file, so the default flips only when they read the keychain."
     },
     {
@@ -4391,7 +4110,7 @@
       "kind": "suite",
       "what": "stand-in claude binary for the tests",
       "ticket": "TR-1066",
-      "dropped": false,
+      "dropped": "bash stand-in for claude; replaced by tests/factory/fake_claude.py.",
       "python": "",
       "ported": false,
       "note": "TR-1066 writes the Python fake so Windows CI can run it."
@@ -4401,7 +4120,7 @@
       "kind": "suite",
       "what": "stand-in ps for the tests",
       "ticket": "TR-1066",
-      "dropped": false,
+      "dropped": "bash stand-in for ps; the Python engine reads processes with psutil (TARES_FAKE_PS_DIR is the test hook).",
       "python": "",
       "ported": false,
       "note": "The Python engine will not shell out to ps; this goes with the Python fake claude."
@@ -4412,8 +4131,8 @@
       "what": "the Python stand-in for claude and ps",
       "ticket": "TR-952",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/fake_claude.py",
+      "ported": true,
       "note": "Runs on Windows; test_crew_fake_claude.py compares it with the bash fakes."
     },
     {
@@ -4422,8 +4141,8 @@
       "what": "the stand-in Tares for the crew up scenarios",
       "ticket": "TR-956",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/fake_up_tares.py",
+      "ported": true,
       "note": "Test double (settings, grants, people, MCP initialize) the parity harness and test_crew_setup_contract.py start in a thread;  a real daemon."
     },
     {
@@ -4432,8 +4151,8 @@
       "what": "a pass-through proxy in front of a test Tares that fails one route on purpose",
       "ticket": "TR-1123",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/route_proxy.py",
+      "ported": true,
       "note": "Used by the spec_* parity scenarios; standard library only."
     },
     {
@@ -4442,8 +4161,8 @@
       "what": "a fake Tares, a copy of the kit and a driver that runs one launch function",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/launch_support.py",
+      "ported": true,
       "note": "Used by the launch_* scenarios of parity.py and by test_crew_launch.py."
     },
     {
@@ -4452,8 +4171,8 @@
       "what": "runs each scenario on the Python engine and compares it with the result recorded once from bash",
       "ticket": "TR-952",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/parity.py",
+      "ported": true,
       "note": "Python alone (TR-1172). The module docstring defines a scenario; --coverage lists them all; --record re-records one."
     },
     {
@@ -4462,8 +4181,8 @@
       "what": "the Python stand-in for a Tares, gh and tares, for the doctor scenarios",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/fake_tares.py",
+      "ported": true,
       "note": "Runs on Windows; standard library only."
     },
     {
@@ -4472,8 +4191,8 @@
       "what": "a driver that runs a real Tares on a throwaway database, feeds it fake usage readings and prints the pace it answers",
       "ticket": "TR-1160",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/pace_daemon.py",
+      "ported": true,
       "note": "Used by the pace_daemon scenario of parity.py; standard library only."
     },
     {
@@ -4482,8 +4201,8 @@
       "what": "a driver that runs the looping watch while the kit changes under it",
       "ticket": "TR-1160",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/freeze_support.py",
+      "ported": true,
       "note": "Used by the freeze_watch and freeze_copywatch scenarios of parity.py; standard library only."
     },
     {
@@ -4492,8 +4211,8 @@
       "what": "a driver that runs a real Tares on a throwaway database and prints the review queue, the setting and the desk",
       "ticket": "TR-1160",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/idle_wake_daemon.py",
+      "ported": true,
       "note": "Used by the idle_wake_daemon scenario of parity.py; standard library only."
     },
     {
@@ -4502,8 +4221,8 @@
       "what": "a fake Tares and a driver that runs one round of the watch (watch --once)",
       "ticket": "TR-959",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/watch_support.py",
+      "ported": true,
       "note": "Used by the watch_* scenarios of parity.py."
     },
     {
@@ -4512,8 +4231,8 @@
       "what": "a driver that runs the watch between its rounds and waits until a fake Tares has answered the asks route N times",
       "ticket": "TR-1163",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/readings_support.py",
+      "ported": true,
       "note": "Used by the usage_watch_* scenarios of parity.py; standard library only."
     },
     {
@@ -4522,8 +4241,8 @@
       "what": "a driver that runs the station's status line the way Claude Code does (usage_statusline scenario)",
       "ticket": "TR-1162",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/usage_support.py",
+      "ported": true,
       "note": "Used by the usage_statusline scenario of parity.py; standard library only."
     },
     {
@@ -4532,8 +4251,8 @@
       "what": "a driver that runs the guard cases in one process",
       "ticket": "TR-1162",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/guard_support.py",
+      "ported": true,
       "note": "Used by the guard scenario of parity.py; standard library only."
     },
     {
@@ -4542,8 +4261,8 @@
       "what": "a driver that runs the factory-heavy port",
       "ticket": "TR-1162",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/heavy_support.py",
+      "ported": true,
       "note": "Used by the heavy scenario of parity.py; standard library only."
     },
     {
@@ -4552,8 +4271,8 @@
       "what": "a driver that runs the plugin's guard and session-start hooks for a helper",
       "ticket": "TR-1162",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/crewname_support.py",
+      "ported": true,
       "note": "Used by the crewname_* scenarios of parity.py; standard library only."
     },
     {
@@ -4562,8 +4281,8 @@
       "what": "a driver that runs the plugin's session-start hook",
       "ticket": "TR-1162",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/spec_hook_support.py",
+      "ported": true,
       "note": "Used by the spec_hooks scenario of parity.py; standard library only."
     },
     {
@@ -4573,8 +4292,8 @@
       "kind": "suite",
       "ticket": "TR-1172",
       "dropped": false,
-      "python": "",
-      "ported": false
+      "python": "tests/factory/parity_labels.json",
+      "ported": true
     },
     {
       "name": "parity_scn_idle.py",
@@ -4583,8 +4302,8 @@
       "kind": "suite",
       "ticket": "TR-1172",
       "dropped": false,
-      "python": "",
-      "ported": false
+      "python": "tests/factory/parity_scn_idle.py",
+      "ported": true
     },
     {
       "name": "parity_scn_misc.py",
@@ -4593,8 +4312,8 @@
       "kind": "suite",
       "ticket": "TR-1172",
       "dropped": false,
-      "python": "",
-      "ported": false
+      "python": "tests/factory/parity_scn_misc.py",
+      "ported": true
     }
   ],
   "cmux_touchpoints": [
@@ -4603,12 +4322,11 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "Terminal shims \\(cmux\\)",
-      "line": 128,
       "what": "explains why claude_bin skips shims",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:is_terminal_shim",
+      "ported": true,
       "note": ""
     },
     {
@@ -4616,12 +4334,11 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "grep -q cmux",
-      "line": 134,
       "what": "skip a claude that is a script mentioning cmux",
       "ticket": "TR-950",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.claude:is_terminal_shim",
+      "ported": true,
       "note": "Mac only in practice; Windows has no cmux, but the real-binary search still needs to run there."
     },
     {
@@ -4629,12 +4346,11 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "cmux shows its own|notice, and cmux reads",
-      "line": 2916,
       "what": "why doctor reads cmux's idle reminder",
       "ticket": "TR-970",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor_lsp:CMUX_ON",
+      "ported": true,
       "note": ""
     },
     {
@@ -4642,7 +4358,6 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "^cmux_config\\(\\)|^cmux_idle_reminder\\(\\)|f=\\$\\(cmux_config\\)",
-      "line": 2920,
       "what": "find and read ~/.config/cmux/cmux.json (JSONC)",
       "ticket": "TR-970",
       "dropped": false,
@@ -4655,7 +4370,6 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "^doctor_cmux\\(\\)|\\(cmux_idle_reminder\\)",
-      "line": 2925,
       "what": "the doctor check",
       "ticket": "TR-970",
       "dropped": false,
@@ -4668,7 +4382,6 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "warn \\\"cmux shows|ok \\\"cmux's idle|could not parse \\$\\(cmux_config\\)",
-      "line": 2927,
       "what": "what doctor says about cmux",
       "ticket": "TR-970",
       "dropped": false,
@@ -4681,7 +4394,6 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "^\\s+doctor_cmux$",
-      "line": 3101,
       "what": "called from cmd_doctor",
       "ticket": "TR-970",
       "dropped": false,
@@ -4694,12 +4406,11 @@
       "kind": "touchpoint",
       "file": "claude-plugin/bin/factory",
       "match": "/tmp/cmux\\|cmux-claude-settings",
-      "line": 3122,
       "what": "a station started through the cmux shim keeps a temp settings file in its respawn flags; doctor flags it",
       "ticket": "TR-969",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tares.crew.doctor:TEMP_FLAGS",
+      "ported": true,
       "note": ""
     },
     {
@@ -4710,7 +4421,7 @@
       "line": 172,
       "what": "the doctor cmux check labels, and the check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED)",
       "ticket": "TR-970",
-      "dropped": false,
+      "dropped": "bash suite replaced by Python-only parity scenarios and tests (TR-1172)",
       "python": "",
       "ported": false,
       "note": "The labels come from crew_test.sh; the settings check belongs to TR-953: the Python write_settings must not set that variable."
@@ -4724,8 +4435,8 @@
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED)",
       "ticket": "TR-953",
       "dropped": false,
-      "python": "",
-      "ported": false,
+      "python": "tests/factory/parity.py",
+      "ported": true,
       "note": "Same words as the label in parity_labels.json, so the coverage report can match them."
     }
   ],

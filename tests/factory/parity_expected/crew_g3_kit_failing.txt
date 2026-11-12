@@ -187,7 +187,6 @@ crew-releaser	releaser		done	1.0.0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

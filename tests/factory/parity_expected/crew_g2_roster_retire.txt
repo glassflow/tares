@@ -21,7 +21,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: links-app-build-m1-rebase was retired; factory spawn starts it again
+tares factory: links-app-build-m1-rebase was retired; tares factory spawn starts it again
 == file crew/crew.json ==
 {
   "authorized": {

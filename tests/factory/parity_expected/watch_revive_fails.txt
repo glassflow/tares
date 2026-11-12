@@ -120,7 +120,6 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -181,7 +180,6 @@ tares factory: shop-build-m2 stopped; reviving it under the same name
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

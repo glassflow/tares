@@ -397,6 +397,15 @@ async function waitFor(url, tries = 100) {
              && /Working/.test(await crews.nth(0).getByTestId("crew-of-person-summary").innerText())
              && /^Not running/.test(await crews.nth(1).getByTestId("crew-of-person-summary").innerText())
              && (await p.getByTestId("crew-summary").count()) === 0);
+          ck(`${tag}: a crew's own name shows next to its person, and an ended crew is put away`,
+             /, crew ashish-mbp/.test(await crews.nth(0).locator("h2").first().innerText())
+             && (await p.getByTestId("crew-ended-toggle").innerText()) === "Show 1 ended crew");
+          await p.getByTestId("crew-ended-toggle").click();
+          ck(`${tag}: Show 1 ended crew shows it, folded, with when it was last heard and its unknown machine`,
+             (await crews.count()) === 3 && /Ended, last heard 2 days ago/.test(await crews.nth(2).innerText())
+             && /on an unknown machine/.test(await crews.nth(2).locator("h2").first().innerText())
+             && (await crews.nth(2).getByTestId("crew-of-person-body").count()) === 0);
+          await p.getByTestId("crew-ended-toggle").click();
           ck(`${tag}: the caller's crew starts open, the others folded, each still saying how it runs`,
              (await crews.nth(0).getByTestId("crew-of-person-body").count()) === 1
              && (await crews.nth(1).getByTestId("crew-of-person-body").count()) === 0

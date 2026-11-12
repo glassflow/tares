@@ -2,7 +2,7 @@
 """Windows spike for TR-946: can the tares-factory crew run on Windows with Claude Code?
 
 THROWAWAY. Not shipped, not part of CI. It records facts so the crew can decide go / no-go for
-porting the bash crew (claude-plugin/bin/factory) to Python. It needs only the standard library.
+porting the bash crew (claude-plugin/bin/factory, removed in TR-975; see git history) to Python. It needs only the standard library.
 `psutil` and `keyring` are optional: the script reports them as missing instead of crashing, and
 the answers that need them are marked "not answered".
 
@@ -449,7 +449,7 @@ def one_line(text, n: int = 160) -> str:
 # the fields bash reads from a job's state.json and from `claude agents --json`
 # ---------------------------------------------------------------------------------------------
 
-# (field, where claude-plugin/bin/factory uses it)
+# (field, where the bash crew used it; line numbers are those of the removed claude-plugin/bin/factory)
 STATE_FIELDS = [
     ("sessionId", "the conversation id a station resumes (job_state, ~lines 826, 902, 2397, 2443)"),
     ("respawnFlags", "model and effort recovered when a session is adopted (~631); temp-settings check (~3067)"),
