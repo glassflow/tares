@@ -3238,6 +3238,7 @@ def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | No
         _setup_views(tmp, env)
         _cc_doctor_tools(tmp)
         crew, state = tmp / "crew", tmp / "claude"
+        env["TARES_FAKE_PS_DIR"] = str(state)   # the process list is the folder's, not the machine's (see _cc_spares)
         kit = _cc_kit(_cc_plugin(tmp, env))
         base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
         rows, agents = {}, []
@@ -3374,6 +3375,7 @@ def _moved(r: Run, name: str, old_session: str, version: str) -> bool:
     return bool(_bg_of(r, name)) and _cc_checks_moved(r, name, old_session, version)
 
 
+_CC_ARGV: dict = {}    # key -> the command line a process in _CC_PROCS stands for
 _CC_PROCS: dict = {}   # (scenario folder, key) -> a process that stands for someone attached, or for a spare
 
 
@@ -3381,6 +3383,7 @@ def _cc_process(tmp: Path, key: str, argv0: str) -> None:
     """A process whose command line starts with argv0 (`exec -a`), for `attached` and the process listing to find."""
     import time
     own_the_process_list()
+    _CC_ARGV[key] = argv0
     _CC_PROCS[(str(tmp), key)] = subprocess.Popen(["bash", "-c", f"exec -a '{argv0}' sleep 120"],
                                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.4)   # until bash has exec'd
@@ -3552,6 +3555,15 @@ def _cc_spares(tmp: Path) -> None:
     for key, sock, version in (("unclaimed", "unclaimed", "1.1.0"), ("claimed", "gone", "1.1.0"), ("fresh", "new", "1.2.0")):
         _cc_process(tmp, key, f"claude bg-pty-host --bg-pty-host {tmp}/{sock}.pty.sock 200 50 -- /x/versions/{version} "
                               f"--bg-spare {tmp}/{sock}.claim.sock")
+    # The process list is the fake folder's: these three, by their real pids (the engine stops the unclaimed one by its pid).
+    # The file does not change when one ends, so a stopped spare is reaped at once: its pid is then gone, as a real listing
+    # would not show it, and the engine skips it the next time it reads the list.
+    import threading
+    for (f, k), proc in _CC_PROCS.items():
+        if f == str(tmp):
+            threading.Thread(target=proc.wait, daemon=True).start()
+    (tmp / "claude" / "ps-list").write_text("".join(f"{p.pid} {_CC_ARGV[k]}\n" for (f, k), p in _CC_PROCS.items() if f == str(tmp)
+                                                    and k in ("unclaimed", "claimed", "fresh")), encoding="utf-8")
 
 
 _cc("cc_move_stale_spare", "a restart that lands on an older spare is tried again; an unclaimed older spare is stopped, a claimed one and a new one are left",
@@ -7942,7 +7954,9 @@ CU_RETRY = "PUT /api/crew/claude-retry?crew=crew"
 CU_SETTINGS = {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind", "challenger": False, "builders_max": 3}
 CU_TARES = {"GET /api/crew/settings": (200, {"settings": CU_SETTINGS}), "GET /api/crew/projects": (200, {"projects": []}),
             "GET /api/grants": (200, {"all": ""}), CU_RETRY: (200, {"ok": True})}
-CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2"}
+# TARES_FAKE_PS_DIR: the process list is the folder's (empty here), never the machine's. Without it `crew update` read the
+# machine's real `--bg-spare` processes, and ended an old one of a Claude Code session running beside the suite.
+CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2", "TARES_FAKE_PS_DIR": "{tmp}/claude"}
 # bash reads GET /api/crew/pace before it starts a session; the Python pace is a stub until TR-962, so the
 # read is left out of the list of what was asked (the pace itself is not what these scenarios test).
 # Reads of Tares are left out, as in the cc_move scenarios: the engines make them in a different number and order
