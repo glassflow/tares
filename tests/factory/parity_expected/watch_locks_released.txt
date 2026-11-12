@@ -258,7 +258,7 @@ tares factory: shop-build-m3 stopped; reviving it under the same name
       }
     ],
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -283,7 +283,7 @@ tares factory: shop-build-m3 stopped; reviving it under the same name
       }
     ],
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -308,7 +308,7 @@ tares factory: shop-build-m3 stopped; reviving it under the same name
       }
     ],
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

@@ -100,7 +100,7 @@ stub-token
 == file crew/crew.json ==
 {
   "authorized": {
-    "at": "2026-11-11",
+    "at": "<DATE>",
     "by": "Test Crew"
   },
   "human": {
@@ -148,7 +148,7 @@ stub-token
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
 == file crew/stations/crew-orchestrator.grants ==
-- "the reviewer may comment on draft PRs" (2026-11-11)
+- "the reviewer may comment on draft PRs" (<DATE>)
 == file crew/stations/crew-orchestrator.settings.json ==
 {
   "autoMode": {
@@ -158,11 +158,11 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crew/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that Test Crew authorized by running `tares factory crew up`. Sessions not recorded there are out of scope.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -227,7 +227,7 @@ stub-token
   }
 }
 == file crew/stations/crew-reviewer.grants ==
-- "the reviewer may comment on draft PRs" (2026-11-11)
+- "the reviewer may comment on draft PRs" (<DATE>)
 == file crew/stations/crew-reviewer.settings.json ==
 {
   "autoMode": {
@@ -237,11 +237,11 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -290,7 +290,7 @@ stub-token
   "crew-orchestrator": {
     "cwd": "<TMP>/crew",
     "effort": "xhigh",
-    "grants": "3932637151",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -308,7 +308,7 @@ stub-token
   "crew-reviewer": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "3932637151",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -329,7 +329,7 @@ stub-token
 == file crew-two/crew.json ==
 {
   "authorized": {
-    "at": "2026-11-11",
+    "at": "<DATE>",
     "by": "Test Crew"
   },
   "human": {
@@ -377,7 +377,7 @@ stub-token
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
 == file crew-two/stations/crew-orchestrator.grants ==
-- "the reviewer may comment on draft PRs" (2026-11-11)
+- "the reviewer may comment on draft PRs" (<DATE>)
 == file crew-two/stations/crew-orchestrator.settings.json ==
 {
   "autoMode": {
@@ -387,11 +387,11 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crew-two/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that Test Crew authorized by running `tares factory crew up`. Sessions not recorded there are out of scope.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -456,7 +456,7 @@ stub-token
   }
 }
 == file crew-two/stations/crew-reviewer.grants ==
-- "the reviewer may comment on draft PRs" (2026-11-11)
+- "the reviewer may comment on draft PRs" (<DATE>)
 == file crew-two/stations/crew-reviewer.settings.json ==
 {
   "autoMode": {
@@ -466,11 +466,11 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -519,7 +519,7 @@ stub-token
   "crew-orchestrator": {
     "cwd": "<TMP>/crew-two",
     "effort": "xhigh",
-    "grants": "3932637151",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -537,7 +537,7 @@ stub-token
   "crew-reviewer": {
     "cwd": "<TMP>/crew-two",
     "effort": "high",
-    "grants": "3932637151",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

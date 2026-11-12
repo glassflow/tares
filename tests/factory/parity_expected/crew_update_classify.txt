@@ -227,7 +227,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-releaser
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -267,7 +267,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-releaser
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

@@ -82,4 +82,4 @@ no projects handed to the crew yet: tares factory spec in a repo starts one
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 

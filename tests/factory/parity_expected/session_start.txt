@@ -185,7 +185,7 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 
 GET /api/crew/projects key=no 
 GET /api/projects/p_notes/crew key=no 
@@ -203,7 +203,7 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 
 GET /api/crew/projects key=no 
 GET /api/projects/p_notes/crew key=no 
@@ -221,7 +221,7 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 
 GET /health key=no 
 POST /mcp key=no {
@@ -237,7 +237,7 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 
 GET /health key=no 
 POST /mcp key=no {
@@ -253,7 +253,7 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 
 GET /health key=no 
 POST /mcp key=no {
@@ -269,5 +269,5 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 

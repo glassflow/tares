@@ -301,7 +301,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2727157353",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -326,7 +326,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "770200294",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -351,7 +351,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "770200294",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

@@ -238,7 +238,7 @@ tares factory: spawn takes builder or helper
     "autonomy": "",
     "cwd": "<TMP>/links",
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -257,7 +257,7 @@ tares factory: spawn takes builder or helper
   "links-app-build-m1-rebase": {
     "cwd": "<TMP>/links",
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

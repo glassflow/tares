@@ -134,7 +134,7 @@ tares factory: shop-build-m1 stopped; reviving it under the same name
       }
     ],
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

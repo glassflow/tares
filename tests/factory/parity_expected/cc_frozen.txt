@@ -663,7 +663,7 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -692,7 +692,7 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -721,7 +721,7 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

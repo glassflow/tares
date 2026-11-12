@@ -50,7 +50,7 @@ The crew takes a few minutes to check in. Next:
 == file crew/crew.json ==
 {
   "authorized": {
-    "at": "2026-11-11",
+    "at": "<DATE>",
     "by": "Test Crew"
   },
   "human": {
@@ -99,7 +99,7 @@ The crew takes a few minutes to check in. Next:
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-releaser"}
 == file crew/stations/crew-orchestrator.grants ==
-- "the releaser may restart the staging database" (2026-11-11)
+- "the releaser may restart the staging database" (<DATE>)
 == file crew/stations/crew-orchestrator.settings.json ==
 {
   "autoMode": {
@@ -109,11 +109,11 @@ The crew takes a few minutes to check in. Next:
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crew/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that Test Crew authorized by running `tares factory crew up`. Sessions not recorded there are out of scope.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -176,7 +176,7 @@ The crew takes a few minutes to check in. Next:
   }
 }
 == file crew/stations/crew-releaser.grants ==
-- "the releaser may restart the staging database" (2026-11-11)
+- "the releaser may restart the staging database" (<DATE>)
 == file crew/stations/crew-releaser.settings.json ==
 {
   "autoMode": {
@@ -186,11 +186,11 @@ The crew takes a few minutes to check in. Next:
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Building container images, loading them into the local kind cluster `factory`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in the repositories of the projects handed to this crew on Tares (crew_projects), are expected work that Test Crew authorized.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the releaser station `crew-releaser` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the releaser station `crew-releaser` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -233,7 +233,7 @@ The crew takes a few minutes to check in. Next:
   }
 }
 == file crew/stations/crew-reviewer.grants ==
-- "the releaser may restart the staging database" (2026-11-11)
+- "the releaser may restart the staging database" (<DATE>)
 == file crew/stations/crew-reviewer.settings.json ==
 {
   "autoMode": {
@@ -243,11 +243,11 @@ The crew takes a few minutes to check in. Next:
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Test Crew authorized.",
-      "Test Crew granted this on 2026-11-11 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
+      "Test Crew granted this on <DATE> for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on 2026-11-11 with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L3-review, meaning: builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -294,7 +294,7 @@ The crew takes a few minutes to check in. Next:
   "crew-orchestrator": {
     "cwd": "<TMP>/crew",
     "effort": "xhigh",
-    "grants": "925418911",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -312,7 +312,7 @@ The crew takes a few minutes to check in. Next:
   "crew-releaser": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "925418911",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -330,7 +330,7 @@ The crew takes a few minutes to check in. Next:
   "crew-reviewer": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "925418911",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

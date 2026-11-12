@@ -90,10 +90,10 @@ A very long project name tha 3/3      all done               0
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 POST /api/projects/p2/finish key=no {
   "words": "all shipped"
 }
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 

@@ -135,7 +135,7 @@ tares factory: limits.autocompact_tokens is 100000; stations use 150000, since a
   "crew-orchestrator": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

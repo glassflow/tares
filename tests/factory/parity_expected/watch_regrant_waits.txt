@@ -248,7 +248,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2727157353",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -273,7 +273,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2727157353",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

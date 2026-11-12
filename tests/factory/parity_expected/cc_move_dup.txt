@@ -162,7 +162,7 @@ tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the on
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

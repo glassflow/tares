@@ -115,7 +115,7 @@ exit: 0
   "crew-reviewer": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

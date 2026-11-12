@@ -3234,6 +3234,7 @@ def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | No
     `done` names builders that are finished (stations/<s>.done); `files` are more files of the fake Claude Code."""
     def setup(tmp: Path, env: dict) -> None:
         _setup_views(tmp, env)
+        _cc_doctor_tools(tmp)
         crew, state = tmp / "crew", tmp / "claude"
         kit = _cc_kit(_cc_plugin(tmp, env))
         base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
@@ -5869,6 +5870,7 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     s = user_by().sub(r"\1<USER>", s)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
+    s = today_re().sub("<DATE>", s)
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
     s = PID_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}<PID>", s)
     s = SESSION.sub("<ID>", s)
@@ -5880,6 +5882,13 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
 
 # what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
 WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
+
+
+def today_re():
+    """Today's date (UTC, and the local one): a grant says "granted on <date>" and the authorization "at" it, so what a run
+    prints holds the day it ran on."""
+    days = {time.strftime("%Y-%m-%d", time.gmtime()), time.strftime("%Y-%m-%d")}
+    return re.compile(r"(?<![\d-])(?:" + "|".join(sorted(days)) + r")(?![\d-]|T\d)")
 
 
 def user_by():
@@ -5900,6 +5909,8 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
     if isinstance(v, list):
         return [norm_json(x, tmp, key) for x in v]
     if isinstance(v, str):
+        if key == "grants" and v.isdigit():
+            return "<GRANTS>"   # the fingerprint of the grants a station was started with: the text of a grant holds the day it was made
         if key == "kit" and v.isdigit():
             return "<KIT>"      # the fingerprint of the kit a station runs on: it moves with every change to the plugin
         if key in ID_KEYS and HEX8.fullmatch(v):
@@ -8906,15 +8917,26 @@ def tares_keyed(**kw) -> dict:
     return {"TARES_AUTH_TOKEN": TARES_KEY, **kw}
 
 
-def _fake_codex(tmp: Path) -> None:
-    """A `codex`, `docker`, `kind` and `kubectl` on PATH that do nothing: doctor only asks whether the Codex CLI and the
-    kind release profile's tools are installed (the machine's own may not have them)."""
-    for name in ("codex", "docker", "kind", "kubectl"):
+def _stub_bins(tmp: Path, *names: str, code: int = 0) -> None:
+    """Programs on PATH that do nothing and exit `code`: doctor only asks whether a tool is installed (or, for gh, signed in),
+    and the machine's own may lack it or answer otherwise."""
+    for name in names:
         if sys.platform == "win32":
-            (tmp / "bin" / f"{name}.cmd").write_bytes(b"@exit /b 0\r\n")
+            (tmp / "bin" / f"{name}.cmd").write_bytes(f"@exit /b {code}\r\n".encode())
         else:
-            (tmp / "bin" / name).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            (tmp / "bin" / name).write_text(f"#!/bin/sh\nexit {code}\n", encoding="utf-8")
             (tmp / "bin" / name).chmod(0o755)
+
+
+def _cc_doctor_tools(tmp: Path) -> None:
+    """Doctor's tool lines read the same on every machine: docker, kind and kubectl installed, gh installed but not signed in."""
+    _stub_bins(tmp, "docker", "kind", "kubectl")
+    _stub_bins(tmp, "gh", code=1)
+
+
+def _fake_codex(tmp: Path) -> None:
+    """The Codex CLI and the kind release profile's tools, installed."""
+    _stub_bins(tmp, "codex", "docker", "kind", "kubectl")
 
 
 def tares_setup_tools(tmp: Path, env: dict) -> None:
@@ -9473,6 +9495,7 @@ scenario(Scenario(
 # the bash suite reads it from.
 
 def _cv_world(tmp: Path, env: dict) -> None:
+    _cc_doctor_tools(tmp)
     state = tmp / "claude"
     state.mkdir(parents=True, exist_ok=True)
     (state / "version").write_text("1.0.0\n", encoding="utf-8")

@@ -192,4 +192,4 @@ GET /health key=no
 GET /api/crew/settings key=no 
 GET /api/crew/pace key=no 
 GET /api/desk?state=open key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 

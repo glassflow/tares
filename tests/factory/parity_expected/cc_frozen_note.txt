@@ -566,7 +566,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -595,7 +595,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -624,7 +624,7 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

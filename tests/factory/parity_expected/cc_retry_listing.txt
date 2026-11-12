@@ -384,7 +384,7 @@ tares factory: crew-releaser runs Claude Code 1.12.4
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -433,7 +433,7 @@ tares factory: crew-releaser runs Claude Code 1.12.4
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

@@ -196,7 +196,7 @@ tares factory: crew-reviewer keeps coming back on an older Claude Code than 1.2.
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

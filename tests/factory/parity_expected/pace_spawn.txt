@@ -875,7 +875,7 @@ exit: 0
   "crew-orchestrator": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -900,7 +900,7 @@ exit: 0
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -925,7 +925,7 @@ exit: 0
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -944,7 +944,7 @@ exit: 0
     "autonomy": "",
     "cwd": "<TMP>/links",
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -963,7 +963,7 @@ exit: 0
   "links-app-build-m1-probe": {
     "cwd": "<TMP>/links",
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -983,7 +983,7 @@ exit: 0
     "autonomy": "",
     "cwd": "<TMP>/links",
     "effort": "high",
-    "grants": "2980329244",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

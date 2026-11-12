@@ -236,7 +236,7 @@ tares factory: crew-reviewer runs Claude Code 1.1.0
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -265,7 +265,7 @@ tares factory: crew-reviewer runs Claude Code 1.1.0
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

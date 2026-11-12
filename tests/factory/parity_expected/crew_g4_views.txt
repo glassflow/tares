@@ -127,7 +127,7 @@ Crew page: http://127.0.0.1:<PORT>/crew
   "shop-build-m1": {
     "cwd": "",
     "effort": "high",
-    "grants": "1",
+    "grants": "<GRANTS>",
     "id": "<ID>",
     "model": "opus",
     "project": "shop",
@@ -139,7 +139,7 @@ Crew page: http://127.0.0.1:<PORT>/crew
   "shop-build-m2": {
     "cwd": "",
     "effort": "high",
-    "grants": "1",
+    "grants": "<GRANTS>",
     "id": "<ID>",
     "model": "opus",
     "project": "shop",
@@ -206,10 +206,10 @@ GET /api/crew/settings key=no
 GET /api/grants?project=shop key=no 
 GET /api/crew/pace key=no 
 GET /api/desk?state=open key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
 GET /api/grants?project=shop key=no 
 GET /api/crew/pace key=no 
 GET /api/desk?state=open key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 

@@ -326,7 +326,7 @@ tares factory: every station runs Claude Code 1.5.7.1, one session each
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -360,7 +360,7 @@ tares factory: every station runs Claude Code 1.5.7.1, one session each
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -394,7 +394,7 @@ tares factory: every station runs Claude Code 1.5.7.1, one session each
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

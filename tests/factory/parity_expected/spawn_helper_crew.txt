@@ -383,7 +383,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   "crew-releaser": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -401,7 +401,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   "crew-releaser-deploy": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -419,7 +419,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   "crew-reviewer": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -437,7 +437,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   "crew-reviewer-probe": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -455,7 +455,7 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   "crew-reviewer-second": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

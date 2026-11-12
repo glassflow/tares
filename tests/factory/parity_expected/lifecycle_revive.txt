@@ -161,7 +161,7 @@ tares factory: nobody is not a recorded station
       }
     ],
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

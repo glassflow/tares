@@ -84,6 +84,11 @@ ck("on Windows a path under a placeholder has its backslashes (single or doubled
 with mock.patch.object(parity, "is_windows", lambda: False):
     _np = parity.norm_text("a\\b <TMP>\\c")
 ck("...and elsewhere a backslash is kept", _np == "a\\b <TMP>\\c", _np)
+_today = __import__("time").strftime("%Y-%m-%d", __import__("time").gmtime())
+ck("today's date is a placeholder (a grant says when it was made), another day is data, a timestamp is a timestamp",
+   parity.norm_text(f"granted on {_today} ({_today}) at {_today}T10:11:12Z, not 2001-02-03 or x{_today}0")
+   == "granted on <DATE> (<DATE>) at <TS>, not 2001-02-03 or x" + _today + "0")
+ck("a grants fingerprint (it holds the day a grant was made) is a placeholder", parity.norm_json({"grants": "925418911"}) == {"grants": "<GRANTS>"})
 ck("a uuid is replaced", parity.norm_text("id 123e4567-e89b-12d3-a456-426614174000") == "id <ID>")
 ck("words and small numbers are kept", parity.norm_text("started 3 stations, port 8788") == "started 3 stations, port 8788")
 ck("CRLF becomes LF", parity.norm_text("a\r\nb") == "a\nb")

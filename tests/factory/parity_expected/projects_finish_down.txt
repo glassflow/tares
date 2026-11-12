@@ -82,7 +82,7 @@ tares factory: Tares did not finish Links App: boom
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 POST /api/projects/p1/finish key=no {
   "words": ""
 }

@@ -171,7 +171,7 @@ tares factory: crew-reviewer stopped; reviving it under the same name
       }
     ],
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

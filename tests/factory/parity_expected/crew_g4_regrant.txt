@@ -65,7 +65,7 @@ tares factory: shop-build-m1 has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "4219394354",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -554,7 +554,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
   "crew-orchestrator": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "1173605558",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -579,7 +579,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2727157353",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -609,7 +609,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2118665527",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -634,7 +634,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2118665527",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -659,7 +659,7 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2118665527",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

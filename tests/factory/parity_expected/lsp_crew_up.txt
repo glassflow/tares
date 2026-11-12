@@ -489,7 +489,7 @@ The crew takes a few minutes to check in. Next:
   "crew-orchestrator": {
     "cwd": "<TMP>/crew",
     "effort": "xhigh",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",
@@ -507,7 +507,7 @@ The crew takes a few minutes to check in. Next:
   "crew-reviewer": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "3515105045",
+    "grants": "<GRANTS>",
     "grants_tried": null,
     "id": "<ID>",
     "kit": "<KIT>",

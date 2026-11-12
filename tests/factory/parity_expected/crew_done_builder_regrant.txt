@@ -289,7 +289,7 @@ tares factory: shop-build-m2 has new permissions from Tares; restarting it with 
   "shop-build-m1": {
     "cwd": "<TMP>/crew",
     "effort": "high",
-    "grants": "4222372425",
+    "grants": "<GRANTS>",
     "grants_skipped": "2737810170",
     "grants_tried": null,
     "id": "<ID>",
@@ -315,7 +315,7 @@ tares factory: shop-build-m2 has new permissions from Tares; restarting it with 
       }
     ],
     "effort": "high",
-    "grants": "2737810170",
+    "grants": "<GRANTS>",
     "grants_skipped": "1418472466",
     "grants_tried": null,
     "id": "<ID>",

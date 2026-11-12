@@ -507,13 +507,13 @@ exit: 0
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/grants key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/grants key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/grants key=no 

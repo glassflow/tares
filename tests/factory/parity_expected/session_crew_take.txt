@@ -56,7 +56,7 @@ POST /mcp key=no {
     "protocolVersion": "2025-03-26"
   }
 }
-GET /api/crew/projects key=no 
+GET /api/crew/projects?crew=crew key=no 
 GET /api/projects key=no 
 GET /api/crew/projects key=no 
 POST /api/projects/p_shop/takeover key=no {
