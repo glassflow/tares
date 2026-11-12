@@ -105,7 +105,7 @@ jobs:
   # The crew's parity scenarios (tests/factory/parity.py) on the Python engine alone, on Linux and on macOS: each runs
   # in a throwaway crew and must print and write what the bash engine did when its result was recorded
   # (tests/factory/parity_expected). Split into shards, one scenario at a time per runner (PARITY_JOBS=1: the cc_*
-  # scenarios share session ids). The 43 scenarios marked not_windows run only here. tests/test_parity.py (in the
+  # scenarios share session ids). The 11 scenarios marked not_windows run only here. tests/test_parity.py (in the
   # test job) checks that every recorded check label (parity_labels.json) has a scenario, without running them again.
   parity:
     name: parity (${{ matrix.os }} ${{ matrix.shard }}/12)
