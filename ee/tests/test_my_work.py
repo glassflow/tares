@@ -328,6 +328,19 @@ async def main():
         async with mk() as cx:
             ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
         ck("and the hand-over is recorded under crew a, not the default", ho["crew"] == "a", ho)
+        # two running crews is no guess to make: the default, as before
+        await push("P", orch_lines("p-o2", "b-orchestrator", "b", "m1"))
+        out = await mf.hand_over(project="Shop", repos=[{"path": "/w/shop"}])
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
+        ck("with two running crews (a and b) it stays on the default crew", ho["crew"] == "crew", ho)
+        # an orchestrator that ended does not count as running
+        await push("P", [{"type": "session_state", "timestamp": ts(0), "sessionId": "p-o2", "state": "ended",
+                          "reason": "test"}])
+        out = await mf.hand_over(project="Shop", repos=[{"path": "/w/shop"}])
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
+        ck("and once b has ended, a is the one running crew again", ho["crew"] == "a", ho)
 
         print("== the default crew, and a cell of one person ==")
         await push(None, orch_lines("l-o1", "crew-orchestrator", "crew", ""))
