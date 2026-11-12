@@ -1238,11 +1238,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     def work_of(me: dict, hidden: set, want: str = "", detail: bool = False) -> dict:
         """What belongs to person `me` ({id, name}) as GET /api/crew/my-work gives it: `ready`,
-        `in_progress`, `led_projects`, `desk` and `spec_questions`, leaving out the projects in
+        `in_progress`, `bouncing`, `led_projects`, `desk` and `spec_questions`, leaving out the projects in
         `hidden`. `want` (a project id) keeps only that project's spec questions. `detail` adds,
         to each led project, its `project_id` and `milestones` ([{id, name, checks, since}]) for
         the home page; the route does not ask for it."""
-        ready, doing, led = [], [], []
+        from . import merge_queue       # here: merge_queue imports this module
+        ready, doing, led, bouncing = [], [], [], []
         for uid in store.handed_over_projects(finished=False, taken=False):
             p = store.get_project(uid)
             if p is None or uid in hidden:
@@ -1259,6 +1260,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 elif wait[t["id"]]["ready"]:
                     ready.append({"project": p["name"], "ticket": factory_mod.label(t),
                                   "title": t["title"], "repo": t.get("repo") or ""})
+                step = merge_queue.ladder_step(store, t["id"])
+                if step:
+                    bouncing.append({
+                        "project": p["name"], "ticket": factory_mod.label(t), "title": t["title"],
+                        "holder": t["holder"] or "", "stage": t["stage"] or "",
+                        "count": merge_queue.bounces(store, t["id"]), "ladder": step,
+                        "reason": merge_queue.last_bounce_reason(store, t["id"])})
             if leads(p, me["id"]):
                 ms, full = [], []
                 for m in store.list_milestones(uid):
@@ -1277,15 +1285,17 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 for d in map(desk_out, store.list_desk("open"))
                 if d["project"] not in hidden and desk_is_mine(d, me["id"])]
         asked = team_mod.get().open_questions_for(team_reader(), me["id"], hidden, want)
-        return {"ready": ready, "in_progress": doing, "led_projects": led, "desk": desk,
-                "spec_questions": asked}
+        return {"ready": ready, "in_progress": doing, "bouncing": bouncing, "led_projects": led,
+                "desk": desk, "spec_questions": asked}
 
     @app.get("/api/crew/my-work")
     def my_work(request: Request, crew: str | None = None, project: str | None = None):
         """What belongs to the caller's person (TR-633), across the projects that have an open
         hand-over and that the caller can see: `ready` (their tickets that can start),
         `in_progress` (their tickets a station holds; a ticket with no assignee is its project
-        lead's, or `local`'s when the project has no lead), and `led_projects` with the milestones
+        lead's, or `local`'s when the project has no lead), `bouncing` (those of them that came
+        back from review three or more times, each with `count`, `ladder` (3 or 5) and the last
+        `reason`; TR-1092), and `led_projects` with the milestones
         whose tickets are all delivered. `desk` is the open desk items addressed to them (TR-634);
         `spec_questions` is the open questions a spec asked of them (TR-636), in any project they
         can see, finished or not; `project` (an id or a name) keeps only that project's, and one

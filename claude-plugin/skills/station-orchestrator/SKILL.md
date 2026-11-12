@@ -139,11 +139,12 @@ On each scheduled tick, and whenever you wake with nothing queued:
 
 1. `tares factory roster`. A station that should exist is missing or `gone`: `tares factory revive <station>` with a prompt that carries any pending hand-off. Don't revive a builder whose tickets are all merged.
 2. `my_work`, first (on an older Tares, the ready tickets of `crew_projects` as in Boot). Assign each `ready` ticket to a builder (start it, as above). Watch `in_progress`: a ticket in `doing`, `review` or `changes` with nothing new for 45 minutes: read the holder's report and the ticket's record, then ask it one line; unreachable, revive it. When Tares has no PR link for a ticket in review, check `gh pr list -R <owner>/<repo>` (you run in the crew home, so always name the repo). A project under `releasing` was taken over by the person: release it (above), even without a `TAKEOVER` message. Do not walk the tickets of every project in `crew_projects`: the others are other people's.
-3. Only for the `led_projects`: a milestone whose tickets are all delivered (`milestones_ready_to_check`) gets its checks run and is finished (above): tell the person, and start the next (with a releaser, `RELEASE` first). The last milestone complete: finish the project (above). A project you do not lead is finished by its lead's crew.
-4. A ticket merged that another of yours waits on (`depends_on`, any repo): it shows in `ready` now; assign it, starting its builder if needed.
-5. The `desk` items of `my_work`, addressed to your person: ask them in this session, as in "Keep it in view" under "The desk". An item addressed to someone else is theirs; do not ask it here.
-6. Append a status block to your report: per project, milestone progress, blockers, open desk items.
-7. Stay silent unless something changed: on a quiet tick print nothing in your session, not even "nothing new", apart from step 5's hourly re-show (step 6 still happens).
+3. `bouncing` in `my_work`: tickets of your person that came back from review or the merge queue three times (`ladder` 3) or five (`ladder` 5), each with `count` and the last `reason`. For each one, once per ladder step (note the ticket and step in your report, and skip it while the step is the same), read `get_ticket` and the reviewer's findings, then either send its builder a concrete hint (what to change, in one message) or reassign it (`assign_ticket`). Do not put it on the desk yourself: Tares adds one desk item at `ladder` 5, addressed to your person, and step 6 asks it.
+4. Only for the `led_projects`: a milestone whose tickets are all delivered (`milestones_ready_to_check`) gets its checks run and is finished (above): tell the person, and start the next (with a releaser, `RELEASE` first). The last milestone complete: finish the project (above). A project you do not lead is finished by its lead's crew.
+5. A ticket merged that another of yours waits on (`depends_on`, any repo): it shows in `ready` now; assign it, starting its builder if needed.
+6. The `desk` items of `my_work`, addressed to your person: ask them in this session, as in "Keep it in view" under "The desk". An item addressed to someone else is theirs; do not ask it here.
+7. Append a status block to your report: per project, milestone progress, blockers, open desk items.
+8. Stay silent unless something changed: on a quiet tick print nothing in your session, not even "nothing new", apart from step 6's hourly re-show (step 7 still happens).
 
 ## Status for the person
 

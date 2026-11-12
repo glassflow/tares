@@ -785,7 +785,9 @@ async def set_later(later: bool = True, project: str = "") -> str:
 async def my_work(crew: str = "", project: str = "") -> str:
     """What belongs to the person whose key this is, across the projects handed to a crew that
     they can see: `ready` (their tickets that can start: nothing they wait on is open), `in_progress`
-    (their tickets a station holds, with the holder and stage), `led_projects` (projects they
+    (their tickets a station holds, with the holder and stage), `bouncing` (those of them that
+    came back from review three or more times: `count`, `ladder` 3 or 5 and the last `reason`),
+    `led_projects` (projects they
     lead, with the milestones whose tickets are all delivered: `milestones_ready_to_check`),
     `desk` (the open desk items addressed to them) and `spec_questions` (the open questions a
     spec asked them as the owner of a repo, always empty without an enterprise licence: answer each

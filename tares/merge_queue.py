@@ -47,6 +47,8 @@ BY = "merge-queue"
 _FAR = 10 ** 9        # sorts after every real position
 UNKNOWN_LIMIT = 10    # ticks in a row GitHub may answer "mergeable: null" before the row blocks
 FILES_SHOWN = 5       # conflict files named in a reason
+LADDER = (3, 5)       # bounces at which a ticket climbs a step (TR-1092): the orchestrator, then the desk
+REASON_SHOWN = 200    # characters of the last reason a desk line carries
 
 # what a person's answer says "yes" with, and the words that turn a yes into a request for a change
 _YES = re.compile(r"(yes|approved)\b", re.I)
@@ -347,6 +349,101 @@ async def _back_if_failed(store, row: dict, ans: dict) -> bool:
         return False
     await send_back(store, row, kind, why)
     return True
+
+
+# ── the bounce ladder (TR-1092) ───────────────────────────────────────────────
+
+def _first_line(text, limit: int = REASON_SHOWN) -> str:
+    """A reason in one short plain line: spaces folded, no em dash, cut at `limit`."""
+    one = " ".join(_plain(text).split()).replace(" ,", ",")
+    return one if len(one) <= limit else one[:limit - 3].rstrip() + "..."
+
+
+def _bounce_events(store, ticket: str | None) -> list[tuple]:
+    """Every time the ticket came back, oldest first, as (when, reason): a review whose verdict is
+    changes or block, and a `send_back` history row (the queue's own return for a conflict, failing
+    CI or a blocking guardrail). Each row is one bounce. Not counted: a pass (the same-changes
+    review Tares writes for a head the queue moved is a pass), the `merge_queue` history rows, and
+    a pull request waiting on CI or on a person."""
+    if not ticket:
+        return []
+    out = []
+    for r in store.ticket_reviews(ticket) or []:
+        if r.get("verdict") not in ("changes", "block"):
+            continue
+        fs = r.get("findings") or []
+        pick = next((f for f in fs if f.get("blocking")), fs[0] if fs else None)
+        out.append((r.get("at"), (pick or {}).get("text") or ""))
+    for h in store.ticket_history(ticket) or []:
+        if h.get("field") == "send_back":
+            out.append((h.get("at"), h.get("reason") or ""))
+    out.sort(key=lambda e: e[0].timestamp() if hasattr(e[0], "timestamp") else 0.0)
+    return out
+
+
+def bounces(store, ticket: str | None) -> int:
+    """How many times the ticket came back from review or from the queue: reviews that asked for
+    changes or blocked, plus send backs, each once. A ticket with neither is 0."""
+    return len(_bounce_events(store, ticket))
+
+
+def last_bounce_reason(store, ticket: str | None) -> str:
+    """The reason of the latest bounce, in one short line; empty when it gave none."""
+    events = _bounce_events(store, ticket)
+    return _first_line(events[-1][1]) if events else ""
+
+
+def ladder_step(store, ticket: str | None) -> int:
+    """The highest step of LADDER the ticket has a `ladder` history row for; 0 when none."""
+    if not ticket:
+        return 0
+    steps = [int(h["value"]) for h in store.ticket_history(ticket) or []
+             if h.get("field") == "ladder" and str(h.get("value") or "").isdigit()]
+    return max(steps, default=0)
+
+
+def _desk_five(store, uid: str, t: dict, n: int, reason: str) -> None:
+    """The one desk item at the last step: the hand-over's person, not blocking. It is not
+    written again when the project already has an item with this question."""
+    label = factory_mod.label(t)
+    said = f"{label} has come back {n} times" + (f": {reason}" if reason else "") + ". What should happen?"
+    if any(x["question"] == said for x in store.list_desk(None, uid)):
+        return
+    store.add_desk_item(
+        uid, said,
+        f"The review or the merge queue sent {label} back {n} times. The orchestrator tried a hint "
+        "or another builder at the third.",
+        [], "Look at the reviewer's findings and say what the builder should do",
+        "Repeated send-backs mean the builder and the reviewer are not converging.",
+        f"What happens to {label}", [label], False, BY, [], now_utc(),
+        to_person_id=_person_id(store, uid))
+
+
+def climb_ladder(store, g: dict) -> None:
+    """For each ticket of a project the queue covers that is in review or changes: at LADDER[0]
+    bounces one `ladder` history row (value `3`), at LADDER[1] another (value `5`) and one desk
+    item. Each step is written once; the rows are what `my_work` lists as `bouncing`."""
+    for uid in g["projects"]:
+        for t in g["tickets"].get(uid, []):
+            if t.get("stage") not in ("review", "changes"):
+                continue
+            try:
+                n = bounces(store, t["id"])
+                if n < LADDER[0]:
+                    continue
+                have = {str(h.get("value")) for h in store.ticket_history(t["id"])
+                        if h.get("field") == "ladder"}
+                reason = last_bounce_reason(store, t["id"])
+                for step in LADDER:
+                    if n < step or str(step) in have:
+                        continue
+                    if step == LADDER[-1]:      # the item first: a failed write retries next tick
+                        _desk_five(store, uid, t, n, reason)
+                    store.add_ticket_history(
+                        t["id"], uid, "ladder", str(step), reason or None, BY, BY, now_utc())
+            except Exception as e:  # noqa: BLE001 - one ticket never stops the others
+                print(f"[tares] merge queue ladder of {t.get('id')} failed: "
+                      f"{type(e).__name__}: {e}", flush=True)
 
 
 # ── the tick ──────────────────────────────────────────────────────────────────
@@ -748,3 +845,4 @@ async def tick(store) -> None:
     # what changed above is in `g["rows"]` (the same dicts); re-read states the walkers wrote
     g["rows"] = await asyncio.to_thread(store.merge_queue_open)
     await _run_queue(store, g, fresh)
+    await asyncio.to_thread(climb_ladder, store, g)
