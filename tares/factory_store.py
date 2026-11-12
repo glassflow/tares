@@ -964,18 +964,25 @@ class FactoryStore:
                 "AND CAST(e.payload AS VARCHAR) LIKE '%[TF:%' "
                 "ORDER BY e.event_time DESC LIMIT ?", [source, limit]).fetchall()
         stations = self._station_of({r[0] for r in rows})
-        out = []
+        out, seen = [], set()
         for sid, at, pj in reversed(rows):
             station = stations.get(sid)
             try:
                 o = json.loads(pj) if pj else {}
             except (TypeError, ValueError):
                 continue
+            if str(o.get("type") or "").startswith("api-request"):
+                continue   # Claude Code's copy of a request, recorded by an older plugin
             msg = o.get("message") if isinstance(o.get("message"), dict) else {}
             for b in msg.get("content") or []:
                 if not (isinstance(b, dict) and b.get("type") == "tool_use"
                         and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
                     continue
+                # one call, once: the same transcript line can be stored more than once
+                if b.get("id"):
+                    if (sid, b["id"]) in seen:
+                        continue
+                    seen.add((sid, b["id"]))
                 inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                 text = str(inp.get("message") or inp.get("content") or "")
                 m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text)

@@ -34,7 +34,11 @@ from datetime import datetime, timezone
 # Claude Code's own bookkeeping lines in a transcript: no conversation in them, so they are not
 # shipped (about half of a session's lines otherwise)
 BOOKKEEPING = {"attachment", "queue-operation", "mode", "permission-mode", "atis-latch",
-               "ai-title", "last-prompt", "file-history-snapshot"}
+               "ai-title", "last-prompt", "file-history-snapshot",
+               # Claude Code's record of each API request (2.1.3xx): an api-request-blob carries a
+               # copy of the previous assistant message, every tool call in it again, and no
+               # timestamp, so Tares would list each call a second time at the moment it arrived
+               "api-request", "api-request-blob", "api-request-shape"}
 
 FLOW_TOOL = "set_session_flow"   # the tares MCP tool; Claude Code prefixes the server name
                                   # (mcp__tares__..., or mcp__plugin_tares_tares__... from a plugin)
@@ -731,6 +735,44 @@ def ship_main(cfg: dict, hook: dict, transcript: str, flow: str) -> tuple:
     return ok, flow
 
 
+# One shipper per transcript at a time: a lock file made with O_EXCL (works the same on Windows),
+# taken over when older than LOCK_STALE (a hook killed while holding it). A hook that finds it held
+# ships nothing: the holder, or the next hook, sends the new lines.
+LOCK_STALE = 120
+# seconds a hook waits for the lock: the ones after which no hook may come for a while
+LOCK_WAIT = {"SessionEnd": 5, "Stop": 5, "SubagentStop": 5}
+
+
+def ship_lock(cfg: dict, transcript: str, wait: float = 0) -> str:
+    """The lock file's path when this process now holds the transcript's lock, else ""."""
+    path = _main_off_file(cfg, transcript)[:-len(".off")] + ".lock"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return path
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(path) > LOCK_STALE:
+                    os.remove(path)
+                    continue
+            except OSError:
+                continue
+        except OSError:
+            return ""
+        if time.monotonic() >= deadline:
+            return ""
+        time.sleep(0.1)
+
+
+def release_lock(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def drain_main(cfg: dict, hook: dict, transcript: str, flow: str) -> None:
     """SessionEnd: no hook comes after it, so send the rest of a backlog, chunk by chunk, while
     chunks go through and time is left. Runs last, so the session's end is already recorded if
@@ -818,11 +860,23 @@ def main() -> None:
     announce(cfg, hook, flow)   # a session the plugin joined after it started
 
     shipped_ok = True
+    lock = ""
     if transcript and os.path.isfile(transcript):
-        shipped_ok, flow = ship_main(cfg, hook, transcript, flow)
-
-    if session_id and shipped_ok:
-        ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
+        # the async hooks of one session run side by side; only one ships its transcript at a
+        # time, or two read the same offset and post the same lines (each call listed twice)
+        # a turn's end waits a little: no hook may come after it for a long time, and its last
+        # lines (a person's answer the desk looks for) must not wait for the next turn
+        lock = ship_lock(cfg, transcript, wait=LOCK_WAIT.get(event, 0))
+    try:
+        if lock:
+            shipped_ok, flow = ship_main(cfg, hook, transcript, flow)
+        if lock and session_id and shipped_ok:
+            ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
+    except BaseException:
+        release_lock(lock) if lock else None
+        raise
+    if lock and event != "SessionEnd":
+        release_lock(lock)
     if session_id and event != "SessionEnd":
         # whatever became of the transcript: a session whose lines can't get through is still alive
         report_state(cfg, hook, event, flow)
@@ -832,8 +886,12 @@ def main() -> None:
         ship_lines(cfg, [synthetic_line(hook, "session_end", flow)])
         write_flow(data_dir, session_id, "")
 
-    if event == "SessionEnd" and shipped_ok and transcript and os.path.isfile(transcript):
-        drain_main(cfg, hook, transcript, flow)
+    if event == "SessionEnd" and lock:
+        try:
+            if shipped_ok:
+                drain_main(cfg, hook, transcript, flow)
+        finally:
+            release_lock(lock)
 
 
 # ── the session's state (working / idle / waiting / ended), from the hook that fired ─
