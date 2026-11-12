@@ -18,7 +18,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 -- after --
 {
   "fails": 1,
-  "in": 120
+  "in": 100
 }
 == step: crew update ==
 exit: 1
@@ -37,7 +37,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 -- after --
 {
   "fails": 2,
-  "in": 180
+  "in": 150
 }
 == step: crew update ==
 exit: 1
@@ -56,7 +56,7 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
 -- after --
 {
   "fails": 3,
-  "in": 180
+  "in": 150
 }
 == file crew/crew.json ==
 {

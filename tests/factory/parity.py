@@ -860,7 +860,7 @@ scenario(Scenario(
          lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
         ("orchestrator may spawn",
          lambda r: "Bash(factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
-        ("orchestrator may spawn as tares factory too (TR-1069)",
+        ("orchestrator may spawn as tares factory",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
          # on Windows the resolved path is tares.exe (any case), so compare the file name without its extension
@@ -876,7 +876,8 @@ scenario(Scenario(
     covers=["crew-$r env FACTORY_STATION", "crew-$r env FACTORY_ROLE", "crew-$r env FACTORY_PARENT empty",
             "crew-$r has no TARES_PROJECT", "crew-$r is told the shared MCP endpoint", "no Rius, no comms",
             "stations turn the plugin on, whatever the person's settings say", "orchestrator may spawn",
-            "nothing goes to production without the person", "grant quoted in the allow rules"],
+            "orchestrator may spawn as tares factory", "nothing goes to production without the person",
+            "grant quoted in the allow rules"],
 ))
 
 _LINKS = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
@@ -7993,14 +7994,15 @@ def _cu_is(got, want) -> bool:
     return True
 
 
-def _cu_wait():
-    """An `after` hook: seconds from now to the station's retry time, up to the next whole minute (a run on a busy
-    machine is a few seconds later than a quiet one), and its failed moves."""
+def _cu_wait(step: int = 10):
+    """An `after` hook: seconds from now to the station's retry time, rounded up to a multiple of `step` (the two
+    engines run a moment apart, and a loaded machine makes the gap longer: a coarse step keeps both in one bucket),
+    and its failed moves."""
     def after(tmp: Path):
         import time
         s = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))["crew-reviewer"]
         at = s.get("cc_retry_at")
-        return {"in": -(-(int(at) - int(time.time())) // 60) * 60 if at else None, "fails": s.get("cc_fails")}
+        return {"in": -(-(int(at) - int(time.time())) // step) * step if at else None, "fails": s.get("cc_fails")}
     return after
 
 
@@ -8255,8 +8257,8 @@ scenario(Scenario(
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
-    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait()),
-           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait())],
+    steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)),
+           Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait(60))],
     checks=[
         ("old spares every time: three resumed tries then a new conversation, for each station",
          lambda r: _cu_names(r)[:8] == ["crew-reviewer"] * 4 + ["crew-orchestrator"] * 4
@@ -8297,9 +8299,9 @@ scenario(Scenario(
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
            for _ in range(3)],
     checks=[
-        ("the first wait is FACTORY_CC_BACKOFF", lambda r: r.snap(0)["fails"] == 1 and r.snap(0)["in"] == 120),
-        ("the second doubles, up to the cap", lambda r: r.snap(1)["fails"] == 2 and r.snap(1)["in"] == 180),
-        ("the third stays at the cap", lambda r: r.snap(2)["fails"] == 3 and r.snap(2)["in"] == 180),
+        ("the first wait is FACTORY_CC_BACKOFF", lambda r: r.snap(0)["fails"] == 1 and 90 < r.snap(0)["in"] <= 100),
+        ("the second doubles, up to the cap", lambda r: r.snap(1)["fails"] == 2 and 140 < r.snap(1)["in"] <= 150),
+        ("the third stays at the cap", lambda r: r.snap(2)["fails"] == 3 and 140 < r.snap(2)["in"] <= 150),
         ("the Tares list follows", lambda r: [p["stations"]["crew-reviewer"]["fails"] for p in _cu_puts(r)] == [1, 2, 3]),
     ],
     covers=[],

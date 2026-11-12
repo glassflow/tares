@@ -2932,7 +2932,7 @@ doctor_cmux() {
 }
 
 doctor_lsp() { # per handed-over repo and language: has Claude Code a language server (ok), or what to run (warn)
-  local project repo lang plugin bin inst state _n _m cmds
+  local project repo lang plugin bin inst state _n _m cmds why
   [ -n "$(project_repo_rows 2>/dev/null)" ] || return 0
   lsp_read_plugins
   while IFS=$'\t' read -r project repo; do
@@ -2946,7 +2946,13 @@ doctor_lsp() { # per handed-over repo and language: has Claude Code a language s
         warn "project $project: $lang in $repo: cannot tell whether Claude Code has a language server, because claude plugin list --json failed"
       else
         cmds=$(lsp_fix "$state" "$plugin" "$bin" "$inst" | sed 's/.*/`&`/' | paste -sd ' ' - | sed 's/` `/` then `/')
-        warn "project $project: $lang in $repo has no language server for Claude Code, so the LSP tool cannot answer for it ($(case "$state" in no-binary) echo "the $plugin plugin is on, $bin is not on PATH" ;; no-plugin) echo "$bin is installed, the $plugin plugin is not on" ;; *) echo "neither the $plugin plugin nor $bin is there" ;; esac)). Run $cmds; $ME crew up offers it"
+        # not a `$(case ...)` inside the string: bash 3.2 (macOS /bin/bash) cannot parse that
+        case "$state" in
+          no-binary) why="the $plugin plugin is on, $bin is not on PATH" ;;
+          no-plugin) why="$bin is installed, the $plugin plugin is not on" ;;
+          *) why="neither the $plugin plugin nor $bin is there" ;;
+        esac
+        warn "project $project: $lang in $repo has no language server for Claude Code, so the LSP tool cannot answer for it ($why). Run $cmds; $ME crew up offers it"
       fi
     done < <(lsp_detect "$repo")
   done < <(project_repo_rows 2>/dev/null)
