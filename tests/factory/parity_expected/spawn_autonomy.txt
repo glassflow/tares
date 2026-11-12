@@ -1,0 +1,373 @@
+== step: spawn builder strict m1 {TMP}/core T1 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+  ✓ started strict-build-m1 (sonnet, high)
+== step: spawn builder --autonomy L5-dark strict m2 {TMP}/core T2 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: autonomy must be L3-review or L4-ship
+== step: spawn builder loose m1 {TMP}/core T1 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+  ✓ started loose-build-m1 (sonnet, high)
+== step: spawn builder --autonomy L3-review loose m2 {TMP}/core T2 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+  ✓ started loose-build-m2 (sonnet, high)
+== step: spawn builder --autonomy L4-ship loose m3 {TMP}/core T3 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: a project can only be stricter than the crew (crew autonomy is L3-review); the person raises the crew setting instead
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "strict-build-m1"}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "loose-build-m1"}
+{"at": "<TS>", "detail": "00000003", "event": "started", "station": "loose-build-m2"}
+== file crew/stations/loose-build-m1.grants ==
+
+@project 
+== file crew/stations/loose-build-m1.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project loose: <TMP>/core or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repository of project loose, checked out at <TMP>/core, and opening pull requests there, is expected work that Pat authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `loose-build-m1` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project loose in <TMP>/core. It was started by the station `crew-orchestrator`. Pat chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "loose",
+    "FACTORY_REPO": "<TMP>/core",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "loose-build-m1",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/core/.factory/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
+    "TARES_PROJECT": "uc_loose",
+    "TARES_PROJECT_NAME": "loose"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/loose-build-m2.grants ==
+
+@project 
+== file crew/stations/loose-build-m2.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project loose: <TMP>/core or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repository of project loose, checked out at <TMP>/core, and opening pull requests there, is expected work that Pat authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `loose-build-m2` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project loose in <TMP>/core. It was started by the station `crew-orchestrator`. Pat chose autonomy level L3-review, meaning: builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "loose",
+    "FACTORY_REPO": "<TMP>/core",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "loose-build-m2",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/core/.factory/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
+    "TARES_PROJECT": "uc_loose",
+    "TARES_PROJECT_NAME": "loose"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/strict-build-m1.grants ==
+
+@project 
+== file crew/stations/strict-build-m1.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project strict: <TMP>/core or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repository of project strict, checked out at <TMP>/core, and opening pull requests there, is expected work that Pat authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `strict-build-m1` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. It works on project strict in <TMP>/core. It was started by the station `crew-orchestrator`. Pat chose autonomy level L3-review, meaning: builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "strict",
+    "FACTORY_REPO": "<TMP>/core",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "strict-build-m1",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/core/.factory/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
+    "TARES_PROJECT": "uc_strict",
+    "TARES_PROJECT_NAME": "strict"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "loose-build-m1": {
+    "autonomy": "",
+    "cwd": "<TMP>/core",
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "sonnet",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "loose",
+    "project_id": "uc_loose",
+    "repo": "<TMP>/core",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/loose-build-m1.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "loose-build-m2": {
+    "autonomy": "L3-review",
+    "cwd": "<TMP>/core",
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "sonnet",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "loose",
+    "project_id": "uc_loose",
+    "repo": "<TMP>/core",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/loose-build-m2.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "strict-build-m1": {
+    "autonomy": "L3-review",
+    "cwd": "<TMP>/core",
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "sonnet",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "strict",
+    "project_id": "uc_strict",
+    "repo": "<TMP>/core",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/strict-build-m1.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/core",
+    "id": "<ID>",
+    "name": "strict-build-m1",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  },
+  {
+    "cwd": "<TMP>/core",
+    "id": "<ID>",
+    "name": "loose-build-m1",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  },
+  {
+    "cwd": "<TMP>/core",
+    "id": "<ID>",
+    "name": "loose-build-m2",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "strict-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name strict-build-m1, project strict, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nT1"], "cwd": "<TMP>/core"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "loose-build-m1", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name loose-build-m1, project loose, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nT1"], "cwd": "<TMP>/core"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "loose-build-m2", "--model", "sonnet", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name loose-build-m2, project loose, repo <TMP>/core, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.\n\nYour task:\nT2"], "cwd": "<TMP>/core"}

@@ -1,0 +1,55 @@
+== step: crew freeze ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no Tares answers at http://127.0.0.1:9. Start one with `tares up` in another terminal, connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where yours runs), then try again.
+-- after --
+false
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}

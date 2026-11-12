@@ -1,0 +1,125 @@
+== step: context orchestrator ==
+exit: 0
+-- stdout --
+crew-orchestrator: 95300 of 200000 tokens (48%), sent to Tares
+-- stderr --
+
+== step: context nobody ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: unknown station nobody
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "name": "crew",
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "role": "orchestrator",
+    "sessionId": "sess-orch-1"
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-p", "--no-session-persistence", "--settings", "<SETTINGS-FILE>", "--output-format", "stream-json", "--verbose", "--plugin-dir", "<REPO>/claude-plugin", "--resume", "sess-orch-1", "--fork-session", "/context"], "cwd": "<TMP>/work"}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+POST /ingest/claude_code key=no {
+  "context_usage": {
+    "categories": [
+      {
+        "kind": "used",
+        "name": "System prompt",
+        "tokens": 3000
+      },
+      {
+        "kind": "used",
+        "name": "Messages",
+        "tokens": 57600
+      },
+      {
+        "kind": "free",
+        "name": "Free space",
+        "tokens": 106400
+      },
+      {
+        "kind": "buffer",
+        "name": "Autocompact buffer",
+        "tokens": 33000
+      }
+    ],
+    "mcp_tools": [
+      {
+        "name": "mcp__tares__a",
+        "server_name": "tares",
+        "tokens": 120
+      }
+    ],
+    "model": "claude-opus-5-5",
+    "percentage": 48,
+    "raw_max_tokens": 200000,
+    "skills": [
+      {
+        "name": "station-builder",
+        "source": "plugin",
+        "tokens": 800
+      }
+    ],
+    "total_tokens": 95300
+  },
+  "sessionId": "sess-orch-1",
+  "timestamp": "<TS>",
+  "type": "session_context"
+}
+GET /health key=no 
+GET /api/crew/settings key=no 

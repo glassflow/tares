@@ -1,0 +1,78 @@
+== step: grant_rules Links App Pat ==
+exit: 0
+-- stdout --
+Pat granted this on 2026-01-02 for all projects, in their own words: "restart staging". Acting within that grant is expected work.
+Pat granted this on 2026-02-03 for project Links App, in their own words: "push to main on Fridays". Acting within that grant is expected work.
+Pat granted this on 2026-03-04 for all projects, in their own words: "deploy the docs". Acting within that grant is expected work.
+Pat granted this on 2026-03-05 for all projects, in their own words: "tidy the cache". Acting within that grant is expected work.
+Pat granted this (undated) for all projects, in their own words: "no date at all". Acting within that grant is expected work.
+Pat granted this (undated) for all projects, in their own words: """". Acting within that grant is expected work.
+-- stderr --
+
+== step: compact_window ==
+exit: 0
+-- stdout --
+150000
+-- stderr --
+tares factory: limits.autocompact_tokens is 100000; stations use 150000, since a smaller window can thrash
+== step: compact_window ==
+exit: 0
+-- stdout --
+auto
+-- stderr --
+
+== step: compact_window ==
+exit: 0
+-- stdout --
+200000
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": "oops"
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{}

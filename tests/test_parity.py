@@ -1,24 +1,20 @@
-"""The parity harness (tests/factory/parity.py): the normaliser, the crew_basic scenario, the exit codes,
-and the scenario count gate.
+"""The parity harness (tests/factory/parity.py): the normaliser, the scenario environment, a scenario run on
+Python alone against its recorded result, the recorded labels and the coverage count.
 
-Checks: what the normaliser removes (temp folder, timestamps, pids, ids, key order) and what it keeps;
-`parity.py crew_basic` exits 0 and its Python side matches bash now that `crew up` is ported; a scenario
-whose command the Python engine has not moved over (a made-up word) prints `SKIP python: not ported` and exits 0; a failing bash side exits 1; a Python side that prints the same as bash
-matches, and one that prints something else exits 1; `--coverage` prints a percentage and exits 0;
-`--require-full` exits 1 below 100%; an unknown scenario exits 2.
-
-A difference in what the engines WRITE fails parity as surely as one in what they print: stub commands
-(PARITY_CMD_BASH, PARITY_CMD_PYTHON) that print the same but write another crew file, other contents, or
-make another Claude Code call must exit 1 and name the file; the same writes must match. Also: the
-`--coverage` count is the number of `check "` lines of each suite (pinned against a fixture), a
-`covers` label missing from its suite is an ERROR, a skipped bash side is an error off Windows and
-fine on it, and the scenario environment drops the person's CLAUDE_CONFIG_DIR, XDG_* and GH_* settings.
-
-The runs that need the real bash engine are skipped where bash and jq are not there (Windows). The
-stub runs need neither.
+Checks: what the normaliser removes (temp folder, timestamps, pids, ids, the checkout's folder, the kit fingerprint,
+the plugin version, the `tares` binary, key order) and what it keeps; `parity.py crew_basic` exits 0 and matches
+its recorded result; a scenario whose command the Python engine has not moved over (a made-up word) fails
+with exit 1 (not ported is a failure, not a skip); a failing check exits 1; `--record` stores what a run printed and wrote, and a later run
+that prints the same matches while one that prints something else, writes another crew file, other contents or makes
+another Claude Code call exits 1 and names the file (stub commands through PARITY_CMD_PYTHON); a scenario with no
+recorded result fails; every recorded result belongs to a scenario and every scenario has one; `--coverage` counts
+the labels of parity_labels.json (pinned against a fixture), a `covers` label missing from its suite is an ERROR,
+`--require-full` exits 1 below 100%; an unknown scenario exits 2; the scenario environment drops the person's
+CLAUDE_CONFIG_DIR, XDG_* and GH_* settings.
 
 Run: .venv/bin/python tests/test_parity.py
 """
+import json
 import os
 import shlex
 import shutil
@@ -74,6 +70,31 @@ ck("an eight-digit number or an eight-letter hex word is kept",
 ck("a job id after stop, rm, job or id is replaced", parity.norm_text("stop 0000000a, rm 0000000b, job 0000000c, id=0000000d") == "stop <ID>, rm <ID>, job <ID>, id=<ID>")
 ck("a string under an id key in JSON is replaced, under another key it is kept",
    parity.norm_output('{"id": "0000000a", "name": "deadbeef"}') == parity.render_json({"id": "<ID>", "name": "deadbeef"}))
+_me = __import__("getpass").getuser()
+ck("the login of whoever froze the kit is a placeholder, in text and in JSON",
+   parity.norm_text(f"frozen since 2026-11-07T10:11:12Z by {_me}; ok") == "frozen since <TS> by <USER>; ok"
+   and parity.norm_text(f'{{"by": "{_me}"}}') == '{"by": "<USER>"}'
+   and parity.norm_json({"by": _me}) == {"by": "<USER>"})
+ck("...but the same word elsewhere, or a longer login, is data",
+   parity.norm_text(f"{_me} went by {_me}x and bye {_me}") == f"{_me} went by {_me}x and bye {_me}")
+with mock.patch.object(parity, "is_windows", lambda: True):
+    _wp = parity.norm_text('"cwd": "<TMP>\\\\crew\\\\a", and <REPO>\\sub\\f.py, plain <TMP>/x')
+ck("on Windows a path under a placeholder has its backslashes (single or doubled) read as slashes",
+   _wp == '"cwd": "<TMP>/crew/a", and <REPO>/sub/f.py, plain <TMP>/x')
+with mock.patch.object(parity, "is_windows", lambda: False):
+    _np = parity.norm_text("a\\b <TMP>\\c")
+ck("...and elsewhere a backslash is kept", _np == "a\\b <TMP>\\c", _np)
+_today = __import__("time").strftime("%Y-%m-%d", __import__("time").gmtime())
+ck("today's date is a placeholder (a grant says when it was made), another day is data, a timestamp is a timestamp",
+   parity.norm_text(f"granted on {_today} ({_today}) at {_today}T10:11:12Z, not 2001-02-03 or x{_today}0")
+   == "granted on <DATE> (<DATE>) at <TS>, not 2001-02-03 or x" + _today + "0")
+ck("a grants fingerprint (it holds the day a grant was made) is a placeholder", parity.norm_json({"grants": "925418911"}) == {"grants": "<GRANTS>"})
+ck("a kit fingerprint is a placeholder wherever a kit is named: its stations, a freeze's version, a kit-newer event, the text",
+   parity.norm_json({"kit": {"crew-reviewer": "2299798679"}, "frozen": {"version": "2299798679"},
+                     "event": "kit-newer", "detail": "3804381130", "n": "12345678"})
+   == {"kit": {"crew-reviewer": "<KIT>"}, "frozen": {"version": "<KIT>"}, "event": "kit-newer", "detail": "<KIT>", "n": "12345678"}
+   and parity.norm_text("kit 3804381130 is newer than the frozen kit 2299798679; x")
+   == "kit <KIT> is newer than the frozen kit <KIT>; x")
 ck("a uuid is replaced", parity.norm_text("id 123e4567-e89b-12d3-a456-426614174000") == "id <ID>")
 ck("words and small numbers are kept", parity.norm_text("started 3 stations, port 8788") == "started 3 stations, port 8788")
 ck("CRLF becomes LF", parity.norm_text("a\r\nb") == "a\nb")
@@ -85,10 +106,42 @@ ck("a Windows temp folder is replaced as a plain path and with its backslashes d
    nw == '{"cwd": "<TMP>\\\\crew"} and <TMP>\\home', nw)
 with mock.patch.object(parity, "is_windows", lambda: True):
     nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
-ck("...and on Windows the drive letter and folder case do not matter", nc == "in <TMP>\\crew", nc)
+ck("...and on Windows the drive letter and folder case do not matter", nc == "in <TMP>/crew", nc)
 with mock.patch.object(parity, "is_windows", lambda: False):
     nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
 ck("...elsewhere case still matters", "<TMP>" not in nc, nc)
+# What Windows spells differently (TR-1172): a quoted kit path, claude.cmd, a settings file, the order of files, a junction
+with mock.patch.object(parity, "is_windows", lambda: True):
+    q1 = parity.norm_text('tares hook statusline --plugin-root "<TMP>/kit"')
+    q2 = parity.norm_text('tares hook statusline --plugin-root "<TMP>\\kit" and <TMP>\\bin\\claude.cmd (2.1.0)')
+ck("on Windows a quoted kit path and claude.cmd read as bash printed them",
+   q1 == "tares hook statusline --plugin-root <TMP>/kit" and q2 == "tares hook statusline --plugin-root <TMP>/kit and <TMP>/bin/claude (2.1.0)", (q1, q2))
+with mock.patch.object(parity, "is_windows", lambda: False):
+    q3 = parity.norm_text('--plugin-root "<TMP>/kit"')
+ck("...and elsewhere the quotes stay", q3 == '--plugin-root "<TMP>/kit"', q3)
+_use = {"args": ["-p", "--no-session-persistence", "--settings", "C:/t/x.json", "--verbose", "/usage"]}
+_ctx = {"args": ["-p", "--no-session-persistence", "--settings", "C:/t/x.json", "--verbose", "/context"]}
+_bg = {"args": ["--bg", "--settings", "C:/t/x.json"]}
+with mock.patch.object(parity, "is_windows", lambda: True):
+    _u, _b = parity._settings_arg(json.loads(json.dumps(_use))), parity._settings_arg(json.loads(json.dumps(_bg)))
+    _c = parity._settings_arg(json.loads(json.dumps(_ctx)))
+ck("on Windows a plan read's settings file reads as the JSON text bash passed; a context read's and a launch's file stay a placeholder",
+   _u["args"][3] == '{"disableAllHooks": true}' and _b["args"][2] == "<SETTINGS-FILE>" and _c["args"][3] == "<SETTINGS-FILE>", (_u, _b, _c))
+_ft = Path(tempfile.mkdtemp(prefix="parity-files-"))
+for _n in ("crew.json", "HALT", "a-b", "a/b"):
+    (_ft / _n).parent.mkdir(parents=True, exist_ok=True)
+    (_ft / _n).write_text("x")
+ck("files are listed in the order bash lists them: by text, upper case first, a folder's files together",
+   [p.relative_to(_ft).as_posix() for p in parity._files_under(_ft)] == ["HALT", "a/b", "a-b", "crew.json"],
+   str([p.relative_to(_ft).as_posix() for p in parity._files_under(_ft)]))
+if hasattr(os, "symlink"):
+    _out = Path(tempfile.mkdtemp(prefix="parity-out-"))
+    (_out / "keep").write_text("x")
+    try:
+        os.symlink(_out, _ft / "door", target_is_directory=True)
+        ck("a link to a folder is not entered", not any("door" in p.parts for p in parity._files_under(_ft)))
+    except OSError:
+        pass
 
 j1 = parity.norm_file('{"b": 1, "pid": 4242, "started_at": 1762510272, "a": "x"}', "s.json")
 j2 = parity.norm_file('{\n  "a": "x",\n  "started_at": 1762510999,\n  "pid": 17,\n  "b": 1\n}', "s.json")
@@ -103,20 +156,32 @@ o1 = parity.norm_output('{"b": [1], "a": {"id": "a1b2c3d4"}}')
 o2 = parity.norm_output('{\n"a": {"id": "ffeeddcc"},\n"b": [1]}\n')
 ck("printed JSON compares by content", o1 == o2, f"{o1!r} vs {o2!r}")
 ck("printed text keeps its words", "no Tares answers" in parity.norm_output("no Tares answers at http://x\n"))
+# What differs between machines is not in an expected result.
+ck("the checkout's folder is replaced", parity.norm_text(f"cwd {parity.ROOT}/tests and {parity.ROOT.as_posix()}") == "cwd <REPO>/tests and <REPO>")
+ver = parity.plugin_version()
+ck("the plugin's version is replaced after the word version, kept elsewhere",
+   not ver or parity.norm_text(f"plugin version {ver} (port {ver})") == f"plugin version <PLUGIN-VERSION> (port {ver})")
+ck("the kit fingerprint of a station is replaced under the key kit and in freeze and upgraded events",
+   parity.norm_json({"kit": "1234567890", "x": {"event": "freeze", "detail": "42"}, "y": {"event": "other", "detail": "42"}})
+   == {"kit": "<KIT>", "x": {"event": "freeze", "detail": "<KIT>"}, "y": {"event": "other", "detail": "42"}})
+note = "  \u2713 once a day the watch also removes Docker's leftovers (docker is on this machine)\n"
+ck("the Docker onboarding line of crew up is left out", parity.norm_text("a\n" + note + "b\n") == "a\nb\n")
+tbin = parity.shutil.which("tares")
+ck("the path of the tares command is replaced", not tbin or parity.norm_text(f"FACTORY_TARES={tbin}") == "FACTORY_TARES=<TARES-BIN>")
 
 work = Path(tempfile.mkdtemp(prefix="test-parity-"))
 
 # --- the scenario environment ---------------------------------------------------------------------
 lent = {"CLAUDE_CONFIG_DIR": "/people/claude", "CLAUDE_JOB_DIR": "/people/jobs", "XDG_CONFIG_HOME": "/people/xdg",
         "XDG_DATA_HOME": "/people/xdg-data", "GH_TOKEN": "ghp_not_real", "GH_HOST": "example.com", "TARES_X": "1",
-        "FACTORY_X": "1", "PARITY_CMD_BASH": "x", "FAKE_CLAUDE_BG_DELAY": "9", "PARITY_KEEP_NOT": "1", "KEEP_ME": "yes"}
+        "FACTORY_X": "1", "PARITY_CMD_PYTHON": "x", "FAKE_CLAUDE_BG_DELAY": "9", "PARITY_KEEP_NOT": "1", "KEEP_ME": "yes"}
 (work / "env").mkdir()
 with mock.patch.dict(os.environ, lent):
-    env_b = parity.crew_env(work / "env", "bash")
+    env_b = parity.crew_env(work / "env")
 ck("the scenario environment drops the person's Claude, XDG, GH, crew, Tares and fake settings",
    not [k for k in lent if k != "KEEP_ME" and k in env_b], str([k for k in lent if k in env_b and k != "KEEP_ME"]))
-ck("...keeps the rest and points HOME and the engine at the scenario",
-   env_b.get("KEEP_ME") == "yes" and env_b["HOME"] == str(work / "env" / "home") and env_b["TARES_FACTORY_ENGINE"] == "bash", str(env_b.get("HOME")))
+ck("...keeps the rest and points HOME at the scenario and pins the Python engine",
+   env_b.get("KEEP_ME") == "yes" and env_b["HOME"] == str(work / "env" / "home") and env_b.get("TARES_FACTORY_ENGINE") == "python", str(env_b.get("HOME")))
 
 # TR-1066: the fake Claude Code is a launcher named `claude`, first on PATH and also CLAUDE_BIN.
 launcher = Path(env_b["CLAUDE_BIN"])
@@ -136,59 +201,37 @@ else:
     ck("on Windows the launcher is CRLF, passes the exit code on, and holds no non-ASCII path",
        b"\r\n" in raw and b"exit /b %ERRORLEVEL%" in raw and all(c < 128 for c in raw), raw[:200])
 
-# --- the suites and the count ---------------------------------------------------------------------
-found = parity.suite_scenarios()
-ck("every suite of tests/factory/ci_list.txt is counted", set(found) == set(parity.suites()) and len(found) > 0)
-ck("the crew suite lists its checks", "without Tares crew up stops plainly" in found["crew"])
-ck("a suite with no check line counts as one scenario", found.get("parse") == ["(the whole parse suite)"], found.get("parse"))
-ck("each scenario covers checks that exist", all(label in found[sc.suite] for sc in parity.SCENARIOS.values() for label in sc.covers))
-
-# The wrapper suites (A39) run another suite on Python and have no check line of their own; coverage leaves them
-# out of the total. The set is pinned here, so a real suite cannot be added to it to lift the percentage.
-ck("the wrapper suites are exactly crew_python, claude_update_python and idle_wake_python",
-   set(parity.WRAPPERS) == {"crew_python", "claude_update_python", "idle_wake_python"}, str(sorted(parity.WRAPPERS)))
-ck("...each names the suite it runs and says why",
-   all(of in found and isinstance(why, str) and why for of, why in parity.WRAPPERS.values() if of in found)
-   and {of for of, _ in parity.WRAPPERS.values()} == {"crew", "claude_update", "idle_wake"}, str(parity.WRAPPERS))
-ck("...and a wrapper that is a suite today has no check line, so it is one whole-suite scenario",
-   all(found[s] == [f"(the whole {s} suite)"] for s in parity.WRAPPERS if s in found), str({s: found[s] for s in parity.WRAPPERS if s in found}))
-ck("...and no suite with checks of its own is a wrapper",
-   not any(len(labels) > 1 or not labels[0].startswith("(the whole") for s, labels in found.items() if s in parity.WRAPPERS))
-
-# The count is one scenario per `check "` line, in every suite, not one per suite or the first of each.
-for suite, labels in found.items():
-    lines = (FACTORY / f"{suite}_test.sh").read_text(encoding="utf-8").splitlines()
-    n = sum(1 for ln in lines if ln.lstrip().startswith('check "'))
-    ck(f"{suite}: the count is the number of check lines", len(labels) == (n or 1), f"{len(labels)} vs {n}")
-ck("the crew suite has many checks, so the count is not one per suite", len(found["crew"]) > 50, len(found["crew"]))
+# --- the recorded labels and results ---------------------------------------------------------------
+labels = parity.recorded_labels()
+ck("the crew suite lists its checks", "without Tares crew up stops plainly" in labels["crew"])
+ck("a suite that was one script counts as one scenario", labels.get("parse") == ["(the whole parse suite)"], labels.get("parse"))
+ck("there is no wrapper suite any more", not [s for s in labels if s.endswith("_python")], str(sorted(labels)))
+ck("each scenario covers checks that exist", all(label in labels[sc.suite] for sc in parity.SCENARIOS.values() for label in sc.covers))
+recorded = {p.stem for p in parity.EXPECTED.glob("*.txt")}
+ck("every scenario has a recorded result", not (set(parity.SCENARIOS) - recorded), str(sorted(set(parity.SCENARIOS) - recorded)[:5]))
+ck("every recorded result belongs to a scenario", not (recorded - set(parity.SCENARIOS)), str(sorted(recorded - set(parity.SCENARIOS))[:5]))
+ck("no recorded result holds this machine's checkout, temp folder or the plugin version",
+   not [n for n in recorded if str(parity.ROOT) in (parity.EXPECTED / f"{n}.txt").read_text(encoding="utf-8")
+        or (parity.plugin_version() and f"version {parity.plugin_version()}" in (parity.EXPECTED / f"{n}.txt").read_text(encoding="utf-8"))])
 
 fx = work / "fx"
 fx.mkdir()
-(fx / "ci_list.txt").write_text("a\n# a comment\nb\n")
-(fx / "a_test.sh").write_text('#!/bin/bash\n# check "in a comment"\ncheck "first" \'true\'\nfor x in 1 2; do\n  check "in a loop $x" \'true\'\ndone\n'
-                              'checkx "not a check"\necho check "not at line start"\ncheck "say \\"hi\\"" \'true\'\n')
-(fx / "b_test.sh").write_text("#!/bin/bash\necho no checks here\n")
+(fx / "labels.json").write_text(json.dumps({"a": ["first", "in a loop $x", 'say "hi"'], "b": ["(the whole b suite)"]}))
 
 
 class Fixture:
-    """parity looks at the fixture's suites for the length of the with block."""
+    """parity reads the fixture's labels and records into the fixture's folder for the length of the with block."""
 
     def __enter__(self):
-        self.saved = (parity.HERE, parity.CI_LIST, dict(parity.SCENARIOS))
-        parity.HERE, parity.CI_LIST = fx, fx / "ci_list.txt"
+        self.saved = (parity.LABELS, parity.EXPECTED, dict(parity.SCENARIOS))
+        parity.LABELS, parity.EXPECTED = fx / "labels.json", fx / "expected"
         return self
 
     def __exit__(self, *a):
-        parity.HERE, parity.CI_LIST = self.saved[:2]
+        parity.LABELS, parity.EXPECTED = self.saved[:2]
         parity.SCENARIOS.clear()
         parity.SCENARIOS.update(self.saved[2])
 
-
-with Fixture():
-    fixture_found = parity.suite_scenarios()
-ck("a fixture suite counts every check line, indented ones too, and not comments, other words or echo lines",
-   fixture_found.get("a") == ["first", "in a loop $x", 'say \\"hi\\"'], str(fixture_found))
-ck("...and a fixture suite with no check line counts once", fixture_found.get("b") == ["(the whole b suite)"], str(fixture_found))
 
 stub = work / "stub.py"
 stub.write_text(
@@ -202,56 +245,70 @@ stub.write_text(
     "if mode == 'file1': write('x.json', '{\"a\": 1}')\n"
     "if mode == 'file2': write('x.json', '{\"a\": 2}')\n"
     "if mode == 'file3': write('y.txt', 'hello')\n"
+    "if mode == 'unported':\n"
+    "    sys.stderr.write('\"x\" is not yet ported to the Python engine\\n'); sys.exit(2)\n"
     "if mode == 'callv': subprocess.run([os.environ['CLAUDE_BIN'], '--version'], capture_output=True)\n"
     "if mode == 'calla': subprocess.run([os.environ['CLAUDE_BIN'], 'agents', '--json'], capture_output=True)\n"
     "sys.exit(1)\n")
 
 
-def stubbed(bash_mode, python_mode):
-    return {"PARITY_CMD_BASH": shlex.join([sys.executable, str(stub), bash_mode]),
-            "PARITY_CMD_PYTHON": shlex.join([sys.executable, str(stub), python_mode])}
+def stubbed(mode):
+    return {"PARITY_CMD_PYTHON": shlex.join([sys.executable, str(stub), mode])}
 
 
-# --- what the engines write -----------------------------------------------------------------------
-# Both sides print the same line and fail the same check-free way; only what they write differs.
-code, text = run("crew_basic", env=stubbed("plain", "plain"))
-ck("stubs that print and write the same match (exit 0)", code == 0 and "MATCH" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("file1", "file1"))
-ck("...also when both write the same crew file", code == 0 and "MATCH" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("callv", "callv"))
-ck("...and when both make the same Claude Code call", code == 0 and "MATCH" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("plain", "file1"))
-ck("the same output but a crew file only Python writes: exit 1, the diff names the file",
-   code == 1 and "output differs from bash" in text and "== file crew/x.json ==" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("file1", "plain"))
-ck("...a crew file only bash writes: exit 1, the diff names the file",
-   code == 1 and "output differs from bash" in text and "crew/x.json" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("file1", "file2"))
-ck("...a crew file with other contents: exit 1, the diff shows both",
-   code == 1 and "crew/x.json" in text and '-  "a": 1' in text and '+  "a": 2' in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("file1", "file3"))
-ck("...another file name: exit 1, both names in the diff", code == 1 and "crew/x.json" in text and "crew/y.txt" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("callv", "calla"))
-ck("the same output but another call to Claude Code: exit 1, the diff names the call record",
-   code == 1 and "== file claude/calls.jsonl ==" in text and "agents" in text and "--version" in text, f"{code}\n{text}")
-code, text = run("crew_basic", env=stubbed("plain", "callv"))
-ck("...a call only Python makes: exit 1", code == 1 and "claude/calls.jsonl" in text, f"{code}\n{text}")
+def recorded_with(mode):
+    """Record crew_basic from the stub in `mode` into the fixture folder."""
+    with mock.patch.dict(os.environ, stubbed(mode)):
+        return parity.record_scenario(parity.SCENARIOS["crew_basic"], out=lambda _l: None)
 
-# --- a skipped bash side --------------------------------------------------------------------------
-saved_patch = (parity.bash_available, parity.is_windows)
-parity.bash_available = lambda: "needs bash and jq on PATH"
-with mock.patch.dict(os.environ, {"PARITY_CMD_PYTHON": stubbed("plain", "plain")["PARITY_CMD_PYTHON"]}):
-    os.environ.pop("PARITY_CMD_BASH", None)
+
+def checked_with(mode):
+    """(exit code, output) of crew_basic run from the stub in `mode` against the fixture's recorded result."""
     lines = []
-    parity.is_windows = lambda: False
-    code, passes = parity.evaluate(parity.SCENARIOS["crew_basic"], out=lines.append)
-    ck("off Windows a skipped bash side is an error: exit 1 and it says why", code == 1 and any(x.startswith("ERROR bash:") for x in lines), "\n".join(lines))
-    ck("...and the scenario does not count as passing against Python", passes is False, passes)
-    lines = []
-    parity.is_windows = lambda: True
-    code, passes = parity.evaluate(parity.SCENARIOS["crew_basic"], out=lines.append)
-    ck("on Windows a skipped bash side is fine: the Python side stands alone", code == 0 and passes is True and not any("ERROR" in x for x in lines), "\n".join(lines))
-parity.bash_available, parity.is_windows = saved_patch
+    with mock.patch.dict(os.environ, stubbed(mode)):
+        code, _ok = parity.evaluate_python(parity.SCENARIOS["crew_basic"], out=lines.append)
+    return code, "\n".join(lines)
+
+
+# --- what the engine writes -----------------------------------------------------------------------
+# Every stub prints the same line and exits 1; only what it writes differs.
+with Fixture():
+    ck("a run is recorded", recorded_with("plain") == 0 and (fx / "expected" / "crew_basic.txt").is_file())
+    code, text = checked_with("plain")
+    ck("a stub that prints and writes the same matches (exit 0)", code == 0 and "MATCH" in text, f"{code}\n{text}")
+    recorded_with("file1")
+    code, text = checked_with("file1")
+    ck("...also when both write the same crew file", code == 0 and "MATCH" in text, f"{code}\n{text}")
+    recorded_with("callv")
+    code, text = checked_with("callv")
+    ck("...and when both make the same Claude Code call", code == 0 and "MATCH" in text, f"{code}\n{text}")
+    recorded_with("plain")
+    code, text = checked_with("file1")
+    ck("the same output but a crew file that was not recorded: exit 1, the diff names the file",
+       code == 1 and "differs from the result recorded" in text and "== file crew/x.json ==" in text, f"{code}\n{text}")
+    recorded_with("file1")
+    code, text = checked_with("plain")
+    ck("...a recorded crew file that is not written: exit 1, the diff names the file", code == 1 and "crew/x.json" in text, f"{code}\n{text}")
+    code, text = checked_with("file2")
+    ck("...a crew file with other contents: exit 1, the diff shows both",
+       code == 1 and "crew/x.json" in text and '-  "a": 1' in text and '+  "a": 2' in text, f"{code}\n{text}")
+    code, text = checked_with("file3")
+    ck("...another file name: exit 1, both names in the diff", code == 1 and "crew/x.json" in text and "crew/y.txt" in text, f"{code}\n{text}")
+    recorded_with("callv")
+    code, text = checked_with("calla")
+    ck("the same output but another call to Claude Code: exit 1, the diff names the call record",
+       code == 1 and "== file claude/calls.jsonl ==" in text and "agents" in text and "--version" in text, f"{code}\n{text}")
+    recorded_with("plain")
+    code, text = checked_with("callv")
+    ck("...a call that was not recorded: exit 1", code == 1 and "claude/calls.jsonl" in text, f"{code}\n{text}")
+    (fx / "expected" / "crew_basic.txt").unlink()
+    code, text = checked_with("plain")
+    ck("a scenario with no recorded result fails and says how to record it", code == 1 and "no recorded result for crew_basic" in text
+       and "--record crew_basic" in text, f"{code}\n{text}")
+    with mock.patch.dict(os.environ, {**stubbed("plain"), "PARITY_FAIL": "python"}):
+        lines = []
+        rc = parity.record_scenario(parity.SCENARIOS["crew_basic"], out=lines.append)
+    ck("a scenario that fails its checks is not recorded", rc == 1 and not (fx / "expected" / "crew_basic.txt").exists(), "\n".join(lines))
 
 # --- the coverage count and its error path --------------------------------------------------------
 crew_basic = parity.SCENARIOS["crew_basic"]
@@ -261,44 +318,39 @@ def fx_scenario(name, label):
     return parity.Scenario(name=name, suite="a", steps=crew_basic.steps, checks=[("it ran", lambda r: True)], covers=[label], about="fixture")
 
 
+def fx_record(name):
+    (fx / "expected").mkdir(exist_ok=True)
+    with mock.patch.dict(os.environ, stubbed("plain")):
+        parity.record_scenario(parity.SCENARIOS[name], out=lambda _l: None)
+
+
 # PARITY_JOBS=1: the fixture scenarios exist only in this process, a worker process would not have them
-with Fixture(), mock.patch.dict(os.environ, {**stubbed("plain", "plain"), "PARITY_JOBS": "1"}):
+with Fixture(), mock.patch.dict(os.environ, {**stubbed("plain"), "PARITY_JOBS": "1"}):
     parity.SCENARIOS.clear()
     parity.SCENARIOS["fx_ok"] = fx_scenario("fx_ok", "first")
+    fx_record("fx_ok")
     lines = []
     rc = parity.coverage(False, out=lines.append)
     text = "\n".join(lines)
-    ck("coverage counts one scenario of a three-check suite: a: 1/3, b: 0/1, 1 of 4 (25.0%)",
+    ck("coverage counts one scenario of a three-label suite: a: 1/3, b: 0/1, 1 of 4 (25.0%)",
        rc == 0 and "a: 1/3" in text and "b: 0/1" in text and "coverage: 1 of 4 scenarios pass against Python (25.0%) in 2 suites" in text, text)
     ck("...and lists the covered check as passing", "PASS python  (fx_ok)" in text and "first" in text, text)
+    lines = []
+    rc = parity.coverage(True, out=lines.append)
+    ck("--require-full exits 1 below 100% and says how many are missing", rc == 1 and "wants every scenario ported, 3 are not" in "\n".join(lines), "\n".join(lines))
+    (fx / "expected" / "fx_ok.txt").write_text("not what it prints\n")
+    lines = []
+    rc = parity.coverage(False, out=lines.append)
+    ck("a scenario that differs from its recorded result does not count", "coverage: 0 of 4 scenarios" in "\n".join(lines), "\n".join(lines))
     parity.SCENARIOS.clear()
     parity.SCENARIOS["fx_bad"] = fx_scenario("fx_bad", "a label the suite does not have")
+    fx_record("fx_bad")
     lines = []
     rc = parity.coverage(False, out=lines.append)
     text = "\n".join(lines)
     ck("a covers label missing from its suite is an ERROR: exit 1, it names scenario, suite and label",
-       rc == 1 and "ERROR scenario fx_bad covers a check that is not in a_test.sh: a label the suite does not have" in text, text)
+       rc == 1 and "ERROR scenario fx_bad covers a check that is not in parity_labels.json under a: a label the suite does not have" in text, text)
     ck("...and it counts for nothing", "coverage: 0 of 4 scenarios" in text, text)
-
-    # A wrapper is left out of the total and says so; a suite with checks of its own cannot be one.
-    parity.SCENARIOS.clear()
-    parity.SCENARIOS["fx_ok"] = fx_scenario("fx_ok", "first")
-    with mock.patch.dict(parity.WRAPPERS, {"b": ("a", "runs a on Python; its checks count under a")}, clear=True):
-        lines = []
-        rc = parity.coverage(False, out=lines.append)
-        text = "\n".join(lines)
-        ck("a wrapper suite is left out of the total and prints 'wrapper of <suite>': 1 of 3 (33.3%) in 1 suites",
-           rc == 0 and "b: wrapper of a (runs a on Python; its checks count under a)" in text and "b: 0/1" not in text
-           and "coverage: 1 of 3 scenarios pass against Python (33.3%) in 1 suites" in text, text)
-        lines = []
-        rc = parity.coverage(True, out=lines.append)
-        ck("...and --require-full does not count it as missing", "wants every scenario ported, 2 are not" in "\n".join(lines), "\n".join(lines))
-    with mock.patch.dict(parity.WRAPPERS, {"a": ("b", "wrongly listed")}, clear=True):
-        lines = []
-        rc = parity.coverage(False, out=lines.append)
-        text = "\n".join(lines)
-        ck("a real suite listed as a wrapper is an ERROR: exit 1, and it still counts in the total",
-           rc == 1 and "ERROR a is listed as a wrapper but has checks of its own: 3" in text and "a: 1/3" in text, text)
 
 # --- the command line -----------------------------------------------------------------------------
 code, text = run("--list")
@@ -309,70 +361,57 @@ code, text = run()
 ck("no scenario exits 2", code == 2, f"{code} {text}")
 code, text = run("--require-full")
 ck("--require-full alone exits 2", code == 2, f"{code} {text}")
+code, text = run("--python-only", "crew_basic")
+ck("a flag it no longer has exits 2", code == 2, f"{code} {text}")
 
-why = parity.bash_available()
-if why:
-    print(f"  skip the runs that need the bash engine: {why}")
-else:
-    code, text = run("crew_basic")
-    ck("crew_basic exits 0", code == 0, f"{code}\n{text}")
-    ck("crew_basic: bash passes", "PASS bash: 1 checks" in text, text)
-    ck("crew_basic: python is ported and matches bash", "PASS python: 1 checks" in text and "MATCH" in text, text)
+code, text = run("crew_basic")
+ck("crew_basic exits 0", code == 0, f"{code}\n{text}")
+ck("crew_basic: python passes its checks and matches the recorded result", "PASS python: 1 checks" in text and "MATCH" in text, text)
+code, text = run("crew_basic", env={"PARITY_FAIL": "python"})
+ck("a failing check exits 1", code == 1 and "FAIL python" in text, f"{code}\n{text}")
 
-    # A command the Python engine has not ported (a made-up word, so a later port cannot turn it ported): that side skips.
-    unported = parity.Scenario(name="fx_unported", suite="a", steps=[parity.Step(["no-such-command"])],
-                               checks=[("it ran", lambda r: True)], covers=["x"], about="fixture")
-    lines = []
-    with mock.patch.dict(os.environ, {k: v for k, v in os.environ.items() if not k.startswith(("PARITY_", "TARES_FACTORY_"))}):
-        code, passes = parity.evaluate(unported, out=lines.append)
-    ck("an unported command skips the Python side: SKIP python: not ported",
-       any("SKIP python: not ported" in x for x in lines) and passes is not True, "\n".join(lines))
+# A command the Python engine has not ported (a made-up word, so a later port cannot turn it ported): the run skips.
+unported = parity.Scenario(name="fx_unported", suite="a", steps=[parity.Step(["no-such-command"])],
+                           checks=[("it ran", lambda r: True)], covers=["x"], about="fixture")
+lines = []
+with mock.patch.dict(os.environ, stubbed("unported")):
+    code, passes = parity.evaluate_python(unported, out=lines.append)
+ck("an unported command fails: exit 1, named, not counted as passing (a SKIP would let a dropped PORTED entry through)",
+   any("not yet ported" in x and x.startswith("FAIL python") for x in lines) and code == 1 and passes is False, "\n".join(lines))
 
-    code, text = run("crew_basic", env={"PARITY_FAIL": "bash"})
-    ck("a failing bash side exits 1", code == 1 and "FAIL bash" in text, f"{code}\n{text}")
+# The strict coverage count, without running the scenarios (--static: each counts as passing). CI runs every scenario in
+# the `parity` job's shards (ci.yml), so this checks only that each recorded label has a scenario that names it.
+code, text = run("--coverage", "--require-full", "--static")
+last = [ln for ln in text.strip().splitlines() if ln.startswith("coverage: ")]
+last = last[-1] if last else ""
+full = last.startswith("coverage: ") and " of " in last and last.split()[1] == last.split()[3]
+ck("--coverage --require-full --static prints a percentage and exits 0 at 100%",
+   last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last and code == (0 if full else 1),
+   f"{code}\n{text[-400:]}")
+ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
+ck("every recorded check label has a scenario, so the count is full", full, last)
+code, text = run("--static")
+ck("--static alone exits 2", code == 2, f"{code} {text}")
 
-    # A Python side that is the bash engine itself prints the same, so the runs match.
-    mirror = work / "mirror.py"
-    mirror.write_text("import os, subprocess, sys\n"
-                      "os.environ['TARES_FACTORY_ENGINE'] = 'bash'\n"
-                      "sys.exit(subprocess.call([sys.executable, '-m', 'tares.crew'] + sys.argv[1:]))\n")
-    same = f"{sys.executable} {mirror}"
-    code, text = run("crew_basic", env={"PARITY_CMD_PYTHON": same})
-    ck("a python side that prints the same as bash matches and exits 0",
-       code == 0 and "PASS python: 1 checks" in text and "MATCH" in text, f"{code}\n{text}")
+# --shard=I/N: every Nth scenario of the sorted list, so N shards run each scenario once (main, with the run stubbed).
+def shard_run(*argv):
+    seen = []
+    with mock.patch.object(parity, "evaluate_python", lambda sc, out=print: (seen.append(sc.name), (0, True))[1]):
+        rc = parity.main(list(argv))
+    return rc, seen
 
-    # A Python side that prints something else: its checks pass, the output differs, so exit 1.
-    stub = work / "stub.py"
-    stub.write_text("import sys\n"
-                    "print('no Tares answers at http://127.0.0.1:9. Start it with tares up. (stub)')\n"
-                    "sys.exit(1)\n")
-    code, text = run("crew_basic", env={"PARITY_CMD_PYTHON": f"{sys.executable} {stub}"})
-    ck("a python side that differs from bash exits 1", code == 1 and "output differs from bash" in text, f"{code}\n{text}")
 
-    # A Python side that fails a check exits 1 too.
-    code, text = run("crew_basic", env={"PARITY_CMD_PYTHON": same, "PARITY_FAIL": "python"})
-    ck("a failing python side exits 1", code == 1 and "FAIL python" in text, f"{code}\n{text}")
-
-    # One full run (it evaluates every scenario, in a pool of worker processes), asked for the strict form: below 100%
-    # it exits 1 and says why; at 100% it exits 0. The plain form prints the same lines.
-    code, text = run("--coverage", "--require-full")
-    last = [ln for ln in text.strip().splitlines() if ln.startswith("coverage: ")]
-    last = last[-1] if last else ""
-    full = last.startswith("coverage: ") and " of " in last and last.split()[1] == last.split()[3]
-    ck("--coverage prints a percentage and --require-full exits 1 below 100% (0 at 100%)",
-       last.startswith("coverage: ") and "%" in last and "scenarios pass against Python" in last
-       and code == (0 if full else 1) and (full or "--require-full" in text), f"{code}\n{text[-400:]}")
-    ck("--coverage lists the crew suite", "crew: " in text and "without Tares crew up stops plainly" in text, text[-400:])
-
-# factory-bin: runs $FACTORY_BIN, and a call that lost the variable stops plainly (the 'tares' suite once ran
-# `env -i ... "$F" spawn` without it and executed "spawn" itself).
-FB = str(FACTORY / "factory-bin")
-if os.name != "nt" and shutil.which("sh"):
-    r = subprocess.run(["sh", FB, "spawn", "x"], env={"PATH": "/usr/bin:/bin"}, capture_output=True, text=True)
-    ck("factory-bin without FACTORY_BIN stops with a plain message", r.returncode == 97 and "FACTORY_BIN is empty" in r.stderr
-       and "not found" not in r.stderr, f"{r.returncode} {r.stderr}")
-    r = subprocess.run(["sh", FB, "a b"], env={"PATH": "/usr/bin:/bin", "FACTORY_BIN": "echo hi"}, capture_output=True, text=True)
-    ck("factory-bin runs a two-word FACTORY_BIN with the arguments", r.returncode == 0 and r.stdout.strip() == "hi a b", r.stdout)
+parts = [shard_run(f"--shard={i}/4") for i in range(1, 5)]
+every = sorted(parity.SCENARIOS)
+ck("four shards are disjoint and together every scenario", all(rc == 0 for rc, _ in parts)
+   and sorted(x for _, p in parts for x in p) == every, str([len(p) for _, p in parts]))
+ck("a shard is every Nth scenario of the sorted list", parts[1][1] == every[1::4], str(parts[1][1][:3]))
+ck("a shard and a pattern run the union once each", sorted(shard_run("--shard=1/4", every[1])[1]) == sorted(every[0::4] + [every[1]]))
+for bad in ("--shard=0/4", "--shard=5/4", "--shard=a/b", "--shard=1"):
+    code, text = run(bad)
+    ck(f"{bad} exits 2", code == 2 and "--shard=I/N" in text, f"{code} {text}")
+code, text = run("--shard=1/%d" % len(every), "--list")
+ck("--list wins over a shard", code == 0 and "crew_basic" in text.split(), text)
 
 shutil.rmtree(work, ignore_errors=True)
 print(f"{P} passed, {F} failed")

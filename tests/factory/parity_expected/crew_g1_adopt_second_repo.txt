@@ -1,0 +1,172 @@
+== step: roster ==
+exit: 0
+-- stdout --
+crew: crew (orchestrator: crew-orchestrator)
+crew-orchestrator	orchestrator		working	2.1.310
+crew-reviewer	reviewer		done	2.1.310
+shop-build-m1	builder	shop	blocked	2.1.100 (older than 2.1.310)
+shop-build-m2	builder	shop	gone	
+argus-build-m2-charts	builder	argus	working	
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "argus-build-m2-charts": {
+    "adopted": true,
+    "cwd": "<TMP>/argus/charts",
+    "effort": "",
+    "id": "<ID>",
+    "model": "",
+    "parent": "crew-orchestrator",
+    "project": "argus",
+    "repo": "<TMP>/argus/charts",
+    "role": "builder",
+    "sessionId": "s-beef",
+    "settings": "<TMP>/crew/stations/argus-build-m2-charts.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-orchestrator": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "status": "active"
+  },
+  "old-helper": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "helper",
+    "status": "stopped"
+  },
+  "shop-build-m1": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "busy",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "shop-build-m1",
+    "pid": "<PID>",
+    "state": "blocked",
+    "status": "waiting",
+    "version": "2.1.100"
+  },
+  {
+    "cwd": "<TMP>/argus/charts",
+    "id": "<ID>",
+    "name": "argus-build-m2-charts",
+    "pid": "<PID>",
+    "sessionId": "s-beef",
+    "state": "working",
+    "status": "busy"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/projects?crew=crew key=no 

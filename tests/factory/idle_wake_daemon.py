@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""The Tares side of the idle wake, for the `idle_wake_daemon` scenario of parity.py: idle_wake_test.sh runs a real
-Tares and checks, between its watch rounds, what the daemon says (the review queue, the setting, the desk). The crew
-engines do not take part (the harness runs this on both sides and compares the two printouts, which must be the
-same); the daemon is the real one, run in this process on a throwaway database, with a small GitHub stand-in for the
-pull request.
+"""The Tares side of the idle wake, for the `idle_wake_daemon` scenario of parity.py: it runs a real Tares and
+checks, between watch rounds, what the daemon says (the review queue, the setting, the desk). The crew engine does
+not take part; the daemon is the real one, run in this process on a throwaway database, with a small GitHub
+stand-in for the pull request.
 
-    idle_wake_daemon.py <bash|python>
+    idle_wake_daemon.py
 
-Prints one JSON object per line, in the order of the bash suite. Standard library, httpx and the package itself.
+Prints one JSON object per line, in the order of the checks. Standard library, httpx and the package itself.
 """
 from __future__ import annotations
 

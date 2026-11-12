@@ -1,0 +1,18 @@
+== step: _parse-bg-id ==
+exit: 0
+-- stdout --
+feb401c6
+-- stderr --
+
+== step: _parse-bg-id ==
+exit: 0
+-- stdout --
+3bd5cd67
+-- stderr --
+
+== step: _parse-bg-id ==
+exit: 0
+-- stdout --
+
+-- stderr --
+

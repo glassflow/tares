@@ -1,0 +1,89 @@
+== step: doctor ==
+exit: 0
+-- stdout --
+tares factory doctor
+  ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
+  ok    crew home: <TMP>/crew
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
+  ok    Tares lets this crew in
+  ok    Claude Code's session list reads (0 active)
+  ok    Claude Code trusts <TMP>/crew
+  ok    stations load the plugin at <REPO>/claude-plugin
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
+  ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
+  ok    the kit follows the plugin checkout (not frozen)
+  ok    project Mix: <TMP>/api trusted
+  ok    project Mix: <TMP>/api is o/api on GitHub (WRITE)
+  ok    project Mix: <TMP>/gw trusted
+  ok    project Mix: <TMP>/gw is o/gw on GitHub (WRITE)
+  ok    project Mix: <TMP>/docs trusted
+  ok    project Mix: <TMP>/docs is o/docs on GitHub (WRITE)
+  ok    project Mix: <TMP>/engine trusted
+  ok    project Mix: <TMP>/engine is o/engine on GitHub (WRITE)
+  ok    project Mix: <TMP>/gw2 trusted
+  ok    project Mix: <TMP>/gw2 is o/gw2 on GitHub (WRITE)
+  ok    project Mix: <TMP>/site trusted
+  ok    project Mix: <TMP>/site is o/site on GitHub (WRITE)
+  warn  project Mix: Python in <TMP>/api has no language server for Claude Code, so the LSP tool cannot answer for it (neither the pyright-lsp plugin nor pyright-langserver is there). Run `npm install -g pyright` then `claude plugin install pyright-lsp@claude-plugins-official`; tares factory crew up offers it
+  warn  project Mix: TypeScript in <TMP>/api has no language server for Claude Code, so the LSP tool cannot answer for it (neither the typescript-lsp plugin nor typescript-language-server is there). Run `npm install -g typescript-language-server typescript` then `claude plugin install typescript-lsp@claude-plugins-official`; tares factory crew up offers it
+  warn  project Mix: Go in <TMP>/gw has no language server for Claude Code, so the LSP tool cannot answer for it (neither the gopls-lsp plugin nor gopls is there). Run `go install golang.org/x/tools/gopls@latest` then `claude plugin install gopls-lsp@claude-plugins-official`; tares factory crew up offers it
+  warn  project Mix: Rust in <TMP>/engine has no language server for Claude Code, so the LSP tool cannot answer for it (neither the rust-analyzer-lsp plugin nor rust-analyzer is there). Run `rustup component add rust-analyzer` then `claude plugin install rust-analyzer-lsp@claude-plugins-official`; tares factory crew up offers it
+  warn  project Mix: Go in <TMP>/gw2 has no language server for Claude Code, so the LSP tool cannot answer for it (neither the gopls-lsp plugin nor gopls is there). Run `go install golang.org/x/tools/gopls@latest` then `claude plugin install gopls-lsp@claude-plugins-official`; tares factory crew up offers it
+  warn  project Mix: JavaScript in <TMP>/site has no language server for Claude Code, so the LSP tool cannot answer for it (neither the typescript-lsp plugin nor typescript-language-server is there). Run `npm install -g typescript-language-server typescript` then `claude plugin install typescript-lsp@claude-plugins-official`; tares factory crew up offers it
+  ok    gh signed in
+all good
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}

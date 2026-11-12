@@ -1,0 +1,274 @@
+== step: status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+links-app-build-m1             builder      opus/high      done     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+links-app-build-m1             builder      opus/high      done     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+pace: ok (5-hour 84%, week 89%)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+links-app-build-m1             builder      opus/high      done     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+pace: slow, no new builders and the longest ticks, until <TS> (5-hour 85%, week 89%)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+links-app-build-m1             builder      opus/high      done     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+pace: hold, builders finish their step and wait, until <TS> (5-hour 95%, week 90%)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+links-app-build-m1             builder      opus/high      done     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+pace: at the limit, stopped stations wait for the reset, until <TS> (5-hour 100%, week 10%)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+crew-releaser                  releaser     opus/high      done     -        
+links-app-build-m1             builder      opus/high      done     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+pace: on, no reading of the plan limits yet
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "sess-aaaa0001",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "sess-bbbb0003",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "sess-bbbb0002",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "links-app",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "sess-cccc0004",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "state": "done"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 

@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-"""Support for the `heavy` scenario of parity.py: heavy_test.sh on the bash script or the Python port.
+"""Support for the `heavy` scenario of parity.py: the heavy command, run as a whole check.
 
-    heavy_support.py <bash|python> [run]
+    heavy_support.py [run]
 
-heavy_test.sh starts two heavy commands at once and checks they never overlap, then checks that a command
-past its timeout is killed (exit 142) and that the lock folder is gone afterwards. `factory heavy` is not a
-command of the bash `factory` (it is the stand-alone claude-plugin/bin/factory-heavy), so the scenario
-cannot run it as a step: this script runs the whole suite against one engine, in a throwaway TMPDIR.
+It starts two heavy commands at once and checks they never overlap, then checks that a command past its
+timeout is killed (exit 142) and that the lock folder is gone afterwards. The scenario cannot run that as a
+step, so this script does it in a throwaway TMPDIR, with `python -m tares.crew heavy <seconds> <command...>`.
 
-  bash    claude-plugin/bin/factory-heavy <seconds> <command...>
-  python  python -m tares.crew heavy <seconds> <command...>
-
-The commands under test are Python one-liners instead of `bash -c`, so the same script runs on Windows.
-It prints what the bash suite prints: a FAIL line per broken rule and, when none broke,
-`factory-heavy: serialises and times out`. Exit 0 when all hold.
+The commands under test are Python one-liners, so the same script runs on Windows. It prints a FAIL line per
+broken rule and, when none broke, `factory-heavy: serialises and times out`. Exit 0 when all hold.
 """
 from __future__ import annotations
 
@@ -31,9 +26,7 @@ LOCK = "tares-factory-heavy.lock"
 WAIT_FOR_LOCK = 10.0     # seconds the first command gets to take the lock (the suite waits up to 10 s too)
 
 
-def heavy_command(engine: str, seconds: int, command: list) -> list:
-    if engine == "bash":
-        return [str(ROOT / "claude-plugin" / "bin" / "factory-heavy"), str(seconds)] + command
+def heavy_command(seconds: int, command: list) -> list:
     return [sys.executable, "-m", "tares.crew", "heavy", str(seconds)] + command
 
 
@@ -44,10 +37,9 @@ def append(log: Path, *lines: str) -> str:
 
 
 def main(argv: list) -> int:
-    if not argv or argv[0] not in ("bash", "python"):
+    if argv and argv[0] != "run":
         print(__doc__, file=sys.stderr)
         return 2
-    engine = argv[0]
     tmp = Path(tempfile.mkdtemp(prefix="heavy-")).resolve()
     env = {**os.environ, "TMPDIR": str(tmp), "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
     env.pop("FACTORY_STATION", None)
@@ -56,7 +48,7 @@ def main(argv: list) -> int:
     fail = 0
     try:
         first = subprocess.Popen(
-            heavy_command(engine, 30, [sys.executable, "-c", append(log, "start-a", "sleep 2", "end-a")]), env=env)
+            heavy_command(30, [sys.executable, "-c", append(log, "start-a", "sleep 2", "end-a")]), env=env)
         deadline = time.monotonic() + WAIT_FOR_LOCK
         while time.monotonic() < deadline:   # a holds the lock once its pid file has content
             try:
@@ -65,14 +57,14 @@ def main(argv: list) -> int:
             except OSError:
                 pass
             time.sleep(0.05)
-        subprocess.run(heavy_command(engine, 30, [sys.executable, "-c", append(log, "start-b", "end-b")]), env=env,
+        subprocess.run(heavy_command(30, [sys.executable, "-c", append(log, "start-b", "end-b")]), env=env,
                        stderr=subprocess.DEVNULL)   # it says who it waits for, which the suite does not read
         first.wait()
         order = " ".join(log.read_text(encoding="utf-8").split()) + " "
         if order != "start-a end-a start-b end-b ":
             print(f"FAIL overlap: {order}")
             fail = 1
-        code = subprocess.run(heavy_command(engine, 1, [sys.executable, "-c", "__import__('time').sleep(5)"]),
+        code = subprocess.run(heavy_command(1, [sys.executable, "-c", "__import__('time').sleep(5)"]),
                               env=env, stderr=subprocess.DEVNULL).returncode
         if code != 142:
             print("FAIL timeout did not kill")

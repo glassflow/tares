@@ -1,0 +1,379 @@
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the plan's limit is full until <TS>, so a stopped station is not revived now (crew-reviewer is the first); the watch revives each one in its own conversation after the reset
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:fail ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": false,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [
+      "crew-reviewer"
+    ],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:fail ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": false,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [
+      "crew-reviewer",
+      "crew-reviewer"
+    ],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+revive crew-reviewer --fresh: The plan's limit was reset, but your last conversation could not be resumed, so this is a new one under the same name. Nothing from it carries over except your report and what is on Tares. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then carry on where your report left off.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": null
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the plan's limit is full until <TS>, so a stopped station is not revived now (crew-reviewer is the first); the watch revives each one in its own conversation after the reset
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:fail ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": false,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [
+      "crew-reviewer"
+    ],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": null
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the plan's limit is full until <TS>, so a stopped station is not revived now (crew-reviewer is the first); the watch revives each one in its own conversation after the reset
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:fail ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": false,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [
+      "crew-reviewer"
+    ],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:fail ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": false,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [
+      "crew-reviewer",
+      "crew-reviewer"
+    ],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the plan's limit is full until <TS>, so a stopped station is not revived now (crew-reviewer is the first); the watch revives each one in its own conversation after the reset
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:fail ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": false,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [
+      "crew-reviewer"
+    ],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, at 45 minutes while the factory paces the crew before the plan's limit, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": null
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "sess-aaaa0001",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "sess-bbbb0003",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "sess-bbbb0002",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "links-app",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "sess-cccc0004",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "state": "done"
+  }
+]

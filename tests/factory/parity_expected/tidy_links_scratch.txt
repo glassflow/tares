@@ -1,0 +1,39 @@
+== step: tidy {tmp}/crew/tmp/link ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: removed <TMP>/crew/tmp/link
+== step: tidy {tmp}/crew/tmp/lg/ ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: removed <TMP>/crew/tmp/lg
+== step: tidy {tmp}/crew/tmp/s {tmp}/crew/tmp/f.txt ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: removed <TMP>/crew/tmp/s
+tares factory: removed <TMP>/crew/tmp/f.txt
+== step: tidy {tmp}/repo/.factory/worktrees/T1 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: removed <TMP>/repo/.factory/worktrees/T1
+== step: tidy {tmp}/job/tmp/v1 ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: removed <TMP>/job/tmp/v1
+== step: tidy {tmp}/job/tmp/v2 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/job/tmp/v2 is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== file crew/tmp/inner/keep ==
+keep

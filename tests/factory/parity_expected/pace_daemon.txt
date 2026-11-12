@@ -1,0 +1,18 @@
+== step: readings ==
+exit: 0
+-- stdout --
+taresd: 0 source(s); console at / · agent API at /read · management API at /api
+{"pace": {"at_limit": false, "known": false, "level": 0, "on": false, "session_pct": null, "state": "off", "until": false, "weekly_pct": null}, "settings": null}
+{"set": true}
+{"pace": {"at_limit": false, "known": true, "level": 0, "on": true, "session_pct": 84, "state": "ok", "until": false, "weekly_pct": 89}, "plan": [84, 89, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 1, "on": true, "session_pct": 85, "state": "slow", "until": true, "weekly_pct": 89}, "plan": [85, 89, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 0, "on": true, "session_pct": 10, "state": "ok", "until": false, "weekly_pct": 10}, "plan": [10, 10, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 0, "on": true, "session_pct": 10, "state": "ok", "until": false, "weekly_pct": 89}, "plan": [10, 89, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 1, "on": true, "session_pct": 10, "state": "slow", "until": true, "weekly_pct": 90}, "plan": [10, 90, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 1, "on": true, "session_pct": 94, "state": "slow", "until": true, "weekly_pct": 90}, "plan": [94, 90, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 2, "on": true, "session_pct": 95, "state": "hold", "until": true, "weekly_pct": 90}, "plan": [95, 90, 10800]}
+{"pace": {"at_limit": true, "known": true, "level": 2, "on": true, "session_pct": 100, "state": "limit", "until": true, "weekly_pct": 10}, "plan": [100, 10, 10800]}
+{"pace": {"at_limit": false, "known": true, "level": 0, "on": true, "session_pct": 0, "state": "ok", "until": false, "weekly_pct": 10}, "plan": [100, 10, -60]}
+{"pace": {"at_limit": false, "known": false, "level": 0, "on": true, "session_pct": null, "state": "ok", "until": false, "weekly_pct": null}, "plan": null}
+-- stderr --
+

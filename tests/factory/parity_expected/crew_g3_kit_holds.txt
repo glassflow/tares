@@ -1,0 +1,179 @@
+== step: crew halt testing ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew halted: stations finish their current step and start nothing risky (merges, pushes, deploys, tags, new sessions). tares factory crew resume lifts it.
+tares factory: tell the orchestrator too (tares factory crew attach orchestrator) so it sends HALT to every station
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "ids": {
+    "crew-orchestrator": "aaaa0001",
+    "crew-releaser": "cccc0003",
+    "crew-reviewer": "bbbb0002"
+  },
+  "launches": 0,
+  "up": [
+    "crew-orchestrator",
+    "crew-releaser",
+    "crew-reviewer"
+  ]
+}
+== step: crew resume ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew resumed
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "ids": {
+    "crew-orchestrator": "aaaa0001",
+    "crew-releaser": "cccc0003",
+    "crew-reviewer": "bbbb0002"
+  },
+  "launches": 0,
+  "up": [
+    "crew-orchestrator",
+    "crew-releaser",
+    "crew-reviewer"
+  ]
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "testing", "event": "halt", "station": ""}
+{"at": "<TS>", "detail": "", "event": "resume", "station": ""}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "older",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "old-releaser",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "old-reviewer",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  }
+]
+== asked of Tares ==
+PUT /api/crew/claude-retry?crew=crew key=no {
+  "stations": {}
+}
+PUT /api/crew/claude-retry?crew=crew key=no {
+  "stations": {}
+}

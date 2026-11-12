@@ -1,0 +1,85 @@
+== step: down ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: no stations recorded
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations/crew-reviewer.pace ==
+{"stretched":true,"held":false}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "busy",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "shop-build-m1",
+    "pid": "<PID>",
+    "state": "blocked",
+    "status": "waiting",
+    "version": "2.1.100"
+  }
+]

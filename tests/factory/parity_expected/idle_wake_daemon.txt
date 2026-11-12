@@ -1,0 +1,17 @@
+== step: run ==
+exit: 0
+-- stdout --
+taresd: 0 source(s); console at / · agent API at /read · management API at /api
+{"queue": 1, "step": "waiting"}
+{"idle_wake": null, "step": "unset"}
+{"queue": 0, "step": "emptied"}
+{"idle_wake": true, "step": "on"}
+{"head": "1111111aaaaaaaa", "step": "head"}
+{"current": true, "step": "verdict"}
+{"answered": 0, "open": 1, "step": "open_question"}
+{"answered": 1, "step": "answered"}
+{"answered": 2, "step": "answered_two"}
+{"permissions": 1, "step": "allowed"}
+{"current": true, "head": "6666666ffffffff", "step": "unseen"}
+-- stderr --
+

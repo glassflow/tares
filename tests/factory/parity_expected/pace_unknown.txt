@@ -1,0 +1,258 @@
+== step: pace_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {
+    "crew-orchestrator": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-releaser": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-reviewer": {
+      "held": false,
+      "stretched": true
+    },
+    "links-app-build-m1": {
+      "held": false,
+      "stretched": true
+    }
+  },
+  "pace": {
+    "limit_since": 5,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {
+    "crew-orchestrator": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-releaser": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-reviewer": {
+      "held": false,
+      "stretched": true
+    },
+    "links-app-build-m1": {
+      "held": false,
+      "stretched": true
+    }
+  },
+  "pace": {
+    "limit_since": 5,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {
+    "crew-orchestrator": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-releaser": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-reviewer": {
+      "held": false,
+      "stretched": true
+    },
+    "links-app-build-m1": {
+      "held": false,
+      "stretched": true
+    }
+  },
+  "pace": {
+    "limit_since": 5,
+    "said": true,
+    "stopped": [
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/pace.json ==
+{
+  "limit_since": 5,
+  "said": true,
+  "stopped": [
+    "crew-reviewer"
+  ],
+  "tried": [],
+  "until": "<TS>"
+}
+== file crew/stations/crew-orchestrator.pace ==
+{"stretched": true, "held": false}
+== file crew/stations/crew-releaser.pace ==
+{"stretched": true, "held": false}
+== file crew/stations/crew-reviewer.pace ==
+{"stretched": true, "held": false}
+== file crew/stations/links-app-build-m1.pace ==
+{"stretched": true, "held": false}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "sess-aaaa0001",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "sess-bbbb0003",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "sess-bbbb0002",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "links-app",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "sess-cccc0004",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "state": "done"
+  }
+]

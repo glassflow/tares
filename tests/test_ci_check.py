@@ -50,12 +50,12 @@ rc, out = run(d)
 ck("a list with only comments and blank lines fails", rc != 0 and "has no test names" in out, f"{rc} {out!r}")
 
 d = fresh()
-rc, out = run(d, "tests/factory/ci_list.txt")
-ck("the factory list is checked by its own path", rc != 0 and "tests/factory/ci_list.txt is missing" in out, f"{rc} {out!r}")
+rc, out = run(d, "ee/tests/ci_list.txt")
+ck("another list is checked by its own path", rc != 0 and "ee/tests/ci_list.txt is missing" in out, f"{rc} {out!r}")
 
-# The two real lists pass.
+# The real lists pass. The mit run of CI deletes every ee directory, so the ee list is checked only where it exists.
 rc1, o1 = run(ROOT, "tests/ci_list.txt")
-rc2, o2 = run(ROOT, "tests/factory/ci_list.txt")
+rc2, o2 = run(ROOT, "ee/tests/ci_list.txt") if (ROOT / "ee" / "tests" / "ci_list.txt").exists() else (0, "")
 ck("the real lists pass", rc1 == 0 and rc2 == 0, o1 + o2)
 
 for p in MADE:

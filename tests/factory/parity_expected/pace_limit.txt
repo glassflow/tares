@@ -1,0 +1,709 @@
+== step: pace_down crew-reviewer:ok crew-releaser:ok ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: the plan's limit is full until <TS>, so a stopped station is not revived now (crew-reviewer is the first); the watch revives each one in its own conversation after the reset
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-releaser",
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:ok ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [],
+  "files": {},
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-releaser",
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: pacing: telling crew-orchestrator (stretch) in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+tares factory: pacing: telling crew-reviewer (stretch) in the same conversation
+  ✓ started crew-reviewer (opus, high)
+tares factory: pacing: telling crew-releaser (stretch) in the same conversation
+  ✓ started crew-releaser (opus, high)
+tares factory: pacing: telling links-app-build-m1 (stretch) in the same conversation
+  ✓ started links-app-build-m1 (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "stretch"
+    ],
+    [
+      "crew-reviewer",
+      "stretch"
+    ],
+    [
+      "crew-releaser",
+      "stretch"
+    ],
+    [
+      "links-app-build-m1",
+      "stretch"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-releaser": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-reviewer": {
+      "held": false,
+      "stretched": true
+    },
+    "links-app-build-m1": {
+      "held": true,
+      "stretched": true
+    }
+  },
+  "pace": {
+    "limit_since": 2000000000,
+    "said": true,
+    "stopped": [
+      "crew-releaser",
+      "crew-reviewer"
+    ],
+    "tried": [],
+    "until": "<TS>"
+  }
+}
+== step: pace_down crew-reviewer:ok crew-releaser:ok ==
+exit: 0
+-- stdout --
+revive crew-reviewer: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, then continue.
+revive crew-releaser: The plan's limit was reset. Carry on from where you stopped: re-read your report and your work on Tares, re-arm your schedule if you have one, then continue.
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "stretch"
+    ],
+    [
+      "crew-reviewer",
+      "stretch"
+    ],
+    [
+      "crew-releaser",
+      "stretch"
+    ],
+    [
+      "links-app-build-m1",
+      "stretch"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-releaser": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-reviewer": {
+      "held": false,
+      "stretched": true
+    },
+    "links-app-build-m1": {
+      "held": true,
+      "stretched": true
+    }
+  },
+  "pace": null
+}
+== step: pace_down crew-orchestrator:ok ==
+exit: 0
+-- stdout --
+revive crew-orchestrator: 
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "stretch"
+    ],
+    [
+      "crew-reviewer",
+      "stretch"
+    ],
+    [
+      "crew-releaser",
+      "stretch"
+    ],
+    [
+      "links-app-build-m1",
+      "stretch"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-releaser": {
+      "held": false,
+      "stretched": true
+    },
+    "crew-reviewer": {
+      "held": false,
+      "stretched": true
+    },
+    "links-app-build-m1": {
+      "held": true,
+      "stretched": true
+    }
+  },
+  "pace": null
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "stretch", "event": "pace", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "stretch", "event": "pace", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000003", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "stretch", "event": "pace", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000004", "event": "started", "station": "links-app-build-m1"}
+{"at": "<TS>", "detail": "00000004", "event": "revived", "station": "links-app-build-m1"}
+{"at": "<TS>", "detail": "stretch", "event": "pace", "station": "links-app-build-m1"}
+== file crew/stations/crew-orchestrator.grants ==
+
+== file crew/stations/crew-orchestrator.pace ==
+{"stretched":true,"held":false}
+== file crew/stations/crew-orchestrator.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crew/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that the user authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "orchestrator",
+    "FACTORY_STATION": "crew-orchestrator",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)",
+      "Bash(factory spawn *)",
+      "Bash(tares factory spawn *)",
+      "Bash(factory revive *)",
+      "Bash(tares factory revive *)",
+      "Bash(factory restart *)",
+      "Bash(tares factory restart *)",
+      "Bash(factory retire *)",
+      "Bash(tares factory retire *)",
+      "Bash(factory roster)",
+      "Bash(tares factory roster)",
+      "Bash(factory projects)",
+      "Bash(tares factory projects)",
+      "Bash(factory crew status)",
+      "Bash(tares factory crew status)",
+      "Bash(factory crew halt)",
+      "Bash(tares factory crew halt)",
+      "Bash(factory crew halt *)",
+      "Bash(tares factory crew halt *)",
+      "Bash(factory crew resume)",
+      "Bash(tares factory crew resume)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-releaser.grants ==
+
+== file crew/stations/crew-releaser.pace ==
+{"stretched":true,"held":false}
+== file crew/stations/crew-releaser.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Building container images, loading them into the local kind cluster `factory`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in the repositories of the projects handed to this crew on Tares (crew_projects), are expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the releaser station `crew-releaser` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It was started by the station `crew-orchestrator`. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_ROLE": "releaser",
+    "FACTORY_STATION": "crew-releaser",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-reviewer.grants ==
+
+== file crew/stations/crew-reviewer.pace ==
+{"stretched":true,"held":false}
+== file crew/stations/crew-reviewer.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It was started by the station `crew-orchestrator`. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_ROLE": "reviewer",
+    "FACTORY_STATION": "crew-reviewer",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/links-app-build-m1.grants ==
+
+@project 
+== file crew/stations/links-app-build-m1.pace ==
+{"stretched":true,"held":true}
+== file crew/stations/links-app-build-m1.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of project links-app:  or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Pushing `factory/*` branches to the repositories of the projects handed to this crew on Tares (crew_projects), and opening pull requests there, is expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the builder station `links-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It works on project links-app in . It was started by the station `crew-orchestrator`. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_PROJECT": "links-app",
+    "FACTORY_ROLE": "builder",
+    "FACTORY_STATION": "links-app-build-m1",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>",
+    "TARES_PROJECT": "p1",
+    "TARES_PROJECT_NAME": "links-app"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-aaaa0001"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-orchestrator.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-bbbb0003"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-releaser.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-bbbb0002"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-reviewer.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-cccc0004"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "links-app",
+    "project_id": "p1",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/links-app-build-m1.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-aaaa0001", "Pacing: the 5-hour window is at 100%, so builders finish their step, push, report and wait, and no new builder starts until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "aaaa0001"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0002", "Pacing: the 5-hour window is at 100%, so builders finish their step, push, report and wait, and no new builder starts until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "bbbb0003"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-bbbb0003", "Pacing: the 5-hour window is at 100%, so builders finish their step, push, report and wait, and no new builder starts until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "bbbb0003"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["stop", "cccc0004"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "links-app-build-m1", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role builder, session name links-app-build-m1, project links-app, repo , started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-builder from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-cccc0004", "Pacing: the 5-hour window is at 100%, so builders finish their step, push, report and wait, and no new builder starts until 2033-05-18 05:00 UTC. Stretch your tick to 45 minutes: if you hold a CronCreate tick, delete it (CronList, then CronDelete) and create it again at 45 minutes, and keep it there until the factory tells you otherwise. Finish the step you are on, push, write in your report where you are and what comes next, then wait without starting new work until the factory tells you the plan has room again."], "cwd": "<TMP>"}
+{"args": ["rm", "cccc0004"], "cwd": "<REPO>"}

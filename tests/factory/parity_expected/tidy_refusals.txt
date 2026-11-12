@@ -1,0 +1,48 @@
+== step: tidy {tmp}/outside ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/outside is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/crew/worktrees ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/crew/worktrees is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/crew/worktrees/a/.. {tmp}/crew/worktrees/a/../../crew-x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/crew/worktrees/a/.. is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/home ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/home is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/linkroot/file ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/linkroot/file is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/home/.claude ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/home/.claude is already gone
+== step: tidy {tmp}/home/x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/home/x is outside the crew's folders. factory tidy removes only inside <TMP>/crew/worktrees, <TMP>/crew/tmp, the projects' .factory/worktrees and your job's scratch folder.
+== step: tidy {tmp}/gone ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/gone is already gone

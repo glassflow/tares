@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """Support for the launch tests (tests/test_crew_launch.py, the `launch_*` scenarios of parity.py): a fake
-Tares, a copy of the kit, and a driver that runs one function of the launch code on either engine.
+Tares, a copy of the kit, and a driver that runs one function of the launch code.
 
-    launch_support.py <bash|python> <function> [arguments]
+    launch_support.py <function> [arguments]
 
 The driver runs in a throwaway crew (the environment parity.crew_env gives: the crew home is
 <tmp>/crew, the fake Claude Code is CLAUDE_BIN). It starts a fake Tares on a free port of its own, makes
-<tmp>/kit as a copy of claude-plugin (the same kit for both engines), and then:
-
-  bash    sources the factory script, cut before its dispatcher, out of that kit and calls the bash function
-  python  calls the function of tares.crew.launch with a TaresClient on the same fake Tares
-
-Both print what the function prints and exit as it does, so the two can be compared. Functions:
+<tmp>/kit as a copy of claude-plugin, and then calls the function of tares.crew.launch with a TaresClient on
+the same fake Tares. It prints what the function prints and exits as it does. Functions:
 write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
 level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
 watch round), pace_down (what the revive step asks of the pace for stations that are down or up), idle_wake_round (the
-idle-wake pass of one watch round), and the whole commands `spawn` (bash's cmd_spawn, or cmd_spawn of
-tares.crew.stations), `revive`, `restart` and `retire` (cmd_revive, cmd_restart and cmd_retire, or those of tares.crew.lifecycle). `watch_regrant` is one round of
-the watch's regrant step (TR-960): bash's per-station loop of cmd_watch cut down to its regrant branches, or regrant.step of tares.crew. The
-word {TMP} in an argument is the temp folder.
+idle-wake pass of one watch round), and the whole commands `spawn` (cmd_spawn of tares.crew.stations), `revive`,
+`restart` and `retire` (cmd_revive, cmd_restart and cmd_retire of tares.crew.lifecycle). `watch_regrant` is one
+round of the watch's regrant step (TR-960): regrant.step of tares.crew. The word {TMP} in an argument is the temp
+folder.
 
 Environment: LAUNCH_WORLD is JSON for the fake Tares (settings, projects, grants, token, health,
 grants_status); LAUNCH_SETUP is JSON for the crew home, made on the first call (crew: keys merged into
@@ -43,7 +39,6 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 PLUGIN = ROOT / "claude-plugin"
-CUT = "cmd=${1:-help}; shift || true"  # the line of bin/factory where the commands begin
 
 DEFAULT_WORLD = {
     "settings": {"autonomy": "L4-ship", "releaser": False, "release_profile": "kind",
@@ -147,16 +142,10 @@ def merge(base, over):
 
 
 def make_kit(tmp: Path) -> Path:
-    """<tmp>/kit: a copy of claude-plugin, with bin/factory-lib.sh, the factory script cut before its
-    dispatcher (the functions of the bash engine, ready to source). Made once."""
+    """<tmp>/kit: a copy of claude-plugin. Made once."""
     kit = tmp / "kit"
     if not kit.exists():
         shutil.copytree(PLUGIN, kit, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        text = (PLUGIN / "bin" / "factory").read_text(encoding="utf-8")
-        head = text.split(CUT)[0]
-        if head == text:
-            raise SystemExit("launch_support: bin/factory has no dispatcher line to cut at")
-        (kit / "bin" / "factory-lib.sh").write_text(head, encoding="utf-8", newline="\n")
     return kit
 
 
@@ -197,107 +186,14 @@ def _sub_json(text: str, tmp: Path) -> str:
 
 
 # ---------------------------------------------------------------------------------------------
-# The two engines
+# The functions
 
-BASH_FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
-                  "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
-                  "idle_wake_note", "spawn", "revive", "restart", "retire", "pace_round", "pace_down", "watch_regrant",
-                  "idle_wake_round"}
+FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
+             "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
+             "idle_wake_note", "spawn", "revive", "restart", "retire", "pace_round", "pace_down", "watch_regrant",
+             "idle_wake_round"}
 NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "retire", "pace_round",
                "pace_down", "idle_wake_round"}
-
-# The pace pass of one watch round, as the bash watch loop runs it: the reading and the tidy at the top of the
-# round, then for each active station that is up the plan and the send (the revive and the regrant before it
-# belong to other steps).
-BASH_PACE_ROUND = '''
-pace_read || true
-pace_tidy || true
-for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
-  case "$(stations_get "$s" '.role')" in
-    helper) continue ;;
-    builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
-  esac
-  up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; continue; }
-  [ "$up" = yes ] || continue
-  if pace_plan "$s"; then pace_send; fi
-done
-'''
-
-# What the watch loop asks of the pace around a revive, for each "<station>:<what>" argument: `up` (the station
-# runs: forget it), `ok` or `fail` (it is down; a closed limit holds it down, else it is revived, and the revive
-# worked or not). The revive itself is not made: the prompt it would get is printed.
-BASH_PACE_DOWN = '''
-pace_read || true
-pace_tidy || true   # the top of the round, which the revive step runs after
-for a in "$@"; do
-  s=${a%%:*}; o=${a##*:}
-  if [ "$o" = up ]; then [ ! -f "$PACE_FILE" ] || pace_revived "$s"; continue; fi
-  if pace_closed; then pace_hold_down "$s"; continue; fi
-  fresh=""; pprompt=""
-  if pace_stopped "$s"; then
-    if pace_tried "$s"; then fresh=--fresh; pprompt=$(pace_fresh_prompt "$s"); else pprompt=$(pace_resume_prompt); fi
-  fi
-  echo "revive $s${fresh:+ $fresh}: $pprompt"
-  if [ "$o" = ok ]; then pace_revived "$s"
-  else [ -z "$pprompt" ] || [ -n "$fresh" ] || pace_mark_tried "$s"; fi
-done
-'''
-
-# One round of cmd_watch for the regrant step: the same loop and the same branches (a helper between turns; a
-# builder that is done is left alone; a stopped or stuck station is the revive step's), with the functions of the
-# kit itself. Tares is asked once at the start of the round, as cmd_watch does.
-WATCH_REGRANT_BASH = r'''
-tares_on || true
-active_json >/dev/null || exit 0
-for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
-  case "$(stations_get "$s" '.role')" in
-    helper) if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi; continue ;;
-    builder) if [ -f "$CREW_HOME/stations/$s.done" ]; then
-        if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi
-        continue
-      fi ;;
-  esac
-  is_alive "$s" || continue
-  stuck_on_context "$s" && continue
-  if ! halted && between_turns "$s" && regrant_due "$s"; then regrant_station "$s"; fi
-done
-'''
-
-# The idle-wake pass of one watch round, as the bash watch loop runs it for each active station (helpers and
-# finished builders skipped, a station whose session is not alive skipped): plan, then send.
-BASH_IDLE_WAKE_ROUND = '''
-for s in $(jq -r 'to_entries[] | select(.value.status == "active") | .key' "$STATIONS" 2>/dev/null); do
-  case "$(stations_get "$s" '.role')" in
-    helper) continue ;;
-    builder) [ -f "$CREW_HOME/stations/$s.done" ] && continue ;;
-  esac
-  up=$(is_alive "$s" && echo yes || echo no) || { say "skipping $s this round"; continue; }
-  [ "$up" = yes ] || continue
-  if idle_wake_plan "$s"; then idle_wake_send; fi
-done
-'''
-
-
-def run_bash(fn: str, args: list, env: dict, kit: Path) -> int:
-    """Source the cut factory script from the kit and call the bash function."""
-    lib = kit / "bin" / "factory-lib.sh"
-    prime = "prime; " if fn in NEEDS_TARES else ""
-    # the script reads its first argument to tell a command from help; "x" is not a command it knows
-    script = f'set -euo pipefail; source "$1" x; shift; {prime}{fn} "$@"'
-    if fn == "idle_wake_on":
-        script = script.replace('idle_wake_on "$@"', 'idle_wake_on')
-    if fn in ("spawn", "revive", "restart", "retire"):
-        script = script.replace(f'{fn} "$@"', f'cmd_{fn} "$@"')
-    if fn == "pace_round":
-        script = script.replace('pace_round "$@"', BASH_PACE_ROUND)
-    if fn == "pace_down":
-        script = script.replace('pace_down "$@"', BASH_PACE_DOWN)
-    if fn == "watch_regrant":
-        script = f'set -euo pipefail; source "$1" x; shift; {WATCH_REGRANT_BASH}'
-    if fn == "idle_wake_round":
-        script = script.replace('idle_wake_round "$@"', BASH_IDLE_WAKE_ROUND)
-    p = subprocess.run(["bash", "-c", script, "bash", str(lib), *args], env=env, stdin=None)
-    return p.returncode
 
 
 def run_python(fn: str, args: list) -> int:
@@ -392,10 +288,10 @@ def run_python(fn: str, args: list) -> int:
 
 
 def main(argv: list) -> int:
-    if len(argv) < 2 or argv[0] not in ("bash", "python") or argv[1] not in BASH_FUNCTIONS:
+    if not argv or argv[0] not in FUNCTIONS:
         print(__doc__, file=sys.stderr)
         return 2
-    engine, fn, args = argv[0], argv[1], argv[2:]
+    fn, args = argv[0], argv[1:]
     tmp = Path(os.environ["FACTORY_CREW_HOME"]).parent
     args = [_sub(a, tmp) for a in args]
     setup = json.loads(_sub_json(os.environ.get("LAUNCH_SETUP") or "{}", tmp))
@@ -403,20 +299,14 @@ def main(argv: list) -> int:
     kit = make_kit(tmp)
     make_crew(tmp, setup)
     with FakeTares(world) as tares:
-        env = {**os.environ, "TARESD_URL": tares.url, "TARES_PLUGIN_DIR": str(kit)}
-        if fn == "spawn":  # the spawn command wants the crew's MCP endpoint, which the settings checks leave at its default
-            env["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
         try:
-            if engine == "bash":
-                return run_bash(fn, args, env, kit)
             os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit))
-            if fn == "spawn":
+            if fn == "spawn":  # the spawn command wants the crew's MCP endpoint, which the settings checks leave at its default
                 os.environ["TARES_FACTORY_MCP_URL"] = tares.url + "/mcp"
             sys.path.insert(0, str(ROOT))
             return run_python(fn, args)
         finally:
-            # the address of every GET the command made, appended to <tmp>/urls: what the idle wake suite's curl shim notes
-            # for bash (idle_wake_test.sh), read from the Tares side so both engines are seen the same way
+            # the address of every GET the command made, appended to <tmp>/urls, read from the Tares side
             with open(tmp / "urls", "a", encoding="utf-8", newline="\n") as f:
                 f.writelines(e["path"] + "\n" for e in tares.log if not e.get("post"))
 

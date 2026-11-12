@@ -1,0 +1,125 @@
+== step: spec orders across api and web ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in <TMP>/work, which holds 2 repo(s): api, web
+tares factory: opening Claude as orders-across-api-and-spec in <TMP>/work, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/work",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec nothing here ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: run tares factory spec inside the git repo the project builds on, or in a folder that holds its repos
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/work",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: <TMP>/fresh has no commit yet. Make a first commit and push it, so builders can branch from it.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/work",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== file crew/stations/spec.settings.json ==
+{
+  "enabledPlugins": {
+    "tares@inline": true
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-n", "orders-across-api-and-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec orders across api and web"], "cwd": "<TMP>/work"}
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
