@@ -35,8 +35,8 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 1,
   "line": {
@@ -97,8 +97,8 @@ exit: 0
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "4147712057",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 3,
   "line": {

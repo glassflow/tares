@@ -5845,10 +5845,14 @@ def tares_bin_forms() -> list:
     return sorted(forms, key=len, reverse=True)
 
 
+KIT_NEWER = re.compile(r"kit \d{6,} is newer than the frozen kit \d{6,}")
+
+
 def norm_text(s: str, tmp: Path | None = None) -> str:
     """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids, the checkout's
     folder and the plugin's version."""
     s = s.replace("\r\n", "\n")
+    s = KIT_NEWER.sub(r"kit <KIT> is newer than the frozen kit <KIT>", s)   # the fingerprints of two kits
     for addr in TARES_ADDR:
         s = s.replace(addr, "<TARES>")
     if tmp is not None:
@@ -5902,8 +5906,8 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
     """A parsed JSON value with its strings normalised and numbers under pid or time keys replaced.
     Key order does not matter: it is sorted when rendered."""
     if isinstance(v, dict):
-        out = {k: norm_json(x, tmp, k) for k, x in v.items()}
-        if v.get("event") in ("freeze", "upgraded") and isinstance(v.get("detail"), str) and v["detail"].isdigit():
+        out = {k: norm_json(x, tmp, "kit" if key == "kit" else k) for k, x in v.items()}   # a kit's stations all hold fingerprints
+        if v.get("event") in ("freeze", "upgraded", "kit-newer") and isinstance(v.get("detail"), str) and v["detail"].isdigit():
             out["detail"] = "<KIT>"     # these events hold the kit's fingerprint
         return out
     if isinstance(v, list):
@@ -5911,7 +5915,7 @@ def norm_json(v, tmp: Path | None = None, key: str = ""):
     if isinstance(v, str):
         if key == "grants" and v.isdigit():
             return "<GRANTS>"   # the fingerprint of the grants a station was started with: the text of a grant holds the day it was made
-        if key == "kit" and v.isdigit():
+        if v.isdigit() and (key == "kit" or (key == "version" and len(v) >= 6)):
             return "<KIT>"      # the fingerprint of the kit a station runs on: it moves with every change to the plugin
         if key in ID_KEYS and HEX8.fullmatch(v):
             return "<ID>"

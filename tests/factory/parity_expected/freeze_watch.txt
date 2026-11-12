@@ -26,7 +26,7 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "2299798679"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "ee5f1a01",
@@ -34,8 +34,8 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 0,
   "line": {
@@ -121,7 +121,7 @@ exit: 0
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "2299798679"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "ee5f1a01",
@@ -129,8 +129,8 @@ exit: 0
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 0,
   "line": {
@@ -175,7 +175,7 @@ exit: 0
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "2299798679"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "ee5f1a01",
@@ -183,8 +183,8 @@ exit: 0
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 0,
   "line": {
@@ -229,7 +229,7 @@ exit: 0
 -- stdout --
 
 -- stderr --
-tares factory: kit 3804381130 is newer than the frozen kit 2299798679; not moving stations (tares factory crew unfreeze lets them follow it)
+tares factory: kit <KIT> is newer than the frozen kit <KIT>; not moving stations (tares factory crew unfreeze lets them follow it)
 == step: crew watch --once ==
 exit: 0
 -- stdout --
@@ -248,7 +248,7 @@ exit: 0
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "2299798679"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "ee5f1a01",
@@ -256,8 +256,8 @@ exit: 0
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 0,
   "line": {
@@ -305,7 +305,7 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "2299798679"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "ee5f1a01",
@@ -313,8 +313,8 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 1,
   "line": {
@@ -366,8 +366,8 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "2299798679",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 1,
   "line": {
@@ -433,8 +433,8 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "2299798679"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 2,
   "line": {
@@ -488,8 +488,8 @@ tares factory: crew-reviewer runs an older version of the plugin; restarting it 
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 3,
   "line": {
@@ -542,8 +542,8 @@ exit: 0
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 3,
   "line": {
@@ -599,7 +599,7 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "3804381130"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "00000002",
@@ -607,8 +607,8 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 4,
   "line": {
@@ -673,8 +673,8 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 4,
   "line": {
@@ -728,8 +728,8 @@ tares factory: crew-orchestrator stopped; reviving it under the same name
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 5,
   "line": {
@@ -778,7 +778,7 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "3804381130"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "00000005",
@@ -786,8 +786,8 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
   },
   "kept": true,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 5,
   "line": {
@@ -846,8 +846,8 @@ tares factory: stations still run from the kit copy of an earlier freeze, and th
   },
   "kept": true,
   "kit": {
-    "crew-orchestrator": "3804381130",
-    "crew-reviewer": "3804381130"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 5,
   "line": {
@@ -908,8 +908,8 @@ tares factory: crew-reviewer runs an older version of the plugin; restarting it 
   },
   "kept": true,
   "kit": {
-    "crew-orchestrator": "1483295536",
-    "crew-reviewer": "1483295536"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 7,
   "line": {
@@ -962,8 +962,8 @@ exit: 0
   },
   "kept": true,
   "kit": {
-    "crew-orchestrator": "1483295536",
-    "crew-reviewer": "1483295536"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 7,
   "line": {
@@ -1016,8 +1016,8 @@ exit: 0
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "1483295536",
-    "crew-reviewer": "1483295536"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 7,
   "line": {
@@ -1066,7 +1066,7 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
   "frozen": {
     "at": "<TS>",
     "by": "<USER>",
-    "version": "1483295536"
+    "version": "<KIT>"
   },
   "id": {
     "crew-orchestrator": "00000006",
@@ -1074,8 +1074,8 @@ tares factory: kit frozen since <TS> by <USER>: stations that start or revive us
   },
   "kept": false,
   "kit": {
-    "crew-orchestrator": "1483295536",
-    "crew-reviewer": "1483295536"
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
   },
   "launches": 7,
   "line": {
@@ -1176,8 +1176,8 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
 }
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
-{"at": "<TS>", "detail": "3924665536", "event": "kit-newer", "station": ""}
-{"at": "<TS>", "detail": "3804381130", "event": "kit-newer", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "kit-newer", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "kit-newer", "station": ""}
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}

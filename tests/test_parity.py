@@ -89,6 +89,12 @@ ck("today's date is a placeholder (a grant says when it was made), another day i
    parity.norm_text(f"granted on {_today} ({_today}) at {_today}T10:11:12Z, not 2001-02-03 or x{_today}0")
    == "granted on <DATE> (<DATE>) at <TS>, not 2001-02-03 or x" + _today + "0")
 ck("a grants fingerprint (it holds the day a grant was made) is a placeholder", parity.norm_json({"grants": "925418911"}) == {"grants": "<GRANTS>"})
+ck("a kit fingerprint is a placeholder wherever a kit is named: its stations, a freeze's version, a kit-newer event, the text",
+   parity.norm_json({"kit": {"crew-reviewer": "2299798679"}, "frozen": {"version": "2299798679"},
+                     "event": "kit-newer", "detail": "3804381130", "n": "12345678"})
+   == {"kit": {"crew-reviewer": "<KIT>"}, "frozen": {"version": "<KIT>"}, "event": "kit-newer", "detail": "<KIT>", "n": "12345678"}
+   and parity.norm_text("kit 3804381130 is newer than the frozen kit 2299798679; x")
+   == "kit <KIT> is newer than the frozen kit <KIT>; x")
 ck("a uuid is replaced", parity.norm_text("id 123e4567-e89b-12d3-a456-426614174000") == "id <ID>")
 ck("words and small numbers are kept", parity.norm_text("started 3 stations, port 8788") == "started 3 stations, port 8788")
 ck("CRLF becomes LF", parity.norm_text("a\r\nb") == "a\nb")
