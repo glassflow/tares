@@ -78,7 +78,7 @@ ck("ci.yml has the jobs console, test, test-ee, wheel, e2e and secrets",
    {"console", "test", "test-ee", "wheel", "e2e", "secrets"} <= set(js), str(sorted(js)))
 test = js.get("test", "")
 RUN = "python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5"
-ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"suite: \[duckdb, postgres, mit\]", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
+ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"""suite: \$\{\{ fromJSON\(.*'\["duckdb"\]'.*'\["duckdb","postgres","mit"\]'\) \}\}""", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
 step = test[test.rfind("run: |", 0, max(test.find(RUN), 0)):test.find(RUN)]
 ck("job test: tests/check_ci_list.sh checks the list in the step before ci_run.py (a missing or empty list fails the job)",
    re.search(r"(?m)^\s*bash tests/check_ci_list\.sh tests/ci_list\.txt\s*$", step) is not None

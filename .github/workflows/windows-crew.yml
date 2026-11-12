@@ -4,12 +4,15 @@
 # split over 4 shards (`--shard N --of 4`, round robin, the parity coverage report in shard 1). The matrix jobs are
 # named windows-crew (shard N); the job `windows-crew` below waits for all of them and fails unless every shard
 # passed, so one stable check name can be required.
+# A PR runs the shards only when it changes the crew engine or what it runs on (the `changes` job below), and not
+# while it is a draft: marking it ready (ready_for_review) runs them once (TR-1233). A push to main always runs them.
 # The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_ci_windows.py and the parity scenarios, and fails
 # if it ran no test, if a test printed no summary, or (--floors) if a test passed fewer checks than its floor (TR-976).
 name: windows-crew
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
       - "README.md"
       - "AGENTS.md"
@@ -38,8 +41,42 @@ permissions:
   contents: read
 
 jobs:
+  # Does this PR need the Windows run? A push to main and a manual run: yes. A draft PR: no. Any other PR: yes
+  # when it changes the crew engine, its tests, the harness or this workflow.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.diff.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ "$DRAFT" = "true" ]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "a draft PR: the Windows shards run when it is marked ready"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$BASE"...HEAD)
+          echo "$changed"
+          if grep -qE '^(tares/crew/|claude-plugin/|tests/factory/|tests/test_crew_|tests/test_ci_windows\.py$|tests/ci_windows\.py$|tares/cli\.py$|pyproject\.toml$|\.github/workflows/windows-crew\.yml$)' <<<"$changed"; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "no crew engine change: the Windows shards are skipped"
+          fi
+
   shard:
     name: windows-crew (shard ${{ matrix.shard }})
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: windows-latest
     timeout-minutes: 45
     strategy:
@@ -84,17 +121,34 @@ jobs:
           .venv\Scripts\activate.ps1
           python tests/ci_windows.py --floors --timeout 1200 --shard ${{ matrix.shard }} --of 4
 
-  # The one check to require: green only when all four shards are.
+  # The one check to require: green when all four shards are, and green when they were skipped on purpose
+  # (a draft or a PR that changes nothing the shards test). A shard that failed, was cancelled, or was skipped by
+  # accident (the `changes` job failed) is red.
   windows-crew:
     name: windows-crew
-    needs: shard
+    needs: [changes, shard]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every shard passed
+      - name: Every shard passed, or none was needed
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          RUN: ${{ needs.changes.outputs.run }}
+          SHARDS: ${{ needs.shard.result }}
         run: |
-          if [ "${{ needs.shard.result }}" != "success" ]; then
-            echo "windows-crew shards: ${{ needs.shard.result }}"
+          if [ "$CHANGES" != "success" ]; then
+            echo "windows-crew: the changes job $CHANGES"
             exit 1
+          fi
+          if [ "$RUN" = "true" ]; then
+            if [ "$SHARDS" != "success" ]; then
+              echo "windows-crew shards: $SHARDS"
+              exit 1
+            fi
+          elif [ "$SHARDS" != "skipped" ]; then
+            echo "windows-crew shards: $SHARDS, expected skipped"
+            exit 1
+          else
+            echo "windows-crew: no shard needed for this PR"
           fi
