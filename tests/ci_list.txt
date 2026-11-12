@@ -17,6 +17,8 @@ test_budget_period
 test_builder_flow
 test_catalog_sync
 test_challenger_workflow
+test_changelog_collect
+test_check_changelog
 test_check_ledger
 test_ci_check
 test_ci_e2e
@@ -189,6 +191,7 @@ test_push_wins
 test_rca_callback_anchor
 test_recording_person
 test_release_block
+test_release_changelog
 test_resources
 test_review_gate
 test_review_post
