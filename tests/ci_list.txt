@@ -189,6 +189,7 @@ test_recording_person
 test_release_block
 test_resources
 test_review_gate
+test_review_post
 test_rius_rca
 test_run_results
 test_schedule_trigger
