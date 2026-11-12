@@ -1799,10 +1799,56 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     # ── review and merge (TR-441..445) ────────────────────────────────────────
     @app.post("/api/projects/{uid}/tickets/{ref}/reviews", status_code=201)
-    def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
+    async def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{head, verdict, verified, not_verified?, findings?, resolved?}: one review round, the
         verdict on the commit it was given on. `resolved` marks earlier findings ({F1: fixed}).
-        Only the reviewer (or a person's own session) records one."""
+        Only the reviewer (or a person's own session) records one.
+
+        The answer's `github` says whether Tares also posted the review to the pull request as
+        the cell's GitHub App (the comment and the `factory/review` check run, TR-1244): `posted`,
+        and `why` when it did not, so the reviewer posts with `gh` as before."""
+        rv = await asyncio.to_thread(add_review_round, uid, ref, request, body)
+        t = await asyncio.to_thread(ticket_or_404, uid, ref)
+        rv["github"] = await post_review_to_github(t, rv, request, body)
+        return rv
+
+    async def post_review_to_github(t: dict, rv: dict, request: Request, body: dict) -> dict:
+        pr = t.get("pr") or {}
+        parsed = factory_github.parse_pr(pr.get("url") or "") if pr.get("url") else None
+        repo, number = parsed if parsed else (pr.get("repo"), pr.get("number"))
+        if not repo or not number:
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": "the ticket has no linked pull request"}
+        by, _ = who(request, body)
+        person = h.current_person(request) or {}
+        blocking = sum(1 for f in rv["findings"] if f.get("blocking"))
+        title = factory_github._VERDICT_WORDS.get(rv["verdict"], rv["verdict"])
+        title += f", {blocking} blocking" if blocking else ""
+        this_round = {f["label"] for f in rv["findings"]}
+        try:
+            earlier = [f for f in await asyncio.to_thread(store.open_findings, t["id"])
+                       if f["label"] not in this_round]
+            comment = factory_github.review_comment(
+                rv["verdict"], by, str(person.get("name") or ""), rv.get("verified") or "",
+                rv.get("not_verified") or "", rv["findings"], rv["head"],
+                fixed=rv.get("fixed") or [], earlier_open=earlier)
+            # the check run goes on the full commit when the PR knows it (the reviewer may give a
+            # short one)
+            full = str(pr.get("head") or "").strip()
+            sha = full if factory_mod.same_commit(full, rv["head"]) else rv["head"]
+            return await asyncio.wait_for(
+                factory_github.post_review(store, repo, int(number), sha, rv["verdict"], comment,
+                                           title),
+                factory_github.REVIEW_POST_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": "GitHub did not answer in time: check the PR, and post with gh "
+                           "what is missing"}
+        except Exception as e:   # the record is kept whatever GitHub does
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": f"could not post to GitHub: {type(e).__name__}"}
+
+    def add_review_round(uid: str, ref: str, request: Request, body: dict) -> dict:
         h.project_or_404(uid)
         deny(request, "review")
         t = ticket_or_404(uid, ref)

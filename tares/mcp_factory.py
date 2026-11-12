@@ -304,10 +304,13 @@ async def record_review(ticket: str, head: str, verdict: str, verified: str,
     and what it showed, `not_verified` what you did not cover and why, `findings`
     [{"severity": "P1|P2|P3", "file": "", "line": 0, "blocking": true, "text": ""}], and on a
     re-review `resolved` marking each earlier finding {"F1": "fixed", "F2": "open"}. A pass
-    leaves no blocking finding open. Only the reviewer records reviews."""
+    leaves no blocking finding open. Only the reviewer records reviews. When the cell holds a
+    GitHub App that can write to the repo, Tares also posts the review to the PR as the App (the
+    comment and the `factory/review` check run); the answer's `github` says what went up and,
+    when something did not, `why`: post that part with `gh`."""
     body = {"head": head, "verdict": verdict, "verified": verified,
             "not_verified": not_verified, "findings": findings or [], "resolved": resolved or {}}
-    async with _cx(15) as cx:
+    async with _cx(60) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
@@ -317,7 +320,7 @@ async def record_review(ticket: str, head: str, verdict: str, verified: str,
     d = r.json()
     return json.dumps({"round": d["round"], "verdict": d["verdict"],
                        "findings": [f["label"] for f in d["findings"]], "fixed": d["fixed"],
-                       "still_open": d["open"]})
+                       "still_open": d["open"], "github": d.get("github")})
 
 
 @mcp.tool()

@@ -62,7 +62,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
+from . import claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -247,7 +247,7 @@ UI_DIST = _ui_dist()
 # What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
 # cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
 # launch_spec, recall). A daemon that could not start lists none.
-CAPABILITIES = ["integrations", "merge_queue", "hook_points"]
+CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points"]
 
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
@@ -6221,6 +6221,7 @@ def make_app() -> FastAPI:
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)
+    guardrails_api.register(app, store, h)
     project_secrets.register(app, store, h)   # TR-775
 
     @app.get("/api/home")

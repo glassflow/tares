@@ -117,6 +117,7 @@ test_github_credentials
 test_github_tickets
 test_goal_first
 test_grants_single
+test_guardrail_rules
 test_handoffs
 test_handover_single
 test_homebrew_formula
@@ -189,6 +190,7 @@ test_recording_person
 test_release_block
 test_resources
 test_review_gate
+test_review_post
 test_rius_rca
 test_run_results
 test_schedule_trigger
