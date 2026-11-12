@@ -147,7 +147,7 @@ check "L3: the autonomy text says Tares merges after the yes on the desk" 'jq -e
 check "L3: no allow sentence merges a pull request" '! jq -e ".autoMode.allow | any(test(\"Merging a pull request|pre-authorized|relayed\"))" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
 check "L3: the builder keeps its push and open-PR allow" 'jq -e "[.autoMode.allow[] | select(test(\"^Pushing\"))] | length == 1" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
 check "L3: the builder's permissions deny gh pr merge" 'jq -e ".permissions.deny == [\"Bash(gh pr merge:*)\"]" "$FACTORY_CREW_HOME/stations/$b.settings.json" >/dev/null'
-check "every station denies gh pr merge and keeps its own commands" 'for s in crew-orchestrator crew-reviewer crew-releaser; do jq -e "(.permissions.deny | index(\"Bash(gh pr merge:*)\")) != null and (.permissions.allow | length) > 0 and (.autoMode.allow | any(test(\"Merging a pull request\")) | not)" "$FACTORY_CREW_HOME/stations/$s.settings.json" >/dev/null || exit 1; done'
+check "every station denies gh pr merge and keeps its own commands" '( for s in crew-orchestrator crew-reviewer crew-releaser; do jq -e "(.permissions.deny | index(\"Bash(gh pr merge:*)\")) != null and (.permissions.allow | length) > 0 and (.autoMode.allow | any(test(\"Merging a pull request\")) | not)" "$FACTORY_CREW_HOME/stations/$s.settings.json" >/dev/null || exit 1; done )'
 "$F" spawn builder "Links App" m1 "$repo" "again" >/dev/null 2>&1
 check "no duplicate builder" '[ "$(launches)" = 4 ]'
 "$F" spawn builder "Nobody's" m1 "$repo" "x" >"$T/unknown.out" 2>&1
