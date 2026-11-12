@@ -4513,6 +4513,7 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="pace_tidy",
+    not_windows=WIN_NO_MULTILINE,
     suite="pace",
     about="the pace file forgets a station that will not be revived, says the limit is full again in a new episode, and goes when nothing is left",
     driver=LAUNCH_DRIVER,
@@ -5863,10 +5864,11 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         for p in sorted(forms, key=len, reverse=True):
             s = re.sub(re.escape(p), "<TMP>", s, flags=flags)
     s = DOCKER_NOTE.sub("", s)
+    flags = re.IGNORECASE if is_windows() else 0    # tares.EXE or tares.exe, C: or c:
+    for p in tares_bin_forms():     # before the checkout: a venv inside the checkout holds the tares command
+        s = re.sub(re.escape(p), "<TARES-BIN>", s, flags=flags)
     for p in repo_forms():
         s = s.replace(p, "<REPO>")
-    for p in tares_bin_forms():
-        s = s.replace(p, "<TARES-BIN>")
     ver = plugin_version()
     if ver:
         s = re.sub(r"(version\s+)" + re.escape(ver) + r"(?![\w.])", r"\1<PLUGIN-VERSION>", s)
@@ -5881,10 +5883,15 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
     s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
     if is_windows():    # the results were recorded from bash with `/` in paths: a Windows path under a placeholder reads the same
         s = WIN_PATH_TAIL.sub(lambda m: m.group(1) + re.sub(r"\\+", "/", m.group(2)), s)
+        # a path with a space (the profile folder of the Windows job) is quoted in the statusline command, one without is not
+        s = WIN_ROOT_QUOTED.sub(r"\1\2", s)
+        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.cmd here, claude elsewhere
     return s
 
 
 # what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
+WIN_ROOT_QUOTED = re.compile(r'(--plugin-root )"([^"]*)"')
+WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.cmd")
 WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 
 
@@ -5940,6 +5947,9 @@ def _settings_arg(row):
         for i, a in enumerate(args[:-1]):
             if a == "--settings" and isinstance(args[i + 1], str) and not args[i + 1].lstrip().startswith("{"):
                 args[i + 1] = "<SETTINGS-FILE>"
+                if is_windows() and args[:2] == ["-p", "--no-session-persistence"]:
+                    # cmd.exe cannot take JSON in a claude.cmd command line: a reading passes the same settings as a file
+                    args[i + 1] = '{"disableAllHooks": true}'
     return row
 
 
@@ -6075,6 +6085,20 @@ def kit_copy_diff(copy: Path, edited: Path) -> str:
     return "\n".join(rows) + "\n" if rows else "same as the kit\n"
 
 
+def _files_under(base: Path) -> list:
+    """The files under base, in the order bash lists them (parts compared as text, and a Windows path compares without
+    case). A link to a folder, or a Windows junction, is not entered."""
+    found = []
+    for root, dirs, names in os.walk(base):
+        junction = getattr(os.path, "isjunction", lambda _p: False)
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d)) and not junction(os.path.join(root, d))]
+        for n in names:
+            p = Path(root, n)
+            if p.is_file():
+                found.append(p)
+    return sorted(found, key=lambda p: p.relative_to(base).parts)
+
+
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
@@ -6084,8 +6108,8 @@ def snapshot(run: Run) -> dict:
     for base, prefix, only in bases:
         if not base.is_dir():
             continue
-        for p in sorted(base.rglob("*")):
-            if p.is_file() and (only is None or p.name in only):
+        for p in _files_under(base):
+            if only is None or p.name in only:
                 rel = prefix + p.relative_to(base).as_posix()
                 if rel.startswith("crew/frozen-kit/"):
                     continue    # a copy of the kit: shown as its difference from the kit it came from, below
@@ -6241,6 +6265,10 @@ def evaluate_python(sc: Scenario, out=print) -> tuple:
     record must equal the one recorded from bash."""
     out(f"== {sc.name}: {sc.about or sc.suite} ==")
     side = run_side(sc)
+    if side.skip == "not ported" and is_windows():
+        # a step the engine has not ported runs in bash, which Windows does not have: the Linux and macOS runs hold the line
+        out("SKIP python: a step of this command is not yet ported, and it runs in bash, which is not available on Windows")
+        return 0, False
     if side.skip == "not ported":
         # a command the engine does not know is a failure: it would otherwise pass as a skip, and a command dropped
         # from PORTED would go unseen
@@ -6261,6 +6289,8 @@ def evaluate_python(sc: Scenario, out=print) -> tuple:
         out(f"FAIL python: no recorded result for {sc.name} (python tests/factory/parity.py --record {sc.name})")
         return 1, False
     want = _lf(path.read_text(encoding="utf-8"))
+    if is_windows():    # bash sets PWD for a command, cmd.exe does not: the recorded line has nothing to match
+        want = re.sub(r'(?m)^ *"PWD": .*\n', "", want)
     got = _lf(side.text)
     if want != got:
         out("FAIL python: output differs from the result recorded from bash (normalised), recorded first")

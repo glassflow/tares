@@ -354,7 +354,9 @@ for label, base in (("a plain path", "tares-launch-plain-"), ("a path with a spa
         ck("the crew home with a space is one word in the status line and in the file's own paths",
            " " in tmp.name and len(words) == 5)
         doc = json.loads((tmp / "crew" / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8"))
-        ck("JSON paths use forward slashes", "\\" not in json.dumps(doc["env"]).replace("\\n", ""), json.dumps(doc["env"])[:200])
+        # ensure_ascii off: a letter outside ASCII in the profile folder would print as \u00e9, a backslash that is not a path separator
+        env_text = json.dumps(doc["env"], ensure_ascii=False)
+        ck("JSON paths use forward slashes", "\\" not in env_text.replace("\\n", ""), str({k: v for k, v in doc["env"].items() if "\\" in str(v)})[:300])
     ck("no token in a settings file", all(FAKE_TOKEN not in p.read_text(encoding="utf-8", errors="replace")
                                           for p in (tmp / "crew" / "stations").glob("*.settings.json")))
 

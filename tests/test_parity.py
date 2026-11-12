@@ -110,6 +110,36 @@ ck("...and on Windows the drive letter and folder case do not matter", nc == "in
 with mock.patch.object(parity, "is_windows", lambda: False):
     nc = parity.norm_text("in c:\\users\\jane do\u00e9\\PARITY-X\\crew", wtmp)
 ck("...elsewhere case still matters", "<TMP>" not in nc, nc)
+# What Windows spells differently (TR-1172): a quoted kit path, claude.cmd, a settings file, the order of files, a junction
+with mock.patch.object(parity, "is_windows", lambda: True):
+    q1 = parity.norm_text('tares hook statusline --plugin-root "<TMP>/kit"')
+    q2 = parity.norm_text('tares hook statusline --plugin-root "<TMP>\\kit" and <TMP>\\bin\\claude.cmd (2.1.0)')
+ck("on Windows a quoted kit path and claude.cmd read as bash printed them",
+   q1 == "tares hook statusline --plugin-root <TMP>/kit" and q2 == "tares hook statusline --plugin-root <TMP>/kit and <TMP>/bin/claude (2.1.0)", (q1, q2))
+with mock.patch.object(parity, "is_windows", lambda: False):
+    q3 = parity.norm_text('--plugin-root "<TMP>/kit"')
+ck("...and elsewhere the quotes stay", q3 == '--plugin-root "<TMP>/kit"', q3)
+_use = {"args": ["-p", "--no-session-persistence", "--settings", "C:/t/x.json", "--verbose"]}
+_bg = {"args": ["--bg", "--settings", "C:/t/x.json"]}
+with mock.patch.object(parity, "is_windows", lambda: True):
+    _u, _b = parity._settings_arg(json.loads(json.dumps(_use))), parity._settings_arg(json.loads(json.dumps(_bg)))
+ck("on Windows a usage read's settings file reads as the JSON text bash passed; a launch's file stays a placeholder",
+   _u["args"][3] == '{"disableAllHooks": true}' and _b["args"][2] == "<SETTINGS-FILE>", (_u, _b))
+_ft = Path(tempfile.mkdtemp(prefix="parity-files-"))
+for _n in ("crew.json", "HALT", "a-b", "a/b"):
+    (_ft / _n).parent.mkdir(parents=True, exist_ok=True)
+    (_ft / _n).write_text("x")
+ck("files are listed in the order bash lists them: by text, upper case first, a folder's files together",
+   [p.relative_to(_ft).as_posix() for p in parity._files_under(_ft)] == ["HALT", "a/b", "a-b", "crew.json"],
+   str([p.relative_to(_ft).as_posix() for p in parity._files_under(_ft)]))
+if hasattr(os, "symlink"):
+    _out = Path(tempfile.mkdtemp(prefix="parity-out-"))
+    (_out / "keep").write_text("x")
+    try:
+        os.symlink(_out, _ft / "door", target_is_directory=True)
+        ck("a link to a folder is not entered", not any("door" in p.parts for p in parity._files_under(_ft)))
+    except OSError:
+        pass
 
 j1 = parity.norm_file('{"b": 1, "pid": 4242, "started_at": 1762510272, "a": "x"}', "s.json")
 j2 = parity.norm_file('{\n  "a": "x",\n  "started_at": 1762510999,\n  "pid": 17,\n  "b": 1\n}', "s.json")
