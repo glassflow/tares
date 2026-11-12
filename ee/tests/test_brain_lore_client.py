@@ -83,7 +83,20 @@ async def main():
         r = fake.calls(route="sync_repo")[-1]
         ck("sync_repo posts the token in the body, not the path or query",
            r.path == f"/v1/repos/{repo['id']}/sync" and r.json == {"token": TOKEN} and not r.query and TOKEN not in r.path, str(r))
-        ck("sync_repo returns lore's report", sync.get("indexed_commit") == "0" * 40)
+        ck("sync_repo returns lore's report", sync.get("indexed_commit") == "0" * 40 and sync["files_indexed"] == 1 and sync["full"] is True, str(sync))
+        ck("sync waits up to 600 s for the whole index run, not 10", r.timeout.get("read") == 600.0, str(r.timeout))
+        async with fake.client(sync_timeout=7) as quick:
+            await quick.sync_repo(repo["id"])
+        ck("the sync timeout can be set", fake.calls(route="sync_repo")[-1].timeout.get("read") == 7.0)
+        for bad in (123, ["t"]):
+            n = len(fake.requests)
+            e = await refused(lore.sync_repo(repo["id"], token=bad))
+            ck(f"sync_repo refuses a token that is {bad!r} without a call", e is not None and len(fake.requests) == n, str(e))
+        for bad in (5, ["u"]):
+            n = len(fake.requests)
+            e = await refused(lore.create_repo("tares", remote_url=bad))
+            e2 = await refused(lore.create_repo("tares", web_url_template=bad))
+            ck(f"create_repo refuses a remote or template that is {bad!r} without a call", e is not None and e2 is not None and len(fake.requests) == n, f"{e} {e2}")
         await lore.sync_repo(repo["id"], token="  ")
         ck("a blank token sends an empty body", fake.calls(route="sync_repo")[-1].json == {})
         e = await refused(lore.sync_repo(""))
@@ -144,6 +157,12 @@ async def main():
         res = await lore.search("licence KEY")
         ck("search finds a stored document", [h["external_id"] for h in res["hits"]] == ["notes/a.md"]
            and fake.calls(route="search")[-1].query == {"q": "licence KEY"})
+        for bad in (5, ["x"]):
+            n = len(fake.requests)
+            e = await refused(lore.search("q", source=bad))
+            e2 = await refused(lore.ask("q", source=bad))
+            e3 = await refused(lore.delete_document(bad, "x"))
+            ck(f"a source that is {bad!r} is a LoreError, not an AttributeError", e is not None and e2 is not None and e3 is not None and len(fake.requests) == n, f"{e} {e2} {e3}")
         await lore.search("x", kind="code", source="  ")
         ck("a kind string and a blank source", fake.calls(route="search")[-1].query == {"q": "x", "kind": "code"})
         for q in ("", "   ", None):
@@ -168,6 +187,12 @@ async def main():
         r = fake.calls(route="ask")[-1]
         ck("a deep ask: mode deep, filters, 120 s", r.json == {"question": "go deeper", "mode": "deep", "k": 20, "kind": ["code"], "source": "tares"}
            and r.timeout.get("read") == 120.0 and d["mode"] == "deep", str(r))
+        await lore.ask("q", kind="code")
+        ck("an ask with a kind string sends one kind, not its letters", fake.calls(route="ask")[-1].json["kind"] == ["code"], str(fake.calls(route="ask")[-1].json))
+        await lore.ask("q", kind=[" ", None, "doc"])
+        ck("ask drops blank and non-text kinds", fake.calls(route="ask")[-1].json["kind"] == ["doc"])
+        await lore.ask("q", kind="  ")
+        ck("a blank kind string sends no kind", "kind" not in fake.calls(route="ask")[-1].json)
         for q, mode in (("", "fast"), ("  ", "deep"), (None, "fast"), ("q", "sources"), ("q", ""), ("q", None)):
             n = len(fake.requests)
             e = await refused(lore.ask(q, mode=mode))
@@ -181,12 +206,15 @@ async def main():
         ck("deleting an unknown repo is a 404", e is not None and e.status == 404)
 
         # -- failures in plain words --------------------------------------------------------
-        for status, want in ((401, "refused this cell's key"), (403, "refused this cell's key"), (404, "no such repo"),
+        for status, want in ((401, "refused this cell's key"), (403, "may not do that"), (404, "no such repo"),
                              (429, "too many requests"), (500, "had a problem (status 500"), (502, "git remote"),
                              (400, "refused the request (status 400: bad things")):
             fake.fail("list_repos", status, "git remote failed" if status == 502 else "bad things")
             e = await refused(lore.list_repos())
             ck(f"status {status} says it in words", e is not None and e.status == status and want in str(e) and "Traceback" not in str(e), str(e))
+        fake.raise_next("sync_repo", httpx.ReadTimeout("read timed out"))
+        e = await refused(lore.sync_repo("00000000-0000-0000-0000-000000000000"))
+        ck("a sync timeout names the 600 seconds", e is not None and "within 600 seconds" in str(e), str(e))
         fake.raise_next("list_repos", httpx.ReadTimeout("read timed out"))
         e = await refused(lore.list_repos())
         ck("a timeout names the 10 seconds", e is not None and e.status is None and "within 10 seconds" in str(e), str(e))
@@ -204,6 +232,20 @@ async def main():
         async with odd(body) as c:
             e = await refused(c.list_repos())
             ck(f"a 200 with {label} is a plain error", e is not None and "cannot read" in str(e), str(e))
+    for code in (301, 302, 307):
+        async with odd(b"", code) as c:
+            e = await refused(c.list_repos())
+            ck(f"a {code} is an error that points at the url, not an empty success", e is not None and e.status == code and "TARES_BRAIN_URL" in str(e), str(e))
+    ck("the client does not follow redirects", LoreClient(fake_lore.BASE_URL, KEY)._http.follow_redirects is False)
+    async with LoreClient(fake_lore.BASE_URL, KEY, transport=httpx.MockTransport(lambda r: (_ for _ in ()).throw(ValueError(f"odd {KEY}")))) as c:
+        e = await refused(c.list_repos())
+        ck("an unexpected error inside a call is still a LoreError without the key", e is not None and KEY not in str(e) and KEY not in repr(e) and e.__cause__ is None, str(e))
+    for odd_key in ("s\u00e9cret-" + "key", "tab\tkey", "new\nline"):
+        try:
+            LoreClient(fake_lore.BASE_URL, odd_key)
+            ck(f"a key with {odd_key!r} is refused", False)
+        except LoreError as e:
+            ck(f"a key with {odd_key!r} is refused without echoing it", odd_key not in str(e) and odd_key not in repr(e) and "ASCII" in str(e), repr(e))
     async with odd(b"") as c:
         ck("an empty 200 is an empty dict", await c.list_repos() == {})
     async with odd(b"<html>proxy error</html>", 502) as c:
@@ -246,6 +288,8 @@ async def main():
     shapes = ["gh" + "p_abcdef123456", "gh" + "o_abcdef123456", "github" + "_pat_11ABCDEF_xyz123", "https://me:pw@host/x"]   # gitleaks:allow
     out = L.scrub("a " + " ".join(shapes) + " b")
     ck("scrub hides the token shapes", not any(x in out for x in ("abcdef123456", "xyz123", "me:pw")), out)
+    short = L.scrub("token gh" + "p_abcdefghij1234", ["abc"])   # gitleaks:allow
+    ck("a short secret does not cut a token shape in two", "defghij" not in short and "1234" not in short, short)
     ck("scrub keeps plain text and handles None", L.scrub("repo not found") == "repo not found" and L.scrub(None) == "")
 
     # -- the fake itself: another test relies on these ----------------------------------------
@@ -256,6 +300,15 @@ async def main():
         ck("fail() fires once", (await refused(c.create_repo("b"))) is not None and (await c.create_repo("b"))["name"] == "b")
         ck("requests are recorded with their route and status", [(x.route, x.status) for x in f2.requests] == [
             ("create_repo", 200), ("create_repo", 500), ("create_repo", 200)], str([(x.route, x.status) for x in f2.requests]))
+    async with f2.client() as c:
+        await c.put_documents("s", [{"external_id": "d", "title": "T", "text": "t"}])
+        ck("a document's kind defaults to note as in lore", f2.documents[("s", "d")]["kind"] == "note")
+        e = await refused(c.put_documents("s", [{"external_id": "e", "title": "T", "text": "t", "kind": "code"}]))
+        ck("the fake refuses a document kind lore refuses", e is not None and e.status == 400 and "note or doc" in str(e), str(e))
+        e = await refused(c.create_repo("cred", remote_url="https://me:pw@github.com/o/r.git"))
+        ck("the fake refuses a remote url with credentials, as lore does", e is not None and e.status == 400 and "pw" not in str(e), str(e))
+        res = await c.search("t", k=-1)
+        ck("a negative k still returns hits", len(res["hits"]) == 1 and {"chunk_id", "path", "start_line", "end_line", "symbols"} <= set(res["hits"][0]), str(res))
     nokey = httpx.Client(transport=httpx.MockTransport(f2.handle), base_url=fake_lore.BASE_URL)
     ck("the fake answers 401 without the key", nokey.get("/v1/repos").status_code == 401 and nokey.get("/v1/nope", headers={"Authorization": f"Bearer {f2.key}"}).status_code == 404)
 

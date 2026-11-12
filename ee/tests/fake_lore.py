@@ -16,6 +16,12 @@ every request recorded. Not a test itself; TR-1197 to TR-1201 import it.
 Routes are named `create_repo list_repos sync_repo repo_progress delete_repo search ask
 put_documents get_document delete_document`. Without the right Bearer key every route answers 401.
 Names and bodies are checked as lore checks them (repo names, blank question, blank q).
+
+Where the fake still differs from lore (lore's source is the authority): ids are not required to be
+UUIDs (lore's `Path<Uuid>` refuses others with a bare 400); `k` is clamped to at least 1 only (lore
+has its own upper bound); search hits carry empty `chunk_id`, `path`, `start_line`, `end_line` and
+`symbols`, and a document search is a substring match, not lore's ranking; ask answers one fixed
+citation; `sync` answers `sync_report` at once instead of after an index run.
 """
 from __future__ import annotations
 
@@ -68,6 +74,11 @@ class FakeLore:
         self.documents: dict[tuple[str, str], dict] = {}   # (source, external_id) -> document
         self.progress: dict[str, dict] = {}
         self.answer = "Fake answer."
+        # what POST /sync answers, lore's SyncReport (IndexReport fields plus up_to_date and full):
+        # lore replies only when the whole fetch and index is done
+        self.sync_report: dict = {"indexed_commit": "", "files_indexed": 1, "files_unchanged": 0,
+                                  "files_skipped": 0, "files_deleted": 0, "chunks": 1,
+                                  "up_to_date": False, "full": True}
         self.hits: list[dict] | None = None   # None: search the stored documents by substring
         self._fail: dict[str, list[tuple[int, str]]] = {}
         self._raise: dict[str, list[Exception]] = {}
@@ -136,6 +147,9 @@ class FakeLore:
             self.repos[repo["id"]] = repo
         if b.get("web_url_template") is not None:
             repo["web_url_template"] = b["web_url_template"]
+        if b.get("remote_url"):
+            if not re.fullmatch(r"https://[^/@\s]+(/\S*)?", b["remote_url"]):
+                return _err(400, "remote_url must be an https:// URL without credentials")
         if b.get("remote_url") is not None:
             repo["remote_url"] = b["remote_url"] or None
         return _ok(repo)
@@ -149,7 +163,7 @@ class FakeLore:
             return _err(404, "not found")
         repo["indexed_commit"] = "0" * 40
         self.progress.setdefault(repo["id"], {"state": "queued"})
-        return _ok({"indexed_commit": repo["indexed_commit"], "state": "queued"})
+        return _ok(self.sync_report | {"indexed_commit": repo["indexed_commit"]})
 
     def _repo_progress(self, rec, args):
         if args["id"] not in self.repos:
@@ -176,8 +190,9 @@ class FakeLore:
                     and (not rec.query.get("source") or rec.query["source"] == source):
                 hits.append({"document_id": d["id"], "source": source, "kind": d["kind"],
                              "title": d["title"], "uri": d["uri"], "external_id": ext,
-                             "snippet": d["text"][:200], "score": 1.0})
-        return _ok({"hits": hits[: int(rec.query.get("k", 12))]})
+                             "snippet": d["text"][:200], "score": 1.0, "chunk_id": None, "path": None,
+                             "start_line": None, "end_line": None, "symbols": []})
+        return _ok({"hits": hits[: max(1, int(rec.query.get("k", 12)))]})
 
     def _ask(self, rec, args):
         b = rec.json if isinstance(rec.json, dict) else {}
@@ -203,7 +218,9 @@ class FakeLore:
         for d in docs:
             if not isinstance(d, dict) or not all(isinstance(d.get(f), str) for f in ("external_id", "title", "text")):
                 return _err(400, "a document needs external_id, title and text")
-            doc = {"id": str(uuid.uuid4()), "kind": d.get("kind") or "doc", "title": d["title"],
+            if d.get("kind") not in (None, "", "note", "doc"):
+                return _err(400, "kind must be note or doc")
+            doc = {"id": str(uuid.uuid4()), "kind": d.get("kind") or "note", "title": d["title"],
                    "uri": d.get("uri"), "metadata": d.get("metadata") or {}, "text": d["text"]}
             old = self.documents.get((source, d["external_id"]))
             if old and {k: old[k] for k in doc if k != "id"} == {k: doc[k] for k in doc if k != "id"}:
