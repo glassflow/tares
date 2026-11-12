@@ -1255,7 +1255,8 @@ scenario(Scenario(
          lambda r: r.code(4) == 1 and "a project can only be stricter than the crew (crew autonomy is L3-review)" in r.out(4)
          and "loose-build-m3" not in stations_json(r)),
     ],
-    covers=["a project handed over stricter keeps it", "L5 is no level any more", "L4: the builder merges on the gate"],
+    covers=["a project handed over stricter keeps it", "L5 is no level any more",
+            "L4: the text says Tares merges after the review gate and green CI"],
 ))
 
 _UP_STEPS = [lstep("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", model, "high", f"Boot as the {role} station", world=_UP_WORLD)
@@ -9342,7 +9343,7 @@ scenario(Scenario(
     steps=[
         Step(["crew", "up", "--yes"], env=_compat_cell("old"), after=_compat_after()),                                # 0
         Step(["crew", "up", "--yes"], env=_compat_cell("other"), after=_compat_after()),                              # 1
-        Step(["crew", "up"], env=_compat_cell("real"), stdin="L3-review\nno\nno\n2\n\n"),                           # 2
+        Step(["crew", "up"], env=_compat_cell("real"), stdin="L3-review\nno\nno\n2\n\n", after=_compat_after()),  # 2
         Step(["crew", "status"], env=_compat_cell("real")),                                                           # 3
         Step(["crew", "status"], env=_compat_cell("old")),                                                            # 4
         Step(["crew", "down"], env=_compat_cell("old")),                                                              # 5
