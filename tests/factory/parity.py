@@ -5714,15 +5714,11 @@ def _iwd(r: Run, step: str) -> dict:
     return next(json.loads(x) for x in r.out(0).splitlines() if x.startswith("{") and json.loads(x).get("step") == step)
 
 
-_IWD_WIN = ("the real daemon takes a repo path only when it starts with a slash (tares/factory.py), so on Windows the "
-           "handover of the scenario's C:/ folder is refused; not the crew engine")
-
 scenario(Scenario(
     name="idle_wake_daemon",
     suite="idle_wake",
     about="the real daemon: the setting, the review queue with its head and verdict, and the desk's answered list",
     driver="idle_wake_daemon.py",
-    not_windows=_IWD_WIN,
     steps=[Step(["run"])],
     checks=[
         ("the daemon ran", lambda r: r.code(0) == 0),

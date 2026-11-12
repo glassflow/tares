@@ -169,8 +169,8 @@ def hidden_paths(handover: dict | None) -> dict[str, str]:
     hidden = {}
     for r in (handover or {}).get("repos") or []:
         if r.get("path"):
-            name = r.get("name") or r["path"].rstrip("/").rsplit("/", 1)[-1] or "the repo"
-            base = r["path"].rstrip("/")
+            name = r.get("name") or factory_mod.folder_name(r["path"]) or "the repo"
+            base = factory_mod.hidden_key(r["path"])
             if base:                                  # with or without a trailing slash
                 hidden[base] = name
     return hidden
@@ -180,10 +180,7 @@ def cleaner(handover: dict | None):
     hidden = hidden_paths(handover)
 
     def clean(text):
-        out = str(text or "")
-        for path in sorted(hidden, key=len, reverse=True):
-            out = out.replace(path, hidden[path])
-        return out
+        return factory_mod.hide_paths(text, hidden)
     return clean
 
 

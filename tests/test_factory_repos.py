@@ -75,6 +75,44 @@ def rules():
     ck("the same repo in another case is one repo",
        len(factory_mod.handover_repos([{"name": "G/Api"}, {"path": "/w/api", "name": "g/api"}])) == 1)
 
+    # a Windows folder is taken whatever OS the daemon runs on, and is kept with forward slashes
+    win = factory_mod.handover_repos([{"path": "C:\\x\\repo", "name": "g/repo"}])
+    ck("a Windows folder with backslashes is accepted", win == [{"path": "C:/x/repo", "name": "g/repo"}], win)
+    win = factory_mod.handover_repos(["C:/x/repo"])
+    ck("a Windows folder with slashes is accepted as a path, not a name", win == [{"path": "C:/x/repo", "name": None}], win)
+    unc = factory_mod.handover_repos(["\\\\srv\\share\\repo\\"])
+    ck("a share is accepted and keeps its backslashes, so its spelling says Windows",
+       unc == [{"path": "\\\\srv\\share\\repo", "name": None}], unc)
+    ck("a share in two cases and slashes is one repo",
+       len(factory_mod.handover_repos(["\\\\srv\\share\\repo", "\\\\SRV\\Share\\Repo\\"])) == 1)
+    ck("a later hand-over of a share in another spelling adds nothing",
+       factory_mod.merge_repos(factory_mod.handover_repos(["\\\\srv\\share\\repo"]),
+                               factory_mod.handover_repos([{"path": "\\\\SRV\\share\\repo", "name": "g/r"}]))
+       == [{"path": "\\\\srv\\share\\repo", "name": "g/r"}])
+    ck("a Mac path with two leading slashes is not a share",
+       not factory_mod.is_windows_path("//srv/share/repo") and factory_mod.handover_repos(["//srv/share/repo"])[0]["path"]
+       == os.path.normpath("//srv/share/repo"))
+    ck("a share root keeps no trailing slash", factory_mod.handover_repos(["\\\\srv\\share\\"])[0]["path"] == "\\\\srv\\share")
+    ck("dots and a trailing slash are dropped", factory_mod.handover_repos(["D:\\a\\.\\b\\..\\repo\\"])[0]["path"] == "D:/a/repo")
+    ck("a drive root keeps its slash", factory_mod.handover_repos(["C:\\"])[0]["path"] == "C:/")
+    same = factory_mod.handover_repos([{"path": "C:\\x\\repo"}, {"path": "c:/X/Repo/", "name": "g/repo"}, "C:/x/./repo"])
+    ck("the same Windows folder in three spellings is one repo", len(same) == 1 and same[0]["name"] == "g/repo", same)
+    added = factory_mod.merge_repos(factory_mod.handover_repos(["C:/x/repo"]), factory_mod.handover_repos([{"path": "C:\\x\\repo", "name": "g/repo"}]))
+    ck("a later hand-over of the same folder adds its name", added == [{"path": "C:/x/repo", "name": "g/repo"}], added)
+    ck("a folder on another drive is another repo", len(factory_mod.handover_repos(["C:/x/repo", "D:/x/repo"])) == 2)
+    for bad in ("C:repo", "C:", "x\\y", "\\\\srv", ".\\repo"):
+        try:
+            factory_mod.handover_repos([{"path": bad, "name": "g/a"}])
+            ck(f"{bad!r} is refused", False)
+        except Exception as e:
+            ck(f"{bad!r} is refused", "not absolute" in str(e), e)
+    ck("a Mac or Linux path is unchanged", factory_mod.handover_repos(["//w//api/./x/", "/w/a b/"])
+       == [{"path": os.path.normpath("//w//api/./x/"), "name": None}, {"path": "/w/a b", "name": None}])
+    ck("an owner/name is still a name", factory_mod.handover_repos(["c/repo"]) == [{"path": None, "name": "c/repo"}])
+    ck("is_windows_path says it by spelling",
+       [factory_mod.is_windows_path(x) for x in ("C:\\a", "c:/a", "\\\\s\\h", "//s/h", "/a", "a/b", "C:a")]
+       == [True, True, True, False, False, False, False])
+
 
 def progress_rules():
     print("== the progress ring's buckets ==")
@@ -192,6 +230,25 @@ async def main():
         ck("the older one-path form still works",
            ho["repos"] == [{"path": "/w/notes", "name": None, "paths": {"local/crew": "/w/notes"}}]
            and ho["repo"] == "/w/notes", ho)
+        out = await mf.hand_over("Notes", repos=[{"path": "C:\\x\\repo", "name": "g/win"}])
+        ck("a Windows folder with backslashes is accepted", "refused" not in out.lower()
+           and "not absolute" not in out, out)
+        await mf.hand_over("Notes", repos=[{"path": "C:/x/repo"}])
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{other}/crew")).json()["handover"]
+        ck("C:\\x\\repo and C:/x/repo are one folder, kept with forward slashes",
+           [x["path"] for x in ho["repos"]] == ["/w/notes", "C:/x/repo"], ho)
+        ck("and this crew's own folder is kept the same way",
+           ho["repos"][1]["paths"] == {"local/crew": "C:/x/repo"}, ho)
+        async with mk() as cx:
+            cp = (await cx.get("/api/crew/projects")).json()["projects"]
+        notes_row = [p for p in cp if p["name"] == "Notes"]
+        ck("crew_projects returns the Windows folder",
+           notes_row and any(r["path"] == "C:/x/repo" for r in notes_row[0]["repos"]), cp)
+        await mf.hand_over("Notes", repos=[{"path": "C:\\x\\repo"}])
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{other}/crew")).json()["handover"]
+        ck("the folder in another spelling is still one entry", len(ho["repos"]) == 2, ho)
 
         print("== the crew's projects ==")
         async with mk() as cx:

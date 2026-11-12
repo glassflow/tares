@@ -108,6 +108,7 @@ test_factory_start_show
 test_factory_takeover
 test_factory_ticket_page
 test_factory_tickets
+test_factory_windows_paths
 test_finding_titles
 test_github
 test_github_app
