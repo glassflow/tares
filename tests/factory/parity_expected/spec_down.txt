@@ -1,0 +1,28 @@
+== step: spec an order form ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no Tares answers at http://127.0.0.1:9. Start one with `tares up` in another terminal, connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where yours runs), then try again.
+-- after --
+{
+  "env": {},
+  "has_auth_token": false,
+  "n": 0,
+  "settings": null
+}
+== step: spec an order form ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no MCP server answers at http://127.0.0.1:9/mcp. Stations reach Tares through it. Start one in another terminal: tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL to where yours runs).
+-- after --
+{
+  "env": {},
+  "has_auth_token": false,
+  "n": 0,
+  "settings": null
+}
+== asked of Tares ==
+GET /health key=no 

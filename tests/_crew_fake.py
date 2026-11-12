@@ -1,4 +1,4 @@
-"""A throwaway crew for tests that run `tares factory` for real, the way tests/factory/*_test.sh do:
+"""A throwaway crew for tests that run `tares factory` for real, the way the parity scenarios do:
 a crew home with a crew.json and no stations, a fake Claude Code (tests/factory/fake-claude) and a
 fake ps, everything under one temp folder. Nothing reaches the real crew home, the real Claude Code
 or a running Tares.

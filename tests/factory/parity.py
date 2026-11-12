@@ -1,42 +1,40 @@
 #!/usr/bin/env python3
-"""The parity harness: a factory scenario runs against the bash engine and against the Python engine,
-and what they print and write must be the same.
+"""The parity harness: a crew scenario runs on the Python engine and what it prints and writes must be what the
+bash engine printed and wrote when the scenario was recorded.
 
-    python tests/factory/parity.py <scenario>            run one scenario on both engines (a name with * or ?, such as tidy_*, runs every match)
+    python tests/factory/parity.py <scenario>            run one scenario (a name with * or ?, such as tidy_*, runs every match)
     python tests/factory/parity.py --list                the scenarios defined here
-    python tests/factory/parity.py --coverage            every scenario of every bash suite, and how
-                                                         many of them pass against Python
+    python tests/factory/parity.py --coverage            every check label recorded in parity_labels.json, and how
+                                                         many of them a passing scenario covers
     python tests/factory/parity.py --coverage --require-full   the same, exit 1 below 100%
+    python tests/factory/parity.py --coverage --require-full --static   the same without running the scenarios (each
+                                                         counts as passing): CI runs them in shards and checks the labels once
+    python tests/factory/parity.py --shard=I/N           every Nth scenario of the sorted list, from the Ith (CI's shards)
+    python tests/factory/parity.py --record <scenario>   run the scenario on Python and store what it printed and wrote as
+                                                         the expected result (parity_expected/<scenario>.txt)
 
-A scenario is defined here, in Python (steps to run, checks on the result), so it runs on Windows too,
-where the bash suites cannot. It is run twice, each time in a throwaway crew with the Python fake
-Claude Code (tests/factory/fake_claude.py): with TARES_FACTORY_ENGINE=bash and with =python, through
-`python -m tares.crew`. The bash suites in this folder stay the reference; a scenario here is one of
-their checks moved over, with the same assertions.
+A scenario is defined here, in Python (steps to run, checks on the result), so it runs on Windows too. It runs in
+a throwaway crew with the Python fake Claude Code (tests/factory/fake_claude.py), through `python -m tares.crew`.
+Its checks must pass, and its normalised record must equal the expected one. The expected results were recorded
+once from the bash engine (TR-1172); a change to what a crew command prints or writes fails the scenario until
+it is recorded again, and the PR says why.
 
-What is compared, after normalising: the exit code, stdout and stderr of every step; every file in the
+What is recorded, after normalising: the exit code, stdout and stderr of every step; every file in the
 crew home; the calls made to Claude Code and the sessions it lists. Normalised away: the temp folder,
 timestamps, pids, session ids and the key order of JSON. Ids and epoch times are only replaced where they
 appear as such (after `backgrounded ·`, `job`, `at`, `since`, under an id or time key in JSON): a plain
 eight-digit or ten-digit number is data and is compared as it is.
 
-Result, per side: PASS, FAIL, or SKIP. The Python engine answers exit 2 with "is not yet ported" for a
-command that has not moved over; that side prints `SKIP python: not ported`. Without bash (Windows)
-the bash side prints `SKIP bash: ...`. Exit 0 when the bash side passes and the Python side passes
-(same normalised output as bash) or is skipped. Exit 1 when the bash side fails, or when Python runs
-and fails a check or differs from bash. On Windows a skipped bash side is expected and the Python side
-stands alone; anywhere else a skipped bash side (no bash or jq) is an error: exit 1, and the scenario
-does not count in --coverage.
+Result: PASS, FAIL, or SKIP (the scenario cannot run on this platform). Exit 0 when the scenario passes or is
+skipped, 1 when a check fails, the record differs, or the Python engine answers exit 2 with "is not yet ported" (every
+scenario runs with TARES_FACTORY_ENGINE=python, so a command missing from PORTED fails instead of running on bash).
 
-Coverage. A "scenario" of a bash suite (the suites named in tests/factory/ci_list.txt) is one `check
-"<label>"` call: a source line that starts, after any indentation, with `check "`. A check in a loop
-counts once. A suite with no such line (guard, heavy, parse) counts as one scenario, named after the
-suite, except a wrapper (WRAPPERS below): a suite that runs another suite on Python only, has no check line of
-its own and counts for nothing, since its checks belong to the suite it runs. A scenario here lists the labels it covers (`covers`), and counts as passing against Python
-when its run passes on the Python side (a SKIP does not count). Percentage = passing / all scenarios.
+Coverage. A "check" is one label of the bash suites the scenarios replaced, kept in tests/factory/parity_labels.json
+(suite -> labels; a suite that was one script counts as one, named "(the whole <suite> suite)"). A scenario lists
+the labels it covers (`covers`), and counts as passing when its run passes. Percentage = passing / all labels.
 
-Test hooks (for tests/test_parity.py): PARITY_CMD_BASH and PARITY_CMD_PYTHON replace the command a side
-runs (default `python -m tares.crew`); PARITY_FAIL=bash|python|both adds a failing check to that side.
+Test hooks (for tests/test_parity.py): PARITY_CMD_PYTHON replaces the command a step runs (default
+`python -m tares.crew`); PARITY_FAIL=python adds a failing check.
 
 Standard library only.
 """
@@ -63,8 +61,6 @@ ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
 sys.path.insert(0, str(HERE))
 from fake_up_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
-CI_LIST = HERE / "ci_list.txt"
-ENGINES = ("bash", "python")
 STEP_TIMEOUT = 180
 NOT_PORTED = "not yet ported"
 
@@ -88,7 +84,7 @@ class Step:
 @dataclass
 class Scenario:
     name: str
-    suite: str           # the bash suite it comes from (tests/factory/<suite>_test.sh)
+    suite: str           # the suite it comes from (the key in parity_labels.json)
     steps: list
     checks: list         # (label, fn(Run) -> bool), the assertions of the bash suite, kept as they are
     covers: list         # labels of the suite's `check` calls this scenario stands for
@@ -3266,6 +3262,7 @@ def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | No
     `done` names builders that are finished (stations/<s>.done); `files` are more files of the fake Claude Code."""
     def setup(tmp: Path, env: dict) -> None:
         _setup_views(tmp, env)
+        _cc_doctor_tools(tmp)
         crew, state = tmp / "crew", tmp / "claude"
         kit = _cc_kit(_cc_plugin(tmp, env))
         base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
@@ -4544,6 +4541,7 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="pace_tidy",
+    not_windows=WIN_NO_MULTILINE,
     suite="pace",
     about="the pace file forgets a station that will not be revived, says the limit is full again in a new episode, and goes when nothing is left",
     driver=LAUNCH_DRIVER,
@@ -4996,9 +4994,9 @@ I_BACK = _pw_add(_pw(85, 10))
 _pw_add(_pw(10, 10))
 _pw_add(_pw(10, 10, grants="the reviewer may label pull requests"))
 _pw_add(_pw(10, 10, grants="the reviewer may label pull requests"))
-# (the shell's own words for the failure, and Python's, are left out of the comparison)
+# (the shell's own words for the failure, and Python's and Windows's, are left out of the comparison)
 I_MID = _pw_add(_pw(85, 10, _pw_grants_in_the_way(_PW_R), grants="the reviewer may label pull requests",
-                    drop=(r"Is a directory",)))
+                    drop=(r"Is a directory", r"Access is denied")))
 _pw_add(_pw(85, 10, _pw_grants_in_the_way(_PW_R, False), grants="the reviewer may label pull requests"))
 I_SENT = _pw_add(_pw(85, 10, grants="the reviewer may label pull requests"))
 
@@ -5772,7 +5770,7 @@ K_FRESH = _iwf_add(0)
 K_FAIL = _iwf_add(50, _H7, env=_PW_FAIL)                  # the restart of the wake fails
 _iwf_add(60, _H7)                                         # the first of these revives the station the failed restart left stopped
 K_SENT = _iwf_add(120, _H7)
-K_MID = _iwf_add(200, _H8, _pw_grants_in_the_way(_PW_R), drop=(r"Is a directory",))   # a restart fails deep inside
+K_MID = _iwf_add(200, _H8, _pw_grants_in_the_way(_PW_R), drop=(r"Is a directory", r"Access is denied"))   # a restart fails deep inside
 _iwf_add(260, _H8, _pw_grants_in_the_way(_PW_R, on=False))
 K_SENT2 = _iwf_add(320, _H8)
 
@@ -5831,8 +5829,6 @@ ISO = re.compile(r"\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[.,]\d+)?(?:Z|[+-]\d\d:?\
 EPOCH = re.compile(r"(?P<pre>(?<![\w.])(?:at|since|until|epoch|ts|time|\w*_at|\w*_ts|\w*_time|\w*At)[\"']?\s*[=:]?\s*[\"']?)"
                    r"1[5-9]\d{8}(?:\d{3})?(?![\d.])")
 EPOCH_VALUE = re.compile(r"1[5-9]\d{8}(?:\d{3})?")
-# A fake Tares listens on a free port, a different one on each side
-PORT = re.compile(r"127\.0\.0\.1:\d{4,5}\b")
 UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 SESSION = re.compile(r"\bsession-\d+\b")
 # A job id (eight hex digits) is replaced only where a job id is printed: after `backgrounded ·`, or after
@@ -5840,7 +5836,7 @@ SESSION = re.compile(r"\bsession-\d+\b")
 JOB_ID = re.compile(r"(?P<pre>\bbackgrounded[^0-9a-f\n]+|\b(?:job|session|id|stop|rm)[ =:]+[\"']?)[0-9a-f]{8}\b")
 HEX8 = re.compile(r"[0-9a-f]{8}")
 PID_TEXT = re.compile(r"\b(pid|PID)([ =:]+)\d+")
-# The port of a throwaway fake Tares (an ephemeral port: five digits); 8787, 8788 and the like stay.
+# The port of a throwaway fake Tares, a different one on each run (an ephemeral port: five digits); 8787, 8788 and the like stay.
 PORT = re.compile(r"(?<=127\.0\.0\.1:)\d{5}\b")
 PID_KEYS = {"pid", "ppid", "watch_pid", "watchPid"}
 ID_KEYS = {"sessionId", "session_id", "id"}
@@ -5850,9 +5846,42 @@ TIME_KEY = re.compile(r"(^(ts|time|at|since|until)$)|(_at$)|(At$)|(_ts$)|(_time$
 TARES_ADDR: list = []   # the stand-in Tares' "127.0.0.1:<port>" while a side runs: its port changes every run
 
 
+# `crew up` says once that the Python watch cleans up Docker (TR-700), where Docker is installed: a line bash never had,
+# and one that depends on the machine, so it is not compared.
+DOCKER_NOTE = re.compile(r"^  \u2713 once a day the watch also removes Docker's leftovers[^\n]*\n", re.M)
+
+
+def plugin_version() -> str:
+    """The version of the plugin in this checkout: it moves with every release, so no expected result may hold it."""
+    try:
+        return json.loads((ROOT / "claude-plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")).get("version", "")
+    except (OSError, ValueError):
+        return ""
+
+
+def repo_forms() -> list:
+    """Every spelling of the checkout's folder: where the repo is checked out differs between machines and CI."""
+    forms = {str(ROOT), os.path.realpath(ROOT), ROOT.as_posix(), Path(os.path.realpath(ROOT)).as_posix()}
+    forms |= {f.replace("\\", "\\\\") for f in forms if "\\" in f}
+    return sorted(forms, key=len, reverse=True)
+
+
+def tares_bin_forms() -> list:
+    """Where the `tares` command is on this machine (stations get it as FACTORY_TARES): not the same everywhere."""
+    found = shutil.which("tares")
+    forms = {found, os.path.realpath(found), Path(found).as_posix(), Path(os.path.realpath(found)).as_posix()} if found else set()
+    forms |= {f.replace("\\", "\\\\") for f in forms if "\\" in f}
+    return sorted(forms, key=len, reverse=True)
+
+
+KIT_NEWER = re.compile(r"kit \d{6,} is newer than the frozen kit \d{6,}")
+
+
 def norm_text(s: str, tmp: Path | None = None) -> str:
-    """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids."""
+    """Text with what changes from run to run replaced: the temp folder, timestamps, pids, ids, the checkout's
+    folder and the plugin's version."""
     s = s.replace("\r\n", "\n")
+    s = KIT_NEWER.sub(r"kit <KIT> is newer than the frozen kit <KIT>", s)   # the fingerprints of two kits
     for addr in TARES_ADDR:
         s = s.replace(addr, "<TARES>")
     if tmp is not None:
@@ -5862,27 +5891,71 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         flags = re.IGNORECASE if is_windows() else 0
         for p in sorted(forms, key=len, reverse=True):
             s = re.sub(re.escape(p), "<TMP>", s, flags=flags)
-    s = PORT.sub("127.0.0.1:<PORT>", s)
+    s = DOCKER_NOTE.sub("", s)
+    flags = re.IGNORECASE if is_windows() else 0    # tares.EXE or tares.exe, C: or c:
+    for p in tares_bin_forms():     # before the checkout: a venv inside the checkout holds the tares command
+        s = re.sub(re.escape(p), "<TARES-BIN>", s, flags=flags)
+    for p in repo_forms():
+        s = s.replace(p, "<REPO>")
+    ver = plugin_version()
+    if ver:
+        s = re.sub(r"(version\s+)" + re.escape(ver) + r"(?![\w.])", r"\1<PLUGIN-VERSION>", s)
+    s = PORT.sub("<PORT>", s)
+    s = user_by().sub(r"\1<USER>", s)
     s = UUID.sub("<ID>", s)
     s = ISO.sub("<TS>", s)
+    s = today_re().sub("<DATE>", s)
     s = EPOCH.sub(lambda m: m.group("pre") + "<TS>", s)
     s = PID_TEXT.sub(lambda m: f"{m.group(1)}{m.group(2)}<PID>", s)
     s = SESSION.sub("<ID>", s)
-    s = PORT.sub("<PORT>", s)
     s = JOB_ID.sub(lambda m: m.group("pre") + "<ID>", s)
+    if is_windows():    # the results were recorded from bash with `/` in paths: a Windows path under a placeholder reads the same
+        s = WIN_PATH_TAIL.sub(lambda m: m.group(1) + re.sub(r"\\+", "/", m.group(2)), s)
+        # a path with a space (the profile folder of the Windows job) is quoted in the statusline command, one without is not
+        s = WIN_ROOT_QUOTED.sub(r"\1\2", s)
+        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.cmd here, claude elsewhere
     return s
+
+
+# what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
+WIN_ROOT_QUOTED = re.compile(r'(--plugin-root )"([^"]*)"')
+WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.cmd")
+WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
+
+
+def today_re():
+    """Today's date (UTC, and the local one): a grant says "granted on <date>" and the authorization "at" it, so what a run
+    prints holds the day it ran on."""
+    days = {time.strftime("%Y-%m-%d", time.gmtime()), time.strftime("%Y-%m-%d")}
+    return re.compile(r"(?<![\d-])(?:" + "|".join(sorted(days)) + r")(?![\d-]|T\d)")
+
+
+def user_by():
+    """`by <login>` in a freeze line, and `"by": "<login>"` in its JSON: the person who froze the kit is whoever runs
+    the scenario, so the login is a placeholder (a runner is `runner`, a person their own name)."""
+    import getpass
+    return re.compile(r"(\bby |\"by\":\s*\")" + re.escape(getpass.getuser()) + r"(?![\w-])")
 
 
 def norm_json(v, tmp: Path | None = None, key: str = ""):
     """A parsed JSON value with its strings normalised and numbers under pid or time keys replaced.
     Key order does not matter: it is sorted when rendered."""
     if isinstance(v, dict):
-        return {k: norm_json(x, tmp, k) for k, x in v.items()}
+        out = {k: norm_json(x, tmp, "kit" if key == "kit" else k) for k, x in v.items()}   # a kit's stations all hold fingerprints
+        if v.get("event") in ("freeze", "upgraded", "kit-newer") and isinstance(v.get("detail"), str) and v["detail"].isdigit():
+            out["detail"] = "<KIT>"     # these events hold the kit's fingerprint
+        return out
     if isinstance(v, list):
         return [norm_json(x, tmp, key) for x in v]
     if isinstance(v, str):
+        if key == "grants" and v.isdigit():
+            return "<GRANTS>"   # the fingerprint of the grants a station was started with: the text of a grant holds the day it was made
+        if v.isdigit() and (key == "kit" or (key == "version" and len(v) >= 6)):
+            return "<KIT>"      # the fingerprint of the kit a station runs on: it moves with every change to the plugin
         if key in ID_KEYS and HEX8.fullmatch(v):
             return "<ID>"
+        if key == "by" and v == _fz_user():
+            return "<USER>"
         if TIME_KEY.search(key) and EPOCH_VALUE.fullmatch(v):
             return "<TS>"
         return norm_text(v, tmp)
@@ -5902,6 +5975,10 @@ def _settings_arg(row):
         for i, a in enumerate(args[:-1]):
             if a == "--settings" and isinstance(args[i + 1], str) and not args[i + 1].lstrip().startswith("{"):
                 args[i + 1] = "<SETTINGS-FILE>"
+                if is_windows() and args[:2] == ["-p", "--no-session-persistence"] and args[-1] == "/usage":
+                    # cmd.exe cannot take JSON in a claude.cmd command line: a plan reading (/usage) passes the same
+                    # settings as a file; a /context reading passes a file on every platform, so it stays a placeholder
+                    args[i + 1] = '{"disableAllHooks": true}'
     return row
 
 
@@ -5944,25 +6021,16 @@ def norm_output(text: str, tmp: Path | None = None) -> str:
 # ---------------------------------------------------------------------------------------------
 # Running one side
 
-def command_for(engine: str, sc: "Scenario | None" = None) -> list:
+def command_for(sc: "Scenario | None" = None) -> list:
     if sc is not None and sc.driver:
-        return [sys.executable, str(HERE / sc.driver), engine]
-    override = os.environ.get("PARITY_CMD_" + engine.upper())
+        return [sys.executable, str(HERE / sc.driver)]
+    override = os.environ.get("PARITY_CMD_PYTHON")
     return shlex.split(override) if override else [sys.executable, "-m", "tares.crew"]
 
 
 def is_windows() -> bool:
     """A function so a test can patch it."""
     return sys.platform == "win32"
-
-
-def bash_available() -> str:
-    """"" when the bash engine can run here, else the reason it cannot."""
-    if is_windows():
-        return "needs bash, which is not available on Windows"
-    if not shutil.which("bash") or not shutil.which("jq"):
-        return "needs bash and jq on PATH"
-    return ""
 
 
 def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
@@ -5982,42 +6050,30 @@ def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
     return path
 
 
-def _no_docker(path: Path) -> Path:
-    """A `docker` that is installed but not running (every call exits 1), first on PATH for both engines.
-    The Python crew engine cleans Docker up (doctor lists its disk use, the watch prunes), the bash engine
-    does not; without this stub a scenario's output would depend on the Docker on the machine running it."""
-    if sys.platform == "win32":
-        path = path.with_suffix(".cmd")
-        path.write_bytes(b"@exit /b 1\r\n")
-    else:
-        path.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
-        path.chmod(0o755)
-    return path
-
-
 # What the person's own shell must not lend a scenario: the crew's and Tares' settings, Claude Code's
 # config and job folders, the XDG folders and GitHub's CLI settings (all of them move state or a login).
 STRIPPED_PREFIXES = ("FACTORY_", "TARES_", "CLAUDE_PLUGIN_OPTION_", "PARITY_", "FAKE_CLAUDE_",
                      "CLAUDE_CONFIG_DIR", "CLAUDE_JOB_DIR", "XDG_", "GH_")
 
 
-def crew_env(tmp: Path, engine: str) -> dict:
+def crew_env(tmp: Path) -> dict:
     """The environment of a throwaway crew: everything under tmp, the Python fake for Claude Code, no
     station or Tares settings from the person's own shell."""
     home, crew, state, bindir = (tmp / n for n in ("home", "crew", "claude", "bin"))
     for d in (home, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
     claude = make_launcher(bindir / "claude", [])  # claude.cmd on Windows, which is also what `claude` finds on PATH
-    _no_docker(bindir / "docker")
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
     env.update(
         HOME=str(home), USERPROFILE=str(home), FACTORY_CREW_HOME=str(crew), FAKE_CLAUDE_STATE=str(state),
+        TARES_FACTORY_ENGINE="python",  # Python alone: a command missing from PORTED exits 2, not "runs on bash and matches"
         CLAUDE_BIN=str(claude), FACTORY_PAUSE="0", FACTORY_NO_WATCH="1",
+        FACTORY_DOCKER=str(tmp / "no-docker"),  # the Python watch's Docker upkeep (TR-700) finds no Docker, whatever the machine has
         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
-        PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8", TARES_FACTORY_ENGINE=engine,
+        PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8",
         TARES_HOME=str(tmp / "tares-home"),
         PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),  # `claude` by name finds the fake first
     )
@@ -6038,6 +6094,40 @@ def _without_calls(text: str, prefixes: tuple) -> str:
     return "\n".join(keep) + ("\n" if keep else "")
 
 
+def _kit_files(root: Path) -> dict:
+    return {p.relative_to(root).as_posix(): p for p in sorted(root.rglob("*"))
+            if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
+
+
+def kit_copy_diff(copy: Path, edited: Path) -> str:
+    """A copy of the kit (the frozen kit) as how it differs from the kit it was copied from: the scenario's own
+    edited kit when it made one, else the checkout's. Printing the whole copy would tie the expected result to every
+    file of the plugin."""
+    src = _kit_files(edited if edited.is_dir() else Path(KIT))
+    got = _kit_files(copy)
+    if not got:
+        return "empty\n"
+    rows = [f"only in the copy: {n}" for n in sorted(got.keys() - src.keys())]
+    rows += [f"missing from the copy: {n}" for n in sorted(src.keys() - got.keys())]
+    rows += [f"differs from the kit: {n}" for n in sorted(got.keys() & src.keys())
+             if got[n].read_bytes() != src[n].read_bytes()]
+    return "\n".join(rows) + "\n" if rows else "same as the kit\n"
+
+
+def _files_under(base: Path) -> list:
+    """The files under base, in the order bash lists them (parts compared as text, and a Windows path compares without
+    case). A link to a folder, or a Windows junction, is not entered."""
+    found = []
+    for root, dirs, names in os.walk(base):
+        junction = getattr(os.path, "isjunction", lambda _p: False)
+        dirs[:] = [d for d in dirs if not os.path.islink(os.path.join(root, d)) and not junction(os.path.join(root, d))]
+        for n in names:
+            p = Path(root, n)
+            if p.is_file():
+                found.append(p)
+    return sorted(found, key=lambda p: p.relative_to(base).parts)
+
+
 def snapshot(run: Run) -> dict:
     """The files a scenario leaves: the crew home, and what the fake Claude Code recorded."""
     files = {}
@@ -6047,9 +6137,11 @@ def snapshot(run: Run) -> dict:
     for base, prefix, only in bases:
         if not base.is_dir():
             continue
-        for p in sorted(base.rglob("*")):
-            if p.is_file() and (only is None or p.name in only):
+        for p in _files_under(base):
+            if only is None or p.name in only:
                 rel = prefix + p.relative_to(base).as_posix()
+                if rel.startswith("crew/frozen-kit/"):
+                    continue    # a copy of the kit: shown as its difference from the kit it came from, below
                 try:
                     text = p.read_text(encoding="utf-8", errors="replace")
                     if p.name == "calls.jsonl" and run.ignore_calls:
@@ -6059,6 +6151,8 @@ def snapshot(run: Run) -> dict:
                     files[rel] = norm_file(text, p.name, run.tmp)
                 except OSError:
                     files[rel] = "<unreadable>"
+    if (run.crew / "frozen-kit").is_dir() and any((run.crew / "frozen-kit").rglob("*")):
+        files["crew/frozen-kit"] = kit_copy_diff(run.crew / "frozen-kit", run.tmp / "kit" / "claude-plugin")
     t = run.tmp / "tares" / "writes.jsonl"   # what the stand-in Tares was asked to save
     if t.is_file():
         files["tares/writes.jsonl"] = norm_file(t.read_text(encoding="utf-8", errors="replace"), t.name, run.tmp)
@@ -6067,7 +6161,6 @@ def snapshot(run: Run) -> dict:
 
 @dataclass
 class Side:
-    engine: str
     skip: str = ""                  # why it did not run ("" when it did)
     passed: list = field(default_factory=list)
     failed: list = field(default_factory=list)
@@ -6075,21 +6168,16 @@ class Side:
     raw: str = ""                   # the first failing step's output, for the person reading
 
 
-def run_side(sc: Scenario, engine: str) -> Side:
-    side = Side(engine)
-    if engine == "bash" and not os.environ.get("PARITY_CMD_BASH"):
-        why = bash_available()
-        if why:
-            side.skip = why
-            return side
-    if engine == "python" and sc.not_windows and is_windows():
+def run_side(sc: Scenario) -> Side:
+    side = Side()
+    if sc.not_windows and is_windows():
         side.skip = sc.not_windows
         return side
-    tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-{engine}-")).resolve()
+    tmp = Path(tempfile.mkdtemp(prefix=f"parity-{sc.name}-")).resolve()
     stand_in = None
     fake = None
     try:
-        env = crew_env(tmp, engine)
+        env = crew_env(tmp)
         if sc.stand_in is not None:
             stand_in = StandInTares(tmp / "tares", **sc.stand_in).start()
             env.update(TARESD_URL=stand_in.url, TARES_FACTORY_MCP_URL=stand_in.mcp_url)
@@ -6114,7 +6202,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
             step_env = step.env(run) if callable(step.env) else step.env
             senv = {**env, **{k: here(v) for k, v in step_env.items()}}
             try:
-                p = subprocess.run(command_for(engine, sc) + [here(a) for a in step.argv],
+                p = subprocess.run(command_for(sc) + [here(a) for a in step.argv],
                                    cwd=here(step.cwd) or str(ROOT), env=senv,
                                    input=step.stdin, capture_output=True, text=True, encoding="utf-8",
                                    errors="replace", timeout=STEP_TIMEOUT)
@@ -6123,7 +6211,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 results.append({"code": 124, "stdout": "", "stderr": f"parity: step timed out after {STEP_TIMEOUT}s\n"})
             if step.after:
                 results[-1]["snap"] = step.after(tmp)
-            if engine == "python" and results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
+            if results[-1]["code"] == 2 and NOT_PORTED in results[-1]["stderr"]:
                 side.skip = "not ported"
                 return side
         for label, fn in sc.checks:
@@ -6133,7 +6221,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 ok = False
                 label = f"{label} ({type(e).__name__}: {e})"
             (side.passed if ok else side.failed).append(label)
-        if os.environ.get("PARITY_FAIL") in (engine, "both"):
+        if os.environ.get("PARITY_FAIL") in ("python", "both"):
             side.failed.append(f"deliberate failure (PARITY_FAIL={os.environ['PARITY_FAIL']})")
         blocks = []
         for step, r in zip(sc.steps, results):
@@ -6144,8 +6232,8 @@ def run_side(sc: Scenario, engine: str) -> Side:
                 blocks.append(f"-- after --\n{render_json(norm_json(r['snap'], tmp))}")
         for rel, content in snapshot(run).items():
             blocks.append(f"== file {rel} ==\n{content}")
-        if fake is not None:  # what each engine asked Tares, and whether it sent a key (never the key)
-            # A read asked twice in a row counts once: bash asks again from a subshell that lost its cache.
+        if fake is not None:  # what the engine asked Tares, and whether it sent a key (never the key)
+            # A read asked twice in a row counts once: the bash engine asked again from a subshell that lost its cache.
             asked = []
             for q in fake.requests:
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
@@ -6155,7 +6243,7 @@ def run_side(sc: Scenario, engine: str) -> Side:
                     asked.append(line)
             blocks.append("== asked of Tares ==\n" + "\n".join(asked))
         side.text = "\n".join(blocks) + "\n"
-        if fake is not None:  # the fake's port is different on each side
+        if fake is not None:  # the fake's port is different on each run
             side.text = side.text.replace(fake.url, "<TARES>")
         side.raw = "\n".join(f"$ tares factory {' '.join(s.argv)}  (exit {r['code']})\n{r['stdout']}{r['stderr']}"
                              for s, r in zip(sc.steps, results))
@@ -6169,80 +6257,89 @@ def run_side(sc: Scenario, engine: str) -> Side:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def run_scenario(sc: Scenario, out=print) -> int:
-    """Run sc on both engines, print the result, return the exit code (0 or 1)."""
-    return evaluate(sc, out)[0]
+# ---------------------------------------------------------------------------------------------
+# The expected result: what the bash engine printed and wrote, recorded once
+
+EXPECTED = HERE / "parity_expected"
+LABELS = HERE / "parity_labels.json"
 
 
-def evaluate(sc: Scenario, out=print) -> tuple:
-    """Run sc on both engines and print the result: (exit code, whether it passes on the Python side)."""
+def expected_path(name: str) -> Path:
+    return EXPECTED / f"{name}.txt"
+
+
+def _lf(text: str) -> str:
+    return text.replace("\r\n", "\n")
+
+
+def record_scenario(sc: Scenario, out=print) -> int:
+    """Run sc on Python and store its normalised record as the expected result. Its checks must pass."""
+    side = run_side(sc)
+    if side.skip:
+        out(f"ERROR {sc.name}: it cannot run here ({side.skip})")
+        return 1
+    if side.failed:
+        out(f"ERROR {sc.name}: it fails {len(side.failed)} checks, nothing recorded")
+        for label in side.failed:
+            out(f"  FAIL {label}")
+        return 1
+    EXPECTED.mkdir(exist_ok=True)
+    expected_path(sc.name).write_text(side.text, encoding="utf-8", newline="\n")
+    out(f"recorded {sc.name}: {len(side.passed)} checks, {len(side.text.splitlines())} lines")
+    return 0
+
+
+def evaluate_python(sc: Scenario, out=print) -> tuple:
+    """Run sc on the Python engine alone: (exit code, whether it passes). Its checks must pass and its normalised
+    record must equal the one recorded from bash."""
     out(f"== {sc.name}: {sc.about or sc.suite} ==")
-    sides = {e: run_side(sc, e) for e in ENGINES}
-    code = 0
-    for e in ENGINES:
-        s = sides[e]
-        if s.skip:
-            out(f"SKIP {e}: {s.skip}")
-        elif s.failed:
-            code = 1
-            out(f"FAIL {e}: {len(s.failed)} of {len(s.failed) + len(s.passed)} checks failed")
-            for label in s.failed:
-                out(f"  FAIL {label}")
-            out(s.raw.rstrip("\n"))
-        else:
-            out(f"PASS {e}: {len(s.passed)} checks")
-    b, p = sides["bash"], sides["python"]
-    if b.skip and not is_windows():
-        # Bash is the reference. Only Windows has none: elsewhere a missing bash or jq must not turn
-        # "matches bash" into "the Python engine ran".
-        code = 1
-        out(f"ERROR bash: the bash side cannot run on this host ({b.skip}); there is nothing to compare "
-            "the Python side with")
-    if not b.skip and not p.skip and not b.failed and not p.failed and b.text != p.text:
-        code = 1
-        out("FAIL python: output differs from bash (normalised), bash first")
-        out("".join(difflib.unified_diff(b.text.splitlines(True), p.text.splitlines(True), "bash", "python")).rstrip("\n"))
-    elif not b.skip and not p.skip and not b.failed and not p.failed:
-        out("MATCH: bash and python print and write the same")
-    return code, (not p.skip and not p.failed and code == 0)
+    side = run_side(sc)
+    if side.skip == "not ported" and is_windows():
+        # a step the engine has not ported runs in bash, which Windows does not have: the Linux and macOS runs hold the line
+        out("SKIP python: a step of this command is not yet ported, and it runs in bash, which is not available on Windows")
+        return 0, False
+    if side.skip == "not ported":
+        # a command the engine does not know is a failure: it would otherwise pass as a skip, and a command dropped
+        # from PORTED would go unseen
+        out("FAIL python: the engine says this command is not yet ported")
+        return 1, False
+    if side.skip:
+        out(f"SKIP python: {side.skip}")
+        return 0, False
+    if side.failed:
+        out(f"FAIL python: {len(side.failed)} of {len(side.failed) + len(side.passed)} checks failed")
+        for label in side.failed:
+            out(f"  FAIL {label}")
+        out(side.raw.rstrip("\n"))
+        return 1, False
+    out(f"PASS python: {len(side.passed)} checks")
+    path = expected_path(sc.name)
+    if not path.is_file():
+        out(f"FAIL python: no recorded result for {sc.name} (python tests/factory/parity.py --record {sc.name})")
+        return 1, False
+    want = _lf(path.read_text(encoding="utf-8"))
+    if is_windows():    # bash sets PWD for a command, cmd.exe does not: the recorded line has nothing to match
+        want = re.sub(r'(?m)^ *"PWD": .*\n', "", want)
+    got = _lf(side.text)
+    if want != got:
+        out("FAIL python: output differs from the result recorded from bash (normalised), recorded first")
+        out("".join(difflib.unified_diff(want.splitlines(True), got.splitlines(True), "recorded", "python")).rstrip("\n"))
+        return 1, False
+    out("MATCH: python prints and writes what bash did")
+    return 0, True
+
+
+def recorded_labels() -> dict:
+    """suite -> the labels of its bash checks, as recorded in parity_labels.json."""
+    return json.loads(LABELS.read_text(encoding="utf-8"))
 
 
 # ---------------------------------------------------------------------------------------------
 # Coverage
 
-CHECK_LINE = re.compile(r'^\s*check\s+"((?:[^"\\]|\\.)*)"')
-
-# Suites that only run another suite on the Python engine. They have no `check "` line of their own, so
-# --coverage leaves them out of the total and prints "wrapper of <suite>"; the suite they run counts their
-# checks. suite -> (the suite it runs, why). Pinned in tests/test_parity.py: a suite with checks of its own
-# cannot be listed here (coverage fails on it), so a real suite cannot drop out of the count.
-WRAPPERS = {
-    "crew_python": ("crew", "runs crew_test.sh on Python; its checks count under crew"),
-    "claude_update_python": ("claude_update", "runs claude_update_test.sh on Python; its checks count under claude_update"),
-    "idle_wake_python": ("idle_wake", "runs idle_wake_test.sh on Python; its checks count under idle_wake"),
-}
-
-
-def suites() -> list:
-    return [ln.strip() for ln in CI_LIST.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
-
-
-def suite_scenarios() -> dict:
-    """suite -> its scenarios: the labels of its `check "<label>"` lines (see the module docstring)."""
-    out = {}
-    for suite in suites():
-        labels = []
-        for line in (HERE / f"{suite}_test.sh").read_text(encoding="utf-8").splitlines():
-            m = CHECK_LINE.match(line)
-            if m:
-                labels.append(m.group(1))
-        out[suite] = labels or [f"(the whole {suite} suite)"]
-    return out
-
-
 def passes_one(name: str) -> bool:
     """Whether scenario `name` passes against Python now (a worker of passes_now)."""
-    return evaluate(SCENARIOS[name], out=lambda _line: None)[1]
+    return evaluate_python(SCENARIOS[name], out=lambda _line: None)[1]
 
 
 def passes_now() -> dict:
@@ -6260,30 +6357,24 @@ def passes_now() -> dict:
         return dict(zip(names, pool.map(passes_one, names)))
 
 
-def coverage(require_full: bool, out=print) -> int:
-    found = suite_scenarios()
+def coverage(require_full: bool, out=print, run: bool = True) -> int:
+    """run=False (--static) does not run the scenarios and counts each as passing: the sharded CI runs
+    them, and this checks that every recorded label has a scenario that names it."""
+    found = recorded_labels()
     passing: dict = {}  # (suite, label) -> scenario name, for scenarios that pass against Python now
     bad = 0
-    for suite in found:
-        if suite in WRAPPERS and not found[suite][0].startswith("(the whole"):
-            out(f"ERROR {suite} is listed as a wrapper but has checks of its own: {len(found[suite])}")
-            bad = 1
-    results = passes_now()
+    results = passes_now() if run else {n: True for n in SCENARIOS}
     for sc in SCENARIOS.values():
         ok = results[sc.name]
         for label in sc.covers:
             if label not in found.get(sc.suite, []):
-                out(f"ERROR scenario {sc.name} covers a check that is not in {sc.suite}_test.sh: {label}")
+                out(f"ERROR scenario {sc.name} covers a check that is not in parity_labels.json under {sc.suite}: {label}")
                 bad = 1
             elif ok:
                 passing[(sc.suite, label)] = sc.name
     total = done = 0
     counted = 0
     for suite, labels in found.items():
-        if suite in WRAPPERS and labels[0].startswith("(the whole"):
-            of, why = WRAPPERS[suite]
-            out(f"{suite}: wrapper of {of} ({why})")
-            continue
         counted += 1
         n = sum(1 for label in labels if (suite, label) in passing)
         total += len(labels)
@@ -7427,9 +7518,6 @@ g3_scn(
 
 # FACTORY_PLAN_EVERY=0: the bash watch reads the plan's limits (/usage) between rounds and answers the console's /context asks;
 # the Python watch does not do that yet (no serve_readings in tares/crew/watch.py), so the scenarios here leave it out on both sides.
-# The Python `crew up` says once that the watch also cleans Docker up (tares/crew/docker_cleanup.py, where Docker is on
-# PATH, and the scenarios put a stub there); the bash engine does not clean Docker up and says nothing. Set aside on both sides.
-DOCKER_NOTE_DROP = (r"once a day the watch also removes Docker's leftovers",)
 G4_WATCH_ENV = {"FACTORY_NO_WATCH": "", "FACTORY_WATCH_INTERVAL": "1", "FACTORY_ASK_POLL": "0.2", "FACTORY_PLAN_EVERY": "0",
                 "TARES_FACTORY_MCP_URL": "{tares}/mcp"}
 
@@ -7493,12 +7581,12 @@ scenario(Scenario(
     # the live watch polls Tares every round, so the reads and the claude-retry write it makes depend on timing
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
-    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_up_after),
-           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=lambda tmp: {"pid": g4_pid(tmp)}),
-           Step(["crew", "status"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP),
-           Step(["crew", "down"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP),
-           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP),
-           Step(["crew", "down"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_quiet)],
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_up_after),
+           Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=lambda tmp: {"pid": g4_pid(tmp)}),
+           Step(["crew", "status"], env=G4_WATCH_ENV),
+           Step(["crew", "down"], env=G4_WATCH_ENV),
+           Step(["crew", "up", "--yes", "--no-watch"], env=G4_WATCH_ENV),
+           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
     checks=[
         ("crew up starts the watch in the background",
          lambda r: "started the watch" in r.out(0) and bool(r.snap(0)["pid"]) and r.snap(0)["alive"]),
@@ -7610,62 +7698,49 @@ scenario(Scenario(
             "a station blocked on a person gets the grant at once", "busy crew stations still wait"],
 ))
 
-# crew_test.sh, "A builder that has finished: only a new grant that names it brings it back (TR-645)": two idle shop
-# builders, both with a `.done` file. A project grant that names neither is noted as skipped, once per builder and
-# once per change; a grant that names one restarts that one and takes its `.done` file away, the other sleeps on.
-G4_LINT = "The builder may run npm run lint in shop"
-G4_BUILD = "shop-build-m2 may run npm run build in shop"
-G4_DONE_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
-G4_DONE_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": '- "%s" (2026-02-06)\n' % G4_LINT})
-G4_DONE_W2 = lworld("L3-review", grants=LAUNCH_GRANT,
-                    project_grants={"shop": '- "%s" (2026-02-06)\n- "%s" (2026-02-07)\n' % (G4_LINT, G4_BUILD)})
-G4_DONE_BUILDERS = ("shop-build-m1", "shop-build-m2")
+# crew_test.sh, "A builder that has finished: only a new grant that names it brings it back (TR-645)": two done builders of
+# shop, a grant that names neither, then one that names the second.
+D_LINT = '- "The builder may run npm run lint in shop" (2026-02-06)\n'
+D_BUILD = '- "shop-build-m2 may run npm run build in shop" (2026-02-07)\n'
+D_W0 = lworld("L3-review", grants=LAUNCH_GRANT)
+D_W1 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": D_LINT})
+D_W2 = lworld("L3-review", grants=LAUNCH_GRANT, project_grants={"shop": D_LINT + D_BUILD})
 
 
-def g4_done_state(tmp: Path) -> dict:
-    """After a step: the sessions started, each builder's id, whether its .done file is there, and the skips noted."""
-    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+def d_state(tmp: Path) -> dict:
+    """The sessions started so far, the regrant-skipped events, which builders are still marked done, and the session ids."""
     ev = tmp / "crew" / "events.jsonl"
     text = ev.read_text(encoding="utf-8") if ev.is_file() else ""
+    rows = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
     return {"started": _sessions_started(tmp),
-            "ids": {n: rows[n]["id"] for n in G4_DONE_BUILDERS},
-            "done": {n: (tmp / "crew" / "stations" / f"{n}.done").is_file() for n in G4_DONE_BUILDERS},
-            "skips": text.replace(" ", "").count('"event":"regrant-skipped"')}
-
-
-def g4_done_recording(step: Step) -> Step:
-    step.after = g4_done_state
-    return step
-
-
-def g4_done_asleep(r: "Run", i: int) -> bool:
-    """Neither builder was restarted by step i: the ids and the number of sessions are those of the start."""
-    return r.snap(i)["ids"] == r.snap(1)["ids"] and r.snap(i)["started"] == r.snap(1)["started"]
+            "skips": text.replace(" ", "").count('"event":"regrant-skipped"'),
+            "done": [s for s in ("shop-build-m1", "shop-build-m2") if (tmp / "crew" / "stations" / f"{s}.done").exists()],
+            "ids": [rows[s]["id"] for s in ("shop-build-m1", "shop-build-m2")],
+            "allow2": json.loads((tmp / "crew" / "stations" / "shop-build-m2.settings.json").read_text(encoding="utf-8"))["autoMode"]["allow"]}
 
 
 scenario(Scenario(
-    name="crew_g4_regrant_done",
+    name="crew_done_builder_regrant",
     suite="crew",
-    about="a done builder sleeps through a grant that does not name it (noted once per builder), and is restarted, no longer done, by one that does",
+    about="a builder that has finished sleeps through a grant that does not name it (noted once), and is restarted, no longer done, by one that does",
     driver=LAUNCH_DRIVER,
     not_windows=WIN_NO_MULTILINE_REGRANT,
-    steps=[_launch("shop-build-m1", "builder", G4_DONE_W0, parent="crew-orchestrator", project="shop"),              # 0
-           g4_done_recording(_launch("shop-build-m2", "builder", G4_DONE_W0, parent="crew-orchestrator", project="shop")),  # 1
-           wstep(G4_DONE_W1, before=_both(_idle(*G4_DONE_BUILDERS), _touch_done("shop-build-m1"), _touch_done("shop-build-m2")),
-                 after=g4_done_state),                                                                             # 2: names neither
-           wstep(G4_DONE_W1, after=g4_done_state),                                                                 # 3: the same again
-           wstep(G4_DONE_W2, after=g4_done_state)],                                                                # 4: names m2
+    steps=[_launch("shop-build-m1", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 0
+           _launch("shop-build-m2", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 1
+           wstep(D_W1, before=_both(_idle("shop-build-m1", "shop-build-m2"), _touch_done("shop-build-m1"),
+                                    _touch_done("shop-build-m2")), after=d_state),                         # 2: a grant naming neither
+           wstep(D_W1, after=d_state),                                                                     # 3: and only once
+           wstep(D_W2, after=d_state)],                                                                    # 4: one naming m2
     checks=[
-        ("a done builder sleeps through a grant that does not name it", lambda r: r.code(2) == 0 and g4_done_asleep(r, 2)),
+        ("a done builder sleeps through a grant that does not name it",
+         lambda r: r.code(2) == 0 and r.snap(2)["started"] == 2 and r.snap(2)["done"] == ["shop-build-m1", "shop-build-m2"]),
         ("the watch notes the skip for each", lambda r: r.snap(2)["skips"] == 2),
-        ("and only once", lambda r: r.code(3) == 0 and g4_done_asleep(r, 3) and r.snap(3)["skips"] == 2),
+        ("and only once", lambda r: r.snap(3)["skips"] == 2 and r.snap(3)["started"] == 2),
         ("a done builder a new grant names is restarted with it",
-         lambda r: r.code(4) == 0 and r.snap(4)["ids"]["shop-build-m2"] != r.snap(1)["ids"]["shop-build-m2"]
-         and r.snap(4)["started"] == r.snap(1)["started"] + 1
-         and any("shop-build-m2 may run npm run build" in a for a in allow_of(r, "shop-build-m2"))),
-        ("and is no longer marked done", lambda r: r.snap(2)["done"]["shop-build-m2"] and not r.snap(4)["done"]["shop-build-m2"]),
-        ("the other done builder stays asleep",
-         lambda r: r.snap(4)["ids"]["shop-build-m1"] == r.snap(1)["ids"]["shop-build-m1"] and r.snap(4)["done"]["shop-build-m1"]),
+         lambda r: r.snap(4)["started"] == 3 and r.snap(4)["ids"][1] != r.snap(2)["ids"][1]
+         and any("shop-build-m2 may run npm run build" in a for a in r.snap(4)["allow2"])),
+        ("and is no longer marked done", lambda r: r.snap(4)["done"] == ["shop-build-m1"]),
+        ("the other done builder stays asleep", lambda r: r.snap(4)["ids"][0] == r.snap(2)["ids"][0] and r.snap(4)["done"] == ["shop-build-m1"]),
     ],
     covers=["a done builder sleeps through a grant that does not name it", "the watch notes the skip for each", "and only once",
             "a done builder a new grant names is restarted with it", "and is no longer marked done",
@@ -7761,9 +7836,9 @@ scenario(Scenario(
     ignore_asked=("GET ", "PUT /api/crew/claude-retry?crew=crew"),
     prepare=trust_crew,
     setup=g4_setup_kit,
-    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_first_banner),
-           Step(["crew", "status"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, before=g4_update_kit, after=g4_restarted),
-           Step(["crew", "down"], env=G4_WATCH_ENV, drop=DOCKER_NOTE_DROP, after=g4_quiet)],
+    steps=[Step(["crew", "up", "--yes"], env=G4_WATCH_ENV, after=g4_first_banner),
+           Step(["crew", "status"], env=G4_WATCH_ENV, before=g4_update_kit, after=g4_restarted),
+           Step(["crew", "down"], env=G4_WATCH_ENV, after=g4_quiet)],
     checks=[
         ("the watch restarts itself on an updated plugin",
          lambda r: r.snap(0)["banners"] == 1 and r.snap(1)["said"] and r.snap(1)["banners"] >= 2 and r.snap(1)["alive"]),
@@ -8108,6 +8183,7 @@ scenario(Scenario(
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
     not_windows=CU_NO_HOOK,
+    ignore_calls=(("agents",),),  # how often the wait polls depends on the machine's speed
     steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
     checks=[
         ("it says it waits, once", lambda r: r.out(0).count("waiting for crew-reviewer to be idle (it is working)") == 1),
@@ -8905,9 +8981,32 @@ def tares_keyed(**kw) -> dict:
     return {"TARES_AUTH_TOKEN": TARES_KEY, **kw}
 
 
+def _stub_bins(tmp: Path, *names: str, code: int = 0) -> None:
+    """Programs on PATH that do nothing and exit `code`: doctor only asks whether a tool is installed (or, for gh, signed in),
+    and the machine's own may lack it or answer otherwise."""
+    for name in names:
+        if sys.platform == "win32":
+            (tmp / "bin" / f"{name}.cmd").write_bytes(f"@exit /b {code}\r\n".encode())
+        else:
+            (tmp / "bin" / name).write_text(f"#!/bin/sh\nexit {code}\n", encoding="utf-8")
+            (tmp / "bin" / name).chmod(0o755)
+
+
+def _cc_doctor_tools(tmp: Path) -> None:
+    """Doctor's tool lines read the same on every machine: docker, kind and kubectl installed, gh installed but not signed in."""
+    _stub_bins(tmp, "docker", "kind", "kubectl")
+    _stub_bins(tmp, "gh", code=1)
+
+
+def _fake_codex(tmp: Path) -> None:
+    """The Codex CLI and the kind release profile's tools, installed."""
+    _stub_bins(tmp, "codex", "docker", "kind", "kubectl")
+
+
 def tares_setup_tools(tmp: Path, env: dict) -> None:
     _fake_tool(tmp, "gh")
     _fake_tool(tmp, "tares")
+    _fake_codex(tmp)    # challenger is on and the release profile is kind in this world: doctor wants these tools
     env["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"  # never the person's keychain
 
 
@@ -9475,6 +9574,7 @@ scenario(Scenario(
 # the bash suite reads it from.
 
 def _cv_world(tmp: Path, env: dict) -> None:
+    _cc_doctor_tools(tmp)
     state = tmp / "claude"
     state.mkdir(parents=True, exist_ok=True)
     (state / "version").write_text("1.0.0\n", encoding="utf-8")
@@ -10397,6 +10497,14 @@ _st_cc("cc_update_helper_down", "crew update, a helper whose restart fails: the 
 
 
 
+# Scenario modules: every tests/factory/parity_scn_*.py is imported here, after the scenarios above, and
+# registers its own with the same `scenario(...)` call. Each does `from parity import *` (this file is `parity`
+# whether it runs as a script or is imported), so a group of scenarios lives in a file of its own.
+sys.modules.setdefault("parity", sys.modules[__name__])
+for _mod in sorted(HERE.glob("parity_scn_*.py")):
+    __import__(_mod.stem)
+
+
 def main(argv: list) -> int:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -10407,19 +10515,24 @@ def main(argv: list) -> int:
                 pass
     args = [a for a in argv if not a.startswith("--")]
     flags = {a for a in argv if a.startswith("--")}
-    if flags - {"--coverage", "--require-full", "--list"}:
+    shard = next((f for f in flags if f.startswith("--shard=")), None)
+    flags.discard(shard)
+    if flags - {"--coverage", "--require-full", "--list", "--record", "--static"}:
         print(__doc__)
+        return 2
+    if "--static" in flags and "--coverage" not in flags:
+        print("parity: --static goes with --coverage", file=sys.stderr)
         return 2
     if "--list" in flags:
         print("\n".join(SCENARIOS))
         return 0
     if "--coverage" in flags:
-        return coverage("--require-full" in flags)
+        return coverage("--require-full" in flags, run="--static" not in flags)
     if "--require-full" in flags:
         print("parity: --require-full goes with --coverage", file=sys.stderr)
         return 2
-    if not args:
-        print("usage: parity.py <scenario>... | --list | --coverage [--require-full]", file=sys.stderr)
+    if not args and not shard:
+        print("usage: parity.py <scenario>... | --shard=I/N | --list | --coverage [--require-full] [--static]", file=sys.stderr)
         return 2
     names: list = []
     for pattern in args:  # `tidy_*` runs every tidy scenario; several patterns run the union, once each
@@ -10428,7 +10541,15 @@ def main(argv: list) -> int:
             print(f"parity: no scenario {pattern!r}; known: {', '.join(SCENARIOS)}", file=sys.stderr)
             return 2
         names += [n for n in found if n not in names]
-    return max(run_scenario(SCENARIOS[n]) for n in names)
+    if shard:  # --shard=I/N: every Nth scenario of the sorted list, from the Ith, so N runners split them
+        m = re.fullmatch(r"--shard=([1-9]\d*)/([1-9]\d*)", shard)
+        if not m or int(m[1]) > int(m[2]):
+            print(f"parity: {shard} is not --shard=I/N with 1 <= I <= N", file=sys.stderr)
+            return 2
+        names += [n for n in sorted(SCENARIOS)[int(m[1]) - 1::int(m[2])] if n not in names]
+    if "--record" in flags:
+        return max(record_scenario(SCENARIOS[n]) for n in names)
+    return max(evaluate_python(SCENARIOS[n])[0] for n in names)
 
 
 if __name__ == "__main__":

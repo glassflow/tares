@@ -1,0 +1,63 @@
+== step: spawn builder Links App m1 {TMP}/links x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no MCP server answers at http://127.0.0.1:<PORT>/mcp. Stations reach Tares through it. Start one in another terminal: tares mcp --transport streamable-http (or set TARES_FACTORY_MCP_URL to where yours runs).
+== step: spawn builder Links App m1 {TMP}/links x ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew is halted ({"at":"<TS>","reason":"testing"}); tares factory crew resume first
+== file crew/HALT ==
+{"at":"<TS>","reason":"testing"}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{}

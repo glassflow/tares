@@ -1,4 +1,4 @@
-"""The CI test lists (Python, bash and the console's browser e2e suites): every name has its file, none is listed twice, they are sorted, and ci.yml reads the lists."""
+"""The CI test lists (Python and the console's browser e2e suites): every name has its file, none is listed twice, they are sorted, and ci.yml reads the lists."""
 import json
 import re
 from pathlib import Path
@@ -47,7 +47,7 @@ def check(label, listfile, filename):
 
 
 py = check("python", ROOT / "tests" / "ci_list.txt", lambda n: f"{n}.py")
-sh = check("bash", ROOT / "tests" / "factory" / "ci_list.txt", lambda n: f"{n}_test.sh")
+ck("the bash test list is gone: the factory checks are parity scenarios (TR-1172)", not (ROOT / "tests" / "factory" / "ci_list.txt").exists() and not list((ROOT / "tests" / "factory").glob("*_test.sh")))
 ck("python list holds this test", "test_ci_list" in py)
 
 # Every tests/test_*.py runs in CI or is skipped on purpose: it is in ci_list.txt, or in ci_skip.txt with a reason.
@@ -80,8 +80,9 @@ test = js.get("test", "")
 RUN = "python tests/ci_run.py --suite ${{ matrix.suite }} --shard ${{ matrix.shard }} --of 5"
 ck("job test: runs tests/ci_run.py per suite and shard", RUN in test and re.search(r"suite: \[duckdb, postgres, mit\]", test) and re.search(r"shard: \[1, 2, 3, 4, 5\]", test), test[:400])
 step = test[test.rfind("run: |", 0, max(test.find(RUN), 0)):test.find(RUN)]
-ck("job test: tests/check_ci_list.sh checks both lists in the step before ci_run.py (a missing or empty list fails the job)",
-   all(re.search(r"(?m)^\s*bash tests/check_ci_list\.sh " + re.escape(f) + r"\s*$", step) for f in ("tests/ci_list.txt", "tests/factory/ci_list.txt")), step)
+ck("job test: tests/check_ci_list.sh checks the list in the step before ci_run.py (a missing or empty list fails the job)",
+   re.search(r"(?m)^\s*bash tests/check_ci_list\.sh tests/ci_list\.txt\s*$", step) is not None
+   and "tests/factory/ci_list.txt" not in step, step)
 ck("tests/check_ci_list.sh exists and tests/test_ci_check.py is in the list", (ROOT / "tests" / "check_ci_list.sh").is_file() and "test_ci_check" in py)
 ck("no job but test and test-ee names a list", all("ci_list" not in j and "ci_run" not in j for n, j in js.items() if n not in ("test", "test-ee")))
 
@@ -98,18 +99,16 @@ ck("job test: the mit run checks tares_ee is not importable",
 ee_list = ROOT / "ee" / "tests" / "ci_list.txt"
 has_ee = (ROOT / "ee").is_dir()
 ee = []
-ee_sh = []
 if has_ee:
     ee = check("ee", ee_list, lambda n: f"{n}.py")
     ck("ee list holds the smoke test", "test_ee_smoke" in ee)
-    ee_sh = check("ee bash", ROOT / "ee" / "tests" / "factory" / "ci_list.txt", lambda n: f"{n}_test.sh")
-    ck("ee bash list holds the crew name test for a shared Tares", "crewname_team" in ee_sh)
+    ck("ee list holds the crew name test for a shared Tares", "test_crewname_team" in ee)
     unlisted = sorted(f.stem for f in ee_list.parent.glob("test_*.py") if f.stem not in ee)
     ck("every ee/tests/test_*.py is in ee/tests/ci_list.txt", not unlisted, "not listed: " + ", ".join(unlisted))
 test_ee = js.get("test-ee", "")
 ck("job test-ee: checks the ee list, then runs the ee suite for each database",
-   all(re.search(r"(?m)^\s*bash tests/check_ci_list\.sh " + re.escape(f) + r"\s*$", test_ee) is not None
-       for f in ("ee/tests/ci_list.txt", "ee/tests/factory/ci_list.txt"))
+   re.search(r"(?m)^\s*bash tests/check_ci_list\.sh ee/tests/ci_list\.txt\s*$", test_ee) is not None
+   and "ee/tests/factory/ci_list.txt" not in test_ee
    and "python tests/ci_run.py --suite ee-postgres" in test_ee
    and re.search(r"(?m)^\s*python tests/ci_run\.py --suite ee\s*$", test_ee) is not None
    and re.search(r"db: \[duckdb, postgres\]", test_ee) is not None, test_ee[:500])
@@ -158,17 +157,17 @@ ck("ci_e2e.py: every suite has its own port, far enough apart for its daemons", 
    and all(b - a >= 30 for a, b in zip(ports, ports[1:])), str(ports))
 ck("ci_e2e.py: only listed names carry a weight", set(ci_e2e.WEIGHT) <= set(e2e), ", ".join(sorted(set(ci_e2e.WEIGHT) - set(e2e))))
 
-# tests/ci_run.py reads the two lists, and its shards together run each suite exactly once.
+# tests/ci_run.py reads the lists, and its shards together run each suite exactly once.
 import sys
 sys.path.insert(0, str(ROOT / "tests"))
 import ci_run
-want = {"duckdb": py + [f"factory:{n}" for n in sh],
-        "postgres": [n for n in py if n not in ("test_state_postgres", "test_duckdb_memory")] + [f"factory:{n}" for n in sh],
-        "mit": [n for n in py if n != "test_ee_packaging"] + [f"factory:{n}" for n in sh],
+want = {"duckdb": py,
+        "postgres": [n for n in py if n not in ("test_state_postgres", "test_duckdb_memory")],
+        "mit": [n for n in py if n != "test_ee_packaging"],
         }
 if has_ee:
-    want["ee"] = list(ee) + [f"ee-factory:{n}" for n in ee_sh]
-    want["ee-postgres"] = [n for n in ee if n not in ci_run.DUCKDB_ONLY] + [f"ee-factory:{n}" for n in ee_sh]
+    want["ee"] = list(ee)
+    want["ee-postgres"] = [n for n in ee if n not in ci_run.DUCKDB_ONLY]
 for suite, w in want.items():
     got = [t for i in range(1, 6) for t in ci_run.shard(ci_run.items(suite), i, 5)]
     ck(f"ci_run.py, suite {suite}: the 5 shards run every listed test once", sorted(got) == sorted(w) and len(got) == len(set(got)),

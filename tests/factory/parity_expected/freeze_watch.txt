@@ -1,0 +1,1465 @@
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: crew freeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "ee5f1a01",
+    "crew-reviewer": "ee5f1a02"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 0,
+  "line": {
+    "crew-orchestrator": "",
+    "crew-reviewer": ""
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resume_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resumes": 0,
+  "same": true,
+  "session": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "old-reviewer"
+  }
+}
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: doctor ==
+exit: 1
+-- stdout --
+tares factory doctor
+  ok    claude: <TMP>/bin/claude (1.0.0 (Claude Code))
+  ok    crew home: <TMP>/crewlink
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
+  ok    Tares lets this crew in
+  ok    Claude Code's session list reads (2 active)
+  FIX   Claude Code has not trusted the crew home <TMP>/crewlink (the crew's own folder, whichever folder you run from; its stations run there). tares factory crew up offers to open Claude Code there to trust it, or: mkdir -p <TMP>/crewlink && cd <TMP>/crewlink && claude, accept the trust prompt, /exit
+  ok    stations load the plugin at <TMP>/kit/claude-plugin
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
+  ok    crew settings on Tares: {"autonomy":"L3-review","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":false}
+  ok    the kit is frozen since <TS> by <USER>; the checkout has nothing newer
+  warn  crew setting claude_update is off: the watch does not move stations onto a new Claude Code (one that restarts for another reason starts on it); tares factory crew update moves them
+  ok    gh signed in
+  ok    crew-orchestrator runs Claude Code 1.0.0
+  ok    crew-reviewer runs Claude Code 1.0.0
+fix the items marked FIX
+-- stderr --
+
+== step: @frozen-loop ==
+exit: 0
+-- stdout --
+{
+  "alive": true,
+  "events": 1,
+  "reported": true,
+  "restart_said": false,
+  "said": 1,
+  "upgraded": 0,
+  "way_out": true
+}
+-- stderr --
+
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 1
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "ee5f1a01",
+    "crew-reviewer": "ee5f1a02"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 0,
+  "line": {
+    "crew-orchestrator": "",
+    "crew-reviewer": ""
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resume_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resumes": 0,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "old-reviewer"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 1
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "ee5f1a01",
+    "crew-reviewer": "ee5f1a02"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 0,
+  "line": {
+    "crew-orchestrator": "",
+    "crew-reviewer": ""
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resume_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resumes": 0,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "old-reviewer"
+  }
+}
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+plugin: 2 station(s) run an older version; the freeze holds them (tares factory crew unfreeze lets the watch move each onto the checkout's)
+FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit <KIT> is newer than the frozen kit <KIT>; not moving stations (tares factory crew unfreeze lets them follow it)
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 2
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "ee5f1a01",
+    "crew-reviewer": "ee5f1a02"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 0,
+  "line": {
+    "crew-orchestrator": "",
+    "crew-reviewer": ""
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resume_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": null
+  },
+  "resumes": 0,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "old-reviewer"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-reviewer stopped; reviving it under the same name
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 2,
+    "revived": 1,
+    "started": 1
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "ee5f1a01",
+    "crew-reviewer": "00000001"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 1,
+  "line": {
+    "crew-orchestrator": "",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": "old-reviewer"
+  },
+  "resumes": 1,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes <TMP>/crewlink/frozen-kit once none runs from it
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 2,
+    "revived": 1,
+    "started": 1,
+    "unfreeze": 1
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "ee5f1a01",
+    "crew-reviewer": "00000001"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 1,
+  "line": {
+    "crew-orchestrator": "",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": null,
+    "crew-reviewer": "old-reviewer"
+  },
+  "resumes": 1,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+plugin: 2 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-orchestrator runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 2,
+    "revived": 2,
+    "started": 2,
+    "unfreeze": 1,
+    "upgraded": 1
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000002",
+    "crew-reviewer": "00000001"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 2,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "old-reviewer"
+  },
+  "resumes": 2,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-reviewer runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 2,
+    "revived": 3,
+    "started": 3,
+    "unfreeze": 1,
+    "upgraded": 2
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000002",
+    "crew-reviewer": "00000003"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 3,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 3,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "checkout_file": false,
+  "copy": false,
+  "copy_bin": false,
+  "events": {
+    "freeze": 1,
+    "kit-newer": 2,
+    "revived": 3,
+    "started": 3,
+    "unfreeze": 1,
+    "upgraded": 2
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000002",
+    "crew-reviewer": "00000003"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 3,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 3,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew freeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-reviewer stopped; reviving it under the same name
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 2,
+    "kit-newer": 2,
+    "revived": 4,
+    "started": 4,
+    "unfreeze": 1,
+    "upgraded": 2
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "00000002",
+    "crew-reviewer": "00000004"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 4,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 4,
+  "same": true,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+FROZEN: the kit since <TS> by <USER>; stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes <TMP>/crewlink/frozen-kit once none runs from it
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 2,
+    "kit-newer": 2,
+    "revived": 4,
+    "started": 4,
+    "unfreeze": 2,
+    "upgraded": 2
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000002",
+    "crew-reviewer": "00000004"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 4,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "old-orchestrator",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 4,
+  "same": true,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-orchestrator stopped; reviving it under the same name
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 2,
+    "kit-newer": 2,
+    "revived": 5,
+    "started": 5,
+    "unfreeze": 2,
+    "upgraded": 2
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000005",
+    "crew-reviewer": "00000004"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 5,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 5,
+  "same": true,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew freeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 3,
+    "kit-newer": 2,
+    "revived": 5,
+    "started": 5,
+    "unfreeze": 2,
+    "upgraded": 2
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "00000005",
+    "crew-reviewer": "00000004"
+  },
+  "kept": true,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 5,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 5,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit unfrozen: the watch moves each station onto the checkout's kit when it's idle, and removes <TMP>/crewlink/frozen-kit once none runs from it
+== step: crew freeze ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: stations still run from the kit copy of an earlier freeze, and the checkout has changed since: wait until tares factory crew watch has moved them (tares factory crew status), then freeze again
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 3,
+    "kit-newer": 2,
+    "revived": 5,
+    "started": 5,
+    "unfreeze": 3,
+    "upgraded": 2
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000005",
+    "crew-reviewer": "00000004"
+  },
+  "kept": true,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 5,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/crew/frozen-kit"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/crew/frozen-kit"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 5,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-orchestrator runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-reviewer runs an older version of the plugin; restarting it on this one now that it's idle, in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 3,
+    "kit-newer": 2,
+    "revived": 7,
+    "started": 7,
+    "unfreeze": 3,
+    "upgraded": 4
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000006",
+    "crew-reviewer": "00000007"
+  },
+  "kept": true,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 7,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 7,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 3,
+    "kit-newer": 2,
+    "revived": 7,
+    "started": 7,
+    "unfreeze": 3,
+    "upgraded": 4
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000006",
+    "crew-reviewer": "00000007"
+  },
+  "kept": true,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 7,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin"
+  },
+  "marker": true,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 7,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "checkout_file": false,
+  "copy": false,
+  "copy_bin": false,
+  "events": {
+    "freeze": 3,
+    "kit-newer": 2,
+    "revived": 7,
+    "started": 7,
+    "unfreeze": 3,
+    "upgraded": 4
+  },
+  "frozen": null,
+  "id": {
+    "crew-orchestrator": "00000006",
+    "crew-reviewer": "00000007"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 7,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin"
+  },
+  "marker": true,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 7,
+  "same": false,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew freeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit frozen since <TS> by <USER>: stations that start or revive use this kit; running ones keep reading the checkout until they restart, and the watch moves none onto a newer kit. tares factory crew unfreeze lifts it.
+-- after --
+{
+  "checkout_file": true,
+  "copy": true,
+  "copy_bin": true,
+  "events": {
+    "freeze": 4,
+    "kit-newer": 2,
+    "revived": 7,
+    "started": 7,
+    "unfreeze": 3,
+    "upgraded": 4
+  },
+  "frozen": {
+    "at": "<TS>",
+    "by": "<USER>",
+    "version": "<KIT>"
+  },
+  "id": {
+    "crew-orchestrator": "00000006",
+    "crew-reviewer": "00000007"
+  },
+  "kept": false,
+  "kit": {
+    "crew-orchestrator": "<KIT>",
+    "crew-reviewer": "<KIT>"
+  },
+  "launches": 7,
+  "line": {
+    "crew-orchestrator": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "crew-reviewer": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin"
+  },
+  "marker": false,
+  "plugin": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "plugin_arg": {
+    "crew-orchestrator": "<TMP>/kit/claude-plugin",
+    "crew-reviewer": "<TMP>/kit/claude-plugin"
+  },
+  "resume_arg": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  },
+  "resumes": 7,
+  "same": true,
+  "session": {
+    "crew-orchestrator": "<ID>",
+    "crew-reviewer": "<ID>"
+  }
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: could not read the crew settings from Tares at http://127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      done     -        
+crew-reviewer                  reviewer     opus/high      done     -        
+plugin: 2 station(s) run an older version; the freeze holds them (tares factory crew unfreeze lets the watch move each onto the checkout's)
+FROZEN: the kit (Tares does not say since when); stations that start or revive use it, running ones keep reading the checkout until they restart; the watch moves no station onto a newer kit (a newer kit is available)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+tares factory: could not read the crew settings from Tares at http://127.0.0.1:<PORT>; if it has auth on, run tares login (or set TARES_AUTH_TOKEN for a Tares of your own)
+== step: crew unfreeze ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: kit unfrozen: the watch moves each station onto the checkout's kit when it's idle
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "kit-newer", "station": ""}
+{"at": "<TS>", "detail": "<KIT>", "event": "kit-newer", "station": ""}
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000003", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
+{"at": "<TS>", "detail": "00000005", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000005", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
+{"at": "<TS>", "detail": "00000006", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000006", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000007", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000007", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "<KIT>", "event": "freeze", "station": ""}
+{"at": "<TS>", "detail": "", "event": "unfreeze", "station": ""}
+== file crew/stations/crew-orchestrator.grants ==
+
+== file crew/stations/crew-orchestrator.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crewlink (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crewlink/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crewlink/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that the user authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L3-review, meaning: builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crewlink",
+    "FACTORY_HOME": "<TMP>/crewlink",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "orchestrator",
+    "FACTORY_STATION": "crew-orchestrator",
+    "FACTORY_TARES": "<TMP>/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crewlink/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)",
+      "Bash(factory spawn *)",
+      "Bash(tares factory spawn *)",
+      "Bash(factory revive *)",
+      "Bash(tares factory revive *)",
+      "Bash(factory restart *)",
+      "Bash(tares factory restart *)",
+      "Bash(factory retire *)",
+      "Bash(tares factory retire *)",
+      "Bash(factory roster)",
+      "Bash(tares factory roster)",
+      "Bash(factory projects)",
+      "Bash(tares factory projects)",
+      "Bash(factory crew status)",
+      "Bash(tares factory crew status)",
+      "Bash(factory crew halt)",
+      "Bash(tares factory crew halt)",
+      "Bash(factory crew halt *)",
+      "Bash(tares factory crew halt *)",
+      "Bash(factory crew resume)",
+      "Bash(tares factory crew resume)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-reviewer.grants ==
+
+== file crew/stations/crew-reviewer.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crewlink (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crewlink/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L3-review, meaning: builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crewlink",
+    "FACTORY_HOME": "<TMP>/crewlink",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "reviewer",
+    "FACTORY_STATION": "crew-reviewer",
+    "FACTORY_TARES": "<TMP>/bin/tares",
+    "FACTORY_WORKTREES": "<TMP>/crewlink/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/crew",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "old-orchestrator"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "",
+    "plugin": "<TMP>/kit/claude-plugin",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crewlink/stations/crew-orchestrator.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>/crew",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "old-reviewer"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "",
+    "plugin": "<TMP>/kit/claude-plugin",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crewlink/stations/crew-reviewer.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/crew/frozen-kit", "--resume", "old-reviewer", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "ee5f1a02"], "cwd": "<REPO>"}
+{"args": ["stop", "ee5f1a01"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-orchestrator", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-orchestrator (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "ee5f1a01"], "cwd": "<REPO>"}
+{"args": ["stop", "00000001"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "00000001"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/crew/frozen-kit", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-reviewer, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "00000003"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "You were revived by the factory under the same name. Reload the skills factory-protocol and station-orchestrator, re-read your report and your work on Tares, re-arm your schedule if you have one, then carry on where your report left off."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "00000002"], "cwd": "<REPO>"}
+{"args": ["stop", "00000005"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-orchestrator (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "00000005"], "cwd": "<REPO>"}
+{"args": ["stop", "00000004"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "<ID>", "The Tares plugin was updated, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer (they may have changed), re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "00000004"], "cwd": "<REPO>"}

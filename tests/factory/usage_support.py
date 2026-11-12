@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Runs the station's status line the way Claude Code does, for the parity scenario `usage_statusline`.
 
-    usage_support.py <bash|python> crew <args...>               `python -m tares.crew <args...>` (the engine is TARES_FACTORY_ENGINE)
-    usage_support.py <bash|python> status <used%> <five-hour%>  the crew-orchestrator's status line, fed the state usage_test.sh feeds it
-    usage_support.py <bash|python> raw                          the same command with stdin as given (not JSON)
-    usage_support.py <bash|python> notares <used%> <five-hour%> the same state, with a Tares that does not answer
+    usage_support.py crew <args...>               `python -m tares.crew <args...>`
+    usage_support.py status <used%> <five-hour%>  the crew-orchestrator's status line, fed a session state with those readings
+    usage_support.py raw                          the same command with stdin as given (not JSON)
+    usage_support.py notares <used%> <five-hour%> the same state, with a Tares that does not answer
 
 The command is the one in the station's settings file (statusLine.command), run with the settings' env on top
 of this process's. `tares hook ...` at its start is run from this checkout (`python -c`), not from whatever
@@ -44,10 +44,10 @@ def command_of(settings: dict) -> list:
 
 
 def main(argv: list) -> int:
-    if len(argv) < 2 or argv[0] not in ("bash", "python"):
+    if not argv:
         print(__doc__, file=sys.stderr)
         return 2
-    op, rest = argv[1], argv[2:]
+    op, rest = argv[0], argv[1:]
     if op == "crew":
         return subprocess.run([sys.executable, "-m", "tares.crew", op, *rest]).returncode
     home = Path(os.environ["FACTORY_CREW_HOME"])

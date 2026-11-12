@@ -1,0 +1,165 @@
+== step: crew desk ==
+exit: 0
+-- stdout --
+Nothing waits for you on the desk.
+-- stderr --
+
+== step: crew status ==
+exit: 0
+-- stdout --
+STATION                        ROLE         MODEL          STATE    TEMPO    DOING / NEEDS
+crew-orchestrator              orchestrator opus/high      working  -        
+crew-reviewer                  reviewer     opus/high      done     -        
+shop-build-m1                  builder      opus/high      blocked  -        
+shop-build-m2                  builder      opus/high      gone     -        
+plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
+claude code: 1 station(s) run an older Claude Code than 2.1.310; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version)
+watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
+desk: nothing waits for you
+Crew page: http://127.0.0.1:<PORT>/crew
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "status": "active"
+  },
+  "old-helper": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "helper",
+    "status": "stopped"
+  },
+  "shop-build-m1": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "cwd": "",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "project": "shop",
+    "repo": "",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "busy",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "2.1.310"
+  },
+  {
+    "cwd": "/x",
+    "id": "<ID>",
+    "name": "shop-build-m1",
+    "pid": "<PID>",
+    "state": "blocked",
+    "status": "waiting",
+    "version": "2.1.100"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["--version"], "cwd": "<REPO>"}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/desk?state=open key=no 
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/pace key=no 
+GET /api/desk?state=open key=no 
+GET /api/crew/projects?crew=crew key=no 

@@ -1,0 +1,3086 @@
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-orchestrator (release); restarting it in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+tares factory: waking crew-reviewer (release); restarting it in the same conversation
+  ✓ started crew-reviewer (opus, high)
+tares factory: waking crew-releaser (release); restarting it in the same conversation
+  ✓ started crew-releaser (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000000840,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-reviewer (liveness); restarting it in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000000900,
+      "last_wake": 2000000900,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000000900,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-orchestrator (liveness); restarting it in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000001260,
+      "last_wake": 2000001260,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000000000,
+      "last_wake": 2000000000,
+      "n": 0,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000000900,
+      "last_wake": 2000000900,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000001260,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-releaser (liveness); restarting it in the same conversation
+  ✓ started crew-releaser (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000001260,
+      "last_wake": 2000001260,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000001800,
+      "last_wake": 2000001800,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000000900,
+      "last_wake": 2000000900,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000001800,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-reviewer (liveness); restarting it in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000001260,
+      "last_wake": 2000001260,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000001800,
+      "last_wake": 2000001800,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000002700,
+      "last_wake": 2000002700,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000002700,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-orchestrator (liveness); restarting it in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000003060,
+      "last_wake": 2000003060,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000001800,
+      "last_wake": 2000001800,
+      "n": 1,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000002700,
+      "last_wake": 2000002700,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000003060,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-releaser (liveness); restarting it in the same conversation
+  ✓ started crew-releaser (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000003060,
+      "last_wake": 2000003060,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000003600,
+      "last_wake": 2000003600,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000002700,
+      "last_wake": 2000002700,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000003600,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-reviewer (liveness); restarting it in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000003060,
+      "last_wake": 2000003060,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000003600,
+      "last_wake": 2000003600,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000005400,
+      "last_wake": 2000005400,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000005400,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-orchestrator (liveness); restarting it in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000005760,
+      "last_wake": 2000005760,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000003600,
+      "last_wake": 2000003600,
+      "n": 2,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000005400,
+      "last_wake": 2000005400,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000005760,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-releaser (liveness); restarting it in the same conversation
+  ✓ started crew-releaser (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000005760,
+      "last_wake": 2000005760,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000005400,
+      "last_wake": 2000005400,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000005760,
+      "last_wake": 2000005760,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000005400,
+      "last_wake": 2000005400,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000007200,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000005760,
+      "last_wake": 2000005760,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000005400,
+      "last_wake": 2000005400,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000008040,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-reviewer (liveness); restarting it in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000005760,
+      "last_wake": 2000005760,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": 2000008100,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000005760,
+      "last_wake": 2000005760,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": 2000008100,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000008400,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-orchestrator (liveness); restarting it in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000008460,
+      "last_wake": 2000008460,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": 2000008100,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000008460,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000008460,
+      "last_wake": 2000008460,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000006300,
+      "last_wake": 2000006300,
+      "n": 3,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": 2000008100,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000008940,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-releaser (liveness); restarting it in the same conversation
+  ✓ started crew-releaser (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000008460,
+      "last_wake": 2000008460,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": 2000009000,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": 2000008100,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000008460,
+      "last_wake": 2000008460,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": 2000009000,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000008100,
+      "last_wake": 2000008100,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000010740,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-reviewer (liveness); restarting it in the same conversation
+  ✓ started crew-reviewer (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 5 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000008460,
+      "last_wake": 2000008460,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": 2000009000,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": 2000010800,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 5 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000008460,
+      "last_wake": 2000008460,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": 2000009000,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": 2000010800,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000011100,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-orchestrator (liveness); restarting it in the same conversation
+  ✓ started crew-orchestrator (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 5 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 5 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000011160,
+      "last_wake": 2000011160,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": 2000009000,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": 2000010800,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000011160,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 5 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 5 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000011160,
+      "last_wake": 2000011160,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000009000,
+      "last_wake": 2000009000,
+      "n": 4,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": 2000010800,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000011640,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: waking crew-releaser (liveness); restarting it in the same conversation
+  ✓ started crew-releaser (opus, high)
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 5 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 5 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 5 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000011160,
+      "last_wake": 2000011160,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000011700,
+      "last_wake": 2000011700,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": 2000010800,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000011700,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== step: idle_wake_round ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "events": [
+    [
+      "crew-orchestrator",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-releaser",
+      "release: idle_wake was switched on, telling the station to drop its tick"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 1 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 2 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 3 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 4 with nothing pending"
+    ],
+    [
+      "crew-reviewer",
+      "liveness: wake 5 with nothing pending"
+    ],
+    [
+      "crew-orchestrator",
+      "liveness: wake 5 with nothing pending"
+    ],
+    [
+      "crew-releaser",
+      "liveness: wake 5 with nothing pending"
+    ]
+  ],
+  "files": {
+    "crew-orchestrator": {
+      "baseline": {
+        "desk": "",
+        "projects": [
+          "p1"
+        ]
+      },
+      "clock": 2000011160,
+      "last_wake": 2000011160,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "crew-releaser": {
+      "baseline": null,
+      "clock": 2000011700,
+      "last_wake": 2000011700,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "crew-reviewer": {
+      "baseline": null,
+      "clock": 2000010800,
+      "last_wake": 2000010800,
+      "n": 5,
+      "released": true,
+      "seen": []
+    },
+    "links-app-build-m1": {
+      "baseline": null,
+      "clock": 2000012600,
+      "last_wake": null,
+      "n": 0,
+      "released": true,
+      "seen": []
+    }
+  },
+  "urls": [
+    "/api/desk?state=answered&mine=1",
+    "/api/review-queue?mine=1"
+  ]
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "release: idle_wake was switched on, telling the station to drop its tick", "event": "idle_wake", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "release: idle_wake was switched on, telling the station to drop its tick", "event": "idle_wake", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000003", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "release: idle_wake was switched on, telling the station to drop its tick", "event": "idle_wake", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "liveness: wake 1 with nothing pending", "event": "idle_wake", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000005", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000005", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "liveness: wake 1 with nothing pending", "event": "idle_wake", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000006", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000006", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "liveness: wake 1 with nothing pending", "event": "idle_wake", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000007", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000007", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "liveness: wake 2 with nothing pending", "event": "idle_wake", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000008", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000008", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "liveness: wake 2 with nothing pending", "event": "idle_wake", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000009", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000009", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "liveness: wake 2 with nothing pending", "event": "idle_wake", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "0000000a", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "0000000a", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "liveness: wake 3 with nothing pending", "event": "idle_wake", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "0000000b", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "0000000b", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "liveness: wake 3 with nothing pending", "event": "idle_wake", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "0000000c", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "0000000c", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "liveness: wake 3 with nothing pending", "event": "idle_wake", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "0000000d", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "0000000d", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "liveness: wake 4 with nothing pending", "event": "idle_wake", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "0000000e", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "0000000e", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "liveness: wake 4 with nothing pending", "event": "idle_wake", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "0000000f", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "0000000f", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "liveness: wake 4 with nothing pending", "event": "idle_wake", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000010", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000010", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "liveness: wake 5 with nothing pending", "event": "idle_wake", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000011", "event": "started", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000011", "event": "revived", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "liveness: wake 5 with nothing pending", "event": "idle_wake", "station": "crew-orchestrator"}
+{"at": "<TS>", "detail": "00000012", "event": "started", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "00000012", "event": "revived", "station": "crew-releaser"}
+{"at": "<TS>", "detail": "liveness: wake 5 with nothing pending", "event": "idle_wake", "station": "crew-releaser"}
+== file crew/stations/crew-orchestrator.grants ==
+
+== file crew/stations/crew-orchestrator.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in <TMP>/crew/stations.json with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that the user authorized by running `tares factory crew up`. Sessions not recorded there are out of scope."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "orchestrator",
+    "FACTORY_STATION": "crew-orchestrator",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)",
+      "Bash(factory spawn *)",
+      "Bash(tares factory spawn *)",
+      "Bash(factory revive *)",
+      "Bash(tares factory revive *)",
+      "Bash(factory restart *)",
+      "Bash(tares factory restart *)",
+      "Bash(factory retire *)",
+      "Bash(tares factory retire *)",
+      "Bash(factory roster)",
+      "Bash(tares factory roster)",
+      "Bash(factory projects)",
+      "Bash(tares factory projects)",
+      "Bash(factory crew status)",
+      "Bash(tares factory crew status)",
+      "Bash(factory crew halt)",
+      "Bash(tares factory crew halt)",
+      "Bash(factory crew halt *)",
+      "Bash(tares factory crew halt *)",
+      "Bash(factory crew resume)",
+      "Bash(tares factory crew resume)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-orchestrator.wake ==
+{"seen":[],"n":5,"last_wake":2000011160,"clock":2000011160,"baseline":{"desk":"","projects":["p1"]},"released":true}
+== file crew/stations/crew-releaser.grants ==
+
+== file crew/stations/crew-releaser.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Building container images, loading them into the local kind cluster `factory`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in the repositories of the projects handed to this crew on Tares (crew_projects), are expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the releaser station `crew-releaser` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It was started by the station `crew-orchestrator`. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_ROLE": "releaser",
+    "FACTORY_STATION": "crew-releaser",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-releaser.wake ==
+{"seen":[],"n":5,"last_wake":2000011700,"clock":2000011700,"baseline":null,"released":true}
+== file crew/stations/crew-reviewer.grants ==
+
+== file crew/stations/crew-reviewer.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. It was started by the station `crew-orchestrator`. the user chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "crew-orchestrator",
+    "FACTORY_ROLE": "reviewer",
+    "FACTORY_STATION": "crew-reviewer",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations/crew-reviewer.wake ==
+{"seen":[],"n":5,"last_wake":2000010800,"clock":2000010800,"baseline":null,"released":true}
+== file crew/stations/links-app-build-m1.wake ==
+{"seen":[],"n":0,"last_wake":null,"clock":2000012600,"baseline":null,"released":true}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-ee5a1a01"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-orchestrator.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-ee5a1a03"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-releaser.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "sess-ee5a1a02"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      },
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "<ID>"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "plugin": "<TMP>/kit",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-reviewer.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "cwd": "<TMP>",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "crew-orchestrator",
+    "project": "links-app",
+    "repo": "",
+    "role": "builder",
+    "sessionId": "sess-ee5a1a04",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "links-app-build-m1",
+    "pid": "<PID>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  },
+  {
+    "cwd": "<TMP>",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "done"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["stop", "ee5a1a01"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-ee5a1a01", "idle_wake was switched on. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "ee5a1a01"], "cwd": "<REPO>"}
+{"args": ["stop", "ee5a1a02"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-ee5a1a02", "idle_wake was switched on. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "ee5a1a02"], "cwd": "<REPO>"}
+{"args": ["stop", "ee5a1a03"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "sess-ee5a1a03", "idle_wake was switched on. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "ee5a1a03"], "cwd": "<REPO>"}
+{"args": ["stop", "00000002"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000002"], "cwd": "<REPO>"}
+{"args": ["stop", "00000001"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000001"], "cwd": "<REPO>"}
+{"args": ["stop", "00000003"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000003"], "cwd": "<REPO>"}
+{"args": ["stop", "00000004"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000004"], "cwd": "<REPO>"}
+{"args": ["stop", "00000005"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000005"], "cwd": "<REPO>"}
+{"args": ["stop", "00000006"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000006"], "cwd": "<REPO>"}
+{"args": ["stop", "00000007"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000007"], "cwd": "<REPO>"}
+{"args": ["stop", "00000008"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000008"], "cwd": "<REPO>"}
+{"args": ["stop", "00000009"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "00000009"], "cwd": "<REPO>"}
+{"args": ["stop", "0000000a"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "0000000a"], "cwd": "<REPO>"}
+{"args": ["stop", "0000000b"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "0000000b"], "cwd": "<REPO>"}
+{"args": ["stop", "0000000c"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "0000000c"], "cwd": "<REPO>"}
+{"args": ["stop", "0000000d"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "0000000d"], "cwd": "<REPO>"}
+{"args": ["stop", "0000000e"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-orchestrator", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role orchestrator, session name crew-orchestrator. Your operating rules are the skills factory-protocol and station-orchestrator from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "0000000e"], "cwd": "<REPO>"}
+{"args": ["stop", "0000000f"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-releaser", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role releaser, session name crew-releaser, started by crew-orchestrator. Your operating rules are the skills factory-protocol and station-releaser from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit", "--resume", "<ID>", "Liveness check, nothing is known to be pending: check your queue once, then end the turn. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete). Carry on from your report."], "cwd": "<TMP>"}
+{"args": ["rm", "0000000f"], "cwd": "<REPO>"}

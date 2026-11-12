@@ -6,22 +6,12 @@
     python tests/ci_run.py --suite mit ...       # the core tests that need no ee/ (CI deletes it first)
     python tests/ci_run.py --suite ee ...        # the tests of the enterprise code, ee/tests
     python tests/ci_run.py --suite ee-postgres   # the same, with the state in Postgres
-    python tests/ci_run.py --suite factory       # only the factory CLI suites (the engine job sets FACTORY_BIN)
 
-The tests are the ones named in tests/ci_list.txt (tests/<name>.py) and tests/factory/ci_list.txt
-(tests/factory/<name>_test.sh, the factory CLI against a real Tares). The ee suites read
-ee/tests/ci_list.txt (ee/tests/<name>.py) and ee/tests/factory/ci_list.txt
-(ee/tests/factory/<name>_test.sh, shown as ee-factory:<name>) the same way. Shards are balanced by
+The tests are the ones named in tests/ci_list.txt (tests/<name>.py); the ee suites read
+ee/tests/ci_list.txt (ee/tests/<name>.py) the same way. Shards are balanced by
 WEIGHT (seconds a test took on a CI runner); anything unlisted counts as DEFAULT_WEIGHT. A test
 that becomes slow should get a weight here so its shard does not finish last. Stops at the first
-failure.
-
-The environment is passed on as it is. With FACTORY_BIN set to a command ("tares factory", or
-"python -m tares.crew") the bash suites run that command in place of the bash script; a suite that edits a
-copy of the plugin also sets TARES_PLUGIN_DIR to that copy, so the command hands bash the copy. Then
-TARES_FACTORY_ENGINE picks the engine: bash runs every command in bash through the dispatcher; python
-runs only the ported commands and fails the rest with exit 2 ("not yet ported"), so it passes a suite only
-once every command the suite uses is ported. Mac and Linux only (the suites are bash)."""
+failure. The environment is passed on as it is."""
 import argparse
 import os
 import subprocess
@@ -29,12 +19,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY_LIST = os.path.join(HERE, "ci_list.txt")
-SH_LIST = os.path.join(HERE, "factory", "ci_list.txt")
 EE_DIR = os.path.join(os.path.dirname(HERE), "ee", "tests")
 EE_PY_LIST = os.path.join(EE_DIR, "ci_list.txt")
-EE_SH_LIST = os.path.join(EE_DIR, "factory", "ci_list.txt")
 
-SUITES = ["duckdb", "postgres", "mit", "ee", "ee-postgres", "factory"]
+SUITES = ["duckdb", "postgres", "mit", "ee", "ee-postgres"]
 
 # Not in the Postgres run: they are about the DuckDB file itself.
 DUCKDB_ONLY = {"test_duckdb_memory", "test_state_postgres"}
@@ -44,11 +32,10 @@ NEEDS_EE = {"test_ee_packaging"}
 
 DEFAULT_WEIGHT = 4
 WEIGHT = {
-    "factory:claude_update": 240, "factory:claude_update_python": 240, "factory:idle_wake": 235, "factory:idle_wake_python": 235, "factory:pace": 225,
-    "test_parity": 900, "factory:crew": 100, "factory:crew_python": 100, "test_watch_escalate": 70, "test_slack": 65, "factory:freeze": 60,
+    "test_parity": 900, "test_watch_escalate": 70, "test_slack": 65,
     "test_project_keys": 19, "test_agents": 15, "test_plugin_challenger": 11, "test_tracing": 11,
-    "factory:lsp": 11, "test_seed": 10, "factory:tares": 10, "test_login": 9, "test_usage": 9,
-    "test_slack_ask": 9, "factory:usage": 9, "test_github_tickets": 8, "test_degraded": 8,
+    "test_seed": 10, "test_login": 9, "test_usage": 9,
+    "test_slack_ask": 9, "test_github_tickets": 8, "test_degraded": 8,
 }
 
 
@@ -59,14 +46,11 @@ def names(path):
 
 def items(suite):
     if suite in ("ee", "ee-postgres"):
-        py = [t for t in names(EE_PY_LIST) if suite == "ee" or t not in DUCKDB_ONLY]
-        return py + [f"ee-factory:{t}" for t in names(EE_SH_LIST)]
-    if suite == "factory":  # only the factory CLI suites, for the engine job (FACTORY_BIN set, TR-1069)
-        return [f"factory:{t}" for t in names(SH_LIST)]
+        return [t for t in names(EE_PY_LIST) if suite == "ee" or t not in DUCKDB_ONLY]
     py = [t for t in names(PY_LIST) if suite in ("duckdb", "mit") or t not in DUCKDB_ONLY]
     if suite == "mit":
         py = [t for t in py if t not in NEEDS_EE]
-    return py + [f"factory:{t}" for t in names(SH_LIST)]
+    return py
 
 
 def shard(all_items, n, of):
@@ -81,11 +65,6 @@ def shard(all_items, n, of):
 
 
 def run(t, suite="duckdb"):
-    if t.startswith(("factory:", "ee-factory:")):
-        kind, name = t.split(":", 1)
-        base = EE_DIR if kind == "ee-factory" else HERE
-        print(f"== {kind.replace('-', ' ')} {name} ==", flush=True)
-        return subprocess.call(["bash", os.path.join(base, "factory", f"{name}_test.sh")])
     base = EE_DIR if suite in ("ee", "ee-postgres") else HERE
     print(f"== {t} ==", flush=True)
     return subprocess.call([sys.executable, os.path.join(base, f"{t}.py")])

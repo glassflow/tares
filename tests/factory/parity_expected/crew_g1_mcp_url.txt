@@ -1,0 +1,24 @@
+== step: _mcp-url ==
+exit: 0
+-- stdout --
+http://127.0.0.1:8788/mcp
+-- stderr --
+
+== step: _mcp-url ==
+exit: 0
+-- stdout --
+http://127.0.0.1:9911/mcp
+-- stderr --
+
+== step: _mcp-url ==
+exit: 0
+-- stdout --
+https://cell.example.com/mcp
+-- stderr --
+
+== step: _mcp-url ==
+exit: 0
+-- stdout --
+http://mcp.example:1/mcp
+-- stderr --
+

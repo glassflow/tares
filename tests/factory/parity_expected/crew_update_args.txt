@@ -1,0 +1,146 @@
+== step: crew update --wait abc ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: --wait takes a number of seconds, not 'abc'
+== step: crew update --wait 1e3 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: --wait takes a number of seconds, not '1e3'
+== step: crew update --wait -5 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: --wait takes a number of seconds, not '-5'
+== step: crew update --wait  ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: --wait takes a number of seconds, not ''
+== step: crew update --wait 99999999999999999999 ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: --wait takes a number of seconds, at most 9 digits, not '99999999999999999999'
+== step: crew update --wait ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: --wait takes a number of seconds
+== step: crew update --bogus ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: usage: tares factory crew update [--force] [--wait <seconds>]
+== step: crew restart --now ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: usage: tares factory crew update [--force] [--wait <seconds>]
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "name": "crew",
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/work",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "sess-o",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cwd": "<TMP>/work",
+    "effort": "high",
+    "id": "<ID>",
+    "model": "opus",
+    "parent": "",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "sess-r",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "2.1.100"
+  },
+  {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "2.1.100"
+  }
+]
+== asked of Tares ==
+

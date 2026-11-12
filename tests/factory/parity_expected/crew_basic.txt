@@ -1,0 +1,6 @@
+== step: crew up --yes ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: no Tares answers at http://127.0.0.1:9. Start one with `tares up` in another terminal, connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where yours runs), then try again.

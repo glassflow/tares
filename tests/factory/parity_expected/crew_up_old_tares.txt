@@ -1,0 +1,8 @@
+== step: crew up --yes ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: This needs a newer Tares on the cell (missing integrations). Upgrade Tares, then run this again.
+== file tares/writes.jsonl ==
+

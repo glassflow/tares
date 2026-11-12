@@ -1,0 +1,88 @@
+== step: finish Links App all shipped ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: Tares did not finish Links App: Links App still has open tickets: T1
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "name": "crew",
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-reviewer": {
+    "role": "reviewer",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "project": "Links App",
+    "role": "builder",
+    "status": "active"
+  },
+  "links-app-build-m2": {
+    "project": "Links App",
+    "role": "builder",
+    "status": "retired"
+  },
+  "shop-build-m1": {
+    "project": "shop",
+    "role": "builder",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "project": "shop",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/projects?crew=crew key=no 
+POST /api/projects/p1/finish key=no {
+  "words": "all shipped"
+}

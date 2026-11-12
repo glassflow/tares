@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Runs the plugin's session-start hook the way spec_test.sh does, for the parity scenario `spec_hooks`.
+"""Runs the plugin's session-start hook for the parity scenario `spec_hooks`.
 
-    spec_hook_support.py <bash|python> hook <source> [VAR=value ...]    `tares hook session-start`, the context it prints
-    spec_hook_support.py <bash|python> bare <source> [VAR=value ...]    hooks/session_start.py by hand, what it prints
+    spec_hook_support.py hook <source> [VAR=value ...]    `tares hook session-start`, the context it prints
+    spec_hook_support.py bare <source> [VAR=value ...]    hooks/session_start.py by hand, what it prints
 
-The hook is the plugin's own file, the same for both engines: the engine word is only there so the parity
-harness can call this script like its other drivers. The hook's stdin is {"source": <source>}. TARES_PROJECT,
+The hook is the plugin's own file. The hook's stdin is {"source": <source>}. TARES_PROJECT,
 FACTORY_ROLE, TARES_SESSION_KIND and TARES_SESSION_TAKEOVER of the caller are dropped, then the VAR=value
 words are set. `hook` prints the additionalContext of the answer (as `jq -r` does, "null" when there is none);
 `bare` prints the hook's output as it is.
@@ -25,10 +24,10 @@ MAIN = "import sys; sys.argv = ['tares'] + sys.argv[1:]; from tares.cli import m
 
 
 def main(argv: list) -> int:
-    if len(argv) < 3 or argv[0] not in ("bash", "python") or argv[1] not in ("hook", "bare"):
+    if len(argv) < 2 or argv[0] not in ("hook", "bare"):
         print(__doc__, file=sys.stderr)
         return 2
-    op, source, sets = argv[1], argv[2], argv[3:]
+    op, source, sets = argv[0], argv[1], argv[2:]
     env = {k: v for k, v in os.environ.items() if k not in DROPPED}
     env.update(w.split("=", 1) for w in sets)
     stdin = json.dumps({"source": source})
