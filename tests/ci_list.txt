@@ -127,6 +127,7 @@ test_handoffs
 test_handover_single
 test_homebrew_formula
 test_hook_start
+test_hooks
 test_hooks_json
 test_host
 test_http_poll

@@ -124,6 +124,23 @@ async def merge_ready(pr: str, project: str = "") -> str:
     return _out(r)
 
 
+@mcp.tool()
+async def release_ready(project: str = "", commit: str = "", repo: str = "", milestone: str = "",
+                        merged_prs: list[str] | None = None) -> str:
+    """May this commit be shipped? Asks the project's guardrails at the pre_release hook. Returns
+    `ready` (false when a guardrail blocks, cannot be reached, or the project or commit is
+    missing), `reasons` (a sentence for each thing holding the release back) and `warnings`
+    (shown, not blocking). Call it before tagging or deploying and stop when it is not ready.
+    `repo` is owner/name, `milestone` the milestone being shipped, `merged_prs` the pull requests
+    in it (`owner/repo#12`). It changes nothing."""
+    project = (project or "").strip() or _default_project()
+    async with _cx(30) as cx:
+        r = await cx.get(f"{TARESD}/api/factory/release-ready", params={
+            "project": project, "commit": commit, "repo": repo, "milestone": milestone,
+            "merged_prs": ",".join(merged_prs or [])})
+    return _out(r)
+
+
 @writable()
 async def set_required_checks(commands: list[str], project: str = "") -> str:
     """Set the commands a pull request of this project must have recorded as passing checks

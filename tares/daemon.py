@@ -70,7 +70,7 @@ from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
-from .integrations import registry as integrations_registry, tickets as _tickets_integ
+from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -247,7 +247,7 @@ UI_DIST = _ui_dist()
 # What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
 # cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
 # launch_spec, recall). A daemon that could not start lists none.
-CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules"]
+CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points"]
 
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
@@ -755,6 +755,7 @@ def make_app() -> FastAPI:
     # the interactive API reference lives under /api so /docs is the console's Docs and memory page
     app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
+    integrations_hooks.bind(store)   # the guardrail hooks resolve a project's guardrails from it
     app.state.runtime = runtime
     app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],

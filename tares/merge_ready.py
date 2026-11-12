@@ -134,9 +134,14 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
     # ── guardrails ──
     rails: list[dict] = []
     try:
+        files = await factory_github.pr_files(store, repo, number)
         decisions = await hooks.run("pre_merge", uid, {
-            "repo": repo, "number": number, "head": head, "base": ref.base,
-            "ticket": base["ticket"], "url": ref.url})
+            "repo": repo, "pr": number, "number": number, "head": head, "base": ref.base,
+            "files": [{"path": f.get("filename") or "", "additions": int(f.get("additions") or 0),
+                       "deletions": int(f.get("deletions") or 0)} for f in files or []],
+            "ticket": base["ticket"], "url": ref.url,
+            "review": {"state": review["state"], "by": review["by"]},
+            "ci": {"state": ci["state"], "failing": list(ci["failing"])}})
         for d in decisions or []:
             rails.append({"allow": bool(d.allow), "reason": d.reason,
                           "integration": d.integration, "warn_only": bool(d.warn_only)})
