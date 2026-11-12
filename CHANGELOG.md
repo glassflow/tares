@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- On Windows, two crew commands or threads writing an event at the same moment could mix their lines or lose one in `events.jsonl` (TR-1229). Each event is now written under a lock, so every line stays whole and none is dropped. macOS and Linux were not affected.
 - The crew's messages were listed two to four times on a ticket (each REVIEW, VERDICT, FYI). The plugin's async hooks shipped the same transcript lines side by side, and Claude Code 2.1.3xx writes `api-request-blob` lines that copy the last assistant message with no timestamp, which Tares stored as new tool calls at the moment they arrived. One shipper per transcript now holds a lock (a turn's end waits up to 5 s for it), the `api-request*` lines are not shipped and are dropped at ingest, and the message list shows each tool call once.
 
 ## [1.57.0] - 2026-11-12
