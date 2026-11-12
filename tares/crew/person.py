@@ -644,6 +644,13 @@ def person_claude(client: TaresClient, env: dict, cwd: str, sname: str, sfile: s
     args += ["--settings", paths.shown(f"stations/{sfile}.settings.json")]
     tares = client.tares or client.tares_url()
     child.update(TARES_FACTORY_URL=tares, TARESD_URL=tares, TARES_FACTORY_MCP_URL=client.mcp_url())
+    # the plugin stamps X-Tares-Crew from FACTORY_CREW: without it a person's hand_over on a named crew
+    # was recorded under `crew` and named crew-orchestrator, which is not theirs
+    if not child.get("FACTORY_CREW"):
+        try:
+            child["FACTORY_CREW"] = state.crew_name(paths)
+        except CrewError:
+            pass  # a crew name that cannot be one: the call names no crew, as before
     child.update(extra or {})
     if not os.path.isdir(cwd):
         raise CrewError(f"cannot open Claude in {cwd}: no such folder")

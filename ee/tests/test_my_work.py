@@ -320,8 +320,16 @@ async def main():
             ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
         ck("the latest hand-over keeps the crew it was made from", ho["crew"] == "other", ho)
 
-        print("== the default crew, and a cell of one person ==")
+        print("== a session that names no crew means the caller's one running crew ==")
         os.environ.pop("FACTORY_CREW")
+        out = await mf.hand_over(project="Shop", repos=[{"path": "/w/shop"}])
+        ck("P's only running crew is a: it names a-orchestrator and the message to send",
+           "a-orchestrator" in out and "[TF:SHIP]" in out and "No orchestrator" not in out, out)
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
+        ck("and the hand-over is recorded under crew a, not the default", ho["crew"] == "a", ho)
+
+        print("== the default crew, and a cell of one person ==")
         await push(None, orch_lines("l-o1", "crew-orchestrator", "crew", ""))
         as_(root)
         out = await mf.hand_over(project="Blog", repos=[{"path": "/w/blog"}])
