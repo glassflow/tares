@@ -4,6 +4,11 @@ from __future__ import annotations
 from .base import Integration
 from .types import PRRef, Verdict
 
+# The review gates whose verdict the crew's reviewer station gives (TR-857). For any other gate (an
+# outside tool such as CodeRabbit or Qodo) the crew reviewer is skipped: Tares reads the gate's
+# verdict instead. `tares+input` is the Tares reviewer with the person's own input (M7).
+CREW_REVIEWED_GATES = ("tares", "tares+input")
+
 
 class ReviewGate(Integration):
     slot = "review"

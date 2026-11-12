@@ -198,9 +198,20 @@ const MANY = make({
              { label: "Open the builder's session", command: "tares factory crew attach project-y-build-m4" }],
 });
 
+// a team cell: a question the crew asked Adam shows apart from the viewer's own (TR-1223 follow-up)
+const TEAM: FactoryProjectData = {
+  ...BUILDING,
+  waiting_others: [{
+    id: "question:D91", kind: "question", label: "Question for Adam", title: BUILDING.name,
+    detail: "Give the crew Docker and Rust 1.95 so the lore tickets (TR-1187, TR-1188) can build and test?",
+    meta: "Asked by the crew, 6 minutes ago", since: "2026-11-02T11:30:00+00:00", project: { id: BUILDING.id, name: BUILDING.name },
+    actions: [], blocking: true,
+  } as unknown as FactoryProjectData["waiting"][number]],
+};
+
 const SAMPLES: Record<string, FactoryProjectData | "load" | "err"> = {
   building: BUILDING, spec: SPEC, ready: READY, dialog: READY, fail: READY, finished: FINISHED, empty: EMPTY,
-  long: LONG, many: MANY, load: "load", err: "err",
+  long: LONG, many: MANY, team: TEAM, load: "load", err: "err",
 };
 
 /** The Close a sample has part way: `dialog` has the confirm open, `fail` has the cell's answer to a

@@ -42,12 +42,11 @@ exit: 0
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project 🔄 Emoji App, checked out at <TMP>/emoji, and opening pull requests there, is expected work that Test Crew authorized.",
-      "Merging a pull request in the repository of project 🔄 Emoji App, checked out at <TMP>/emoji, that this crew opened from a `factory/*` branch is expected work that Test Crew pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Test Crew chose to rely on. Deleting the merged `factory/*` branch is expected.",
       "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `emoji-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project 🔄 Emoji App in <TMP>/emoji. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `emoji-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project 🔄 Emoji App in <TMP>/emoji. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -83,6 +82,9 @@ exit: 0
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -274,7 +276,7 @@ stub-token
     ],
     "environment": [
       "$defaults",
-      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the orchestrator station `crew-orchestrator` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -316,6 +318,9 @@ stub-token
       "Bash(tares factory crew halt)",
       "Bash(tares factory crew halt *)",
       "Bash(tares factory crew resume)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -342,7 +347,7 @@ stub-token
     ],
     "environment": [
       "$defaults",
-      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -374,6 +379,9 @@ stub-token
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -397,12 +405,11 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project 🔄 Emoji App, checked out at <TMP>/emoji, and opening pull requests there, is expected work that Test Crew authorized.",
-      "Merging a pull request in the repository of project 🔄 Emoji App, checked out at <TMP>/emoji, that this crew opened from a `factory/*` branch is expected work that Test Crew pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Test Crew chose to rely on. Deleting the merged `factory/*` branch is expected.",
       "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `emoji-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project 🔄 Emoji App in <TMP>/emoji. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `emoji-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project 🔄 Emoji App in <TMP>/emoji. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -438,6 +445,9 @@ stub-token
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -461,13 +471,12 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project Links App, checked out at <TMP>/links, and opening pull requests there, is expected work that Test Crew authorized.",
-      "Merging a pull request in the repository of project Links App, checked out at <TMP>/links, that this crew opened from a `factory/*` branch is expected work that Test Crew pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Test Crew chose to rely on. Deleting the merged `factory/*` branch is expected.",
       "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work.",
       "Test Crew granted this on <DATE> for project Links App, in their own words: \"builders may bump patch versions of dependencies\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `links-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `links-app-build-m1` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -503,6 +512,9 @@ stub-token
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -526,13 +538,12 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project Links App, checked out at <TMP>/links, and opening pull requests there, is expected work that Test Crew authorized.",
-      "Merging a pull request in the repository of project Links App, checked out at <TMP>/links, that this crew opened from a `factory/*` branch is expected work that Test Crew pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Test Crew chose to rely on. Deleting the merged `factory/*` branch is expected.",
       "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work.",
       "Test Crew granted this on <DATE> for project Links App, in their own words: \"builders may bump patch versions of dependencies\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `links-app-build-m3` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `links-app-build-m3` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -568,6 +579,9 @@ stub-token
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -591,13 +605,12 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project Links App, checked out at <TMP>/links, and opening pull requests there, is expected work that Test Crew authorized.",
-      "Merging a pull request in the repository of project Links App, checked out at <TMP>/links, that this crew opened from a `factory/*` branch is expected work that Test Crew pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Test Crew chose to rely on. Deleting the merged `factory/*` branch is expected.",
       "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work.",
       "Test Crew granted this on <DATE> for project Links App, in their own words: \"builders may bump patch versions of dependencies\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `links-app-build-m5` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `links-app-build-m5` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -633,6 +646,9 @@ stub-token
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {
@@ -656,13 +672,12 @@ stub-token
       "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
       "Reading and writing this crew's records on Tares at http://<TARES> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
       "Pushing `factory/*` branches to the repository of project Links App, checked out at <TMP>/links, and opening pull requests there, is expected work that Test Crew authorized.",
-      "Merging a pull request in the repository of project Links App, checked out at <TMP>/links, that this crew opened from a `factory/*` branch is expected work that Test Crew pre-authorized at level L4-ship, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's `factory/review` commit status on that head commit is `success`. The reviewer station's verdict is the review Test Crew chose to rely on. Deleting the merged `factory/*` branch is expected.",
       "Test Crew granted this on <DATE> for all projects, in their own words: \"the reviewer may comment on draft PRs\". Acting within that grant is expected work.",
       "Test Crew granted this on <DATE> for project Links App, in their own words: \"builders may bump patch versions of dependencies\". Acting within that grant is expected work."
     ],
     "environment": [
       "$defaults",
-      "This session is the builder station `links-app-build-m6` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      "This session is the builder station `links-app-build-m6` of a tares-factory crew: one team of Claude Code sessions that Test Crew started on <DATE> with `tares factory crew up` to build the projects handed to it on Tares. It works on project Links App in <TMP>/links. It was started by the station `crew-orchestrator`. Test Crew chose autonomy level L4-ship, meaning: builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
     ],
     "soft_deny": [
       "$defaults",
@@ -698,6 +713,9 @@ stub-token
   "permissions": {
     "allow": [
       "Bash(tares factory tidy *)"
+    ],
+    "deny": [
+      "Bash(gh pr merge:*)"
     ]
   },
   "statusLine": {

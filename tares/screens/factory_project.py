@@ -368,6 +368,26 @@ def register(app, store, h, ctx):
                     w[k] = clean(w[k])
             w["actions"] = [{**a, "label": clean(a["label"])} if isinstance(a.get("label"), str) else a
                             for a in w.get("actions") or []]
+        # On a team cell a question or permission request addressed to someone else is theirs, not
+        # the viewer's (TR-1223 follow-up): it moves to `waiting_others`, named for that person,
+        # with nothing to press (only the person it is for may answer it), and does not make the
+        # project "Waiting on you".
+        others: list[dict] = []
+        me = (h.current_person(request) or {}).get("id")
+        if me and not store.only_local_person():
+            kept = []
+            for w in waiting:
+                kind, _, ref = str(w.get("id") or "").partition(":")
+                d = store.get_desk_item(ref) if kind in ("question", "permission") and ref else None
+                to = (d or {}).get("to_person_id")
+                if to and to != me:
+                    person = store.get_person(to) or {}
+                    who = person.get("name") or "someone else"
+                    others.append({**w, "label": f"{'Question' if kind == 'question' else 'Permission'} for {who}",
+                                   "actions": [], "for_person": {"id": to, "name": person.get("name")}})
+                else:
+                    kept.append(w)
+            waiting = kept
         gids = set(h.global_ids().values())
         own = [d for d in store.list_docs(uid) if d["id"] not in gids]
         has_start = any(d["kind"] == "start" for d in own)
@@ -436,7 +456,7 @@ def register(app, store, h, ctx):
                 "goal": clean(p.get("goal")),
                 "stage": stage, "stage_label": STAGE_LABEL[stage],
                 "state": state, "state_label": STATE_LABEL[state],
-                "waiting": waiting, "counts": counts, "moving": moving, "moving_total": len(movers),
+                "waiting": waiting, "waiting_others": others, "counts": counts, "moving": moving, "moving_total": len(movers),
                 "tickets_href": f"/tickets?project={uid}", "next": nxt,
                 # how many pull requests the GitHub page lists (the header links it when any)
                 "prs_total": sum(1 for t in tickets if pr_state(t)),
