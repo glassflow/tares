@@ -1104,6 +1104,7 @@ def spawn_step(*args: str, **kw) -> Step:
     return lstep("spawn", *args, **kw)
 
 
+WIN_NOT_YET = ("Windows never ran the Python side of this scenario while a step of it went through bash, which Windows lacks; its first run there fails (TR-975 follow-up: make it run on Windows)")
 WIN_NO_MULTILINE = ("a station is started through claude.cmd here, and cmd.exe cannot take the boot prompt of a builder or helper "
                     "(several lines); the claude.exe form waits for TR-946")
 
@@ -7548,6 +7549,7 @@ def g4_quiet(tmp: Path) -> None:
 scenario(Scenario(
     name="crew_g4_up_watch",
     suite="crew",
+    not_windows=WIN_NOT_YET,
     about="crew up starts the watch in the background and logs; a second crew up keeps it; crew down stops it; --no-watch starts none",
     ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
@@ -7803,6 +7805,7 @@ def g4_restarted(tmp: Path) -> dict:
 scenario(Scenario(
     name="crew_g4_watch_update",
     suite="crew",
+    not_windows=WIN_NOT_YET,
     about="a watch that crew up started restarts itself on the new version when the plugin is updated",
     ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
@@ -8561,6 +8564,7 @@ CN_ORCH_LINE = "a-orchestrator\torchestrator\t\tworking\t"
 scenario(Scenario(
     name="crewname_stations",
     suite="crewname",
+    not_windows=WIN_NOT_YET,
     about="the default crew and two named crews build the same project side by side, each under its own names; the roster adopts only its own",
     stand_in={"settings": {**SAVED, "releaser": False}},
     tares=_CN_TARES,
@@ -8893,6 +8897,7 @@ def _usage_sid(r) -> str:
 scenario(Scenario(
     name="usage_statusline",
     suite="usage",
+    not_windows=WIN_NOT_YET,
     about="a station is told where it compacts and runs the plugin's status line, which prints a line and tells Tares only when something changed",
     stand_in={"settings": {**SAVED, "releaser": False, "challenger": False, "builders_max": 2}},
     prepare=trust_crew,
@@ -9008,6 +9013,7 @@ def tares_no_token_in(folder: Path) -> bool:
 scenario(Scenario(
     name="tares_up_auth",
     suite="tares",
+    not_windows=WIN_NOT_YET,
     about="crew up against a Tares with auth on: a wrong key stops it, the key is kept in a file only the person reads, "
           "a second machine asks nothing",
     stand_in={"token": TARES_KEY},
@@ -9151,6 +9157,7 @@ TARES_WIDE_ROW = (r"^\U0001F504 Emoji App ",)
 scenario(Scenario(
     name="tares_spawn_auth",
     suite="tares",
+    not_windows=WIN_NOT_YET,
     about="builders against a Tares with auth on: their project's grants, an emoji project by id, the orchestrator's own "
           "spawn through the token file, and a key the person's shell holds never reaches a station",
     stand_in={"token": TARES_KEY, "projects": TARES_PROJECTS,

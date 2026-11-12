@@ -418,7 +418,9 @@ FACTORY_PROBE = (
 def factory(args, extra=None, probe=FACTORY_PROBE):
     e = dict(ENV_F, **(extra or {}))
     e.pop("PYTHONPATH", None)
-    return subprocess.run([sys.executable, "-I", "-c", probe, *args], capture_output=True, text=True, encoding="utf-8", env=e, cwd=str(T))
+    e.setdefault("PYTHONIOENCODING", "utf-8")   # a profile folder with a letter outside ASCII is in the messages
+    return subprocess.run([sys.executable, "-I", "-c", probe, *args], capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", env=e, cwd=str(T))
 
 
 r = factory(["zz", "q"])
