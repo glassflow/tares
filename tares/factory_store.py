@@ -418,6 +418,10 @@ FACTORY_SCHEMA = [
       updated_at    TIMESTAMPTZ
     )""",
     "CREATE INDEX IF NOT EXISTS idx_merge_queue_repo ON merge_queue (repo, base)",
+    # TR-858: the files (and head) a pull request had before its branch was brought up to date,
+    # as JSON, and how many ticks in a row GitHub could not say whether it merges.
+    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS before_files TEXT",
+    "ALTER TABLE merge_queue ADD COLUMN IF NOT EXISTS unknown_ticks INTEGER",
     # How a project's pull requests are merged: squash, merge or rebase. No row means squash.
     """CREATE TABLE IF NOT EXISTS project_merge_method (
       project     TEXT PRIMARY KEY,
@@ -2003,15 +2007,16 @@ class FactoryStore:
     MERGE_METHODS = ("squash", "merge", "rebase")
     MERGE_OPEN = ("queued", "waiting_ci", "waiting_approval", "merging", "blocked")
     _MQ_COLS = ("id, repo, base, pr, head, ticket, project_uid, state, reason, desk_item, "
-                "approved_head, entered_at, updated_at")
+                "approved_head, entered_at, updated_at, before_files, unknown_ticks")
     _MQ_FIELDS = ("repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
-                  "desk_item", "approved_head")
+                  "desk_item", "approved_head", "before_files", "unknown_ticks")
 
     @staticmethod
     def _mq_row(r) -> dict:
         return {"id": r[0], "repo": r[1], "base": r[2], "pr": r[3], "head": r[4], "ticket": r[5],
                 "project_uid": r[6], "state": r[7], "reason": r[8], "desk_item": r[9],
-                "approved_head": r[10], "entered_at": r[11], "updated_at": r[12]}
+                "approved_head": r[10], "entered_at": r[11], "updated_at": r[12],
+                "before_files": r[13], "unknown_ticks": r[14] or 0}
 
     def merge_queue_add(self, repo: str, base: str, pr: int, head: str, ticket: str | None,
                         project_uid: str | None, state: str = "queued",
@@ -2028,9 +2033,9 @@ class FactoryStore:
                 return self._mq_row(have)
             self.sc.execute(
                 f"INSERT INTO merge_queue ({self._MQ_COLS}) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [mid, repo, base, pr, head, ticket, project_uid, state, reason, None, None, now,
-                 now])
+                 now, None, 0])
         return self.merge_queue_get(mid)
 
     def merge_queue_get(self, mid: str) -> dict | None:
@@ -2055,6 +2060,25 @@ class FactoryStore:
                                     f"({marks}) ORDER BY entered_at, id",
                                     list(self.MERGE_OPEN)).fetchall()
         return [self._mq_row(r) for r in rows]
+
+    def merge_queue_sent_back(self) -> list[dict]:
+        """Every row that was sent back to its builder (or ended with the ticket's review)."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE state = "
+                                    "'sent_back' ORDER BY entered_at, id").fetchall()
+        return [self._mq_row(r) for r in rows]
+
+    def merge_queue_last_merged(self, repo: str, base: str, not_pr: int | None = None) -> dict | None:
+        """The row of the pull request merged most recently into (repo, base), or None. `not_pr`
+        leaves one pull request out."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._MQ_COLS} FROM merge_queue WHERE repo = ? AND "
+                                    "base = ? AND state = 'merged' ORDER BY updated_at DESC, id "
+                                    "DESC", [repo, base]).fetchall()
+        for r in rows:
+            if not_pr is None or r[3] != not_pr:
+                return self._mq_row(r)
+        return None
 
     def merge_queue_update(self, mid: str, **fields) -> None:
         bad = [k for k in fields if k not in self._MQ_FIELDS]

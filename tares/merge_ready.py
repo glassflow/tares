@@ -59,7 +59,9 @@ async def merge_ready(store, pr_ref: str, source: str | None = None) -> dict:
     head = str(pr.get("head") or "").strip()
     brief = {"repo": repo, "number": number, "url": pr.get("url") or "",
              "state": pr.get("state"), "draft": bool(pr.get("draft")),
-             "merged": bool(pr.get("merged")), "base": pr.get("base") or ""}
+             "merged": bool(pr.get("merged")), "base": pr.get("base") or "",
+             # TR-858: GitHub's own answer on whether it merges (None while it works it out)
+             "mergeable": pr.get("mergeable"), "mergeable_state": pr.get("mergeable_state")}
     if pr.get("error"):
         # read_pr keeps the ticket's last snapshot (head, state, draft) when a read fails; none of
         # that is a fresh answer, so a failed read stops here whatever it kept
