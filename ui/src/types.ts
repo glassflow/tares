@@ -659,6 +659,7 @@ export interface LinearStatus {
   account?: { name?: string; email?: string; org?: string };
   connected_at?: string | null;
   error?: string | null;   // why a connection that is there cannot be used
+  write_error?: string | null;   // Linear refused a write for its scope: the words and the way to fix it
 }
 export interface ProjectSession {
   session: string; repo: string | null; linked_at: string;
