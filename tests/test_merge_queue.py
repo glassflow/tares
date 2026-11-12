@@ -19,8 +19,16 @@ guardrail hook answers nothing. Each scenario has its own repo so queues do not 
    request enters again for the new commit; a closed one is sent back; one merged by anyone else
    becomes merged with no merge call and no error;
  - GitHub's answers: no credential can write (403 from all) blocks with ONE desk item for the repo;
-   405, 409 and 422 keep the row queued with GitHub's message; a spent rate limit keeps it queued;
-   a second credential is tried when the first is refused;
+   a 405 blocks the row with a desk item carrying GitHub's message, never the builder; 409 re-reads
+   the pull request (moved head: row dropped; conflict: sent back; else queued); 422 keeps the row
+   queued; a spent rate limit keeps it queued; a second credential is tried when the first is refused;
+ - TR-858: behind a base on a GitHub CI project, the branch is updated and the row waits for a check on
+   the new head; the same changes keep the review (a Tares review is written for the new head, an
+   outside gate is left alone), different ones go back to the review gate; local CI never updates;
+   mergeable null waits ten ticks then blocks with a desk item; a conflict (or a 422 on the update)
+   is sent back with the files named; a reviewed pull request whose CI fails or a guardrail blocks
+   is sent back once per head; same_changes, compare, pr_files and update_branch on their own
+   (null, empty and malformed input included);
  - two ticks at once merge once; a `merging` row left by a dead tick is recovered;
  - the rate limit: remembered per API base, a missing or odd header changes nothing, a low value
    skips the tick with one line;
@@ -36,6 +44,7 @@ import json
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _env import scrub_os_environ
@@ -55,7 +64,7 @@ os.environ["TARES_PR_SYNC_SECONDS"] = "off"      # the daemon's own loop stays o
 import httpx
 
 from tares import factory as factory_mod
-from tares import factory_api, factory_github, merge_queue
+from tares import factory_api, factory_github, merge_queue, merge_ready
 from tares.integrations import hooks, registry
 from tares.integrations.ci import CISource
 from tares.integrations.review import ReviewGate
@@ -84,6 +93,29 @@ RATE = {"value": 4000}   # the x-ratelimit-remaining header; None sends none
 NOT_APPROVED = set()     # (repo, number) the review gate does not approve
 CI_FAIL = set()          # (repo, number) whose CI fails
 ALL_CALLS = []           # every request path (the network never sees one: this is the transport)
+# TR-858: what GitHub says about a branch that is behind, in conflict, or being updated
+MERGEABLE = {}           # (repo, number) -> (mergeable, mergeable_state); default (True, "clean")
+BEHIND = {}              # (repo, number) -> commits the base has that the head lacks
+FILES = {}               # (repo, number) -> the files the compare lists for the head now
+AFTER = {}               # (repo, number) -> the files once the branch is updated (default: same)
+UPDATE = {}              # repo -> how update-branch answers (default "ok", head changes at once)
+UPDATES = []             # (repo, number, body), every update-branch call
+PENDING = {}             # (repo, number) -> the head an accepted update will make (see land)
+CHECKED = set()          # heads that have a check run
+PR_FILES = {}            # (repo, number) -> the pull request's files; missing answers 404
+COMPARE_CODE = {}        # repo -> the status the compare answers with (default 200)
+RAILS = {}               # repo -> the guardrail decisions before a merge (default none)
+CI_NONE = set()          # repos whose CI source says "none"
+COMPARE_BODY = {}        # repo -> a body the compare answers 200 with instead of its own
+
+
+BEFORE = "@@ -1,3 +1,3 @@\n keep\n-old\n+new"
+HUNK_MOVED = "@@ -41,3 +41,3 @@\n elsewhere\n-old\n+new"     # the base moved: header and context differ
+DIFFERENT = "@@ -1,3 +1,3 @@\n keep\n-old\n+newer"
+
+
+def fl(name, patch, status="modified"):
+    return {"filename": name, "status": status, "patch": patch}
 
 
 def sha(n, v=0):
@@ -99,7 +131,7 @@ def handler(req: httpx.Request):
     if len(p) < 4 or p[0] != "repos":
         return httpx.Response(404, json={}, headers=hdr)
     repo = f"{p[1]}/{p[2]}"
-    if p[3] == "pulls" and method == "GET":
+    if p[3] == "pulls" and method == "GET" and len(p) == 5:
         pr = PRS.get((repo, int(p[4])))
         if pr is None:
             return httpx.Response(404, json={}, headers=hdr)
@@ -108,7 +140,45 @@ def handler(req: httpx.Request):
             "draft": pr["draft"], "html_url": f"https://github.com/{repo}/pull/{p[4]}",
             "head": {"sha": pr["head"], "ref": pr["branch"],
                      "repo": {"full_name": pr.get("head_repo", repo)}},
-            "base": {"ref": pr["base"]}})
+            "base": {"ref": pr["base"]},
+            "mergeable": MERGEABLE.get((repo, int(p[4])), (True, "clean"))[0],
+            "mergeable_state": MERGEABLE.get((repo, int(p[4])), (True, "clean"))[1]})
+    if p[3] == "pulls" and method == "GET" and p[-1] == "files":
+        files = PR_FILES.get((repo, int(p[4])))
+        return httpx.Response(404 if files is None else 200, json={} if files is None else files,
+                              headers=hdr)
+    if p[3] == "pulls" and method == "PUT" and p[-1] == "update-branch":
+        n = int(p[4])
+        UPDATES.append((repo, n, json.loads(req.content or b"{}")))
+        mode = UPDATE.get(repo, "ok")
+        if mode == "422_conflict":
+            return httpx.Response(422, json={"message": "merge conflict between base and head"},
+                                  headers=hdr)
+        if mode == "422_plain":
+            return httpx.Response(422, json={"message": "expected head sha didn't match"},
+                                  headers=hdr)
+        if mode == "403":
+            return httpx.Response(403, json={"message": "Resource not accessible"}, headers=hdr)
+        if mode == "403_rate":
+            return httpx.Response(403, json={"message": "rate limit"},
+                                  headers={"x-ratelimit-remaining": "0"})
+        new = sha(n, 50 + len(UPDATES))
+        if mode == "later":
+            PENDING[(repo, n)] = new
+        else:
+            land(repo, n, new)
+        return httpx.Response(202, json={"message": "Updating pull request branch."}, headers=hdr)
+    if p[3] == "compare" and method == "GET":
+        if COMPARE_CODE.get(repo, 200) != 200:
+            return httpx.Response(COMPARE_CODE[repo], json={}, headers=hdr)
+        if repo in COMPARE_BODY:
+            return httpx.Response(200, json=COMPARE_BODY[repo], headers=hdr)
+        head = p[4].split("...")[-1]
+        n = next((k[1] for k, v in PRS.items() if k[0] == repo and v["head"] == head), None)
+        if n is None:
+            return httpx.Response(404, json={}, headers=hdr)
+        return httpx.Response(200, headers=hdr, json={
+            "behind_by": BEHIND.get((repo, n), 0), "ahead_by": 1, "files": FILES.get((repo, n), [])})
     if p[3] == "pulls" and method == "PUT" and p[-1] == "merge":
         n = int(p[4])
         body = json.loads(req.content or b"{}")
@@ -124,6 +194,14 @@ def handler(req: httpx.Request):
         if mode == "403_rate":
             return httpx.Response(403, json={"message": "rate limit"},
                                   headers={"x-ratelimit-remaining": "0"})
+        if mode == "405_empty":          # GitHub says no and gives no words
+            return httpx.Response(405, json={}, headers=hdr)
+        if mode == "409_moved":          # a commit landed after the claim
+            PRS[(repo, n)]["head"] = sha(n, 9)
+            return httpx.Response(409, json={"message": "Head branch was modified"}, headers=hdr)
+        if mode == "409_conflict":       # the base moved and the pull request conflicts now
+            MERGEABLE[(repo, n)] = (False, "dirty")
+            return httpx.Response(409, json={"message": "Base branch was modified"}, headers=hdr)
         if mode in ("405", "409", "422"):
             return httpx.Response(int(mode), json={"message": f"GitHub says {mode}"}, headers=hdr)
         pr = PRS[(repo, n)]
@@ -137,11 +215,23 @@ def handler(req: httpx.Request):
         return httpx.Response(DELETE_CODE["value"], json={}, headers=hdr)
     if p[3] == "commits":
         key = "statuses" if p[-1] == "status" else "check_runs"
-        return httpx.Response(200, json={key: []}, headers=hdr)
+        runs = ([{"name": "build", "status": "completed", "conclusion": "success"}]
+                if key == "check_runs" and p[4] in CHECKED else [])
+        return httpx.Response(200, json={key: runs}, headers=hdr)
     return httpx.Response(404, json={}, headers=hdr)
 
 
 factory_github._transport = httpx.MockTransport(handler)
+
+
+def land(repo, n, new=None):
+    """The update GitHub accepted makes its commit: the head moves and the branch is not behind."""
+    new = new or PENDING.pop((repo, n))
+    PRS[(repo, n)]["head"] = new
+    BEHIND[(repo, n)] = 0
+    if (repo, n) in AFTER:
+        FILES[(repo, n)] = AFTER[(repo, n)]
+    return new
 
 
 class FakeReview(ReviewGate):
@@ -167,14 +257,21 @@ class FakeCI(CISource):
     async def state(self, pr, required):
         if (pr.repo, pr.number) in CI_FAIL:
             return CIState(state="failure", head=pr.head, failing=["test"])
+        if pr.repo in CI_NONE:
+            return CIState(state="none", head=pr.head)
         return CIState(state="success", head=pr.head)
 
 
-async def no_rails(stage, project, payload):
-    return []
+class FakeGithubCI(FakeCI):
+    """The CI integration named `github`: the only one whose branch Tares brings up to date."""
+    name = "github"
 
 
-hooks.run = no_rails
+async def rails(stage, project, payload):
+    return RAILS.get(payload.get("repo"), [])
+
+
+hooks.run = rails
 
 
 async def main():
@@ -184,6 +281,7 @@ async def main():
     registry.load()
     registry._loaded[("review", "fakerev")] = FakeReview
     registry._loaded[("ci", "fakeci")] = FakeCI
+    registry._loaded[("ci", "github")] = FakeGithubCI
     store.upsert_github_credential("main", "tok-main")
     root = {"Authorization": f"Bearer {TOKEN}"}
     person = store.create_person("Priya", email="priya@example.com")
@@ -192,15 +290,16 @@ async def main():
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                  headers=headers or dict(root))
 
-    def project(name, autonomy=None, handed=True):
+    def project(name, autonomy=None, handed=True, review="fakerev", ci="fakeci"):
         uid = "uc_" + name.replace("-", "")
         store.create_project(uid, "custom", name, {}, goal="A project for the test")
         store.set_project_kind(uid, "software_factory")
         if handed:
             store.set_handover(uid, [{"path": "/w/a", "name": name}], autonomy, None, now_utc(),
                                person_id=person["id"])
-        store.set_project_choice(uid, "review", "fakerev", {}, by="test")
-        store.set_project_choice(uid, "ci", "fakeci", {}, by="test")
+        if review:      # None: the project keeps the Tares reviewer, the default gate
+            store.set_project_choice(uid, "review", review, {}, by="test")
+        store.set_project_choice(uid, "ci", ci, {}, by="test")
         return uid
 
     def ticket(uid, repo, title, n, milestone=None, position=None, depends=None, stage="review",
@@ -212,6 +311,23 @@ async def main():
         PRS[(repo, n)] = {"head": sha(n), "branch": branch or f"factory/T{n}", "base": base,
                           "state": "open", "merged": False, "draft": draft}
         return tid
+
+    def reviewed(uid, tid, repo, n):
+        """The Tares reviewer's pass on the pull request's head now."""
+        store.add_review(uid, tid, f"https://github.com/{repo}/pull/{n}", PRS[(repo, n)]["head"],
+                         "pass", "Ran the tests", "", "crew-reviewer", [], {},
+                         factory_mod.finding_kind, now_utc())
+
+    def behind(repo, n, before, after, mode="ok"):
+        """The pull request is behind its base; what an update will leave of its files, and how
+        the update answers."""
+        BEHIND[(repo, n)] = 2
+        FILES[(repo, n)] = before
+        AFTER[(repo, n)] = after
+        UPDATE[repo] = mode
+
+    def history(tid, field):
+        return [h for h in store.ticket_history(tid) if h["field"] == field]
 
     def rows(repo, n=None, base="main"):
         out = [r for r in store.merge_queue_list(repo, base) if n is None or r["pr"] == n]
@@ -244,7 +360,9 @@ async def main():
         a = store.merge_queue_add("o/store", "main", 1, "h1", None, None)
         ck("a row starts queued with its columns",
            set(a) == {"id", "repo", "base", "pr", "head", "ticket", "project_uid", "state", "reason",
-                      "desk_item", "approved_head", "entered_at", "updated_at"} and a["state"] == "queued", a)
+                      "desk_item", "approved_head", "entered_at", "updated_at", "before_files",
+                      "unknown_ticks"} and a["state"] == "queued"
+           and a["before_files"] is None and a["unknown_ticks"] == 0, a)
         ck("the same open pull request is added once",
            store.merge_queue_add("o/store", "main", 1, "h1", None, None)["id"] == a["id"]
            and len(rows("o/store")) == 1)
@@ -340,7 +458,15 @@ async def main():
         ck("each branch was deleted", sorted(b for r, b in DELETES if r == repo) == ["factory/T1", "factory/T2",
                                                                                       "factory/T3", "factory/T6"], DELETES)
         ck("nothing was asked of a person at L4-ship", desk(up) == [])
+        ck("the reviewed pull request whose CI fails was sent back to its builder (TR-858)",
+           stage(up, t_slow) == "changes" and row(repo, 4) is None
+           and [h["value"] for h in history(t_slow, "send_back")] == [f"ci_failure:{sha(4)}"],
+           (stage(up, t_slow), row(repo, 4), history(t_slow, "send_back")))
         CI_FAIL.discard((repo, 4))
+        # the builder fixes it and pushes: a new head, back in review
+        new = land(repo, 4, new=sha(4, 7))
+        store.update_ticket(t_slow, stage="review", pr={"url": f"https://github.com/{repo}/pull/4",
+                                                        "number": 4, "repo": repo, "head": new})
         del MERGES[:]
         await tick()
         order = [n for n, _ in merged_calls(repo)]
@@ -624,7 +750,7 @@ async def main():
            merge_queue.autonomy_of(store, project("ceiling2", None)) == "L3-review")
 
         print("== GitHub says no to this one pull request ==")
-        for code in ("405", "409", "422"):
+        for code in ("409", "422"):
             repo = f"acme/g{code}"
             up = project(f"g{code}", "L4-ship")
             MODE[repo] = code
@@ -632,11 +758,536 @@ async def main():
             await tick()
             r = row(repo, 1)
             ck(f"{code}: the row stays queued with GitHub's message",
-               r["state"] == "queued" and r["reason"] == f"GitHub says {code}" and desk(up) == [], r)
+               r["state"] == "queued" and r["reason"] == f"GitHub says {code}" and desk(up) == []
+               and stage(up, t) == "review", r)
         MODE.clear()
         await tick()
         ck("when GitHub agrees the row merges", row(repo, 1)["state"] == "merged" and stage(up, t) == "merged", row(repo, 1))
-        ck("so do the others that were stuck", all(row(f"acme/g{c}", 1)["state"] == "merged" for c in ("405", "409", "422")))
+        ck("so does the other that was stuck", row("acme/g409", 1)["state"] == "merged")
+
+        print("== 405: a rule of the repo, to the desk and never to the builder ==")
+        for mode, said in (("405", "GitHub says 405"), ("405_empty", "GitHub answered 405")):
+            repo = f"acme/g{mode}"
+            up = project(f"g{mode.replace('_', '')}", "L4-ship")
+            MODE[repo] = mode
+            t = ticket(up, repo, "Held by a rule", 1)
+            await tick()
+            await tick()
+            r, d = row(repo, 1), desk(up)
+            ck(f"{mode}: the row is blocked with GitHub's words", r["state"] == "blocked"
+               and said in r["reason"], r)
+            ck(f"{mode}: one desk item for the person carries them", len(d) == 1
+               and said in d[0]["context"] and "PR #1" in d[0]["question"] and r["desk_item"] == d[0]["id"], d)
+            ck(f"{mode}: the builder hears nothing: still in review, nothing sent back",
+               stage(up, t) == "review" and history(t, "send_back") == [], (stage(up, t), history(t, "send_back")))
+        MODE.clear()
+        await tick()
+        ck("a blocked row is not lined up again by itself", row("acme/g405", 1)["state"] == "blocked")
+        merge_queue.approve(store, row("acme/g405", 1))
+        await tick()
+        ck("a person's approval in the console releases it", row("acme/g405", 1)["state"] == "merged")
+        ck("the 405 row with an empty message was not touched", row("acme/g405_empty", 1)["state"] == "blocked")
+        fake = dict(row("acme/g405_empty", 1))
+        merge_queue._blocked_by_rule(store, fake, store.get_ticket(fake["project_uid"], fake["ticket"]), "")
+        ck("with no words at all it says so", "GitHub gave no reason" in row("acme/g405_empty", 1)["reason"],
+           row("acme/g405_empty", 1))
+
+        print("== 409: the head moved, the base moved, or nothing changed ==")
+        repo = "acme/g409m"
+        up = project("g409m", "L4-ship")
+        MODE[repo] = "409_moved"
+        t = ticket(up, repo, "A commit landed", 1)
+        h0 = PRS[(repo, 1)]["head"]
+        await tick()
+        ck("a changed head deletes the row, with no desk item and no send back",
+           row(repo, 1) is None and desk(up) == [] and stage(up, t) == "review", rows(repo))
+        MODE.clear()
+        await tick()
+        ck("it enters again for the new commit and merges it", row(repo, 1)["state"] == "merged"
+           and row(repo, 1)["head"] == sha(1, 9) != h0, row(repo, 1))
+        repo = "acme/g409c"
+        up = project("g409c", "L4-ship")
+        MODE[repo] = "409_conflict"
+        t = ticket(up, repo, "The base moved", 1)
+        PR_FILES[(repo, 1)] = [{"filename": "api/routes.py", "status": "modified"}]
+        await tick()
+        ck("a pull request GitHub now says conflicts is sent back as a conflict",
+           stage(up, t) == "changes" and row(repo, 1)["state"] == "sent_back"
+           and "Conflicts with main" in row(repo, 1)["reason"], (stage(up, t), row(repo, 1)))
+        ck("with the history row the bounce count reads",
+           [(h["value"], h["by"]) for h in history(t, "send_back")] == [(f"conflict:{sha(1)}", "merge-queue")],
+           history(t, "send_back"))
+
+        print("== TR-858: GitHub's own answer on whether it merges, in merge_ready ==")
+        repo = "acme/brief"
+        up = project("brief", "L4-ship")
+        t = ticket(up, repo, "Reads mergeable", 1)
+        MERGEABLE[(repo, 1)] = (None, "unknown")
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("a null mergeable is reported as null, not as false",
+           ans["pr"]["mergeable"] is None and ans["pr"]["mergeable_state"] == "unknown", ans["pr"])
+        MERGEABLE[(repo, 1)] = (False, "dirty")
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("a conflict is reported", ans["pr"]["mergeable"] is False and ans["pr"]["mergeable_state"] == "dirty", ans["pr"])
+        del MERGEABLE[(repo, 1)]
+        ans = await merge_ready.merge_ready(store, f"{repo}#1")
+        ck("a clean one is reported", ans["pr"]["mergeable"] is True and ans["pr"]["mergeable_state"] == "clean", ans["pr"])
+        got = await factory_github.read_pr(store, repo, 1)
+        ck("read_pr carries both", got["mergeable"] is True and got["mergeable_state"] == "clean", got)
+
+        print("== TR-858: behind, the same changes: the review is kept ==")
+        repo = "acme/same"
+        up = project("same", "L4-ship", review=None, ci="github")
+        t = ticket(up, repo, "Behind", 1)
+        reviewed(up, t, repo, 1)
+        h0 = PRS[(repo, 1)]["head"]
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", HUNK_MOVED)], "later")
+        del MERGES[:], UPDATES[:]
+        await tick()
+        r = row(repo, 1)
+        ck("the branch is updated with the head it was reviewed at, and nothing merges",
+           len(UPDATES) == 1 and UPDATES[0][2] == {"expected_head_sha": h0} and merged_calls(repo) == []
+           and r["state"] == "waiting_ci" and r["reason"] == merge_queue.UPDATING, (UPDATES, r))
+        saved = json.loads(r["before_files"])
+        ck("the files before are kept as JSON with the head, the patch reduced to its changed lines",
+           saved == {"head": h0, "files": [{"filename": "a.py", "status": "modified", "patch": "-old\n+new"}]}, saved)
+        await tick()
+        await tick()
+        ck("with the head unchanged the row waits and the branch is not updated again",
+           len(UPDATES) == 1 and row(repo, 1)["state"] == "waiting_ci" and merged_calls(repo) == [], row(repo, 1))
+        new = land(repo, 1)
+        await tick()
+        r = row(repo, 1)
+        ck("a new head with no check on it yet holds, no review written, no merge",
+           r["state"] == "waiting_ci" and r["head"] == h0 and "Waiting for checks" in r["reason"]
+           and [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"] == []
+           and merged_calls(repo) == [], r)
+        CHECKED.add(new)
+        await tick()
+        r = row(repo, 1)
+        mq = [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"]
+        ck("with a check on the new head the row is queued on it, and nothing merges in that tick",
+           r["state"] == "queued" and r["head"] == new and r["before_files"] is None and merged_calls(repo) == [], r)
+        ck("the review is written again for the new head, with the agreed words and no findings",
+           len(mq) == 1 and mq[0]["head"] == new and mq[0]["verdict"] == "pass"
+           and mq[0]["verified"] == f"Same changes against main as the reviewed commit {h0[:7]}; only the base moved",
+           mq)
+        await tick()
+        ck("the next tick merges the new head", [b["sha"] for _, b in merged_calls(repo)] == [new]
+           and stage(up, t) == "merged", merged_calls(repo))
+
+        print("== TR-858: behind, a project whose CI says none: no check to wait for ==")
+        repo = "acme/cinone"
+        up = project("cinone", "L4-ship", review=None, ci="github")
+        t = ticket(up, repo, "No CI", 1)
+        reviewed(up, t, repo, 1)
+        CI_NONE.add(repo)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", HUNK_MOVED)], "later")
+        await tick()
+        h0 = PRS[(repo, 1)]["head"]
+        new = land(repo, 1)
+        await tick()
+        r = row(repo, 1)
+        ck("with CI state none and no check on the new head the row is queued on it at once",
+           r["state"] == "queued" and r["head"] == new and "Waiting" not in (r["reason"] or "")
+           and len([x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"]) == 1, r)
+        await tick()
+        ck("and merges", row(repo, 1)["state"] == "merged" and stage(up, t) == "merged", row(repo, 1))
+
+        print("== TR-858: behind, an outside review gate: the head is updated and nothing else ==")
+        repo = "acme/outside"
+        up = project("outside", "L4-ship", review="fakerev", ci="github")
+        t = ticket(up, repo, "Outside gate", 1)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", HUNK_MOVED)])
+        await tick()
+        new = PRS[(repo, 1)]["head"]
+        CHECKED.add(new)
+        await tick()
+        ck("no review is written for it, the row is queued on the new head",
+           [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"] == []
+           and row(repo, 1)["state"] == "queued" and row(repo, 1)["head"] == new, row(repo, 1))
+        await tick()
+        ck("and it merges", row(repo, 1)["state"] == "merged" and stage(up, t) == "merged", row(repo, 1))
+
+        print("== TR-858: behind, different changes: back to the review gate ==")
+        variants = [("changed lines", [fl("a.py", BEFORE)], [fl("a.py", DIFFERENT)]),
+                    ("a compare with no files", [fl("a.py", BEFORE)], []),
+                    ("a file with no patch", [fl("a.py", BEFORE)], [fl("a.py", None)]),
+                    ("no patch on either side", [fl("a.py", None)], [fl("a.py", None)]),
+                    ("another file", [fl("a.py", BEFORE)], [fl("a.py", BEFORE), fl("b.py", BEFORE)]),
+                    ("another status", [fl("a.py", BEFORE)], [fl("a.py", BEFORE, "renamed")])]
+        for i, (label, before, after) in enumerate(variants):
+            repo = f"acme/diff{i}"
+            up = project(f"diff{i}", "L4-ship", review=None, ci="github")
+            t = ticket(up, repo, "Changes", 1)
+            reviewed(up, t, repo, 1)
+            behind(repo, 1, before, after)
+            del MERGES[:]
+            await tick()
+            CHECKED.add(PRS[(repo, 1)]["head"])
+            await tick()
+            h = history(t, "merge_queue")
+            ck(f"{label}: the row is gone and the ticket stays in review", row(repo, 1) is None
+               and stage(up, t) == "review", (rows(repo), stage(up, t)))
+            ck(f"{label}: the history says why", len(h) == 1 and h[0]["value"] == "needs_review"
+               and h[0]["reason"] == "the branch update changed what this pull request does; it needs a new review"
+               and h[0]["by"] == "merge-queue", h)
+            await tick()
+            ck(f"{label}: nothing merged, no review was written, and it is not lined up again",
+               merged_calls(repo) == [] and row(repo, 1) is None
+               and [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"] == [], rows(repo))
+
+        print("== TR-858: before_files empty or missing ==")
+        repo = "acme/nobefore"
+        up = project("nobefore", "L4-ship", review=None, ci="github")
+        t = ticket(up, repo, "Empty list", 1)
+        reviewed(up, t, repo, 1)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        await tick()
+        h0 = PRS[(repo, 1)]["head"]
+        store.merge_queue_update(row(repo, 1)["id"], before_files=json.dumps({"head": h0, "files": []}))
+        CHECKED.add(land(repo, 1))
+        await tick()
+        ck("an empty saved list is never the same changes: back to the review gate",
+           row(repo, 1) is None and len(history(t, "merge_queue")) == 1
+           and [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"] == [], rows(repo))
+        repo = "acme/nosaved"
+        up = project("nosaved", "L4-ship", review=None, ci="github")
+        t = ticket(up, repo, "Nothing saved", 1)
+        reviewed(up, t, repo, 1)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], "later")
+        await tick()
+        store.merge_queue_update(row(repo, 1)["id"], before_files=None)
+        CHECKED.add(land(repo, 1))
+        await tick()
+        ck("a waiting row with nothing saved is an ordinary new commit: the row goes, no review is kept",
+           row(repo, 1) is None and history(t, "merge_queue") == []
+           and [x for x in store.ticket_reviews(t) if x["by"] == "merge-queue"] == [], rows(repo))
+
+        print("== TR-858: local CI does not update a branch that is only behind ==")
+        repo = "acme/local"
+        up = project("local", "L4-ship", ci="fakeci")
+        t = ticket(up, repo, "Local CI", 1)
+        BEHIND[(repo, 1)] = 3
+        before_calls = len([c for c in ALL_CALLS if "compare" in c[1]])
+        del UPDATES[:]
+        await tick()
+        ck("it merges as it is: no update, no compare", UPDATES == [] and row(repo, 1)["state"] == "merged"
+           and len([c for c in ALL_CALLS if "compare" in c[1]]) == before_calls, (UPDATES, row(repo, 1)))
+        repo = "acme/stateonly"
+        up = project("stateonly", "L4-ship", review="fakerev", ci="github")
+        t = ticket(up, repo, "State says behind", 1)
+        MERGEABLE[(repo, 1)] = (True, "behind")
+        del UPDATES[:]
+        await tick()
+        ck("mergeable_state behind alone is not read as behind: the compare says it is not",
+           UPDATES == [] and row(repo, 1)["state"] == "merged", (UPDATES, row(repo, 1)))
+        repo = "acme/falseother"
+        up = project("falseother", "L4-ship")
+        t = ticket(up, repo, "Not clean, not dirty", 1)
+        MERGEABLE[(repo, 1)] = (False, "blocked")
+        await tick()
+        ck("mergeable false with a state other than dirty is not a conflict",
+           history(t, "send_back") == [] and row(repo, 1)["state"] == "merged", row(repo, 1))
+
+        print("== TR-858: GitHub cannot tell yet: mergeable null ==")
+        repo = "acme/null"
+        up = project("null", "L4-ship")
+        t = ticket(up, repo, "Unknown", 1)
+        MERGEABLE[(repo, 1)] = (None, "unknown")
+        del MERGES[:]
+        for i in range(1, merge_queue.UNKNOWN_LIMIT):
+            await tick()
+            r = row(repo, 1)
+            if r["state"] != "queued" or r["unknown_ticks"] != i or desk(up):
+                break
+        ck("nine ticks in a row wait, queued, counted, no desk item, no merge",
+           r["state"] == "queued" and r["unknown_ticks"] == merge_queue.UNKNOWN_LIMIT - 1 and desk(up) == []
+           and merged_calls(repo) == [] and "still working out" in r["reason"], r)
+        await tick()
+        r, d = row(repo, 1), desk(up)
+        ck("the tenth blocks the row with a desk item that says GitHub cannot tell",
+           r["state"] == "blocked" and len(d) == 1 and "cannot tell" in d[0]["question"]
+           and r["desk_item"] == d[0]["id"] and stage(up, t) == "review" and history(t, "send_back") == [], (r, d))
+        await tick()
+        ck("later ticks leave it blocked with the one item", row(repo, 1)["state"] == "blocked" and len(desk(up)) == 1)
+        del MERGEABLE[(repo, 1)]
+        merge_queue.approve(store, row(repo, 1))
+        await tick()
+        ck("once GitHub can tell, a person's approval releases it and it merges", row(repo, 1)["state"] == "merged"
+           and merged_calls(repo) != [], row(repo, 1))
+        repo = "acme/null2"
+        up = project("null2", "L4-ship")
+        t = ticket(up, repo, "Briefly unknown", 1)
+        MERGEABLE[(repo, 1)] = (None, "unknown")
+        for _ in range(3):
+            await tick()
+        ck("three ticks of null count three", row(repo, 1)["unknown_ticks"] == 3, row(repo, 1))
+        MERGEABLE[(repo, 1)] = (True, "clean")
+        await tick()
+        ck("an answer ends the count and the row merges", row(repo, 1)["state"] == "merged"
+           and row(repo, 1)["unknown_ticks"] == 0, row(repo, 1))
+
+        print("== TR-858: a conflict is sent back with the files named ==")
+        repo = "acme/conf"
+        up = project("conf", "L4-ship")
+        t1 = ticket(up, repo, "Lands first", 1, position=1)
+        t2 = ticket(up, repo, "Conflicts", 2, position=2)
+        t3 = ticket(up, repo, "Clean", 3, position=3)
+        PR_FILES[(repo, 1)] = [{"filename": "api/routes.py"}, {"filename": "x.py"}, {"filename": None}]
+        PR_FILES[(repo, 2)] = [{"filename": "z.py"}, {"filename": "api/routes.py"}, {"filename": "y.py"}]
+        MERGEABLE[(repo, 2)] = (False, "dirty")
+        del MERGES[:]
+        await tick()
+        r = row(repo, 2)
+        ck("the conflicting one is sent back with the reason naming the file both changed",
+           stage(up, t2) == "changes" and r["state"] == "sent_back"
+           and r["reason"] == "Conflicts with #1 in api/routes.py; rebase on main and push", r)
+        ck("the stage history carries the reason, and send_back carries kind:head by merge-queue",
+           [(h["value"], h["by"], h["reason"]) for h in history(t2, "send_back")]
+           == [(f"conflict:{sha(2)}", "merge-queue", r["reason"])]
+           and history(t2, "stage")[-1]["value"] == "changes", history(t2, "send_back"))
+        ck("it never reached a merge call, and the queue moved on to the next", [n for n, _ in merged_calls(repo)] == [1, 3]
+           and stage(up, t3) == "merged", merged_calls(repo))
+        new = land(repo, 2, new=sha(2, 7))
+        del MERGEABLE[(repo, 2)]
+        store.update_ticket(t2, stage="review", pr={"url": f"https://github.com/{repo}/pull/2", "number": 2,
+                                                    "repo": repo, "head": new})
+        await tick()
+        ck("the builder's new head deletes the sent back row, and the pull request enters again and merges",
+           len(rows(repo, 2)) == 1 and row(repo, 2)["state"] == "merged" and row(repo, 2)["head"] == new, rows(repo, 2))
+        repo = "acme/conf0"
+        up = project("conf0", "L4-ship")
+        t = ticket(up, repo, "First of the repo", 1)
+        MERGEABLE[(repo, 1)] = (False, "dirty")
+        await tick()
+        ck("with nothing merged yet for that repo and base, the reason names the base only",
+           row(repo, 1)["reason"] == "Conflicts with main; rebase on main and push" and stage(up, t) == "changes",
+           row(repo, 1))
+        repo = "acme/conf1"
+        up = project("conf1", "L4-ship")
+        t1 = ticket(up, repo, "Lands first", 1, position=1)
+        t2 = ticket(up, repo, "Conflicts", 2, position=2)
+        MERGEABLE[(repo, 2)] = (False, "dirty")
+        await tick()
+        ck("when GitHub gives no file list the reason names the base only",
+           row(repo, 2)["reason"] == "Conflicts with main; rebase on main and push", row(repo, 2))
+        repo = "acme/conf2"
+        up = project("conf2", "L4-ship")
+        t1 = ticket(up, repo, "Lands first", 1, position=1)
+        t2 = ticket(up, repo, "Conflicts", 2, position=2)
+        names = [f"f{i}.py" for i in range(7)]
+        PR_FILES[(repo, 1)] = [{"filename": n} for n in names]
+        PR_FILES[(repo, 2)] = [{"filename": n} for n in reversed(names[:6])]
+        MERGEABLE[(repo, 2)] = (False, "dirty")
+        await tick()
+        ck("many shared files: the first five in order, then how many more",
+           row(repo, 2)["reason"] == "Conflicts with #1 in f0.py, f1.py, f2.py, f3.py, f4.py and 1 more; "
+                                     "rebase on main and push", row(repo, 2))
+        repo = "acme/conf3"
+        up = project("conf3", "L4-ship")
+        t1 = ticket(up, repo, "Lands first", 1, position=1)
+        t2 = ticket(up, repo, "Conflicts", 2, position=2)
+        PR_FILES[(repo, 1)] = [{"filename": "a.py"}]
+        PR_FILES[(repo, 2)] = []
+        MERGEABLE[(repo, 2)] = (False, "dirty")
+        await tick()
+        ck("a pull request with an empty file list shares nothing: the base only",
+           row(repo, 2)["reason"] == "Conflicts with main; rebase on main and push", row(repo, 2))
+
+        print("== TR-858: the update itself is refused ==")
+        for mode in ("422_conflict", "422_plain", "403"):
+            repo = f"acme/up{mode}"
+            up = project("up" + mode.replace("_", ""), "L4-ship", review="fakerev", ci="github")
+            t = ticket(up, repo, "Update refused", 1)
+            behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)], mode)
+            del UPDATES[:], MERGES[:]
+            await tick()
+            r = row(repo, 1)
+            ck(f"{mode}: one update call, nothing merged, nothing saved on the row",
+               len(UPDATES) == 1 and merged_calls(repo) == [] and r["before_files"] is None, (UPDATES, r))
+            if mode == "422_conflict":
+                ck("a 422 that mentions conflict is a conflict: sent back, once",
+                   r["state"] == "sent_back" and stage(up, t) == "changes"
+                   and r["reason"] == "Conflicts with main; rebase on main and push"
+                   and [h["value"] for h in history(t, "send_back")] == [f"conflict:{sha(1)}"], (r, history(t, "send_back")))
+            elif mode == "422_plain":
+                ck("a 422 that does not mention conflict stays queued with GitHub's words, no send back",
+                   r["state"] == "queued" and r["reason"] == "expected head sha didn't match"
+                   and history(t, "send_back") == [] and stage(up, t) == "review", r)
+                UPDATE[repo] = "ok"
+                await tick()
+                ck("and it is updated on the next tick", row(repo, 1)["state"] == "waiting_ci", row(repo, 1))
+            else:
+                ck("no credential can write: blocked with the one desk item, no send back",
+                   r["state"] == "blocked" and r["reason"] == merge_queue.no_write_reason(repo)
+                   and len(desk(up)) == 1 and history(t, "send_back") == [], (r, desk(up)))
+        repo = "acme/cmp500"
+        up = project("cmp500", "L4-ship", review="fakerev", ci="github")
+        t = ticket(up, repo, "Compare fails", 1)
+        behind(repo, 1, [fl("a.py", BEFORE)], [fl("a.py", BEFORE)])
+        COMPARE_CODE[repo] = 500
+        del UPDATES[:]
+        await tick()
+        ck("a compare GitHub cannot answer holds the row queued with the reason, no update, no merge",
+           row(repo, 1)["state"] == "queued" and row(repo, 1)["reason"].startswith("Could not tell whether the branch is behind")
+           and [u for u in UPDATES if u[0] == repo] == [] and merged_calls(repo) == [], (UPDATES, merged_calls(repo)))
+        del COMPARE_CODE[repo]
+        await tick()
+        ck("and goes on when it can", row(repo, 1)["state"] == "waiting_ci" and len([u for u in UPDATES if u[0] == repo]) == 1, (UPDATES, row(repo, 1)["state"]))
+
+        print("== TR-858: a reviewed pull request that fails goes back, once per head ==")
+        repo = "acme/cifail"
+        up = project("cifail", "L4-ship")
+        t = ticket(up, repo, "CI fails", 1)
+        CI_FAIL.add((repo, 1))
+        await tick()
+        ck("stage changes, reason is merge_ready's, one send_back ci_failure:head by merge-queue, no row",
+           stage(up, t) == "changes" and row(repo, 1) is None
+           and [(h["value"], h["by"]) for h in history(t, "send_back")] == [(f"ci_failure:{sha(1)}", "merge-queue")]
+           and "CI is failing on" in history(t, "stage")[-1]["reason"], history(t, "send_back"))
+        store.update_ticket(t, stage="review")
+        await tick()
+        await tick()
+        ck("the same head is not sent back again, however often it is looked at",
+           stage(up, t) == "review" and len(history(t, "send_back")) == 1 and desk(up) == [], history(t, "send_back"))
+        new = land(repo, 1, new=sha(1, 7))
+        await tick()
+        ck("a new head that fails too is sent back again, for that head",
+           stage(up, t) == "changes" and [h["value"] for h in history(t, "send_back")]
+           == [f"ci_failure:{sha(1)}", f"ci_failure:{new}"], history(t, "send_back"))
+        repo = "acme/rail"
+        up = project("rail", "L4-ship")
+        t = ticket(up, repo, "Guardrail blocks", 1)
+        RAILS[repo] = [SimpleNamespace(allow=False, reason="touches the payments folder", integration="policy",
+                                       warn_only=False)]
+        await tick()
+        ck("a blocking guardrail is a send back of kind guardrail",
+           stage(up, t) == "changes" and [h["value"] for h in history(t, "send_back")] == [f"guardrail:{sha(1)}"]
+           and history(t, "stage")[-1]["reason"] == "Blocked by policy: touches the payments folder",
+           history(t, "send_back"))
+        repo = "acme/railwarn"
+        up = project("railwarn", "L4-ship")
+        t = ticket(up, repo, "Guardrail warns", 1)
+        RAILS[repo] = [SimpleNamespace(allow=False, reason="look at this", integration="policy", warn_only=True)]
+        await tick()
+        ck("a guardrail that only warns sends nothing back and the pull request merges",
+           history(t, "send_back") == [] and stage(up, t) == "merged", history(t, "send_back"))
+        repo = "acme/unrev"
+        up = project("unrev", "L4-ship")
+        t = ticket(up, repo, "Not reviewed, CI fails", 1)
+        NOT_APPROVED.add((repo, 1))
+        CI_FAIL.add((repo, 1))
+        await tick()
+        ck("a pull request nobody approved is not sent back for its CI",
+           stage(up, t) == "review" and history(t, "send_back") == [], history(t, "send_back"))
+        repo = "acme/late"
+        up = project("late", "L4-ship")
+        t = ticket(up, repo, "Fails after it queued", 1)
+        MODE[repo] = "403_rate"
+        await tick()
+        ck("it queues (the merge is held by the rate limit)", row(repo, 1)["state"] == "queued", row(repo, 1))
+        factory_github.rate_remaining.clear()
+        MODE[repo] = "ok"
+        CI_FAIL.add((repo, 1))
+        await tick()
+        ck("a queued row whose CI then fails is sent back and marked sent_back",
+           row(repo, 1)["state"] == "sent_back" and stage(up, t) == "changes"
+           and [h["value"] for h in history(t, "send_back")] == [f"ci_failure:{sha(1)}"], (row(repo, 1), history(t, "send_back")))
+        CI_FAIL.discard((repo, 1))
+        new = land(repo, 1, new=sha(1, 7))
+        store.update_ticket(t, stage="review", pr={"url": f"https://github.com/{repo}/pull/1", "number": 1,
+                                                   "repo": repo, "head": new})
+        await tick()
+        ck("the builder's push clears it and the pull request merges", len(rows(repo, 1)) == 1
+           and row(repo, 1)["state"] == "merged", rows(repo, 1))
+
+        print("== TR-858: the pieces on their own ==")
+        a = [fl("a.py", BEFORE)]
+        ck("same files, same lines, a moved hunk header: the same", merge_queue.same_changes(a, [fl("a.py", HUNK_MOVED)]))
+        ck("different lines: not the same", not merge_queue.same_changes(a, [fl("a.py", DIFFERENT)]))
+        ck("a missing patch is changed, even against itself",
+           not merge_queue.same_changes([fl("a.py", None)], [fl("a.py", None)]))
+        ck("an empty patch is changed", not merge_queue.same_changes([fl("a.py", "")], [fl("a.py", "")]))
+        ck("empty, missing and malformed lists are never the same",
+           not merge_queue.same_changes([], []) and not merge_queue.same_changes(None, None)
+           and not merge_queue.same_changes(a, None) and not merge_queue.same_changes(None, a)
+           and not merge_queue.same_changes(a, []) and not merge_queue.same_changes("x", "x")
+           and not merge_queue.same_changes([None], [None]) and not merge_queue.same_changes([{}], [{}]))
+        ck("a different set of files is not the same", not merge_queue.same_changes(a, a + [fl("b.py", BEFORE)]))
+        ck("a different status is not the same", not merge_queue.same_changes(a, [fl("a.py", BEFORE, "added")]))
+        ck("the order of the files does not matter",
+           merge_queue.same_changes([fl("a.py", BEFORE), fl("b.py", DIFFERENT)], [fl("b.py", DIFFERENT), fl("a.py", HUNK_MOVED)]))
+        ck("a file listed twice is not comparable", not merge_queue.same_changes(a + a, a + a))
+        slim = merge_queue._slim([fl("a.py", BEFORE), fl("b.py", None), "junk", None])
+        ck("_slim keeps the name, the status and the reduced patch, and None for no patch",
+           slim == [{"filename": "a.py", "status": "modified", "patch": "-old\n+new"},
+                    {"filename": "b.py", "status": "modified", "patch": None}], slim)
+        ck("_slim of nothing is nothing", merge_queue._slim(None) == [] and merge_queue._slim([]) == [])
+        ck("a saved list compares to the same list again (the reduced patch is stable)",
+           merge_queue.same_changes(slim[:1], [fl("a.py", BEFORE)]))
+        ck("_load_before survives nothing, junk and the wrong shape",
+           all(merge_queue._load_before({"before_files": v}) == ("", [])
+               for v in (None, "", "not json", "[]", '{"files": 3}', "null")) and merge_queue._load_before({}) == ("", []))
+        ck("_load_before reads what _branch_ok wrote",
+           merge_queue._load_before({"before_files": json.dumps({"head": "h", "files": slim})}) == ("h", slim))
+        none_failed = [{}, {"pr": None}, {"pr": {"merged": True}}, {"pr": {"draft": True, "state": "open"}},
+                       {"pr": {"state": "closed"}}, {"pr": {"state": "open"}, "head": "h"},
+                       {"pr": {"state": "open"}, "head": "h", "review": {"state": "none"}, "ci": {"state": "failure"}},
+                       {"pr": {"state": "open"}, "head": "", "review": {"state": "approved"}, "ci": {"state": "failure"}},
+                       {"pr": {"state": "open"}, "head": "h", "review": {"state": "approved"}, "ci": None,
+                        "guardrails": None}]
+        ck("_reviewed_failure answers None for everything that is not a reviewed failure",
+           all(merge_queue._reviewed_failure(a_) is None for a_ in none_failed))
+        ck("_reviewed_failure names CI before a guardrail, with the reason merge_ready gave",
+           merge_queue._reviewed_failure({"pr": {"state": "open"}, "head": "h", "review": {"state": "approved"},
+                                          "ci": {"state": "failure"}, "reasons": ["x", "CI is failing on abc: test"]})
+           == ("ci_failure", "CI is failing on abc: test"))
+        repo = "acme/ghx"
+        PRS[(repo, 1)] = {"head": sha(1), "branch": "b", "base": "main", "state": "open", "merged": False,
+                          "draft": False}
+        BEHIND[(repo, 1)] = 4
+        FILES[(repo, 1)] = [fl("a.py", BEFORE)]
+        got = await factory_github.compare(store, repo, "main", sha(1))
+        ck("compare: behind_by, ahead_by and the files", got["ok"] and got["behind_by"] == 4 and got["ahead_by"] == 1
+           and got["files"] == [fl("a.py", BEFORE)], got)
+        BEHIND[(repo, 1)] = 0
+        ck("compare: zero behind is still ok", (await factory_github.compare(store, repo, "main", sha(1)))["behind_by"] == 0)
+        got = await factory_github.compare(store, repo, "main", "nosuchhead")
+        ck("compare: a 404 is not ok and says why", not got["ok"] and got["error"], got)
+        COMPARE_CODE[repo] = 500
+        got = await factory_github.compare(store, repo, "main", sha(1))
+        ck("compare: a 500 is not ok", not got["ok"] and got["error"], got)
+        del COMPARE_CODE[repo]
+        for label, body in (("a list", []), ("an empty object", {}), ("a string", "x"),
+                            ("behind_by null", {"behind_by": None, "files": []})):
+            COMPARE_BODY[repo] = body
+            got = await factory_github.compare(store, repo, "main", sha(1))
+            ck(f"compare: {label} is not ok, and has no behind_by to trust", not got["ok"] and got["error"], got)
+        del COMPARE_BODY[repo]
+        COMPARE_BODY[repo] = {"behind_by": 2}
+        got = await factory_github.compare(store, repo, "main", sha(1))
+        ck("compare: a body with no files is ok with an empty list", got["ok"] and got["files"] == [] and got["behind_by"] == 2, got)
+        del COMPARE_BODY[repo]
+        PR_FILES[(repo, 1)] = [fl("a.py", BEFORE)]
+        ck("pr_files: the files", await factory_github.pr_files(store, repo, 1) == [fl("a.py", BEFORE)])
+        PR_FILES[(repo, 1)] = []
+        ck("pr_files: none is an empty list", await factory_github.pr_files(store, repo, 1) == [])
+        del PR_FILES[(repo, 1)]
+        ck("pr_files: unreadable is None", await factory_github.pr_files(store, repo, 1) is None)
+        UPDATE[repo] = "ok"
+        got = await factory_github.update_branch(store, repo, 1, sha(1))
+        ck("update_branch: accepted", got["ok"] and got["status"] == 202 and not got["conflict"], got)
+        UPDATE[repo] = "422_conflict"
+        got = await factory_github.update_branch(store, repo, 1, sha(1))
+        ck("update_branch: a 422 that mentions conflict", not got["ok"] and got["conflict"], got)
+        UPDATE[repo] = "422_plain"
+        got = await factory_github.update_branch(store, repo, 1, sha(1))
+        ck("update_branch: a 422 that does not", not got["ok"] and not got["conflict"]
+           and got["message"] == "expected head sha didn't match", got)
+        UPDATE[repo] = "403"
+        got = await factory_github.update_branch(store, repo, 1, sha(1))
+        ck("update_branch: no credential can write", not got["ok"] and got["no_write"], got)
 
         print("== a spent rate limit on the merge ==")
         repo = "acme/spent"

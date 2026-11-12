@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from urllib.parse import quote
 
 import httpx
 
@@ -207,6 +208,9 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 "author": (pr.get("user") or {}).get("login"),
                 "merged_by": (pr.get("merged_by") or {}).get("login"),
                 "base": (pr.get("base") or {}).get("ref"), "draft": bool(pr.get("draft")),
+                # TR-858: whether GitHub says the PR merges (True, False, or None while it works
+                # it out) and why not (`dirty` is a conflict, `behind` is only out of date)
+                "mergeable": pr.get("mergeable"), "mergeable_state": pr.get("mergeable_state"),
                 "commits": pr.get("commits"), "changed_files": pr.get("changed_files"),
                 "additions": pr.get("additions"), "deletions": pr.get("deletions"),
                 # an `error` status is the reviewer failing to run, not a verdict
@@ -297,6 +301,147 @@ async def delete_branch(store, repo: str, branch: str) -> bool:
         if r.status_code in (404, 422):
             return False
     return False
+
+
+def _enc(part: str) -> str:
+    return quote(str(part or ""), safe="")
+
+
+def _int(v) -> int | None:
+    try:
+        return None if isinstance(v, bool) or v is None else int(v)
+    except (TypeError, ValueError):
+        return None
+
+
+async def compare(store, repo: str, base: str, head: str) -> dict:
+    """How `head` stands against `base`: GET /repos/{repo}/compare/{base}...{head}. Returns
+    {ok, behind_by, ahead_by, files, error}: `behind_by` is how many commits `base` has that the
+    head lacks (a branch that needs updating has behind_by above 0). `ok` is false, with `error`
+    saying why, when GitHub gave no usable answer (no credential, rate limit, network, a body with
+    no counts); `files` is the compare's files list (each {filename, status, patch}, `patch`
+    missing for a binary or very large file) and [] when there is none. Never raises."""
+    out = {"ok": False, "behind_by": None, "ahead_by": None, "files": [], "error": ""}
+    if not str(base or "").strip() or not str(head or "").strip():
+        out["error"] = "no base or head to compare"
+        return out
+    tokens = await _tokens(store, repo)
+    if not tokens:
+        out["error"] = "no GitHub credential on this Tares can read it (Settings, GitHub)"
+        return out
+    for tok, api in tokens:
+        try:
+            async with httpx.AsyncClient(timeout=15, transport=_transport,
+                                         headers=_headers(tok)) as cx:
+                r = await cx.get(f"{api}/repos/{repo}/compare/{_enc(base)}...{_enc(head)}")
+        except Exception as e:
+            out["error"] = f"could not reach GitHub: {type(e).__name__}"
+            continue
+        note_rate(api, r)
+        if r.status_code != 200:
+            out["error"] = f"GitHub answered {r.status_code} for the compare"
+            continue
+        try:
+            body = r.json()
+        except Exception:
+            body = None
+        if not isinstance(body, dict):
+            out["error"] = "GitHub's compare answer could not be read"
+            continue
+        behind, ahead = _int(body.get("behind_by")), _int(body.get("ahead_by"))
+        if behind is None:
+            out["error"] = "GitHub's compare answer has no behind_by"
+            continue
+        files = body.get("files")
+        out.update(ok=True, behind_by=behind, ahead_by=ahead,
+                   files=[f for f in files if isinstance(f, dict)] if isinstance(files, list) else [],
+                   error="")
+        return out
+    return out
+
+
+async def update_branch(store, repo: str, number: int, expected_head: str) -> dict:
+    """Merge the base branch into the pull request's branch:
+    PUT /repos/{repo}/pulls/{n}/update-branch with `expected_head_sha`. Returns {ok, status,
+    message, conflict, no_write, rate_limited}: `ok` is a 200 or 202; `conflict` is true for a 422 whose
+    message mentions a conflict (the branch cannot be updated without a person); any other 422
+    (the head moved, say) is not a conflict. Never raises."""
+    out = {"ok": False, "status": 0, "message": "", "conflict": False, "no_write": False,
+           "rate_limited": False}
+    tokens = await _tokens(store, repo)
+    refused = 0
+    for tok, api in tokens:
+        try:
+            async with httpx.AsyncClient(timeout=15, transport=_transport,
+                                         headers=_headers(tok)) as cx:
+                r = await cx.put(f"{api}/repos/{repo}/pulls/{number}/update-branch",
+                                 json={"expected_head_sha": expected_head})
+        except Exception as e:
+            out["message"] = f"could not reach GitHub: {type(e).__name__}"
+            continue
+        note_rate(api, r)
+        out["status"] = r.status_code
+        try:
+            body = r.json()
+        except Exception:
+            body = {}
+        msg = str(body.get("message") or "") if isinstance(body, dict) else ""
+        if r.status_code in (200, 202):
+            out.update(ok=True, message=msg, conflict=False, no_write=False, rate_limited=False)
+            return out
+        if r.status_code in (409, 422):
+            out.update(message=msg or f"GitHub answered {r.status_code}",
+                       conflict="conflict" in msg.lower(), no_write=False, rate_limited=False)
+            return out
+        if r.status_code in (401, 403, 404, 429):
+            if r.status_code in (403, 429) and (
+                    r.headers.get("x-ratelimit-remaining") == "0" or r.headers.get("retry-after")
+                    or "rate limit" in msg.lower()):
+                out["rate_limited"] = True
+                out["message"] = msg or "GitHub's rate limit is spent"
+                continue
+            refused += 1
+            out["message"] = msg or f"GitHub answered {r.status_code}"
+            continue
+        out["message"] = msg or f"GitHub answered {r.status_code}"
+    out["no_write"] = bool(tokens) and refused == len(tokens) and not out["rate_limited"]
+    if not tokens:
+        out["message"] = "no GitHub credential on this Tares"
+    return out
+
+
+PR_FILES_PAGES = 10   # 100 files a page: a PR past 1,000 files is read as far as this
+
+
+async def pr_files(store, repo: str, number: int) -> list[dict] | None:
+    """The files of a pull request (GET /repos/{repo}/pulls/{n}/files, each {filename, status,
+    patch}), every page up to PR_FILES_PAGES; [] for a PR with none, None when GitHub gave no
+    answer (so a caller can tell "no files" from "could not read"). Never raises."""
+    for tok, api in await _tokens(store, repo):
+        files: list[dict] = []
+        ok = True
+        try:
+            async with httpx.AsyncClient(timeout=15, transport=_transport,
+                                         headers=_headers(tok)) as cx:
+                for page in range(1, PR_FILES_PAGES + 1):
+                    r = await cx.get(f"{api}/repos/{repo}/pulls/{number}/files",
+                                     params={"per_page": 100, "page": page})
+                    note_rate(api, r)
+                    if r.status_code != 200:
+                        ok = False
+                        break
+                    body = r.json()
+                    if not isinstance(body, list):
+                        ok = False
+                        break
+                    files += [f for f in body if isinstance(f, dict)]
+                    if len(body) < 100:
+                        break
+        except Exception:
+            ok = False
+        if ok:
+            return files
+    return None
 
 
 # (repo, ref) -> whether the commit has workflow files; a commit's files never change, so an
