@@ -64,7 +64,7 @@ api POST /api/grants "$(jq -cn --arg p "$P" '{words: "builders may bump patch ve
 "$F" spawn builder "Links App" m1 "$repo" "work T1" >/dev/null 2>&1
 check "project grant quoted for the builder" 'allow_has links-app-build-m1 "for project Links App, in their own words: \"builders may bump patch versions of dependencies\". Acting"'
 check "and the grants for all" 'allow_has links-app-build-m1 "in their own words: \"the reviewer may comment on draft PRs\""'
-check "L4: builder may merge on the gate" 'jq -e ".autoMode.allow | any(test(\"pre-authorized at level L4-ship\"))" "$FACTORY_CREW_HOME/stations/links-app-build-m1.settings.json" >/dev/null'
+check "L4: the builder's text says Tares merges on the gate, and nothing allows a merge" 'jq -e "(.autoMode.environment | any(contains(\"Tares merges them after the review gate passes and CI is green\"))) and (.autoMode.allow | any(test(\"Merging a pull request|pre-authorized\")) | not) and (.permissions.deny == [\"Bash(gh pr merge:*)\"])" "$FACTORY_CREW_HOME/stations/links-app-build-m1.settings.json" >/dev/null'
 "$F" retire links-app-build-m1 >/dev/null 2>&1
 
 # TR-534: a project named with an emoji. The header X-Tares-Project takes ASCII only, so a builder

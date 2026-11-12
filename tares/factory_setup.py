@@ -45,11 +45,11 @@ class Question:
 def crew_questions(missing: list[str]) -> list[Question]:
     """The questions for the settings the crew does not have yet, in the order the box shows them."""
     qs = {
-        "autonomy": Question("autonomy", "Merging", "Who merges pull requests?", [
+        "autonomy": Question("autonomy", "Merging", "Who approves merging pull requests?", [
             Option("L4-ship", "The crew, once its reviewer approves and tests pass",
                    "Tares merges on its own; you answer only what the crew can't decide."),
             Option("L3-review", "You, each one",
-                   "Every merge waits for your yes in the orchestrator's session."),
+                   "Every merge waits for your yes on the desk."),
         ]),
         "releaser": Question("releaser", "Releasing", "Should the crew release and deploy finished work?", [
             Option("no", "No, it stops when work is merged to main",

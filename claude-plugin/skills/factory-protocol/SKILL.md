@@ -37,7 +37,7 @@ These come from a month of running this setup by hand. Each one exists because i
    | Action | Owner |
    |---|---|
    | review verdicts: the PR comment, the `factory/review` status, `record_review` | reviewer |
-   | merging a PR | the builder holding its ticket |
+   | merging a PR | Tares's merge queue, once the review gate, CI and the guardrails allow it; no crew station merges |
    | who holds a ticket (`assign_ticket`) | orchestrator |
    | a ticket's stage (`set_stage`), except shipped | the station holding the ticket, and its helpers |
    | stage `shipped`, tags, releases, deploys, rollbacks | releaser, when the crew has one; without a releaser nobody releases and tickets end at `merged` |

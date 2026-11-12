@@ -80,8 +80,11 @@ ck("...also written with a capital", raises(L.check_model, "Haiku", "s") is not 
 ck("sonnet and opus pass", raises(L.check_model, "sonnet", "s") is None and raises(L.check_model, "opus", "s") is None)
 ck("level_rank: 3, 4, and nothing for anything else",
    (L.level_rank("L3-review"), L.level_rank("L4-ship"), L.level_rank("L5"), L.level_rank("")) == (3, 4, None, None))
-ck("level_text names the human's yes at L3 and the reviewer's verdict at L4",
-   "waits for the human's yes" in L.level_text("L3-review") and "reviewer's verdict and green CI" in L.level_text("L4-ship"))
+ck("level_text says Tares merges after the human's yes on the desk at L3, and after the review gate and green CI at L4",
+   L.level_text("L3-review") == "builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production"
+   and L.level_text("L4-ship") == "builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production")
+ck("neither level text says a builder merges", not any("builders merge" in L.level_text(x) or "builder merges" in L.level_text(x) for x in ("L3-review", "L4-ship", "")))
+ck("an empty level gets the L4 wording, as before", L.level_text("") == L.level_text("L4-ship"))
 ck("neither level text allows production", all("nothing is deployed to production" in L.level_text(x) for x in ("L3-review", "L4-ship")))
 
 crew_home = SCRATCH / "crew"
@@ -299,6 +302,10 @@ ck("Windows: FACTORY_REPO and FACTORY_WORKTREES use forward slashes",
    str(wdoc["env"]))
 ck("Windows: the worktree rule lists the project's repos with forward slashes",
    "C:/Users/Jane/links, D:/other/api" in wallow and "\\" not in wallow, wallow[:300])
+ck("a builder denies gh pr merge, and no allow sentence merges a pull request",
+   wdoc["permissions"].get("deny") == ["Bash(gh pr merge:*)"] and "Merging a pull request" not in wallow and "pre-authorized" not in wallow,
+   json.dumps(wdoc["permissions"]))
+ck("it keeps its push and open-PR allow", sum(1 for a in wdoc["autoMode"]["allow"] if a.startswith("Pushing")) == 1, wallow[:300])
 
 
 # ---------------------------------------------------------------------------------------------
@@ -362,6 +369,11 @@ else:
                 docs[e + "_words"] = [parity.norm_text(w, tmp) for w in words]
             ck(f"{role} {station}: same settings (key order aside)", docs["bash"] == docs["python"],
                "\n".join(k for k in docs["bash"] if docs["bash"].get(k) != docs["python"].get(k)))
+            for e in ("bash", "python"):
+                ck(f"{e} {role} {station}: permissions deny gh pr merge, an allow list is kept, no allow sentence merges",
+                   "Bash(gh pr merge:*)" in (docs[e]["permissions"].get("deny") or []) and bool(docs[e]["permissions"].get("allow"))
+                   and not any("Merging a pull request" in a or "pre-authorized" in a for a in docs[e]["autoMode"]["allow"]),
+                   json.dumps(docs[e]["permissions"]))
             ck(f"{role} {station}: the status line is `tares hook statusline --plugin-root <kit>` in both, the kit as one word",
                docs["bash_words"] == docs["python_words"] and docs["python_words"][:4] == HEAD
                and len(docs["python_words"]) == 5, str(docs["python_words"]))

@@ -437,7 +437,7 @@ ask_settings() { # missing keys → saves the answers on Tares
   printf '\nSetting up your crew. Asked once, saved on Tares.\n' >&2
   for k in $missing; do
     case "$k" in
-      autonomy) n=$((n + 1)); v=$(choose "$n/$total  Who merges pull requests?" 1 \
+      autonomy) n=$((n + 1)); v=$(choose "$n/$total  Who approves merging pull requests?" 1 \
           "L4-ship|The crew, once its reviewer approves and tests pass" "L3-review|You, each one")
         answers=$(jq -c --arg v "$v" '.autonomy=$v' <<<"$answers") ;;
       releaser) n=$((n + 1)); v=$(choose "$n/$total  Should the crew release and deploy finished work?" 1 \
@@ -664,8 +664,8 @@ check_model() {
 
 level_text() {
   case "$1" in
-    L3-review) echo "builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; nothing is deployed to production" ;;
-    *) echo "builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production" ;;
+    L3-review) echo "builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production" ;;
+    *) echo "builders open PRs and Tares merges them after the review gate passes and CI is green; nothing is deployed to production" ;;
   esac
 }
 
@@ -717,9 +717,7 @@ write_settings() { # station role parent project repo
   case "$work_role" in
     orchestrator) allow+=("Starting background Claude Code sessions for this crew with \`tares factory spawn\` (builders named \`<project>-build-<slug>\` inside a project's repo, helpers named \`<station>-<slug>\`), and stopping, removing or resuming the sessions recorded in $STATIONS with \`tares factory retire\`, \`tares factory revive\`, \`tares factory restart\`, \`claude stop\`, \`claude rm\` or \`claude --bg --resume\`, is expected work that $human authorized by running \`tares factory crew up\`. Sessions not recorded there are out of scope.") ;;
     builder)
-      allow+=("Pushing \`factory/*\` branches to $where, and opening pull requests there, is expected work that $human authorized.")
-      [ "$level" != "L3-review" ] && allow+=("Merging a pull request in $where, that this crew opened from a \`factory/*\` branch is expected work that $human pre-authorized at level $level, once CI on its head commit is green (or the repository has no CI checks configured, in which case the reviewer's run of the tests stands in for CI) and the crew reviewer station's \`factory/review\` commit status on that head commit is \`success\`. The reviewer station's verdict is the review $human chose to rely on. Deleting the merged \`factory/*\` branch is expected.")
-      [ "$level" = "L3-review" ] && allow+=("Merging a pull request in $where, that this crew opened from a \`factory/*\` branch is expected work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of the tests standing in; the crew reviewer's \`factory/review\` status \`success\` on the head commit) and the orchestrator has relayed $human's yes for that pull request, quoted verbatim from the desk.") ;;
+      allow+=("Pushing \`factory/*\` branches to $where, and opening pull requests there, is expected work that $human authorized.") ;;
     reviewer) allow+=("Posting review-verdict comments with \`gh pr comment\` on pull requests that this crew opened in $repos, and setting the \`factory/review\` commit status on their head commits with \`gh api repos/.../statuses/<sha>\`, is expected work that $human authorized.") ;;
     releaser) allow+=("Building container images, loading them into the local kind cluster \`$cluster\`, applying manifests, rolling out and rolling back in that cluster, creating \`v*\` git tags and GitHub releases in $repos, are expected work that $human authorized.") ;;
   esac
@@ -731,6 +729,8 @@ write_settings() { # station role parent project repo
   # each command is allowed as `factory ...` and as `tares factory ...` (the Python engine's name, TR-1069)
   local perms_json='{"allow": ["Bash(factory tidy *)", "Bash(tares factory tidy *)"]}'
   [ "$role" = orchestrator ] && perms_json='{"allow": ["Bash(factory tidy *)", "Bash(tares factory tidy *)", "Bash(factory spawn *)", "Bash(tares factory spawn *)", "Bash(factory revive *)", "Bash(tares factory revive *)", "Bash(factory restart *)", "Bash(tares factory restart *)", "Bash(factory retire *)", "Bash(tares factory retire *)", "Bash(factory roster)", "Bash(tares factory roster)", "Bash(factory projects)", "Bash(tares factory projects)", "Bash(factory crew status)", "Bash(tares factory crew status)", "Bash(factory crew halt)", "Bash(tares factory crew halt)", "Bash(factory crew halt *)", "Bash(tares factory crew halt *)", "Bash(factory crew resume)", "Bash(tares factory crew resume)"]}'
+  # Tares merges pull requests (the merge queue); a crew station never does (TR-860)
+  perms_json=$(jq -c '. + {deny: ["Bash(gh pr merge:*)"]}' <<<"$perms_json")
 
   local allow_json deny_json wt tok_file=""
   allow_json=$(printf '%s\n' "${allow[@]}" | jq -R . | jq -s '["$defaults"] + .')
@@ -1081,6 +1081,7 @@ cmd_crew_up() {
     case "$1" in --yes|-y) ASSUME_YES=1; shift ;; --no-watch) watch=0; shift ;; *) roles="$roles $1"; shift ;; esac
   done
   need_capability integrations
+  need_capability merge_queue
   require_mcp
   local clash; clash=$(installed_tares)
   [ -z "$clash" ] || say "warning: $(clash_text "$clash")"
@@ -3096,7 +3097,7 @@ cmd_doctor() {
           case "$perm" in
             ADMIN|MAINTAIN|WRITE) ok "project $p: $repo is ${gh_line% *} on GitHub ($perm)" ;;
             "") no "project $p: gh can't read the GitHub repo of $repo (no GitHub remote, or no access); builders open PRs there" ;;
-            *) no "project $p: gh has $perm on ${gh_line% *}; builders need write access to push and merge" ;;
+            *) no "project $p: gh has $perm on ${gh_line% *}; builders need write access to push branches and open PRs" ;;
           esac
         fi
       done < <(project_repo_rows)
@@ -3109,7 +3110,7 @@ cmd_doctor() {
   if command -v gh >/dev/null; then
     gh auth status >/dev/null 2>&1 && ok "gh signed in" || no "gh not signed in: gh auth login"
   else
-    no "gh not installed (needed for PRs, reviews and merges): brew install gh"
+    no "gh not installed (needed for PRs and reviews): brew install gh"
   fi
   if [ -f "$STATIONS" ] && [ -n "${list:-}" ]; then
     local cc_target cc_s cc_v; cc_target=$(claude_version)
