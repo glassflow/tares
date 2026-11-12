@@ -47,6 +47,7 @@ from tares.crew.client import TaresClient, cksum  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 import launch_support as LS  # noqa: E402
+import parity  # noqa: E402
 
 P = F = 0
 FAKE_TOKEN = "tok-fake-launch-test-0123456789"
@@ -174,14 +175,6 @@ note = L.idle_wake_note()
 ck("idle_wake_note says the tick is released and how to delete one", "idle_wake is on" in note and "CronDelete" in note)
 
 
-def make_kit(tmp):
-    """<tmp>/kit: a copy of claude-plugin (launch_support.make_kit also needs the deleted bin/factory, so not used)."""
-    kit = tmp / "kit"
-    if not kit.exists():
-        shutil.copytree(LS.PLUGIN, kit, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    return kit
-
-
 def client_for(world, tmp=SCRATCH):
     LS.make_crew(tmp, {})
     tares = LS.FakeTares(world)
@@ -219,7 +212,7 @@ def launch_seen(name, station, role, parent, project, repo_name, out, world_=Non
     tmp = SCRATCH / name
     tmp.mkdir()
     LS.make_crew(tmp, {"token": FAKE_TOKEN})
-    kit = make_kit(tmp)
+    kit = LS.make_kit(tmp)
     seen = {}
 
     def fake(args, claude=None, timeout=None, platform=None, **kw):
@@ -282,7 +275,7 @@ ck("a claude that names no session: 'could not start <station>'", err == "could 
 tmpw = SCRATCH / "win-paths"
 tmpw.mkdir()
 LS.make_crew(tmpw, {"token": FAKE_TOKEN})
-kitw = make_kit(tmpw)
+kitw = LS.make_kit(tmpw)
 os.environ["TARES_PLUGIN_DIR"] = str(kitw)
 winrepo = "C:\\Users\\Jane\\links"
 tw = LS.FakeTares({"projects": [{"id": "uc_links", "name": "Links App", "repos": [{"path": winrepo}, {"path": "D:\\other\\api"}]}]})
