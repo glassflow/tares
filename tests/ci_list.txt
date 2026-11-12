@@ -141,6 +141,7 @@ test_licence
 test_licence_api
 test_licence_cloud
 test_linear
+test_linear_write_scope
 test_login
 test_login_keyring
 test_loki
