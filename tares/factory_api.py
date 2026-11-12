@@ -1984,18 +1984,21 @@ def register(app, store, h: Host) -> SimpleNamespace:
     async def release_ready(request: Request, project: str = "", repo: str = "", commit: str = "",
                             milestone: str = "", merged_prs: str = ""):
         """May this commit be shipped (TR-861)? Asks the project's guardrails at the pre_release hook:
-        {ready, reasons, warnings}. `merged_prs` is a comma separated list. `ready` is false for a
+        {ready, reasons, warnings, guardrails}. `merged_prs` is a comma separated list. `ready` is false for a
         guardrail that blocks or cannot be reached, and for a missing project or commit. A crew
         station may read this; nothing is shipped or recorded."""
         if not project.strip():
-            return {"ready": False, "reasons": ["Name the project to check"], "warnings": []}
+            return {"ready": False, "reasons": ["Name the project to check"], "warnings": [],
+                    "guardrails": []}
         p = h.project_or_404(h.resolve_project(project.strip()))
         if not commit.strip():
-            return {"ready": False, "reasons": ["Name the commit to ship"], "warnings": []}
+            return {"ready": False, "reasons": ["Name the commit to ship"], "warnings": [],
+                    "guardrails": []}
         gate = await integrations_hooks.gate("pre_release", p["id"], {
             "repo": repo.strip(), "commit": commit.strip(), "milestone": milestone.strip(),
             "merged_prs": [x.strip() for x in merged_prs.split(",") if x.strip()]})
-        return {"ready": gate["ok"], "reasons": gate["reasons"], "warnings": gate["warnings"]}
+        return {"ready": gate["ok"], "reasons": gate["reasons"], "warnings": gate["warnings"],
+                "guardrails": gate["decisions"]}
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
     def pr_repo(t: dict) -> str | None:
@@ -2915,7 +2918,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         (L3-review). Recorded with the time, the person and the crew (`crew`, else X-Tares-Crew,
         else `crew`); the orchestrator finds it in /api/crew/projects. A key with no person is
         refused (TR-633). Nobody signs off first: a repo's owner is asked through a question when
-        the spec needs them. A project kept for later starts here."""
+        the spec needs them. A project kept for later starts here. Answers `handover`, and the
+        guardrails' `guardrails` (each decision) and `warnings` (the ones that only warn)."""
         p = h.project_or_404(uid)
         me = work_person(request)
         try:
@@ -2956,7 +2960,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
         ho = store.get_handover(uid)
-        return {"handover": {**ho, "repos": factory_mod.own_paths(ho.get("repos") or [], key)}}
+        return {"handover": {**ho, "repos": factory_mod.own_paths(ho.get("repos") or [], key)},
+                "guardrails": gate["decisions"], "warnings": gate["warnings"]}
 
     @app.post("/api/projects/{uid}/later")
     def set_later(uid: str, body: dict = Body(default={})):
