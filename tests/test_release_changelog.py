@@ -53,7 +53,8 @@ def repo():
 
 def release(tmp, version, **env):
     return subprocess.run(["bash", str(tmp / "scripts" / "release.sh"), version], cwd=tmp, capture_output=True, text=True,
-                          env=clean_env(**env))
+                          env=clean_env(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",   # a CI runner has no git identity
+                                        GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com", **env))
 
 
 tmp = repo()
