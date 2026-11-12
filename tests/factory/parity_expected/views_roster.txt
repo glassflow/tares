@@ -150,8 +150,6 @@ tares factory: Orchestrator session title is crew-orchestrator, expected ops-orc
 ]
 == file claude/calls.jsonl ==
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}
-{"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["agents", "--json"], "cwd": "<REPO>"}
 {"args": ["--version"], "cwd": "<REPO>"}
