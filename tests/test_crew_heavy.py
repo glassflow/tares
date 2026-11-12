@@ -1,11 +1,11 @@
-"""`tares factory heavy <seconds> <command...>` (tares/crew/heavy.py), the port of bin/factory-heavy.
+"""`tares factory heavy <seconds> <command...>` (tares/crew/heavy.py), the port of the old factory-heavy wrapper.
 
 The port of tests/factory/heavy_test.sh, plus: two commands never overlap; the timeout kills the command
 and everything it started (exit 142, the lock folder gone); the command's own exit status comes back; a
 lock whose holder is gone is cleared and a live or half-made one is waited for; the wait gives up (75) and
 says who it waits for; bad usage is exit 2; a missing command is 127; SIGTERM stops the tree and frees
-the lock; the lock is the bash script's folder, so a bash holder and a Python holder make each other
-wait; `tares factory heavy` is routed to Python; a plain run imports no psutil, duckdb or fastapi.
+the lock; the lock is a folder, so a second run waits for the first and a stale folder is cleared;
+`tares factory heavy` is routed to Python; a plain run imports no psutil, duckdb or fastapi.
 
 Run: .venv/bin/python tests/test_crew_heavy.py
 """
@@ -106,7 +106,7 @@ for label, args in (("no arguments", []), ("a timeout and no command", ["5"]),
                     ("a timeout that is not a number", ["soon", "true"]), ("a negative timeout", ["-1", "true"]),
                     ("a timeout with a unit", ["5s", "true"])):
     code, out, err = run(t, *args)
-    ck(f"usage: {label} is exit 2 with the usage line", code == 2 and "usage: factory-heavy" in err, f"{code} {err!r}")
+    ck(f"usage: {label} is exit 2 with the usage line", code == 2 and "usage: tares factory heavy <timeout-seconds> <command...>" in err, f"{code} {err!r}")
 ck("usage: no lock left behind", not os.path.exists(lockpath(t)))
 
 # ---------- exit status ----------
@@ -128,8 +128,9 @@ if not WINDOWS:
 
 # ---------- the lock names its holder ----------
 t = fresh()
-holder = start(t, 30, *pycmd("import time; time.sleep(30)"), FACTORY_STATION="the-station")
-ok = wait_for(os.path.join(lockpath(t), "what"))
+started = os.path.join(t, "started")
+holder = start(t, 30, *pycmd(f"import time; open({started!r}, 'w').write('x'); time.sleep(30)"), FACTORY_STATION="the-station")
+ok = wait_for(os.path.join(lockpath(t), "what")) and wait_for(started)   # the command runs: the runner's SIGTERM handler is in place
 what = open(os.path.join(lockpath(t), "what"), encoding="utf-8").read() if ok else ""
 pid = open(os.path.join(lockpath(t), "pid"), encoding="utf-8").read().strip() if ok else ""
 # on Windows the python.exe a venv hands out can be a launcher whose child is the runner: Popen's pid is not the lock's
@@ -237,33 +238,21 @@ try:
 finally:
     heavy.WAIT_LIMIT, heavy.SAY_EVERY, heavy.POLL = saved
 
-# ---------- the bash script and this one share the lock ----------
-BASH_HEAVY = ROOT / "claude-plugin" / "bin" / "factory-heavy"
-if not WINDOWS and shutil.which("bash") and shutil.which("perl") and BASH_HEAVY.is_file():
-    t = fresh()
-    holder = start(t, 30, *pycmd("import time; time.sleep(2)"))
-    wait_for(os.path.join(lockpath(t), "pid"))
-    t0 = time.time()
-    r = subprocess.run(["bash", str(BASH_HEAVY), "30", "true"], env=env_for(t), capture_output=True, text=True, timeout=60)
-    took = time.time() - t0
-    holder.communicate(timeout=30)
-    ck("bash waits for a Python holder", r.returncode == 0 and took > 0.8 and "waiting for" in r.stderr, f"{r.returncode} {took:.1f}s {r.stderr!r}")
-    shell = subprocess.Popen(["bash", str(BASH_HEAVY), "30", "sleep", "2"], env=env_for(t))
-    wait_for(os.path.join(lockpath(t), "pid"))
-    t0 = time.time()
-    code, out, err = run(t, 30, *pycmd("pass"))
-    took = time.time() - t0
-    shell.wait()
-    ck("Python waits for a bash holder", code == 0 and took > 0.8 and "waiting for sleep 2" in err, f"{code} {took:.1f}s {err!r}")
-else:
-    print("  skip the bash/Python lock check (needs bash and perl, not Windows)")
+# ---------- a second run waits for the first ----------
+t = fresh()
+holder = start(t, 30, *pycmd("import time; time.sleep(2)"))
+wait_for(os.path.join(lockpath(t), "pid"))
+t0 = time.time()
+code, out, err = run(t, 30, *pycmd("pass"))
+took = time.time() - t0
+holder.communicate(timeout=30)
+ck("a second run waits for the holder, says so, then runs", code == 0 and took > 0.8 and "waiting for" in err, f"{code} {took:.1f}s {err!r}")
+ck("... and the lock is gone after both", not os.path.exists(lockpath(t)))
 
 # ---------- routing and imports ----------
-ck("`factory heavy` is a ported command", dispatch.find(["heavy", "5", "true"]) is not None)
-kind, fn, msg = dispatch.route(["heavy", "5", "true"], {"TARES_FACTORY_ENGINE": "python"})
-ck("... and runs on the Python engine", kind == "python" and fn is not None, f"{kind} {msg}")
-kind, fn, msg = dispatch.route(["heavy", "5", "true"], {})
-ck("... also with no engine setting", kind == "python", kind)
+ck("`tares factory heavy` is a ported command", dispatch.find(["heavy", "5", "true"]) is not None)
+ck("... and the handler is the one in tares.crew.heavy", dispatch.find(["heavy", "5", "true"]).__module__ == "tares.crew.heavy"
+   or dispatch.find(["heavy", "5", "true"]).__name__ == "_heavy", str(dispatch.find(["heavy", "5", "true"])))
 probe = ("import os, sys; from tares.crew.dispatch import find; "
          "code = find(['heavy'])(['heavy', '30', sys.executable, '-c', 'pass'], dict(os.environ)); "
          "bad = [m for m in ('psutil', 'duckdb', 'fastapi', 'tares.daemon', 'tares.store', 'tares.cli') if m in sys.modules]; "

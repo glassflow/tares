@@ -11,7 +11,7 @@ the same settings, the same grant and the same requests, in the same order; that
 id, a value that is not a choice, an invalid crew name, a release profile with no releaser, text that is
 not JSON) save nothing and say why; that `crew up --yes` with saved answers asks nothing and writes
 nothing; that the Python crew up starts the watch (TR-1155) and never asks Claude Code for the language
-server list; that crew up on the default engine is still bash.
+server list; that `crew up` runs in Python whatever TARES_FACTORY_ENGINE says (the switch is gone).
 
 Run: python tests/test_crew_setup_contract.py
 """
@@ -55,10 +55,9 @@ def schema_problems(name, doc):
 
 P = F = 0
 TIMEOUT = 120
-HAVE_BASH = bool(shutil.which("bash")) and os.name != "nt"
 KEYS = {"id", "text", "kind", "choices", "default", "recommendation", "why", "pattern"}
 GRANT = "the releaser may restart the staging database"
-BASH_NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,30}$"   # the pattern bash passes to ask for the crew's name
+NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,30}$"   # the pattern the crew name question carries
 
 
 def ck(label, cond, detail=""):
@@ -172,8 +171,8 @@ c = Case(people=[{"id": "local", "name": "Local"}, {"id": "p2", "name": "Two"}, 
 r, qs = questions(c)
 first = (qs or [{}])[0]
 ck("two other people on Tares: the crew's name is the first question", first.get("id") == "crew_name", first)
-ck("...a text question with bash's pattern, a suggested default and a reason",
-   first.get("kind") == "text" and first.get("pattern") == BASH_NAME_PATTERN == up.NAME_PATTERN
+ck("...a text question with the name pattern, a suggested default and a reason",
+   first.get("kind") == "text" and first.get("pattern") == NAME_PATTERN == up.NAME_PATTERN
    and first.get("default") and first.get("why"), first)
 c.close()
 
@@ -184,7 +183,7 @@ ANSWERS = {"autonomy": "L3-review", "releaser": True, "release_profile": "kind",
            "builders_max": "3", "grant": GRANT}
 
 c1 = Case()
-t = c1.run(["crew", "up"], stdin=TERMINAL)          # the stations part needs bash; the answers are saved before it
+t = c1.run(["crew", "up"], stdin=TERMINAL)          # the answers are saved before the stations start
 c2 = Case()
 a = c2.run(["crew", "setup", "--answers", c2.answers(ANSWERS), "--json"])
 ck("--answers exits 0 and says what it saved", a.returncode == 0 and json.loads(a.stdout)["grants"] == 1, (a.returncode, a.stdout, a.stderr[-300:]))
@@ -222,7 +221,7 @@ c1.close()
 c2.close()
 
 # the crew's name on both paths
-# bash counts the people other than the built-in local one and asks for a name when there are more than one
+# the people other than the built-in local one are counted, and a name is asked for when there are more than one
 people = [{"id": "local", "name": "Local"}, {"id": "p2", "name": "Two"}, {"id": "p3", "name": "Three"}]
 full = {"autonomy": "L4-ship", "releaser": False, "challenger": False, "builders_max": 2}
 c1 = Case(people=people)
@@ -311,26 +310,18 @@ r = c.run(["crew", "up", "--yes"], env=env_watch)
 out = r.stdout + r.stderr
 ck("asks nothing: no prompt, no question in the output", "Choice [" not in out and "recommended:" not in out and "> " not in out.replace("-> ", ""), out[-300:])
 ck("writes nothing to Tares: every answer was saved already", c.tares.written() == [], c.tares.written())
-if HAVE_BASH:
-    ck("says it started the watch", "started the watch, which revives any station that stops" in out, out[-400:])
-    ck("starts the Python watch: the pid file names it and the log is there",
-       (c.crew / "watch.pid").exists() and (c.crew / "watch.log").exists() and watch.running_pid(CrewPaths(str(c.crew))) is not None,
-       out[-300:])
-    meta = (c.crew / watch.META_FILE).read_text(encoding="utf-8").split()
-    ck("...and it is the Python watch (TARES_FACTORY_ENGINE=python)", meta[-1:] == ["python"], meta)
-    watch.stop(CrewPaths(str(c.crew)), lambda m: None, 20, c.env)   # a watch left running would outlive the test
-    ck("the test stopped it", watch.running_pid(CrewPaths(str(c.crew))) is None)
-else:   # no bash (Windows): the stations cannot be started yet (TR-953), so it stops before the watch line
-    ck("without bash it says the stations cannot be started here and exits 2",
-       r.returncode == 2 and "cannot start the stations here" in out and "started the watch" not in out, (r.returncode, out[-400:]))
-ck("asks Claude Code for the language server list, as bash does, and offers nothing when no project has a repo",
+ck("says it started the watch", "started the watch, which revives any station that stops" in out, out[-400:])
+ck("starts the Python watch: the pid file names it and the log is there",
+   (c.crew / "watch.pid").exists() and (c.crew / "watch.log").exists() and watch.running_pid(CrewPaths(str(c.crew))) is not None,
+   out[-300:])
+meta = (c.crew / watch.META_FILE).read_text(encoding="utf-8").split()
+ck("...and it is the Python watch", meta[-1:] == ["python"], meta)
+watch.stop(CrewPaths(str(c.crew)), lambda m: None, 20, c.env)   # a watch left running would outlive the test
+ck("the test stopped it", watch.running_pid(CrewPaths(str(c.crew))) is None)
+ck("asks Claude Code for the language server list, and offers nothing when no project has a repo",
    ["plugin", "list", "--json"] in c.calls() and "Code intelligence" not in out, c.calls())
-if HAVE_BASH:
-    ck("exits 0 and starts the three stations", r.returncode == 0 and sum(1 for a in c.calls() if a[:1] == ["--bg"]) == 3,
-       (r.returncode, out[-400:]))
-else:
-    ck("no bash here: says plainly that starting the stations is not yet ported, exit 2",
-       r.returncode == 2 and "not yet ported" in r.stderr, (r.returncode, r.stderr[-300:]))
+ck("exits 0 and starts the three stations", r.returncode == 0 and sum(1 for a in c.calls() if a[:1] == ["--bg"]) == 3,
+   (r.returncode, out[-400:]))
 r = c.run(["crew", "up", "--yes", "--no-watch"], env=env_watch)
 ck("--no-watch: no watch started", "started the watch" not in r.stdout + r.stderr and not (c.crew / "watch.pid").exists())
 r = c.run(["crew", "up", "--yes"])           # FACTORY_NO_WATCH=1 as the harness sets it
@@ -345,7 +336,7 @@ ck("--yes with nothing saved: the recommended answers are used and saved, nothin
 c.close()
 
 # ====================================================================================
-print("routing: crew up runs in Python by default (TR-1069)")
+print("routing: crew up runs in Python, whatever TARES_FACTORY_ENGINE says (TR-1069, TR-975)")
 ck("crew up and crew setup are in the ported table", dispatch.find(["crew", "up"]) is not None and dispatch.find(["crew", "setup"]) is not None)
 calls = []
 
@@ -353,7 +344,7 @@ calls = []
 def fake_execve(path, args, env):
     _crew_guard.check_exec([path, *args], env)   # even a refused exec must not carry the real home
     calls.append((path, args))
-    raise AssertionError("crew up must not exec bash from the Python entry")
+    raise AssertionError("crew up must not exec another program from the Python entry")
 
 
 with mock.patch.object(os, "execve", fake_execve), \
@@ -361,10 +352,11 @@ with mock.patch.object(os, "execve", fake_execve), \
     scratch = Path(tempfile.mkdtemp(prefix="setup-contract-route-"))   # a scratch home, not this process's own (TR-1164)
     base = {k: v for k, v in parity.crew_env(scratch).items() if not k.startswith("TARES_FACTORY_ENGINE")}
     up.entry_crew_up(["crew", "up", "--yes"], dict(base))
-    ck("engine unset: the Python crew up runs, with its arguments", calls == [("python", ["crew", "up", "--yes"])], calls)
-    calls.clear()
-    up.entry_crew_up(["crew", "up"], {**base, "TARES_FACTORY_ENGINE": "python"})
-    ck("engine=python: the Python crew up runs", calls == [("python", ["crew", "up"])], calls)
+    ck("no engine setting: the Python crew up runs, with its arguments", calls == [("python", ["crew", "up", "--yes"])], calls)
+    for value in ("python", "bash", "perl", ""):
+        calls.clear()
+        up.entry_crew_up(["crew", "up"], {**base, "TARES_FACTORY_ENGINE": value})
+        ck(f"TARES_FACTORY_ENGINE={value!r}: the Python crew up runs all the same", calls == [("python", ["crew", "up"])], calls)
 
 # ====================================================================================
 print("an older Tares (need_capability)")

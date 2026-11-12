@@ -125,9 +125,10 @@ ck("tidy of a root itself is refused", code == 1 and wt.is_dir(), err)
 code, err = run(env, str(base / "outside"))
 ck("tidy of an outside folder is refused with the plain message", code == 1 and "outside the crew's folders" in err
    and (base / "outside" / "file").exists(), err)
+ck("...and names the command people type", "tares factory tidy removes only inside" in " ".join(err.split()), err)
 code, err = run(env)
 ck("tidy with no path prints the usage", code == 1 and err.strip().endswith(tidy.USAGE), err)
-
+ck("the tidy usage names the command people type", tidy.USAGE.startswith("usage: tares factory tidy "), tidy.USAGE)
 # ===================================================================================================
 print("\n== a link out of a root ==")
 base, env = fresh("links")

@@ -413,6 +413,54 @@ for bad in ("--shard=0/4", "--shard=5/4", "--shard=a/b", "--shard=1"):
 code, text = run("--shard=1/%d" % len(every), "--list")
 ck("--list wins over a shard", code == 0 and "crew_basic" in text.split(), text)
 
+# The process lock: a scenario that starts a process the others could see waits for them, and they wait for it.
+LOCKED = r"""
+import sys, time
+from pathlib import Path
+sys.path.insert(0, %r)
+import fcntl, os, parity
+parity.PROCESS_LOCK = Path(sys.argv[1])
+fd = os.open(parity.PROCESS_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+fcntl.flock(fd, fcntl.LOCK_SH)
+parity._LOCK_FD[:] = [fd]
+print("running", flush=True)
+if sys.argv[2] == "own":
+    parity.own_the_process_list()
+    print("owned", flush=True)
+if sys.argv[2] == "hold":
+    time.sleep(float(sys.argv[3]))
+""" % str(FACTORY)
+
+
+def locked(lockfile, mode, secs="0"):
+    return subprocess.Popen([sys.executable, "-c", LOCKED, str(lockfile), mode, secs], stdout=subprocess.PIPE, text=True)
+
+
+if parity.fcntl is not None:
+    import time
+    lockfile = work / "process.lock"
+    holder = locked(lockfile, "hold", "3")
+    ck("a running scenario holds the shared lock", holder.stdout.readline().strip() == "running")
+    sharer = locked(lockfile, "share")
+    ck("scenarios that start no visible process run beside it", sharer.stdout.readline().strip() == "running"
+       and sharer.wait(timeout=10) == 0)
+    t0 = time.time()
+    owner = locked(lockfile, "own")
+    ck("one that starts a visible process waits until the others end",
+       owner.stdout.readline().strip() == "running" and owner.stdout.readline().strip() == "owned"
+       and time.time() - t0 > 1.5 and holder.poll() is not None, f"{time.time() - t0:.1f}s")
+    owner.wait(timeout=10)
+    seen = []
+    with mock.patch.object(parity, "PROCESS_LOCK", work / "run_side.lock"), \
+            mock.patch.object(parity, "_run_side", lambda sc: seen.append(list(parity._LOCK_FD)) or parity.Side()):
+        parity.run_side(mock.Mock(not_windows=""))
+    ck("run_side holds the lock while a scenario runs and lets go after", len(seen) == 1 and len(seen[0]) == 1
+       and parity._LOCK_FD == [])
+    stray = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    parity._ATTACHED["x"] = stray
+    parity.end_visible_processes()
+    ck("end_visible_processes stops a process a scenario left", stray.poll() is not None and not parity._ATTACHED)
+
 shutil.rmtree(work, ignore_errors=True)
 print(f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)

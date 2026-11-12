@@ -164,7 +164,6 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -226,7 +225,6 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

@@ -102,7 +102,6 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -159,7 +158,6 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

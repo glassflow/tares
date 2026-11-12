@@ -1,12 +1,10 @@
 """The watch: a detached background loop, its pid file and its stop file (TR-958).
 
-Ports these functions of `claude-plugin/bin/factory`: cmd_watch (the loop skeleton), nap, watch_pid, start_watch
+Port of these functions from the old bash crew (removed in TR-975): cmd_watch (the loop skeleton), nap, watch_pid, start_watch
 and stop_watch. What the loop does each round (revive a stopped station, regrant, wake an idle one, pace, move onto
 an updated plugin) is not here: those steps are separate tickets, and each registers itself with `register` when it
 lands (revive, regrant and idle_wake have: `tares/crew/watch_revive.py`, `regrant.py`, `idle_wake.py`; the Claude Code
-move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing. The Python watch is
-the default (TR-1069); `TARES_FACTORY_WATCH=bash` or the bash engine (`TARES_FACTORY_ENGINE=bash`, `"engine": "bash"` in
-crew.json) keeps the bash one (on Windows there is no bash, so it is always Python there).
+move of the updates step has: `cc_update.py`). Every step not yet registered falls back to nothing.
 
 Standard library plus the crew modules and psutil (no duckdb, fastapi or daemon).
 
@@ -16,23 +14,23 @@ How the watch runs
     console window) on Windows. It gets the environment, and so the PATH, of the process that started it.
   * The pid file `watch.pid` holds the pid alone, as bash's does, so the bash `watch_pid`, `crew down` and
     doctor read it. A second file, `watch.pid.meta`, holds `<pid> <create time> <engine>` on one line: the
-    process's create time (seconds since the epoch) and the engine that runs it (`python` or `bash`). The meta
-    file is used only while its pid is the pid file's; a pid file with no meta (bash's) has no create time and
-    no engine.
+    process's create time (seconds since the epoch) and the engine that runs it (`python`; a meta file
+    written before the bash crew was removed may say `bash`). The meta file is used only while its pid is the
+    pid file's; a pid file with no meta (the old bash watch's) has no create time and no engine.
   * A process is the watch only when its pid is alive, its command line has `crew watch`, and its create time is
     the one in the meta file (when there is one). After a reboot a pid is reused by some other process: the
     create time differs, and the pid file is ignored.
   * stop() asks the loop to stop with a stop file (`watch.stop`) instead of a signal, which means the same on
     every platform. The loop looks for the file at the start of each round and on every tick of its nap. Only when
     the process is still there after a timeout is it terminated, and killed if it ignores that. A watch that does
-    not read the stop file (bash's, or a pid file with no engine line) is terminated at once, as before.
+    not read the stop file (an old bash watch, or a pid file with no engine line, both from before the upgrade)
+    is terminated at once, as before.
 
 Differences from bash
   * The bash watch is stopped with `kill`; this one first gets a chance to finish its round and clean up.
   * A meta file next to the pid file has the create time and the engine.
   * The loop leaves on a stop file, and on SIGTERM where the platform has it, removing its pid file and stop file.
   * Only the steps registered so far run; see above.
-  * A round that finds the engine setting turned to bash runs the bash watch in its place (`follow_engine`, TR-1069).
   * When the kit step sees the plugin updated, `restart_self` runs the watch again on the new code: `os.execve` where
     the platform has it (same pid, same pid file), a new detached watch on Windows (untested there, TR-946).
 
@@ -45,7 +43,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -69,7 +66,7 @@ DEFAULT_STOP_TIMEOUT = 30.0  # seconds a stop file may wait before the process i
 TERMINATE_WAIT = 3.0        # seconds a terminated watch has before it is killed
 IDENTITY_SLACK = 1.0        # seconds the create time in the pid file may differ from the process's own
 
-WATCH_USAGE = "usage: factory crew watch [--once] [--interval <seconds>]"
+WATCH_USAGE = "usage: tares factory crew watch [--once] [--interval <seconds>]"
 
 # What a round does, in this order. A later ticket registers the function for its name.
 STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker")
@@ -218,19 +215,13 @@ def stop_requested(paths: CrewPaths) -> bool:
 
 
 def _watch_command(env: dict) -> tuple:
-    """(argv, engine): the command that runs the watch. Python unless the bash engine or TARES_FACTORY_WATCH=bash
-    asks for bash, and always Python where there is no bash (Windows, or a system without it), whatever the engine
-    setting says."""
-    from . import dispatch   # the one rule for which engine runs `crew watch`; imported late, dispatch imports us
-    if os.name == "nt" or dispatch.bash_exe(env) is None or dispatch.route(["crew", "watch"], env)[0] == "python":
-        exe = sys.executable
-        if os.name == "nt":
-            gui = os.path.join(os.path.dirname(exe), "pythonw.exe")
-            if os.path.isfile(gui):
-                exe = gui   # no console window
-        return [exe, "-m", "tares.crew", "crew", "watch"], "python"
-    from ..cli import plugin_dir   # as `python -m tares.crew` does
-    return ["bash", str(plugin_dir() / "bin" / "factory"), "crew", "watch"], "bash"
+    """(argv, engine): the command that runs the watch, always the Python one."""
+    exe = sys.executable
+    if os.name == "nt":
+        gui = os.path.join(os.path.dirname(exe), "pythonw.exe")
+        if os.path.isfile(gui):
+            exe = gui   # no console window
+    return [exe, "-m", "tares.crew", "crew", "watch"], "python"
 
 
 def _spawn(paths: CrewPaths, argv: list, env: dict) -> tuple:
@@ -250,28 +241,6 @@ def _spawn(paths: CrewPaths, argv: list, env: dict) -> tuple:
         raise CrewError("the watch stopped as it started; see " + paths.shown(LOG_FILE))
 
 
-def follow_engine(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
-    """A running Python watch whose engine setting has turned to bash (`"engine": "bash"` in crew.json, TR-1069) runs
-    the bash watch instead, so the switch back needs no `crew down`. Looked at at the top of every round. The pid file
-    is rewritten to name bash first: stop() ends a bash watch with a terminate, not the stop file. Does not return
-    when it switches. An environment variable cannot change under a running process; that one takes a new watch."""
-    env = dict(os.environ if env is None else env)
-    if _watch_command(env)[1] != "bash":
-        return
-    _say("the engine setting is now bash; the bash watch takes over")
-    try:
-        me = psutil.Process()
-        write_pidfile(paths, me.pid, me.create_time(), "bash")
-    except (psutil.Error, OSError, SystemError):   # the pid file then keeps naming python; stop() terminates it anyway
-        pass
-    try:
-        restart_self(paths, interval, env)
-    except OSError as e:   # the exec failed: this watch is still here, so it stays the Python watch and says so
-        _say(f"could not start the bash watch ({e}); staying on the Python watch")
-        with contextlib.suppress(psutil.Error, OSError, SystemError):
-            write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
-
-
 def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> None:
     """The plugin was updated: run the watch again on the new code (bash: `exec watch --interval`). Where the platform
     has exec, this process becomes the new watch (same pid, same pid file). On Windows there is none: a new watch is
@@ -285,11 +254,10 @@ def restart_self(paths: CrewPaths, interval: float, env: dict | None = None) -> 
         raise SystemExit(0)
     sys.stdout.flush()
     sys.stderr.flush()
-    # execve wants a path: the bash watch's argv[0] is "bash", so find it on the PATH the new watch will have
     held = locks.release_for_exec()   # exec runs no atexit: a station lock this image holds would stay, named for the same pid
     try:
-        os.execve(shutil.which(argv[0], path=env.get("PATH")) or argv[0], argv, env)
-    except OSError:   # follow_engine keeps this watch running, so it keeps the locks it held
+        os.execve(argv[0], argv, env)
+    except OSError:   # this watch keeps running, so it keeps the locks it held
         locks.retake_locks(held)
         raise
 
@@ -428,7 +396,6 @@ def watch(paths: CrewPaths, interval: float, once: bool = False, poll: float = D
     try:
         while not stop_requested(paths):
             claim_pidfile(paths)   # every round: the first try may have run before start() wrote the file
-            follow_engine(paths, interval)
             run_steps(paths)
             if nap(paths, interval, poll):
                 break
@@ -462,7 +429,7 @@ def _say_unreadable_settings(paths: CrewPaths, env: dict) -> None:
 
 
 def cmd_watch(argv: list, env: dict) -> int:
-    """factory [crew] watch [--once] [--interval <seconds>]"""
+    """tares factory [crew] watch [--once] [--interval <seconds>]"""
     args = list(argv)
     if args and args[0] == "crew":
         args = args[1:]

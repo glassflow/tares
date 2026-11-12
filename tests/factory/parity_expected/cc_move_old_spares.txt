@@ -128,7 +128,6 @@ tares factory: crew-reviewer keeps coming back on an older Claude Code than 1.2.
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

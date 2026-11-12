@@ -1,9 +1,9 @@
 """The watch as a process (tares/crew/watch.py, TR-958): it starts detached, outlives the process that started it,
 stops through its stop file, and a stale pid file names nothing.
 
-The real loop runs in a real child process (`python -m tares.crew crew watch`, TARES_FACTORY_WATCH=python) in a
+The real loop runs in a real child process (`python -m tares.crew crew watch`) in a
 throwaway crew home. Its steps are the empty ones: nothing is revived. The loop's rounds, the registered steps
-and the nap are checked in this process. The same code stops a plain pid file (bash's) at once, as TR-955 did.
+and the nap are checked in this process. The same code stops a plain pid file (the old bash watch's) at once, as TR-955 did.
 
 On Windows the processes that start the real watch are not run (the creation flags and pythonw.exe are untested
 there, TR-946); the checks that need no such process run.
@@ -141,7 +141,7 @@ try:
     (CREW / "watch.stop").unlink()
     ck("a nap with no stop file waits its time and says no", watch.nap(paths, 0.2, 0.05) is False)
 
-    print("every round looks at the engine setting (TR-1164)")
+    print("a round: claim the pid file, run the steps, nap (no engine setting to follow, TR-975)")
     order = []
     rounds = []
 
@@ -150,18 +150,18 @@ try:
         rounds.append(1)
         return len(rounds) >= 3   # the third nap ends the watch
     with mock.patch.object(watch, "claim_pidfile", lambda p: order.append("claim")), \
-            mock.patch.object(watch, "follow_engine", lambda p, i, env=None: order.append(("follow", i))), \
             mock.patch.object(watch, "run_steps", lambda p: order.append("steps")), \
             mock.patch.object(watch, "nap", fake_nap):
         watch.watch(paths, 2.5)
-    ck("watch() calls follow_engine in every round, with its interval, after the pid file claim and before the steps",
-       order == ["claim", ("follow", 2.5), "steps", "nap"] * 3, str(order))
+    ck("watch() claims the pid file, runs the steps and naps, in every round, and calls nothing else",
+       order == ["claim", "steps", "nap"] * 3, str(order))
     order.clear()
     with mock.patch.object(watch, "claim_pidfile", lambda p: order.append("claim")), \
-            mock.patch.object(watch, "follow_engine", lambda p, i, env=None: order.append("follow")), \
             mock.patch.object(watch, "run_steps", lambda p: order.append("steps")):
         watch.watch(paths, 2.5, once=True)
-    ck("--once runs the steps and looks at no engine setting (no running watch to switch)", order == ["steps"], str(order))
+    ck("--once runs the steps and nothing else", order == ["steps"], str(order))
+    ck("the watch has no follow_engine: crew.json's \"engine\" is not read", not hasattr(watch, "follow_engine")
+       and "follow_engine" not in (ROOT / "tares" / "crew" / "watch.py").read_text(encoding="utf-8"))
 
     print("the pid file and who is the watch")
     ck("no pid file: no watch", watch.running_pid(paths) is None)
@@ -172,14 +172,12 @@ try:
     proc = sleeper()
     created = psutil.Process(proc.pid).create_time()
     watch.write_pidfile(paths, proc.pid, created, "python")
-    ck("the pid file is the pid alone, as bash writes it",
+    ck("the pid file is the pid alone, as the old bash watch wrote it",
        (CREW / "watch.pid").read_text(encoding="utf-8") == f"{proc.pid}\n")
     ck("...and the meta file has the pid, the create time and the engine",
        (CREW / "watch.pid.meta").read_text(encoding="utf-8").split() == [str(proc.pid), f"{created:.3f}", "python"])
-    if not WINDOWS:
-        r = subprocess.run(["bash", "-c", f'pid=$(cat "{CREW}/watch.pid"); kill -0 "$pid" && echo ok'],
-                           capture_output=True, text=True)
-        ck("...bash's watch_pid reads it: `kill -0 $(cat watch.pid)` works", r.stdout.strip() == "ok", r.stderr)
+    ck("...a plain `kill -0 <pid>` on it works (the file is the pid and a newline, nothing else)",
+       int((CREW / "watch.pid").read_text(encoding="utf-8").strip()) == proc.pid and alive(proc.pid))
     ck("...doctor's watch_running reads it", doctor.watch_running(paths) is True)
     ck("...read_pidfile gives the pid, create time and engine", watch.read_pidfile(paths) == (proc.pid, float(f"{created:.3f}"), "python"))
     (CREW / "watch.pid").write_text(f"{proc.pid}\n", encoding="utf-8")
@@ -228,7 +226,7 @@ try:
     watch.write_pidfile(paths, victim.pid, psutil.Process(victim.pid).create_time(), "bash")
     lines = []
     watch.stop(paths, lines.append, timeout=30)
-    ck("a bash watch is terminated at once, not after the timeout",
+    ck("an old watch whose meta file says bash (from before the upgrade) is terminated at once, not after the timeout",
        victim.wait(10) is not None and time.monotonic() - started < 10 and lines == ["stopped the watch"]
        and not (CREW / "watch.pid").exists(), str(lines))
     victim = sleeper()
@@ -338,82 +336,40 @@ try:
     for name in ("watch.pid", "watch.pid.meta", "watch.stop"):
         (CREW / name).unlink(missing_ok=True)
 
-    print("which command starts the watch, and which engine runs `watch`")
-    argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python"})
-    ck("TARES_FACTORY_WATCH=python still works: the Python module, no shell", engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
-    argv, engine = watch._watch_command({})
-    ck("by default the watch is Python (TR-1069)", engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
-    if not WINDOWS:
-        argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "bash"})
-        ck("TARES_FACTORY_WATCH=bash keeps the bash watch", engine == "bash" and argv[0] == "bash" and argv[-2:] == ["crew", "watch"], str(argv))
-        argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "bash", "TARES_FACTORY_ENGINE": "python"})
-        ck("TARES_FACTORY_ENGINE=python wins over TARES_FACTORY_WATCH=bash", engine == "python", str(argv))
-    argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "python", "TARES_FACTORY_ENGINE": "bash"})
-    ck("TARES_FACTORY_ENGINE=bash wins over TARES_FACTORY_WATCH=python (on POSIX; Windows has no bash and runs Python)",
-       engine == ("python" if WINDOWS else "bash"), str(argv))
-    argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
-    ck("TARES_FACTORY_ENGINE=bash alone: bash on POSIX, Python on Windows",
-       engine == ("python" if WINDOWS else "bash") and (WINDOWS or argv[0] == "bash"), str(argv))
-    with mock.patch.object(dispatch, "bash_exe", lambda e: None):
-        argv, engine = watch._watch_command({"TARES_FACTORY_ENGINE": "bash"})
-        ck("TARES_FACTORY_ENGINE=bash with no bash on the system: the watch is Python (nothing to run it with)",
-           engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"], str(argv))
-        argv, engine = watch._watch_command({"TARES_FACTORY_WATCH": "bash"})
-        ck("TARES_FACTORY_WATCH=bash with no bash on the system: the watch is Python", engine == "python", str(argv))
+    print("which command starts the watch (always Python, TR-975)")
+    for label, env in (("an empty environment", {}), ("TARES_FACTORY_WATCH=python", {"TARES_FACTORY_WATCH": "python"}),
+                       ("TARES_FACTORY_WATCH=bash", {"TARES_FACTORY_WATCH": "bash"}),
+                       ("TARES_FACTORY_ENGINE=bash", {"TARES_FACTORY_ENGINE": "bash"}),
+                       ("both set to bash", {"TARES_FACTORY_WATCH": "bash", "TARES_FACTORY_ENGINE": "bash"})):
+        argv, engine = watch._watch_command(env)
+        ck(f"{label}: the Python module, no shell, and the engine is python",
+           engine == "python" and argv[1:] == ["-m", "tares.crew", "crew", "watch"] and "bash" not in os.path.basename(argv[0]), str(argv))
 
-    print("a running Python watch follows the engine setting (TR-1069)")
-    switched = []
-    with mock.patch.object(watch, "restart_self", lambda p, i, e=None: switched.append(i)):
-        watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
-        watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
-        ck("the default engine: nothing changes", not switched and watch.read_pidfile(paths)[2] == "python")
-        (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "python"}), encoding="utf-8")
-        watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
-        ck("\"engine\": \"python\" in crew.json: nothing changes", not switched)
-        (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "bash"}), encoding="utf-8")
-        watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
-        if WINDOWS:
-            ck("\"engine\": \"bash\" in crew.json: Windows has no bash, the watch stays", not switched)
-        else:
-            ck("\"engine\": \"bash\" in crew.json: the bash watch takes over, on the same interval", switched == [7], str(switched))
-            ck("...and the pid file now names bash, so a stop terminates it", watch.read_pidfile(paths)[2] == "bash",
-               str(watch.read_pidfile(paths)))
-        switched.clear()
-        with mock.patch.object(dispatch, "bash_exe", lambda e: None):
-            watch.follow_engine(paths, 7, {"FACTORY_CREW_HOME": str(CREW)})
-        ck("...but with no bash on the system it stays Python", not switched)
+    print("restart_self runs the Python watch again, whatever the old variables say")
     if not WINDOWS:
         execs = []
         def record_exec(path, argv, env):
             _crew_guard.check_exec([path, *argv], env)   # the environment it would exec with must not reach the real home
             execs.append((path, argv, env))
         with mock.patch.object(os, "execve", record_exec):
-            watch.restart_self(paths, 3, {**SCRATCH_ENV, "TARES_FACTORY_ENGINE": "bash", "PATH": os.environ.get("PATH", "")})
-        ck("restart_self onto the bash watch execs bash by its path (a bare \"bash\" is not an execve path)",
-           len(execs) == 1 and os.path.isabs(execs[0][0]) and os.path.basename(execs[0][0]) == "bash"
-           and execs[0][1][0] == "bash" and execs[0][1][-2:] == ["--interval", "3"], str(execs))
-        (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "bash"}), encoding="utf-8")
-
-        def no_exec(*a):
-            raise FileNotFoundError(2, "No such file or directory", "bash")
-        watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
-        with mock.patch.object(os, "execve", no_exec):
-            watch.follow_engine(paths, 7, {**SCRATCH_ENV})   # must not raise
-        ck("an exec that fails leaves the Python watch running and its pid file naming python",
-           watch.read_pidfile(paths)[2] == "python", str(watch.read_pidfile(paths)))
+            watch.restart_self(paths, 3, {**SCRATCH_ENV, "TARES_FACTORY_ENGINE": "bash", "TARES_FACTORY_WATCH": "bash",
+                                          "PATH": os.environ.get("PATH", "")})
+        ck("restart_self with TARES_FACTORY_ENGINE=bash execs this Python on `-m tares.crew crew watch --interval 3`",
+           len(execs) == 1 and execs[0][0] == sys.executable and execs[0][1][1:] == ["-m", "tares.crew", "crew", "watch", "--interval", "3"],
+           str(execs))
+    (CREW / "crew.json").write_text(json.dumps({"crew_name": "t", "engine": "bash"}), encoding="utf-8")
+    watch.write_pidfile(paths, os.getpid(), psutil.Process().create_time(), "python")
+    watch.watch(paths, 0, once=True)
+    ck("an \"engine\": \"bash\" in crew.json is ignored: a round runs and the pid file still names python",
+       watch.read_pidfile(paths)[2] == "python", str(watch.read_pidfile(paths)))
     (CREW / "crew.json").write_text(json.dumps({"crew_name": "t"}), encoding="utf-8")
     for name in ("watch.pid", "watch.pid.meta"):
         (CREW / name).unlink(missing_ok=True)
 
     for words in (["watch"], ["crew", "watch"]):
-        ck(f"`{' '.join(words)}` goes to Python by default", dispatch.route(words, {})[0] == "python")
-        ck(f"`{' '.join(words)}` goes to bash with TARES_FACTORY_WATCH=bash" if not WINDOWS else f"`{' '.join(words)}` runs in Python on Windows",
-           dispatch.route(words, {"TARES_FACTORY_WATCH": "bash"})[0] == ("python" if WINDOWS else "bash"))
-        ck(f"`{' '.join(words)}` goes to Python with TARES_FACTORY_WATCH=python",
-           dispatch.route(words, {"TARES_FACTORY_WATCH": "python"})[0] == "python")
-        ck(f"`{' '.join(words)}` goes to Python with TARES_FACTORY_ENGINE=python",
-           dispatch.route(words, {"TARES_FACTORY_ENGINE": "python"})[0] == "python")
-    ck("...and `status` is not affected by the switch", dispatch.route(["status"], {})[0] == "python")
+        ck(f"`{' '.join(words)}` is a command of the table, the watch's", dispatch.find(words) is not None and dispatch.find(words).__name__ == "_watch")
+    ck("...and the watch's usage line names `tares factory`", watch.WATCH_USAGE == "usage: tares factory crew watch [--once] [--interval <seconds>]",
+       watch.WATCH_USAGE)
 
     print("options")
     for bad in (["--bogus"], ["--interval", "soon"]):

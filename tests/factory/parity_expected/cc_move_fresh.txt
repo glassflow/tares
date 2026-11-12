@@ -126,7 +126,6 @@ tares factory: crew-reviewer runs Claude Code 1.2.1
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

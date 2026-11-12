@@ -11,7 +11,7 @@ It builds a throwaway crew end to end and exits 0 only when the crew opened a pu
 
 Run it through the heavy queue, with a hard timeout, because every run spends Claude usage:
 
-  factory-heavy 2400 python scripts/crew_smoke.py
+  tares factory heavy 2400 python scripts/crew_smoke.py
 
 --dry-run swaps the fake Claude Code (tests/factory/fake-claude) in, inside a scratch HOME: it checks the
 plumbing (daemon, MCP, crew up, hand-over, roster, crew down), opens no pull request and spends nothing.

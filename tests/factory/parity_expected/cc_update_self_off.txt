@@ -241,7 +241,6 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -300,7 +299,6 @@ tares factory: kit unfrozen: the watch moves each station onto the checkout's ki
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

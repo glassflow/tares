@@ -27,7 +27,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: crew-reviewer was retired; factory spawn starts it again
+tares factory: crew-reviewer was retired; tares factory spawn starts it again
 == step: revive nobody ==
 exit: 1
 -- stdout --
@@ -131,7 +131,6 @@ tares factory: nobody is not a recorded station
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
