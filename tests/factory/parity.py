@@ -4538,7 +4538,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="pace_tidy",
-    not_windows=WIN_NO_MULTILINE,
     suite="pace",
     about="the pace file forgets a station that will not be revived, says the limit is full again in a new episode, and goes when nothing is left",
     driver=LAUNCH_DRIVER,
@@ -5906,13 +5905,13 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         s = WIN_PATH_TAIL.sub(lambda m: m.group(1) + re.sub(r"\\+", "/", m.group(2)), s)
         # a path with a space (the profile folder of the Windows job) is quoted in the statusline command, one without is not
         s = WIN_ROOT_QUOTED.sub(r"\1\2", s)
-        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.cmd here, claude elsewhere
+        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.exe (or claude.cmd) here, claude elsewhere
     return s
 
 
 # what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
 WIN_ROOT_QUOTED = re.compile(r'(--plugin-root )"([^"]*)"')
-WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.cmd")
+WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.(?:cmd|exe)")
 WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 
 
