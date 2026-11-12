@@ -23,9 +23,9 @@ REPO, SHA, HEAD, BEFORE = "o/r", "m" * 40, "h" * 40, "b" * 40
 def world(**kw):
     """The API answers for a clean squash merge of PR 7; keyword arguments change one fact."""
     w = {
-        "prs": [{"number": 7, "merged_at": "2026-11-12T10:00:00Z", "base": {"ref": "main"}, "head": {"sha": HEAD}}],
+        "prs": [{"number": 7, "merged_at": "2026-11-12T10:00:00Z", "base": {"ref": "main"}, "head": {"sha": HEAD, "ref": "feat", "repo": {"full_name": REPO}}}],
         "tree_main": "T1", "tree_head": "T1", "behind_by": 0,
-        "runs": [{"id": 11, "run_number": 5, "created_at": "2026-11-12T09:00:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/11", "pull_requests": [{"number": 7}]}],
+        "runs": [{"id": 11, "run_number": 5, "created_at": "2026-11-12T09:00:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/11", "head_branch": "feat", "head_repository": {"full_name": REPO}, "pull_requests": []}],
         "jobs": [{"name": "test (duckdb 1/5)", "conclusion": "success"}, {"name": "e2e (1/2)", "conclusion": "success"}],
         "boom": None,
     }
@@ -76,9 +76,11 @@ for label, w, kw in [
     ("the run was the draft's light set (no e2e job)", world(jobs=[{"name": "test (duckdb 1/5)", "conclusion": "success"}]), {}),
     ("the e2e job was skipped", world(jobs=[{"name": "e2e (1/2)", "conclusion": "skipped"}]), {}),
     ("a run of the workflow is the newest one and it failed (an older green run does not count)",
-     world(runs=[dict(world()["runs"][0]), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "failure", "html_url": "u", "pull_requests": [{"number": 7}]}]), {}),
-    ("the only run belongs to another PR that shares the head sha", world(runs=[dict(world()["runs"][0], pull_requests=[{"number": 9}])]), {}),
-    ("the only run lists no PR (a fork run)", world(runs=[dict(world()["runs"][0], pull_requests=[])]), {}),
+     world(runs=[dict(world()["runs"][0]), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "failure", "html_url": "u", "head_branch": "feat", "head_repository": {"full_name": REPO}, "pull_requests": []}]), {}),
+    ("the only run is of another branch that shares the head sha", world(runs=[dict(world()["runs"][0], head_branch="other")]), {}),
+    ("the only run is from a fork's branch of the same name", world(runs=[dict(world()["runs"][0], head_repository={"full_name": "fork/r"})]), {}),
+    ("the PR itself comes from a fork", world(prs=[dict(world()["prs"][0], head={"sha": HEAD, "ref": "feat", "repo": {"full_name": "fork/r"}})]), {}),
+    ("the PR's head repo was deleted (head.repo is null)", world(prs=[dict(world()["prs"][0], head={"sha": HEAD, "ref": "feat", "repo": None})]), {}),
     ("the event is a manual run", world(), {"event": "workflow_dispatch", "ref": "refs/heads/main"}),
     ("the push is to another branch", world(), {"ref": "refs/heads/factory-modular/x"}),
     ("the event is a pull request", world(), {"event": "pull_request"}),
@@ -91,7 +93,7 @@ ck("not covered: no previous tip of main", not c, note)
 c, note = ask(world(), before="0" * 40)
 ck("not covered: the previous tip is the null sha (a new branch)", not c, note)
 
-newest = world(runs=[dict(world()["runs"][0], conclusion="failure"), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/12", "pull_requests": [{"number": 7}]}],
+newest = world(runs=[dict(world()["runs"][0], conclusion="failure"), {"id": 12, "run_number": 6, "created_at": "2026-11-12T09:30:00Z", "status": "completed", "conclusion": "success", "html_url": "https://x/runs/12", "head_branch": "feat", "head_repository": {"full_name": REPO}, "pull_requests": []}],
                jobs_other=[{"name": "e2e (2/2)", "conclusion": "success"}])
 c, note = ask(newest)
 ck("covered when the newest run passed, although an older one failed (a fix was pushed)", c and "https://x/runs/12" in note, note)
@@ -144,6 +146,15 @@ ns = {"__name__": "broken"}
 exec(compile(broken, "broken", "exec"), ns)
 c, _ = ns["decide"](api_for(world(tree_main="T2")), REPO, SHA, BEFORE, "ci.yml", "e2e")
 ck("break test: without the tree comparison the different-tree merge would be called covered", c)
+
+# break test: a decide() that takes every run on the head sha (no branch/repo match) calls another branch's run covered
+src = (ROOT / "scripts" / "ci_covered.py").read_text()
+broken = src.replace('r.get("head_branch") == branch', 'True')
+assert broken != src
+ns = {"__name__": "broken"}
+exec(compile(broken, "broken", "exec"), ns)
+c, _ = ns["decide"](api_for(world(runs=[dict(world()["runs"][0], head_branch="other")])), REPO, SHA, BEFORE, "ci.yml", "e2e")
+ck("break test: without the branch match another branch's run on the same sha would count", c)
 
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)

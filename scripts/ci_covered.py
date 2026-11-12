@@ -16,7 +16,8 @@ on anything else, an API error included:
   3. the tree of the pushed commit equals the tree of that PR's head;
   4. the PR head already had every commit main had before the push (compare behind_by is 0), so the run on the
      PR, which GitHub makes on the head merged with main, tested exactly the head's tree;
-  5. the newest pull_request run of the workflow on that head finished with success;
+  5. the newest pull_request run of the workflow on that head, from the PR's own branch in this repo (not a
+     fork), finished with success;
   6. that run had the full set: a job whose name starts with --marker succeeded (a draft PR runs a light set
      without it).
 
@@ -57,8 +58,11 @@ def decide(api, repo, sha, before, workflow, marker, event="push", ref="refs/hea
     if behind != 0:
         return False, f"PR {pr['number']} head was {behind} commits behind main: everything runs"
     runs = api(f"repos/{repo}/actions/workflows/{workflow}/runs?head_sha={head}&event=pull_request&per_page=50").get("workflow_runs", [])
-    # a head sha can also sit under another PR (a branch opened twice): only runs of this PR count
-    runs = [r for r in runs if pr["number"] in [x.get("number") for x in r.get("pull_requests") or []]]
+    # a merged PR's runs list no pull_requests, so a run is this PR's when it ran on the PR's own branch of this repo
+    # (a fork's run, or a run of another branch that shares the head sha, does not count)
+    branch, prepo = pr["head"].get("ref"), ((pr["head"].get("repo") or {}).get("full_name"))
+    runs = [r for r in runs if branch and prepo == repo and r.get("head_branch") == branch
+            and (r.get("head_repository") or {}).get("full_name") == repo]
     if not runs:
         return False, f"no {workflow} run of PR {pr['number']} on head {head[:8]}: everything runs"
     run = max(runs, key=lambda r: (r.get("created_at") or "", r.get("run_number") or 0))
