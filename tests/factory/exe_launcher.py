@@ -4,7 +4,7 @@ The real Claude Code is a claude.exe, and CreateProcess hands it the command lin
 goes through cmd.exe, which cannot take an argument of several lines or a percent sign, so the scenarios that
 start or tell a station with such a prompt could not run on Windows. This builds the executable form:
 the console launcher pip puts in front of every console script (pip's vendored distlib: t64.exe, t32.exe,
-t64-arm.exe), then a `#!python.exe` line, then a zip holding one `__main__.py`. Running claude.exe starts
+t64-arm.exe; read from the pip in use, or from the pip wheel ensurepip bundles when the venv has none), then a `#!python.exe` line, then a zip holding one `__main__.py`. Running claude.exe starts
 python.exe with the executable itself as the script, which Python runs as a zip application; the arguments are
 passed on untouched, with no shell in between.
 
@@ -46,17 +46,41 @@ def launcher_name(machine: str | None = None) -> str:
     return "t64.exe" if sys.maxsize > 2 ** 32 and m in ("amd64", "x86_64") else "t32.exe"
 
 
-def find_launcher(machine: str | None = None) -> bytes:
-    """The console launcher shipped inside pip. Raises when this pip does not carry it."""
-    name = launcher_name(machine)
+def _from_pip_dir(name: str) -> bytes | None:
     try:
         import pip
-    except ImportError as e:
-        raise RuntimeError("no claude.exe fake: pip is not installed (%s)" % e)
+    except ImportError:
+        return None
     f = Path(pip.__file__).parent / "_vendor" / "distlib" / name
-    if not f.is_file():
-        raise RuntimeError("no claude.exe fake: pip's launcher %s is missing (%s)" % (name, f))
-    return f.read_bytes()
+    return f.read_bytes() if f.is_file() else None
+
+
+def _from_bundled_wheel(name: str) -> bytes | None:
+    """The pip wheel that ensurepip ships inside Python itself. A venv made by `uv venv` has no pip, but the
+    interpreter under it still carries this wheel."""
+    try:
+        import ensurepip
+    except ImportError:
+        return None
+    for whl in sorted((Path(ensurepip.__file__).parent / "_bundled").glob("pip-*.whl")):
+        try:
+            with zipfile.ZipFile(whl) as z:
+                return z.read("pip/_vendor/distlib/" + name)
+        except (OSError, KeyError, zipfile.BadZipFile):
+            continue
+    return None
+
+
+def find_launcher(machine: str | None = None) -> bytes:
+    """The console launcher shipped inside pip: from the pip this Python imports, else from the wheel ensurepip
+    bundles (a `uv venv` has no pip). Raises when neither carries it."""
+    name = launcher_name(machine)
+    data = _from_pip_dir(name)
+    if data is None:
+        data = _from_bundled_wheel(name)
+    if data is None:
+        raise RuntimeError("no claude.exe fake: neither pip nor ensurepip's bundled pip wheel carries the launcher %s" % name)
+    return data
 
 
 def build_exe(path: Path, python: str, fake: Path, extra: list, launcher: bytes | None = None) -> Path:

@@ -66,6 +66,19 @@ ck("the launcher is chosen by the machine",
    [exe_launcher.launcher_name(m) for m in ("ARM64", "aarch64")] == ["t64-arm.exe"] * 2
    and exe_launcher.launcher_name("AMD64") in ("t64.exe", "t32.exe"))
 
+# --- the launcher is found even where the venv has no pip (uv venv) ----------------------------------------
+want = exe_launcher.launcher_name()
+ck("ensurepip's bundled wheel carries the launcher (MZ)", (exe_launcher._from_bundled_wheel(want) or b"")[:2] == b"MZ")
+saved = sys.modules.get("pip", False)
+sys.modules["pip"] = None  # makes `import pip` raise ImportError, as in a venv made by uv venv
+try:
+    ck("with no pip to import, the launcher still comes from the bundled wheel", exe_launcher.find_launcher()[:2] == b"MZ")
+finally:
+    if saved is False:
+        sys.modules.pop("pip", None)
+    else:
+        sys.modules["pip"] = saved
+
 # --- run as a zip application: the arguments arrive whole ---------------------------------------------
 plain = exe_launcher.build_exe(T / "plain.exe", sys.executable, FAKE, [], launcher=STUB)
 state = T / "state"
