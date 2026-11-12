@@ -1,0 +1,26 @@
+# A pull request that changes tares/ or ui/src/ adds a file under changelog.d/ (TR-1249), or carries the
+# label `no changelog`. Its own workflow, not a job in ci.yml: a label starts only this check, never the
+# heavy ones, and it is cheap, so a draft runs it too. Adding or removing the label runs it again.
+name: Changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+
+concurrency:
+  group: changelog-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changelog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: A fragment under changelog.d/, or the label `no changelog`
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          git diff --name-status "origin/$BASE_REF...HEAD" | python3 scripts/check_changelog.py --labels "$LABELS"
