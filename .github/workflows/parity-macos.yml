@@ -13,6 +13,7 @@ on:
       - "README.md"
       - "AGENTS.md"
       - "CLAUDE.md"
+      - ".impeccable.md"
       - "SECURITY.md"
       - "THIRD_PARTY_NOTICES.md"
       - "docs/**"
