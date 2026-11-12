@@ -239,7 +239,7 @@ def home_trusted(paths: CrewPaths, env: dict) -> bool:
     if not isinstance(projects, dict):
         return False
     return any(isinstance(projects.get(k), dict) and projects[k].get("hasTrustDialogAccepted") is True
-               for k in (paths.raw, real))
+               for p in (paths.raw, real) for k in state.trust_keys(p))
 
 
 # ---------------------------------------------------------------------------------------------

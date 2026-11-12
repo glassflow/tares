@@ -141,7 +141,9 @@ tmp = Path(tempfile.mkdtemp(prefix="tares-setup-"))
 home = tmp / "factory"
 home.mkdir()
 old_home = os.environ.get("HOME")
+old_profile = os.environ.get("USERPROFILE")
 os.environ["HOME"] = str(tmp)
+os.environ["USERPROFILE"] = str(tmp)   # Path.home() reads this on Windows, not HOME
 try:
     ck("no record: not trusted", not fs.home_trusted(home))
     (tmp / ".claude.json").write_text(json.dumps({"projects": {str(home.resolve()): {
@@ -212,6 +214,8 @@ try:
 finally:
     if old_home is not None:
         os.environ["HOME"] = old_home
+    if old_profile is not None:
+        os.environ["USERPROFILE"] = old_profile
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

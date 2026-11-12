@@ -18,6 +18,18 @@ from . import perms
 from .errors import CrewError
 from .paths import CREW_NAME_RULE, CrewPaths
 
+def trust_keys(path: str) -> list:
+    """The keys Claude Code may file a folder's trust under in ~/.claude.json: the path as given and,
+    on Windows, with forward slashes, the way Claude Code writes them there (C:/Users/me/factory)."""
+    keys = [path]
+    if os.name == "nt":
+        for p in (path, os.path.normpath(path)):
+            k = p.replace("\\", "/")
+            if k not in keys:
+                keys.append(k)
+    return keys
+
+
 # ---------- JSON text the way jq prints it ----------
 
 
