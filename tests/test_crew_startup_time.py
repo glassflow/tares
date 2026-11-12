@@ -36,10 +36,11 @@ RUNS = 5
 # too, so a slowdown on the shared path lifts it; two bounds keep that honest: the scaled limit never goes
 # above CAP_MS (the slowest CI median seen is 310 ms), and the dispatcher alone must stay under
 # DISPATCH_MS (41 to 66 ms on CI, 33 ms on M1). On a fast machine the limit stays 300 ms, so the M1 check
-# keeps its meaning there.
+# keeps its meaning there. Windows starts processes more slowly and nothing measured it against 100 ms, so
+# there the bound stays at the 150 ms it had before.
 RATIO = 6.5
 CAP_MS = 450
-DISPATCH_MS = 100
+DISPATCH_MS = 150 if os.name == "nt" else 100
 
 P = F = 0
 
