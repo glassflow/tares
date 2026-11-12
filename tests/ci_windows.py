@@ -49,8 +49,8 @@ SKIP = {
 
 # Tests outside tests/test_crew_*.py that the Windows job runs as well (TR-976): test_ci_windows.py runs this
 # runner against fake trees in a folder with a space and a non-ASCII letter. test_parity.py is left out: it takes
-# about 15 minutes, too much for the job, and the claude.cmd launcher it checks is what every parity scenario
-# here already starts the fake Claude Code through.
+# about 15 minutes, too much for the job, and the claude.exe launcher it checks is what every parity scenario
+# here already starts the fake Claude Code through (tests/test_crew_exe_launcher.py runs it on Windows).
 EXTRA = ["test_ci_windows.py"]
 
 # The fewest checks a test may pass on Windows (TR-976, the TR-1066 review's F3). Each number is what the

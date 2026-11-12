@@ -185,7 +185,7 @@ ck("...keeps the rest and points HOME at the scenario and pins the Python engine
 
 # TR-1066: the fake Claude Code is a launcher named `claude`, first on PATH and also CLAUDE_BIN.
 launcher = Path(env_b["CLAUDE_BIN"])
-ck("the fake Claude Code is named claude (claude.cmd on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
+ck("the fake Claude Code is named claude (claude.exe on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
 ck("...in the first folder of PATH", env_b["PATH"].split(os.pathsep)[0] == str(launcher.parent), env_b["PATH"][:200])
 found_claude = shutil.which("claude", path=env_b["PATH"])
 ck("...so `claude` by name finds it, not a real one", found_claude is not None and Path(found_claude).resolve() == launcher.resolve(), str(found_claude))
