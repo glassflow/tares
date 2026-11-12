@@ -107,7 +107,6 @@ tares factory: crew-reviewer runs Claude Code 1.10.0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

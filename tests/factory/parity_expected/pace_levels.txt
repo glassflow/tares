@@ -1569,27 +1569,16 @@ tares factory: pacing: telling links-app-build-m1 (release) in the same conversa
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)",
-      "Bash(factory spawn *)",
       "Bash(tares factory spawn *)",
-      "Bash(factory revive *)",
       "Bash(tares factory revive *)",
-      "Bash(factory restart *)",
       "Bash(tares factory restart *)",
-      "Bash(factory retire *)",
       "Bash(tares factory retire *)",
-      "Bash(factory roster)",
       "Bash(tares factory roster)",
-      "Bash(factory projects)",
       "Bash(tares factory projects)",
-      "Bash(factory crew status)",
       "Bash(tares factory crew status)",
-      "Bash(factory crew halt)",
       "Bash(tares factory crew halt)",
-      "Bash(factory crew halt *)",
       "Bash(tares factory crew halt *)",
-      "Bash(factory crew resume)",
       "Bash(tares factory crew resume)"
     ]
   },
@@ -1645,7 +1634,6 @@ tares factory: pacing: telling links-app-build-m1 (release) in the same conversa
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -1701,7 +1689,6 @@ tares factory: pacing: telling links-app-build-m1 (release) in the same conversa
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -1762,7 +1749,6 @@ tares factory: pacing: telling links-app-build-m1 (release) in the same conversa
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

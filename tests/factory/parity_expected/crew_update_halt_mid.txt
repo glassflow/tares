@@ -104,7 +104,6 @@ tares factory: the crew was halted; nothing more was restarted (tares factory cr
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

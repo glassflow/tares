@@ -128,7 +128,6 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -190,7 +189,6 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -252,7 +250,6 @@ tares factory: a project can only be stricter than the crew (crew autonomy is L3
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

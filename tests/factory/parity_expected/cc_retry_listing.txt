@@ -287,7 +287,6 @@ tares factory: crew-releaser runs Claude Code 1.12.4
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },
@@ -343,7 +342,6 @@ tares factory: crew-releaser runs Claude Code 1.12.4
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

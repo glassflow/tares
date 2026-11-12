@@ -319,7 +319,7 @@ scenario(Scenario(
         ("grant quoted in the allow rules",
          lambda r: allow_has(r, "crew-releaser", 'granted this on %s for all projects, in their own words: "%s". Acting' % (TODAY, GRANT))),
         ("orchestrator may spawn",
-         lambda r: "Bash(factory spawn *)" in r.station_settings("crew-orchestrator").get("permissions", {}).get("allow", [])),
+         lambda r: "Bash(tares factory spawn *)" in r.station_settings("crew-orchestrator").get("permissions", {}).get("allow", [])),
         ("stations launch with a 200k autocompact window",
          lambda r: any(c["args"][2] == "crew-orchestrator" and "--autocompact" in c["args"]
                        and c["args"][c["args"].index("--autocompact") + 1] == "200000"
@@ -859,7 +859,7 @@ scenario(Scenario(
         ("stations turn the plugin on, whatever the person's settings say",
          lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
         ("orchestrator may spawn",
-         lambda r: "Bash(factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
+         lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("orchestrator may spawn as tares factory",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
@@ -1145,8 +1145,8 @@ scenario(Scenario(
          lambda r: r.code(3) == 1 and "is not one of Links App's repos on Tares" in r.out(3)),
         ("a folder that is no repository is refused", lambda r: r.code(4) == 1 and "nowhere is not a git repository" in r.out(4)),
         ("too few arguments say how to call it",
-         lambda r: r.code(5) == 1 and 'usage: factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"' in r.out(5)
-         and r.code(8) == 1 and 'usage: factory spawn helper <parent-station> <slug> "<task>"' in r.out(8)),
+         lambda r: r.code(5) == 1 and 'usage: tares factory spawn builder [--autonomy L3-review] <project> <slug> <repo path> "<task>"' in r.out(5)
+         and r.code(8) == 1 and 'usage: tares factory spawn helper <parent-station> <slug> "<task>"' in r.out(8)),
         ("the repo hides .factory from git and has a worktrees folder",
          lambda r: ".factory/" in (r.tmp / "links" / ".git" / "info" / "exclude").read_text(encoding="utf-8").split("\n")
          and (r.tmp / "links" / ".factory" / "worktrees").is_dir()),
@@ -1252,7 +1252,7 @@ scenario(Scenario(
         ("a second helper of the same parent", lambda r: r.code(4) == 0 and "crew-reviewer-second" in stations_json(r)),
         ("the releaser's helper", lambda r: r.code(5) == 0 and stations_json(r)["crew-releaser-deploy"]["role"] == "helper"
          and station_json(r, "crew-releaser-deploy")["env"]["FACTORY_PARENT"] == "crew-releaser"),
-        ("a helper call without a task says how to call it", lambda r: r.code(6) == 1 and "usage: factory spawn helper" in r.out(6)),
+        ("a helper call without a task says how to call it", lambda r: r.code(6) == 1 and "usage: tares factory spawn helper" in r.out(6)),
         ("only the new helpers started", lambda r: r.launches() == 5),
     ],
     covers=[],
@@ -1856,7 +1856,7 @@ def _freeze_state(tmp: Path) -> dict:
     frozen = _frozen_of(tmp) or {}
     snap = tmp / "crew" / "frozen-kit"
     return {"frozen": bool(frozen), "keys": sorted(frozen), "at": frozen.get("at"), "by": frozen.get("by"),
-            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "factory").exists(),
+            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "mcp-headers").exists(),
             "extra": (tmp / "crew" / "frozen-kit.new").exists() or (tmp / "crew" / "freezing").exists()}
 
 
@@ -1995,7 +1995,7 @@ def _fz_marks(tmp: Path) -> dict:
             "plugin": {s: v.get("plugin") for s, v in rows.items()}, "kit": {s: v.get("kit") for s, v in rows.items()},
             "line": {s: line(s) for s in rows},
             "plugin_arg": {s: plugin_dir(s) for s in rows}, "resume_arg": {s: resumed(s) for s in rows},
-            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "factory", os.X_OK),
+            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "mcp-headers", os.X_OK),
             "same": _same_tree(snap, kit), "kept": (snap / ".kept").exists(), "marker": (crew / "freezing").exists(),
             "checkout_file": (crew / "kit-checkout").exists()}
 
@@ -3163,7 +3163,7 @@ scenario(Scenario(
         ("revive --fresh starts without --resume", lambda r: r.code(2) == 0 and _resumes(r)[2] is None),
         ("revive writes revived and restarted-fresh events", lambda r: "revived" in _events(r) and "restarted-fresh" in _events(r)),
         ("a running station is refused", lambda r: r.code(3) == 1 and "crew-reviewer is running; message it instead" in r.out(3)),
-        ("a retired station is refused", lambda r: r.code(4) == 1 and "crew-reviewer was retired; factory spawn starts it again" in r.out(4)),
+        ("a retired station is refused", lambda r: r.code(4) == 1 and "crew-reviewer was retired; tares factory spawn starts it again" in r.out(4)),
         ("an unknown station dies", lambda r: r.code(5) == 1 and "nobody is not a recorded station" in r.out(5)),
     ],
     covers=[],
@@ -7867,7 +7867,7 @@ scenario(Scenario(
     tares=SETTINGS_TARES,
     steps=[Step(["settings", role], env=SETTINGS_ENV) for role in ("orchestrator", "reviewer", "releaser")],
     checks=[("$s may run factory tidy",
-             lambda r: all(r.code(i) == 0 and "Bash(factory tidy *)" in _printed(r, i)["permissions"]["allow"] for i in range(3)))],
+             lambda r: all(r.code(i) == 0 and "Bash(tares factory tidy *)" in _printed(r, i)["permissions"]["allow"] for i in range(3)))],
     covers=["$s may run factory tidy"],
 ))
 
@@ -9464,19 +9464,11 @@ def _compat_health(r: Run) -> dict:
 
 
 def _compat_no_capability_ask() -> bool:
-    """Neither `status` nor `down` asks for a capability: bash's cmd_status and cmd_down (as the suite greps them),
-    and the Python functions that are the same commands."""
+    """Neither `status` nor `down` asks for a capability: the Python functions of the two commands."""
     import inspect
     sys.path.insert(0, str(ROOT))
     from tares.crew import lifecycle, views
-    text = (ROOT / "claude-plugin" / "bin" / "factory").read_text(encoding="utf-8")
-    bodies = []
-    for fn in ("cmd_status", "cmd_down"):
-        m = re.search(r"^%s\(\)(.*?)^\}" % fn, text, re.M | re.S)
-        if not m:
-            return False
-        bodies.append(m.group(1))
-    bodies += [inspect.getsource(views.cmd_status), inspect.getsource(lifecycle.down)]
+    bodies = [inspect.getsource(views.cmd_status), inspect.getsource(lifecycle.down)]
     return not any("need_capability" in b for b in bodies)
 
 

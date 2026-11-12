@@ -6,7 +6,7 @@ exit: 0
 tares factory: crew-reviewer runs an older Claude Code than 1.5.0; restarting it on 1.5.0 now that it's idle, in the same conversation
   ✓ started crew-reviewer (opus, high)
 tares factory: crew-reviewer runs Claude Code 1.5.0
-tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the one stations.json does not list (factory roster)
+tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the one stations.json does not list (tares factory roster)
 -- after --
 {
   "alive": {},
@@ -109,7 +109,6 @@ tares factory: TWO SESSIONS named crew-reviewer: dup00001, 00000001; stop the on
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ]
   },

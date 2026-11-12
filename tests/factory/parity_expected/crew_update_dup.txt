@@ -5,7 +5,7 @@ exit: 1
 -- stderr --
 tares factory: crew-orchestrator already runs Claude Code 2.1.200
 tares factory: crew-reviewer already runs Claude Code 2.1.200
-tares factory: TWO SESSIONS named crew-reviewer: bbbb0002, dup00001; stop the one stations.json does not list (factory roster)
+tares factory: TWO SESSIONS named crew-reviewer: bbbb0002, dup00001; stop the one stations.json does not list (tares factory roster)
 tares factory: not every station runs Claude Code 2.1.200: two-sessions
 == step: crew update ==
 exit: 0
