@@ -114,6 +114,13 @@ subprocess.run(FACTORY, capture_output=True, env=ENV, cwd=str(T))
 asked = [json.loads(line)["args"] for line in calls.read_text(encoding="utf-8").splitlines() if line.strip()] if calls.is_file() else []
 ck("a roster asks Claude Code for the session list once", asked.count(["agents", "--json"]) == 1, str(asked))
 
+if statistics.median(ms) >= limit:  # where the time goes, for the log of a slow machine
+    (T / "roster_main.py").write_text("import sys; sys.argv = ['tares', 'factory', 'roster']\nfrom tares.cli import main; main()\n")
+    prof = subprocess.run([sys.executable, "-m", "cProfile", "-s", "cumulative", str(T / "roster_main.py")],
+                          capture_output=True, env=ENV, cwd=str(T))
+    print("roster profile (top by cumulative time):")
+    print("\n".join((prof.stdout + prof.stderr).decode("utf-8", "replace").splitlines()[:28]))
+
 shutil.rmtree(T, ignore_errors=True)
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

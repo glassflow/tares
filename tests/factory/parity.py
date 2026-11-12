@@ -5910,7 +5910,7 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
 
 # what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
 WIN_ROOT_QUOTED = re.compile(r'(--plugin-root )"([^"]*)"')
-WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.(?:cmd|exe)")
+WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/(?:claude|tares))\.(?:cmd|exe)", re.I)
 WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 
 
