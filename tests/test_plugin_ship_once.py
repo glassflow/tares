@@ -115,6 +115,21 @@ def hooks_side_by_side():
         text=True, env=env, capture_output=True, timeout=60)
     sent = Counter(o["uuid"] for o in t.lines if o.get("uuid"))
     check("the lock is let go: a later hook ships the next line", sent.get("u3") == 1, dict(sent))
+    # a killed holder left a fresh lock: the session's end ships its last line anyway (no hook
+    # comes after it) and leaves the lock that is not its own
+    lock = [os.path.join(r, f)[:-len(".off")] + ".lock" for r, _, fs in os.walk(os.path.join(d, "data"))
+            for f in fs if f.endswith(".off")]
+    check("the transcript has an offset file to find its lock by", len(lock) == 1, lock)
+    if lock:
+        open(lock[0], "w").close()
+        with open(path, "a", newline="\n") as fh:
+            fh.write(json.dumps(call("s", 4, "[TF:DONE] bye", mid="msg_3")) + "\n")
+        subprocess.run([sys.executable, SHIP], input=json.dumps(
+            {"hook_event_name": "SessionEnd", "session_id": "s", "cwd": d, "transcript_path": path}),
+            text=True, env=env, capture_output=True, timeout=60)
+        sent = Counter(o["uuid"] for o in t.lines if o.get("uuid"))
+        check("a SessionEnd that cannot get the lock still ships the last line", sent.get("u4") == 1, dict(sent))
+        check("...and leaves the lock that is not its own", os.path.exists(lock[0]))
     t.close()
     shutil.rmtree(d, ignore_errors=True)
 
@@ -136,6 +151,16 @@ def tares_lists_each_call_once():
     store.append([_raw_envelope(c, blob("s", v, f))])
     got = [(m["type"], m["first_line"]) for m in store.protocol_messages("claude_code")]
     check("each message is listed once, in order",
+          got == [("VERDICT", "ok"), ("FYI", "note")], got)
+    # a request copy of another call, stored by an older Tares: skipped by its type, not by an id seen before
+    store.append([_raw_envelope(c, blob("s", call("s", 9, "[TF:FYI] only in a copy", mid="msg_9")))])
+    got = [(m["type"], m["first_line"]) for m in store.protocol_messages("claude_code")]
+    check("a request copy holding a call not seen elsewhere is not listed", ("FYI", "only in a copy") not in got, got)
+    # a resumed session copies the old lines into its own file under a new session id: same call ids
+    resumed = [dict(o, sessionId="s2", uuid="r" + o["uuid"]) for o in (v, f)]
+    store.append(c.map_payload(resumed))
+    got = [(m["type"], m["first_line"]) for m in store.protocol_messages("claude_code")]
+    check("a resumed session's copy of a call is listed once",
           got == [("VERDICT", "ok"), ("FYI", "note")], got)
     store.con.close()
     shutil.rmtree(d, ignore_errors=True)

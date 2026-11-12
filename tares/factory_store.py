@@ -979,10 +979,11 @@ class FactoryStore:
                         and str(b.get("name") or "").split("__")[-1] == "SendMessage"):
                     continue
                 # one call, once: the same transcript line can be stored more than once
+                # (a resumed session's file copies the old lines under its own session id)
                 if b.get("id"):
-                    if (sid, b["id"]) in seen:
+                    if b["id"] in seen:
                         continue
-                    seen.add((sid, b["id"]))
+                    seen.add(b["id"])
                 inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                 text = str(inp.get("message") or inp.get("content") or "")
                 m = re.match(r"\s*\[TF:([A-Z_]+)\]\s*(.*)", text)

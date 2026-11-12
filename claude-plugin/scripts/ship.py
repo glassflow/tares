@@ -755,10 +755,10 @@ def ship_lock(cfg: dict, transcript: str, wait: float = 0) -> str:
         except FileExistsError:
             try:
                 if time.time() - os.path.getmtime(path) > LOCK_STALE:
-                    os.remove(path)
+                    os.remove(path)   # best effort: two hooks taking over at once may still both ship
                     continue
             except OSError:
-                continue
+                pass   # gone already, or not ours to remove: fall through to the deadline and the sleep
         except OSError:
             return ""
         if time.monotonic() >= deadline:
@@ -861,36 +861,37 @@ def main() -> None:
 
     shipped_ok = True
     lock = ""
-    if transcript and os.path.isfile(transcript):
+    has_transcript = bool(transcript and os.path.isfile(transcript))
+    if has_transcript:
         # the async hooks of one session run side by side; only one ships its transcript at a
         # time, or two read the same offset and post the same lines (each call listed twice)
         # a turn's end waits a little: no hook may come after it for a long time, and its last
         # lines (a person's answer the desk looks for) must not wait for the next turn
         lock = ship_lock(cfg, transcript, wait=LOCK_WAIT.get(event, 0))
+    # no hook comes after SessionEnd, so it ships what is left even when the lock stayed held (a
+    # killed holder's fresh lock): a line posted twice is listed once, a line never sent is lost
+    ships = bool(lock) or (event == "SessionEnd" and has_transcript)
     try:
-        if lock:
+        if ships:
             shipped_ok, flow = ship_main(cfg, hook, transcript, flow)
-        if lock and session_id and shipped_ok:
+        if ships and session_id and shipped_ok:
             ship_subagents(cfg, hook, flow, read_project(data_dir, session_id))
-    except BaseException:
-        release_lock(lock) if lock else None
-        raise
-    if lock and event != "SessionEnd":
-        release_lock(lock)
-    if session_id and event != "SessionEnd":
-        # whatever became of the transcript: a session whose lines can't get through is still alive
-        report_state(cfg, hook, event, flow)
+        if lock and event != "SessionEnd":
+            release_lock(lock)
+            lock = ""
+        if session_id and event != "SessionEnd":
+            # whatever became of the transcript: a session whose lines can't get through is still alive
+            report_state(cfg, hook, event, flow)
 
-    if event == "SessionEnd" and session_id and flow:
-        # the line the challenger_session_ended trigger watches; the marker goes with the session
-        ship_lines(cfg, [synthetic_line(hook, "session_end", flow)])
-        write_flow(data_dir, session_id, "")
+        if event == "SessionEnd" and session_id and flow:
+            # the line the challenger_session_ended trigger watches; the marker goes with the session
+            ship_lines(cfg, [synthetic_line(hook, "session_end", flow)])
+            write_flow(data_dir, session_id, "")
 
-    if event == "SessionEnd" and lock:
-        try:
-            if shipped_ok:
-                drain_main(cfg, hook, transcript, flow)
-        finally:
+        if event == "SessionEnd" and ships and shipped_ok:
+            drain_main(cfg, hook, transcript, flow)
+    finally:
+        if lock:
             release_lock(lock)
 
 
