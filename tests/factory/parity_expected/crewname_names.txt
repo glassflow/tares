@@ -1,0 +1,60 @@
+== step: roster ==
+exit: 1
+-- stdout --
+crew: a (orchestrator: a-orchestrator)
+-- stderr --
+tares factory: no crew yet in <TMP>/empty; run: tares factory crew up
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "Bad_Name" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "-x" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "UPPER" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "a b" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "x-build-y" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "build" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens
+== step: roster ==
+exit: 1
+-- stdout --
+crew: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa (orchestrator: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-orchestrator)
+-- stderr --
+tares factory: no crew yet in <TMP>/empty; run: tares factory crew up
+== step: status ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: the crew name "Bad_Name" (from FACTORY_CREW_NAME) is not valid: it is 1 to 31 characters: a-z, 0-9 and hyphens, starting with a letter or digit, and not containing the word build between hyphens

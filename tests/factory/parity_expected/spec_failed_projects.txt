@@ -1,0 +1,88 @@
+== step: spec --project Acme web ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: planning in the repo <TMP>/shop
+tares factory: opening Claude as acme-web-spec in <TMP>/shop, with /tares:spec.
+         It interviews you, one question at a time, and writes the spec, milestones and tickets
+         into a project on Tares (http://127.0.0.1:<PORT>). It ends by asking whether to hand the project to the crew.
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== step: spec --project Acme web ==
+exit: 1
+-- stdout --
+
+-- stderr --
+tares factory: run tares factory spec inside the git repo the project builds on, or in a folder that holds its repos
+-- after --
+{
+  "env": {
+    "PWD": "<TMP>/shop",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:<PORT>/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "has_auth_token": false,
+  "n": 1,
+  "settings": {
+    "enabledPlugins": {
+      "tares@inline": true
+    }
+  }
+}
+== file crew/stations/spec.settings.json ==
+{
+  "enabledPlugins": {
+    "tares@inline": true
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-n", "acme-web-spec", "--plugin-dir", "<REPO>/claude-plugin", "--settings", "<SETTINGS-FILE>", "/tares:spec (project name: Acme web)"], "cwd": "<TMP>/shop"}
+== asked of Tares ==
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 
+GET /health key=no 
+POST /mcp key=no {
+  "id": 1,
+  "jsonrpc": "2.0",
+  "method": "initialize",
+  "params": {
+    "capabilities": {},
+    "clientInfo": {
+      "name": "tares-factory",
+      "version": "0"
+    },
+    "protocolVersion": "2025-03-26"
+  }
+}
+GET /api/projects key=no 

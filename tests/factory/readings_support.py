@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Runs the watch between its rounds for the parity scenarios `usage_watch_*` (TR-1163).
 
-    readings_support.py <bash|python> watch <ticks>
+    readings_support.py watch <ticks>
 
-Starts `python -m tares.crew crew watch --interval 60` (the engine is TARES_FACTORY_ENGINE), which spends its
+Starts `python -m tares.crew crew watch --interval 60`, which spends its
 time napping and serving readings, and waits until the fake Tares says it has answered the asks route <ticks>
 times (GET {TARESD_URL}/ticks), so a tick is waited for by what happened and not by a pause. Then it stops the
 watch and prints the lines of the watch's own output that say it could not read something.
@@ -30,10 +30,10 @@ def ticks(url: str) -> int:
 
 
 def main(argv: list) -> int:
-    if len(argv) != 3 or argv[0] not in ("bash", "python") or argv[1] != "watch" or not argv[2].isdigit():
+    if len(argv) != 2 or argv[0] != "watch" or not argv[1].isdigit():
         print(__doc__, file=sys.stderr)
         return 2
-    want = int(argv[2])
+    want = int(argv[1])
     url = os.environ["TARESD_URL"]
     env = {**os.environ, "FACTORY_ASK_POLL": os.environ.get("FACTORY_ASK_POLL", "0.2")}
     with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as log:

@@ -1,15 +1,14 @@
-"""Building and starting a station in Python (tares/crew/launch.py, TR-953) does what the bash engine does.
+"""Building and starting a station in Python (tares/crew/launch.py, TR-953) does what the bash engine did.
 
 Part 1 needs no bash: the small rules (model check, levels, the parent's role, grants into allow rules), the
 quoting of the status line command on Mac and on Windows (the Windows form is tested without Windows), the
 cksum that fingerprints the kit, the kit folder, the two notes that are not ported yet, the idle wake, and what
 a started session is given (its environment holds no key, its command line holds no token).
 
-Part 2 runs the same call on both engines in a throwaway crew of its own (tests/factory/launch_support.py:
-a fake Tares, a copy of the kit, the fake Claude Code) and compares what they leave: the settings file of every
-role, also for a crew home with a space in its path, and the `claude` command line of a start. It is skipped,
-with the reason printed, when bash or jq is missing or on Windows. The scenarios of the parity harness
-(`parity.py launch_*`) go further, one assertion at a time.
+Part 2 runs the Python engine in a throwaway crew of its own (tests/factory/launch_support.py: a fake Tares, a
+copy of the kit, the fake Claude Code) and checks what it leaves: the settings file of every role, also for a crew
+home with a space in its path, and the `claude` command line of a start. The scenarios of the parity harness
+(`parity.py launch_*`) compare the same output with what bash printed and wrote, one assertion at a time.
 
 The test runs in a fresh HOME with fake keys and no keyring: nothing of the person's is read or written.
 
@@ -302,31 +301,27 @@ ck("Windows: the worktree rule lists the project's repos with forward slashes",
 
 
 # ---------------------------------------------------------------------------------------------
-# Part 2: bash and Python side by side
+# Part 2: the Python engine alone (the bash comparison went with the bash engine, TR-1172; the
+# parity scenarios `launch_*` hold what bash printed and wrote)
 
-def drive(engine, tmp, steps, env=None):
+def drive(tmp, steps, env=None):
     """Run the driver once per step in a throwaway crew under tmp; returns [(code, stdout, stderr)]."""
     tmp.mkdir(parents=True, exist_ok=True)
-    base = parity.crew_env(tmp, engine)
+    base = parity.crew_env(tmp)
     out = []
     for op, args, world, setup in steps:
         e = {**base, **(env or {}), "LAUNCH_WORLD": json.dumps(world), "LAUNCH_SETUP": json.dumps(setup or {})}
-        p = subprocess.run([sys.executable, str(HERE / "factory" / "launch_support.py"), engine, op, *args], cwd=str(ROOT),
+        p = subprocess.run([sys.executable, str(HERE / "factory" / "launch_support.py"), op, *args], cwd=str(ROOT),
                            env=e, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
         out.append((p.returncode, p.stdout, p.stderr))
     return out
 
 
 def settings_of(tmp, station):
-    """The station's settings file, parsed; the status line command is returned apart (its quoting differs
-    by design: shlex.quote against printf %q), as the words a shell makes of it."""
+    """The station's settings file, parsed; the status line command is returned apart, as the words a shell makes of it."""
     doc = json.loads((tmp / "crew" / "stations" / f"{station}.settings.json").read_text(encoding="utf-8"))
     words = shlex.split(doc["statusLine"].pop("command"))
     return doc, words
-
-
-def normal(doc, tmp):
-    return json.loads(parity.render_json(parity.norm_json(doc, tmp)))
 
 
 def world(autonomy="L3-review", projects=None, **settings):
@@ -336,98 +331,66 @@ def world(autonomy="L3-review", projects=None, **settings):
                                                    "projects": {}}}
 
 
-why = parity.bash_available()
-if why:
-    print(f"skip the bash comparison: {why}")
-else:
-    for label, base in (("a plain path", "tares-launch-plain-"), ("a path with a space", "tares launch spaced ")):
-        print(f"bash and Python write the same settings, {label}")
-        links = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
-        cases = [("crew-orchestrator", "orchestrator", "", "", ""), ("crew-reviewer", "reviewer", "", "", ""),
-                 ("crew-releaser", "releaser", "", "", ""),
-                 ("links-app-build-m1", "builder", "crew-orchestrator", "Links App", "{TMP}/links"),
-                 ("links-app-build-m1-h1", "helper", "links-app-build-m1", "Links App", "{TMP}/links")]
-        tmps = {e: Path(tempfile.mkdtemp(prefix=f"{base}{e}-", dir=SCRATCH)).resolve() for e in ("bash", "python")}
-        for e, tmp in tmps.items():
-            steps = [("write_settings", list(c), world(projects=[links]), {"stations": {"links-app-build-m1": {"autonomy": "L3-review", "project_id": "uc_links"}}})
-                     for c in cases]
-            res = drive(e, tmp, steps)
-            ck(f"{e}: every write_settings exits 0 and prints the file's path", all(r[0] == 0 for r in res) and all(r[1].strip().endswith(".settings.json") for r in res),
-               str([(r[0], r[2][-120:]) for r in res]))
-        for station, role, *_ in cases:
-            docs = {}
-            for e, tmp in tmps.items():
-                docs[e], words = settings_of(tmp, station)
-                docs[e] = normal(docs[e], tmp)
-                docs[e + "_words"] = [parity.norm_text(w, tmp) for w in words]
-            ck(f"{role} {station}: same settings (key order aside)", docs["bash"] == docs["python"],
-               "\n".join(k for k in docs["bash"] if docs["bash"].get(k) != docs["python"].get(k)))
-            ck(f"{role} {station}: the status line is `tares hook statusline --plugin-root <kit>` in both, the kit as one word",
-               docs["bash_words"] == docs["python_words"] and docs["python_words"][:4] == HEAD
-               and len(docs["python_words"]) == 5, str(docs["python_words"]))
-        if " " in tmps["python"].name:
-            _, words = settings_of(tmps["python"], "crew-reviewer")
-            ck("the crew home with a space is one word in the status line and in the file's own paths",
-               " " in tmps["python"].name and len(words) == 5)
-            doc = json.loads((tmps["python"] / "crew" / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8"))
-            ck("JSON paths use forward slashes", "\\" not in json.dumps(doc["env"]).replace("\\n", ""), json.dumps(doc["env"])[:200])
-        ck("no token in a settings file", all(FAKE_TOKEN not in p.read_text(encoding="utf-8", errors="replace")
-                                              for t in tmps.values() for p in (t / "crew" / "stations").glob("*.settings.json")))
+for label, base in (("a plain path", "tares-launch-plain-"), ("a path with a space", "tares launch spaced ")):
+    print(f"the Python engine writes the settings, {label}")
+    links = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
+    cases = [("crew-orchestrator", "orchestrator", "", "", ""), ("crew-reviewer", "reviewer", "", "", ""),
+             ("crew-releaser", "releaser", "", "", ""),
+             ("links-app-build-m1", "builder", "crew-orchestrator", "Links App", "{TMP}/links"),
+             ("links-app-build-m1-h1", "helper", "links-app-build-m1", "Links App", "{TMP}/links")]
+    tmp = Path(tempfile.mkdtemp(prefix=f"{base}python-", dir=SCRATCH)).resolve()
+    steps = [("write_settings", list(c), world(projects=[links]), {"stations": {"links-app-build-m1": {"autonomy": "L3-review", "project_id": "uc_links"}}})
+             for c in cases]
+    res = drive(tmp, steps)
+    ck("every write_settings exits 0 and prints the file's path", all(r[0] == 0 for r in res) and all(r[1].strip().endswith(".settings.json") for r in res),
+       str([(r[0], r[2][-120:]) for r in res]))
+    for station, role, *_ in cases:
+        _, words = settings_of(tmp, station)
+        words = [parity.norm_text(w, tmp) for w in words]
+        ck(f"{role} {station}: the status line is `tares hook statusline --plugin-root <kit>`, the kit as one word",
+           words[:4] == HEAD and len(words) == 5, str(words))
+    if " " in tmp.name:
+        _, words = settings_of(tmp, "crew-reviewer")
+        ck("the crew home with a space is one word in the status line and in the file's own paths",
+           " " in tmp.name and len(words) == 5)
+        doc = json.loads((tmp / "crew" / "stations" / "crew-reviewer.settings.json").read_text(encoding="utf-8"))
+        # ensure_ascii off: a letter outside ASCII in the profile folder would print as \u00e9, a backslash that is not a path separator
+        env_text = json.dumps(doc["env"], ensure_ascii=False)
+        ck("JSON paths use forward slashes", "\\" not in env_text.replace("\\n", ""), str({k: v for k, v in doc["env"].items() if "\\" in str(v)})[:300])
+    ck("no token in a settings file", all(FAKE_TOKEN not in p.read_text(encoding="utf-8", errors="replace")
+                                          for p in (tmp / "crew" / "stations").glob("*.settings.json")))
 
-    print("bash and Python start a station with the same command line and the same environment")
-    tmps = {e: Path(tempfile.mkdtemp(prefix=f"tares crew launch argv {e} ", dir=SCRATCH)).resolve() for e in ("bash", "python")}
-    secret = {"TARES_AUTH_TOKEN": FAKE_TOKEN, "TARES_FACTORY_SOURCE": "/x/source", "TARES_FACTORY_KEY_SOURCE": "/x/keysource"}
-    runs = {}
-    for e, tmp in tmps.items():
-        steps = [("launch", [f"crew-{role}", role, "", "", "", "{TMP}/crew", model, "high", f"Boot as the {role} station"], world(), None)
-                 for role, model in (("orchestrator", "opus"), ("reviewer", "sonnet"))]
-        steps.append(("launch", ["crew-releaser", "releaser", "", "", "", "{TMP}/crew", "sonnet", "high", "go", "sess-9"], world(), None))
-        res = drive(e, tmp, steps, env=secret)
-        calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
-        runs[e] = (res, [c for c in calls if c["args"] and c["args"][0] == "--bg"], tmp)
-    ck("both start three stations", all(r[0] == 0 for e in runs for r in runs[e][0]) and all(len(runs[e][1]) == 3 for e in runs),
-       str([(e, [r[0] for r in runs[e][0]], len(runs[e][1])) for e in runs]))
-    norm_calls = {e: [{"cwd": parity.norm_text(c["cwd"], runs[e][2]), "args": [parity.norm_text(a, runs[e][2]) for a in c["args"]]}
-                      for c in runs[e][1]] for e in runs}
-    ck("the claude command lines are the same, argument for argument", norm_calls["bash"] == norm_calls["python"],
-       json.dumps(norm_calls)[:300])
-    a = norm_calls["python"][0]["args"]
-    ck("the line is --bg -n <station> --model --effort --permission-mode auto --settings --autocompact --append-system-prompt --plugin-dir, prompt last",
-       a[:3] == ["--bg", "-n", "crew-orchestrator"] and a[3:11:2] == ["--model", "--effort", "--permission-mode", "--settings"]
-       and "--autocompact" in a and "--append-system-prompt" in a and "--plugin-dir" in a and a[-1] == "Boot as the orchestrator station", str(a)[:300])
-    ck("a resumed station: --resume with the session id, the prompt still last",
-       norm_calls["python"][2]["args"][-3:-1] == ["--resume", "sess-9"] and norm_calls["python"][2]["args"][-1] == "go")
-    for e, (res, calls, tmp) in runs.items():
-        env_text = (tmp / "claude" / "last.env").read_text(encoding="utf-8")
-        env_map = dict(x.split("=", 1) for x in env_text.splitlines() if "=" in x)
-        ck(f"{e}: the session is started without the person's key or the key source (TARES_AUTH_TOKEN, TARES_FACTORY_*SOURCE)",
-           not any(k in env_map for k in secret) and FAKE_TOKEN not in env_text, str([k for k in secret if k in env_map]))
-        ck(f"{e}: the session gets NO_COLOR=1 and FORCE_COLOR=0", env_map.get("NO_COLOR") == "1" and env_map.get("FORCE_COLOR") == "0",
-           f"{env_map.get('NO_COLOR')!r} {env_map.get('FORCE_COLOR')!r}")
-        ck(f"{e}: no token in the command lines or in the output", all(FAKE_TOKEN not in json.dumps(c) for c in calls)
-           and all(FAKE_TOKEN not in r[1] + r[2] for r in res))
-    st = {e: json.loads((runs[e][2] / "crew" / "stations.json").read_text(encoding="utf-8")) for e in runs}
-    keys = {e: sorted(st[e]["crew-orchestrator"]) for e in st}
-    ck("stations.json records the same fields for a started station", keys["bash"] == keys["python"], str(keys))
-    ck("...and the same kit fingerprint (cksum)", st["bash"]["crew-orchestrator"]["kit"] == st["python"]["crew-orchestrator"]["kit"],
-       f"{st['bash']['crew-orchestrator']['kit']} vs {st['python']['crew-orchestrator']['kit']}")
-    kit_py = L.kit_version(runs["python"][2] / "kit")
-    kit_sh = drive("bash", tmps["bash"], [("kit_version", [str(runs["bash"][2] / "kit")], world(), None)])[0][1].strip()
-    ck("kit_version of the same folder: Python equals bash", kit_py == drive("python", tmps["python"], [("kit_version", [str(runs["python"][2] / "kit")], world(), None)])[0][1].strip()
-       and kit_sh == st["bash"]["crew-orchestrator"]["kit"], f"{kit_py} vs {kit_sh}")
-
-    print("bash and Python agree on the small functions")
-    probes = [("level_rank", ["L3-review"]), ("level_rank", ["L4-ship"]), ("level_rank", ["L9"]), ("level_text", ["L3-review"]),
-              ("level_text", ["L4-ship"]), ("check_model", ["claude-haiku-4-5", "crew-x"]), ("check_model", ["opus", "crew-x"]),
-              ("parent_role", ["crew-orchestrator"]), ("parent_role", ["p-build-m1"]), ("parent_role", ["zzz"]),
-              ("idle_wake_note", []), ("plugin_flags", [])]
-    t_b = Path(tempfile.mkdtemp(prefix="tares crew launch small bash ", dir=SCRATCH)).resolve()
-    t_p = Path(tempfile.mkdtemp(prefix="tares crew launch small python ", dir=SCRATCH)).resolve()
-    rb = drive("bash", t_b, [(op, a, world(), None) for op, a in probes])
-    rp = drive("python", t_p, [(op, a, world(), None) for op, a in probes])
-    same = [(op, a) for (op, a), x, y in zip(probes, rb, rp)
-            if (x[0], parity.norm_text(x[1], t_b), parity.norm_text(x[2], t_b)) != (y[0], parity.norm_text(y[1], t_p), parity.norm_text(y[2], t_p))]
-    ck(f"{len(probes)} calls give the same exit code, output and error text", not same, str(same))
+print("the Python engine starts a station with the right command line and environment")
+tmp = Path(tempfile.mkdtemp(prefix="tares crew launch argv python ", dir=SCRATCH)).resolve()
+secret = {"TARES_AUTH_TOKEN": FAKE_TOKEN, "TARES_FACTORY_SOURCE": "/x/source", "TARES_FACTORY_KEY_SOURCE": "/x/keysource"}
+steps = [("launch", [f"crew-{role}", role, "", "", "", "{TMP}/crew", model, "high", f"Boot as the {role} station"], world(), None)
+         for role, model in (("orchestrator", "opus"), ("reviewer", "sonnet"))]
+steps.append(("launch", ["crew-releaser", "releaser", "", "", "", "{TMP}/crew", "sonnet", "high", "go", "sess-9"], world(), None))
+res = drive(tmp, steps, env=secret)
+all_calls = [json.loads(x) for x in (tmp / "claude" / "calls.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+calls = [c for c in all_calls if c["args"] and c["args"][0] == "--bg"]
+ck("it starts three stations", all(r[0] == 0 for r in res) and len(calls) == 3, str(([r[0] for r in res], len(calls))))
+norm_calls = [{"cwd": parity.norm_text(c["cwd"], tmp), "args": [parity.norm_text(a, tmp) for a in c["args"]]} for c in calls]
+a = norm_calls[0]["args"]
+ck("the line is --bg -n <station> --model --effort --permission-mode auto --settings --autocompact --append-system-prompt --plugin-dir, prompt last",
+   a[:3] == ["--bg", "-n", "crew-orchestrator"] and a[3:11:2] == ["--model", "--effort", "--permission-mode", "--settings"]
+   and "--autocompact" in a and "--append-system-prompt" in a and "--plugin-dir" in a and a[-1] == "Boot as the orchestrator station", str(a)[:300])
+ck("a resumed station: --resume with the session id, the prompt still last",
+   norm_calls[2]["args"][-3:-1] == ["--resume", "sess-9"] and norm_calls[2]["args"][-1] == "go")
+env_text = (tmp / "claude" / "last.env").read_text(encoding="utf-8")
+env_map = dict(x.split("=", 1) for x in env_text.splitlines() if "=" in x)
+ck("the session is started without the person's key or the key source (TARES_AUTH_TOKEN, TARES_FACTORY_*SOURCE)",
+   not any(k in env_map for k in secret) and FAKE_TOKEN not in env_text, str([k for k in secret if k in env_map]))
+ck("the session gets NO_COLOR=1 and FORCE_COLOR=0", env_map.get("NO_COLOR") == "1" and env_map.get("FORCE_COLOR") == "0",
+   f"{env_map.get('NO_COLOR')!r} {env_map.get('FORCE_COLOR')!r}")
+ck("no token in the command lines or in the output", all(FAKE_TOKEN not in json.dumps(c) for c in calls)
+   and all(FAKE_TOKEN not in r[1] + r[2] for r in res))
+st = json.loads((tmp / "crew" / "stations.json").read_text(encoding="utf-8"))
+ck("stations.json records a kit fingerprint for a started station", bool(st["crew-orchestrator"].get("kit")), str(sorted(st["crew-orchestrator"])))
+kit_py = L.kit_version(tmp / "kit")
+ck("kit_version of a folder: the function and the driver agree",
+   kit_py == drive(tmp, [("kit_version", [str(tmp / "kit")], world(), None)])[0][1].strip() == st["crew-orchestrator"]["kit"],
+   f"{kit_py} vs {st['crew-orchestrator']['kit']}")
 
 shutil.rmtree(SCRATCH, ignore_errors=True)
 print(f"\n{P} passed, {F} failed")

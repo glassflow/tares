@@ -1,0 +1,6 @@
+== step: run ==
+exit: 0
+-- stdout --
+guard: all cases pass
+-- stderr --
+

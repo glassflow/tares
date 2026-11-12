@@ -73,7 +73,7 @@ class Case:
 
     def __init__(self, **tares):
         self.tmp = Path(tempfile.mkdtemp(prefix="setup-contract-")).resolve()
-        self.env = parity.crew_env(self.tmp, "python")
+        self.env = parity.crew_env(self.tmp)
         self.tares = FakeTares(self.tmp / "tares", **tares).start()
         self.env.update(TARESD_URL=self.tares.url, TARES_FACTORY_MCP_URL=self.tares.mcp_url)
         self.crew = self.tmp / "crew"
@@ -359,7 +359,7 @@ def fake_execve(path, args, env):
 with mock.patch.object(os, "execve", fake_execve), \
         mock.patch.object(up, "cmd_crew_up", lambda argv, env: calls.append(("python", argv)) or 0):
     scratch = Path(tempfile.mkdtemp(prefix="setup-contract-route-"))   # a scratch home, not this process's own (TR-1164)
-    base = {k: v for k, v in parity.crew_env(scratch, "python").items() if not k.startswith("TARES_FACTORY_ENGINE")}
+    base = {k: v for k, v in parity.crew_env(scratch).items() if not k.startswith("TARES_FACTORY_ENGINE")}
     up.entry_crew_up(["crew", "up", "--yes"], dict(base))
     ck("engine unset: the Python crew up runs, with its arguments", calls == [("python", ["crew", "up", "--yes"])], calls)
     calls.clear()

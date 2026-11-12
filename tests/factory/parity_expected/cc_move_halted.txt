@@ -1,0 +1,234 @@
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+
+-- after --
+{
+  "alive": {},
+  "launched": []
+}
+== step: crew watch --once ==
+exit: 0
+-- stdout --
+
+-- stderr --
+tares factory: crew-reviewer runs an older Claude Code than 1.1.0; restarting it on 1.1.0 now that it's idle, in the same conversation
+  ✓ started crew-reviewer (opus, high)
+tares factory: crew-reviewer runs Claude Code 1.1.0
+-- after --
+{
+  "alive": {},
+  "launched": [
+    "crew-reviewer"
+  ]
+}
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/events.jsonl ==
+{"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
+{"at": "<TS>", "detail": "1.1.0", "event": "claude-updated", "station": "crew-reviewer"}
+== file crew/stations/crew-reviewer.grants ==
+
+== file crew/stations/crew-reviewer.settings.json ==
+{
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Creating and editing files under <TMP>/crew (the crew's own folder), and git worktrees under the .factory/worktrees folder of the repositories of the projects handed to this crew on Tares (crew_projects) or under <TMP>/crew/worktrees, is expected work for this crew station.",
+      "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in the repositories of the projects handed to this crew on Tares (crew_projects), and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that the user authorized."
+    ],
+    "environment": [
+      "$defaults",
+      "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that the user started on  with `tares factory crew up` to build the projects handed to it on Tares. the user chose autonomy level L4-ship, meaning: builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs the user directly."
+    ]
+  },
+  "crossSessionInbound": "accept",
+  "enabledPlugins": {
+    "tares@inline": true
+  },
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "<TMP>/crew",
+    "FACTORY_HOME": "<TMP>/crew",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "reviewer",
+    "FACTORY_STATION": "crew-reviewer",
+    "FACTORY_TARES": "<TARES-BIN>",
+    "FACTORY_WORKTREES": "<TMP>/crew/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(factory tidy *)",
+      "Bash(tares factory tidy *)"
+    ]
+  },
+  "statusLine": {
+    "command": "tares hook statusline --plugin-root <TMP>/kit/claude-plugin",
+    "padding": 0,
+    "type": "command"
+  },
+  "worktree": {
+    "bgIsolation": "none"
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "orchestrator",
+    "sessionId": "old-orchestrator",
+    "status": "active"
+  },
+  "crew-releaser": {
+    "cwd": "<TMP>/crew",
+    "effort": "high",
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "project": "",
+    "repo": "",
+    "role": "releaser",
+    "sessionId": "old-releaser",
+    "status": "active"
+  },
+  "crew-reviewer": {
+    "cc_failed": null,
+    "cc_fails": null,
+    "cc_fresh": null,
+    "cc_retry_at": null,
+    "cwd": "<TMP>/crew",
+    "earlier": [
+      {
+        "id": "<ID>",
+        "replacedAt": "<TS>",
+        "sessionId": "old-reviewer"
+      }
+    ],
+    "effort": "high",
+    "grants": "<GRANTS>",
+    "grants_tried": null,
+    "id": "<ID>",
+    "kit": "<KIT>",
+    "model": "opus",
+    "parent": "",
+    "plugin": "<TMP>/kit/claude-plugin",
+    "project": "",
+    "repo": "",
+    "role": "reviewer",
+    "sessionId": "<ID>",
+    "settings": "<TMP>/crew/stations/crew-reviewer.settings.json",
+    "startedAt": "<TS>",
+    "status": "active"
+  }
+}
+== file claude/agents.json ==
+[
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-orchestrator",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-releaser",
+    "pid": "<PID>",
+    "state": "working",
+    "status": "idle",
+    "version": "1.0.0"
+  },
+  {
+    "cwd": "<TMP>/crew",
+    "id": "<ID>",
+    "name": "crew-reviewer",
+    "pid": "<PID>",
+    "sessionId": "<ID>",
+    "startedAt": "<TS>",
+    "state": "working",
+    "version": "1.1.0"
+  }
+]
+== file claude/calls.jsonl ==
+{"args": ["stop", "bbbb0002"], "cwd": "<REPO>"}
+{"args": ["--bg", "-n", "crew-reviewer", "--model", "opus", "--effort", "high", "--permission-mode", "auto", "--settings", "<SETTINGS-FILE>", "--autocompact", "200000", "--append-system-prompt", "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.", "--plugin-dir", "<TMP>/kit/claude-plugin", "--resume", "old-reviewer", "Claude Code was updated to 1.1.0, so the factory restarted you on it, in this same conversation, with fresh settings. Reload the skills factory-protocol and station-reviewer, re-read your report, re-arm your schedule if you have one, then carry on where you were."], "cwd": "<TMP>/crew"}
+{"args": ["rm", "bbbb0002"], "cwd": "<REPO>"}
+== asked of Tares ==
+PUT /api/crew/claude-retry?crew=crew key=no {
+  "stations": {}
+}
+PUT /api/crew/claude-retry?crew=crew key=no {
+  "stations": {}
+}
+PUT /api/crew/claude-retry?crew=crew key=no {
+  "stations": {}
+}

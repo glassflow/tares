@@ -1,0 +1,76 @@
+== step: boot_prompt orchestrator ==
+exit: 0
+-- stdout --
+Boot as the orchestrator station: load the skills factory-protocol and station-orchestrator, then follow the Boot section. The other stations will send you READY.
+-- stderr --
+
+== step: boot_prompt reviewer ==
+exit: 0
+-- stdout --
+Boot as the reviewer station: load the skills factory-protocol and station-reviewer, follow their Boot sections, and send crew-orchestrator READY when you are set. idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete).
+-- stderr --
+
+== step: boot_prompt builder work T1 and T2 ==
+exit: 0
+-- stdout --
+Boot as the builder station: load the skills factory-protocol and station-builder, follow their Boot sections, and send crew-orchestrator READY when you are set.
+
+Your task:
+work T1 and T2
+-- stderr --
+
+== step: idle_wake_note ==
+exit: 0
+-- stdout --
+idle_wake is on: the factory wakes you when there is work and holds your tick, so do not arm a CronCreate tick (if you hold one, delete it: CronList, then CronDelete).
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "2026-01-01",
+    "by": "Pat"
+  },
+  "human": {
+    "github": "",
+    "name": "Pat"
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{}

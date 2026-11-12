@@ -1,0 +1,99 @@
+== step: finish shop all shipped ==
+exit: 0
+-- stdout --
+✓ shop is done. It is off the crew's work list; http://127.0.0.1:<PORT>/projects/p2 shows it.
+-- stderr --
+
+== step: projects ==
+exit: 0
+-- stdout --
+PROJECT                      DONE     MILESTONE              BUILDERS  REPOS
+Links App                    1/2      Links 1/2              1         acme/links
+A very long project name tha 3/3      all done               0         
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "name": "crew",
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-reviewer": {
+    "role": "reviewer",
+    "status": "active"
+  },
+  "links-app-build-m1": {
+    "project": "Links App",
+    "role": "builder",
+    "status": "active"
+  },
+  "links-app-build-m2": {
+    "project": "Links App",
+    "role": "builder",
+    "status": "retired"
+  },
+  "shop-build-m1": {
+    "project": "shop",
+    "role": "builder",
+    "status": "active"
+  },
+  "shop-build-m2": {
+    "project": "shop",
+    "role": "builder",
+    "status": "active"
+  }
+}
+== asked of Tares ==
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/projects?crew=crew key=no 
+POST /api/projects/p2/finish key=no {
+  "words": "all shipped"
+}
+GET /health key=no 
+GET /api/crew/settings key=no 
+GET /api/crew/projects?crew=crew key=no 

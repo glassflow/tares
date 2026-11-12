@@ -21,9 +21,9 @@ it also answers GET /api/projects/<id> and GET /api/grants?project=<id>, and kee
 with scope "project"). `project_grants` is {project id: [grant lines]}.
 
 Every write (PUT, POST except /mcp) is kept in order in <dir>/writes.jsonl as {method, path, body}, so a
-scenario can compare what two engines saved. Anything else answers 404. Standard library only; it runs in a
+scenario can compare what was saved. Anything else answers 404. Standard library only; it runs in a
 thread of the process that starts it, so it works on Windows too. This is a test double, not the product:
-the milestone runs of tests/factory/crew_test.sh still use a real daemon.
+the milestone runs still use a real daemon.
 """
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ from pathlib import Path
 
 class FakeTares:
     def __init__(self, directory, settings=None, people=None, grants=None, capabilities=None,
-                 token="", projects=None, project_grants=None):
+                 token="", projects=None, project_grants=None, health=None):
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.writes = self.dir / "writes.jsonl"
@@ -46,6 +46,7 @@ class FakeTares:
         self.grants = list(grants or [])
         # what /health lists: crew up wants "integrations" (need_capability); capabilities=[] is an old Tares
         self.capabilities = list(["integrations"] if capabilities is None else capabilities)
+        self.health = health                # None: the short /health body; a dict: that whole body (an old cell, or the real daemon's)
         self.token = token                  # "": no auth
         self.mcp_auth: list = []            # the Authorization header (or None) of each POST /mcp
         self.projects = json.loads(json.dumps(projects or []).replace("{tmp}", json.dumps(str(self.dir.parent))[1:-1]))
@@ -88,6 +89,8 @@ class FakeTares:
                     return
                 with outer.lock:
                     if path == "/health":
+                        if outer.health is not None:
+                            return self._send(200, dict(outer.health))
                         return self._send(200, {"status": "ok", "capabilities": list(outer.capabilities)})
                     if path == "/api/crew/settings":
                         return self._send(200, dict(outer.settings))

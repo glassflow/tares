@@ -1,0 +1,75 @@
+== step: doctor ==
+exit: 1
+-- stdout --
+tares factory doctor
+  ok    claude: <TMP>/bin/claude (0.0.0 (Claude Code))
+  ok    crew home: <TMP>/crew
+  ok    Tares answers at http://127.0.0.1:<PORT> (from the environment)
+  ok    Tares lets this crew in
+  ok    Claude Code's session list reads (0 active)
+  ok    Claude Code trusts <TMP>/crew
+  ok    stations load the plugin at <REPO>/claude-plugin
+  ok    MCP endpoint answers at http://127.0.0.1:<PORT>/mcp
+  ok    crew settings on Tares: {"autonomy":"L4-ship","releaser":false,"release_profile":"kind","prod_pattern":"(^|[-_.])(prod|production)([-_.]|$)","challenger":false,"builders_max":2,"idle_wake":false,"pace":false,"claude_update":true}
+  ok    the kit follows the plugin checkout (not frozen)
+  ok    project argus: <TMP>/core trusted
+  ok    project argus: <TMP>/core is o/core on GitHub (WRITE)
+  FIX   project argus: Claude Code has not trusted <TMP>/ro-charts (its git root must be trusted itself); run `claude` there once
+  FIX   project argus: gh has READ on o/ro-charts; builders need write access to push and merge
+  ok    gh signed in
+fix the items marked FIX
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "sonnet"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "sonnet"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["--version"], "cwd": "<REPO>"}
+{"args": ["agents", "--json"], "cwd": "<REPO>"}
+{"args": ["plugin", "list", "--json"], "cwd": "<REPO>"}

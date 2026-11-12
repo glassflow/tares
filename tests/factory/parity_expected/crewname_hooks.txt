@@ -1,0 +1,66 @@
+== step: guard a-releaser gh pr merge 3 a ==
+exit: 0
+-- stdout --
+deny
+-- stderr --
+
+== step: guard a-releaser kubectl --context kind-factory rollout undo deploy/app a ==
+exit: 0
+-- stdout --
+allow
+-- stderr --
+
+== step: guard a-shop-build-m1 factory restart a-reviewer a ==
+exit: 0
+-- stdout --
+deny
+-- stderr --
+
+== step: guard crew-releaser gh pr merge 3  ==
+exit: 0
+-- stdout --
+deny
+-- stderr --
+
+== step: guard crew-releaser-build-x gh pr merge 3  ==
+exit: 0
+-- stdout --
+deny
+-- stderr --
+
+== step: guard a-releaser-build-x gh pr merge 3 a ==
+exit: 0
+-- stdout --
+deny
+-- stderr --
+
+== step: start a-reviewer a ==
+exit: 0
+-- stdout --
+station-reviewer
+-- stderr --
+
+== step: start a-shop-build-m1 a ==
+exit: 0
+-- stdout --
+station-builder
+-- stderr --
+
+== step: start crew-releaser  ==
+exit: 0
+-- stdout --
+station-releaser
+-- stderr --
+
+== step: start crew-reviewer-build-x  ==
+exit: 0
+-- stdout --
+station-reviewer
+-- stderr --
+
+== step: start a-reviewer-build-x a ==
+exit: 0
+-- stdout --
+station-reviewer
+-- stderr --
+

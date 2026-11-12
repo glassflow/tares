@@ -1,0 +1,105 @@
+== step: watch 3 ==
+exit: 0
+-- stdout --
+
+the watch served 3 ticks
+-- stderr --
+
+== step: watch 6 ==
+exit: 0
+-- stdout --
+tares factory: could not read the plan's limits (tares factory plan says why); trying again every 600s
+the watch served 6 ticks
+-- stderr --
+
+== file crew/crew.json ==
+{
+  "authorized": {
+    "at": "",
+    "by": ""
+  },
+  "human": {
+    "github": "",
+    "name": ""
+  },
+  "limits": {
+    "autocompact_tokens": 200000
+  },
+  "name": "crew",
+  "release": {
+    "cluster": "factory",
+    "environments": [
+      {
+        "name": "kind",
+        "production": false
+      }
+    ]
+  },
+  "review": {
+    "challenge": true
+  },
+  "stations": {
+    "builder": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "orchestrator": {
+      "effort": "xhigh",
+      "model": "opus"
+    },
+    "releaser": {
+      "effort": "high",
+      "model": "sonnet"
+    },
+    "reviewer": {
+      "effort": "high",
+      "model": "opus"
+    }
+  },
+  "tares": {
+    "url": null
+  }
+}
+== file crew/stations.json ==
+{
+  "crew-orchestrator": {
+    "cwd": "<TMP>/work",
+    "id": "<ID>",
+    "role": "orchestrator",
+    "sessionId": "sess-orch-1"
+  }
+}
+== file claude/agents.json ==
+[]
+== file claude/calls.jsonl ==
+{"args": ["-p", "--no-session-persistence", "--settings", "{\"disableAllHooks\": true}", "--output-format", "stream-json", "--verbose", "/usage"], "cwd": "<TMP>/crew"}
+{"args": ["-p", "--no-session-persistence", "--settings", "{\"disableAllHooks\": true}", "--output-format", "stream-json", "--verbose", "/usage"], "cwd": "<TMP>/crew"}
+== asked of Tares ==
+POST /ingest/claude_code key=no {
+  "timestamp": "<TS>",
+  "type": "claude_plan",
+  "usage_report": {
+    "rate_limits": {
+      "extra_usage": {
+        "is_enabled": false
+      },
+      "limits": [
+        {
+          "is_active": true,
+          "kind": "session",
+          "percent": 27,
+          "resets_at": "<TS>",
+          "scope": null
+        },
+        {
+          "is_active": false,
+          "kind": "weekly_all",
+          "percent": 5,
+          "resets_at": "<TS>",
+          "scope": null
+        }
+      ]
+    }
+  }
+}
+GET /api/crew/context/asks key=no 
