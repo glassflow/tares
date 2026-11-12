@@ -39,6 +39,7 @@ import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the re
 
 _crew_guard.scratch_home()   # the probes below inherit this process's HOME: not the real one (TR-1164)
 import fake_claude  # noqa: E402
+from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 from _crew_fake import fake_crew_env  # noqa: E402
 
 from tares.crew import contract, dispatch, events  # noqa: E402
@@ -89,8 +90,10 @@ class Stub(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def do_GET(self):  # noqa: N802
-        path = self.path.split("?")[0]
-        body = {"/health": {"status": "ok"},
+        path, _, query = self.path.partition("?")
+        q = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
+        body = {"/health": {"status": "ok", "capabilities": ["guardrail_rules"]},
+                RULES_PATH: rules_answer(q.get("station", ""), q.get("role", "builder"), "", "", ""),
                 "/api/crew/settings": {"settings": WORLD["settings"]},
                 "/api/crew/projects": {"projects": WORLD["projects"]},
                 "/api/desk": {"desk": WORLD["desk"]}}.get(path)

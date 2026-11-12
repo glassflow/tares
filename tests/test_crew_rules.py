@@ -31,7 +31,7 @@ sys.path.insert(0, str(HERE / "factory"))
 
 from tares.crew import launch as L  # noqa: E402
 from tares.crew import regrant, rules  # noqa: E402
-from tares.crew.client import TaresClient  # noqa: E402
+from tares.crew.client import TaresClient, TaresHTTPError  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 import launch_support as LS  # noqa: E402
@@ -148,6 +148,8 @@ print("never no rules")
 got, err, c, said = start({"rules": {"station": "s", "allow": [], "soft_deny": [], "rules": []}}, before=put_copy)
 ck("Tares answering with no rules stops the start, even with a copy", got is None and "never starts without rules" in err, err)
 ck("...and does not overwrite the copy with nothing", json.loads(c.paths.rules_file("crew-reviewer").read_text(encoding="utf-8")) == copy_doc)
+got, err, c, said = start({"rules": {"station": "s", "allow": ["Do a thing."], "soft_deny": [], "rules": [{"kind": "allow", "text": "Do a thing."}]}}, before=put_copy)
+ck("an answer with allow sentences but no deny side stops the start (the production guard is part of the rules)", got is None and "never starts without rules" in err, err)
 got, err, c, said = start({"rules": ["not", "a", "doc"]}, before=put_copy)
 ck("an answer that is not rules is read as no answer: the copy", got and got["source"] == "copy", str(got) + err)
 bare = SCRATCH / "bare-kit"
@@ -157,6 +159,36 @@ ck("a plugin without the shipped file is an error that says what to do", msg is 
 (bare / "templates").mkdir()
 (bare / "templates" / "default-rules.json").write_text('{"defaults": []}', encoding="utf-8")
 ck("a shipped file with no defaults is the same error", "Reinstall the plugin" in (raises(lambda: rules.shipped(str(bare), "builder")) or ""))
+
+print("a call that says which station it is")
+tares, c = crew_with({})
+try:
+    try:
+        c.tares_http("GET", "/api/factory/guardrails/rules?station=crew-reviewer&role=reviewer")
+        bare_call = None
+    except Exception as e:   # noqa: BLE001
+        bare_call = getattr(e, "status", None)
+    ck("the fake Tares, like the real route, refuses a rules call that names no station (403)", bare_call == 403, str(bare_call))
+    sent = rules.fetch(c, "crew-reviewer", "", "reviewer")
+    ck("rules.fetch names the station and its role, so a person's key is answered", sent.get("station") == "crew-reviewer" and sent.get("role") == "reviewer", str(sent))
+finally:
+    tares.__exit__(None, None, None)
+
+
+def refuse_with(code):
+    def before(c):
+        def deny(*a, **k):
+            raise TaresHTTPError(f"curl: (22) The requested URL returned error: {code}", code)
+        c.tares_http = deny
+    return before
+
+
+for code in (401, 403):
+    got, err, c, said = start({"grants": {"all": GRANT, "projects": {}}}, before=lambda c, code=code: (put_copy(c), refuse_with(code)(c)))
+    ck(f"Tares refusing the rules ({code}) stops the start, copy or not, and does not fall back quietly",
+       got is None and str(code) in err and "never starts without its rules" in err, err)
+got, err, c, said = start({"grants": {"all": GRANT, "projects": {}}}, before=lambda c: (put_copy(c), refuse_with(500)(c)))
+ck("Tares erroring (500) still falls back to the copy", got and got["source"] == "copy", str(got) + err)
 
 print("an older Tares")
 got, err, c, said = start({"capabilities": ["integrations", "merge_queue"]}, before=put_copy)

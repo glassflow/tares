@@ -111,6 +111,8 @@ class FakeTares:
                         return self._send(200, {"all": w["grants"]["all"], "project": mine[q["project"][0]]})
                     return self._send(200, {"all": w["grants"]["all"]})
                 if u.path == RULES_PATH:
+                    if not self.headers.get("X-Tares-Station"):   # the real route: a key alone, with no station, is refused
+                        return self._send(403, {"detail": "this needs an admin or a crew station"})
                     if w["rules_status"] != 200:
                         return self._send(w["rules_status"], {"detail": "rules"})
                     if w["rules"] is not None:

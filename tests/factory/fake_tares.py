@@ -79,6 +79,8 @@ def _handler(world: World):
             if self.command == "GET" and path in world.routes:
                 return self._json(200, world.routes[path])
             if self.command == "GET" and path == RULES_PATH:
+                if not self.headers.get("X-Tares-Station"):   # the real route: a key alone, without a station, is refused
+                    return self._json(403, {"detail": "this needs an admin or a crew station"})
                 q = parse_qs(urlparse(self.path).query)
                 grants = (world.routes.get("/api/grants") or {}).get("all", "")
                 return self._json(200, rules_answer((q.get("station") or [""])[0], (q.get("role") or ["builder"])[0],

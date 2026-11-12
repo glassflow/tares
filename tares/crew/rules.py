@@ -43,8 +43,9 @@ def _sentences(doc, key: str) -> list:
 
 
 def usable(doc) -> bool:
-    """True for a rendered answer with at least one sentence."""
-    return bool(_sentences(doc, "allow") or _sentences(doc, "soft_deny"))
+    """True for a rendered answer with both kinds of sentence: what the station may do and what it must not. An
+    answer that lost the deny side (the production guard) is not a set of rules to start a station under."""
+    return bool(_sentences(doc, "allow") and _sentences(doc, "soft_deny"))
 
 
 def shipped(kit: str, role: str) -> dict:
@@ -85,7 +86,12 @@ def fetch(client: TaresClient, station: str, project: str, role: str) -> dict:
         q += f"&project={uri(project)}"
     if role in ROLES:
         q += f"&role={uri(role)}"
-    doc = state.loads_json(client.tares_http("GET", f"/api/factory/guardrails/rules{q}"))
+    # Tares answers a station's own rules to a call that says which station it is (a person's key alone gets a
+    # 403), the same labels the plugin's MCP proxy sets.
+    who = {"X-Tares-Station": station}
+    if role in ROLES:
+        who["X-Tares-Role"] = role
+    doc = state.loads_json(client.tares_http("GET", f"/api/factory/guardrails/rules{q}", headers=who))
     if not isinstance(doc, dict):
         raise ValueError("the rules are not JSON")
     return doc
@@ -99,7 +105,13 @@ def for_station(client: TaresClient, station: str, project: str, role: str, kit:
     if client.tares_on():
         try:
             doc, source = fetch(client, station, project, role), "tares"
-        except (TaresHTTPError, ValueError) as e:
+        except TaresHTTPError as e:
+            if e.status in (401, 403):
+                raise CrewError(f"Tares refused to give the rules for {station} (HTTP {e.status}). A station never "
+                                "starts without its rules; check the crew's key on Tares, then run this again.")
+            client.say(f"could not read the rules for {station} from Tares ({e}); using the copy kept from its "
+                       "last start, else the ones shipped with the plugin")
+        except ValueError as e:
             client.say(f"could not read the rules for {station} from Tares ({e}); using the copy kept from its "
                        "last start, else the ones shipped with the plugin")
         if doc is not None and not usable(doc):
