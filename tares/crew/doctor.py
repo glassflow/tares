@@ -637,6 +637,7 @@ class Doctor:
                     "winget install Git.Git" if _windows() else "brew install git", True)
         else:
             self.ok("git", f"git: {(r.stdout.strip().splitlines() or [''])[0]}", True)
+            self.check_git_identity()
         if _windows():
             found = self.env.get("CLAUDE_CODE_GIT_BASH_PATH") or shutil.which("bash", path=self.env.get("PATH")) or ""
             for d in (self.env.get("ProgramFiles"), self.env.get("ProgramFiles(x86)"), r"C:\Program Files"):
@@ -648,6 +649,25 @@ class Doctor:
             else:
                 self.no("git_windows", "Git for Windows: not found, and Claude Code on Windows runs its shell commands "
                         "through Git Bash", "winget install Git.Git", True)
+
+    def check_git_identity(self) -> None:
+        """git's global user.name and user.email. Without them a builder's first commit in a repo that sets
+        none of its own stops with "Author identity unknown", and crew up names the person "the user". A
+        fresh Windows machine often has neither. A warn, not a FIX: each repo can set its own. No line when
+        git cannot be asked."""
+        missing = []
+        for key in ("user.name", "user.email"):
+            r = self.run(["git", "config", "--global", "--get", key], timeout=30)
+            if r is None:
+                return
+            if r.returncode != 0 or not r.stdout.strip():
+                missing.append(key)
+        if missing:
+            self.warn("git_identity", f"git identity: no {' or '.join(missing)} in git's global config, so a builder's "
+                      "commit in a repo that sets none fails with \"Author identity unknown\"",
+                      " && ".join(f'git config --global {k} "<your {k.split(".")[1]}>"' for k in missing), True)
+        else:
+            self.ok("git_identity", "git identity: user.name and user.email are set in git's global config", True)
 
     def check_gh(self) -> None:
         gh = shutil.which("gh", path=self.env.get("PATH"))

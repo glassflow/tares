@@ -418,6 +418,32 @@ d, *_ = make("git-none", run=fake_run({}))
 d.check_git()
 r = one(d, "git")
 ck("git that will not run is a FIX", r and r.level == "fix" and r.fix, r)
+ck("git that will not run: no identity line", not by_id(d, "git_identity"))
+
+print("git identity")
+ver = ("--version",)
+d, *_ = make("gid-ok", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(0, "Kiran\n"),
+                                     ("user.email",): res(0, "k@example.com\n")}))
+d.check_git()
+r = one(d, "git_identity")
+ck("a global name and email are ok", r and r.level == "ok" and r.new and r.message.startswith("git identity"), r)
+d, *_ = make("gid-none", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(1),
+                                       ("user.email",): res(1)}))
+d.check_git()
+r = one(d, "git_identity")
+ck("no global identity is a warn that names both keys and the fix",
+   r and r.level == "warn" and "user.name or user.email" in r.message and "Author identity unknown" in r.message
+   and "git config --global user.name" in r.fix and "git config --global user.email" in r.fix, r)
+d, *_ = make("gid-email", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(0, "Kiran\n"),
+                                        ("user.email",): res(0, "  \n")}))
+d.check_git()
+r = one(d, "git_identity")
+ck("a blank email alone is named", r and r.level == "warn" and "no user.email" in r.message
+   and "user.name" not in r.fix, r)
+d, *_ = make("gid-cannot", run=fake_run({ver: res(0, "git version 2.50\n")}))
+d.check_git()
+ck("git config that cannot be asked: no identity line", not by_id(d, "git_identity"))
+ck("the identity line's label is one of NEW_LABELS", any("git identity: x".startswith(l) for l in doctor.NEW_LABELS))
 
 print("the watch's pid file, read with psutil")
 d, home, th, paths = make("watch")
