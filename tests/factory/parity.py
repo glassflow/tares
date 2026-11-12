@@ -3380,6 +3380,7 @@ _CC_PROCS: dict = {}   # (scenario folder, key) -> a process that stands for som
 def _cc_process(tmp: Path, key: str, argv0: str) -> None:
     """A process whose command line starts with argv0 (`exec -a`), for `attached` and the process listing to find."""
     import time
+    own_the_process_list()
     _CC_PROCS[(str(tmp), key)] = subprocess.Popen(["bash", "-c", f"exec -a '{argv0}' sleep 120"],
                                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.4)   # until bash has exec'd
@@ -3820,6 +3821,7 @@ _ATTACHED: dict = {}
 def _attach(station: str):
     """Someone has the session open in a terminal: a process whose command line says `attach <id>`."""
     def run(tmp: Path) -> None:
+        own_the_process_list()
         _ATTACHED[station] = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)", "attach",
                                                 _agent_of(tmp, station)])
         time.sleep(0.5)
@@ -6142,7 +6144,59 @@ class Side:
     raw: str = ""                   # the first failing step's output, for the person reading
 
 
+# A process that says `attach <id>` or a spare's `bg-pty-host` is seen by every process on the machine, and
+# the engine looks at all of them (psutil). A scenario that starts such a process makes the fixed ids of the others look
+# "open in a terminal" or leave a spare in the list, so the scenarios run beside it fail now and then. Every scenario therefore holds a
+# shared lock on a file in the temp folder while it runs, and one that starts such a process asks for the exclusive lock
+# first (`own_the_process_list`): it waits until the scenarios running beside it end, and they wait until it ends. The
+# lock is the machine's, so another run of this harness (another station's) is held off the same way.
+try:
+    import fcntl
+except ImportError:     # Windows: no flock; the CI runs one scenario at a time there (PARITY_JOBS=1)
+    fcntl = None
+PROCESS_LOCK = Path(tempfile.gettempdir()) / "tares-parity-processes.lock"
+_LOCK_FD: list = []     # the open lock file of the scenario this process is running, if any
+
+
+def own_the_process_list() -> None:
+    """Called before a scenario starts a process other scenarios could see: wait until none of them is running, and
+    keep them from starting until this one ends."""
+    if _LOCK_FD:
+        fcntl.flock(_LOCK_FD[0], fcntl.LOCK_EX)
+
+
+def end_visible_processes() -> None:
+    """End the processes this scenario started on the machine's process list (a scenario may leave one)."""
+    for table in (_CC_PROCS, _WATCHING, G2_PROCS):
+        for p in list(table.values()):
+            if p.poll() is None:
+                p.kill()
+            p.wait()
+        table.clear()
+    for p in list(_ATTACHED.values()):
+        if p.poll() is None:
+            p.kill()
+        p.wait()
+    _ATTACHED.clear()
+
+
 def run_side(sc: Scenario) -> Side:
+    if fcntl is None or (sc.not_windows and is_windows()):
+        return _run_side(sc)
+    fd = os.open(PROCESS_LOCK, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        _LOCK_FD[:] = [fd]
+        try:
+            return _run_side(sc)
+        finally:
+            end_visible_processes()
+    finally:
+        _LOCK_FD.clear()
+        os.close(fd)    # releases the lock
+
+
+def _run_side(sc: Scenario) -> Side:
     side = Side()
     if sc.not_windows and is_windows():
         side.skip = sc.not_windows
@@ -9629,6 +9683,8 @@ def _cb_all(*fns):
 
 def _cb_file(name: str, text: str):
     def before(tmp: Path) -> None:
+        if "attach" in text:    # the hook starts a process that says `attach <id>`
+            own_the_process_list()
         (tmp / "claude" / name).write_text(text, encoding="utf-8")
     return before
 
