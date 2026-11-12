@@ -665,7 +665,7 @@ class Doctor:
         if missing:
             self.warn("git_identity", f"git identity: no {' or '.join(missing)} in git's global config, so a builder's "
                       "commit in a repo that sets none fails with \"Author identity unknown\"",
-                      " && ".join(f'git config --global {k} "<your {k.split(".")[1]}>"' for k in missing), True)
+                      "; ".join(f'git config --global {k} "<your {k.split(".")[1]}>"' for k in missing), True)
         else:
             self.ok("git_identity", "git identity: user.name and user.email are set in git's global config", True)
 

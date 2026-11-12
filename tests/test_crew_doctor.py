@@ -433,7 +433,8 @@ d.check_git()
 r = one(d, "git_identity")
 ck("no global identity is a warn that names both keys and the fix",
    r and r.level == "warn" and "user.name or user.email" in r.message and "Author identity unknown" in r.message
-   and "git config --global user.name" in r.fix and "git config --global user.email" in r.fix, r)
+   and "git config --global user.name" in r.fix and "git config --global user.email" in r.fix
+   and r.new and "&&" not in r.fix, r)   # new: shown as a new check; no &&: PowerShell 5.1 refuses it
 d, *_ = make("gid-email", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(0, "Kiran\n"),
                                         ("user.email",): res(0, "  \n")}))
 d.check_git()

@@ -5,6 +5,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- `tares factory doctor` now warns when git has no global `user.name` or `user.email`. On a fresh Windows machine a builder's first commit in a repo that sets none of its own stopped with "Author identity unknown", and `crew up` named the person "the user"; the warn gives the two `git config --global` commands.
+
 ## [1.57.0] - 2026-11-12
 
 Tares now merges ready pull requests itself through a merge queue, and the crew no longer merges.
@@ -47,7 +50,6 @@ Crew page reads as a conversation.
 - The bash crew is removed (TR-975). `tares factory` runs on the Python engine only, so `TARES_FACTORY_ENGINE`, `"engine"` in `~/factory/crew.json` and `TARES_FACTORY_WATCH` no longer do anything, and `claude-plugin/bin/factory` and `bin/factory-heavy` are gone. The heavy-command wrapper is now `tares factory heavy <timeout-seconds> <command...>`; the guard accepts that form and refuses a bare `factory-heavy`. The three hook shims from TR-1131 stay one more release. If you kept `TARES_FACTORY_ENGINE=bash` as a way back, use the previous release instead.
 
 ### Fixed
-- `tares factory doctor` now warns when git has no global `user.name` or `user.email`. On a fresh Windows machine a builder's first commit in a repo that sets none of its own stopped with "Author identity unknown", and `crew up` named the person "the user"; the warn gives the two `git config --global` commands.
 - On a team cell, a project page no longer shows a question or permission request addressed to someone else as "Question for you" with an Answer button the cell would refuse. It is under a new "Waiting for others" section, named for the person it is for ("Question for Adam"), with nothing to press, and it no longer makes the project "Waiting on you" (TR-1223 follow-up).
 - A cell that gets its licence no longer splits each person's crew in two. Without a licence the cell keeps no machine for a crew; the first session after the licence names the machine and used to start a second crew, so the Crew page showed the same person twice, one of them ended. Now that session joins the crew it belongs to, the same holds the other way if the licence goes, and a cell that already split merges the two when it starts (only when the person has one crew of that name on a machine). On the Crew page a crew's own name shows next to its person, a crew without a machine says so, and crews whose members all ended over a day ago sit behind "Show N ended crews" (TR-1223).
 - The Crew page shows every crew on the cell, each under the person it belongs to, yours first (TR-1223). Before, on a cell with several people it took the first orchestrator and reviewer of any crew, since crews repeat station names, so a running crew could show as "Not running" and builders of different crews were mixed. Each crew now has its own state line and members, the machine is named when a person has more than one crew, and "Show what it did" opens that crew's station. Each person's section folds, showing whether the crew runs and how many builders are on it; yours starts open, the others folded, and the page remembers your folds in this browser. A cell with one crew looks as before.
