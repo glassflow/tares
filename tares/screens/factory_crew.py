@@ -204,11 +204,18 @@ def register(app, store, h, ctx):
         for cid, ss in by_crew.items():
             person = ss[0].get("person") or {}
             pid = person.get("id")
+            # a crew whose members all ended over a day ago is put away under "Show N ended crews"
+            last = max((_dt(x.get("last_at")) for x in ss if _dt(x.get("last_at")) is not None), default=None)
+            ended = all(x["state"] == "ended" for x in ss) and (last is None or now - last > timedelta(days=1))
             crews.append({"id": cid, "person": {"id": pid, "name": person.get("name") or None},
                           "machine": ss[0].get("machine") or "", "name": ss[0].get("crew") or "",
                           "mine": bool(me) and pid == me,
-                          "machine_shown": len(persons_crews.get(pid, [])) > 1, **crew_view(ss)})
-        crews.sort(key=lambda c: (not c["mine"], str(c["person"]["name"] or "~").lower(), c["machine"],
+                          "machine_shown": len(persons_crews.get(pid, [])) > 1, "ended": ended,
+                          "last_heard": heard_ago(last, now) if last is not None else None, **crew_view(ss)})
+        # the live crews first, the caller's own first among them, a person's running crew before
+        # their quiet one; the ended ones after
+        crews.sort(key=lambda c: (c["ended"], not c["mine"], str(c["person"]["name"] or "~").lower(),
+                                  c["summary"] in ("Not running", "Not started"), c["machine"] or "~",
                                   str(c["id"])))
         own = crews[0] if crews else {"summary": "Not started", "talk_to": None, "reviewer": None,
                                       "releaser": None, "builders": []}
@@ -248,8 +255,9 @@ def register(app, store, h, ctx):
         detail call and is never shown. `pacing` is a sentence while the plan presses on the crew,
         else null. `rule_proposals` are the open ones, `standup` is null when nothing moved.
         `crews` is every crew on the cell (TR-1223), the caller's own first, then by person: each
-        {id, person {id, name}, machine, name, mine, machine_shown, summary, talk_to, reviewer,
-        releaser, builders}; `machine_shown` is true when that person has more than one crew. A
+        {id, person {id, name}, machine, name, mine, machine_shown, ended, last_heard, summary,
+        talk_to, reviewer, releaser, builders}; `machine_shown` is true when that person has more than
+        one crew; `ended` is true when every member ended over a day ago (they come last). A
         member's `crew` is its crew's id, for the detail call. The top-level summary, talk_to,
         reviewer, releaser and builders are the first crew's."""
         return build(request)

@@ -39,7 +39,7 @@ exit: 1
 -- stdout --
 
 -- stderr --
-tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
+tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>"
 == file crew/crew.json ==
 {
   "authorized": {
@@ -137,7 +137,6 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -197,7 +196,6 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -257,7 +255,6 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -317,7 +314,6 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [
@@ -377,7 +373,6 @@ tares factory: usage: factory spawn helper <parent-station> <slug> "<task>"
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

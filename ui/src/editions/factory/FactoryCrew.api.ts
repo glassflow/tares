@@ -33,6 +33,12 @@ export interface CrewOfPerson {
   /** True when the person has more than one crew: then the machine tells them apart. */
   machine_shown: boolean;
   mine: boolean;
+  /** The crew's own name (crew_name in its crew.json), "crew" when it was never given one. */
+  name?: string;
+  /** Every member ended over a day ago: the page puts it away under "Show N ended crews". */
+  ended?: boolean;
+  /** When the crew was last heard from, as "2 days ago". */
+  last_heard?: string | null;
   summary: string;
   talk_to: CrewMember | null;
   reviewer: CrewMember | null;

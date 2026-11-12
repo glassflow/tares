@@ -22,7 +22,7 @@ STATION                        ROLE         MODEL          STATE    TEMPO    DOI
 crew-orchestrator              orchestrator opus/high      done     -        
 crew-reviewer                  reviewer     opus/high      working  -        
 crew-releaser                  releaser     opus/high      done     -        
-TWO SESSIONS named crew-reviewer: 00000001, 0000dup1; stop the one stations.json does not list (factory roster)
+TWO SESSIONS named crew-reviewer: 00000001, 0000dup1; stop the one stations.json does not list (tares factory roster)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
 desk: nothing waits for you
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -167,27 +167,16 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)",
-      "Bash(factory spawn *)",
       "Bash(tares factory spawn *)",
-      "Bash(factory revive *)",
       "Bash(tares factory revive *)",
-      "Bash(factory restart *)",
       "Bash(tares factory restart *)",
-      "Bash(factory retire *)",
       "Bash(tares factory retire *)",
-      "Bash(factory roster)",
       "Bash(tares factory roster)",
-      "Bash(factory projects)",
       "Bash(tares factory projects)",
-      "Bash(factory crew status)",
       "Bash(tares factory crew status)",
-      "Bash(factory crew halt)",
       "Bash(tares factory crew halt)",
-      "Bash(factory crew halt *)",
       "Bash(tares factory crew halt *)",
-      "Bash(factory crew resume)",
       "Bash(tares factory crew resume)"
     ],
     "deny": [
@@ -246,7 +235,6 @@ exit: 0
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

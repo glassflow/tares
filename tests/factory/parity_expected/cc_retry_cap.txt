@@ -183,7 +183,6 @@ tares factory: not every station runs Claude Code 2.1.200: crew-reviewer
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

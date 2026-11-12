@@ -130,7 +130,7 @@ async def main():
                and r.json()["added"] is True, r.text)
             mem_id = r.json()["id"]
             for kind, line in (("agents", "Stop only processes you started."),
-                               ("agents", "Use factory-heavy for builds.")):
+                               ("agents", "Use tares factory heavy for builds.")):
                 r = await cx.post(f"/api/docs/global/{kind}/lines", json={"text": line, "by": "crew-reviewer"})
                 assert r.status_code == 200, r.text
 
@@ -214,7 +214,7 @@ async def main():
             clean("the shared rules", rules)
             ck("the shared rules: the opening note and each line, no title, no author per line",
                [x["text"] for x in rules["lines"]][-2:] == ["Stop only processes you started.",
-                                                            "Use factory-heavy for builds."]
+                                                            "Use tares factory heavy for builds."]
                and rules["lines"][0]["kind"] == "p" and all(x["by"] == "" and x["when"] == "" for x in rules["lines"]),
                rules["lines"])
             ck("the shared rules say who changed them, as a whole", rules["changed"] == "Changed by the Reviewer, just now",

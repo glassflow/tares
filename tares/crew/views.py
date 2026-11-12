@@ -2,8 +2,7 @@
 
 Ports cmd_desk, cmd_status, cmd_roster, cmd_attach and cmd_logs of claude-plugin/bin/factory, with the
 read-only helpers they lean on (the kit fingerprint, the grants and Claude Code version checks, the pace
-line, the watch's pid, adopt_unrecorded). Each prints what bash prints, in the same order. Keep the two in
-step: CI (port-drift) fails a PR that edits one of these bash functions without touching this file.
+line, the watch's pid, adopt_unrecorded). Each prints its lines in a fixed order.
 
 Helpers that a later ticket owns (the kit freeze, the Claude Code move, the pace) are read-only copies
 here, so the default output of a command that runs in Python is the same as bash's. The ticket that ports
@@ -358,7 +357,7 @@ def cmd_status(argv: list, env: dict) -> int:
     for name in sorted(groups):
         if len(groups[name]) > 1:
             out.write(f"TWO SESSIONS named {name}: {', '.join(groups[name])}; "
-                      "stop the one stations.json does not list (factory roster)\n")
+                      "stop the one stations.json does not list (tares factory roster)\n")
     is_frozen = frozen.on
     doc["plugin"] = {"older": old}
     if old == 0:

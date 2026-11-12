@@ -1,6 +1,6 @@
-"""scripts/check_ledger.py: the crew ledger and the bash crew list the same things, every row has an owner or a reason, and a ported row points at code that exists."""
+"""scripts/check_ledger.py: the crew ledger is a finished record. Every row is dropped with a reason, or ported to Python that exists."""
+import copy
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -9,7 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CHECK = ROOT / "scripts" / "check_ledger.py"
 LEDGER = ROOT / "scripts" / "crew_ledger.json"
-FACTORY = ROOT / "claude-plugin" / "bin" / "factory"
+SECTIONS = ["functions", "helpers", "dispatcher_cases", "env_vars", "state_files", "test_suites",
+            "cmux_touchpoints", "hook_entries"]
 
 P = F = 0
 
@@ -26,230 +27,210 @@ def run(*args):
     return r.returncode, r.stdout + r.stderr
 
 
+def row(name, **kw):
+    r = {"name": name, "kind": "function", "ticket": "TR-948", "dropped": False,
+         "python": "tares.crew.state:slugify", "ported": True, "note": ""}
+    r.update(kw)
+    return r
+
+
+def clean():
+    """A small ledger that passes: one ported row of each way to point at Python, and a dropped one."""
+    data = {"version": 1, "source": "claude-plugin/bin/factory (removed in TR-975)"}
+    for s in SECTIONS:
+        data[s] = []
+    data["functions"] = [
+        row("slugify"),
+        row("method", python="tares.crew.doctor:Doctor.ok"),
+        row("constant", python="tares.crew.usage:USAGE"),
+        row("die", ticket=None, dropped="Python raises CrewError instead.", python="", ported=False),
+    ]
+    data["state_files"] = [row("a file", kind="file", python="scripts/check_ledger.py")]
+    return data
+
+
+tmp = Path(tempfile.mkdtemp(prefix="check_ledger_"))
+led = tmp / "ledger.json"
+
+
+def save(data):
+    led.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def check(data, *extra):
+    save(data)
+    return run("--ledger", str(led), *extra)
+
+
 def load():
     return json.loads(LEDGER.read_text(encoding="utf-8"))
 
 
-def save(path, data):
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-tmp = Path(tempfile.mkdtemp(prefix="check_ledger_"))
-
-# the real tree
-code, out = run("--list-only")
-ck("--list-only exits 0 on this tree", code == 0, out)
+# the real ledger
 code, out = run()
-ck("the full check exits 0 on this tree", code == 0, out)
+ck("the real ledger passes: every row ported or dropped", code == 0, out)
+real = load()
+ck("the real ledger names the removed bash as its source", real["source"] == "claude-plugin/bin/factory (removed in TR-975)", real["source"])
+ck("the real ledger has no row that is neither ported nor dropped", all(
+    r["ported"] is True or (isinstance(r["dropped"], str) and r["dropped"].strip())
+    for s in SECTIONS for r in real[s]))
+ck("the ledger lists no hook entries (every hooks.json command is a `tares hook` one)", real["hook_entries"] == [])
+ck("the ledger has no em dash", "—" not in LEDGER.read_text(encoding="utf-8"))
+code, out = run("--help")
+ck("--help exits 0", code == 0 and "--ledger" in out, out)
+for gone in ("--bash", "--list-only", "--refresh-lines"):
+    code, out = run(gone)
+    ck("%s is gone: exit 2" % gone, code == 2, "exit %d: %s" % (code, out))
 
-# (a) a function row deleted from the ledger
-data = load()
-gone = data["functions"][-1]["name"]
-data["functions"] = [r for r in data["functions"] if r["name"] != gone]
-led = tmp / "a.json"
-save(led, data)
-code, out = run("--list-only", "--ledger", str(led))
-ck("a deleted function row exits 1", code == 1, f"exit {code}: {out}")
-ck("the deleted function row is named", gone in out and "missing" in out, out)
+# a clean fixture
+code, out = check(clean())
+ck("a clean ledger exits 0", code == 0, out)
+ck("the clean ledger is counted", "ok, 5 rows" in out, out)
 
-# a middle one too, so a check that only looks at one end cannot pass
-data = load()
-mid = data["functions"][len(data["functions"]) // 2]["name"]
-data["functions"] = [r for r in data["functions"] if r["name"] != mid]
-save(led, data)
-code, out = run("--list-only", "--ledger", str(led))
-ck("a deleted middle function row exits 1 and is named", code == 1 and mid in out, f"exit {code}: {out}")
-
-# (b) a new bash function the ledger does not know
-fake = tmp / "factory_extra"
-fake.write_text(FACTORY.read_text(encoding="utf-8") + "\nzz_fake_function() {\n  echo fake\n}\n", encoding="utf-8")
-code, out = run("--list-only", "--bash", str(fake))
-ck("a new bash function exits 1", code == 1, f"exit {code}: {out}")
-ck("the new bash function is named", "zz_fake_function" in out, out)
-
-# a function at the very top of the file as well
-text = FACTORY.read_text(encoding="utf-8")
-first = text.index("\n", text.index("\n") + 1)
-fake2 = tmp / "factory_top"
-fake2.write_text(text[:first] + "\naa_first_fake() {\n  echo fake\n}\n" + text[first:], encoding="utf-8")
-code, out = run("--list-only", "--bash", str(fake2))
-ck("a new bash function near the top exits 1 and is named", code == 1 and "aa_first_fake" in out, f"exit {code}: {out}")
-
-# (c) a stale ledger row
-data = load()
-row = dict(data["functions"][0])
-row["name"] = "zz_not_in_bash"
-data["functions"].append(row)
-save(led, data)
-code, out = run("--list-only", "--ledger", str(led))
-ck("a stale ledger row exits 1", code == 1, f"exit {code}: {out}")
-ck("the stale row is named", "zz_not_in_bash" in out and "stale" in out, out)
-
-# a stale row in another section
-data = load()
-row = dict(data["env_vars"][0])
-row["name"] = "ZZ_NOT_AN_ENV"
-data["env_vars"].append(row)
-save(led, data)
-code, out = run("--list-only", "--ledger", str(led))
-ck("a stale env row exits 1 and is named", code == 1 and "ZZ_NOT_AN_ENV" in out, f"exit {code}: {out}")
-
-# (d) ported rows
-data = load()
-data["functions"][0]["ported"] = True
-data["functions"][0]["python"] = "tares.cli:main"
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a ported row whose symbol exists passes", code == 0, f"exit {code}: {out}")
-data["functions"][0]["python"] = "tares.cli:zz_no_such_symbol"
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a ported row whose symbol is missing fails", code == 1 and "zz_no_such_symbol" in out, f"exit {code}: {out}")
-data["functions"][0]["python"] = "tares.zz_no_module:main"
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a ported row whose module is missing fails", code == 1, f"exit {code}: {out}")
+# ported=false and not dropped
+data = clean()
+data["functions"][0]["ported"] = False
 data["functions"][0]["python"] = ""
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a ported row with no python field fails", code == 1, f"exit {code}: {out}")
+code, out = check(data)
+ck("a row with ported=false and not dropped exits 1", code == 1, "exit %d: %s" % (code, out))
+ck("the unfinished row is named", "slugify" in out and "neither ported nor dropped" in out, out)
 
-# (e) dropped
-data = load()
-data["functions"][0]["dropped"] = ""
+# a ported row that points at nothing
+for label, python, want in (
+        ("a symbol that is missing", "tares.crew.state:zz_no_such_symbol", "zz_no_such_symbol"),
+        ("a module that is missing", "tares.crew.zz_no_module:main", "zz_no_module"),
+        ("a method that is missing", "tares.crew.doctor:Doctor.zz_no_method", "zz_no_method"),
+        ("a method of something that is not a class", "tares.crew.state:slugify.inner", "not a class"),
+        ("a path that is missing", "tests/zz_no_such_file.py", "zz_no_such_file"),
+        ("a path with ..", "scripts/../README.md", "relative to the repo"),
+        ("an absolute path", str(ROOT / "README.md"), "relative to the repo"),
+        ("a folder, not a file", "tares/crew", "does not exist as a file"),
+        ("two colons", "tares.crew.state:slugify:x", "module.path:symbol"),
+        ("no python at all", "", "python is empty")):
+    data = clean()
+    data["functions"][0]["python"] = python
+    code, out = check(data)
+    ck("a ported row with %s exits 1 and says why" % label, code == 1 and want in out, "exit %d: %s" % (code, out))
+data = clean()
+data["functions"][0]["python"] = "tares.crew.state"  # no symbol is not a module:symbol and not a file
+code, out = check(data)
+ck("a python value that is neither module:symbol nor a file exits 1", code == 1, "exit %d: %s" % (code, out))
+
+# dropped
+data = clean()
+data["functions"][3]["dropped"] = ""
+code, out = check(data)
+ck("a dropped row with an empty reason exits 1", code == 1 and "without a reason" in out, "exit %d: %s" % (code, out))
+data["functions"][3]["dropped"] = "   "
+code, out = check(data)
+ck("a dropped row with a blank reason exits 1", code == 1 and "without a reason" in out, "exit %d: %s" % (code, out))
+data = clean()
+data["functions"][3]["dropped"] = True
+code, out = check(data)
+ck("dropped=true (not a reason) exits 1", code == 1, "exit %d: %s" % (code, out))
+data = clean()
+data["functions"][3]["ported"] = True
+code, out = check(data)
+ck("a row both dropped and ported exits 1", code == 1 and "both dropped and ported" in out, "exit %d: %s" % (code, out))
+data = clean()
 data["functions"][0]["ticket"] = None
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a dropped row with no reason fails", code == 1 and "dropped" in out, f"exit {code}: {out}")
-data["functions"][0]["dropped"] = "Windows has no such thing, nothing to port"
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a dropped row with a reason and no ticket passes", code == 0, f"exit {code}: {out}")
-data["functions"][0]["dropped"] = False
-save(led, data)
-code, out = run("--ledger", str(led))
-ck("a row with no owner and not dropped fails", code == 1, f"exit {code}: {out}")
+code, out = check(data)
+ck("a row that is not dropped and has no ticket exits 1", code == 1 and "no owning ticket" in out, "exit %d: %s" % (code, out))
+data["functions"][0]["ticket"] = "955"
+code, out = check(data)
+ck("a ticket that is not TR-<number> exits 1", code == 1 and "TR-123" in out, "exit %d: %s" % (code, out))
 
-# (e2) things the bash can gain that the ledger must hear about: an env var, a state file, a cmux line
-base = FACTORY.read_text(encoding="utf-8")
+# a missing field, each in turn
+for field in ("name", "kind", "ticket", "dropped", "python", "ported", "note"):
+    data = clean()
+    del data["functions"][0][field]
+    code, out = check(data)
+    ck("a row without %s exits 1" % field, code == 1, "exit %d: %s" % (code, out))
+    if field != "name":
+        ck("the missing field %s is named" % field, "lacks" in out and field in out, out)
+data = clean()
+data["functions"][0]["ported"] = "yes"
+code, out = check(data)
+ck("ported that is not a boolean exits 1", code == 1 and "ported must be" in out, "exit %d: %s" % (code, out))
+data = clean()
+data["functions"][0]["note"] = None
+code, out = check(data)
+ck("a note that is not a string exits 1", code == 1, "exit %d: %s" % (code, out))
+data = clean()
+data["functions"] = {"slugify": 1}
+code, out = check(data)
+ck("a section that is not a list exits 1", code == 1 and "must be a list" in out, "exit %d: %s" % (code, out))
+data = clean()
+data["functions"].append("slugify")
+code, out = check(data)
+ck("a row that is not an object exits 1", code == 1 and "not an object" in out, "exit %d: %s" % (code, out))
 
-
-def bash_copy(name, extra):
-    p = tmp / name
-    p.write_text(base + extra, encoding="utf-8")
-    return p
-
-
-code, out = run("--list-only", "--bash", str(bash_copy("env_new", "\n# reads $FACTORY_ZZ_NEW_KNOB\n")))
-ck("a new env var in the bash exits 1 and is named", code == 1 and "FACTORY_ZZ_NEW_KNOB" in out and "environment variable" in out, f"exit {code}: {out}")
-code, out = run("--list-only", "--bash", str(bash_copy("state_new", '\n# writes "$CREW_HOME/zz-new-state"\n')))
-ck("a new state file in the bash exits 1 and is named", code == 1 and "zz-new-state" in out and "state file" in out, f"exit {code}: {out}")
-code, out = run("--list-only", "--bash", str(bash_copy("home_new", '\n# reads "$HOME/.zz-new-dotfile"\n')))
-ck("a new $HOME dotfile in the bash exits 1 and is named", code == 1 and ".zz-new-dotfile" in out, f"exit {code}: {out}")
-code, out = run("--list-only", "--bash", str(bash_copy("repo_new", '\n# writes "$repo/.factory/zz-new-dir"\n')))
-ck("a new per-repo .factory path in the bash exits 1 and is named", code == 1 and ".factory/zz-new-dir" in out, f"exit {code}: {out}")
-code, out = run("--list-only", "--bash", str(bash_copy("cmux_new", "\n# zz_new_cmux_line talks to cmux\n")))
-ck("a new cmux line in the bash exits 1 and is named", code == 1 and "zz_new_cmux_line" in out and "cmux" in out, f"exit {code}: {out}")
-
-# and the ledger rows that cover them, taken away one by one
-# hook_entries has no rows since TR-1103: every hooks.json command runs `tares hook`, none python3 or bash
-ck("the ledger lists no hook entries (every hooks.json command is a `tares hook` one)", load()["hook_entries"] == [])
-for section, label in (("env_vars", "env var"), ("state_files", "state file"), ("cmux_touchpoints", "cmux touchpoint")):
-    data = load()
-    # an external state file is only seen through its row, so take a crew_home one; the rest: the last row
-    pick = [r for r in data[section] if r.get("scope") != "external"] or data[section]
-    gone = pick[-1]["name"]
-    data[section] = [r for r in data[section] if r is not pick[-1]]
-    save(led, data)
-    code, out = run("--list-only", "--ledger", str(led))
-    ck("a deleted %s row exits 1 and is named" % label, code == 1 and ("cmux mention" if section == "cmux_touchpoints" else gone) in out and "missing" in out, f"exit {code}: {out}")
-for name in ("<repo>/.factory/worktrees", "<repo>/.git/info/exclude"):
-    data = load()
-    ck("the ledger has a row for %s" % name, any(r["name"] == name for r in data["state_files"]))
-    data["state_files"] = [r for r in data["state_files"] if r["name"] != name]
-    save(led, data)
-    code, out = run("--list-only", "--ledger", str(led))
-    ck("a deleted row for %s exits 1 and is named" % name, code == 1 and name in out, f"exit {code}: {out}")
-
-# a row listed twice
+# a row listed twice, in every section
 for section in ("functions", "env_vars", "state_files", "dispatcher_cases"):
-    data = load()
-    dup = data[section][0]["name"]
-    data[section].append(dict(data[section][0]))
-    save(led, data)
-    code, out = run("--list-only", "--ledger", str(led))
-    ck("a duplicate %s row exits 1 and is named" % section, code == 1 and "twice" in out and dup in out, f"exit {code}: {out}")
+    data = clean()
+    data[section] = [row("zz dup", kind="x"), row("zz dup", kind="x")]
+    code, out = check(data)
+    ck("a duplicate %s row exits 1 and is named" % section, code == 1 and "twice" in out and "zz dup" in out, "exit %d: %s" % (code, out))
+data = clean()
+data["helpers"] = [row("same", file="a"), row("same", file="b")]
+code, out = check(data)
+ck("the same helper name in two files is not a duplicate", code == 0, out)
 
-# --list-only leaves the ported and owner rules out; the full check applies them
-data = load()
-data["functions"][0]["ticket"] = None
-data["functions"][1]["ported"] = True
-data["functions"][1]["python"] = ""
-save(led, data)
-code, out = run("--list-only", "--ledger", str(led))
-ck("--list-only skips the owner and ported rules", code == 0, f"exit {code}: {out}")
+# the file itself
+code, out = run("--ledger", str(tmp / "no_such_ledger.json"))
+ck("an unreadable ledger exits 2", code == 2 and "cannot read" in out, "exit %d: %s" % (code, out))
+code, out = run("--ledger", str(tmp), "--json")
+ck("a ledger that is a folder exits 2", code == 2, "exit %d: %s" % (code, out))
+code, out = run("--ledger", str(tmp / "no_such_ledger.json"), "--export-md")
+ck("--export-md of an unreadable ledger exits 2", code == 2, "exit %d: %s" % (code, out))
+led.write_text("{not json", encoding="utf-8")
 code, out = run("--ledger", str(led))
-ck("the full check applies the owner and ported rules to the same ledger", code == 1 and "no owning ticket" in out and "ported but its python field is empty" in out, f"exit {code}: {out}")
+ck("a ledger that is not JSON exits 1", code == 1 and "not valid JSON" in out, "exit %d: %s" % (code, out))
+data = clean()
+data["version"] = 2
+code, out = check(data)
+ck("a ledger of another version exits 1", code == 1 and "version 1" in out, "exit %d: %s" % (code, out))
+code, out = run("--no-such-option")
+ck("a bad command line exits 2", code == 2, "exit %d: %s" % (code, out))
 
-# (f) the Markdown copy
+# --json
+code, out = check(clean(), "--json")
+parsed = json.loads(out)
+ck("--json on a clean ledger: ok true, no problems, exit 0", code == 0 and parsed["ok"] is True and parsed["problems"] == [], out)
+data = clean()
+data["functions"][0]["python"] = "tares.crew.state:zz_no_such_symbol"
+code, out = check(data, "--json")
+parsed = json.loads(out)
+p0 = parsed["problems"][0] if parsed["problems"] else {}
+ck("--json on a broken ledger: ok false, one problem, exit 1", code == 1 and parsed["ok"] is False and len(parsed["problems"]) == 1, out)
+ck("--json names the section, the row and the problem", p0.get("section") == "functions" and p0.get("name") == "slugify"
+   and p0.get("problem") == "python-unresolved" and "zz_no_such_symbol" in p0.get("message", ""), out)
+code, out = check(clean(), "--json")
+ck("--json does not print the text summary", out.lstrip().startswith("{"), out)
+
+# --export-md
+data = clean()
+data["functions"][3]["dropped"] = "Python raises CrewError | instead."
+save(data)
 md1, md2 = tmp / "one.md", tmp / "two.md"
-c1, o1 = run("--export-md", str(md1))
-c2, o2 = run("--export-md", str(md2))
-ck("--export-md exits 0", c1 == 0 and c2 == 0, o1 + o2)
+c1, o1 = run("--ledger", str(led), "--export-md", str(md1))
+c2, o2 = run("--ledger", str(led), "--export-md", str(md2))
+ck("--export-md PATH exits 0 and prints nothing", c1 == 0 and c2 == 0 and o1 == "" and o2 == "", o1 + o2)
 ck("--export-md is the same twice", md1.read_bytes() == md2.read_bytes())
 md = md1.read_text(encoding="utf-8")
-names = [r["name"] for r in load()["functions"]]
-lost = [n for n in names if n not in md]
-ck("--export-md has every function name (%d)" % len(names), not lost, ", ".join(lost[:5]))
-ck("--export-md has no em dash", "\u2014" not in md)
-
-# the ledger itself
-raw = LEDGER.read_text(encoding="utf-8")
-ck("the ledger has no em dash", "\u2014" not in raw)
-ck("every row has an owner or a reason", all(
-    (isinstance(r.get("ticket"), str) and re.match(r"^TR-\d+$", r["ticket"])) or (isinstance(r.get("dropped"), str) and r["dropped"].strip())
-    for k, v in load().items() if isinstance(v, list) for r in v))
-
-# callers before callees (TR-1072): a function that a lower-numbered ticket calls is owned by that ticket or an earlier one,
-# or its row has a note that names the caller's ticket (a partial port or a stub there).
-# CALLS is read off the bash by hand (name matching finds calls in strings and comments too): add a pair when a ticket's
-# ownership changes or a function gains a caller. Read-only views (cmd_crew, usage, ...) and desk_json (ported with the client) are left out.
-CALLS = [
-    ("launch", "kit_dir"), ("launch", "iw_launch_note"), ("launch", "pace_launch_note"), ("launch", "kit_version"),
-    ("boot_prompt", "idle_wake_on"), ("boot_prompt", "idle_wake_note"),
-    ("cmd_spawn", "halted"), ("cmd_spawn", "pace_read"),
-    ("cmd_crew_up", "start_watch"), ("cmd_crew_up", "installed_tares"), ("cmd_crew_up", "clash_text"),
-    ("cmd_down", "stop_watch"), ("cmd_revive", "rearm_text"), ("regrant_station", "rearm_text"), ("rearm_text", "pace_read"),
-    ("cc_movable", "cc_backoff"), ("cc_pick", "cc_backoff"),
-    ("claude_move", "cc_delay"), ("claude_move", "cc_retry_sync"), ("claude_move", "prune_spares"),
-    ("cmd_crew_update", "upgrades_frozen"), ("watch_claude_move", "upgrades_frozen"),
-    ("cmd_doctor", "doctor_cmux"), ("cmd_doctor", "doctor_lsp"),
-]
-num = lambda t: int(t.split("-")[1])
-
-
-def late_pairs(functions):
-    fn = {r["name"]: r for r in functions}
-    late = []
-    for caller, callee in CALLS:
-        ct, et = fn[caller]["ticket"], fn[callee]["ticket"]
-        if num(et) > num(ct) and not re.search(r"\b%s\b" % re.escape(ct), fn[callee].get("note", "")):
-            late.append("%s (%s) calls %s (%s)" % (caller, ct, callee, et))
-    return late
-
-
-late = late_pairs(load()["functions"])
-ck("no function is owned by a later ticket than its caller unless its note names the caller's ticket (%d pairs)" % len(CALLS), not late, "; ".join(late))
-# the check bites: without its note a late callee is named; a note naming a longer ticket number does not count
-data = load()
-for r in data["functions"]:
-    if r["name"] == "kit_version":
-        r["note"] = ""
-ck("a late callee with no note is caught", late_pairs(data["functions"]) == ["launch (TR-953) calls kit_version (TR-965)"], str(late_pairs(data["functions"])))
-for r in data["functions"]:
-    if r["name"] == "kit_version":
-        r["note"] = "Called by launch (TR-9530)."
-ck("a note naming TR-9530 does not stand for TR-953", len(late_pairs(data["functions"])) == 1)
+ck("--export-md has the counts", "5 rows, 4 ported, 1 dropped." in md, md[:300])
+ck("--export-md has every section title", all(("## %s (" % t) in md for t in (
+    "Functions of claude-plugin/bin/factory (removed in TR-975)", "Helper scripts and glue", "Dispatcher cases", "Environment variables",
+    "State files", "Test files (tests/factory)", "cmux touchpoints", "Hook entries (hooks.json)")), md)
+ck("--export-md has every function name", all(n in md for n in ("slugify", "method", "constant", "die")), md)
+ck("--export-md shows the python and the dropped reason, with a | escaped", "tares.crew.doctor:Doctor.ok" in md and "dropped: Python raises CrewError \\| instead." in md, md)
+ck("--export-md writes LF line endings", b"\r" not in md1.read_bytes())
+code, out = run("--ledger", str(led), "--export-md")
+ck("--export-md without a path writes to stdout", code == 0 and out == md, out[:200])
+code, out = run("--export-md")
+ck("--export-md of the real ledger lists all its rows", code == 0 and "## Functions of" in out and
+   all(r["name"] in out for r in real["functions"]), out[:200])
+ck("--export-md of the real ledger has no em dash", "—" not in out)
 
 print(f"{P} passed, {F} failed")
 sys.exit(1 if F else 0)

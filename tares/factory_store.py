@@ -484,6 +484,29 @@ class FactoryStore:
         return rows
 
     # ── upgrade and clean-up ──────────────────────────────────────────────────
+    def _merge_split_crews(self) -> None:
+        """A person's crew recorded without its machine, before the cell had a licence, and the same
+        crew recorded with one since are one crew (TR-1223): its sessions move to the crew with the
+        machine and the bare record goes. Only when the person has exactly one crew of that name with
+        a machine; with several it can't be told which. Lock held (or no other thread yet)."""
+        rows = self.sc.execute("SELECT id, name, person_id, machine, first_seen, last_seen FROM crews").fetchall()
+        groups: dict = {}
+        for r in rows:
+            groups.setdefault((r[2], r[1]), []).append(r)
+        for crews in groups.values():
+            bare = [c for c in crews if not c[3]]
+            named = [c for c in crews if c[3]]
+            if len(named) != 1 or not bare:
+                continue
+            keep = named[0]
+            firsts = [c[4] for c in [keep, *bare] if c[4] is not None]
+            lasts = [c[5] for c in [keep, *bare] if c[5] is not None]
+            for b in bare:
+                self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id = ?", [keep[0], b[0]])
+                self.sc.execute("DELETE FROM crews WHERE id = ?", [b[0]])
+            self.sc.execute("UPDATE crews SET first_seen = ?, last_seen = ? WHERE id = ?",
+                            [min(firsts) if firsts else None, max(lasts) if lasts else None, keep[0]])
+
     def _factory_upgrade(self) -> None:
         """Tickets from before numbers get them, in plan order, per project. Sessions that played
         a station before crews existed (TR-628) join the crew `crew` of the person `local`."""
@@ -492,6 +515,7 @@ class FactoryStore:
             cid = self._crew_id("crew", "local", "", now_utc())
             self.sc.execute("UPDATE session_stations SET crew_id = ? WHERE crew_id IS NULL",
                              [cid])
+        self._merge_split_crews()
         # an override kept before the log existed is its first entry (TR-640); one with no time of
         # its own takes the hand-over's, else now, so a log entry always has a time
         self.sc.execute(
@@ -717,6 +741,24 @@ class FactoryStore:
             if at is not None and (r[1] is None or at > r[1]):
                 self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, r[0]])
             return r[0]
+        # A crew recorded without its machine (a cell with no licence keeps none) and the same crew
+        # named with one (once a licence is on, or off again) are one crew (TR-1223): the line joins
+        # the person's only other crew of that name, and a crew without a machine takes the one this
+        # line names. With several machines it can't be told which one it was: a new crew is made.
+        others = self.sc.execute("SELECT id, last_seen, machine FROM crews WHERE person_id = ? AND name = ?",
+                                 [person_id, name]).fetchall()
+        bare = [o for o in others if not o[2]]
+        named = [o for o in others if o[2]]
+        pick = None
+        if machine and bare and not named:
+            pick = bare[0]
+            self.sc.execute("UPDATE crews SET machine = ? WHERE id = ?", [machine, pick[0]])
+        elif not machine and len(named) == 1:
+            pick = named[0]
+        if pick is not None:
+            if at is not None and (pick[1] is None or at > pick[1]):
+                self.sc.execute("UPDATE crews SET last_seen = ? WHERE id = ?", [at, pick[0]])
+            return pick[0]
         cid = "c_" + uuid.uuid4().hex[:10]
         self.sc.execute("INSERT INTO crews (id, name, person_id, machine, first_seen, last_seen) "
                          "VALUES (?, ?, ?, ?, ?, ?)", [cid, name, person_id, machine, at, at])

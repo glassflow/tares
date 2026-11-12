@@ -122,7 +122,6 @@ tares factory: crew-reviewer stopped; reviving it under the same name
   },
   "permissions": {
     "allow": [
-      "Bash(factory tidy *)",
       "Bash(tares factory tidy *)"
     ],
     "deny": [

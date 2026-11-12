@@ -6,9 +6,11 @@
     python tests/ci_windows.py --root DIR   a tree other than this checkout (test_ci_windows.py uses a fake one)
     python tests/ci_windows.py --timeout S  seconds a single test may take (default 600)
     python tests/ci_windows.py --floors     apply the per-test floors below (the Windows job passes it)
+    python tests/ci_windows.py --shard N --of M   only the Nth of M slices (1-based) of the runs below; the Windows job
+                                            runs M slices side by side so no slice nears the job's time limit
     python tests/ci_windows.py --floor NAME=N  one more floor, e.g. test_crew_state.py=55 (test_ci_windows.py uses it)
 
-What runs, in this order:
+What runs, in this order (with --shard N --of M, every Mth run from the Nth, and the coverage report in slice 1 only):
   1. every tests/test_crew_*.py that exists (sorted), as `python <file>`, except the SKIP list below,
      then the EXTRA tests that exist (the runner's own test);
   2. `python tests/factory/parity.py --coverage`;
@@ -203,9 +205,15 @@ def show(r):
     sys.stdout.flush()
 
 
+def pick(items, shard, of):
+    """The Nth of M slices of items: every Mth item from the Nth, so each slice gets a mix of tests and scenarios."""
+    return [x for i, x in enumerate(items) if i % of == shard - 1]
+
+
 def main(argv):
     root, timeout, only_list = HERE.parent, 600, False
     use_floors, extra_floors = False, {}
+    shard, of = 1, 1
     args = list(argv)
     while args:
         a = args.pop(0)
@@ -217,12 +225,20 @@ def main(argv):
             timeout = int(args.pop(0))
         elif a == "--floors":
             use_floors = True
+        elif a == "--shard" and args:
+            shard = int(args.pop(0))
+        elif a == "--of" and args:
+            of = int(args.pop(0))
         elif a == "--floor" and args and "=" in args[0]:
             name, _, n = args.pop(0).partition("=")
             extra_floors[name] = int(n)
         else:
             print(__doc__)
             return 2
+
+    if not 1 <= shard <= of:
+        print("ci_windows: --shard must be between 1 and --of")
+        return 2
 
     missing = [p for p in REQUIRED if not (root / p).is_file()]
     to_run, skipped = plan_tests(root)
@@ -232,15 +248,16 @@ def main(argv):
     for n, why in skipped:
         print("skip  %-40s %s" % (n, why))
     if only_list:
-        for n in to_run:
-            print("test  tests/%s" % n)
-        print("test  tests/factory/parity.py --coverage")
+        names, err = [], ""
         if "tests/factory/parity.py" not in missing:
             names, err = scenarios(root, timeout)
-            for n in names:
-                print("test  tests/factory/parity.py %s" % n)
-            if err:
-                print("ci_windows: %s" % err)
+        mine = pick(list(to_run) + ["parity:" + n for n in names], shard, of)
+        for n in mine:
+            print("test  tests/factory/parity.py %s" % n[7:] if n.startswith("parity:") else "test  tests/%s" % n)
+        if shard == 1 and "tests/factory/parity.py" not in missing:
+            print("test  tests/factory/parity.py --coverage")
+        if err:
+            print("ci_windows: %s" % err)
         for p in missing:
             print("MISSING %s" % p)
         return 1 if missing else 0
@@ -254,19 +271,24 @@ def main(argv):
     floors = dict(FLOOR) if use_floors else {}
     floors.update(extra_floors)
     results = []
-    for n in to_run:
+    names, err = scenarios(root, timeout)
+    mine = pick(list(to_run) + ["parity:" + n for n in names], shard, of)
+    if of > 1:
+        print("ci_windows: slice %d of %d: %d of %d runs" % (shard, of, len(mine), len(to_run) + len(names)))
+    names = [n[7:] for n in mine if n.startswith("parity:")]
+    for n in [n for n in mine if not n.startswith("parity:")]:
         code, secs, out = run([sys.executable, str(root / "tests" / n)], root, timeout)
         r = judge(Result("tests/" + n, code, secs, last_line(out), out), floors)
         show(r)
         results.append(r)
 
-    code, secs, out = run([sys.executable, str(root / "tests" / "factory" / "parity.py"), "--coverage"], root, timeout)
-    r = Result("parity.py --coverage", code, secs, last_line(out), out, "coverage")
-    show(r)
-    results.append(r)
+    if shard == 1:
+        code, secs, out = run([sys.executable, str(root / "tests" / "factory" / "parity.py"), "--coverage"], root, timeout)
+        r = Result("parity.py --coverage", code, secs, last_line(out), out, "coverage")
+        show(r)
+        results.append(r)
 
-    names, err = scenarios(root, timeout)
-    if err:
+    if err and shard == 1:
         r = Result("parity.py --list", 1, 0.0, err, err, "coverage")
         show(r)
         results.append(r)

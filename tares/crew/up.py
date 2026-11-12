@@ -4,9 +4,7 @@
     crew setup --questions [--json]        every outstanding setup question, as one document (schemas/setup_questions.json)
     crew setup --answers <file.json> [--json]  validate the answers and save them, as the prompts would; --json says what was saved (schemas/setup_answers.json)
 
-Python is the default engine (TR-1069): the dispatcher sends `crew up` here unless TARES_FACTORY_ENGINE=bash
-(or "engine": "bash" in crew.json) asks for bash. Wherever it differs from claude-plugin/bin/factory, bash is right, except for the
-lines below.
+Port of cmd_crew_up and its helpers from the old bash crew (removed in TR-975).
 
 What is ported here (bash name -> Python): installed_tares, clash_text, home_trusted, ensure_home_trusted,
 store_crew_name, people_count, suggest_crew_name, setup_crew_name, ask, choose, ask_settings, ask_grants,
@@ -19,27 +17,15 @@ and add_grant, so the same settings are saved on Tares either way. In a terminal
 the box of tares/factory_setup.py before it calls this; the plain prompts here are what
 `python -m tares.crew` and a pipe get, as in bash.
 
-Differences from bash (each one a decision, none an accident):
+Differences from the old bash crew (each one a decision, none an accident):
 
- 0. `crew up` runs here by default (TR-1069), as every ported command does; TARES_FACTORY_ENGINE=bash runs
-    bash's. It was gated behind TARES_FACTORY_ENGINE=python until the watch (TR-958) and the language
-    server offer (TR-970) were wired in. `crew setup` has no bash twin and runs here unless the engine
-    is "bash".
-
- 1. `crew setup` is new: bash has no such command (it answers "crew takes up, down, ..."). It runs on
-    Python whatever TARES_FACTORY_ENGINE says unless that is "bash" (then bash's own error answers).
- 2. The watch is started here (watch.start, TR-958, wired in TR-1155): the Python watch, as
-    `crew watch` is routed (TARES_FACTORY_WATCH=bash keeps the bash one, TR-1069). The language server offer (lsp_offer,
+ 1. `crew setup` is new: bash had no such command (it answered "crew takes up, down, ...").
+ 2. The watch is started here (watch.start, TR-958, wired in TR-1155). The language server offer (lsp_offer,
     TR-970) is Up.lsp_offer, which calls tares.crew.doctor_lsp.offer.
- 3. Starting the stations (launch, boot_prompt, write_settings, is_alive: TR-950 and TR-953, not ported
-    yet) is the one step that still runs bash: `start_stations` hands the roles to the bash internal
-    command `_start-stations`, which is the second half of bash's own cmd_crew_up, cut out unchanged
-    (the roles loop and its "Starting the crew" line; no watch, no language servers). When TR-953 lands, replace
-    start_stations here and delete the bash function and its case arm. Without bash (Windows) crew up
-    stops at that step with exit 2 and "not yet ported" in its message, after the settings and the crew
-    name are saved.
+ 3. The stations are started by start_stations (launch, boot_prompt, is_alive), the second half of bash's
+    cmd_crew_up: the roles loop and its "Starting the crew" line, the orchestrator first.
  4. The claude binary: CLAUDE_BIN, else the first `claude` on PATH that is not a cmux wrapper script
-    (bash's claude_bin, TR-950, in the part this ticket needs). It is looked up when crew up starts, as
+    (the old bash claude_bin). It is looked up when crew up starts, as
     bash does at its own start.
  5. The terminal box (tares/factory_setup.py) is not imported here: it needs termios, which Windows lacks.
     `tares factory` runs it before the dispatcher, so a terminal user still sees the box.
@@ -53,7 +39,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -621,18 +606,34 @@ def _run(fn) -> int:
         return 1
 
 
-def start_stations(env: dict, roles: list) -> int:
-    """Start the crew's stations (bash's second half of cmd_crew_up). Until launch is ported (TR-953) this
-    runs the bash internal command `_start-stations`; see the module docstring."""
-    from ..cli import plugin_dir
-    script = plugin_dir() / "bin" / "factory"
-    if os.name == "nt" or not shutil.which("bash", path=env.get("PATH")):
-        _err(f'{ME}: "crew up" cannot start the stations here: that step is not yet ported to the Python engine '
-             "(TR-953) and runs in bash, which is not available. The settings and the crew name are saved.\n")
-        return 2
-    sys.stdout.flush()
-    sys.stderr.flush()
-    return subprocess.run(["bash", str(script), "_start-stations", *roles], env=env, stdin=subprocess.DEVNULL).returncode
+def start_stations(client: TaresClient, env: dict, roles: list, claude: str | None = None) -> int:
+    """Start the crew's stations, the orchestrator first so the others can check in with it. A station that
+    already runs is left alone. FACTORY_PAUSE seconds (default 5) pass after the orchestrator starts."""
+    from . import launch
+    from .claude import is_alive
+    from .locks import station_lock
+    from .stations import station_name
+    paths = client.paths
+    ordered = [r for r in roles if r == "orchestrator"][:1] + [r for r in roles if r != "orchestrator"]
+    _err("\nStarting the crew\n")
+    for r in ordered:
+        if r not in ("orchestrator", "reviewer", "releaser"):
+            raise CrewError(f"unknown crew role '{r}' (crew roles: orchestrator, reviewer, releaser; builders start with {ME} spawn)")
+        station = station_name(r, paths)
+        station_lock(station, paths)
+        if is_alive(station, "", claude, paths):
+            _err(f"  \u2713 {station} is already running\n")
+            continue
+        launch.launch(client, station, r, "", "", "", paths.raw,
+                      state.ccfg("stations", r, "model", paths=paths), state.ccfg("stations", r, "effort", paths=paths),
+                      launch.boot_prompt(client, r), claude=claude)
+        if r == "orchestrator":
+            try:
+                pause = float(env.get("FACTORY_PAUSE") or 5)
+            except ValueError:
+                pause = 5.0
+            time.sleep(pause)
+    return 0
 
 
 def cmd_crew_up(argv: list, env: dict) -> int:
@@ -640,9 +641,7 @@ def cmd_crew_up(argv: list, env: dict) -> int:
 
 
 def entry_crew_up(argv: list, env: dict) -> int:
-    """What the dispatcher calls for `crew up`. The watch (TR-958) and the language server offer (TR-970) are
-    wired in, so it runs here whatever the engine; `engine=bash` never reaches this (the dispatcher hands
-    every command to bash then)."""
+    """What the dispatcher calls for `crew up`."""
     return cmd_crew_up(argv, env)
 
 
@@ -677,7 +676,7 @@ def _crew_up(argv: list, env: dict) -> int:
     up.lsp_offer(claude)
     if not roles:
         roles = c.crew_roles()
-    code = start_stations(env, roles)
+    code = start_stations(c, env, roles, claude)
     if code:
         return code
     if watch:

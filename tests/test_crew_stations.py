@@ -146,7 +146,7 @@ def refused(label, args, text, **world):
     ck(label, err is not None and text in err and not ls, str(err))
 
 
-refused("too few arguments", ["builder", "Links App", "m9"], "usage: factory spawn builder [--autonomy L3-review]")
+refused("too few arguments", ["builder", "Links App", "m9"], "usage: tares factory spawn builder [--autonomy L3-review]")
 refused("an unknown kind", ["wizard"], "spawn takes builder or helper")
 refused("a level that does not exist", ["builder", "--autonomy", "L5-dark", "Links App", "m9", LINKS, "x"], "autonomy must be L3-review or L4-ship")
 refused("a level looser than the crew", ["builder", "--autonomy", "L4-ship", "Links App", "m9", LINKS, "x"],
@@ -197,7 +197,7 @@ ck("its prompt names the parent's manual, the parent and the task",
 err, ls = run(["releaser-helper", "deploy", "ship it"])
 ck("a releaser-helper belongs to the releaser", err is not None and "crew-releaser is not a recorded station" in err, str(err))
 refused("a parent that is not recorded", ["helper", "nobody", "probe", "x"], "nobody is not a recorded station")
-refused("a helper without a task", ["helper", "crew-reviewer", "probe"], "usage: factory spawn helper <parent-station> <slug> \"<task>\"")
+refused("a helper without a task", ["helper", "crew-reviewer", "probe"], "usage: tares factory spawn helper <parent-station> <slug> \"<task>\"")
 
 print("refusals before anything starts")
 (CREW / "HALT").write_text('{"at":"2026-01-01T00:00:00Z","reason":"testing"}\n', encoding="utf-8")

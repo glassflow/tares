@@ -1,7 +1,7 @@
 """`tares factory projects|finish|context|plan` in Python (tares/crew/person.py, TR-967).
 
-The word-for-word match with bash is the parity scenarios (projects_*, usage_*). This checks what they
-cannot: `projects --json` (bash has none), the usage errors, a refusal Tares words its own way, the key
+The commands' printed text is covered by the parity scenarios (projects_*, usage_*). This checks what they
+cannot: `projects --json`, the usage errors, a refusal Tares words its own way, the key
 going to Tares and never into a message, the small helpers, and that `tares factory roster` still does not
 import the module (the dispatcher loads it only when one of its commands runs).
 
@@ -55,7 +55,7 @@ T = Path(tempfile.mkdtemp(prefix="tares crew person "))
 
 
 def run(env, *argv, fake=None, **extra):
-    e = {**env, "TARES_FACTORY_ENGINE": "python", "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
+    e = {**env, "PYTHONPATH": str(ROOT), "PYTHONIOENCODING": "utf-8"}
     if fake is not None:
         e["TARESD_URL"] = fake.url
     e.update(extra)
@@ -126,7 +126,7 @@ try:
            and err.get("error", {}).get("code") and "did not give the crew's projects" in err["error"]["message"]
            and not r.stderr.strip(), r.stdout + r.stderr)
         r = run(env, "projects", fake=fake)
-        ck("projects: the text view keeps bash's answer when Tares refuses", r.returncode == 0
+        ck("projects: the text view says there are none when Tares refuses", r.returncode == 0
            and "no projects handed to the crew yet" in r.stdout, r.stdout + r.stderr)
     finally:
         fake.stop()
@@ -182,7 +182,11 @@ try:
         return []
 
     try:
-        saved = {k: os.environ.get(k) for k in [*env, "TARESD_URL"]}
+        # a crew station's own TARES_FACTORY_URL (and the rest) must not point this at its Tares
+        stray = [k for k in os.environ if k.startswith(("TARES_", "FACTORY_")) and k not in env]
+        saved = {k: os.environ.get(k) for k in [*env, "TARESD_URL", *stray]}
+        for k in stray:
+            os.environ.pop(k)
         os.environ.update(env)
         os.environ["TARESD_URL"] = fake.url
         person.read_quiet = spy

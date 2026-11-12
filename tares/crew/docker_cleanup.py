@@ -381,9 +381,8 @@ def before_heavy(env: dict, now=None) -> None:
 
 
 def onboarding_note(env: dict) -> str | None:
-    """What crew up says once about the cleanup: only where the Python watch runs and Docker is installed."""
-    from . import dispatch
-    if not docker_bin(env) or dispatch.route(["crew", "watch"], env)[0] != "python":
+    """What crew up says once about the cleanup: only where Docker is installed."""
+    if not docker_bin(env):
         return None
     return ("  ✓ once a day the watch also removes Docker's leftovers (old stopped containers, build cache, "
             "images unused for 7 days; never volumes); the crew setting docker_cleanup turns it off")
