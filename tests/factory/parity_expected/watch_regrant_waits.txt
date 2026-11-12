@@ -116,6 +116,10 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "2727157353", "event": "regranted", "station": "crew-reviewer"}
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-releaser.done ==
 
 == file crew/stations/crew-releaser.grants ==

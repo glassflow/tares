@@ -147,6 +147,10 @@ stub-token
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 - "the reviewer may comment on draft PRs" (<DATE>)
 == file crew/stations/crew-orchestrator.settings.json ==
@@ -370,6 +374,10 @@ stub-token
 == file crew-two/events.jsonl ==
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
+== file crew-two/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew-two/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew-two/stations/crew-orchestrator.grants ==
 - "the reviewer may comment on draft PRs" (<DATE>)
 == file crew-two/stations/crew-orchestrator.settings.json ==

@@ -1490,6 +1490,14 @@ exit: 0
 {"at": "<TS>", "detail": "0000000c", "event": "started", "station": "links-app-build-m1"}
 {"at": "<TS>", "detail": "0000000c", "event": "revived", "station": "links-app-build-m1"}
 {"at": "<TS>", "detail": "rearm", "event": "idle_wake", "station": "links-app-build-m1"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

@@ -381,6 +381,10 @@ tares factory: every station runs Claude Code 1.2.1, one session each
 {"at": "<TS>", "detail": "00000010", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000010", "event": "revived", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "1.2.1", "event": "claude-updated", "station": "crew-orchestrator"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

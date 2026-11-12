@@ -83,6 +83,8 @@ tares factory: crew-reviewer runs Claude Code 1.2.1
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000004", "event": "restarted-fresh", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "1.2.1", "event": "claude-updated", "station": "crew-reviewer"}
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.grants ==
 
 == file crew/stations/crew-reviewer.settings.json ==

@@ -1,9 +1,10 @@
 """The regrant step of the watch: restart a station between turns when its grants change (TR-960).
 
-Ports these functions of `claude-plugin/bin/factory`, with the same behaviour and the same printed text:
-grants_now, regranted, regrant_due and regrant_station, and the part of cmd_watch that calls them (the helper
-branch and the `elif ! halted && between_turns && regrant_due` branch of the per-station loop). Where this
-module and the bash differ, the bash is right; every difference is listed under "Differences from bash".
+Ports these functions of the retired bash crew, with the same behaviour and the same printed text:
+grants_now, regranted, regrant_due and regrant_station, and the part of the watch that calls them (the helper
+branch and the between-turns branch of the per-station loop). Every difference from the bash is listed under
+"Differences from bash". The prompt quotes the rules the station's last start did not have, as Tares renders
+them now (TR-864, `rules.added`); the fingerprint of the grants still decides whether to restart.
 
 A station's grants are fingerprinted when it starts (launch.launch keeps the cksum in stations.json `grants` and
 the text in stations/<station>.grants). Each round the step reads the grants on Tares now; a station whose
@@ -32,6 +33,7 @@ import re
 import sys
 
 from . import claude, launch, locks, state, watch_revive
+from . import rules as rules_mod
 from .client import TaresClient, grants_sum
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -120,6 +122,20 @@ def _prompt(human: str, rules: str, rearm: str) -> str:
             f"report, {rearm}, then carry on where you were.")
 
 
+def _new_rules(client: TaresClient, paths: CrewPaths, station: str, project: str) -> list:
+    """The sentences Tares renders for the station now that its last start did not have (TR-864), written as the
+    start will write them. Empty when Tares cannot give the rules: the prompt then says the change without quoting."""
+    role = state.stations_get(station, "role", paths=paths)
+    work = launch.parent_role(state.stations_get(station, "parent", paths=paths), paths) if role == "helper" else role
+    pid = state.stations_get(station, "project_id", paths=paths) or project
+    try:
+        new = rules_mod.fetch(client, station, pid, work)
+    except (CrewError, ValueError):   # an older Tares, or one that cannot answer
+        return []
+    values = launch.rule_values(client, work, project, state.stations_get(station, "repo", paths=paths))
+    return [rules_mod.fill(t, values) for t in rules_mod.added(rules_mod.saved(paths, station), new)]
+
+
 @locks.scoped   # the station's lock goes with its regrant, as with the end of bash's per-station subshell (TR-1171)
 def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None) -> None:
     """Restart the station with its new grants, in the same conversation, saying which. Tares and the settings
@@ -142,11 +158,7 @@ def regrant_station(paths: CrewPaths, station: str, *, claude_bin: str, env=None
             now = now.rstrip("\n")
             total = str(grants_sum(now + "\n"))
             human = launch._ccfg_or("the user", "human", "name", paths=paths) or "the user"
-            kept = paths.station_file(station, "grants")
-            added = now
-            if kept.is_file():
-                added = added_grants(now, state.read_text(kept))
-            rules = "\n".join("- " + r for r in launch.grant_rules(added + "\n", project, human))
+            rules = "\n".join("- " + r for r in _new_rules(client, paths, station, project))
             state.stations_put(station, {"grants_tried": total}, paths=paths)
             prompt = _prompt(human, rules, lifecycle.rearm_text(client))
             client.say(f"{station} has new permissions from Tares; restarting it with them now that it's "

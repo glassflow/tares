@@ -17,7 +17,11 @@ import os
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 
 SETTINGS = {"autonomy": "L4-ship", "releaser": False, "challenger": False, "builders_max": 2,
             "idle_wake": False, "pace": False, "claude_update": True, "kit": {"frozen": None}}
@@ -31,6 +35,7 @@ class World:
         self.mcp = True
         self.keep = True                    # False: a PUT of the settings is answered but not kept
         self.broken = False                 # True: a Tares that is up but cannot answer, every GET but /health is a 500
+        self.capabilities = ["guardrail_rules"]   # what /health lists: a station start asks for the rules route (TR-864)
         self.routes = {}                    # more GETs: path -> answer (200); /api/grants is one the watch asks
         self.log = []
 
@@ -53,7 +58,7 @@ def _handler(world: World):
             path = urlparse(self.path).path
             world.log.append((self.command, path, self.headers.get("Authorization")))
             if path == "/health":
-                return self._json(200, {"status": "ok"})
+                return self._json(200, {"status": "ok", "capabilities": list(world.capabilities)})
             if world.token and self.headers.get("Authorization") != f"Bearer {world.token}":
                 return self._json(401, {"detail": "unauthorized"})
             if world.broken and self.command == "GET":
@@ -73,6 +78,13 @@ def _handler(world: World):
                 return self._json(200, {"projects": world.projects})
             if self.command == "GET" and path in world.routes:
                 return self._json(200, world.routes[path])
+            if self.command == "GET" and path == RULES_PATH:
+                if not self.headers.get("X-Tares-Station"):   # the real route: a key alone, without a station, is refused
+                    return self._json(403, {"detail": "this needs an admin or a crew station"})
+                q = parse_qs(urlparse(self.path).query)
+                grants = (world.routes.get("/api/grants") or {}).get("all", "")
+                return self._json(200, rules_answer((q.get("station") or [""])[0], (q.get("role") or ["builder"])[0],
+                                                    (q.get("project") or [""])[0], grants, ""))
             self._json(404, {})
 
         do_GET = do_POST = do_PUT = do_DELETE = _go  # noqa: N815

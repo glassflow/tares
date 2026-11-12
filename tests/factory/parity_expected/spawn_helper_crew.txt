@@ -93,6 +93,16 @@ tares factory: usage: tares factory spawn helper <parent-station> <slug> "<task>
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "crew-reviewer-probe"}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer-second"}
 {"at": "<TS>", "detail": "00000005", "event": "started", "station": "crew-releaser-deploy"}
+== file crew/rules/crew-releaser-deploy.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer-probe.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer-second.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-releaser-deploy.grants ==
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-releaser-deploy.settings.json ==

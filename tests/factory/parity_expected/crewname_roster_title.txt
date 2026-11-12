@@ -95,6 +95,10 @@ b-reviewer	reviewer		working
 == file crew-a/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "a-orchestrator"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "a-reviewer"}
+== file crew-a/rules/a-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew-a/rules/a-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew-a/stations/a-orchestrator.grants ==
 
 == file crew-a/stations/a-orchestrator.settings.json ==
@@ -311,6 +315,10 @@ b-reviewer	reviewer		working
 == file crew-b/events.jsonl ==
 {"at": "<TS>", "detail": "00000003", "event": "started", "station": "b-orchestrator"}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "b-reviewer"}
+== file crew-b/rules/b-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew-b/rules/b-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew-b/stations/b-orchestrator.grants ==
 
 == file crew-b/stations/b-orchestrator.settings.json ==
