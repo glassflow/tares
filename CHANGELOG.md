@@ -9,6 +9,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 - On Windows, `tares factory doctor` and the plugin version check now tell a person to stop the crew before they upgrade or install `tares` by hand, because an upgrade while any tares command runs can leave the install broken. macOS and Linux text is unchanged (TR-1281).
 
 ### Added
+- `crew up --yes`, `crew down`, `halt`, `resume`, `freeze`, `unfreeze`, `update`, `restart`, and a station's `restart`, `revive` and `retire` accept `--json`: one result document on stdout (`schemas/result.json`) on success, the error document on failure. Without `--json` nothing changes (TR-1283).
 - `tests/test_schema_compat.py` fails when a change to the crew's JSON schemas would break a reader of the last release and `schema_version` was not raised (TR-1280).
 - `tares factory crew watch --restart` stops the background watch and starts a new one, and touches no station (TR-1279). `--if-running` does nothing when no watch runs, `--only-under <folder>` leaves a watch that runs from a program outside the folder alone, and `--json` prints `{"schema_version":1,"watch":{"action":...}}` (`watch.json`). It lets the desktop app move the watch onto a new engine version.
 

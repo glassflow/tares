@@ -204,7 +204,7 @@ def pretty(doc):
 
 print("== the schemas")
 ck("a schema for every --json output and for the error shape",
-   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "error", "login", "logout"}
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "result", "error", "login", "logout"}
    <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
@@ -820,7 +820,7 @@ finally:
 
 print("== the samples")
 for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
-             "setup_questions.json", "setup_answers.json", "error.json", "watch.json"):
+             "setup_questions.json", "setup_answers.json", "result.json", "error.json", "watch.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
