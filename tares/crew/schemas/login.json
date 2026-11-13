@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/login.json",
+  "title": "tares login --json and tares login --show --json: one document per line",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "login"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "login": {
+      "oneOf": [
+        {
+          "description": "The sign-in page is ready: open `url` in a browser (the command opens it too, unless --no-browser). It waits `expires_in` seconds.",
+          "type": "object",
+          "required": [
+            "step",
+            "url",
+            "expires_in"
+          ],
+          "properties": {
+            "step": {
+              "const": "open"
+            },
+            "url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "expires_in": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Signed in; the key is saved (never printed).",
+          "type": "object",
+          "required": [
+            "step",
+            "cell",
+            "cell_url",
+            "machine",
+            "key_store"
+          ],
+          "properties": {
+            "step": {
+              "const": "done"
+            },
+            "cell": {
+              "type": "string"
+            },
+            "cell_url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "machine": {
+              "type": "string"
+            },
+            "key_store": {
+              "enum": [
+                "keychain",
+                "file"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "--show: nothing is saved.",
+          "type": "object",
+          "required": [
+            "signed_in"
+          ],
+          "properties": {
+            "signed_in": {
+              "const": false
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "--show: the saved login. `source` is where tares commands find their Tares (`saved login`, `environment` or `local default`). `key_works` is null when it could not be checked.",
+          "type": "object",
+          "required": [
+            "signed_in",
+            "source",
+            "cloud",
+            "cell",
+            "cell_url",
+            "machine",
+            "signed_in_at",
+            "key_id",
+            "key_store",
+            "key_works"
+          ],
+          "properties": {
+            "signed_in": {
+              "const": true
+            },
+            "source": {
+              "enum": [
+                "saved login",
+                "environment",
+                "local default"
+              ]
+            },
+            "cloud": {
+              "type": "string"
+            },
+            "cell": {
+              "type": "string"
+            },
+            "cell_url": {
+              "type": "string",
+              "minLength": 1
+            },
+            "machine": {
+              "type": "string"
+            },
+            "signed_in_at": {
+              "type": "string"
+            },
+            "key_id": {
+              "type": "string"
+            },
+            "key_store": {
+              "enum": [
+                "keychain",
+                "file"
+              ]
+            },
+            "key_works": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}
