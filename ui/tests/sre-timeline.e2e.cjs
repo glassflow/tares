@@ -190,7 +190,16 @@ const local = (d) => `${d.getUTCFullYear()}-${two(d.getUTCMonth() + 1)}-${two(d.
       ck(`normal @${width}: the bad alert is red and the deploy is plain`,
          (await items(page).evaluateAll((e) => e.filter((x) => x.dataset.kind === "alert").map((x) => x.dataset.tone))).includes("bad")
          && (await items(page).evaluateAll((e) => e.filter((x) => x.dataset.kind === "deploy").every((x) => x.dataset.tone === "info"))));
-      eq(`normal @${width}: a metric tag is amber whatever the cell says`, await row(page, six.items.find((i) => i.kind === "metric").id).getByTestId("timeline-tag").getAttribute("data-tone"), "warn");
+      const metric = six.items.find((i) => i.kind === "metric");
+      eq(`normal @${width}: a metric tag takes its item's own tone`, await row(page, metric.id).getByTestId("timeline-tag").getAttribute("data-tone"), metric.tone);
+      const inkOf = (loc, prop) => loc.evaluate((e, prop) => {   // amber only for an action, a selection or live work (TR-1273)
+        const probe = document.createElement("i"); probe.className = "text-foreground bg-foreground"; document.body.appendChild(probe);
+        const ink = getComputedStyle(probe)[prop]; probe.remove(); return [getComputedStyle(e)[prop], ink];
+      }, prop);
+      const [warnTag, ink] = await inkOf(row(page, warn.id).getByTestId("timeline-tag"), "color");
+      eq(`normal @${width}: a warn tag is written in ink, not amber`, warnTag, ink);
+      const [dot, inkFill] = await inkOf(page.getByTestId("timeline-kind-logs").locator("b"), "backgroundColor");
+      eq(`normal @${width}: a kind toggle's mark is ink, not amber`, dot, inkFill);
       eq(`normal @${width}: tags are in words`, [...new Set(await tags(page))].sort(), ["ALERT", "CHECK", "DEPLOY", "INCIDENT", "LOGS", "METRIC"].map((x) => x));
       const deployText = await texts(page).then((t) => t.filter((x) => /example-org\/edge-proxy pushed/.test(x)));
       eq(`normal @${width}: the deploy is the one the incident follows`, deployText, ["example-org/edge-proxy pushed to main by Kim: 3 commits"]);

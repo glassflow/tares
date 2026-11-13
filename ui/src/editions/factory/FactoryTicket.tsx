@@ -30,19 +30,19 @@ const SHOW_HISTORY = 10;
 const NOTES_CAP_LINES = 60;
 
 const NONE = "text-[13px] text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 const KIND = "m-0! font-mono text-[11px]! font-medium uppercase tracking-[0.06em] text-muted-foreground";
 const TAG = "whitespace-nowrap border border-border bg-muted px-1.5 py-px text-[11.5px] font-semibold";
 const TAG_OK = "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]";
-const TAG_WAIT = "border-[color:var(--warn)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]";
+const TAG_WAIT = "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground";
 const TAG_BAD = "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]";
 const MORE = "h-8 self-start text-[13px]!";
 
 const DOT: Record<TicketStateKey, string> = {
   to_do: "border border-[color:var(--ink-faint)]",
   in_progress: "bg-[var(--accent)]",
-  in_review: "bg-[var(--accent-deep)]",
-  changes_asked: "bg-[var(--warn)]",
+  in_review: "bg-foreground",
+  changes_asked: "border-2 border-foreground",
   blocked: "bg-[var(--err)]",
   merged: "bg-[var(--ok)]",
   canceled: "bg-[var(--ink-faint)]",
@@ -77,7 +77,7 @@ function Section({ id, title, aside, children }: { id: string; title: string; as
 function Finding({ f }: { f: TicketFinding }) {
   const open = f.state_text === "open";
   return (
-    <div className={cn("flex min-w-0 flex-col gap-1 border border-l-[3px] border-border bg-card px-2.5 py-2", open ? "border-l-[color:var(--warn)]!" : "border-l-[color:var(--ok-border)]!")}
+    <div className={cn("flex min-w-0 flex-col gap-1 border border-l-[3px] border-border bg-card px-2.5 py-2", open ? "border-l-[color:var(--ink-soft)]!" : "border-l-[color:var(--ok-border)]!")}
          data-testid="finding" data-state={open ? "open" : "fixed"}>
       <div className="text-[13.5px] [overflow-wrap:anywhere]" data-user-text>{f.text}</div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -381,7 +381,7 @@ function Facts({ d }: { d: FactoryTicketData }) {
 
 function Back({ href, name, icon }: { href: string; name?: string; icon?: string | null }) {
   return (
-    <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-[color:var(--accent-deep)]! no-underline! hover:underline!">
+    <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-muted-foreground! no-underline! hover:text-foreground! hover:underline!">
       {"←"} {name !== undefined ? <span data-user-text><InlineIcon icon={icon} className="mr-1" />{name}</span> : "Back to the project"}
     </Link>
   );

@@ -122,7 +122,7 @@ export function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: 
           <>
             {cut > 0 && (
               <button type="button" onClick={() => setAll(true)} data-testid="doc-earlier"
-                      className="block! w-full border-0! border-b! border-dotted! border-border! bg-transparent! px-0! py-2.5! text-left text-[13px]! font-normal! text-[color:var(--accent-deep)]! underline! cursor-pointer">
+                      className="block! w-full border-0! border-b! border-dotted! border-border! bg-transparent! px-0! py-2.5! text-left text-[13px]! font-normal! text-foreground! underline! cursor-pointer">
                 Show {cut.toLocaleString("en")} earlier lines
               </button>
             )}

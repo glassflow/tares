@@ -70,7 +70,7 @@ export function OlderFold({ items, children }: { items: HomeItem[]; children: (i
   return (
     <>
       <div className="border-t border-border px-4 py-2.5" data-testid="waiting-older">
-        <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Button variant="quiet" className="px-0! text-foreground! underline!" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
           {open ? "Hide" : "Show"} {items.length} older {items.length === 1 ? "thing" : "things"}
         </Button>
         {!open && <span className="ml-2 text-xs text-muted-foreground">waited more than a week, holding nothing up</span>}

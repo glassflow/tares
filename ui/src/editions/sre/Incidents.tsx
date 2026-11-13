@@ -42,7 +42,7 @@ const now = (sample: string | null) => (sample ? SAMPLE_NOW : Date.now());
 
 const H1 = "m-0! mb-1.5! text-[22px]! md:text-[28px]!";
 const SUB = "m-0 max-w-[640px] text-[15px] text-muted-foreground";
-const LINK_BTN = "cursor-pointer border-0! bg-transparent! p-0! text-[13px]! text-[color:var(--accent-deep)]! underline!";
+const LINK_BTN = "cursor-pointer border-0! bg-transparent! p-0! text-[13px]! text-foreground! underline!";
 
 // ── the list ─────────────────────────────────────────────────────────────────
 

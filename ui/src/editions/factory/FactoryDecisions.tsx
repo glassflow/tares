@@ -13,7 +13,7 @@ import { InlineIcon } from "./ProjectIcon";
 
 const POLL_MS = 15000;
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 
 export default function FactoryDecisions() {
   const { id = "" } = useParams();

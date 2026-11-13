@@ -28,8 +28,7 @@ const SECTION_H = "m-0! text-base!";
 const CARD = "min-w-0 border border-border bg-card [overflow-wrap:anywhere]";
 const MUTED = "text-xs text-muted-foreground";
 const INK_FILL = "[&>div:first-child]:bg-foreground!";
-const WARN_FILL = "[&>div:first-child]:bg-[var(--warn)]!";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 const FOLD_BTN = "linklike text-[13px]";
 const CODE = "mt-0.5 inline-block border border-border bg-muted px-1.5 py-0.5 font-mono";
 
@@ -44,7 +43,7 @@ export interface CrewActions {
 const DOT: Record<string, string> = {
   working: "bg-[var(--accent)]",
   idle: "bg-[var(--ok)]",
-  "waiting for you": "bg-[var(--warn)]",
+  "waiting for you": "border border-foreground bg-transparent",
   "not heard": "bg-[var(--ink-faint)]",
   ended: "border border-[var(--ink-faint)] bg-transparent",
 };
@@ -172,9 +171,9 @@ function Member({ m, actions }: { m: CrewMember; actions: CrewActions }) {
             <>
               <ProgressBar
                 value={pct} aria-label="Memory" data-testid="memory-bar"
-                className={cn("mt-0 h-1 w-[120px] shrink-0", pct >= WARN_AT ? WARN_FILL : INK_FILL)}
+                className={cn("mt-0 h-1 w-[120px] shrink-0", INK_FILL)}
               />
-              <span>{m.memory_text ?? `Memory ${Math.round(pct)}% full`}</span>
+              <span className={cn(pct >= WARN_AT && "font-medium text-foreground")}>{m.memory_text ?? `Memory ${Math.round(pct)}% full`}</span>
             </>
           )}
           {helpers && <span>{helpers}</span>}
@@ -384,7 +383,7 @@ function Plan({ plan }: { plan: CrewPage["plan"] }) {
         {plan.limits.map((l) => (
           <div key={l.kind} className="border-b border-border px-4 py-3">
             <div className="mb-1.5 flex justify-between gap-3 text-[13px]"><span>{l.label}</span><span>{l.text}</span></div>
-            <ProgressBar value={l.pct} aria-label={l.label} className={cn("mt-0 h-1", l.pct >= WARN_AT ? WARN_FILL : INK_FILL)} />
+            <ProgressBar value={l.pct} aria-label={l.label} className={cn("mt-0 h-1", INK_FILL)} />
           </div>
         ))}
         {(plan.by_project ?? []).length > 0 && (
@@ -449,7 +448,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
               {started && (
                 <section data-testid="crew-standup">
                   <SectionHead title="Standup" aside={
-                    <Link to="/settings?tab=morning" className="text-[13px] text-[color:var(--accent-deep)]! underline!" data-testid="standup-morning-link">Send it every morning</Link>
+                    <Link to="/settings?tab=morning" className="text-[13px] text-foreground! underline!" data-testid="standup-morning-link">Send it every morning</Link>
                   } />
                   <div className={CARD}>
                     {data.standup ? (

@@ -120,7 +120,7 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                         onCheckedChange={(v) => set({ to_slack: v === true })} data-testid="morning-to-slack" />
               {!slackConnected && (
                 <div className="ml-7 text-[13px] text-muted-foreground" data-testid="morning-no-slack">
-                  <b className="text-foreground">Connect Slack first.</b> <Link to="/settings?tab=slack" className="text-[color:var(--accent-deep)]! underline!">Connect Slack</Link>
+                  <b className="text-foreground">Connect Slack first.</b> <Link to="/settings?tab=slack" className="text-foreground! underline!">Connect Slack</Link>
                 </div>
               )}
               {draft.to_slack && slackConnected && (

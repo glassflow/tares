@@ -40,15 +40,15 @@ const CLOSE_WORDS = "Closed from the project page";
 const NOT_SAVED = "That was not saved. Try again in a moment.";
 const STEPS = ["Spec", "Build", "Review", "Done"];
 
-const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
+const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 const CARD = "border border-border bg-card";
 const SECTION_H = "m-0! text-base!";
 const ROW = "border-b border-border px-4 py-3 last:border-b-0";
 
 const CHIP: Record<ProjectPageState, string> = {
-  waiting_on_you: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
+  waiting_on_you: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
   building: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
   not_started: "border-border bg-muted text-muted-foreground",
   ready_to_close: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
@@ -59,8 +59,8 @@ const CHIP: Record<ProjectPageState, string> = {
 const DOT: Record<TicketState, string> = {
   "to do": "border border-[color:var(--ink-faint)]",
   "in progress": "bg-[var(--accent)]",
-  "in review": "bg-[var(--accent-deep)]",
-  "changes asked": "bg-[var(--warn)]",
+  "in review": "bg-foreground",
+  "changes asked": "border-2 border-foreground",
   blocked: "bg-[var(--err)]",
   merged: "bg-[var(--ok)]",
   canceled: "bg-[var(--ink-faint)]",
@@ -172,7 +172,7 @@ function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: Home
   // something the page does on Home: the arrow says so
   return (
     <Button asChild variant={variant} className={cn(cls, strong)}>
-      <Link to="/" title="Opens Home, where this is done" aria-label={named && `${named}, on Home`}>{action.label} <span aria-hidden className="not-italic text-[color:var(--accent-deep)]">{"↗"}</span></Link>
+      <Link to="/" title="Opens Home, where this is done" aria-label={named && `${named}, on Home`}>{action.label} <span aria-hidden className="not-italic text-muted-foreground">{"↗"}</span></Link>
     </Button>
   );
 }
@@ -471,13 +471,13 @@ function MilestoneRow({ m, onAnswer, onAccept }: {
           </div>
           {m.goal && <div className="mt-0.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{m.goal}</div>}
           {m.needs_person && (
-            <div className="mt-1 text-[13px] font-semibold text-[color:var(--accent-deep)]" data-testid="milestone-needs">
+            <div className="mt-1 text-[13px] font-semibold text-foreground" data-testid="milestone-needs">
               {mine > 0 ? `${plural(mine, "check", "checks")} for you to try` : "The crew has not recorded its checks. Accept it as it is, or ask the crew."}
             </div>
           )}
           {m.checks.length > 0 && (
             <details className="group mt-1" data-testid="milestone-checks" open={m.needs_person && mine > 0}>
-              <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[13px] text-[color:var(--accent-deep)] [&::-webkit-details-marker]:hidden">
+              <summary className="inline-flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[13px] text-foreground underline [&::-webkit-details-marker]:hidden">
                 <span aria-hidden className="text-[11px] transition-transform group-open:rotate-90">{"▸"}</span>
                 {plural(m.checks.length, "check", "checks")} to pass
               </summary>
@@ -770,7 +770,7 @@ function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
           <Command label={first.label} command={first.command} />
           {rest.length > 0 && (
             <details className="mt-2.5 border-t border-border pt-2" data-testid="terminal-more">
-              <summary className="cursor-pointer text-[13px] text-[color:var(--accent-deep)]">{plural(rest.length, "more command", "more commands")}</summary>
+              <summary className="cursor-pointer text-[13px] text-foreground underline">{plural(rest.length, "more command", "more commands")}</summary>
               <div className="mt-2.5 grid gap-3">
                 {rest.map((c) => <Command key={c.command} label={c.label} command={c.command} />)}
               </div>

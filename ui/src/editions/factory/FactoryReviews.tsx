@@ -62,7 +62,7 @@ function Row({ r }: { r: ReviewRow }) {
         <div className="col-span-full text-[13px] text-foreground" data-testid="review-why">{r.why}</div>
       )}
       {r.holds_up && (
-        <div className="col-span-full text-[13px] font-semibold text-[color:var(--accent-deep)] [overflow-wrap:anywhere]" data-user-text data-testid="review-holds">
+        <div className="col-span-full text-[13px] font-semibold text-foreground [overflow-wrap:anywhere]" data-user-text data-testid="review-holds">
           {r.holds_up}
         </div>
       )}
@@ -92,13 +92,13 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
       {data.project && (
         <div className={cn("flex flex-wrap items-center gap-2", MUTED)} data-testid="reviews-filter">
           <span>Showing <b data-user-text>{data.project.name}</b>.</span>
-          <Link to="/reviews" className="text-[color:var(--accent-deep)]! underline!">Show all</Link>
+          <Link to="/reviews" className="text-foreground! underline!">Show all</Link>
         </div>
       )}
       {unknown && (
         <div className={cn("flex flex-wrap items-center gap-2", MUTED)} data-testid="reviews-unknown">
           <span>No project has that address.</span>
-          <Link to="/reviews" className="text-[color:var(--accent-deep)]! underline!">Show all</Link>
+          <Link to="/reviews" className="text-foreground! underline!">Show all</Link>
         </div>
       )}
       <p className="m-0 text-[13px] text-muted-foreground" data-testid="reviews-autonomy">{data.autonomy_text}</p>

@@ -14,7 +14,7 @@ import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "@/editions/
 // waiting on". A cell of one keeps the plain list in FactoryHome.tsx.
 
 const SHOW_FIRST = 8;
-const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
+const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
 
 function Row({ item, renderAction, error, panel }: {
@@ -76,7 +76,7 @@ export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaiti
             {rest.map(row)}
             {g.rest.length > rest.length && (
               <ListRow className="px-[18px]! py-3!">
-                <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
+                <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
                   Show all {g.rest.length}
                 </Button>
               </ListRow>
