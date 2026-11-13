@@ -287,8 +287,8 @@ class Doctor:
         return self._trust
 
     def accepted(self, path: str) -> bool:
-        row = self.trusted_map().get(path)
-        return isinstance(row, dict) and row.get("hasTrustDialogAccepted") is True
+        rows = (self.trusted_map().get(k) for k in state.trust_keys(path))
+        return any(isinstance(row, dict) and row.get("hasTrustDialogAccepted") is True for row in rows)
 
     def trusted(self, path: str) -> bool:
         """bash trusted: Claude Code trusts the path, or a linked worktree's main repo."""

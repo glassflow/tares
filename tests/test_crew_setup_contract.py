@@ -384,6 +384,15 @@ ck("it started nothing", c.tares.written() == [] or not any("--bg" in str(x) for
 c.close()
 
 # ====================================================================================
+print("up.home_trusted reads the key Claude Code writes on Windows (TR-1236)")
+c = Case()
+(c.tmp / "home" / ".claude.json").write_text(
+    json.dumps({"projects": {str(c.crew).replace("\\", "/"): {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
+ck("a crew home recorded with forward slashes is trusted", up.home_trusted(CrewPaths(str(c.crew)), {"HOME": str(c.tmp / "home")}))
+(c.tmp / "home" / ".claude.json").write_text(json.dumps({"projects": {}}), encoding="utf-8")
+ck("no record: not trusted", not up.home_trusted(CrewPaths(str(c.crew)), {"HOME": str(c.tmp / "home")}))
+c.close()
+
 print("the module")
 src = (ROOT / "tares" / "crew" / "up.py").read_text(encoding="utf-8")
 ck("up.py has no em dash", "\u2014" not in src)
