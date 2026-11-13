@@ -42,7 +42,7 @@ def ck(label, cond, detail=""):
 
 WORLD = {"version": "1.44.0", "exchange_status": 200, "logout_status": 200, "delete_status": 200,
          "good_keys": set(), "no_admin_keys": set(), "project_keys": set(), "calls": [], "health_status": 200,
-         "whoami_status": 200, "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
+         "whoami_status": 200, "requests": [], "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
 OUTPUTS = []        # everything any call printed, to look for a key in
 
 
@@ -56,6 +56,7 @@ class Fake(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):  # noqa: N802
+        WORLD["requests"].append(self.path)
         if self.path == "/health":
             if WORLD["health_status"] == 299:       # answers 200 with something that is not a Tares
                 return self._json(200, {"hello": "world"})
@@ -78,7 +79,9 @@ class Fake(BaseHTTPRequestHandler):
             if WORLD["settings_force"]:
                 return self._json(WORLD["settings_force"], {})
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
-            ok = bearer in WORLD["good_keys"] or bearer in WORLD["no_admin_keys"] or bearer in WORLD["project_keys"]
+            if bearer in WORLD["project_keys"]:     # a real cell answers a project key 403 here
+                return self._json(403, {})
+            ok = bearer in WORLD["good_keys"] or bearer in WORLD["no_admin_keys"]
             return self._json(200 if ok else 401, {"settings": {}})
         self._json(404, {})
 
@@ -297,7 +300,16 @@ try:
     L.login_file().write_text(json.dumps({"cell_url": BASE, "key": "x"}))
     e = need({"TARES_HOME": HOME, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
     ck("a saved login (in the client's TARES_HOME) is not 'not signed in'", e is not None and e.code == "error", e)
+    L.login_file().write_text(json.dumps({"key": "x"}))
+    e = need({"TARES_HOME": HOME, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
+    ck("a login.json with no cell_url counts as not signed in", isinstance(e, NotSignedInError)
+       and e.code == "not_signed_in", e)
     L.login_file().unlink()
+    other_home = tempfile.mkdtemp()
+    (Path(other_home) / "login.json").write_text(json.dumps({"cell_url": BASE, "key": "x"}))
+    e = need({"TARES_HOME": other_home, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
+    ck("the login.json is read from the client's own TARES_HOME, not os.environ", e is not None
+       and not isinstance(e, NotSignedInError) and e.code == "error", e)
 finally:
     if saved_login is not None:
         login_path.write_bytes(saved_login)
@@ -336,6 +348,74 @@ L._http = real_http
 ck("a bad --cloud (InvalidURL): open document then an error document, no traceback", rc == 1
    and docs(out)[-1]["error"]["code"] == "error" and "Traceback" not in err, (rc, out, err))
 
+
+def guarded(fn, *a, **kw):
+    """run(), but an exception that escapes fn is a failed check, not a crashed script."""
+    try:
+        return run(fn, *a, **kw)
+    except Exception as e:  # noqa: BLE001
+        return -1, "", f"Traceback: {type(e).__name__}: {e}"
+
+
+def health_bad(method, url, *a, **k):
+    if url.endswith("/health"):
+        raise httpx.InvalidURL("Invalid URL")
+    return real_http(method, url, *a, **k)
+
+
+L._http = health_bad
+browser()
+rc, out, err = guarded(L.login, BASE, wait=10, json_out=True)
+L._http = real_http
+ck("InvalidURL on the workspace's /health: an error document, exit 1, no traceback", rc == 1
+   and docs(out)[-1]["error"]["code"] == "error" and "Traceback" not in err, (rc, out, err))
+cloud_login = {"cloud": BASE, "cell": "factory", "cell_url": BASE, "key_id": "k9", "key": "nvf_k9_x",
+               "machine": "m", "signed_in_at": "t"}
+L.login_file().write_text(json.dumps(cloud_login))
+L._http = bad_url
+rc, out, err = guarded(L.show, json_out=True)
+L._http = real_http
+ck("InvalidURL on show's key check: key_works null, no traceback", rc == 0 and "Traceback" not in err
+   and docs(out)[0]["login"]["key_works"] is None, (rc, out, err))
+L._http = bad_url
+rc, out, err = guarded(L.logout, json_out=True)
+L._http = real_http
+ck("InvalidURL on both calls of the key removal: logout_failed, exit 1, no traceback", rc == 1
+   and err_code(out) == "logout_failed" and "Traceback" not in err, (rc, out, err))
+L.login_file().unlink(missing_ok=True)
+
+print("a browser that cannot be pointed at stderr leaks no descriptor")
+real_dup, real_dup2, real_open_fn = os.dup, os.dup2, L.webbrowser.open
+dups = []
+
+
+def dup_spy(fd):
+    new = real_dup(fd)
+    dups.append(new)
+    return new
+
+
+def dup2_fails(*a, **k):
+    raise OSError("fd 2 is closed")
+
+
+os.dup, os.dup2, L.webbrowser.open = dup_spy, dup2_fails, lambda url, *a, **k: True
+try:
+    L._open_browser("http://127.0.0.1:1/", True)
+finally:
+    os.dup, os.dup2, L.webbrowser.open = real_dup, real_dup2, real_open_fn
+leaked = []
+for fd in dups:
+    try:
+        os.fstat(fd)
+        leaked.append(fd)
+    except OSError:
+        pass
+ck("os.dup(1) worked and os.dup2(2, 1) raised: the copy of fd 1 is closed", len(dups) == 1 and not leaked,
+   (dups, leaked))
+for fd in leaked:
+    os.close(fd)
+
 print("the crew key file notice goes to stderr with --json")
 crew = Path(HOME) / "crew-home"
 (crew / ".tares-token").mkdir(parents=True)      # a directory where the file goes: the write fails
@@ -371,6 +451,18 @@ try:
     ck("show says keychain and the key works", docs(out)[0]["login"]["key_store"] == "keychain"
        and docs(out)[0]["login"]["key_works"] is True, out)
     run(L.logout, json_out=True)
+    # M12: a cell login that changes the account takes the previous account's key out of the keychain.
+    WORLD["good_keys"].add("nvf_m1_first")
+    WORLD["good_keys"].add("nvf_m2_second")
+    other = BASE.replace("127.0.0.1", "localhost")      # the same fake cell under another address: another account
+    rc, out, err = run(L.connect_cell, BASE, "nvf_m1_first", json_out=True)
+    ck("a cell login with the keychain on keeps its key there", rc == 0
+       and Mem.store.get((L.KEYRING_SERVICE, BASE)) == "nvf_m1_first", (rc, out, Mem.store))
+    rc, out, err = run(L.connect_cell, other, "nvf_m2_second", json_out=True)
+    ck("a cell login to another address: the new key is in the keychain and the old entry is gone", rc == 0
+       and Mem.store.get((L.KEYRING_SERVICE, other)) == "nvf_m2_second"
+       and (L.KEYRING_SERVICE, BASE) not in Mem.store, (rc, out, Mem.store))
+    run(L.logout, json_out=True)
     os.environ["TARES_KEYRING"] = "off"
 except ImportError:
     print("  skip keyring is not installed")
@@ -394,6 +486,7 @@ os.dup2(tmp1.fileno(), 1)
 os.dup2(tmp2.fileno(), 2)
 try:
     rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+    os.write(1, b"MARK AFTER LOGIN\n")      # where fd 1 points once the login has returned
 finally:
     os.dup2(save1, 1)
     os.dup2(save2, 2)
@@ -405,7 +498,8 @@ fd1, fd2 = tmp1.read(), tmp2.read()
 ck("the login worked", rc == 0 and len(docs(out)) == 2, (rc, out))
 ck("the browser's output did not reach fd 1", b"STRAY" not in fd1, fd1)
 ck("it went to stderr", b"STRAY" in fd2, fd2)
-ck("fd 1 is back to what it was", os.write(1, b"") == 0)
+ck("fd 1 is back to what it was: what is written after the login lands on fd 1, not on stderr",
+   b"MARK AFTER LOGIN" in fd1 and b"MARK AFTER LOGIN" not in fd2, (fd1, fd2))
 
 print("a cell by its address and a key (TR-1285)")
 import subprocess  # noqa: E402
@@ -461,7 +555,8 @@ ck("text logout of such a login: exit 0, says the key stays on the cell", rc == 
 for label, key, code in (("a refused key", "nvf_zz_wrong", "key_refused"),
                          ("a read and ingest key (real cells answer 200 to the settings call)", "nvf_c2_readonly",
                           "key_lacks_admin"),
-                         ("a project key", "nvf_c3_project", "key_lacks_admin")):
+                         ("a project key (real cells answer 403 to the settings call, and whoami says why)",
+                          "nvf_c3_project", "key_lacks_admin")):
     rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=key + "\n")
     ck(f"{label}: {code}, exit 1, nothing saved", rc == 1 and err_code(out) == code and not L.login_file().exists(),
        (rc, out, err))
@@ -520,10 +615,13 @@ ck("--cell with --show: usage error, exit 2", rc == 2 and err_code(out) == "usag
 rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin="\ufeff" + KEY + "\r\n")
 ck("a BOM and a CRLF in front of and after the key are dropped", rc == 0, (rc, out, err))
 WORLD["calls"].clear()
+WORLD["requests"].clear()
 for bad in (KEY[:6] + chr(0) + KEY[6:], KEY[:6] + chr(233) + KEY[6:], KEY[:6] + chr(32) + KEY[6:]):
     rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=bad + chr(10))
     ck("a key with a NUL, a non-ASCII character or a space: key_refused, exit 1, no traceback, key not echoed",
        rc == 1 and err_code(out) == "key_refused" and "Traceback" not in err and KEY[6:] not in out + err, (rc, out, err))
+ck("...and no request reached the cell for any of them (a 401 would also be key_refused)",
+   WORLD["requests"] == [], WORLD["requests"])
 
 crew2 = Path(HOME) / "crew-for-cell"
 crew2.mkdir()
