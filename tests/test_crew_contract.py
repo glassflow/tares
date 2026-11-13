@@ -204,7 +204,7 @@ def pretty(doc):
 
 print("== the schemas")
 ck("a schema for every --json output and for the error shape",
-   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "error"}
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "error", "login", "logout"}
    <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
@@ -832,6 +832,21 @@ for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor
 sample_lines = (FIXTURES / "events.jsonl").read_text(encoding="utf-8").splitlines() if (FIXTURES / "events.jsonl").is_file() else []
 ck("sample events.jsonl validates line by line against events.json",
    len(sample_lines) == 4 and all(not problems("events", json.loads(x)) for x in sample_lines), sample_lines)
+
+for name, schema in (("login-open", "login"), ("login-done", "login"), ("login-show", "login"), ("logout", "logout")):
+    try:
+        doc = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        ck(f"sample {name}.json is JSON", False, e)
+        continue
+    bad = problems(schema, doc)
+    ck(f"sample {name}.json validates against {schema}.json", not bad, bad)
+ck("login documents that are not the shape fail",
+   problems("login", {"schema_version": 1, "login": {"step": "done", "cell": "c"}}) != []
+   and problems("login", {"schema_version": 1, "login": {"signed_in": True}}) != []
+   and problems("login", {"schema_version": 1, "login": {"signed_in": False}}) == []
+   and problems("login", {"schema_version": 1, "login": {"signed_in": False, "key": "x"}}) != []
+   and problems("logout", {"schema_version": 1, "logout": {"was_signed_in": True}}) != [])
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

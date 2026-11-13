@@ -16,6 +16,9 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `crew setup --answers <file> --json` | one document | `setup_answers.json` |
 | `settings <station>` | Claude Code's settings file, no `schema_version` | `settings.json` |
 | `crew watch --restart --json` | one document | `watch.json` |
+| `tares login --json` (not a factory command) | one document per line: `step: open`, then `step: done` | `login.json` |
+| `tares login --show [--json]` | one document | `login.json` |
+| `tares logout --json` | one document | `logout.json` |
 | `tidy --json` | nothing on success; the error shape on a refusal | `error.json` |
 | any of them, when it fails with `--json` | one document | `error.json` |
 
@@ -48,7 +51,16 @@ its types from them.
 
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
 `station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `tares_error`
-(a call to Tares failed). A bug with `--json` is `error` with the exception named.
+(a call to Tares failed), `not_signed_in` (no Tares is configured: no saved `tares login`, no address set, and nothing at
+the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
+
+## login and logout
+
+`tares login --json` prints one document per line (like `events`): first `{"login": {"step": "open", "url", "expires_in"}}`
+as soon as the sign-in page address is ready, then `{"login": {"step": "done", ...}}` once the key is saved. The key
+is never printed, on stdout or stderr. A failure is the error shape and exit 1; notes for a person go to stderr.
+`tares login --show --json` and `tares logout --json` print one document. `--show` cannot be combined with
+`--cloud` or `--no-browser` (a usage error, exit 2).
 
 ## events
 
