@@ -8,6 +8,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 ### Changed
 - On Windows, `tares factory doctor` and the plugin version check now tell a person to stop the crew before they upgrade or install `tares` by hand, because an upgrade while any tares command runs can leave the install broken. macOS and Linux text is unchanged (TR-1281).
 
+### Added
+- `tests/test_schema_compat.py` fails when a change to the crew's JSON schemas would break a reader of the last release and `schema_version` was not raised (TR-1280).
+
 ### Fixed
 - On Windows, two crew commands or threads writing an event at the same moment could mix their lines or lose one in `events.jsonl` (TR-1229). Each event is now written under a lock, so every line stays whole and none is dropped. macOS and Linux were not affected.
 - The crew's messages were listed two to four times on a ticket (each REVIEW, VERDICT, FYI). The plugin's async hooks shipped the same transcript lines side by side, and Claude Code 2.1.3xx writes `api-request-blob` lines that copy the last assistant message with no timestamp, which Tares stored as new tool calls at the moment they arrived. One shipper per transcript now holds a lock (a turn's end waits up to 5 s for it), the `api-request*` lines are not shipped and are dropped at ingest, and the message list shows each tool call once.
