@@ -124,14 +124,22 @@
       "slot": "ci"
     },
     {
-      "available": [],
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "tares",
+          "settings_schema": [],
+          "title": "Tares"
+        }
+      ],
       "choice": null,
       "effective": {
         "integration": "tares",
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "tares"
+        "title": "Tares"
       },
       "slot": "memory"
     },
@@ -243,7 +251,7 @@
           "reason": "",
           "slot": "memory",
           "source": "default",
-          "title": "tares"
+          "title": "Tares"
         },
         {
           "integration": "rius",
@@ -297,7 +305,7 @@
           "reason": "",
           "slot": "memory",
           "source": "default",
-          "title": "tares"
+          "title": "Tares"
         },
         {
           "integration": "rius",
@@ -351,7 +359,7 @@
           "reason": "",
           "slot": "memory",
           "source": "default",
-          "title": "tares"
+          "title": "Tares"
         },
         {
           "integration": "rius",
@@ -405,7 +413,7 @@
           "reason": "",
           "slot": "memory",
           "source": "default",
-          "title": "tares"
+          "title": "Tares"
         },
         {
           "integration": "rius",

@@ -318,6 +318,18 @@ FACTORY_SCHEMA = [
       created_at  TIMESTAMPTZ,
       created_by  TEXT
     )""",
+    # A memory line the Tares doc took but a non-Tares memory integration did not (TR-865): kept
+    # until the integration takes it. scope is a project uid or `factory`; `line` is the line as it
+    # was sent, with its date and name. The background sync retries each row on every round.
+    """CREATE TABLE IF NOT EXISTS pending_memory (
+      id         TEXT PRIMARY KEY,
+      scope      TEXT,
+      line       TEXT,
+      attempts   INTEGER DEFAULT 0,
+      last_error TEXT,
+      created_at TIMESTAMPTZ,
+      tried_at   TIMESTAMPTZ
+    )""",
     # a project grant from someone who is neither the project's lead nor an admin also waits
     # for the lead (for an admin when the project has none)
     "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
@@ -594,6 +606,7 @@ class FactoryStore:
         self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM guardrail_pairs WHERE project_uid = ?", [uid])
+        self.sc.execute("DELETE FROM pending_memory WHERE scope = ?", [uid])
         self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
@@ -2042,6 +2055,46 @@ class FactoryStore:
         with self._swrite:
             gone = self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ? RETURNING id",
                                    [str(pid or "").strip().upper()]).fetchone()
+        return gone is not None
+
+    # ── memory lines waiting for a non-Tares memory integration (TR-865) ──────
+    _PENDING_COLS = "id, scope, line, attempts, last_error, created_at, tried_at"
+
+    @staticmethod
+    def _pending_view(r) -> dict:
+        return dict(zip(("id", "scope", "line", "attempts", "last_error", "created_at", "tried_at"), r))
+
+    def add_pending_memory(self, scope: str, line: str, error: str = "") -> str:
+        """Keep a line the integration did not take; returns the row's id. attempts starts at 1:
+        the write that just failed."""
+        pid = "pm_" + uuid.uuid4().hex[:10]
+        at = now_utc()
+        with self._swrite:
+            self.sc.execute(
+                f"INSERT INTO pending_memory ({self._PENDING_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [pid, str(scope), str(line), 1, str(error or "")[:500], at, at])
+        return pid
+
+    def list_pending_memory(self, scope: str | None = None) -> list[dict]:
+        """The waiting lines, oldest first; one scope's when `scope` is given."""
+        sql, args = f"SELECT {self._PENDING_COLS} FROM pending_memory", []
+        if scope is not None:
+            sql, args = sql + " WHERE scope = ?", [str(scope)]
+        with self._sread:
+            rows = self.sc.execute(sql + " ORDER BY created_at, id", args).fetchall()
+        return [self._pending_view(r) for r in rows]
+
+    def retried_pending_memory(self, pid: str, error: str) -> None:
+        """A retry failed again: count it and keep the reason."""
+        with self._swrite:
+            self.sc.execute("UPDATE pending_memory SET attempts = attempts + 1, last_error = ?, "
+                            "tried_at = ? WHERE id = ?", [str(error or "")[:500], now_utc(), pid])
+
+    def delete_pending_memory(self, pid: str) -> bool:
+        """True when a row was removed (the integration took the line, or it is no longer needed)."""
+        with self._swrite:
+            gone = self.sc.execute("DELETE FROM pending_memory WHERE id = ? RETURNING id",
+                                   [pid]).fetchone()
         return gone is not None
 
     # ── integration choices and their settings (TR-839) ───────────────────────
