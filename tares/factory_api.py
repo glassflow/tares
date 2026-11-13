@@ -24,6 +24,7 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
+from . import memory_route
 from . import merge_ready as merge_ready_mod
 from . import team as team_mod
 from .integrations import hooks as integrations_hooks
@@ -141,6 +142,12 @@ async def sync_prs(store, stop: asyncio.Event) -> None:
             raise
         except Exception as e:
             print(f"[tares] merge queue failed: {type(e).__name__}: {e}", flush=True)
+        try:   # memory lines the cell's memory integration did not take yet (TR-865)
+            await memory_route.retry_pending(store)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[tares] memory retry failed: {type(e).__name__}: {e}", flush=True)
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
@@ -1768,34 +1775,34 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"line": lines[0], "lines": lines, "working_doc": doc_id,
                 "checks": store.ticket_checks(t["id"], 10), "project": p["name"]}
 
-    # the project's own memory (TR-436): what builders learned about this project
-    def memory_doc(uid: str, create: bool = False) -> str | None:
-        gid = (h.global_ids(False) or {}).get("memory")
-        d = next((x for x in store.list_docs(uid, "memory") if x["id"] != gid), None)
-        if d or not create:
-            return d["id"] if d else None
-        p = store.get_project(uid)
-        return store.create_doc(uid, "memory", f"Memory: {p['name']}",
-                                f"# Memory for {p['name']}\n\nWhat the builders learned about "
-                                "this project, one line each, newest last.\n\n", by="tares")
-
+    # the project's own memory (TR-436): what builders learned about this project; TR-865 routes
+    # it through the memory integration (memory_route)
     @app.post("/api/projects/{uid}/memory/lines", status_code=201)
-    def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
-        """{text}: one dated line in the project's memory (made with the first line)."""
+    async def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
+        """{text}: one dated line in the project's memory (made with the first line). The Tares
+        doc takes it first; the cell's memory integration, when it is not Tares, takes it next,
+        and `pending` is true when that one did not and the line waits for a retry."""
         h.project_or_404(uid)
-        doc_id = memory_doc(uid, create=True)
         by, _ = who(request, body)
-        cur = store.get_doc(uid, doc_id)["body"]
+        said = str(body.get("text") or "").strip()
         try:
-            text, added = docs_mod.append_line(
-                cur, f"{str(body.get('text') or '').strip()} ({now_utc().date().isoformat()}, {by})"
-                if str(body.get("text") or "").strip() else "")
+            res = await memory_route.write(
+                store, uid, f"{said} ({now_utc().date().isoformat()}, {by})" if said else "",
+                by=by)
         except docs_mod.DocError as e:
             h.err(e)
-        if added:
-            store.update_doc(doc_id, body=text, by=by)
         h.ensure_globals(uid)
-        return {"id": doc_id, "added": added, "body": store.get_doc(uid, doc_id)["body"]}
+        return {"id": res["doc_id"], "added": res["added"], "pending": res["pending"],
+                "body": store.get_doc(uid, res["doc_id"])["body"]}
+
+    @app.get("/api/projects/{uid}/recall")
+    async def recall(uid: str, q: str = "", limit: int = 10):
+        """The lines of the project's memory and the shared memory that share words with `q`,
+        best first, each prefixed [project] or [shared]: {lines, integration, note}."""
+        h.project_or_404(uid)
+        if not q.strip():
+            h.err(ValueError("say what to recall: q is a question or a few words"))
+        return await memory_route.recall(store, uid, q, limit)
 
     # ── review and merge (TR-441..445) ────────────────────────────────────────
     @app.post("/api/projects/{uid}/tickets/{ref}/reviews", status_code=201)
