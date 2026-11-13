@@ -10,6 +10,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `tests/test_schema_compat.py` fails when a change to the crew's JSON schemas would break a reader of the last release and `schema_version` was not raised (TR-1280).
+- `tares factory crew watch --restart` stops the background watch and starts a new one, and touches no station (TR-1279). `--if-running` does nothing when no watch runs, `--only-under <folder>` leaves a watch that runs from a program outside the folder alone, and `--json` prints `{"schema_version":1,"watch":{"action":...}}` (`watch.json`). It lets the desktop app move the watch onto a new engine version.
 
 ### Fixed
 - On Windows, a live station could read as stopped when the folder `claude agents --json` lists for it and the folder the crew recorded were the same place spelled differently (backslash against slash, another letter case, a trailing separator). The watch then skipped its grants restart, and the stopped-session checks in `find_live_job` and `is_alive` called it gone. The two folders are now compared as normalised paths (TR-1305). macOS and Linux were not affected, apart from a trailing separator.

@@ -421,6 +421,24 @@ else:
     code, out, err = tares(env, ["doctor", "--nope"])
     ck("doctor without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory doctor" in err, (code, out, err))
 
+    # ---------- watch --restart ----------
+
+    print("== watch --restart")
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["crew", "watch", "--restart", "--if-running", "--json"])
+    doc = one_document("watch --restart --if-running, none running", code, out, err, "watch")
+    ck("watch --restart --if-running: none_running, no pid", doc.get("watch") == {"action": "none_running"}, doc)
+    fixture("watch.json", stable(out, tmp))
+    for sample in ({"action": "restarted", "pid": 4242}, {"action": "started", "pid": 7},
+                   {"action": "other_install", "executable": "C:/x/tares.exe"}):
+        ck(f"watch: a {sample['action']} document follows the schema", not problems("watch", {"schema_version": 1, "watch": sample}), sample)
+    ck("watch: a pid below 1 fails the schema", problems("watch", {"schema_version": 1, "watch": {"action": "started", "pid": 0}}) != [])
+    ck("watch: an unknown action fails the schema", problems("watch", {"schema_version": 1, "watch": {"action": "gone"}}) != [])
+    doc = one_document("watch --json without --restart", *tares(env, ["crew", "watch", "--json", "--if-running"]), "error", want_code=2)
+    ck("watch --json without --restart: usage", doc.get("error", {}).get("code") == "usage", doc)
+    code, out, err = tares(env, ["crew", "watch", "--restart", "--only-under"])
+    ck("watch --restart --only-under without a folder: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory crew watch --restart" in err, (code, out, err))
+
     # ---------- the error shape ----------
 
     print("== the error shape")
@@ -802,7 +820,7 @@ finally:
 
 print("== the samples")
 for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
-             "setup_questions.json", "setup_answers.json", "error.json"):
+             "setup_questions.json", "setup_answers.json", "error.json", "watch.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))

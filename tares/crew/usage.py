@@ -16,6 +16,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             questions in the orchestrator)
   tares factory crew desk                   the questions waiting for you, each in full
   tares factory crew logs <role|station>    a station's recent output
+  tares factory crew watch --restart [--if-running] [--only-under <folder>] [--json]
+                                            stop the watch and start a new one, no station touched
   tares factory crew watch [--once]         (crew up runs it in the background) revive stations
                                             that stopped, under the same name; start
                                             fresh any that Claude Code stopped for thrashing on

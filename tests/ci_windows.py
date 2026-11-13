@@ -91,6 +91,7 @@ FLOOR = {
     "test_crew_tidy_safety.py": 78,
     "test_crew_unicode_home.py": 8,
     "test_crew_watch_process.py": 47,
+    "test_crew_watch_restart.py": 20,
     "test_crew_watch_revive.py": 53,
 }
 
