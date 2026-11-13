@@ -51,6 +51,7 @@ test_crew_idle_wake
 test_crew_import_without_tty
 test_crew_kit
 test_crew_launch
+test_crew_launch_spec
 test_crew_lifecycle
 test_crew_lifecycle_json
 test_crew_mcp_headers

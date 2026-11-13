@@ -59,6 +59,7 @@ import re
 from fastapi import Body, HTTPException, Request, Response
 
 from . import factory_setup, licence
+from .crew.state import STATION_NAME_RULE, station_name_ok
 from .factory_api import caller, crew_settings
 from .factory_store import FactoryStore
 from .integrations import hooks, registry, resolve
@@ -253,7 +254,7 @@ def register(app, store, h):
                    token_file: bool = False):
         """The launch spec of `station` (see the module's note): the runtime's command, env and settings
         with placeholders for the command line's own machine. An admin, or a key that carries the station's
-        name; the name is not otherwise checked here (TR-870 validates it)."""
+        name. A name that is not a station name (see `crew.state.station_name_ok`) is a 422 that says the rule."""
         station = station.strip()
         me = caller(request)
         if me["station"]:
@@ -261,6 +262,8 @@ def register(app, store, h):
                 refuse(403, f"this key is for station {me['station']}; it cannot read the launch of {station}")
         elif not h.is_admin(request):
             refuse(403, "this needs an admin or the crew station itself")
+        if not station_name_ok(station):
+            refuse(422, f"{station!r} cannot name a station: {STATION_NAME_RULE}")
         crew = crew.strip() or request.headers.get("x-tares-crew", "").strip()
         have = station_record(station, crew)
         role = (role or have.get("role") or infer_role(station)).strip().lower()
@@ -278,7 +281,7 @@ def register(app, store, h):
                     raise   # a project the caller names must exist, as on the rules route (404)
                 p = None   # the station's recorded project may be gone: launch without its rules
         project_id = p["id"] if p else ""
-        project_name = p["name"] if p else project
+        project_name = p["name"] if p else ""   # a gone recorded project is not named: the station starts without one
         work_role = role
         if role == "helper":
             work_role = parent_role.strip().lower() or infer_role(parent)

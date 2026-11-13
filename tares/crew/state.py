@@ -177,6 +177,19 @@ def slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", lowered).strip("-")
 
 
+# A station's name is a file name (rules/, launch/, stations/) and a path in a URL: lower-case letters, digits,
+# hyphens and underscores, at most 120 characters (the cell's MAX_NAME), never a leading hyphen.
+STATION_NAME_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,119}")
+STATION_NAME_RULE = ("a station name is 1 to 120 characters: lower-case letters, digits, hyphens and underscores, "
+                     "starting with a letter or digit")
+
+
+def station_name_ok(name) -> bool:
+    """Can `name` name a station: the rule in STATION_NAME_RULE. One check, used by the command line and by the
+    cell's launch route, so a name cannot reach a file path or a URL as `../x`, `a/b` or `.hidden`."""
+    return isinstance(name, str) and STATION_NAME_RE.fullmatch(name) is not None
+
+
 def crew_name_ok(name: str) -> bool:
     """Can `name` name a crew: the rule in CREW_NAME_RULE."""
     return _NAME_RE.fullmatch(name) is not None and "-build-" not in f"-{name}-"
