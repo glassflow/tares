@@ -1,6 +1,8 @@
 """The runtime slot: what runs a station."""
 from __future__ import annotations
 
+import re
+
 from .base import Integration
 from .types import LaunchSpec
 
@@ -23,9 +25,11 @@ def fill_placeholders(value, values: dict):
     settings do) with each `{NAME}` of `values` replaced in every string. Dict keys and any other
     `{...}` stay as they are; `value` itself is not changed."""
     if isinstance(value, str):
-        for name, text in values.items():
-            value = value.replace("{" + name + "}", str(text))
-        return value
+        if not values:
+            return value
+        pattern = "|".join(re.escape(name) for name in sorted(values, key=len, reverse=True))
+        # one pass: a value that holds another `{NAME}` is left as it is, whatever the order of `values`
+        return re.sub(r"\{(" + pattern + r")\}", lambda m: str(values[m.group(1)]), value)
     if isinstance(value, list):
         return [fill_placeholders(v, values) for v in value]
     if isinstance(value, tuple):

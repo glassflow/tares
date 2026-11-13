@@ -214,6 +214,9 @@ if "builder" in specs:
        and "/fixed/settings_file" in out["c"] and out["c"][-1] == "/fixed/plugin_dir"
        and out["e"]["FACTORY_WORKTREES"].endswith("/.factory/worktrees"))
     ck("the spec itself is not changed by filling it", json.dumps([spec.command, spec.env, spec.settings]).count("{PLUGIN_DIR}") >= 1)
+    order = {"A": "{B}", "B": "x"}
+    ck("fill_placeholders fills in one pass: a value holding another {NAME} stays, in either order of the values",
+       fill_placeholders("{A}/{B}", order) == "{B}/x" and fill_placeholders("{A}/{B}", dict(reversed(order.items()))) == "{B}/x")
     ck("fill_placeholders leaves a name it was not given, and a dict's keys",
        fill_placeholders({"{CREW_HOME}": ["{CREW_HOME}/x {other}"]}, {"CREW_HOME": "/h"}) == {"{CREW_HOME}": ["/h/x {other}"]})
 
@@ -347,7 +350,15 @@ async def main():
             async with mk(token=reader) as cx:
                 rr = await cx.get(URL, params=params)
                 ck("a key without the admin scope is refused", rr.status_code == 403, (rr.status_code, rr.text[:100]))
-            ck("an unknown role is 422", (await root.get(URL, params={**params, "role": "janitor"})).status_code == 422)
+            r = await root.get(URL, params={**params, "project": "alpah"})
+            ck("a project the caller names that does not exist is 404, as on the rules route",
+               r.status_code == 404 and (await root.get("/api/factory/guardrails/rules",
+                                                         params={"station": "shop-build-api", "project": "alpah"})).status_code == 404,
+               (r.status_code, r.text[:100]))
+            ck("a project left out still builds (a station with no project, such as the reviewer)",
+               (await root.get("/api/factory/stations/shop-reviewer/launch",
+                               params={k: v for k, v in {**params, "role": "reviewer"}.items() if k != "project"})).status_code == 200)
+            ck("an unknown role is 422",(await root.get(URL, params={**params, "role": "janitor"})).status_code == 422)
             ck("a helper needs its parent's role (422)",
                (await root.get("/api/factory/stations/shop-build-api-h1/launch", params={**params, "role": "helper"})).status_code == 422)
             r = await root.get("/api/factory/stations/shop-build-api-h1/launch",

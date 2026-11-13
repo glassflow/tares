@@ -252,7 +252,8 @@ def register(app, store, h):
                    effort: str = "", autocompact: str = "", tares_url: str = "", mcp_url: str = "",
                    token_file: bool = False):
         """The launch spec of `station` (see the module's note): the runtime's command, env and settings
-        with placeholders for the command line's own machine. An admin, or the station itself."""
+        with placeholders for the command line's own machine. An admin, or a key that carries the station's
+        name; the name is not otherwise checked here (TR-870 validates it)."""
         station = station.strip()
         me = caller(request)
         if me["station"]:
@@ -266,13 +267,16 @@ def register(app, store, h):
         if not role:
             refuse(422, f"cannot tell the role of {station!r}: add role=orchestrator|reviewer|releaser|builder|helper")
         parent = parent or have.get("parent") or ""
-        project = project.strip() or (have.get("project") or "")
+        named = project.strip()
+        project = named or (have.get("project") or "")
         p = None
         if project:
             try:
                 p = h.project_or_404(h.resolve_project(project))
             except HTTPException:
-                p = None
+                if named:
+                    raise   # a project the caller names must exist, as on the rules route (404)
+                p = None   # the station's recorded project may be gone: launch without its rules
         project_id = p["id"] if p else ""
         project_name = p["name"] if p else project
         work_role = role
