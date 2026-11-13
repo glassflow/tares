@@ -16,9 +16,11 @@ import { changeOf, DiffText, JsonText, looksLikeDiff } from "./codeColours";
 //
 // The most common calls have a body built for them (TR-1317, VIEWS below): Bash shows its description,
 // its command and its output with the exit status, TodoWrite its plan as a checklist, Agent its brief and
-// report as markdown, Edit and Write their change. Each has a Formatted / Raw switch, and its Copy copies
-// the call's input as it came. An input the list cut short does not parse, and a view can say no (null):
-// either way the card shows the plain Input and Output blocks, as every other tool does.
+// report as markdown, SendMessage its message under who it went to, Read the lines it read with their
+// numbers, Grep and Glob the files they found, Edit and Write their change. Each has a Formatted / Raw
+// switch, and its Copy copies the call's input as it came. An input the list cut short does not parse,
+// and a view can say no (null): either way the card shows the plain Input and Output blocks, as every
+// other tool does.
 
 const GROUP_AT = 3;
 const NEAR_BOTTOM = 48;
@@ -220,8 +222,10 @@ interface ViewArgs {
 }
 
 interface ToolView {
-  /** The name on the header, when it says more than the tool's own. */
-  title?: string;
+  /** The name on the header, when it says more than the tool's own ("Plan", "To crew-reviewer"). */
+  title?: string | ((input: Record<string, unknown>) => string);
+  /** A muted note after the summary, read from the result (how many files matched). */
+  note?: (t: ConvoTool, input: Record<string, unknown>, output: string | null) => string;
   /** The header's summary is words (a description, a plan), not code. */
   prose?: (input: Record<string, unknown>) => boolean;
   /** A short tag after the summary, such as a sub-agent's type. */
@@ -296,7 +300,7 @@ function PlanView({ t, input, output, loading, missed, toggle }: ViewArgs) {
         <div className="mb-2 h-1 border border-border bg-muted" role="img" aria-label={`${done} of ${plan.length} done`}>
           <i className="block h-full bg-[var(--ok)]" style={{ width: `${Math.round((done / plan.length) * 100)}%` }} />
         </div>
-        <ul className="m-0 grid list-none gap-1.5 p-0 text-sm" data-words-exempt>
+        <ul className="m-0 grid list-none gap-1.5 p-0 pl-0! text-sm" data-words-exempt>
           {plan.map((s, i) => {
             const isDone = s.status === "completed";
             const now = s.status === "in_progress";
@@ -349,6 +353,136 @@ function ChangeView({ t, output, loading, missed, toggle }: ViewArgs) {
   );
 }
 
+function MessageView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const message = str(input.message);
+  if (!message || !str(input.to)) return null;
+  return (
+    <>
+      <Section label="Message" right={<>{toggle}<Copy text={t.input} /></>} testid="tool-message">
+        <div className="border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-sm dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]"
+             data-words-exempt><Prose text={message} /></div>
+      </Section>
+      {t.failed && <OutputPart output={output} loading={loading} missed={missed} mark={<Mark ok={false}>not sent</Mark>} />}
+    </>
+  );
+}
+
+/** A Read result's lines with their numbers: Claude Code writes each as "84<tab>text" (older ones "84→text").
+ *  A line without a number (a note the session added) keeps its text, with no number. */
+export function numbered(output: string): { n: string; text: string }[] | null {
+  const lines = output.split("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  if (!lines.length || !/^\s*\d+(?:\t|\u2192)/.test(lines[0])) return null;
+  return lines.map((l) => {
+    const m = /^\s*(\d+)(?:\t|\u2192)(.*)$/.exec(l);
+    return m ? { n: m[1], text: m[2] } : { n: "", text: l };
+  });
+}
+
+function ReadView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const file = str(input.file_path);
+  if (!file) return null;
+  const lines = output !== null && !t.failed ? numbered(output) : null;
+  const width = lines ? Math.max(...lines.map((l) => l.n.length)) : 0;
+  return (
+    <>
+      <Section label={<span className="truncate normal-case" data-words-exempt>{rest(loading, file)}</span>}
+               right={<>{toggle}<Copy text={t.input} /></>} testid="tool-file">
+        {lines ? (
+          <pre data-words-exempt data-testid="tool-lines" className={PRE}>
+            {lines.map((l, i) => (
+              <span key={i} className="flex">
+                <span aria-hidden className="mr-3 shrink-0 select-none text-right text-[color:var(--sand-300)] opacity-70" style={{ width: `${width}ch` }}
+                      data-testid="line-number">{l.n}</span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{l.text || " "}</span>
+              </span>
+            ))}
+          </pre>
+        ) : output === null ? (
+          <p className="m-0 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
+        ) : (
+          <pre data-words-exempt data-testid="tool-output" data-look="plain" className={PRE}>{output || " "}</pre>
+        )}
+        {t.failed && <div className="mt-1"><Mark ok={false}>failed</Mark></div>}
+        {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the file did not load.</p>}
+      </Section>
+    </>
+  );
+}
+
+interface Matches { files: { path: string; n: number | null }[]; total: number | null; cut: boolean }
+
+/** A Grep or Glob result as files: Grep lists them under "Found 3 files" (a "path:N" line each when it
+ *  counts), Glob one path a line; "No files found" is none. Null for what is not a list of files (Grep's
+ *  matching lines, an answer in another shape). */
+export function matchesOf(name: string, input: Record<string, unknown>, output: string): Matches | null {
+  const mode = name === "Grep" ? str(input.output_mode) || "files_with_matches" : "files";
+  if (mode === "content") return null;
+  const out: Matches = { files: [], total: null, cut: false };
+  for (const raw of output.split("\n")) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (/^No (files|matches) found/i.test(l)) continue;
+    const found = /^Found (\d+) (files?|total occurrences?)\b/i.exec(l);
+    if (found) { if (/^file/i.test(found[2])) out.total = Number(found[1]); continue; }
+    if (/^\(Results are truncated/i.test(l)) { out.cut = true; continue; }
+    if (mode === "count") {
+      const m = /^(.*):(\d+)$/.exec(l);
+      if (!m) return null;
+      out.files.push({ path: m[1], n: Number(m[2]) });
+    } else {
+      out.files.push({ path: l, n: null });
+    }
+  }
+  return out;
+}
+
+const files = (n: number, more: boolean) => (n === 0 ? "no files" : `${n}${more ? "+" : ""} ${n === 1 && !more ? "file" : "files"}`);
+
+function matchNote(t: ConvoTool, input: Record<string, unknown>, output: string | null): string {
+  if (output === null || t.failed) return "";
+  const m = matchesOf(t.name, input, output);
+  if (!m) return "";
+  const n = m.total ?? m.files.length;
+  return files(n, m.total === null && (m.cut || (t.more && output === t.output)));
+}
+
+function MatchesView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  if (output === null || t.failed) {
+    return (
+      <Section label="Files" right={<>{toggle}<Copy text={t.input} /></>}>
+        {output === null ? <p className="m-0 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
+          : <><pre data-words-exempt data-testid="tool-output" data-look="plain" className={PRE}>{output || " "}</pre><div className="mt-1"><Mark ok={false}>failed</Mark></div></>}
+      </Section>
+    );
+  }
+  const m = matchesOf(t.name, input, output);
+  if (!m) return null;
+  const base = str(input.path).replace(/\/+$/, "");
+  const strip = base.startsWith("/") && m.files.length > 0 && m.files.every((f) => f.path.startsWith(`${base}/`));
+  return (
+    <Section label={<>{rest(loading, "Files")}{strip && <span className="truncate normal-case" data-words-exempt>in {base}</span>}</>}
+             right={<>{toggle}<Copy text={t.input} /></>} testid="tool-matches">
+      {m.files.length === 0 ? (
+        <p className="m-0 text-sm text-muted-foreground" data-testid="matches-none">No files matched.</p>
+      ) : (
+        <ul className="m-0 grid max-h-72 list-none gap-0.5 overflow-auto p-0 pl-0! font-mono text-xs" data-words-exempt>
+          {m.files.map((f, i) => (
+            <li key={i} className="flex min-w-0 justify-between gap-3" data-testid="match-file">
+              <span className="min-w-0 truncate" title={f.path}>{strip ? f.path.slice(base.length + 1) : f.path}</span>
+              {f.n !== null && <span className="shrink-0 tabular-nums text-muted-foreground">{f.n}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(m.cut || (t.more && !loading && output === t.output)) && <p className="m-0 mt-1 text-xs text-muted-foreground">The list goes on past these.</p>}
+      {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the list did not load.</p>}
+    </Section>
+  );
+}
+
+const MATCHES: ToolView = { note: matchNote, body: MatchesView };
+
 const AGENT: ToolView = { prose: (i) => !!str(i.description), tag: (i) => str(i.subagent_type), body: AgentView };
 
 /** The tools with a body of their own; every other tool shows its Input and Output blocks. */
@@ -357,6 +491,10 @@ const VIEWS: Record<string, ToolView> = {
   TodoWrite: { title: "Plan", prose: () => true, body: PlanView },
   Agent: AGENT,
   Task: AGENT,
+  SendMessage: { title: (i) => (str(i.to) ? `To ${str(i.to)}` : "SendMessage"), prose: (i) => !!str(i.message), body: MessageView },
+  Read: { body: ReadView },
+  Grep: MATCHES,
+  Glob: MATCHES,
   Edit: { body: ChangeView },
   MultiEdit: { body: ChangeView },
   Write: { body: ChangeView },
@@ -384,6 +522,8 @@ function ToolCard({ t, open, onToggle, loadFull }: {
     : null;
   const tag = shaped && input && shaped.tag ? shaped.tag(input) : "";
   const prose = !!(shaped && input && shaped.prose?.(input));
+  const title = shaped && input && shaped.title ? (typeof shaped.title === "string" ? shaped.title : shaped.title(input)) : toolName(t.name);
+  const note = shaped && input && shaped.note ? shaped.note(t, input, output) : "";
   const meta = [took(t.ms), hm(t.at)].filter(Boolean).join(" · ");
   return (
     <div className={cn("border bg-card", t.failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-card"
@@ -395,9 +535,9 @@ function ToolCard({ t, open, onToggle, loadFull }: {
           t.failed ? "border-[var(--err)] text-[color:var(--err)]" : "border-border text-muted-foreground")}>
           <ToolIcon name={t.name} />
         </span>
-        <span className="shrink-0 font-mono text-[13px] font-semibold" data-words-exempt>{shaped?.title ?? toolName(t.name)}</span>
+        <span className="max-w-[45%] shrink-0 truncate font-mono text-[13px] font-semibold" data-words-exempt data-testid="tool-title">{title}</span>
         <span className={cn("min-w-0 flex-1 truncate", prose ? "text-[13px] text-foreground" : "font-mono text-xs text-muted-foreground")}
-              data-words-exempt data-testid="tool-summary">{t.summary}</span>
+              data-words-exempt data-testid="tool-summary">{t.summary}{note && <span className="text-muted-foreground" data-testid="tool-note"> · {note}</span>}</span>
         {tag && <span className="shrink-0 border border-border px-1.5 font-mono text-[10.5px]" data-words-exempt data-testid="tool-tag">{tag}</span>}
         {t.failed && (
           <span className="shrink-0 border border-[var(--err)] px-1.5 font-mono text-[10px] uppercase text-[color:var(--err)]"

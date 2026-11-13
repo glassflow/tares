@@ -419,19 +419,56 @@ async function waitFor(url, tries = 100) {
              (await cut.getByTestId("tool-body").getAttribute("data-shaped")) === "false" && (await cut.getByTestId("tool-input").count()) === 1
              && (await cut.getByTestId("tool-switch").count()) === 0 && /cat > notes\.md/.test(await cut.getByTestId("tool-input").innerText()));
           await cut.getByTestId("tool-head").click();
-          const send = convo.locator("[data-testid=tool-card][data-tool=SendMessage]");
-          await send.getByTestId("tool-head").click();
+          const fetchCard = convo.locator("[data-testid=tool-card][data-tool=WebFetch]");
+          await fetchCard.getByTestId("tool-head").click();
           ck(`${tag}: a tool with no view of its own looks as it did`,
-             (await send.getByTestId("tool-input").count()) === 1 && (await send.getByTestId("tool-switch").count()) === 0
-             && (await send.getByTestId("tool-summary").innerText()) === "crew-reviewer");
+             (await fetchCard.getByTestId("tool-input").count()) === 1 && (await fetchCard.getByTestId("tool-switch").count()) === 0
+             && (await fetchCard.getByTestId("tool-title").innerText()) === "WebFetch"
+             && (await fetchCard.getByTestId("tool-summary").innerText()) === "https://docs.glassflow.ai/tares");
+          await fetchCard.getByTestId("tool-head").click();
+
+          const send = convo.locator("[data-testid=tool-card][data-tool=SendMessage]");
+          ck(`${tag}: closed, a message names who it went to and its first line (TR-1317)`,
+             (await send.getByTestId("tool-title").innerText()) === "To crew-reviewer" && (await send.getByTestId("tool-summary").innerText()) === "PR #595 is ready.");
           await send.getByTestId("tool-head").click();
+          ck(`${tag}: open, the message reads as markdown and the answer stays in Raw`,
+             (await send.getByTestId("tool-message").locator("li").count()) === 2 && (await send.getByTestId("tool-message").locator("strong").innerText()) === "known"
+             && (await send.getByTestId("tool-output").count()) === 0);
+          await send.getByTestId("tool-head").click();
+
+          const read = convo.locator("[data-testid=tool-card][data-tool=Read]");
+          ck(`${tag}: closed, a Read card names the file and the lines (TR-1317)`,
+             (await read.getByTestId("tool-summary").innerText()) === "/w/shop/tests/factory/lib.sh · lines 10-14");
+          await read.getByTestId("tool-head").click();
+          const nums = await read.getByTestId("line-number").allInnerTexts();
+          ck(`${tag}: open, the code has its line numbers beside it, not in it`,
+             JSON.stringify(nums) === JSON.stringify(["10", "11", "12", "13", "14"])
+             && !/\t/.test(await read.getByTestId("tool-lines").innerText().then((x) => x.replace(/^\d+/gm, "")))
+             && /check\(\) \{/.test(await read.getByTestId("tool-lines").innerText()), JSON.stringify(nums));
+          await read.getByTestId("tool-head").click();
+
+          const grep = convo.locator("[data-testid=tool-card][data-tool=Grep]");
+          ck(`${tag}: closed, a Grep card says its pattern, where, and how many files (TR-1317)`,
+             (await grep.getByTestId("tool-summary").innerText()) === "KNOWN_DIFFS in /w/shop · 2 files");
+          await grep.getByTestId("tool-head").click();
+          const found = await grep.getByTestId("match-file").allInnerTexts();
+          ck(`${tag}: open, the files it found, relative to where it looked, with their counts`,
+             JSON.stringify(found.map((x) => x.replace(/\s+/g, " "))) === JSON.stringify(["tests/factory/claude_update_test.sh 3", "tests/factory/lib.sh 1"]), JSON.stringify(found));
+          await grep.getByTestId("tool-head").click();
+
+          const glob = convo.locator("[data-testid=tool-card][data-tool=Glob]");
+          ck(`${tag}: a Glob that found nothing says so in the header`,
+             (await glob.getByTestId("tool-summary").innerText()) === "docs/**/*.md in /w/shop · no files");
+          await glob.getByTestId("tool-head").click();
+          ck(`${tag}: and in the body`, (await glob.getByTestId("matches-none").count()) === 1);
+          await glob.getByTestId("tool-head").click();
           await convo.getByTestId("group-head").click();
           await convo.getByTestId("group-head").click();
           await convo.getByTestId("tool-group").getByTestId("tool-head").nth(1).click();
           await p.waitForFunction(() => /case 120/.test(document.querySelector("[data-testid=tool-group] [data-testid=tool-output]")?.textContent || ""));
           ck(`${tag}: an output the list cut loads whole when its card opens`, true);
           await convo.getByTestId("conversation-open-all").click();
-          ck(`${tag}: Open all tools opens every card`, (await convo.getByTestId("tool-body").count()) === 9);
+          ck(`${tag}: Open all tools opens every card`, (await convo.getByTestId("tool-body").count()) === 13);
           await convo.getByTestId("conversation-scroll").evaluate((e) => { e.scrollTop = 0; e.dispatchEvent(new Event("scroll")); });
           await p.waitForTimeout(100);
           ck(`${tag}: scrolled up, it stops following and offers the newest`, (await convo.getByTestId("conversation-newest").count()) === 1);
