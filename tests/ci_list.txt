@@ -42,6 +42,7 @@ test_crew_dispatch
 test_crew_docker_cleanup
 test_crew_doctor
 test_crew_doctor_lsp
+test_crew_exe_launcher
 test_crew_fake_claude
 test_crew_guard_hook
 test_crew_heavy
