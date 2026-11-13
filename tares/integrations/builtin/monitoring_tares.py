@@ -93,14 +93,22 @@ def save(store, name: str, merged: dict) -> None:
     nothing typed again. Rius and OTLP write the provider and the values their own settings have
     (an empty one clears the stored value, the environment's takes over again) and switch tracing
     on. A value the integration has no setting for, such as the headers of a Rius choice that were
-    set on /api/settings/tracing, is left as it is."""
+    set on /api/settings/tracing, is left as it is while the provider stays the same. When the
+    provider changes it is cleared: tracing.resolve reads every stored key whatever the provider,
+    so the old backend's headers would go to the new one, and the new integration's view cannot
+    show or clear them."""
     if name == "off":
         store.set_setting("tracing_enabled", "0")
         return
+    switching = stored_provider(store) != name
+    own = fields_of(name)
     store.set_setting("tracing_provider", name)
-    for field in fields_of(name):
-        value = str((merged or {}).get(field) or "").strip()
-        store.set_setting(_KEYS[field], value or None)
+    for field, key in _KEYS.items():
+        if field in own:
+            value = str((merged or {}).get(field) or "").strip()
+            store.set_setting(key, value or None)
+        elif switching:
+            store.set_setting(key, None)
     store.set_setting("tracing_enabled", "1")
 
 
@@ -166,8 +174,11 @@ class _Tracing(Monitoring):
         if key and not any(k.lower() == "authorization" for k in headers):
             headers["authorization"] = f"Bearer {key}"
         headers["content-type"] = "application/x-protobuf"
-        shown = clean_endpoint(endpoint)     # never echo a user, password, query or fragment
-        url = endpoint.rstrip("/") + "/v1/traces"
+        # a message names the host only: a user, password, query, fragment or a token in the path never shows
+        clean = urlsplit(clean_endpoint(endpoint))
+        shown = f"{clean.scheme}://{clean.netloc}"
+        raw = urlsplit(endpoint.strip())
+        url = urlunsplit((raw.scheme, raw.netloc, raw.path.rstrip("/") + "/v1/traces", raw.query, ""))
         try:
             # an empty body is a valid, empty export request: a collector answers 200 and sends nothing on
             async with httpx.AsyncClient(timeout=8) as cx:

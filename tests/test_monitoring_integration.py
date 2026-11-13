@@ -237,6 +237,37 @@ async def main():
             await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
                                                            "endpoint": "", "headers": ""})
 
+            print("== switching the provider drops the old backend's headers ==")
+            r = ru(await root.put("/api/factory/integrations/monitoring", json={
+                "name": "otlp", "settings": {"endpoint": "https://collector.example.com:4318",
+                                             "headers": "x-token=COLLECTOR-SECRET"}}))
+            ck("otlp with a collector header: 200", r.status_code == 200, r.text[:200])
+            r = ru(await root.put("/api/factory/integrations/monitoring", json={
+                "name": "rius", "settings": {"api_key": KEY}}))
+            ck("then rius with a key: 200", r.status_code == 200, r.text[:200])
+            ck("the collector's headers are gone", store.get_setting("tracing_headers") is None,
+               store.get_setting("tracing_headers"))
+            ck("so is its address, and the rius key is stored",
+               store.get_setting("tracing_endpoint") is None and store.get_setting("tracing_api_key") == KEY)
+            ck("nothing of the collector reaches the exporter config or the helper route",
+               "COLLECTOR-SECRET" not in json.dumps(registry.get("monitoring", "rius")(store).exporter_config())
+               and "COLLECTOR-SECRET" not in (await root.get("/api/factory/monitoring/headers")).text)
+            r = ru(await root.put("/api/factory/integrations/monitoring", json={
+                "name": "otlp", "settings": {"endpoint": "https://collector.example.com:4318",
+                                             "headers": "x-token=NEXT-ONE"}}))
+            ck("and back to otlp: its own values are written", r.status_code == 200
+               and store.get_setting("tracing_headers") == "x-token=NEXT-ONE"
+               and store.get_setting("tracing_api_key") is None
+               and store.get_setting("tracing_endpoint") == "https://collector.example.com:4318",
+               (r.status_code, store.get_setting("tracing_headers"), store.get_setting("tracing_api_key")))
+            r = ru(await root.put("/api/factory/integrations/monitoring", json={
+                "name": "otlp", "settings": {"endpoint": "https://collector.example.com:4318"}}))
+            ck("a re-save of the same provider keeps what it has",
+               r.status_code == 200 and store.get_setting("tracing_headers") == "x-token=NEXT-ONE",
+               (r.status_code, store.get_setting("tracing_headers")))
+            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+                                                           "endpoint": "", "headers": ""})
+
             print("== the provider comes from tracing.resolve ==")
             store.set_setting("tracing_provider", None)
             os.environ["TARES_TRACING_ENDPOINT"] = "https://env.example.com:4318"
@@ -285,6 +316,12 @@ async def main():
             r = await root.get("/api/factory/monitoring/headers")
             ck("the admin key without a station header gets them too (the credential decides)",
                r.status_code == 200 and r.json() == {"headers": {"x-token": HDR}}, (r.status_code, r.text[:120]))
+            adm = (await root.post("/api/keys", json={"name": "crew", "scopes": ["admin"]})).json()
+            ck("an admin key was minted", bool(adm.get("secret")), str(adm)[:120])
+            async with mk(token=adm["secret"], station="crew-build-x") as ak:
+                r = await ak.get("/api/factory/monitoring/headers")
+                ck("a minted admin key, the kind a station carries, gets the headers",
+                   r.status_code == 200 and r.json() == {"headers": {"x-token": HDR}}, (r.status_code, r.text[:120]))
             made = (await root.post("/api/keys", json={"name": "reader", "scopes": ["read"]})).json()
             for who, kw in (("a read key", {}), ("a read key that sends the station header",
                                                   {"station": "crew-build-x"})):
@@ -340,10 +377,18 @@ async def main():
             ck("nothing listening is not ok, and the message has no secret",
                r.json().get("ok") is False and KEY not in r.text, r.text[:300])
             direct = await registry.get("monitoring", "otlp")().check_connection(
-                {"endpoint": "http://user:PASSW0RD@127.0.0.1:1/p?token=TOKEN9#frag"})
-            ck("a message shows the address without user, password, query or fragment",
-               direct[0] is False and "127.0.0.1:1/p" in direct[1]
-               and not any(x in direct[1] for x in ("user", "PASSW0RD", "TOKEN9", "frag")), direct)
+                {"endpoint": "http://user:PASSW0RD@127.0.0.1:1/PATHTOKEN?token=TOKEN9#frag"})
+            ck("a message names the host only: no user, password, path, query or fragment",
+               direct[0] is False and "127.0.0.1:1" in direct[1]
+               and not any(x in direct[1] for x in ("user", "PASSW0RD", "PATHTOKEN", "TOKEN9", "frag")), direct)
+            os.environ["TARES_WEBHOOK_ALLOW_PRIVATE"] = "1"
+            srv, base = serve()
+            Handler.status = 200
+            HITS.clear()
+            await registry.get("monitoring", "otlp")().check_connection({"endpoint": f"{base}/p/?org=7"})
+            ck("/v1/traces goes on the path, before any query", HITS and HITS[-1]["path"] == "/p/v1/traces?org=7",
+               HITS[-1:] and HITS[-1]["path"])
+            srv.shutdown()
             direct = await registry.get("monitoring", "otlp")().check_connection({"endpoint": "ftp://h"})
             ck("a non-http address is refused before any call", direct[0] is False and "http" in direct[1], direct)
             direct = await registry.get("monitoring", "otlp")().check_connection({})
