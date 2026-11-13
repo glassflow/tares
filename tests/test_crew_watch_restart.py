@@ -83,6 +83,41 @@ def wait_for(cond, seconds=20.0):
     return False
 
 
+def parent_of(pid):
+    try:
+        return psutil.Process(pid).ppid()
+    except psutil.Error:
+        return None
+
+
+def settled(seconds=20.0):
+    """The watch's pid once the pid file names the loop itself. On Windows a start first writes the venv launcher's
+    pid, and the loop writes its own over it a moment later (`claim_pidfile`), so the pid changes with no restart."""
+    out = []
+
+    def read():
+        pid = watch.running_pid(paths)
+        if pid is None:
+            return None
+        try:
+            if any("crew watch" in " ".join(c.cmdline()) for c in psutil.Process(pid).children(recursive=True)):
+                return None
+        except psutil.Error:
+            return None
+        return pid
+
+    def done():
+        pid = read()
+        if pid is None:
+            return False
+        time.sleep(0.3)   # a launcher that has not yet spawned its loop has no child to see: the same pid twice
+        if read() != pid:
+            return False
+        out.append(pid)
+        return True
+    return out[0] if wait_for(done, seconds) else None
+
+
 def cleanup():
     pid = watch.running_pid(paths)
     if pid is not None:
@@ -105,8 +140,8 @@ try:
     ck("--restart with none running starts one: action started and a pid",
        code == 0 and d and list(d)[0] == "schema_version" and d["watch"]["action"] == "started" and isinstance(pid1, int),
        (code, out, err))
-    ck("...the pid file names a live watch", wait_for(lambda: watch.running_pid(paths) is not None))
-    pid1 = watch.running_pid(paths)
+    pid1 = settled()
+    ck("...the pid file names a live watch", pid1 is not None)
 
     print("restart")
     code, out, err = run("--restart", "--json")
@@ -116,8 +151,9 @@ try:
        code == 0 and d and d["watch"]["action"] == "restarted" and isinstance(pid2, int) and pid2 != pid1,
        (code, out, err, pid1))
     ck("...the old watch process is gone", wait_for(lambda: gone(pid1)), pid1)
-    ck("...the new one runs and the pid file names it", wait_for(lambda: watch.running_pid(paths) == pid2),
-       (watch.running_pid(paths), pid2))
+    w2 = settled()
+    ck("...the new one runs and the pid file names it (or the loop it started)",
+       w2 is not None and (w2 == pid2 or parent_of(w2) == pid2), (w2, pid2))
     ck("...stations.json is byte for byte the same", (CREW / "stations.json").read_bytes() == STATIONS)
     ck("...no stop file is left behind", not (CREW / "watch.stop").exists())
 
@@ -130,7 +166,7 @@ try:
     ck("a folder the watch is not in: other_install, the executable named, no pid",
        code == 0 and d and d["watch"]["action"] == "other_install" and "pid" not in d["watch"]
        and d["watch"]["executable"], (code, out, err))
-    ck("...the watch was left alone (same pid, still running)", watch.running_pid(paths) == pid2, watch.running_pid(paths))
+    ck("...the watch was left alone (same pid, still running)", watch.running_pid(paths) == w2, (watch.running_pid(paths), w2))
     code, out, err = run("--restart", "--only-under", str(elsewhere))
     ck("...as text: names the install and says it was left alone",
        code == 0 and out.startswith("the watch runs from another install (") and out.strip().endswith("): left alone"), out)
@@ -144,7 +180,7 @@ try:
     ck("the folder it runs from: restarted with a new pid",
        code == 0 and d and d["watch"]["action"] == "restarted" and isinstance(pid3, int) and pid3 != pid2,
        (code, out, err, folder))
-    ck("...the second old watch is gone", wait_for(lambda: gone(pid2)), pid2)
+    ck("...the second old watch is gone", wait_for(lambda: gone(pid2) and gone(w2)), (pid2, w2))
     ck("...a restart without --json prints one line",
        run("--restart")[1].startswith("watch restarted, pid "))
 
@@ -158,7 +194,7 @@ try:
     code, out, err = run("--restart", "--only-under")
     ck("--only-under without a folder: usage, exit 2", code == 2 and "needs a folder" in err, (code, out, err))
     ck("a refused restart left the watch running", watch.running_pid(paths) is not None)
-    live = watch.running_pid(paths)
+    live = settled()
     code, out, err = run("--restart", "--only-under", "")
     ck("--only-under with an empty folder: usage, exit 2, not a restart", code == 2 and "needs a folder" in err, (code, out, err))
     code, out, err = run("--restart", "--only-under", "--json")
@@ -172,6 +208,54 @@ try:
     ck("a restart that could not start a new watch fails before stopping the old one",
        code == 1 and "FACTORY_NO_WATCH" in (out + err), (code, out, err))
     ck("...the running watch is still the same one", watch.running_pid(paths) == live, (watch.running_pid(paths), live))
+
+    print("_watch_executables: a watch started by a launcher (TR-1319)")
+    # A Windows venv's python.exe is a launcher that runs the base interpreter as the loop, so the loop alone is
+    # never under the venv. Stand-ins: a "launcher" with `crew watch` in its command line and its own argv[0], and
+    # a child that has another argv[0].
+    lfolder = SCRATCH / "venv" / "Scripts"
+    bfolder = SCRATCH / "base"
+    BASEPY = getattr(sys, "_base_executable", sys.executable)   # a venv's own python.exe may itself be a launcher
+    child_code = "import time; time.sleep(60)"
+    launch_code = ("import subprocess, sys, time; "
+                   f"subprocess.Popen([{str(bfolder / 'pythonw')!r}, '-c', {child_code!r}], executable={BASEPY!r}); "
+                   "time.sleep(60)")
+
+    def start_pair(launcher_args):
+        lp = subprocess.Popen([str(lfolder / "pythonw"), "-c", launch_code, *launcher_args], executable=BASEPY,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        kid = []
+
+        def seen():
+            try:
+                kid[:] = [c.pid for c in psutil.Process(lp.pid).children()]
+            except psutil.Error:
+                pass
+            return bool(kid)
+        wait_for(seen)
+        return lp, (kid[0] if kid else None)
+
+    pair = []
+    try:
+        lp, cp = start_pair(["crew", "watch"])
+        pair.append(lp)
+        ck("a launcher and its loop child started", cp is not None)
+        ck("the loop alone is not under the launcher's folder",
+           not any(watch._under(e, str(lfolder)) for e in watch._program_paths(psutil.Process(cp))), watch._program_paths(psutil.Process(cp)))
+        ck("...but its `crew watch` launcher is: the folder is accepted",
+           any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp)), watch._watch_executables(cp))
+        ck("...and a folder that neither is in is still not",
+           not any(watch._under(e, str(elsewhere)) for e in watch._watch_executables(cp)), watch._watch_executables(cp))
+        lp2, cp2 = start_pair(["serve"])
+        pair.append(lp2)
+        ck("a parent that is not a `crew watch` launcher is not counted",
+           cp2 is not None and not any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp2)),
+           watch._watch_executables(cp2) if cp2 else None)
+    finally:
+        for q in pair:
+            for c in psutil.Process(q.pid).children(recursive=True) if q.poll() is None else []:
+                c.kill()
+            q.kill()
 
     print("_under")
     base = SCRATCH / "install"
