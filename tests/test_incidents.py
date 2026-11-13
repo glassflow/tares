@@ -527,6 +527,19 @@ def sweep_case():
        [i["id"] for i in incidents.sweep(store, catalog, now=T + timedelta(hours=25))
         if i["id"] == b], [b])
 
+    print("== resolve marks the notes handled before it shows resolved (TR-1335) ==")
+    c = quiet_one("res-order")
+    seen = []
+    real_handled = store.set_run_handled
+    store.set_run_handled = lambda *a, **k: (seen.append(state(c)), real_handled(*a, **k))[1]
+    try:
+        incidents.resolve(store, c, "u1", "Kim")
+    finally:
+        store.set_run_handled = real_handled
+    ck("the incident has a note to mark", len(seen) > 0, str(seen))
+    eq("it is not resolved while a note is still being marked", [x for x in seen if x == "resolved"], [])
+    eq("and it ends resolved", state(c), "resolved")
+
     print("== the sweep reads past its first page ==")
     seed_old_note(store, "c-old", "f7-old", T - timedelta(hours=40), uid, verdict="resolved")
     old = store.create_incident("f7-old", uid, T - timedelta(hours=50))
