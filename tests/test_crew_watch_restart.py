@@ -83,6 +83,25 @@ def wait_for(cond, seconds=20.0):
     return False
 
 
+def settled(seconds=20.0):
+    """The watch's pid once the pid file names the loop itself. On Windows a start first writes the venv launcher's
+    pid, and the loop writes its own over it a moment later (`claim_pidfile`), so the pid changes with no restart."""
+    out = []
+
+    def done():
+        pid = watch.running_pid(paths)
+        if pid is None:
+            return False
+        try:
+            if any("crew watch" in " ".join(c.cmdline()) for c in psutil.Process(pid).children(recursive=True)):
+                return False
+        except psutil.Error:
+            return False
+        out.append(pid)
+        return True
+    return out[0] if wait_for(done, seconds) else None
+
+
 def cleanup():
     pid = watch.running_pid(paths)
     if pid is not None:
@@ -105,8 +124,8 @@ try:
     ck("--restart with none running starts one: action started and a pid",
        code == 0 and d and list(d)[0] == "schema_version" and d["watch"]["action"] == "started" and isinstance(pid1, int),
        (code, out, err))
-    ck("...the pid file names a live watch", wait_for(lambda: watch.running_pid(paths) is not None))
-    pid1 = watch.running_pid(paths)
+    pid1 = settled()
+    ck("...the pid file names a live watch", pid1 is not None)
 
     print("restart")
     code, out, err = run("--restart", "--json")
@@ -116,8 +135,9 @@ try:
        code == 0 and d and d["watch"]["action"] == "restarted" and isinstance(pid2, int) and pid2 != pid1,
        (code, out, err, pid1))
     ck("...the old watch process is gone", wait_for(lambda: gone(pid1)), pid1)
-    ck("...the new one runs and the pid file names it", wait_for(lambda: watch.running_pid(paths) == pid2),
-       (watch.running_pid(paths), pid2))
+    w2 = settled()
+    ck("...the new one runs and the pid file names it (or the loop it started)",
+       w2 is not None and (w2 == pid2 or psutil.Process(w2).ppid() == pid2), (w2, pid2))
     ck("...stations.json is byte for byte the same", (CREW / "stations.json").read_bytes() == STATIONS)
     ck("...no stop file is left behind", not (CREW / "watch.stop").exists())
 
@@ -130,7 +150,7 @@ try:
     ck("a folder the watch is not in: other_install, the executable named, no pid",
        code == 0 and d and d["watch"]["action"] == "other_install" and "pid" not in d["watch"]
        and d["watch"]["executable"], (code, out, err))
-    ck("...the watch was left alone (same pid, still running)", watch.running_pid(paths) == pid2, watch.running_pid(paths))
+    ck("...the watch was left alone (same pid, still running)", watch.running_pid(paths) == w2, (watch.running_pid(paths), w2))
     code, out, err = run("--restart", "--only-under", str(elsewhere))
     ck("...as text: names the install and says it was left alone",
        code == 0 and out.startswith("the watch runs from another install (") and out.strip().endswith("): left alone"), out)
@@ -144,7 +164,7 @@ try:
     ck("the folder it runs from: restarted with a new pid",
        code == 0 and d and d["watch"]["action"] == "restarted" and isinstance(pid3, int) and pid3 != pid2,
        (code, out, err, folder))
-    ck("...the second old watch is gone", wait_for(lambda: gone(pid2)), pid2)
+    ck("...the second old watch is gone", wait_for(lambda: gone(pid2) and gone(w2)), (pid2, w2))
     ck("...a restart without --json prints one line",
        run("--restart")[1].startswith("watch restarted, pid "))
 
@@ -158,7 +178,7 @@ try:
     code, out, err = run("--restart", "--only-under")
     ck("--only-under without a folder: usage, exit 2", code == 2 and "needs a folder" in err, (code, out, err))
     ck("a refused restart left the watch running", watch.running_pid(paths) is not None)
-    live = watch.running_pid(paths)
+    live = settled()
     code, out, err = run("--restart", "--only-under", "")
     ck("--only-under with an empty folder: usage, exit 2, not a restart", code == 2 and "needs a folder" in err, (code, out, err))
     code, out, err = run("--restart", "--only-under", "--json")
