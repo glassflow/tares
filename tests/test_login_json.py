@@ -508,6 +508,11 @@ rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--show", "--json", s
 ck("--cell with --show: usage error, exit 2", rc == 2 and err_code(out) == "usage", (rc, out))
 rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin="\ufeff" + KEY + "\r\n")
 ck("a BOM and a CRLF in front of and after the key are dropped", rc == 0, (rc, out, err))
+WORLD["calls"].clear()
+for bad in (KEY[:6] + chr(0) + KEY[6:], KEY[:6] + chr(233) + KEY[6:], KEY[:6] + chr(32) + KEY[6:]):
+    rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=bad + chr(10))
+    ck("a key with a NUL, a non-ASCII character or a space: key_refused, exit 1, no traceback, key not echoed",
+       rc == 1 and err_code(out) == "key_refused" and "Traceback" not in err and KEY[6:] not in out + err, (rc, out, err))
 
 crew2 = Path(HOME) / "crew-for-cell"
 crew2.mkdir()

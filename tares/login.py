@@ -592,6 +592,10 @@ def _connect_cell(address: str, key: str, json_out: bool) -> int:
         return _err(json_out, "keychain_unreadable",
                     _unreadable(why, old_data, "tares login") + f" Or, to start over, delete {login_file()} "
                     "and remove that key yourself under Security > API keys.")
+    if not key or not all(33 <= ord(c) <= 126 for c in key):
+        return _err(json_out, "key_refused",
+                    "tares login: the key has a character a key never has (a space, a control character or a non-ASCII one). "
+                    "Nothing was sent and nothing was saved.")
     old = {**old_data, "key": old_key} if old_data is not None and old_key else None
     try:
         status, health = _http("GET", f"{address}/health", timeout=10)
