@@ -41,7 +41,8 @@ def ck(label, cond, detail=""):
 
 
 WORLD = {"version": "1.44.0", "exchange_status": 200, "logout_status": 200, "delete_status": 200,
-         "good_keys": set(), "no_admin_keys": set(), "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
+         "good_keys": set(), "no_admin_keys": set(), "project_keys": set(), "calls": [], "health_status": 200,
+         "whoami_status": 200, "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
 OUTPUTS = []        # everything any call printed, to look for a key in
 
 
@@ -56,14 +57,27 @@ class Fake(BaseHTTPRequestHandler):
 
     def do_GET(self):  # noqa: N802
         if self.path == "/health":
+            if WORLD["health_status"] == 299:       # answers 200 with something that is not a Tares
+                return self._json(200, {"hello": "world"})
+            if WORLD["health_status"] != 200:
+                return self._json(WORLD["health_status"], {})
             return self._json(200, {"status": "ok", "version": WORLD["version"]})
+        if self.path == "/api/whoami":
+            bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+            if WORLD["whoami_status"] != 200:
+                return self._json(WORLD["whoami_status"], {})
+            if bearer in WORLD["project_keys"]:
+                return self._json(200, {"id": "k9", "kind": "key", "project": "p1", "scopes": ["admin", "read"]})
+            if bearer in WORLD["no_admin_keys"]:
+                return self._json(200, {"id": "k8", "kind": "key", "scopes": ["ingest", "read"]})
+            return self._json(200 if bearer in WORLD["good_keys"] else 401,
+                              {"id": "k1", "kind": "key", "scopes": ["admin", "ingest", "read"]})
         if self.path == "/api/crew/settings":
             if WORLD["settings_force"]:
                 return self._json(WORLD["settings_force"], {})
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
-            if bearer in WORLD["no_admin_keys"]:
-                return self._json(403, {"detail": "this credential lacks the 'admin' scope"})
-            return self._json(200 if bearer in WORLD["good_keys"] else 401, {"settings": {}})
+            ok = bearer in WORLD["good_keys"] or bearer in WORLD["no_admin_keys"] or bearer in WORLD["project_keys"]
+            return self._json(200 if ok else 401, {"settings": {}})
         self._json(404, {})
 
     def do_POST(self):  # noqa: N802
@@ -77,10 +91,12 @@ class Fake(BaseHTTPRequestHandler):
             return self._json(200, {"token": f"nvf_{kid}_topsecret", "key_id": kid, "cell": "factory",
                                     "cell_url": WORLD["cell_url"] or BASE})
         if self.path == "/api/cli/logout":
+            WORLD["calls"].append(("logout", (self.headers.get("Authorization") or "").removeprefix("Bearer ")))
             return self._json(WORLD["logout_status"], {"revoked": True})
         self._json(404, {})
 
     def do_DELETE(self):  # noqa: N802
+        WORLD["calls"].append(("delete", (self.headers.get("Authorization") or "").removeprefix("Bearer ")))
         self._json(WORLD["delete_status"], {})
 
     def log_message(self, *a):
@@ -395,18 +411,22 @@ import subprocess  # noqa: E402
 KEY = "nvf_c1_cellsecret"
 WORLD["good_keys"].add(KEY)
 WORLD["no_admin_keys"].add("nvf_c2_readonly")
+WORLD["project_keys"].add("nvf_c3_project")
+WORLD["calls"].clear()
 L.login_file().unlink(missing_ok=True)
 CLEAN_ENV = {k: v for k, v in os.environ.items() if not k.startswith(("TARES_", "FACTORY_")) and k != "TARESD_URL"}
 CLEAN_ENV.update(TARES_HOME=HOME, TARES_KEYRING="off", PYTHONPATH=str(Path(__file__).resolve().parent.parent),
                  FACTORY_CREW_HOME=os.path.join(HOME, "no-crew"), PYTHON_KEYRING_BACKEND="keyring.backends.fail.Keyring")
 
 
-def cli(*argv, stdin=""):
+def cli(*argv, stdin="", env=None):
     """The real command in its own process: (exit code, stdout, stderr). Its output is searched for the key too."""
     r = subprocess.run([sys.executable, "-c", "import sys;from tares.cli import main;sys.exit(main())", *argv],
-                       input=stdin, capture_output=True, text=True, env=CLEAN_ENV, timeout=120)
-    OUTPUTS.append(r.stdout + r.stderr)
-    return r.returncode, r.stdout, r.stderr
+                       input=stdin.encode("utf-8"), capture_output=True, timeout=120,
+                       env={**CLEAN_ENV, "PYTHONUTF8": "1", **(env or {})})
+    out, err = r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+    OUTPUTS.append(out + err)
+    return r.returncode, out, err
 
 
 rc, out, err = cli("login", "--cell", BASE + "/", "--key-stdin", "--json", stdin=KEY + "\n")
@@ -428,8 +448,8 @@ ck("--show --json: source saved login, cloud null, key works", rc == 0 and docs(
 rc, out, err = cli("logout", "--json")
 ck("logout --json: signed in, key not removed, exit 0", rc == 0 and docs(out)[0]["logout"] ==
    {"was_signed_in": True, "key_removed": False}, (rc, out, err))
-ck("the saved login is gone and the cell was not asked to delete a key", not L.login_file().exists() and WORLD["n"] == 0
-   or not L.login_file().exists(), "")
+ck("the saved login is gone and the cell was not asked to revoke or delete the key",
+   not L.login_file().exists() and WORLD["calls"] == [], WORLD["calls"])
 
 rc, out, err = cli("login", "--cell", BASE, "--key-stdin", stdin=KEY + "\n")
 ck("text: one line", rc == 0 and out.strip() == f"tares login: this machine is connected to {BASE}", (rc, out, err))
@@ -437,7 +457,9 @@ rc, out, err = cli("logout")
 ck("text logout of such a login: exit 0, says the key stays on the cell", rc == 0 and "still valid" in out, (rc, out))
 
 for label, key, code in (("a refused key", "nvf_zz_wrong", "key_refused"),
-                         ("a key without admin", "nvf_c2_readonly", "key_lacks_admin")):
+                         ("a read and ingest key (real cells answer 200 to the settings call)", "nvf_c2_readonly",
+                          "key_lacks_admin"),
+                         ("a project key", "nvf_c3_project", "key_lacks_admin")):
     rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=key + "\n")
     ck(f"{label}: {code}, exit 1, nothing saved", rc == 1 and err_code(out) == code and not L.login_file().exists(),
        (rc, out, err))
@@ -464,6 +486,55 @@ ck("an empty key line: usage error, exit 2", rc == 2 and err_code(out) == "usage
 ck("a localhost address is allowed over http, and a trailing slash is dropped", L.cell_address("http://localhost:8787/") ==
    ("http://localhost:8787", "") and L.cell_address("https://cell.example.com/")[0] == "https://cell.example.com", "")
 ck("nothing was saved by any failure", not L.login_file().exists(), "")
+
+print("more of the cell login (TR-1285 review)")
+WORLD["settings_force"] = 500
+rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + "\n")
+ck("a 5xx on the key check is not 'connected'", rc == 1 and err_code(out) == "cell_unreachable"
+   and not L.login_file().exists(), (rc, out))
+WORLD["settings_force"] = 0
+for status, what in ((500, "a /health that fails"), (299, "a /health with no version")):
+    WORLD["health_status"] = status
+    rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + "\n")
+    ck(f"{what}: cell_unreachable, nothing saved", rc == 1 and err_code(out) == "cell_unreachable"
+       and not L.login_file().exists(), (rc, out))
+WORLD["health_status"] = 200
+WORLD["whoami_status"] = 404
+rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + "\n")
+ck("a cell with no /api/whoami: the key that worked is accepted", rc == 0, (rc, out))
+WORLD["whoami_status"] = 200
+L.login_file().unlink(missing_ok=True)
+rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--show", "--json", stdin=KEY + "\n")
+ck("--cell with --show: usage error, exit 2", rc == 2 and err_code(out) == "usage", (rc, out))
+rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin="\ufeff" + KEY + "\r\n")
+ck("a BOM and a CRLF in front of and after the key are dropped", rc == 0, (rc, out, err))
+
+crew2 = Path(HOME) / "crew-for-cell"
+crew2.mkdir()
+rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + "\n",
+                   env={"FACTORY_CREW_HOME": str(crew2)})
+ck("a crew home follows the cell login: its key file holds the key", rc == 0
+   and (crew2 / ".tares-token").read_text().strip() == KEY, (rc, out, err))
+rc, out, err = cli("logout", "--json", env={"FACTORY_CREW_HOME": str(crew2)})
+ck("...and logout empties it again", rc == 0 and (crew2 / ".tares-token").read_text().strip() == "", (rc, out))
+
+print("a Cloud login and a cell login replace each other")
+WORLD["calls"].clear()
+L.login_file().unlink(missing_ok=True)
+browser()
+rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+cloud_key = json.loads(L.login_file().read_text())["key"]
+ck("a Cloud login first", rc == 0 and cloud_key.startswith("nvf_k"), (rc, out))
+rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + "\n")
+ck("a cell login after it revokes the Cloud key", rc == 0 and ("logout", cloud_key) in WORLD["calls"],
+   (rc, out, WORLD["calls"]))
+WORLD["calls"].clear()
+L.DEFAULT_CLOUD = BASE      # where a wrongly revoked cell key would go
+browser()
+rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+ck("a Cloud login after a cell login does not send the cell key to anyone", rc == 0
+   and not [c for c in WORLD["calls"] if c[1] == KEY], WORLD["calls"])
+L.login_file().unlink(missing_ok=True)
 
 print("the key is in no output")
 ck("no stdout or stderr held a key", all("topsecret" not in o and "nvf_" not in o for o in OUTPUTS)

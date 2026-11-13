@@ -295,7 +295,7 @@ def _login(args: argparse.Namespace):
         url, problem = cell_address(args.cell)
         if problem:
             usage(f"tares login: --cell {problem}.")
-        key = (sys.stdin.readline() or "").strip()
+        key = (sys.stdin.readline() or "").strip().lstrip("\ufeff").strip()
         if not key:
             usage("tares login: --key-stdin read no key: send the key as one line on standard input.")
         raise SystemExit(connect_cell(url, key, json_out=args.json))

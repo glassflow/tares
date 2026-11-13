@@ -526,7 +526,7 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
                     + ("The key just made for this machine was removed, and the saved login (if any) is as it was."
                        if removed else f"The saved login (if any) is as it was. {_left_behind(data)}"))
     _crew_follows(data["key"], json_out=json_out)
-    if old and old.get("key_id") != data["key_id"]:
+    if old and old.get("cloud") and old.get("key_id") != data["key_id"]:
         ok, _how = _revoke(old)
         if not ok:
             print(f"tares login: the previous key on {old.get('cell')} could not be removed; "
@@ -597,6 +597,8 @@ def _connect_cell(address: str, key: str, json_out: bool) -> int:
         status, health = _http("GET", f"{address}/health", timeout=10)
         status2, detail = (_http("GET", f"{address}/api/crew/settings", token=key, timeout=10)
                            if status == 200 else (0, {}))
+        who_status, who = (_http("GET", f"{address}/api/whoami", token=key, timeout=10)
+                           if status2 == 403 or 200 <= status2 < 300 else (0, {}))
     except (httpx.HTTPError, httpx.InvalidURL) as e:
         return _err(json_out, "cell_unreachable",
                     f"tares login: could not reach {address} ({e}). Nothing was saved.")
@@ -604,14 +606,21 @@ def _connect_cell(address: str, key: str, json_out: bool) -> int:
         return _err(json_out, "cell_unreachable",
                     f"tares login: {address} answered {status} at /health, so it does not look like a Tares. "
                     "Nothing was saved.")
-    version = str(health.get("version") or "")
+    version = str(health.get("version") or "") if isinstance(health, dict) else ""
+    if not version:
+        return _err(json_out, "cell_unreachable",
+                    f"tares login: {address} answered at /health but not like a Tares (no version). "
+                    "Nothing was saved.")
     if (_version(version) or (0, 0, 0)) < MIN_VERSION:
         return _err(json_out, "cell_too_old",
-                    f"tares login: {address} runs Tares {version or 'of an unknown version'}; "
+                    f"tares login: {address} runs Tares {version}; "
                     f"tares login needs {MIN_VERSION_TEXT} or later. Nothing was saved.")
-    if status2 == 403 and "admin" in str(detail.get("detail") or ""):
+    scopes = who.get("scopes") if who_status == 200 and isinstance(who, dict) else None
+    if isinstance(scopes, list) and (who.get("project") or "admin" not in scopes):
+        why = ("it is a project key, which reads one project only" if who.get("project")
+               else f"its scopes are {', '.join(map(str, scopes)) or 'none'}")
         return _err(json_out, "key_lacks_admin",
-                    f"tares login: {address} accepted the key but it lacks the admin scope, which "
+                    f"tares login: {address} accepted the key but it lacks the admin scope ({why}), which "
                     "tares factory needs. Make a key with the admin scope under Security > API keys. "
                     "Nothing was saved.")
     if status2 in (401, 403):
