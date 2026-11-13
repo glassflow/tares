@@ -156,6 +156,9 @@ def main():
             findings.append((name, p, what))
         ok += 1
     print(f"baseline {tag}: {ok} schema files compared, schema_version {old_version} -> {new_version}")
+    if ok == 0 and not unreadable:
+        print(f"FAIL no schema files compared: {tag} lists none under {SCHEMAS}/ (was the folder moved?)")
+        return 1
     if not findings:
         if unreadable:
             return 1

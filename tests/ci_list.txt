@@ -208,6 +208,7 @@ test_rius_rca
 test_run_results
 test_schedule_trigger
 test_schema_compat
+test_schema_compat_guards
 test_seed
 test_seed_new_cell_only
 test_services
