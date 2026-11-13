@@ -178,6 +178,29 @@ async def main():
             beyond = (await cx.get(f"/api/crew/{ST}", params={"conversation": 200, "since": 999})).json()
             ck("a since past the newest line reads nothing new", beyond["conversation"] == [], beyond.get("conversation"))
 
+    # TR-1317: the header line of the most common calls says what the call did
+    ck("a Bash call's summary is its description, on one line, before the command",
+       cc.summary("Bash", {"command": "uv run pytest -q", "description": "Run the\n  parser tests"}) == "Run the parser tests")
+    ck("a Bash call with no description still shows its command",
+       cc.summary("Bash", {"command": "npm test", "description": "  "}) == "npm test")
+    todos = [{"content": "Read", "status": "completed", "activeForm": "Reading"},
+             {"content": "Plan", "status": "completed", "activeForm": "Planning"},
+             {"content": "Build the Bash view", "status": "in_progress", "activeForm": "Building the Bash view"},
+             {"content": "Fall back", "status": "pending", "activeForm": "Falling back"},
+             {"content": "Test", "status": "pending", "activeForm": "Testing"}]
+    ck("a TodoWrite call counts the steps done and names the one in hand",
+       cc.summary("TodoWrite", {"todos": todos}) == "2 of 5 done · Building the Bash view",
+       cc.summary("TodoWrite", {"todos": todos}))
+    ck("with no step in hand it only counts",
+       cc.summary("TodoWrite", {"todos": todos[:2]}) == "2 of 2 done")
+    ck("an empty plan falls back to the start of the input",
+       cc.summary("TodoWrite", {"todos": []}) == '{"todos": []}')
+    ck("an Agent call reads its description, not its brief",
+       cc.summary("Agent", {"description": "Find the views", "subagent_type": "Explore", "prompt": "Search ui/src"})
+       == "Find the views")
+    ck("another tool keeps the first field that says most",
+       cc.summary("Grep", {"pattern": "changeOf", "description": "x"}) == "changeOf")
+
     print(f"{P} passed, {F} failed")
     return F
 

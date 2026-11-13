@@ -81,13 +81,41 @@ def _result_text(content) -> str:
     return "" if content is None else str(content)
 
 
+def _one_line(v: str) -> str:
+    return " ".join(v.split())[:SUMMARY]
+
+
+def _plan(todos: list) -> str | None:
+    """A TodoWrite plan in one line: how many steps are done, and the one in hand (TR-1317)."""
+    steps = [t for t in todos if isinstance(t, dict)]
+    if not steps:
+        return None
+    done = sum(1 for t in steps if t.get("status") == "completed")
+    line = f"{done} of {len(steps)} done"
+    now = next((t for t in steps if t.get("status") == "in_progress"), None)
+    if now:
+        step = now.get("activeForm") or now.get("content")
+        if isinstance(step, str) and step.strip():
+            line += f" · {step}"
+    return _one_line(line)
+
+
 def summary(name: str, inp) -> str:
-    """One line about a call: its command, its file, its pattern... else the start of its input."""
+    """One line about a call: its command, its file, its pattern... else the start of its input.
+
+    A Bash call says what it does in its description, so that comes before the command; a TodoWrite call
+    counts the steps done (TR-1317)."""
     if isinstance(inp, dict):
+        if name == "Bash" and isinstance(inp.get("description"), str) and inp["description"].strip():
+            return _one_line(inp["description"])
+        if name == "TodoWrite" and isinstance(inp.get("todos"), list):
+            plan = _plan(inp["todos"])
+            if plan:
+                return plan
         for f in SUMMARY_FIELDS:
             v = inp.get(f)
             if isinstance(v, str) and v.strip():
-                return " ".join(v.split())[:SUMMARY]
+                return _one_line(v)
         text = json.dumps(inp, ensure_ascii=False)
     else:
         text = str(inp or "")
