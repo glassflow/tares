@@ -47,15 +47,22 @@ def check_repo(value) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{value!r} is not a repo: write it as owner/name, like glassflow/tares")
     repo = norm_repo(value)
-    for part in repo.split("/"):
-        if part in (".", "..") or not _REPO_NAME.fullmatch(part):
+    owner, _, name = repo.partition("/")
+    if name.endswith(".git"):
+        name = name[:-4]
+    for part in (owner, name):
+        if part in ("", ".", "..") or not _REPO_NAME.fullmatch(part):
             raise ValueError(f"{value!r} is not a repo: write it as owner/name, like glassflow/tares")
-    return repo
+    if "_" in owner or "." in owner:
+        # a GitHub owner holds letters, digits and hyphens; an underscore would let two repos
+        # share one lore name (a_b/c and a/b_c)
+        raise ValueError(f"{value!r} is not a repo: an owner holds letters, digits and hyphens")
+    return f"{owner}/{name}"
 
 
 def lore_name(repo: str) -> str:
     """The name of the repo source in lore: owner and name joined by an underscore (lore names
-    cannot hold a slash). A GitHub owner never holds an underscore, so two repos never share one."""
+    cannot hold a slash). check_repo refuses an underscore in the owner, so two repos never share one."""
     return repo.replace("/", "_", 1)
 
 
@@ -156,9 +163,11 @@ def register_routes(app, host) -> None:
         person = host.current_person(request)
         by = person["id"] if person else None
         done: list[str] = []
+        current = repos[0]
         try:
             async with lore_client() as lore:
                 for repo in repos:
+                    current = repo
                     made = await lore.create_repo(lore_name(repo),
                                                   remote_url=f"https://github.com/{repo}.git")
                     source = str(made.get("id") or "")
@@ -170,7 +179,7 @@ def register_routes(app, host) -> None:
                         done.append(repo)
         except LoreError as e:
             kept = f" Connected before it failed: {', '.join(done)}." if done else ""
-            host.err(ValueError(f"Could not connect {repos[len(done)]}: {e}{kept}"), 502)
+            host.err(ValueError(f"Could not connect {current}: {e}{kept}"), 502)
         return {"repos": [row_view(store.get_brain_repo(r)) for r in done]}
 
     @app.delete("/api/brain/repos/{owner}/{name}")

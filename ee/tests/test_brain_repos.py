@@ -88,13 +88,14 @@ def unit():
     ck("Owner/Name is stored in lowercase", repos_mod.check_repo(" Acme/Web ") == "acme/web")
     ck("a pasted GitHub address is the repo", repos_mod.check_repo("https://github.com/Acme/Web.git") == "acme/web")
     for bad in ("web", "a/b/c", "", None, 5, ["a/b"], "acme/..", "../web", "acme/.", "https://gitlab.com/a/b",
-                "acme/" + "x" * 101):
+                "acme/" + "x" * 101, "a_b/c", "acme/.git", "a.b/c"):
         try:
             repos_mod.check_repo(bad)
             ok = False
         except ValueError:
             ok = True
         ck(f"check_repo refuses {bad!r}"[:70], ok)
+    ck("a .git ending on the name is dropped", repos_mod.check_repo("Acme/Web.git") == "acme/web")
     ck("the lore name has no slash", repos_mod.lore_name("acme/web") == "acme_web")
 
 
@@ -231,6 +232,12 @@ async def main():
            and "Connected before it failed: acme/p1" in r.text, f"{r.status_code} {r.text[:300]}")
         ck("... the first is stored, the others are not", store.get_brain_repo("acme/p1") is not None
            and store.get_brain_repo("acme/p2") is None and store.get_brain_repo("acme/p3") is None)
+        repos_mod.lore_client = lambda: LoreClient(fake_lore.BASE_URL, lore.key, transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"name": "acme_p9"})))
+        r = await cx.post("/api/brain/repos", json={"repos": ["acme/p9"]})
+        ck("lore answering without a repo id is 502 and stores nothing", r.status_code == 502 and "did not say which repo" in r.text
+           and store.get_brain_repo("acme/p9") is None, f"{r.status_code} {r.text[:300]}")
+        ck("... and the failure names the repo it was on", "Could not connect acme/p9" in r.text, r.text[:300])
         repos_mod.lore_client = lore.client
         r = await cx.post("/api/brain/repos", json={"repos": ["acme/p2"]})
         ck("it can be connected again", r.status_code == 201, r.text[:200])
