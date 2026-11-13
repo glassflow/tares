@@ -1,10 +1,13 @@
 /*
- * Browser e2e for TR-734: the factory project page (/projects/:id).
+ * Browser e2e for TR-734 and TR-1245: the factory project's pages (/projects/:id and its sub-pages).
  *
- * One project, from one read of the cell (GET /api/factory/projects/{id}): where it stands (Spec,
- * Build, Review, Done), what waits for you on it, the few tickets moving now (at most 5, with a link
- * to all of them), a compact row per milestone with its counts, the calls the crew made (Keep or
- * Overturn), your decisions, the documents, and the command that opens a builder's session. A button
+ * The project sidebar lists Overview, Tickets, Pull requests, Milestones, Decisions and calls, Docs
+ * and memory, People and access and Settings, each with its own address and count. Overview, from one
+ * read of the cell (GET /api/factory/projects/{id}): where it stands (Spec, Build, Review, Done), what
+ * waits for you on it, three cards (pull requests, milestones, decisions), the few tickets moving now
+ * (at most 3, with a link to all of them). Milestones has a compact row per milestone with its counts,
+ * Calls the calls the crew made (Keep or Overturn), Decisions your decisions, Settings the icon, the
+ * plan, the repos and Delete; the sidebar opens the command for a builder's session. A button
  * that opens another page uses the address the cell sends. Close asks first. A project with every
  * ticket merged says "Ready to close" and can be closed from the header or from the Waiting list.
  * An old ticket or doc link, a project that is not a factory project and an address with no project
@@ -81,9 +84,12 @@ async function waitFor(url, tries = 100) {
     const settle = async (page) => { await page.waitForLoadState("networkidle"); await page.waitForTimeout(THEME_MS); };
     const txt = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
     const raw = async (loc) => (await loc.textContent()).replace(/\s+/g, " ").trim();   // before the stylesheet's capitals
-    const open = async (page, id, hash = "") => {
-      await page.goto(`${BASE}/projects/${id}${hash}`, { waitUntil: "load" });
-      await page.getByTestId("factory-project").waitFor();
+    // the project's pages (TR-1245): the address after /projects/<id>, and what each one shows when it is there
+    const ROOT = { "": "factory-project", tickets: "project-tickets-page", github: "github-page", milestones: "milestones", decisions: "decisions-page",
+                   calls: "calls-page", docs: "project-docs-page", people: "people-page", settings: "settings-page" };
+    const open = async (page, id, hash = "", sub = "") => {
+      await page.goto(`${BASE}/projects/${id}${sub ? `/${sub}` : ""}${hash}`, { waitUntil: "load" });
+      await page.getByTestId(ROOT[sub]).waitFor();
     };
 
     const expectIcon = async (p, emoji, words = "the icon shows") => {
@@ -97,7 +103,8 @@ async function waitFor(url, tries = 100) {
     const one = expectOneCall(page, `/api/factory/projects/${y}`);
     await open(page, y);
     await one(ck, "project-y");
-    ck("the heading is the project's name", (await T("project-name").innerText()).trim() === "project-y");
+    ck("the project sidebar names the project", (await T("project-name").innerText()).trim() === "project-y");
+    ck("the page's heading is Overview", (await txt(T("page-title"))) === "Overview");
     ck("the chip says Waiting on you", (await raw(T("project-chip"))) === "Waiting on you");
     ck("the goal is shown", (await txt(T("project-goal"))).startsWith("Publish 1,000 answers"));
     ck("the crumb links back to Projects", (await T("crumb").getByRole("link", { name: "Projects" }).getAttribute("href")) === "/projects");
@@ -106,10 +113,16 @@ async function waitFor(url, tries = 100) {
     ck("four stages, Build is the current one, Spec is done",
        (await steps.count()) === 4 && (await steps.nth(1).getAttribute("aria-current")) === "step" &&
        (await txt(steps.nth(0))).startsWith("✓") && (await txt(steps.nth(2))).startsWith("3"), await txt(T("project-steps")));
-    ck("Edit plan opens the plan of this project",
-       (await T("project-links").getByRole("link", { name: "Edit plan" }).getAttribute("href")) === `/setup?project=${y}`);
-    ck("All 11 tickets opens the ticket list of this project",
-       (await T("all-tickets-head").getAttribute("href")) === `/tickets?project=${y}` && (await txt(T("all-tickets-head"))) === "All 11 tickets");
+    // TR-1245: every part of the project is a page of its own, one click away in the project sidebar
+    const navPages = await T("project-pages").locator("a").evaluateAll((as) => as.map((a) => [a.textContent.replace(/\d+$/, "").trim(), a.getAttribute("href")]));
+    ck("the project sidebar lists every page, each with its own address", JSON.stringify(navPages) === JSON.stringify([
+      ["Overview", `/projects/${y}`], ["Tickets", `/projects/${y}/tickets`], ["Pull requests", `/projects/${y}/github`], ["Milestones", `/projects/${y}/milestones`],
+      ["Decisions and calls", `/projects/${y}/decisions`], ["Docs and memory", `/projects/${y}/docs`], ["People and access", `/projects/${y}/people`], ["Settings", `/projects/${y}/settings`]]), JSON.stringify(navPages));
+    const navCount = async (k) => ((await T(`project-page-${k}`).getByTestId("project-page-count").count()) ? txt(T(`project-page-${k}`).getByTestId("project-page-count")) : "");
+    ck("each item counts what is on its page; Overview counts what waits for you",
+       (await navCount("overview")) === "4" && (await navCount("tickets")) === "11" && (await navCount("milestones")) === "3" && (await navCount("prs")) === "5"
+       && (await navCount("decisions")) === "7" && (await navCount("settings")) === "", [await navCount("overview"), await navCount("tickets"), await navCount("prs"), await navCount("decisions")].join());
+    ck("Overview is the page in view", (await T("project-page-overview").getAttribute("aria-current")) === "page" && (await T("project-page-tickets").getAttribute("aria-current")) === null);
     ck("a project without a tracker has no tracker link", (await T("tracker-link").count()) === 0);
     ck("there is no filter anywhere on the page", (await page.locator("select, [role=combobox], [role=listbox]").count()) === 0);
 
@@ -139,13 +152,13 @@ async function waitFor(url, tries = 100) {
     ck("1 PR to review: Review opens the reviews of this project",
        (await row("prs_to_review").getByRole("link", { name: "Review" }).getAttribute("href")) === `/reviews?project=${y}`);
 
-    // moving now: at most five, a link to all
-    ck("five tickets are moving, never six", (await T("moving-row").count()) === 5, String(await T("moving-row").count()));
+    // moving now: at most three on Overview, a link to all
+    ck("three tickets are moving here, never more", (await T("moving-row").count()) === 3, String(await T("moving-row").count()));
     ck("the caption says how many are merged", (await txt(T("moving-caption"))) === "2 of 11 tickets merged", await txt(T("moving-caption")));
     ck("the rest is counted, with a link to all tickets",
-       (await txt(T("moving-more"))).startsWith("3 more tickets are moving.") && (await T("all-tickets-more").getAttribute("href")) === `/tickets?project=${y}`
+       (await txt(T("moving-more"))).startsWith("5 more tickets are moving.") && (await T("all-tickets-more").getAttribute("href")) === `/projects/${y}/tickets`
        && (await txt(T("all-tickets-more"))) === "All 11 tickets ›", await txt(T("moving-more")));
-    ck("the header of the section links to all tickets too", (await T("all-tickets-moving").getAttribute("href")) === `/tickets?project=${y}`);
+    ck("the header of the section links to all tickets too", (await T("all-tickets-moving").getAttribute("href")) === `/projects/${y}/tickets`);
     const t5 = T("moving-row").and(page.locator("[data-ref=T5]"));
     ck("a ticket row opens the ticket, in words", (await t5.getAttribute("href")) === `/projects/${y}/tickets/T5`
        && (await txt(t5)).includes("Changes asked") && (await txt(t5)).includes("Builder for M2") && (await txt(t5)).includes("open, CI failing"), await txt(t5));
@@ -153,27 +166,42 @@ async function waitFor(url, tries = 100) {
        (await txt(T("next-up"))).startsWith("T10") && (await T("moving-row").and(page.locator("[data-ref=T10]")).count()) === 0, await txt(T("next-up")));
     ck("and it opens that ticket", (await T("next-up").getAttribute("href")) === `/projects/${y}/tickets/T10`, await T("next-up").getAttribute("href"));
 
-    // milestones: compact, with counts and a link, no tickets listed
+    // three cards open the pull requests, the milestones and the decisions
+    const card = async (k) => [await txt(T(`summary-${k}`).getByTestId("summary-big")), await txt(T(`summary-${k}`).getByTestId("summary-line")), await T(`summary-${k}`).getAttribute("href")];
+    ck("the pull requests card: how many are open, the newest one, and it opens Pull requests",
+       JSON.stringify(await card("prs")) === JSON.stringify(["3 open", "#15 Add the search box, CI failing", `/projects/${y}/github`]), JSON.stringify(await card("prs")));
+    ck("the milestones card: the milestone under way, and it opens Milestones",
+       JSON.stringify(await card("milestones")) === JSON.stringify(["2 of 3 merged", "M1: The first articles", `/projects/${y}/milestones`]), JSON.stringify(await card("milestones")));
+    ck("the decisions card: the calls to confirm come first, and it opens them",
+       JSON.stringify(await card("decisions")) === JSON.stringify(["2 to confirm", "Which date format?", `/projects/${y}/calls`]), JSON.stringify(await card("decisions")));
+    ck("Overview has no milestone rows, decisions, docs or people", (await T("milestone-row").count()) === 0 && (await T("decision-row").count()) === 0
+       && (await T("doc-row").count()) === 0 && (await T("project-people").count()) === 0 && (await T("delete-project").count()) === 0);
+    await shot(page, "live-building-1440.png");
+
+    // milestones: their own page, compact, with counts and a link, no tickets listed
+    await T("project-page-milestones").click();
+    await T("milestones").waitFor();
+    ck("Milestones opens at its own address, in the project's frame", new URL(page.url()).pathname === `/projects/${y}/milestones`
+       && (await T("project-page-milestones").getAttribute("aria-current")) === "page" && (await txt(T("page-title"))) === "Milestones", page.url());
     const mrows = T("milestone-row");
     ck("three milestones, in order", (await mrows.count()) === 3 && (await txt(mrows.nth(0))).startsWith("M1: The first articles"));
     ck("a milestone has no ticket list", (await T("milestones").locator("[data-testid=moving-row], [data-ref]").count()) === 0
        && (await T("milestones").locator("a[href*='/tickets/']").count()) === 0);
     const count0 = mrows.nth(0).getByTestId("milestone-count");
-    ck("its count links to its tickets", (await txt(count0)) === "2 of 3 merged" && /^\/tickets\?project=uc_projecty&milestone=ms_/.test(await count0.getAttribute("href")), await count0.getAttribute("href"));
+    ck("its count links to its tickets, on the project's Tickets page", (await txt(count0)) === "2 of 3 merged" && /^\/projects\/uc_projecty\/tickets\?milestone=ms_/.test(await count0.getAttribute("href")), await count0.getAttribute("href"));
     ck("the other milestones count too", (await txt(mrows.nth(1).getByTestId("milestone-count"))) === "0 of 5 merged");
     const checks = mrows.nth(0).getByTestId("milestone-checks");
     ck("the checks are folded away, with their number", (await txt(checks)).includes("2 checks to pass") && !(await checks.evaluate((e) => e.open)));
     await checks.locator("summary").click();
     ck("opened, each check says what should show", (await txt(checks)).includes("Should show: Ten articles are listed"));
     ck("a milestone with open tickets is not marked Done", !/\bDone\b/.test(await txt(mrows.nth(0))), await txt(mrows.nth(0)));
+    await checkWords(page, ck, "project-y milestones page");
 
-    // calls: on their own page; keep removes, change needs words
-    ck("the project page has no calls card", (await T("calls").count()) === 0 && (await page.getByTestId("call-row").count()) === 0);
-    ck("the Calls link opens the calls page", (await T("calls-link").getAttribute("href")) === `/projects/${y}/calls`);
-    await page.goto(`${BASE}/projects/${y}/calls`, { waitUntil: "load" });
-    await page.getByTestId("calls-page").waitFor();
-    ck("the calls page: crumb back to the project, To confirm first",
-       (await T("crumb").getByRole("link", { name: "project-y" }).getAttribute("href")) === `/projects/${y}` && (await T("calls-open").count()) === 1);
+    // calls: the Calls tab of Decisions and calls; keep removes, change needs words
+    await open(page, y, "", "calls");
+    ck("Calls is a tab of Decisions and calls, with its own address, To confirm first",
+       (await T("tab-calls").getAttribute("aria-current")) === "page" && (await T("tab-decisions").getAttribute("href")) === `/projects/${y}/decisions`
+       && (await T("project-page-decisions").getAttribute("aria-current")) === "page" && (await T("calls-open").count()) === 1);
     const calls = page.getByTestId("call-row");
     ck("two calls, each with Keep and Change", (await calls.count()) === 2 && (await calls.nth(0).getByTestId("call-keep").count()) === 1
        && (await calls.nth(0).getByTestId("call-overturn").count()) === 1);
@@ -207,51 +235,76 @@ async function waitFor(url, tries = 100) {
        JSON.parse(kept[kept.length - 1].body).state === "kept" && (await txt(T("calls-empty"))) === "Nothing to confirm. When the crew decides something without you, it shows here.");
     await page.unroute(`**/api/projects/${y}/assumptions/A2/state`);
 
-    await open(page, y);
     // decisions, docs, terminal
-    ck("decisions: three shown, newest first, a link to all five", (await T("decision-row").count()) === 3 && (await txt(T("decisions-all"))) === "All 5 decisions ›"
+    await T("tab-decisions").click();
+    await T("decisions-page").waitFor();
+    ck("decisions: all five, newest first", (await T("decision-row").count()) === 5
        && (await txt(T("decision-row").nth(1))).includes("The light one"), await txt(T("decision-row").nth(1)));
     ck("a reply by letter reads as the option chosen, with the person's words under it (TR-1018)",
        (await txt(T("decision-row").first().getByTestId("decision-answer"))) === "merge main into teams"
        && (await txt(T("decision-row").first().getByTestId("decision-said"))) === "You said: D85 A", await txt(T("decision-row").first()));
     ck("words equal to the answer are not repeated", (await T("decision-row").nth(1).getByTestId("decision-said").count()) === 0);
-    ck("All 5 decisions opens the decisions page", (await T("decisions-all").getAttribute("href")) === `/projects/${y}/decisions`);
-    await page.goto(`${BASE}/projects/${y}/decisions`, { waitUntil: "load" });
-    await page.getByTestId("decisions-page").waitFor();
-    ck("the decisions page lists all five, and says they are your answers, newest first",
-       (await T("decision-row").count()) === 5 && /Your answers to the crew on project-y, newest first\./.test(await txt(T("decisions-page"))));
+    ck("the decisions tab says they are your answers, newest first", /Your answers to the crew, newest first\./.test(await txt(T("decisions-page"))));
     await checkWords(page, ck, "project-y decisions page");
-    await open(page, y);
-    ck("docs open on the project's own docs page", (await T("doc-row").count()) === 4
-       && (await T("doc-row").first().getAttribute("href")).startsWith(`/projects/${y}/docs?doc=`) &&
-       (await txt(T("doc-row").first())).startsWith("Spec") && /Updated /.test(await txt(T("doc-row").first())), await txt(T("doc-row").first()));
-    ck("All documents opens the project's docs page", (await T("docs-all").getAttribute("href")) === `/projects/${y}/docs`
-       && /^All \d+ documents ›$/.test(await txt(T("docs-all"))), await txt(T("docs-all")));
-    await page.goto(`${BASE}/projects/${y}/docs`, { waitUntil: "load" });
+    await T("project-page-docs").click();
     await page.getByTestId("project-docs-page").waitFor();
+    ck("Docs and memory opens the project's docs at their own address", new URL(page.url()).pathname === `/projects/${y}/docs`
+       && (await txt(T("page-title"))) === "Docs and memory", page.url());
     await page.getByTestId("doc-pane").waitFor();
     ck("the docs page opens the spec first, with the project's documents in groups",
        (await txt(T("doc-title"))).startsWith("Spec:") && (await T("project-doc-group").first().getAttribute("data-group")) === "project", await txt(T("doc-title")));
     await checkWords(page, ck, "project-y docs page");
     await open(page, y);
-    ck("the terminal shows the command to open a builder's session",
-       (await T("command-text").first().innerText()) === "tares factory crew attach project-y-build-m2" && (await txt(T("terminal"))).includes("Open the builder's session"));
-    ck("a second command is behind \"1 more command\"", (await txt(T("terminal-more").locator("summary"))) === "1 more command");
+    ck("Work on it yourself sits in the project sidebar", (await T("project-nav").getByTestId("terminal-open").count()) === 1);
+    await T("terminal-open").click();
+    await T("terminal").waitFor();
+    ck("it opens the commands that open each builder's session",
+       (await T("command-text").first().innerText()) === "tares factory crew attach project-y-build-m2" && (await T("command").count()) === 2
+       && (await txt(T("terminal"))).includes("Open the builder's session"));
+    await checkWords(page, ck, "project-y terminal");
     await T("command-copy").first().click();
     await page.waitForFunction(() => document.querySelector("[data-testid=command-copy]").textContent.trim() === "Copied");
     ck("Copy puts the command on the clipboard and says Copied",
        (await page.evaluate(() => navigator.clipboard.readText())) === "tares factory crew attach project-y-build-m2");
-    await checkWords(page, ck, "project-y");
-    await shot(page, "live-building-1440.png");
+    await T("terminal-done").click();
 
-    // a #section in the address scrolls to it
-    await open(page, y, "#milestones");
-    await page.waitForTimeout(THEME_MS);
-    ck("#milestones scrolls to the milestones", await page.evaluate(() => {
-      const top = document.getElementById("milestones").getBoundingClientRect().top;
-      const atEnd = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2;
-      return window.scrollY > 0 && (Math.abs(top) < 40 || (atEnd && top >= 0 && top < window.innerHeight));
-    }));
+    // the other pages: each is one click from the sidebar, has its own address and keeps the frame
+    for (const [k, sub, words] of [["tickets", "tickets", "Tickets"], ["prs", "github", "Pull requests"], ["people", "people", "People and access"], ["settings", "settings", "Settings"]]) {
+      await T(`project-page-${k}`).click();
+      await T(ROOT[sub]).waitFor();
+      await settle(page);
+      ck(`${words}: its own address, its heading, the sidebar marks it`, new URL(page.url()).pathname === `/projects/${y}/${sub}`
+         && (await txt(T("page-title"))) === words && (await T(`project-page-${k}`).getAttribute("aria-current")) === "page", page.url());
+      ck(`${words}: no sideways scroll`, (await overflow(page)) <= 0, String(await overflow(page)));
+      await checkWords(page, ck, `project-y ${words}`);
+      await shot(page, `live-${sub}-1440.png`);
+    }
+    await open(page, y, "", "tickets");
+    await T("tickets-count").waitFor();
+    ck("Tickets is kept to this project: no Project filter, every ticket of it",
+       (await T("f-project").count()) === 0 && (await T("f-milestone").isDisabled()) === false && /^11 tickets/.test(await txt(T("tickets-count"))), await txt(T("tickets-count")));
+    await open(page, y, "", "settings");
+    ck("Settings: Edit plan opens the plan of this project", (await T("edit-plan").getAttribute("href")) === `/setup?project=${y}`);
+    ck("Settings: the tickets live in Tares, and the repo handed over is named",
+       (await txt(T("settings-tickets"))).includes("The tickets live in Tares.") && JSON.stringify(await T("repo-name").allInnerTexts()) === JSON.stringify(["example-org/docs-site"]));
+    ck("Settings: a project the crew works on cannot be kept for later", (await T("later-not-now").count()) === 1 && (await T("project-later").count()) === 0);
+    ck("Settings ends with Delete", (await T("delete-project").count()) === 1);
+    await open(page, y, "", "people");
+    ck("People and access: the people and the secrets, side by side", (await T("project-people").count()) === 1 && (await T("project-secrets").count()) === 1);
+
+    // an old #section link opens the page that section moved to
+    await page.goto(`${BASE}/projects/${y}#milestones`, { waitUntil: "load" });
+    await T("milestones").waitFor();
+    ck("#milestones opens Milestones", new URL(page.url()).pathname === `/projects/${y}/milestones` && (await T("milestones").count()) === 1, page.url());
+    await page.goto(`${BASE}/projects/${y}#people`, { waitUntil: "load" });
+    await T("people-page").waitFor();
+    ck("#people opens People and access", new URL(page.url()).pathname === `/projects/${y}/people`, page.url());
+    await page.goto(`${BASE}/projects/${y}#secrets`, { waitUntil: "load" });
+    await T("project-secrets").waitFor();
+    ck("#secrets opens People and access, at the secrets", new URL(page.url()).pathname === `/projects/${y}/people` && new URL(page.url()).hash === "#secrets", page.url());
+    await page.goto(`${BASE}/projects/${y}#decisions`, { waitUntil: "load" });
+    await T("decisions-page").waitFor();
+    ck("#decisions opens Decisions and calls", new URL(page.url()).pathname === `/projects/${y}/decisions`, page.url());
     await open(page, y, "#desk-D1");
     await page.waitForTimeout(THEME_MS);
     ck("#desk-D1 brings the waiting list into view", Math.abs(await page.evaluate(() => document.getElementById("waiting").getBoundingClientRect().top)) < 40);
@@ -260,10 +313,11 @@ async function waitFor(url, tries = 100) {
     {
       const kid = ids["project-k"];
       await open(page, kid);
+      ck("the Waiting list has the milestone item", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 1);
+      await open(page, kid, "", "milestones");
       const row = page.locator('[data-testid="milestone-row"][data-ms="M1"]');
       ck("project-k: the merged milestone says it has checks for you", (await txt(row.getByTestId("milestone-needs"))) === "2 checks for you to try");
       ck("the crew's check says it passed and who checked it", (await txt(row.locator('[data-testid="milestone-check"][data-for="crew"]').getByTestId("check-state"))).startsWith("The crew's. Passed, checked by crew-orchestrator"));
-      ck("the Waiting list has the milestone item", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 1);
       const first = row.locator('[data-testid="milestone-check"][data-for="person"]').first();
       await first.getByTestId("check-works").click();
       await page.waitForFunction(() => document.querySelectorAll('[data-testid="milestone-row"][data-ms="M1"] [data-testid="check-works"]').length === 1);
@@ -277,8 +331,9 @@ async function waitFor(url, tries = 100) {
       ck("after Something's wrong the milestone is the crew's work: nothing left for you",
          (await row.getByTestId("milestone-needs").count()) === 0
          && ((await row.locator('[data-testid="milestone-check"][data-for="person"]').nth(1).getByTestId("check-state").textContent()) || "").includes("Home lists one more than Reviews"));
-      ck("and the item leaves the Waiting list", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 0);
       await shot(page, "live-milestone-checks-1440.png");
+      await open(page, kid);
+      ck("and the item leaves the Waiting list", (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 0);
     }
 
     // ── 1c. a check that is a command is set as one, a sentence stays as it is (TR-1082) ─────────
@@ -298,7 +353,7 @@ async function waitFor(url, tries = 100) {
 
       for (const width of [1440, 390]) {
         const { ctx: c, page: p } = await newPage(width);
-        await open(p, ids["project-k"]);
+        await open(p, ids["project-k"], "", "milestones");
         await settle(p);
         const row = p.locator('[data-testid="milestone-row"][data-ms="M3"]');
         await row.getByTestId("milestone-checks").evaluate((e) => { e.open = true; });
@@ -332,7 +387,7 @@ async function waitFor(url, tries = 100) {
     ck("no separate milestone item: a project ready to close folds them into Ready to close (TR-1017)",
        (await T("waiting-row").and(page.locator("[data-kind=milestone_to_check]")).count()) === 0);
     ck("Waiting counts the one", (await txt(T("waiting-count"))) === "1 thing", await txt(T("waiting-count")));
-    ck("the terminal says no builder is working", (await txt(T("terminal-empty"))).startsWith("No builder is working on this project now."));
+    ck("with no builder at work there is no Work on it yourself", (await T("terminal-open").count()) === 0);
     await checkWords(page, ck, "project-z ready");
     await shot(page, "live-ready-1440.png");
     const finishPosts = [];
@@ -373,10 +428,16 @@ async function waitFor(url, tries = 100) {
     ck("project-x is Not started, at the Spec stage", (await raw(T("project-chip"))) === "Not started" && (await steps.nth(0).getAttribute("aria-current")) === "step");
     ck("no tickets, no milestones, with the sentences for it",
        (await txt(T("moving-empty"))) === "No tickets yet. They show here once the crew has planned the build."
-       && (await txt(T("milestones-empty"))) === "No milestones yet. The crew adds them when it plans the build.");
-    ck("and no All tickets link", (await T("all-tickets-head").count()) === 0 && (await T("all-tickets-moving").count()) === 0);
+       && (await txt(T("summary-milestones").getByTestId("summary-big"))) === "None yet" && (await txt(T("summary-prs").getByTestId("summary-big"))) === "None yet");
+    ck("and no All tickets link, no count on Tickets", (await T("all-tickets-moving").count()) === 0 && (await navCount("tickets")) === "");
     await checkWords(page, ck, "project-x");
-    await open(page, ids["project-p"]);
+    await open(page, ids["project-x"], "", "milestones");
+    ck("project-x Milestones says there are none yet", (await txt(T("milestones-empty"))) === "No milestones yet. The crew adds them when it plans the build.");
+    await open(page, ids["project-x"], "", "tickets");
+    await T("tickets-zero").waitFor();
+    ck("project-x Tickets says there are none yet", (await txt(T("tickets-zero"))).includes("No tickets yet."), await txt(T("tickets-zero")));
+    await checkWords(page, ck, "project-x tickets");
+    await open(page, ids["project-p"], "", "milestones");
     ck("a project with no milestones has no filter for them", (await txt(T("milestones-empty"))).startsWith("No milestones yet.") && (await page.locator("select, [role=combobox]").count()) === 0);
     await open(page, ids["project-d"]);
     ck("a finished project (closed before) says Finished and has no Close", (await raw(T("project-chip"))) === "Finished" && (await T("project-close").count()) === 0);
@@ -417,6 +478,23 @@ async function waitFor(url, tries = 100) {
         ck(`390: ${name} does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
         await checkWords(p, ck, `390 ${name}`);
         await shot(p, `${file}-390.png`);
+      }
+      // the project sidebar is a row of buttons under the name that scrolls on its own
+      await open(p, ids["project-y"]);
+      const row = await p.getByTestId("project-pages").evaluate((e) => ({ scrolls: e.scrollWidth > e.clientWidth, x: getComputedStyle(e).overflowX,
+        top: e.getBoundingClientRect().top, under: document.querySelector("[data-testid=project-name]").getBoundingClientRect().bottom }));
+      ck("390: the project's pages are a row under the name that scrolls on its own", row.scrolls && row.x === "auto" && row.top >= row.under, JSON.stringify(row));
+      for (const sub of ["tickets", "github", "milestones", "decisions", "calls", "docs", "people", "settings"]) {
+        await open(p, ids["project-y"], "", sub);
+        await settle(p);
+        const seen = await p.getByTestId("project-pages").evaluate((ul) => {
+          const a = ul.querySelector("[aria-current=page]").getBoundingClientRect(), r = ul.getBoundingClientRect();
+          return a.left >= r.left - 1 && a.right <= r.right + 1;
+        });
+        ck(`390: project-y ${sub}: its button is in view in the row`, seen);
+        ck(`390: project-y ${sub} does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+        await checkWords(p, ck, `390 project-y ${sub}`);
+        await shot(p, `live-${sub}-390.png`);
       }
       await c.close();
     }
@@ -469,13 +547,14 @@ async function waitFor(url, tries = 100) {
         const q = (id) => p.getByTestId(id);
         if (width === 1440) {
           if (name === "building") {
-            ck("building: four waiting (three shown), five of seven moving, three milestones",
-               (await txt(q("waiting-count"))) === "4 things" && (await q("waiting-row").count()) === 3 && (await q("moving-row").count()) === 5
-               && (await txt(q("moving-more"))).startsWith("2 more tickets are moving.") && (await q("milestone-row").count()) === 3);
+            ck("building: four waiting (three shown), three of seven moving, three milestones",
+               (await txt(q("waiting-count"))) === "4 things" && (await q("waiting-row").count()) === 3 && (await q("moving-row").count()) === 3
+               && (await txt(q("moving-more"))).startsWith("4 more tickets are moving.") && (await txt(q("summary-milestones"))).includes("All 3 milestones"),
+               `${await txt(q("moving-more"))} | ${await txt(q("summary-milestones"))}`);
             ck("building: the tracker link opens the tracker", (await q("tracker-link").getAttribute("href")) === "https://example.com/tickets" && (await txt(q("tracker-link"))).startsWith("Tickets in GitHub"));
             ck("building: no Close button", (await q("project-close").count()) === 0);
           } else if (name === "spec") {
-            ck("spec: Not started at the Spec stage, with no tickets", (await raw(q("project-chip"))) === "Not started" && (await q("moving-empty").count()) === 1 && (await q("terminal-empty").count()) === 1);
+            ck("spec: Not started at the Spec stage, with no tickets", (await raw(q("project-chip"))) === "Not started" && (await q("moving-empty").count()) === 1 && (await q("terminal-open").count()) === 0);
           } else if (name === "ready" || name === "dialog" || name === "fail") {
             ck(`${name}: Ready to close, with the Close button`, (await raw(q("project-chip"))) === "Ready to close" && (await q("project-close").count()) === 1
                && (await raw(q("waiting-row").and(p.locator("[data-kind=signoff]")))).includes("Ready to close"));
@@ -496,17 +575,23 @@ async function waitFor(url, tries = 100) {
           } else if (name === "finished") {
             ck("finished: Finished, no Close, nothing waiting", (await raw(q("project-chip"))) === "Finished" && (await q("project-close").count()) === 0 && (await q("waiting-empty").count()) === 1);
           } else if (name === "empty") {
-            ck("empty: every section has its sentence", (await q("waiting-empty").count()) === 1 && (await q("moving-empty").count()) === 1 && (await q("milestones-empty").count()) === 1
-               && (await q("decisions-empty").count()) === 1 && (await q("docs-empty").count()) === 1);
+            const bigs = await p.getByTestId("summary-big").allInnerTexts();
+            ck("empty: every section has its sentence, and every card says None yet", (await q("waiting-empty").count()) === 1 && (await q("moving-empty").count()) === 1
+               && JSON.stringify(bigs) === JSON.stringify(["None yet", "None yet", "None yet"]), JSON.stringify(bigs));
           } else if (name === "long") {
             ck("long: nothing pushes out of its card", await p.evaluate(() => [...document.querySelectorAll("[data-testid=factory-project] *")]
               .every((e) => e.closest("details:not([open])") || e.scrollWidth <= e.clientWidth + 1 || getComputedStyle(e).display === "inline" || e.tagName === "CODE")));
           } else if (name === "many") {
-            ck("many: five waiting (three shown), five of eighteen moving, six milestones, forty decisions (three shown)",
-               (await txt(q("waiting-count"))) === "5 things" && (await q("moving-row").count()) === 5 && (await txt(q("moving-more"))).startsWith("13 more tickets are moving.")
-               && (await q("milestone-row").count()) === 6 && (await q("decision-row").count()) === 3 && (await txt(q("decisions-all"))) === "All 40 decisions ›");
-            ck("many: three commands, two behind a button", (await q("command").count()) === 3 && (await txt(q("terminal-more").locator("summary"))) === "2 more commands");
+            ck("many: five waiting (three shown), three of eighteen moving, six milestones",
+               (await txt(q("waiting-count"))) === "5 things" && (await q("moving-row").count()) === 3 && (await txt(q("moving-more"))).startsWith("15 more tickets are moving.")
+               && (await txt(q("summary-milestones"))).includes("All 6 milestones"), `${await txt(q("moving-more"))} | ${await txt(q("summary-milestones"))}`);
+            await q("terminal-open").click();
+            await q("terminal").waitFor();
+            ck("many: three commands in Work on it yourself", (await q("command").count()) === 3);
+            await q("terminal-done").click();
           } else if (name === "team") {
+            ck("team: Waiting for others is one line, the list behind Show", (await txt(q("waiting-others-line"))).startsWith("Waiting for others: 1 thing.") && (await q("waiting-others").count()) === 0);
+            await q("waiting-others-toggle").click();
             ck("team: another person's question is under Waiting for others, named for them, nothing to press",
                (await q("waiting-others").count()) === 1 && (await raw(q("waiting-other-row"))).startsWith("Question for Adam")
                && (await q("waiting-others").locator("button").count()) === 0
@@ -570,21 +655,14 @@ async function waitFor(url, tries = 100) {
     {
       const { ctx: c, page: p } = await newPage(1440);
       const id = ids["project-p"];
-      await open(p, id);
+      await open(p, id, "", "settings");
       const T2 = (t) => p.getByTestId(t);
       const opacity = (loc) => loc.evaluate((e) => getComputedStyle(e).opacity);
       const iconNow = async () => (await (await fetch(`${BASE}/api/projects/${id}`)).json()).icon;
       const add = T2("project-add-icon");
-      ck("no icon: no emoji at the title, an Add icon control near it", (await T2("project-icon").count()) === 0 && (await add.count()) === 1);
+      ck("no icon: no emoji on Settings or beside the name, an Add icon control", (await T2("project-icon").count()) === 0 && (await T2("project-inline-icon").count()) === 0 && (await add.count()) === 1);
       ck("Add icon says what it does", (await txt(add)) === "Add icon");
-      ck("Add icon is quiet until the heading is hovered", (await opacity(add)) === "0");
-      await add.focus();
-      await p.waitForTimeout(250);
-      ck("it shows on keyboard focus", (await opacity(add)) === "1");
-      await p.evaluate(() => document.activeElement.blur());
-      await T2("project-name").hover();
-      await p.waitForTimeout(250);
-      ck("it shows when the heading is hovered", (await opacity(add)) === "1");
+      ck("on Settings Add icon shows without a hover", (await opacity(add)) === "1");
       await checkWords(p, ck, "icon: Add icon showing");
       await add.click();
       await T2("icon-picker").waitFor();
@@ -611,10 +689,11 @@ async function waitFor(url, tries = 100) {
       await T2("project-icon").waitFor();
       await expectIcon(p, "🚀");
       ck("the pick saves at once, with no Save button", (await iconNow()) === "🚀");
-      ck("the emoji is not in the name", (await T2("project-name").innerText()).trim() === "project-p");
+      ck("the emoji is not in the name, it shows beside it in the project sidebar", (await T2("project-name").innerText()).trim() === "project-p"
+         && (await T2("project-nav").getByTestId("project-inline-icon").innerText()).trim() === "🚀");
       ck("the Add icon control is gone", (await add.count()) === 0);
       await p.reload({ waitUntil: "load" });
-      await T2("factory-project").waitFor();
+      await T2("settings-page").waitFor();
       await expectIcon(p, "🚀", "it survives a reload");
 
       await T2("project-icon").click();
@@ -639,7 +718,7 @@ async function waitFor(url, tries = 100) {
 
       // at 390 px Add icon is always there, the picker fits and the page does not scroll sideways
       const { ctx: c390, page: q } = await newPage(390);
-      await open(q, id);
+      await open(q, id, "", "settings");
       const T3 = (t) => q.getByTestId(t);
       ck("390: Add icon is always visible", (await T3("project-add-icon").evaluate((e) => getComputedStyle(e).opacity)) === "1");
       await T3("project-add-icon").click();
@@ -665,9 +744,9 @@ async function waitFor(url, tries = 100) {
     {
       const { ctx: c, page: p } = await newPage(1440);
       const d = ids["project-d"];
-      await open(p, d);
+      await open(p, d, "", "settings");
       const T2 = (id) => p.getByTestId(id);
-      ck("a project page ends with Delete this project", (await T2("delete-project").count()) === 1 && (await txt(T2("delete-open"))) === "Delete project");
+      ck("Settings ends with Delete this project", (await T2("delete-project").count()) === 1 && (await txt(T2("delete-open"))) === "Delete project");
       await T2("delete-open").click();
       await T2("delete-dialog").waitFor();
       ck("Delete stays off until the name is typed", await T2("delete-confirm").isDisabled());
