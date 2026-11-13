@@ -42,7 +42,7 @@ def ck(label, cond, detail=""):
 
 WORLD = {"version": "1.44.0", "exchange_status": 200, "logout_status": 200, "delete_status": 200,
          "good_keys": set(), "no_admin_keys": set(), "project_keys": set(), "calls": [], "health_status": 200,
-         "whoami_status": 200, "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
+         "whoami_status": 200, "requests": [], "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
 OUTPUTS = []        # everything any call printed, to look for a key in
 
 
@@ -56,6 +56,7 @@ class Fake(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):  # noqa: N802
+        WORLD["requests"].append(self.path)
         if self.path == "/health":
             if WORLD["health_status"] == 299:       # answers 200 with something that is not a Tares
                 return self._json(200, {"hello": "world"})
@@ -78,7 +79,9 @@ class Fake(BaseHTTPRequestHandler):
             if WORLD["settings_force"]:
                 return self._json(WORLD["settings_force"], {})
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
-            ok = bearer in WORLD["good_keys"] or bearer in WORLD["no_admin_keys"] or bearer in WORLD["project_keys"]
+            if bearer in WORLD["project_keys"]:     # a real cell answers a project key 403 here
+                return self._json(403, {})
+            ok = bearer in WORLD["good_keys"] or bearer in WORLD["no_admin_keys"]
             return self._json(200 if ok else 401, {"settings": {}})
         self._json(404, {})
 
@@ -448,6 +451,18 @@ try:
     ck("show says keychain and the key works", docs(out)[0]["login"]["key_store"] == "keychain"
        and docs(out)[0]["login"]["key_works"] is True, out)
     run(L.logout, json_out=True)
+    # M12: a cell login that changes the account takes the previous account's key out of the keychain.
+    WORLD["good_keys"].add("nvf_m1_first")
+    WORLD["good_keys"].add("nvf_m2_second")
+    other = BASE.replace("127.0.0.1", "localhost")      # the same fake cell under another address: another account
+    rc, out, err = run(L.connect_cell, BASE, "nvf_m1_first", json_out=True)
+    ck("a cell login with the keychain on keeps its key there", rc == 0
+       and Mem.store.get((L.KEYRING_SERVICE, BASE)) == "nvf_m1_first", (rc, out, Mem.store))
+    rc, out, err = run(L.connect_cell, other, "nvf_m2_second", json_out=True)
+    ck("a cell login to another address: the new key is in the keychain and the old entry is gone", rc == 0
+       and Mem.store.get((L.KEYRING_SERVICE, other)) == "nvf_m2_second"
+       and (L.KEYRING_SERVICE, BASE) not in Mem.store, (rc, out, Mem.store))
+    run(L.logout, json_out=True)
     os.environ["TARES_KEYRING"] = "off"
 except ImportError:
     print("  skip keyring is not installed")
@@ -540,7 +555,8 @@ ck("text logout of such a login: exit 0, says the key stays on the cell", rc == 
 for label, key, code in (("a refused key", "nvf_zz_wrong", "key_refused"),
                          ("a read and ingest key (real cells answer 200 to the settings call)", "nvf_c2_readonly",
                           "key_lacks_admin"),
-                         ("a project key", "nvf_c3_project", "key_lacks_admin")):
+                         ("a project key (real cells answer 403 to the settings call, and whoami says why)",
+                          "nvf_c3_project", "key_lacks_admin")):
     rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=key + "\n")
     ck(f"{label}: {code}, exit 1, nothing saved", rc == 1 and err_code(out) == code and not L.login_file().exists(),
        (rc, out, err))
@@ -599,10 +615,13 @@ ck("--cell with --show: usage error, exit 2", rc == 2 and err_code(out) == "usag
 rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin="\ufeff" + KEY + "\r\n")
 ck("a BOM and a CRLF in front of and after the key are dropped", rc == 0, (rc, out, err))
 WORLD["calls"].clear()
+WORLD["requests"].clear()
 for bad in (KEY[:6] + chr(0) + KEY[6:], KEY[:6] + chr(233) + KEY[6:], KEY[:6] + chr(32) + KEY[6:]):
     rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=bad + chr(10))
     ck("a key with a NUL, a non-ASCII character or a space: key_refused, exit 1, no traceback, key not echoed",
        rc == 1 and err_code(out) == "key_refused" and "Traceback" not in err and KEY[6:] not in out + err, (rc, out, err))
+ck("...and no request reached the cell for any of them (a 401 would also be key_refused)",
+   WORLD["requests"] == [], WORLD["requests"])
 
 crew2 = Path(HOME) / "crew-for-cell"
 crew2.mkdir()
