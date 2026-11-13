@@ -424,6 +424,11 @@ def _open_browser(url: str, json_out: bool) -> None:
             saved = os.dup(1)
             os.dup2(2, 1)
         except OSError:
+            if saved is not None:
+                try:
+                    os.close(saved)
+                except OSError:
+                    pass
             saved = None
     try:
         webbrowser.open(url)

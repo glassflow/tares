@@ -297,7 +297,16 @@ try:
     L.login_file().write_text(json.dumps({"cell_url": BASE, "key": "x"}))
     e = need({"TARES_HOME": HOME, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
     ck("a saved login (in the client's TARES_HOME) is not 'not signed in'", e is not None and e.code == "error", e)
+    L.login_file().write_text(json.dumps({"key": "x"}))
+    e = need({"TARES_HOME": HOME, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
+    ck("a login.json with no cell_url counts as not signed in", isinstance(e, NotSignedInError)
+       and e.code == "not_signed_in", e)
     L.login_file().unlink()
+    other_home = tempfile.mkdtemp()
+    (Path(other_home) / "login.json").write_text(json.dumps({"cell_url": BASE, "key": "x"}))
+    e = need({"TARES_HOME": other_home, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
+    ck("the login.json is read from the client's own TARES_HOME, not os.environ", e is not None
+       and not isinstance(e, NotSignedInError) and e.code == "error", e)
 finally:
     if saved_login is not None:
         login_path.write_bytes(saved_login)
@@ -335,6 +344,74 @@ rc, out, err = run(L.login, BASE, wait=10, json_out=True)
 L._http = real_http
 ck("a bad --cloud (InvalidURL): open document then an error document, no traceback", rc == 1
    and docs(out)[-1]["error"]["code"] == "error" and "Traceback" not in err, (rc, out, err))
+
+
+def guarded(fn, *a, **kw):
+    """run(), but an exception that escapes fn is a failed check, not a crashed script."""
+    try:
+        return run(fn, *a, **kw)
+    except Exception as e:  # noqa: BLE001
+        return -1, "", f"Traceback: {type(e).__name__}: {e}"
+
+
+def health_bad(method, url, *a, **k):
+    if url.endswith("/health"):
+        raise httpx.InvalidURL("Invalid URL")
+    return real_http(method, url, *a, **k)
+
+
+L._http = health_bad
+browser()
+rc, out, err = guarded(L.login, BASE, wait=10, json_out=True)
+L._http = real_http
+ck("InvalidURL on the workspace's /health: an error document, exit 1, no traceback", rc == 1
+   and docs(out)[-1]["error"]["code"] == "error" and "Traceback" not in err, (rc, out, err))
+cloud_login = {"cloud": BASE, "cell": "factory", "cell_url": BASE, "key_id": "k9", "key": "nvf_k9_x",
+               "machine": "m", "signed_in_at": "t"}
+L.login_file().write_text(json.dumps(cloud_login))
+L._http = bad_url
+rc, out, err = guarded(L.show, json_out=True)
+L._http = real_http
+ck("InvalidURL on show's key check: key_works null, no traceback", rc == 0 and "Traceback" not in err
+   and docs(out)[0]["login"]["key_works"] is None, (rc, out, err))
+L._http = bad_url
+rc, out, err = guarded(L.logout, json_out=True)
+L._http = real_http
+ck("InvalidURL on both calls of the key removal: logout_failed, exit 1, no traceback", rc == 1
+   and err_code(out) == "logout_failed" and "Traceback" not in err, (rc, out, err))
+L.login_file().unlink(missing_ok=True)
+
+print("a browser that cannot be pointed at stderr leaks no descriptor")
+real_dup, real_dup2, real_open_fn = os.dup, os.dup2, L.webbrowser.open
+dups = []
+
+
+def dup_spy(fd):
+    new = real_dup(fd)
+    dups.append(new)
+    return new
+
+
+def dup2_fails(*a, **k):
+    raise OSError("fd 2 is closed")
+
+
+os.dup, os.dup2, L.webbrowser.open = dup_spy, dup2_fails, lambda url, *a, **k: True
+try:
+    L._open_browser("http://127.0.0.1:1/", True)
+finally:
+    os.dup, os.dup2, L.webbrowser.open = real_dup, real_dup2, real_open_fn
+leaked = []
+for fd in dups:
+    try:
+        os.fstat(fd)
+        leaked.append(fd)
+    except OSError:
+        pass
+ck("os.dup(1) worked and os.dup2(2, 1) raised: the copy of fd 1 is closed", len(dups) == 1 and not leaked,
+   (dups, leaked))
+for fd in leaked:
+    os.close(fd)
 
 print("the crew key file notice goes to stderr with --json")
 crew = Path(HOME) / "crew-home"
@@ -394,6 +471,7 @@ os.dup2(tmp1.fileno(), 1)
 os.dup2(tmp2.fileno(), 2)
 try:
     rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+    os.write(1, b"MARK AFTER LOGIN\n")      # where fd 1 points once the login has returned
 finally:
     os.dup2(save1, 1)
     os.dup2(save2, 2)
@@ -405,7 +483,8 @@ fd1, fd2 = tmp1.read(), tmp2.read()
 ck("the login worked", rc == 0 and len(docs(out)) == 2, (rc, out))
 ck("the browser's output did not reach fd 1", b"STRAY" not in fd1, fd1)
 ck("it went to stderr", b"STRAY" in fd2, fd2)
-ck("fd 1 is back to what it was", os.write(1, b"") == 0)
+ck("fd 1 is back to what it was: what is written after the login lands on fd 1, not on stderr",
+   b"MARK AFTER LOGIN" in fd1 and b"MARK AFTER LOGIN" not in fd2, (fd1, fd2))
 
 print("a cell by its address and a key (TR-1285)")
 import subprocess  # noqa: E402
