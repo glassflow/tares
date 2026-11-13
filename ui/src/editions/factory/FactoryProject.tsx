@@ -676,7 +676,7 @@ export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][nu
           <div className="min-w-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{x.question}</div>
           <div className={cn(MUTED, "whitespace-nowrap")}>{x.when}</div>
         </div>
-        <div className="mt-1.5 border-l-[3px] border-[color:var(--accent)] pl-3 text-[15px] font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+        <div className="mt-1.5 text-[15px] font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
         {x.said && <div className="mt-1.5 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
       </div>
     );
@@ -684,7 +684,7 @@ export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][nu
   return (
     <div className={ROW} data-testid="decision-row">
       <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-user-text>{x.question}</div>
-      <div className="my-0.5 border-l-[3px] border-[color:var(--accent)] pl-2.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
+      <div className="my-0.5 font-medium [overflow-wrap:anywhere]" data-user-text data-testid="decision-answer">{x.answer}</div>
       {x.said && <div className={cn(MUTED, "[overflow-wrap:anywhere]")} data-testid="decision-said">You said: <span data-user-text>{x.said}</span></div>}
       <div className={MUTED}>{x.when}</div>
     </div>

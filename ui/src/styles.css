@@ -1927,7 +1927,8 @@ pre.payload {
 /* the Plan step, edited in place: a card opens its item into an editor and spans the row */
 .main ol.su-cards > .su-card.editing { grid-column: 1 / -1; }
 .su-item-actions { display: flex; gap: 14px; flex-wrap: wrap; }
-.main ul.su-problems { list-style: none; margin: 0; padding: 8px 12px; border-left: 3px solid var(--err); background: var(--err-soft); color: var(--ink); display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; align-self: stretch; }
+/* what stops an item, as red sentences under it: the colour and the words carry it, no stripe (TR-1274) */
+.main ul.su-problems { list-style: none; margin: 0; padding: 0; color: var(--err); display: flex; flex-direction: column; gap: 4px; font-size: 13px; overflow-wrap: anywhere; align-self: stretch; }
 .su-editor { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding: 14px 0 4px; border-top: 1px solid var(--line); }
 .su-card > .su-editor:first-of-type { border-top: 0; padding-top: 0; }
 .su-editor .field, .su-editor label.field, .su-editor div.field { margin-bottom: 0; }
@@ -2024,7 +2025,7 @@ pre.payload {
 .fo-next { border: 2px solid var(--accent); background: var(--panel); padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; }
 .fo-next h2 { margin: 0; font-size: 20px; }
 .fo-next-empty { border-width: 1px; border-color: var(--line); }
-.fo-gist { margin: 0; color: var(--ink-soft); border-left: 3px solid var(--line); padding-left: 12px; max-width: 80ch; }
+.fo-gist { margin: 0; color: var(--ink-soft); max-width: 80ch; }
 .fo-cmd { display: flex; gap: 8px; flex-wrap: wrap; align-items: stretch; }
 .fo-cmd code { flex: 1 1 320px; min-width: 0; font-family: var(--mono); font-size: 13px; background: var(--bg); border: 1px solid var(--line); padding: 8px 12px; overflow-x: auto; white-space: nowrap; user-select: all; }
 .fo-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; }
@@ -2062,7 +2063,7 @@ pre.payload {
 .fo-attn { border: 1px dashed var(--ink-soft); background: var(--wash); padding: 14px 18px; display: flex; flex-direction: column; gap: 8px; }
 .fo-attn-silent { border-color: var(--err); background: var(--err-soft); }
 .fo-attn h2 { margin: 0; font-size: 17px; }
-.fo-said { margin: 0; white-space: pre-wrap; font-size: 14px; border-left: 3px solid var(--line); padding-left: 12px; max-width: 90ch; max-height: 220px; overflow: auto; }
+.fo-said { margin: 0; white-space: pre-wrap; font-size: 14px; max-width: 90ch; max-height: 220px; overflow: auto; }
 .fo-sess { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 /* a crew station's row: when it last spoke, and its attach command to copy; in a narrow column
    they drop below the name */
