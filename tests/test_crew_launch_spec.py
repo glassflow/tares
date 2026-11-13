@@ -14,7 +14,12 @@ real runtime (tests/factory/fake_launch.py), in a throwaway crew home:
     no project variable;
  f. a name that is not a station name (a slash, a backslash, two dots, a space, a leading dot or hyphen, upper
     case, a length over 120) is refused with the rule before Tares is asked; ordinary names pass;
- g. `crew status` and `crew down` never ask for a capability or a launch spec.
+ g. `crew status` and `crew down` never ask for a capability or a launch spec;
+ i. `launch-plan` with Tares down prints the kept launch, and stops for a station never started; a helper whose
+    parent's role is not clear is refused.
+ h. `revive` and `restart`, through the commands the watch runs, go on with Tares down from the copy: the same plan,
+    the repositories named as before, a prompt that says idle_wake could not be read, and a copy that has not the
+    model asked for is given it; a station never started still stops.
 Also: the refusals and the older cell (no launch_spec), and what the command line adds (FACTORY_TARES only when
 a `tares` is on the PATH).
 
@@ -322,6 +327,124 @@ try:
     ck("...and is left out when there is none", "FACTORY_TARES" not in got["env"])
 finally:
     shutil.which = real_which
+    client.close()
+    tares.__exit__(None, None, None)
+
+# ---------------------------------------------------------------------------------------------
+print("h. revive and restart with Tares down start from the copy")
+from tares.crew import claude as CL  # noqa: E402
+
+launched = []
+real_launch, real_alive, real_active, real_stop = L.launch, CL.is_alive, CL.active_json, lifecycle._stop_session
+
+
+def recording_launch(client, station, role, parent, project, repo, cwd, model, effort, prompt, resume="", **kw):
+    launched.append({"plan": L.launch_plan(client, station, role, parent, project, repo, model, effort),
+                     "prompt": prompt, "model": model})
+
+
+def cmd(fn, station, tares, paths, extra=()):
+    out, err = io.StringIO(), io.StringIO()
+    env = {**os.environ, "TARESD_URL": tares.url, "FACTORY_CREW_HOME": str(paths.raw), "CLAUDE_BIN": "claude-fake"}
+    old = os.environ.get("FACTORY_CREW_HOME")
+    os.environ["FACTORY_CREW_HOME"] = str(paths.raw)
+    try:
+        import contextlib
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = getattr(lifecycle, "cmd_" + fn)([fn, station, *extra], env)
+    finally:
+        if old is None:
+            os.environ.pop("FACTORY_CREW_HOME", None)
+        else:
+            os.environ["FACTORY_CREW_HOME"] = old
+    return code, err.getvalue()
+
+
+L.launch, CL.is_alive = recording_launch, (lambda *a, **k: False)
+CL.active_json, lifecycle._stop_session = (lambda *a, **k: []), (lambda *a, **k: None)
+try:
+    row = {"role": "builder", "parent": "crew-orchestrator", "project": "Links App", "repo": str(repo),
+           "cwd": str(repo), "id": "old1", "sessionId": "s-old", "status": "active"}
+    st = "links-app-build-m1"
+    tares, paths, said, mk = crew(project_world(repo), stations={st: row})
+    paths_home = paths
+    code, err = cmd("revive", st, tares, paths)
+    ck("revive with Tares up starts the station and keeps the copy", code == 0 and len(launched) == 1
+       and paths.launch_file(st).is_file(), err)
+    up = launched[-1] if launched else {}
+    tares.__exit__(None, None, None)
+    for fn in ("revive", "restart"):
+        launched.clear()
+        code, err = cmd(fn, st, tares, paths)
+        ck(f"{fn} with Tares down goes on from the copy (exit 0)", code == 0 and len(launched) == 1, err)
+        down = launched[-1] if launched else {}
+        ck(f"{fn} with Tares down: a line says the launch is the kept one", "kept from its last start" in err, err)
+        ck(f"{fn} with Tares down: the plan is the one made with Tares up", down.get("plan") == up.get("plan"),
+           str(down.get("plan"))[:300])
+        ck(f"{fn} with Tares down: the repositories are still named in the plan", str(repo) in json.dumps(down.get("plan")))
+        ck(f"{fn} with Tares down: the prompt says idle_wake could not be read",
+           "idle_wake" in down.get("prompt", "") and "could not be read" in down.get("prompt", ""), down.get("prompt", ""))
+    # a copy made for another model gets the one asked for
+    kept = json.loads(paths.launch_file(st).read_text(encoding="utf-8"))
+    kept["command"][kept["command"].index("--model") + 1] = "old-model"
+    paths.launch_file(st).write_text(json.dumps(kept), encoding="utf-8")
+    client = TaresClient(paths, env={**os.environ, "TARESD_URL": tares.url}, say=lambda s: None)
+    try:
+        plan_m, err_m = plan_of(client, st, "builder", "crew-orchestrator", "Links App", str(repo))
+    finally:
+        client.close()
+    args_m = plan_m["args"] if plan_m else []
+    ck("a kept launch is given the model asked for now, not the one it was made with",
+       plan_m is not None and "old-model" not in args_m and args_m[args_m.index("--model") + 1] == L.model_effort(paths, "builder", "crew-orchestrator")[0],
+       str(args_m)[:300] if plan_m else str(err_m))
+    # a station that never started stops
+    tares2, paths2, _, _ = crew(project_world(repo), stations={st: row})
+    tares2.__exit__(None, None, None)
+    launched.clear()
+    code, err = cmd("revive", st, tares2, paths2)
+    ck("a revive of a station with no copy, Tares down, stops with the one message", code == 1 and NEVER in err and not launched, err)
+finally:
+    L.launch, CL.is_alive, CL.active_json, lifecycle._stop_session = real_launch, real_alive, real_active, real_stop
+
+# ---------------------------------------------------------------------------------------------
+print("i. launch-plan with Tares down, and a helper with no clear parent")
+from tares.crew import stations as ST  # noqa: E402
+
+tares, paths, said, mk = crew()
+client = mk()
+try:
+    argv = ["launch-plan", "crew-reviewer", "reviewer", "-", "-", "-"]
+    old = os.environ.get("FACTORY_CREW_HOME")
+    os.environ["FACTORY_CREW_HOME"] = str(paths.raw)
+    first = ST.launch_plan(client, paths, argv[1:])
+    tares.__exit__(None, None, None)
+    for var, val in (("TARESD_URL", tares.url),):
+        os.environ[var] = val
+    out, err = io.StringIO(), io.StringIO()
+    import contextlib
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = ST.cmd_launch_plan(argv, dict(os.environ))
+    ck("launch-plan with Tares down prints the plan made with Tares up", code == 0 and out.getvalue() == first, err.getvalue())
+    paths.launch_file("crew-reviewer").unlink()
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = ST.cmd_launch_plan(argv, dict(os.environ))
+    ck("...and with no copy stops with the one message", code == 1 and NEVER in err.getvalue() and out.getvalue() == "", err.getvalue())
+    os.environ.pop("TARESD_URL", None)
+    if old is None:
+        os.environ.pop("FACTORY_CREW_HOME", None)
+    else:
+        os.environ["FACTORY_CREW_HOME"] = old
+finally:
+    client.close()
+tares, paths, said, mk = crew()
+client = mk()
+try:
+    plan_h, err_h = plan_of(client, "crew-helper-1", "helper", "nobody-here", "", "")
+    ck("a helper whose parent is not one of the crew's stations is refused, naming the parent",
+       plan_h is None and err_h and "nobody-here" in err_h and "helper" in err_h, str(err_h))
+    ck("...and the cell is not asked", not paths.launch_file("crew-helper-1").exists())
+finally:
     client.close()
     tares.__exit__(None, None, None)
 

@@ -112,11 +112,30 @@ def parent_role(parent: str, paths: CrewPaths | None = None) -> str:
 # ---------- the words of the rules ----------
 
 
+def _recorded_repo_rows(paths: CrewPaths) -> list:
+    """(project name, repo path) for each station recorded with both: what the crew knows of its repositories
+    when Tares cannot list them."""
+    out = []
+    try:
+        data = state.stations_load(paths)
+    except CrewError:
+        return out
+    for row in data.values():
+        if isinstance(row, dict) and row.get("project") and row.get("repo"):
+            out.append((row["project"], row["repo"]))
+    return out
+
+
 def _repo_words(client: TaresClient, project: str, repo: str) -> tuple:
     """(repos, where, wt_repos): the sentences that name the repositories checked out on this machine, the one
     the station works in, and the ones whose worktree folders it may use."""
     repos = "the repositories of the projects handed to this crew on Tares (crew_projects)"
-    known = _forward(",".join(client.all_repos())).replace(",", ", ")
+    rows = client.project_repo_rows()
+    all_repos = client.all_repos()
+    if client.projects_err:   # Tares cannot list them (it is down): the folders the crew's stations were started in
+        rows = _recorded_repo_rows(client.paths)
+        all_repos = sorted({p for _, p in rows})
+    known = _forward(",".join(all_repos)).replace(",", ", ")
     if known:
         repos = f"{repos}, today: {known}"
     where = repos
@@ -124,7 +143,7 @@ def _repo_words(client: TaresClient, project: str, repo: str) -> tuple:
         where = f"the repository of project {project}, checked out at {_forward(repo)}"
     wt_repos = repos
     if project:  # a builder and its helpers: the worktree folders of its own project's repos only
-        mine = _forward(",".join(str(p) for n, p in client.project_repo_rows() if n == project)).replace(",", ", ")
+        mine = _forward(",".join(str(p) for n, p in rows if n == project)).replace(",", ", ")
         wt_repos = f"the repositories of project {project}: {mine}"
     return repos, where, wt_repos
 
@@ -394,6 +413,16 @@ def saved_spec(paths: CrewPaths, station: str):
     return doc if _valid_spec(doc) else None
 
 
+def _with_model(spec: dict, model: str, effort: str) -> dict:
+    """The kept launch with the model and effort this start asks for (`crew settings` may have changed them
+    since the copy was made)."""
+    command = list(spec["command"])
+    for flag, value in (("--model", model), ("--effort", effort)):
+        if flag in command and command.index(flag) + 1 < len(command):
+            command[command.index(flag) + 1] = value
+    return {**spec, "command": command}
+
+
 def _spec_query(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
                 model: str, effort: str) -> dict:
     """What the cell is told to build the launch from: what only this machine and this crew know. A value
@@ -468,7 +497,7 @@ def _spec(client: TaresClient, station: str, role: str, parent: str, project: st
     if spec is None:
         raise CrewError("Tares is unreachable and this station has never started; start Tares first.")
     client.say(f"{why}; starting {station} from the launch kept from its last start")
-    return spec
+    return _with_model(spec, model, effort)
 
 
 def machine_values(client: TaresClient, station: str, project: str, repo: str) -> dict:
