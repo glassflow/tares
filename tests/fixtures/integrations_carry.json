@@ -148,6 +148,13 @@
         {
           "allowed": true,
           "ee": false,
+          "name": "off",
+          "settings_schema": [],
+          "title": "Off"
+        },
+        {
+          "allowed": true,
+          "ee": false,
           "name": "rius",
           "settings_schema": [
             {
