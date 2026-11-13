@@ -270,8 +270,9 @@ LAUNCH_PLAN_USAGE = 'usage: launch-plan <station> <role> <parent> <project> <rep
 
 def launch_plan(client: TaresClient, paths: CrewPaths, argv: list) -> str:
     """The text `tares factory launch-plan` prints: what a station would start with, as JSON
-    ({args, env, settings}), built by launch.launch_plan from this crew's own state. Nothing is started and
-    no settings file is written. Five words are needed, so a wrong count is refused with the usage line."""
+    ({args, env, settings}), the cell's launch spec with this machine's placeholders filled
+    (launch.launch_plan). Nothing is started and no settings file is written; the copy of the spec is
+    kept. Five words are needed, so a wrong count is refused with the usage line."""
     state.require_crew(paths)
     if len(argv) != 5 or not argv[0] or not argv[1]:
         raise CrewError(LAUNCH_PLAN_USAGE)
@@ -290,7 +291,7 @@ def cmd_launch_plan(argv: list, env: dict) -> int:
         state.crew_name(paths)
         client = TaresClient(paths, env)
         try:
-            client.prime()
+            client.prime(offline_ok=True)  # with Tares down, the launch kept from the station's last start
             text = launch_plan(client, paths, list(argv[1:]))
         finally:
             client.close()

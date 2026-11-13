@@ -39,6 +39,7 @@ import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the re
 
 _crew_guard.scratch_home()   # the probes below inherit this process's HOME: not the real one (TR-1164)
 import fake_claude  # noqa: E402
+from fake_launch import CAPABILITY as LAUNCH_CAPABILITY, launch_answer  # noqa: E402
 from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 from _crew_fake import fake_crew_env  # noqa: E402
 
@@ -92,7 +93,17 @@ class Stub(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         path, _, query = self.path.partition("?")
         q = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
-        body = {"/health": {"status": "ok", "capabilities": ["guardrail_rules"]},
+        if path.startswith("/api/factory/stations/") and path.endswith("/launch"):   # the launch `settings` starts from (TR-870)
+            hit = launch_answer(self.path, self.headers, WORLD["projects"], lambda name, role: rules_answer("", role, name, "", ""),
+                                WORLD["settings"]["autonomy"], UP)
+            raw = json.dumps(hit[1]).encode()
+            self.send_response(hit[0])
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+            return
+        body = {"/health": {"status": "ok", "capabilities": ["guardrail_rules", LAUNCH_CAPABILITY]},
                 RULES_PATH: rules_answer(q.get("station", ""), q.get("role", "builder"), "", "", ""),
                 "/api/crew/settings": {"settings": WORLD["settings"]},
                 "/api/crew/projects": {"projects": WORLD["projects"]},
@@ -356,6 +367,7 @@ else:
     # ---------- settings ----------
 
     print("== settings")
+    WORLD["projects"] = [{"id": "shop", "name": "shop"}]   # the cell knows the project a builder works on (TR-870)
     env, tmp = world(crew_of(), sessions())
     for who, role in (("crew-orchestrator", "orchestrator"), ("shop-build-m1", "builder"), ("crew-reviewer", "reviewer")):
         p = subprocess.run([sys.executable, "-m", "tares.crew", "settings", who], cwd=str(ROOT), capture_output=True,
@@ -379,6 +391,7 @@ else:
             fixture("settings.json", stable(pretty(doc), tmp))
     ck("settings: a settings file without its env fails the schema", problems("settings", {"permissions": {"allow": []}}) != [])
     ck("settings: a token in TARES_AUTH_TOKEN fails the schema", problems("settings", dict(doc, env=dict(doc["env"], TARES_AUTH_TOKEN="secret"))) != [])
+    WORLD["projects"] = []
 
     # ---------- projects ----------
 

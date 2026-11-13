@@ -13,13 +13,13 @@ level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note,
 watch round), pace_down (what the revive step asks of the pace for stations that are down or up), idle_wake_round (the
 idle-wake pass of one watch round), and the whole commands `spawn` (cmd_spawn of tares.crew.stations), `revive`,
 `restart` and `retire` (cmd_revive, cmd_restart and cmd_retire of tares.crew.lifecycle), and `launch_plan` (cmd_launch_plan of
-tares.crew.stations, TR-867) and `launch_ctx` (what a runtime integration is given for the same station: the
-ctx and the placeholder values the command line fills, as JSON). `watch_regrant` is one
+tares.crew.stations, TR-867). `watch_regrant` is one
 round of the watch's regrant step (TR-960): regrant.step of tares.crew. The word {TMP} in an argument is the temp
 folder.
 
 Environment: LAUNCH_WORLD is JSON for the fake Tares (settings, projects, grants, token, health,
-grants_status); LAUNCH_SETUP is JSON for the crew home, made on the first call (crew: keys merged into
+grants_status, launch_status, launch_detail, launch; the fake serves the launch route with a spec the real
+runtime builds, tests/factory/fake_launch.py); LAUNCH_SETUP is JSON for the crew home, made on the first call (crew: keys merged into
 crew.json, stations: stations.json, token: the crew's key file; a later call's crew: keys are merged
 into the crew.json again). {TMP} in either is the temp folder.
 
@@ -41,6 +41,7 @@ from urllib.parse import parse_qs, urlparse
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 sys.path.insert(0, str(HERE))
+from fake_launch import launch_answer  # noqa: E402
 from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 PLUGIN = ROOT / "claude-plugin"
 
@@ -54,9 +55,12 @@ DEFAULT_WORLD = {
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
-    "capabilities": ["integrations", "merge_queue", "guardrail_rules"],   # what /health lists
+    "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"],   # what /health lists
     "rules_status": 200,     # the status of GET /api/factory/guardrails/rules
     "rules": None,           # its body; None: Tares renders the defaults and the world's grants (fake_rules.py)
+    "launch_status": 200,    # the status of GET /api/factory/stations/<station>/launch (not 200: that status, {"detail": ...})
+    "launch_detail": "launch",   # the "detail" of that answer
+    "launch": None,          # its body; None: the real runtime builds the spec (fake_launch.py), from the rules above
     "routes": {},            # any other GET: "<path>[?query]" -> [status, body] (the full path with its query wins over the path)
 }
 
@@ -112,6 +116,15 @@ class FakeTares:
                             return self._send(404, {"detail": "unknown project"})
                         return self._send(200, {"all": w["grants"]["all"], "project": mine[q["project"][0]]})
                     return self._send(200, {"all": w["grants"]["all"]})
+                if "/launch" in u.path:
+                    if w["launch_status"] != 200:
+                        return self._send(w["launch_status"], {"detail": w["launch_detail"]})
+                    if w["launch"] is not None:
+                        return self._send(200, w["launch"])
+                    hit = launch_answer(self.path, self.headers, w["projects"], outer.rules_for,
+                                        w["settings"].get("autonomy", "L4-ship"), outer.url)
+                    if hit:
+                        return self._send(*hit)
                 if u.path == RULES_PATH:
                     if not self.headers.get("X-Tares-Station"):   # the real route: a key alone, with no station, is refused
                         return self._send(403, {"detail": "this needs an admin or a crew station"})
@@ -134,6 +147,13 @@ class FakeTares:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         # a short poll interval: shutdown() waits for one, which was half a second per step
         self.thread = threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.02), daemon=True)
+
+    def rules_for(self, name: str, role: str) -> dict:
+        """The rendered rules the launch route gives a station of `role` under project `name`."""
+        w = self.world
+        if w["rules"] is not None:
+            return w["rules"]
+        return rules_answer("", role, name, w["grants"]["all"], w["grants"]["projects"].get(name, ""))
 
     def __enter__(self):
         self.thread.start()
@@ -211,50 +231,9 @@ def _sub_json(text: str, tmp: Path) -> str:
 FUNCTIONS = {"write_settings", "launch", "boot_prompt", "compact_window", "kit_version",
              "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
              "idle_wake_note", "spawn", "revive", "restart", "retire", "pace_round", "pace_down", "watch_regrant",
-             "idle_wake_round", "launch_plan", "launch_ctx"}
+             "idle_wake_round", "launch_plan"}
 NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "retire", "pace_round",
-               "pace_down", "idle_wake_round", "launch_plan", "launch_ctx"}
-
-
-def launch_ctx(client, station: str, role: str, parent: str, project: str, repo: str) -> dict:
-    """{ctx, values, model, effort}: the ctx the Claude Code runtime integration is given for this station (what the
-    command line knows and the cell hands over, TR-867) and the values of its placeholders on this machine. "-"
-    is an empty parent, project or repo. The rules are the ones the fake Tares gives, with their `{name}`s in."""
-    from tares.crew import launch as L
-    from tares.crew import rules as R
-    from tares.crew import state
-    paths = client.paths
-    parent, project, repo = ("" if a == "-" else a for a in (parent, project, repo))
-    work_role = L.parent_role(parent, paths) if role == "helper" else role
-    pid = L._project_id(client, station, parent, project)
-    doc = R.fetch(client, station, pid or project, work_role)
-    home = L._forward(paths.raw)
-    values = L.rule_values(client, work_role, project, repo)
-    kit = L.kit_dir(client)
-    shell = L.status_line_command(L._forward(kit))
-    model, effort = L.model_effort(paths, role, parent)
-    token = ""
-    try:
-        if paths.token_file.stat().st_size > 0:
-            token = f"{home}/{paths.token_file.name}"
-    except OSError:
-        pass
-    own = state.stations_get(station, "autonomy", paths=paths) or (state.stations_get(parent, "autonomy", paths=paths) if parent else "")
-    ctx = {
-        "crew": state.crew_name(paths), "orchestrator": state.crew_orchestrator(paths), "parent": parent,
-        "parent_role": work_role if role == "helper" else "", "project": project, "project_id": pid,
-        "repo": L._forward(repo), "human": values["human"], "authorized_at": state.ccfg("authorized", "at", paths=paths),
-        "autonomy": own, "crew_autonomy": client.setting("autonomy"), "model": model, "effort": effort,
-        "autocompact": L.compact_window(paths), "tares_url": values["tares"], "mcp_url": client.mcp_url(),
-        "cluster": values["cluster"], "token_file": bool(token),
-        "rules": {"allow": R._sentences(doc, "allow"), "soft_deny": R._sentences(doc, "soft_deny")},
-    }
-    placeholders = {
-        "CREW_HOME": home, "PLUGIN_DIR": kit, "PLUGIN_DIR_SHELL": shell[len(L.STATUS_LINE) + 1:],
-        "WT_REPOS": values["wt_repos"], "REPOS": values["repos"], "TOKEN_FILE": token,
-        "SETTINGS_FILE": L.settings_path(client, station)[1],
-    }
-    return {"ctx": ctx, "values": placeholders, "model": model, "effort": effort}
+               "pace_down", "idle_wake_round", "launch_plan"}
 
 
 def run_python(fn: str, args: list) -> int:
@@ -328,8 +307,6 @@ def run_python(fn: str, args: list) -> int:
         elif fn == "spawn":
             from tares.crew import stations
             return stations.cmd_spawn(["spawn", *args], dict(os.environ))
-        elif fn == "launch_ctx":
-            print(json.dumps(launch_ctx(client, *args), indent=2))
         elif fn == "launch_plan":
             from tares.crew import stations
             return stations.cmd_launch_plan(["launch-plan", *args], dict(os.environ))

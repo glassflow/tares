@@ -1,12 +1,20 @@
-"""Starting a station: the settings file it launches with, the `claude --bg` command line, and the first
-prompt. Port of these functions from the old bash crew (removed in TR-975), with the same output:
-check_model, level_text, level_rank, parent_role, write_settings, plugin_flags, kit_dir (in part),
-compact_window, kit_version, launch, boot_prompt, idle_wake_on and idle_wake_note. Where this module and
-the bash differ, the bash is right; every difference is listed under "Differences from bash" below.
+"""Starting a station: the launch the cell gives it, the settings file it launches with, the `claude --bg`
+command line, and the first prompt. Port of these functions from the old bash crew (removed in TR-975), with
+the same output: check_model, level_text, level_rank, parent_role, plugin_flags, kit_dir (in part),
+compact_window, kit_version, launch, boot_prompt, idle_wake_on and idle_wake_note. Where this module and the
+bash differ, the bash is right; every difference is listed under "Differences from bash" below.
 
 What it promises
-  * write_settings writes the same JSON as bash for every role (orchestrator, reviewer, releaser, builder,
-    helper): the same keys, values and allow rules. Key order is the order bash builds them in.
+  * The launch is the cell's (TR-870). launch_plan asks Tares for the launch spec of the station
+    (`GET /api/factory/stations/<station>/launch`, the `launch_spec` capability), fills the `{PLACEHOLDER}`s
+    only this machine knows (the crew's folder, the plugin folder, the repositories, the key file, the settings
+    file), adds FACTORY_TARES and returns {args, env, settings}. Nothing is built here: the rules, the
+    environment and the settings come from the cell's runtime. The spec is kept at
+    <crew home>/launch/<station>.json as the cell gave it, and a start while Tares does not answer (or answers
+    with a server error) uses that copy. A station that has never started has no copy: that start stops with a
+    message. A refusal (401, 403) or an answer that says no (404, 422) stops the start, copy or not.
+  * write_settings writes the same JSON as the bash did for every role (orchestrator, reviewer, releaser,
+    builder, helper): the same keys, values and allow rules.
   * launch runs `claude --bg` with the same arguments in the same order as bash:
       --bg -n <station> --model <m> --effort <e> --permission-mode auto --settings <file>
       --autocompact <n> --append-system-prompt <identity> --plugin-dir <kit> [--resume <id>] <prompt>
@@ -54,11 +62,11 @@ from pathlib import Path
 
 from . import claude as cl
 from . import pace, state
-from . import rules as rules_mod
-from .client import TaresClient, cksum
+from .client import TaresClient, TaresHTTPError, cksum, uri
 from .errors import CrewError
 from .paths import ME, CrewPaths
 
+CAPABILITY = "launch_spec"  # the cell capability of the launch route (TR-867)
 COMPACT_MIN = 150000  # under about 150k tokens a station can refill its context within three steps of a compaction
 
 # The environment bash un-exports (export -n): the person's key never reaches a process the engine starts.
@@ -104,12 +112,9 @@ def parent_role(parent: str, paths: CrewPaths | None = None) -> str:
 # ---------- the words of the rules ----------
 
 
-def rule_values(client: TaresClient, role: str, project: str, repo: str) -> dict:
-    """What fills the `{name}` of a rule's sentence: only this machine knows them (the person, the crew's folder,
-    the repositories checked out here). `role` is the station's own role; a helper's rules follow its parent's,
-    and its caller passes that one."""
-    paths = client.paths
-    home = _forward(paths.raw)
+def _repo_words(client: TaresClient, project: str, repo: str) -> tuple:
+    """(repos, where, wt_repos): the sentences that name the repositories checked out on this machine, the one
+    the station works in, and the ones whose worktree folders it may use."""
     repos = "the repositories of the projects handed to this crew on Tares (crew_projects)"
     known = _forward(",".join(client.all_repos())).replace(",", ", ")
     if known:
@@ -121,6 +126,16 @@ def rule_values(client: TaresClient, role: str, project: str, repo: str) -> dict
     if project:  # a builder and its helpers: the worktree folders of its own project's repos only
         mine = _forward(",".join(str(p) for n, p in client.project_repo_rows() if n == project)).replace(",", ", ")
         wt_repos = f"the repositories of project {project}: {mine}"
+    return repos, where, wt_repos
+
+
+def rule_values(client: TaresClient, role: str, project: str, repo: str) -> dict:
+    """What fills the `{name}` of a rule's sentence: only this machine knows them (the person, the crew's folder,
+    the repositories checked out here). `role` is the station's own role; a helper's rules follow its parent's,
+    and its caller passes that one. The regrant prompt fills the rules it quotes with these."""
+    paths = client.paths
+    home = _forward(paths.raw)
+    repos, where, wt_repos = _repo_words(client, project, repo)
     return {
         "human": _ccfg_or("the user", "human", "name", paths=paths) or "the user",
         "home": home, "tares": client.tares or client.tares_url(), "stations_file": f"{home}/stations.json",
@@ -238,12 +253,12 @@ def quote_windows(text: str) -> str:
 STATUS_LINE = "tares hook statusline --plugin-root"
 
 
-def status_line_command(kit: str, platform: str | None = None) -> str:
-    """`tares hook statusline --plugin-root <kit>` for the shell that runs the status line, with the kit
-    path quoted for it. The kit is named, so a frozen copy keeps its own status line script."""
+def shell_word(kit: str, platform: str | None = None) -> str:
+    """The kit path as one word for the shell that runs the status line: `PLUGIN_DIR_SHELL` of a launch spec.
+    The kit is named, so a frozen copy keeps its own status line script."""
     if (platform or sys.platform) == "win32":
-        return f"{STATUS_LINE} {quote_windows(kit.replace(chr(92), '/'))}"
-    return f"{STATUS_LINE} {shlex.quote(kit)}"
+        return quote_windows(kit.replace(chr(92), "/"))
+    return shlex.quote(kit)
 
 
 # ---------- idle wake ----------
@@ -286,28 +301,6 @@ def iw_launch_note(client: TaresClient, station: str) -> None:
 # ---------- the settings file ----------
 
 
-def _project_id(client: TaresClient, station: str, parent: str, project: str) -> str:
-    """The id of the station's project, as the X-Tares-Project header carries it (it takes no emoji or other
-    non-ASCII, TR-534): the station's own record, its parent's, else Tares's; the name when that is plain
-    ASCII; else empty, with a line saying the station starts without a default project."""
-    paths = client.paths
-    pid = ""
-    if project:
-        pid = state.stations_get(station, "project_id", paths=paths)
-        if not pid and parent:
-            pid = state.stations_get(parent, "project_id", paths=paths)
-        if not pid:
-            row = client.project_row(project)
-            pid = state.jq_get(row, ("id",)) if row is not None else ""
-        if pid:
-            state.stations_put(station, {"project_id": pid}, paths)
-        elif all(" " <= c <= "~" for c in project):
-            pid = project
-        else:
-            client.say(f"could not find {project}'s id on Tares; {station} starts without a default project")
-    return pid
-
-
 def environment_sentence(role: str, station: str, parent: str, project: str, repo: str, human: str, at: str,
                          level: str) -> str:
     """The autoMode environment sentence: who the station is, what it works on and the autonomy its person
@@ -344,100 +337,23 @@ def settings_path(client: TaresClient, station: str) -> tuple:
     return paths.station_file(station, "settings.json"), f"{_forward(paths.raw)}/stations/{station}.settings.json"
 
 
-def _settings_parts(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str) -> tuple:
-    """(env, rest): the environment a station runs with, and the rest of its settings document (everything but
-    `env`). Nothing is written. Dies (CrewError) when the crew has no valid autonomy, or the station's own
-    level is not one. See write_settings for the arguments."""
-    paths = client.paths
-    home = _forward(paths.raw)
-    repo_f = _forward(repo)
-    tares = client.tares or client.tares_url()
-
-    human = _ccfg_or("the user", "human", "name", paths=paths) or "the user"
-    at = state.ccfg("authorized", "at", paths=paths)
-    # A project handed over at a stricter level keeps it for its builder and the builder's helpers.
-    level = state.stations_get(station, "autonomy", paths=paths)
-    if not level and parent:
-        level = state.stations_get(parent, "autonomy", paths=paths)
-    crew_level = client.setting("autonomy")
-    if level_rank(crew_level) is None:
-        raise CrewError(f"no valid crew autonomy (got '{crew_level}'); refusing to write settings for {station}")
-    level = level or crew_level
-    if level_rank(level) is None:
-        raise CrewError(f"no valid autonomy level for {station} (got '{level}'); refusing to write its settings")
-    # A crew lowered since the project was handed over takes the project down with it.
-    if level_rank(crew_level) < level_rank(level):
-        level = crew_level
-    work_role = parent_role(parent, paths) if role == "helper" else role
-    values = rule_values(client, work_role, project, repo)
-
-    env_line = environment_sentence(role, station, parent, project, repo_f, human, at, level)
-
-    pid = _project_id(client, station, parent, project)
-    given = rules_mod.for_station(client, station, pid or project, work_role, kit_dir(client), values)
-    allow, soft_deny = given["allow"], given["soft_deny"]
-
-    perms = permissions(role)
-
-    wt = f"{repo_f}/.factory/worktrees" if repo else f"{home}/worktrees"
-    tok_file = ""
-    try:
-        if paths.token_file.stat().st_size > 0:
-            tok_file = f"{home}/{paths.token_file.name}"
-    except OSError:
-        pass
-
-    # statusLine: after each reply it sends Tares the session's context window and the plan's limits;
-    # FACTORY_AUTOCOMPACT tells it where the station compacts (the --autocompact it was started with)
-    env = {
-        "FACTORY_STATION": station, "FACTORY_ROLE": role, "FACTORY_PARENT": parent,
-        "FACTORY_CREW": state.crew_name(paths), "FACTORY_ORCHESTRATOR": state.crew_orchestrator(paths),
-        "FACTORY_HOME": home, "FACTORY_CREW_HOME": home, "FACTORY_WORKTREES": wt,
-        "TARES_FACTORY_URL": tares, "TARESD_URL": tares, "TARES_FACTORY_MCP_URL": client.mcp_url(),
-        "FACTORY_AUTOCOMPACT": compact_window(paths),
-        # blank over any key Claude Code itself inherited: stations use the crew file (TR-560)
-        "TARES_AUTH_TOKEN": "",
-    }
-    # the `tares` that started the crew, written for a later release to read (TR-1069); nothing reads it yet
-    try:
-        tares_bin = shutil.which("tares")
-    except (AttributeError, OSError):  # a lookup that cannot run never stops a launch
-        tares_bin = None
-    if tares_bin:
-        env["FACTORY_TARES"] = _forward(tares_bin)
-    if tok_file:
-        env["TARES_FACTORY_TOKEN_FILE"] = tok_file
-        # the same file under a name Claude Code does not hide from the plugin header helper
-        env["TARES_FACTORY_CRED_FILE"] = tok_file
-    if project:
-        env.update(TARES_PROJECT=pid, TARES_PROJECT_NAME=project, FACTORY_PROJECT=state.slugify(project))
-    if repo:
-        env["FACTORY_REPO"] = repo_f
-    rest = {
-        "crossSessionInbound": "accept",
-        "enabledPlugins": {"tares@inline": True},
-        "statusLine": {"type": "command", "command": status_line_command(_forward(kit_dir(client))),
-                       "padding": 0},
-        "worktree": {"bgIsolation": "none"},
-        "permissions": perms,
-        "autoMode": {"environment": ["$defaults", env_line], "allow": ["$defaults", *allow],
-                     "soft_deny": ["$defaults", *soft_deny]},
-    }
-    return env, rest
-
-
-def write_settings(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str) -> str:
+def write_settings(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
+                   plan: dict | None = None) -> str:
     """Write stations/<station>.settings.json, the file a station launches with (--settings), and return its
     path as bash prints it. Plugins cannot ship permissions or auto-mode rules, and project settings files are
-    ignored for auto mode, so the human's grant travels this way. Dies (CrewError) when the crew has no valid
-    autonomy, or the station's own level is not one.
+    ignored for auto mode, so the human's grant travels this way. The file is `{"env": env, **settings}` of the
+    launch plan; the project id the cell resolved (TARES_PROJECT) is recorded on the station.
 
-    client: the crew's view of Tares, primed (TaresClient.prime): its settings, projects and grants are read.
-    station, role, parent, project, repo: as bash's write_settings (parent, project and repo may be "")."""
-    env, rest = _settings_parts(client, station, role, parent, project, repo)
+    `plan` is launch_plan's answer when the caller has it already (launch does); without one it is asked for
+    here, and dies (CrewError) as launch_plan does."""
+    paths = client.paths
+    plan = plan or launch_plan(client, station, role, parent, project, repo)
     file, shown = settings_path(client, station)
-    client.paths.stations_dir.mkdir(parents=True, exist_ok=True)
-    state.write_json(file, {"env": env, **rest})
+    paths.stations_dir.mkdir(parents=True, exist_ok=True)
+    state.write_json(file, {"env": plan["env"], **plan["settings"]})
+    pid = plan["env"].get("TARES_PROJECT")
+    if project and pid:
+        state.stations_put(station, {"project_id": pid}, paths)
     return shown
 
 
@@ -463,28 +379,145 @@ def model_effort(paths: CrewPaths, role: str, parent: str = "") -> tuple:
     return (state.ccfg("stations", role, "model", paths=paths), state.ccfg("stations", role, "effort", paths=paths))
 
 
+ROLES = ("orchestrator", "reviewer", "releaser", "builder", "helper")
+
+
+def _valid_spec(doc) -> bool:
+    return (isinstance(doc, dict) and isinstance(doc.get("command"), list)
+            and isinstance(doc.get("env"), dict) and isinstance(doc.get("settings"), dict))
+
+
+def saved_spec(paths: CrewPaths, station: str):
+    """The launch spec the cell last gave this station (<crew home>/launch/<station>.json), or None when there
+    is none, or it is not a launch spec."""
+    doc = state.read_json(paths.launch_file(station), None)
+    return doc if _valid_spec(doc) else None
+
+
+def _spec_query(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
+                model: str, effort: str) -> dict:
+    """What the cell is told to build the launch from: what only this machine and this crew know. A value
+    that is empty is left out. The project is named only when Tares lists it for this crew: a project the cell
+    would not find stops the start with a 404, where the old start went on without a default project."""
+    paths = client.paths
+    level = state.stations_get(station, "autonomy", paths=paths)
+    if not level and parent:
+        level = state.stations_get(parent, "autonomy", paths=paths)
+    named = project
+    if project and client.project_row(project) is None:
+        client.say(f"could not find {project} on Tares; {station} starts without a default project")
+        named = ""
+    try:
+        has_key = paths.token_file.stat().st_size > 0
+    except OSError:
+        has_key = False
+    query = {
+        "role": role, "parent": parent, "parent_role": parent_role(parent, paths) if role == "helper" else "",
+        "project": named, "repo": _forward(repo), "crew": state.crew_name(paths),
+        "orchestrator": state.crew_orchestrator(paths),
+        "human": _ccfg_or("the user", "human", "name", paths=paths),
+        "authorized_at": state.ccfg("authorized", "at", paths=paths), "autonomy": level,
+        "cluster": _ccfg_or("factory", "release", "cluster", paths=paths), "model": model, "effort": effort,
+        "autocompact": compact_window(paths, client.say), "tares_url": client.tares or client.tares_url(),
+        "mcp_url": client.mcp_url(), "token_file": "true" if has_key else "",
+    }
+    return {k: v for k, v in query.items() if v}
+
+
+def _ask(client: TaresClient, station: str, role: str, query: dict) -> dict:
+    """The launch spec Tares gives `station` now. TaresHTTPError when it cannot answer; ValueError for an
+    answer that is not a launch spec."""
+    qs = "&".join(f"{k}={uri(v)}" for k, v in query.items())
+    # Tares answers a station's own launch to a call that says which station it is (a person's key alone gets
+    # a 403), the same labels the plugin's MCP proxy sets.
+    who = {"X-Tares-Station": station}
+    if role in ROLES:
+        who["X-Tares-Role"] = role
+    doc = state.loads_json(client.tares_http("GET", f"/api/factory/stations/{uri(station)}/launch?{qs}", headers=who))
+    if not _valid_spec(doc):
+        raise ValueError("the answer is not a launch spec")
+    return doc
+
+
+def _spec(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
+          model: str, effort: str) -> dict:
+    """The launch spec for a start, unfilled: Tares's answer (kept as the copy), else the copy of the last
+    start when Tares does not answer, answers with a server error, or gives something that is not a spec. A
+    cell too old to have the route, a refusal (401, 403) and an answer that says no (404, 422) stop the start."""
+    paths = client.paths
+    spec, why = None, "Tares does not answer"
+    if client.tares_on():
+        client.need_capability(CAPABILITY)
+        query = _spec_query(client, station, role, parent, project, repo, model, effort)
+        try:
+            spec = _ask(client, station, role, query)
+        except TaresHTTPError as e:
+            if e.status in (401, 403):
+                raise CrewError(f"Tares refused to give the launch of {station} (HTTP {e.status}). A station never "
+                                "starts without it; check the crew's key on Tares, then run this again.") from None
+            if e.status in (404, 422):
+                raise CrewError(f"Tares would not give the launch of {station}: {e.detail or f'HTTP {e.status}'}") from None
+            why = f"Tares could not give it ({e})"
+        except ValueError as e:
+            why = f"Tares could not give it ({e})"
+    if spec is not None:
+        paths.launch_dir.mkdir(parents=True, exist_ok=True)
+        state.write_json(paths.launch_file(station), spec)
+        return spec
+    spec = saved_spec(paths, station)
+    if spec is None:
+        raise CrewError("Tares is unreachable and this station has never started; start Tares first.")
+    client.say(f"{why}; starting {station} from the launch kept from its last start")
+    return spec
+
+
+def machine_values(client: TaresClient, station: str, project: str, repo: str) -> dict:
+    """What fills the `{PLACEHOLDER}`s of a launch spec on this machine (see runtime.PLACEHOLDERS): the crew's
+    folder, the plugin, the repositories, the crew's key file and the station's settings file."""
+    paths = client.paths
+    home = _forward(paths.raw)
+    kit = kit_dir(client)
+    repos, _, wt_repos = _repo_words(client, project, repo)
+    return {"CREW_HOME": home, "PLUGIN_DIR": kit, "PLUGIN_DIR_SHELL": shell_word(_forward(kit)),
+            "WT_REPOS": wt_repos, "REPOS": repos, "TOKEN_FILE": f"{home}/{paths.token_file.name}",
+            "SETTINGS_FILE": settings_path(client, station)[1]}
+
+
 def launch_plan(client: TaresClient, station: str, role: str, parent: str, project: str, repo: str,
                 model: str | None = None, effort: str | None = None) -> dict:
-    """What a station starts with, built and not started or written: {args, env, settings}.
+    """What a station starts with, from the cell's launch spec and not started: {args, env, settings}.
 
     args: the `claude` arguments up to and including --plugin-dir; no --resume and no prompt, which `launch`
     adds. env and settings: the two halves of the settings document (env, and everything else); the file is
     `{"env": env, **settings}`. `model` and `effort` default to the crew's (see model_effort).
-    client: the crew's view of Tares, primed. The other arguments are as write_settings' (parent, project and
-    repo may be ""). Dies (CrewError) for a model that cannot run auto mode, or as write_settings does."""
+    client: the crew's view of Tares. parent, project and repo may be "". The spec is the cell's (see _spec);
+    this fills the placeholders of this machine and adds FACTORY_TARES, the `tares` that started the crew.
+    Dies (CrewError) for a model that cannot run auto mode, a name that is not a station name, a helper whose
+    parent's role is not clear, or a spec Tares will not give and no copy stands in for."""
+    from ..integrations.runtime import fill_placeholders   # here: the runtime imports this module
     paths = client.paths
     if model is None or effort is None:
         m, e = model_effort(paths, role, parent)
         model = m if model is None else model
         effort = e if effort is None else effort
     check_model(model, station)
-    env, rest = _settings_parts(client, station, role, parent, project, repo)
-    skill = parent_role(parent, paths) if role == "helper" else role
-    args = ["--bg", "-n", station, "--model", model, "--effort", effort, "--permission-mode", "auto",
-            "--settings", settings_path(client, station)[1], "--autocompact", compact_window(paths, client.say),
-            "--append-system-prompt", identity(role, station, parent, project, repo, skill),
-            *plugin_flags(client)]
-    return {"args": args, "env": env, "settings": rest}
+    if not state.station_name_ok(station):
+        raise CrewError(f"'{station}' cannot name a station: {state.STATION_NAME_RULE}")
+    if role == "helper" and not parent_role(parent, paths):
+        raise CrewError(f"{station} is a helper, and its rules follow the station it works under, which is not clear "
+                        f"from its parent ('{parent}'). Name the parent as one of this crew's stations, then run this again.")
+    spec = _spec(client, station, role, parent, project, repo, model, effort)
+    values = machine_values(client, station, project, repo)
+    env = fill_placeholders(spec["env"], values)
+    # the `tares` that started the crew, written for a later release to read (TR-1069); nothing reads it yet
+    try:
+        tares_bin = shutil.which("tares")
+    except (AttributeError, OSError):  # a lookup that cannot run never stops a launch
+        tares_bin = None
+    if tares_bin:
+        env["FACTORY_TARES"] = _forward(tares_bin)
+    return {"args": fill_placeholders(spec["command"], values), "env": env,
+            "settings": fill_placeholders(spec["settings"], values)}
 
 
 # ---------- starting a station ----------
@@ -510,9 +543,7 @@ def launch(client: TaresClient, station: str, role: str, parent: str, project: s
     except CrewError:  # bash: the die runs in a subshell, so it only leaves no fingerprint
         grants = gsum = ""
     plan = launch_plan(client, station, role, parent, project, repo, model, effort)
-    file, settings = settings_path(client, station)
-    paths.stations_dir.mkdir(parents=True, exist_ok=True)
-    state.write_json(file, {"env": plan["env"], **plan["settings"]})
+    settings = write_settings(client, station, role, parent, project, repo, plan)
     args = plan["args"]
     kd = kit_dir(client)
     if resume:

@@ -3,10 +3,10 @@
 The runtime integration (tares/integrations/builtin/runtime_claude_code.py) gives a LaunchSpec for a station
 and a role. A later runtime is one more integration of the slot. Covered:
  - claude_code is installed for the runtime slot and is its default;
- - for each of the five roles (orchestrator, reviewer, releaser, builder, helper) the spec, with the command
-   line's placeholders filled by the values of that crew, equals what `tares factory launch-plan` prints: the
-   arguments exactly, the settings deep-equal, the environment equal except FACTORY_TARES, which only the
-   command line adds (a spec has the keys of monitoring's station_env as well, tested apart);
+ - for each of the five roles (orchestrator, reviewer, releaser, builder, helper) what `tares factory
+   launch-plan` prints is the spec the cell gave (the copy the command line keeps) with that crew's values
+   put in: the arguments and the settings the same, the environment the same except FACTORY_TARES, which
+   only the command line adds (a spec has the keys of monitoring's station_env as well, tested apart);
  - no spec holds a secret: the crew's key stays in its file ({TOKEN_FILE}), TARES_AUTH_TOKEN is blank, and no
    value looks like a key;
  - the placeholders a spec uses are listed with what they stand for, and filling them with fixed values leaves
@@ -17,9 +17,11 @@ and a role. A later runtime is one more integration of the slot. Covered:
    with no rules and a blank station are a ValueError;
  - GET /api/factory/stations/{station}/launch on a cell with auth on: an admin and the station itself get the
    spec, a key for another station gets 403, no key 401, a key with no admin scope 403, an unknown role 422;
-   /health lists the launch_spec capability; the answer holds no secret.
+   /health lists the launch_spec capability; the answer holds no secret;
+ - a name that is not a station name (a space, a backslash, a leading dot or hyphen, upper case, two dots, more
+   than 120 characters) is a 422 that says the rule (TR-870; tests/test_crew_launch_spec.py covers the command line).
 
-The crew side (launch-plan) runs in a throwaway crew of its own (tests/factory/launch_support.py: a fake
+The crew side (launch-plan, the cell answered by a fake Tares that builds the spec with this runtime) runs in a throwaway crew of its own (tests/factory/launch_support.py: a fake
 Tares and a copy of the kit), as tests/test_crew_launch.py does.
 
 Run: python tests/test_runtime_launch.py
@@ -33,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 HERE = Path(__file__).resolve().parent
@@ -59,6 +62,7 @@ sys.path.insert(0, str(HERE / "factory"))
 
 import httpx  # noqa: E402
 
+from tares.envelope import now_utc  # noqa: E402
 from tares.integrations import registry, resolve  # noqa: E402
 from tares.integrations.builtin.runtime_claude_code import ROLES, RuntimeClaudeCode  # noqa: E402
 from tares.integrations.runtime import PLACEHOLDERS, fill_placeholders  # noqa: E402
@@ -130,7 +134,7 @@ ck("it is named Claude Code, runs the five roles and is not an ee integration",
    and set(ROLES) == {"orchestrator", "reviewer", "releaser", "builder", "helper"})
 
 # ---------------------------------------------------------------------------------------------
-print("the spec of each role equals the launch plan")
+print("the launch plan is the cell's spec with this machine's values put in")
 links = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
 CASES = [("crew-orchestrator", "orchestrator", "-", "-", "-"), ("crew-reviewer", "reviewer", "-", "-", "-"),
          ("crew-releaser", "releaser", "-", "-", "-"),
@@ -139,37 +143,60 @@ CASES = [("crew-orchestrator", "orchestrator", "-", "-", "-"), ("crew-reviewer",
 SETUP = {"token": FAKE_TOKEN,
          "stations": {"links-app-build-m1": {"autonomy": "L3-review", "project_id": "uc_links"}}}
 tmp = Path(tempfile.mkdtemp(prefix="tares-runtime-plan-", dir=SCRATCH)).resolve()
-steps = []
-for c in CASES:
-    steps += [("launch_ctx", list(c), world(projects=[links]), SETUP), ("launch_plan", list(c), world(projects=[links]), SETUP)]
+steps = [("launch_plan", list(c), world(projects=[links]), SETUP) for c in CASES]
 res = drive(tmp, steps)
-ck("every launch_ctx and launch-plan run exits 0", all(r[0] == 0 for r in res),
-   str([(r[0], r[2][-160:]) for r in res if r[0]]))
+ck("every launch-plan run exits 0", all(r[0] == 0 for r in res), str([(r[0], r[2][-160:]) for r in res if r[0]]))
+UNKNOWN = ("REPOS", "WT_REPOS", "PLUGIN_DIR_SHELL")   # machine words the test does not spell out: matched, not compared
+
+
+def same(spec_node, plan_node, values):
+    """True when plan_node is spec_node with each {NAME} of `values` put in, and an UNKNOWN one standing for any text."""
+    if isinstance(spec_node, dict):
+        return (isinstance(plan_node, dict) and spec_node.keys() == plan_node.keys()
+                and all(same(spec_node[k], plan_node[k], values) for k in spec_node))
+    if isinstance(spec_node, list):
+        return (isinstance(plan_node, list) and len(spec_node) == len(plan_node)
+                and all(same(a, b, values) for a, b in zip(spec_node, plan_node)))
+    if not isinstance(spec_node, str):
+        return spec_node == plan_node
+    pattern = ""
+    for part in re.split(r"(\{[A-Z_]+\})", spec_node):
+        name = part[1:-1]
+        if part.startswith("{") and name in values:
+            pattern += re.escape(values[name])
+        elif part.startswith("{") and name in UNKNOWN:
+            pattern += ".+?"
+        else:
+            pattern += re.escape(part)
+    return isinstance(plan_node, str) and re.fullmatch(pattern, plan_node, re.S) is not None
+
 
 specs = {}
 for i, (station, role, *_rest) in enumerate(CASES):
-    cres, pres = res[2 * i], res[2 * i + 1]
-    if cres[0] or pres[0]:
-        ck(f"{role}: the crew side ran", False, (cres[2] + pres[2])[-200:])
+    r = res[i]
+    copy_file = tmp / "crew" / "launch" / f"{station}.json"
+    if r[0] or not copy_file.is_file():
+        ck(f"{role}: the crew side ran and kept the spec", False, r[2][-200:])
         continue
-    got, plan = json.loads(cres[1]), json.loads(pres[1])
-    ctx, values = got["ctx"], got["values"]
-    spec = RuntimeClaudeCode().launch_spec(role, station, copy.deepcopy(ctx))
+    plan = json.loads(r[1])
+    raw = json.loads(copy_file.read_text(encoding="utf-8"))
+    spec = SimpleNamespace(command=raw["command"], env=raw["env"], settings=raw["settings"], placeholders=raw["placeholders"])
     specs[role] = spec
     before = copy.deepcopy([spec.command, spec.env, spec.settings])
+    values = {"CREW_HOME": plan["env"]["FACTORY_HOME"], "PLUGIN_DIR": plan["args"][-1],
+              "SETTINGS_FILE": plan["args"][plan["args"].index("--settings") + 1],
+              "TOKEN_FILE": plan["env"].get("TARES_FACTORY_TOKEN_FILE", "")}
     filled = fill_placeholders({"command": spec.command, "env": spec.env, "settings": spec.settings}, values)
     ck(f"{role}: filling the placeholders does not change the spec", [spec.command, spec.env, spec.settings] == before)
-    # the fake Tares of each run has a port of its own: the same address under the other run's port
-    filled = json.loads(json.dumps(filled).replace(ctx["tares_url"], plan["env"]["TARES_FACTORY_URL"]))
-    ck(f"{role}: no placeholder is left after filling", not NAME.findall(json.dumps(filled)), NAME.findall(json.dumps(filled)))
-    ck(f"{role}: the arguments equal launch-plan's, exactly", filled["command"] == plan["args"],
-       json.dumps([filled["command"], plan["args"]])[:600])
-    ck(f"{role}: the settings equal launch-plan's, deep", filled["settings"] == plan["settings"],
-       [k for k in set(filled["settings"]) | set(plan["settings"]) if filled["settings"].get(k) != plan["settings"].get(k)])
+    ck(f"{role}: the plan has no placeholder left", not NAME.findall(json.dumps(plan)), NAME.findall(json.dumps(plan)))
+    ck(f"{role}: the arguments are the spec's command with this machine's values",
+       same(spec.command, plan["args"], values), json.dumps([spec.command, plan["args"]])[:600])
+    ck(f"{role}: the settings are the spec's settings with this machine's values",
+       same(spec.settings, plan["settings"], values),
+       [k for k in plan["settings"] if not same(spec.settings.get(k), plan["settings"][k], values)])
     plan_env = {k: v for k, v in plan["env"].items() if k != "FACTORY_TARES"}
-    diff = {k: (filled["env"].get(k), plan_env.get(k)) for k in set(filled["env"]) | set(plan_env)
-            if filled["env"].get(k) != plan_env.get(k)}
-    ck(f"{role}: the environment equals launch-plan's, but for FACTORY_TARES", not diff, diff)
+    ck(f"{role}: the environment is the spec's, but for FACTORY_TARES", same(spec.env, plan_env, values),
+       {k: (spec.env.get(k), plan_env.get(k)) for k in set(spec.env) | set(plan_env) if not same(spec.env.get(k, ""), plan_env.get(k, ""), values)})
     ck(f"{role}: FACTORY_TARES is added by the command line only", "FACTORY_TARES" not in spec.env)
     ck(f"{role}: the spec has no --resume, no boot prompt and no claude binary",
        "--resume" not in spec.command and spec.command[0] == "--bg" and spec.command[-2] == "--plugin-dir"
@@ -180,8 +207,9 @@ for i, (station, role, *_rest) in enumerate(CASES):
     ck(f"{role}: the token is the file placeholder",
        spec.env.get("TARES_FACTORY_TOKEN_FILE") == "{TOKEN_FILE}" and spec.env.get("TARES_FACTORY_CRED_FILE") == "{TOKEN_FILE}"
        and spec.env["TARES_AUTH_TOKEN"] == "", {k: v for k, v in spec.env.items() if "TOKEN" in k})
-    ck(f"{role}: the crew's key is not in the ctx, only the file it is in is known",
-       FAKE_TOKEN not in json.dumps(ctx) and values["TOKEN_FILE"].endswith(".tares-token"), values["TOKEN_FILE"])
+    ck(f"{role}: the crew's key is in no spec, nor in the plan; only the file it is in is known",
+       FAKE_TOKEN not in json.dumps(raw) and FAKE_TOKEN not in json.dumps(plan) and values["TOKEN_FILE"].endswith(".tares-token"),
+       values["TOKEN_FILE"])
     used = set(NAME.findall(json.dumps([spec.command, spec.env, spec.settings])))
     ck(f"{role}: spec.placeholders names each placeholder the spec uses, with what it stands for",
        set(spec.placeholders) == used and used <= set(PLACEHOLDERS)
@@ -364,6 +392,60 @@ async def main():
             r = await root.get("/api/factory/stations/shop-build-api-h1/launch",
                                params={**params, "role": "helper", "parent": "shop-build-api", "parent_role": "builder"})
             ck("a helper with its parent's role builds", r.status_code == 200 and r.json()["role"] == "helper", r.text[:200])
+
+            print("the route answers what the fake cell the crew tests rely on answers (F2)")
+            import fake_launch
+            hdr_st = {"X-Tares-Station": "shop-build-api", "X-Tares-Role": "builder"}
+            for what, q in (("a builder with a project", params),
+                            ("a builder with no project", {k: v for k, v in params.items() if k != "project"}),
+                            ("a builder with no token file", {**params, "token_file": "false"})):
+                rr = await root.get(URL, params=q)
+                rules_r = (await root.get("/api/factory/guardrails/rules", params={
+                    "station": "shop-build-api", "project": q.get("project", ""), "role": "builder"})).json()
+                want = fake_launch.launch_answer(
+                    URL + "?" + "&".join(f"{k}={v}" for k, v in q.items()), hdr_st,
+                    [{"id": "p1", "name": "alpha"}],
+                    lambda pname, wrole, _r=rules_r: {"allow": _r["allow"], "soft_deny": _r["soft_deny"]},
+                    "L3-review", "http://t", monitoring=otlp)
+                ck(f"the real route and the fake agree: {what}",
+                   rr.status_code == 200 and want is not None and want[0] == 200
+                   and rr.json() == json.loads(json.dumps(want[1])),
+                   (rr.status_code, rr.text[:200], str(want)[:200]))
+
+            print("a station whose recorded project is gone still launches (F6)")
+            store.set_session_station("sess-gone", "shop-build-gone", "builder", "shop-orchestrator", "p_gone_id", now_utc())
+            no_proj = {k: v for k, v in params.items() if k not in ("project", "crew")}   # a named crew must match the record
+            rr = await root.get("/api/factory/stations/shop-build-gone/launch", params=no_proj)
+            ck("with no project named, the gone recorded project is not an error (200)", rr.status_code == 200, (rr.status_code, rr.text[:200]))
+            store.set_session_station("sess-none", "shop-build-none", "builder", "shop-orchestrator", None, now_utc())
+            r_none = await root.get("/api/factory/stations/shop-build-none/launch", params=no_proj)
+            if rr.status_code == 200 and r_none.status_code == 200:
+                ck("the launch has no project id, and its allow and deny rules are those of a station with no project",
+                   not rr.json()["env"].get("TARES_PROJECT") and not rr.json()["env"].get("TARES_PROJECT_NAME")
+                   and "p_gone_id" not in json.dumps(rr.json()) and {k: v for k, v in rr.json()["settings"]["autoMode"].items() if k != "environment"}
+                   == {k: v for k, v in r_none.json()["settings"]["autoMode"].items() if k != "environment"},
+                   (rr.json()["env"].get("TARES_PROJECT"), list(rr.json()["settings"]["autoMode"])))
+            store.set_session_station("sess-here", "shop-build-here", "builder", "shop-orchestrator", "p1", now_utc())
+            rr = await root.get("/api/factory/stations/shop-build-here/launch", params=no_proj)
+            ck("a recorded project that exists is the station's project",
+               rr.status_code == 200 and rr.json()["env"].get("TARES_PROJECT") == "p1", (rr.status_code, rr.text[:200]))
+            rr = await root.get("/api/factory/stations/shop-build-gone/launch",
+                                params={**params, "project": "p_gone_id"})
+            ck("naming the gone project is still 404", rr.status_code == 404, (rr.status_code, rr.text[:120]))
+
+            print("the route refuses a name that is not a station name")
+            bad = {"a b": "a%20b", "a backslash": "x%5Cy", "a leading dot": ".hidden", "a leading hyphen": "-lead",
+                   "upper case": "Shop", "two dots": "a..b", "121 characters": "a" * 121, "a colon": "a%3Ab"}
+            for what, enc in bad.items():
+                rr = await root.get(f"/api/factory/stations/{enc}/launch", params=params)
+                ck(f"{what} is 422 and the answer says the rule",
+                   rr.status_code == 422 and "lower-case letters, digits, hyphens and underscores" in rr.text,
+                   (rr.status_code, rr.text[:160]))
+            ck("a name of 120 characters is a station name", (await root.get(f"/api/factory/stations/{'a' * 120}/launch",
+                                                                             params={**params, "project": ""})).status_code == 200)
+            async with mk(station=".hidden") as cx:
+                rr = await cx.get("/api/factory/stations/.hidden/launch", params=params)
+                ck("the station's own key does not let a bad name through", rr.status_code == 422, (rr.status_code, rr.text[:120]))
 
     print(f"\n{P} passed, {F} failed")
     sys.exit(1 if F else 0)

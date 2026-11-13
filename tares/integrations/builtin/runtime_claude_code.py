@@ -5,12 +5,12 @@ the crew's settings) and from what the `tares factory` command line tells it. Th
 `{PLACEHOLDER}`s that only its machine knows, adds `--resume`, the boot prompt and the `claude` binary, and
 starts the session. A later runtime is one more integration of the `runtime` slot.
 
-The spec is the same launch the command line builds itself (`tares factory launch-plan` prints that one):
-the same arguments, the same environment, the same settings, with these differences:
+The command line (`tares factory`, `tares.crew.launch.launch_plan`) asks for this spec and starts from it, with
+no launch of its own: it fills the placeholders, adds `FACTORY_TARES` (the path of the `tares` program on that
+machine, which only it knows), and keeps a copy for a start while the cell is down. `tares factory launch-plan`
+prints the spec after that. Notes on the spec:
   * the machine's values are placeholders (see `runtime.PLACEHOLDERS`) until the command line fills them;
-  * monitoring's `station_env` and `station_settings` are in the spec, and only there;
-  * `FACTORY_TARES`, the path of the `tares` program on that machine, is not in the spec: the command line
-    adds it;
+  * monitoring's `station_env` and `station_settings` are in the spec;
   * the settings are the settings file without its `env`, which is `spec.env`.
 The file a station launches with is `{"env": spec.env, **spec.settings}`.
 
