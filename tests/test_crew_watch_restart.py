@@ -53,8 +53,8 @@ ENV = {**os.environ, "PYTHONPATH": str(ROOT), "FACTORY_WATCH_INTERVAL": "1", "FA
        "PYTHONUNBUFFERED": "1", "TARESD_URL": "http://127.0.0.1:9"}
 
 
-def run(*args):
-    p = subprocess.run([sys.executable, "-m", "tares.crew", "crew", "watch", *args], env=ENV, capture_output=True,
+def run(*args, extra_env=None):
+    p = subprocess.run([sys.executable, "-m", "tares.crew", "crew", "watch", *args], env={**ENV, **(extra_env or {})}, capture_output=True,
                        text=True, timeout=120, stdin=subprocess.DEVNULL)
     return p.returncode, p.stdout, p.stderr
 
@@ -158,6 +158,33 @@ try:
     code, out, err = run("--restart", "--only-under")
     ck("--only-under without a folder: usage, exit 2", code == 2 and "needs a folder" in err, (code, out, err))
     ck("a refused restart left the watch running", watch.running_pid(paths) is not None)
+    live = watch.running_pid(paths)
+    code, out, err = run("--restart", "--only-under", "")
+    ck("--only-under with an empty folder: usage, exit 2, not a restart", code == 2 and "needs a folder" in err, (code, out, err))
+    code, out, err = run("--restart", "--only-under", "--json")
+    d = doc_of(out)
+    ck("--only-under does not swallow a following --json: the usage error comes as JSON",
+       code == 2 and d and d["error"]["code"] == "usage", (code, out, err))
+    ck("...and the watch was not touched", watch.running_pid(paths) == live)
+
+    print("FACTORY_NO_WATCH")
+    code, out, err = run("--restart", "--json", extra_env={"FACTORY_NO_WATCH": "1"})
+    ck("a restart that could not start a new watch fails before stopping the old one",
+       code == 1 and "FACTORY_NO_WATCH" in (out + err), (code, out, err))
+    ck("...the running watch is still the same one", watch.running_pid(paths) == live, (watch.running_pid(paths), live))
+
+    print("_under")
+    base = SCRATCH / "install"
+    (base / "bin").mkdir(parents=True)
+    ck("a path inside the folder", watch._under(str(base / "bin" / "python"), str(base)))
+    ck("the folder itself", watch._under(str(base), str(base)))
+    ck("a sibling that only shares the name as a prefix is not inside", not watch._under(str(base) + "-old/bin/python", str(base)))
+    if os.name != "nt":
+        outside = SCRATCH / "base-python"
+        outside.write_text("", encoding="utf-8")
+        link = base / "bin" / "python3"
+        link.symlink_to(outside)
+        ck("a link inside the folder that points outside it still counts as inside", watch._under(str(link), str(base)))
 finally:
     cleanup()
 

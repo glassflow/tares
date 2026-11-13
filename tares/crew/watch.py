@@ -431,11 +431,15 @@ def _say_unreadable_settings(paths: CrewPaths, env: dict) -> None:
 
 
 def _under(path: str, folder: str) -> bool:
-    """Is `path` the folder itself or inside it: case-insensitive on Windows, symlinks resolved elsewhere."""
-    def norm(p: str) -> str:
-        return os.path.normcase(os.path.abspath(p if os.name == "nt" else os.path.realpath(p)))
-    path, folder = norm(path), norm(folder)
-    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+    """Is `path` the folder itself or inside it: case-insensitive on Windows. It counts when the path as written or
+    with its links resolved is inside the folder as written or resolved (a venv's python links outside the venv)."""
+    def forms(p: str) -> set:
+        return {os.path.normcase(os.path.abspath(p)), os.path.normcase(os.path.realpath(p))}
+    for f in forms(folder):
+        base = f.rstrip(os.sep) + os.sep
+        if any(x == f or x.startswith(base) for x in forms(path)):
+            return True
+    return False
 
 
 def _watch_executables(pid: int) -> list:
@@ -464,7 +468,9 @@ def restart_watch(paths: CrewPaths, env: dict, *, if_running: bool = False, only
         if only_under:
             exes = _watch_executables(pid)
             if not any(_under(e, only_under) for e in exes):
-                return {"action": "other_install", "executable": exes[0] if exes else ""}
+                return {"action": "other_install", "executable": exes[0] if exes else "unknown"}
+        if env.get("FACTORY_NO_WATCH"):
+            raise CrewError(f"FACTORY_NO_WATCH is set, so a new watch would not start: the running watch (pid {pid}) is left alone")
         said: list = []
         stop(paths, said.append, env=env)
         if running_pid(paths) is not None:
@@ -501,7 +507,7 @@ def _cmd_restart(args: list, env: dict) -> int:
             if_running = True
         elif a == "--json":
             pass
-        elif a == "--only-under" and rest:
+        elif a == "--only-under" and rest and rest[0].strip() and not rest[0].startswith("--"):
             only_under = rest.pop(0)
         elif a == "--only-under":
             problem = "--only-under needs a folder"
