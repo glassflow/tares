@@ -4,6 +4,36 @@ from __future__ import annotations
 from .base import Integration
 from .types import LaunchSpec
 
+# The placeholders a launch spec leaves for the machine that starts the station, and what each stands for.
+# The cell cannot know them: they are paths and lists of this machine's folders. The `tares factory` command
+# line fills them with `fill_placeholders` just before it starts the session.
+PLACEHOLDERS: dict[str, str] = {
+    "CREW_HOME": "the crew's own folder on the machine that starts the station",
+    "PLUGIN_DIR": "the Tares plugin folder the station runs on (a frozen crew runs from its frozen copy)",
+    "PLUGIN_DIR_SHELL": "the same folder written as one word for the shell that runs the status line",
+    "WT_REPOS": "the sentence naming the repositories whose worktree folders the station may use",
+    "REPOS": "the sentence naming the repositories checked out on that machine",
+    "TOKEN_FILE": "the file that holds the crew's key (the key itself is never in a spec)",
+    "SETTINGS_FILE": "the settings file the station is started with (--settings)",
+}
+
+
+def fill_placeholders(value, values: dict):
+    """A copy of `value` (a string, or lists and dicts holding them, as a spec's command, env and
+    settings do) with each `{NAME}` of `values` replaced in every string. Dict keys and any other
+    `{...}` stay as they are; `value` itself is not changed."""
+    if isinstance(value, str):
+        for name, text in values.items():
+            value = value.replace("{" + name + "}", str(text))
+        return value
+    if isinstance(value, list):
+        return [fill_placeholders(v, values) for v in value]
+    if isinstance(value, tuple):
+        return tuple(fill_placeholders(v, values) for v in value)
+    if isinstance(value, dict):
+        return {k: fill_placeholders(v, values) for k, v in value.items()}
+    return value
+
 
 class Runtime(Integration):
     slot = "runtime"

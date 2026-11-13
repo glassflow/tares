@@ -11,12 +11,27 @@ rules, which are the grants.
   POST   /api/factory/guardrails/rules                       add a deny rule (an admin)
   PUT    /api/factory/guardrails/rules/{id}                  change the text of a deny rule of your own
   DELETE /api/factory/guardrails/rules/{id}                  remove a deny rule of your own
+  GET    /api/factory/stations/{station}/launch              how that station starts (TR-867), see below
 
 A default can be neither added over, changed nor removed: any write that names one is 403. An allow
 rule is a grant; it is read in place from the grants (GET /api/grants) and written there, so a write
 here that asks for one is 422 and points to the grants. The sentences keep a `{name}` placeholder
 for what only the station's machine knows (the person's name, the crew's folder); `{prod_pattern}`
 is filled from the crew's settings.
+
+How a station starts (TR-867): the cell builds the launch spec through the runtime integration (slot
+`runtime`, `claude_code` unless another is chosen) and answers it as {runtime, role, command, env, settings,
+placeholders}. The `tares factory` command line fills the placeholders (`{CREW_HOME}`, `{PLUGIN_DIR}`,
+`{PLUGIN_DIR_SHELL}`, `{WT_REPOS}`, `{REPOS}`, `{TOKEN_FILE}`, `{SETTINGS_FILE}`: what only its machine knows),
+adds the boot prompt, `--resume` and the `claude` binary, and starts the session. No answer holds a secret.
+An admin key, or the station's own (X-Tares-Station: <station>), may ask; a key that names another station is
+403. The station's role, parent and project come from the cell's record of it when it has one; the query
+parameters give what only the command line knows, and win over the record:
+  role, parent, parent_role (the role a helper works under), project (name or id), repo (the folder, with
+  forward slashes), orchestrator (the crew's orchestrator station), human, authorized_at, autonomy (the
+  station's own level when it differs from the crew's), cluster, model, effort, autocompact, tares_url,
+  mcp_url, token_file (true when the crew keeps its key in a file).
+A role the runtime cannot run, or a station with no role to find, is 422.
 
 A guardrail pair is a hook point (`pre_build`, `pre_merge`, `pre_release`) paired with a guardrail
 integration and its integration settings; `on_fail` is `block` (the default) or `warn`. The factory
@@ -46,7 +61,7 @@ from fastapi import Body, HTTPException, Request, Response
 from . import factory_setup, licence
 from .factory_api import caller, crew_settings
 from .factory_store import FactoryStore
-from .integrations import hooks, registry
+from .integrations import hooks, registry, resolve
 from .integrations.builtin import guardrails_tares as rules_mod
 from .integrations_api import kind_ok, may_write_project_of, required_ok
 
@@ -219,6 +234,79 @@ def register(app, store, h):
         may_write(request)
         r = rule_or_error(rule_id)
         return {"deleted": store.delete_guardrail_rule(r["id"]), "id": r["id"]}
+
+    # ── how a station starts (TR-867) ──
+    def station_record(station: str, crew: str) -> dict:
+        """The newest session the cell has seen play `station` (in `crew` when it is named): its role,
+        parent and project. {} for a station the cell has not seen yet, which is every first start."""
+        names = {c["id"]: c["name"] for c in store.list_crews()} if crew else {}
+        for row in store.station_sessions(h.cc_source()):
+            if row["station"] == station and (not crew or names.get(row["crew_id"]) == crew):
+                return row
+        return {}
+
+    @app.get("/api/factory/stations/{station}/launch")
+    def get_launch(station: str, request: Request, role: str = "", parent: str = "", parent_role: str = "",
+                   project: str = "", repo: str = "", crew: str = "", orchestrator: str = "", human: str = "",
+                   authorized_at: str = "", autonomy: str = "", cluster: str = "", model: str = "",
+                   effort: str = "", autocompact: str = "", tares_url: str = "", mcp_url: str = "",
+                   token_file: bool = False):
+        """The launch spec of `station` (see the module's note): the runtime's command, env and settings
+        with placeholders for the command line's own machine. An admin, or the station itself."""
+        station = station.strip()
+        me = caller(request)
+        if me["station"]:
+            if me["station"] != station:
+                refuse(403, f"this key is for station {me['station']}; it cannot read the launch of {station}")
+        elif not h.is_admin(request):
+            refuse(403, "this needs an admin or the crew station itself")
+        crew = crew.strip() or request.headers.get("x-tares-crew", "").strip()
+        have = station_record(station, crew)
+        role = (role or have.get("role") or infer_role(station)).strip().lower()
+        if not role:
+            refuse(422, f"cannot tell the role of {station!r}: add role=orchestrator|reviewer|releaser|builder|helper")
+        parent = parent or have.get("parent") or ""
+        project = project.strip() or (have.get("project") or "")
+        p = None
+        if project:
+            try:
+                p = h.project_or_404(h.resolve_project(project))
+            except HTTPException:
+                p = None
+        project_id = p["id"] if p else ""
+        project_name = p["name"] if p else project
+        work_role = role
+        if role == "helper":
+            work_role = parent_role.strip().lower() or infer_role(parent)
+            if work_role not in rules_mod.ROLES:
+                refuse(422, "a helper works under its parent's role: add parent_role="
+                            "orchestrator|reviewer|releaser|builder")
+        rules = rendered(request, station, project_id, work_role)
+        eff = resolve.effective("runtime", None, store=store)
+        cls = registry.get("runtime", eff.integration)
+        if cls is None:
+            refuse(422, f"the runtime {eff.integration!r} is not installed")
+        mon = resolve.effective("monitoring", None, store=store)
+        mon_cls = registry.get("monitoring", mon.integration)
+        base = str(request.base_url).rstrip("/")
+        person = h.current_person(request)
+        ctx = {
+            "crew": crew or "crew", "orchestrator": orchestrator.strip(), "parent": parent, "parent_role": work_role,
+            "project": project_name, "project_id": project_id, "repo": repo, "human": human,
+            "authorized_at": authorized_at, "autonomy": autonomy.strip(),
+            "crew_autonomy": crew_settings(store, person, h.is_system(request)).get("autonomy") or "",
+            "model": model, "effort": effort, "autocompact": autocompact, "cluster": cluster,
+            "tares_url": tares_url.strip() or base, "mcp_url": mcp_url.strip() or f"{base}/mcp",
+            "token_file": token_file,
+            "rules": {"allow": rules["allow"], "soft_deny": rules["soft_deny"]},
+            "monitoring": mon_cls(store) if mon_cls else None,
+        }
+        try:
+            spec = cls().launch_spec(role, station, ctx)
+        except ValueError as e:
+            refuse(422, str(e))
+        return {"runtime": eff.integration, "station": station, "role": role, "command": spec.command,
+                "env": spec.env, "settings": spec.settings, "placeholders": spec.placeholders}
 
     # ── guardrail pairs (TR-863) ──
     def no_station_pairs(request: Request):

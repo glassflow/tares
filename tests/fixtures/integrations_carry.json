@@ -208,14 +208,22 @@
       "slot": "guardrails"
     },
     {
-      "available": [],
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "claude_code",
+          "settings_schema": [],
+          "title": "Claude Code"
+        }
+      ],
       "choice": null,
       "effective": {
-        "integration": "claude-code",
+        "integration": "claude_code",
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "claude-code"
+        "title": "Claude Code"
       },
       "slot": "runtime"
     }
@@ -267,11 +275,11 @@
           "title": "Tares guardrails"
         },
         {
-          "integration": "claude-code",
+          "integration": "claude_code",
           "reason": "",
           "slot": "runtime",
           "source": "default",
-          "title": "claude-code"
+          "title": "Claude Code"
         }
       ]
     },
@@ -321,11 +329,11 @@
           "title": "Tares guardrails"
         },
         {
-          "integration": "claude-code",
+          "integration": "claude_code",
           "reason": "",
           "slot": "runtime",
           "source": "default",
-          "title": "claude-code"
+          "title": "Claude Code"
         }
       ]
     },
@@ -375,11 +383,11 @@
           "title": "Tares guardrails"
         },
         {
-          "integration": "claude-code",
+          "integration": "claude_code",
           "reason": "",
           "slot": "runtime",
           "source": "default",
-          "title": "claude-code"
+          "title": "Claude Code"
         }
       ]
     },
@@ -429,11 +437,11 @@
           "title": "Tares guardrails"
         },
         {
-          "integration": "claude-code",
+          "integration": "claude_code",
           "reason": "",
           "slot": "runtime",
           "source": "default",
-          "title": "claude-code"
+          "title": "Claude Code"
         }
       ]
     }

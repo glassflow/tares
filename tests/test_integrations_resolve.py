@@ -83,7 +83,7 @@ def eff(slot, uid=None):
 # ── default ────────────────────────────────────────────────────────────────────
 ck("the defaults are the agreed ones", DEFAULTS == {
     "tickets": "tares", "review": "tares", "ci": "local", "memory": "tares",
-    "monitoring": "off", "guardrails": "tares", "runtime": "claude-code"}, DEFAULTS)
+    "monitoring": "off", "guardrails": "tares", "runtime": "claude_code"}, DEFAULTS)
 for slot, name in DEFAULTS.items():
     e = eff(slot)
     ck(f"nothing stored: {slot} is the default", e == Effective(name, {}, "default", ""), e)
