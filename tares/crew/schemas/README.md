@@ -53,7 +53,7 @@ its types from them.
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
 `station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `setup_needed`, `tares_error`
 (a call to Tares failed), `not_signed_in` (no Tares is configured: no saved `tares login`, no address set, and nothing at
-the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
+the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `cell_unreachable`, `key_refused`, `key_lacks_admin`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
 
 ## login and logout
 
@@ -62,6 +62,12 @@ as soon as the sign-in page address is ready, then `{"login": {"step": "done", .
 is never printed, on stdout or stderr. A failure is the error shape and exit 1; notes for a person go to stderr.
 `tares login --show --json` and `tares logout --json` print one document. `--show` cannot be combined with
 `--cloud` or `--no-browser` (a usage error, exit 2).
+`tares login --cell <address> --key-stdin [--json]` connects to a Tares that is not Tares Cloud with a key the person
+made: it reads the key as one line from standard input (never from an argument; `--cell` without `--key-stdin` is a
+usage error, exit 2), checks `/health` and the key, saves the login with `cloud` null and prints the same `done`
+document. `cell_unreachable` carries the connection or certificate error, `key_refused` is a 401 or 403 and
+`key_lacks_admin` a key without the admin scope. `tares logout` after such a login deletes the saved login and
+leaves the key on the cell (`key_removed` false).
 
 ## events
 

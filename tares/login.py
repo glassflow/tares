@@ -555,6 +555,99 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
     return 0
 
 
+def cell_address(address: str) -> tuple[str, str]:
+    """(url, problem) for a cell address typed after --cell: https://, or http:// only for localhost and
+    127.0.0.1; a trailing slash is dropped. problem is plain words, empty when the address is fine."""
+    from urllib.parse import urlsplit
+    text = (address or "").strip()
+    try:
+        u = urlsplit(text)
+        host, _port = u.hostname, u.port
+    except ValueError:
+        return "", f"{text!r} is not an address"
+    if u.scheme not in ("http", "https") or not host:
+        return "", f"{text!r} is not an address: it must start with https://"
+    if u.scheme == "http" and host not in ("localhost", "127.0.0.1"):
+        return "", f"{text!r} is not safe: http:// is only for localhost and 127.0.0.1, use https://"
+    if u.username is not None or u.password is not None or u.query or u.fragment:
+        return "", f"{text!r} must be a plain address, without a user, a query or a fragment"
+    return text.rstrip("/"), ""
+
+
+def connect_cell(address: str, key: str, json_out: bool = False) -> int:
+    """`tares login --cell <address> --key-stdin`: save a sign-in to a cell that is not Tares Cloud, with a
+    key the person made (the Security page shows it once). address comes from cell_address()."""
+    try:
+        return _connect_cell(address, key, json_out)
+    except OSError as e:
+        if not json_out:
+            raise
+        return _err(True, "error", f"tares login: {type(e).__name__}: {e}")
+
+
+def _connect_cell(address: str, key: str, json_out: bool) -> int:
+    import httpx
+    old_data, old_key, why = _load()
+    if old_data is not None and not old_key and why:
+        return _err(json_out, "keychain_unreadable",
+                    _unreadable(why, old_data, "tares login") + f" Or, to start over, delete {login_file()} "
+                    "and remove that key yourself under Security > API keys.")
+    old = {**old_data, "key": old_key} if old_data is not None and old_key else None
+    try:
+        status, health = _http("GET", f"{address}/health", timeout=10)
+        status2, detail = (_http("GET", f"{address}/api/crew/settings", token=key, timeout=10)
+                           if status == 200 else (0, {}))
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
+        return _err(json_out, "cell_unreachable",
+                    f"tares login: could not reach {address} ({e}). Nothing was saved.")
+    if status != 200:
+        return _err(json_out, "cell_unreachable",
+                    f"tares login: {address} answered {status} at /health, so it does not look like a Tares. "
+                    "Nothing was saved.")
+    version = str(health.get("version") or "")
+    if (_version(version) or (0, 0, 0)) < MIN_VERSION:
+        return _err(json_out, "cell_too_old",
+                    f"tares login: {address} runs Tares {version or 'of an unknown version'}; "
+                    f"tares login needs {MIN_VERSION_TEXT} or later. Nothing was saved.")
+    if status2 == 403 and "admin" in str(detail.get("detail") or ""):
+        return _err(json_out, "key_lacks_admin",
+                    f"tares login: {address} accepted the key but it lacks the admin scope, which "
+                    "tares factory needs. Make a key with the admin scope under Security > API keys. "
+                    "Nothing was saved.")
+    if status2 in (401, 403):
+        return _err(json_out, "key_refused",
+                    f"tares login: {address} refused the key ({status2}). Check it, or make a new one under "
+                    "Security > API keys. Nothing was saved.")
+    if not 200 <= status2 < 300:
+        return _err(json_out, "cell_unreachable",
+                    f"tares login: {address} answered {status2} when the key was checked. Nothing was saved.")
+    from urllib.parse import urlsplit
+    machine = _machine()
+    data = {"cloud": None, "cell": urlsplit(address).hostname, "cell_url": address, "key": key, "key_id": None,
+            "machine": machine, "signed_in_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    try:
+        where = _save(data)
+    except (OSError, CrewError) as e:
+        return _err(json_out, "error", f"tares login: could not save the login ({e}). "
+                    "The saved login (if any) is as it was.")
+    _crew_follows(key, json_out=json_out)
+    if old and old.get("cloud"):
+        ok, _how = _revoke(old)
+        if not ok:
+            print(f"tares login: the previous key on {old.get('cell')} could not be removed; "
+                  f"remove it under Security > API keys on {old.get('cell_url')}.",
+                  file=sys.stderr if json_out else sys.stdout)
+    if old and _account(old) != _account(data):
+        _kc_delete(_account(old))
+    store = "file" if where == str(login_file()) else "keychain"
+    if json_out:
+        contract.emit({"login": {"step": "done", "cell": data["cell"], "cell_url": address, "machine": machine,
+                                 "key_store": store}}, "login")
+        return 0
+    print(f"tares login: this machine is connected to {address}")
+    return 0
+
+
 def show(json_out: bool = False) -> int:
     """`tares login --show`: what is saved, and whether its key still works. Never prints the key."""
     import httpx
@@ -573,7 +666,7 @@ def show(json_out: bool = False) -> int:
             works = True if 200 <= status < 300 else False if status in (401, 403) else None
         except (httpx.HTTPError, httpx.InvalidURL, OSError):
             works = None
-    info = {"signed_in": True, "source": source, "cloud": data.get("cloud") or "", "cell": data.get("cell") or "",
+    info = {"signed_in": True, "source": source, "cloud": data.get("cloud") or None, "cell": data.get("cell") or "",
             "cell_url": _account(data), "machine": data.get("machine") or "",
             "signed_in_at": data.get("signed_in_at") or "", "key_id": data.get("key_id") or "",
             "key_store": _key_store(data), "key_works": works}
@@ -615,6 +708,20 @@ def _logout(data, key: str, json_out: bool) -> int:
             print("tares logout: this machine is not signed in.")
         return 0
     data = {**data, "key": key}
+    if not data.get("cloud"):
+        # connected by address and key: the person made that key, so it stays on the cell
+        _forget()
+        crew = _crew_follows("", data["key"], json_out=json_out)
+        if json_out:
+            contract.emit({"logout": {"was_signed_in": True, "key_removed": False}}, "logout")
+            return 0
+        print(f"tares logout: the saved login is deleted. The key was not made by this machine, so it is still "
+              f"valid on {data.get('cell')}: remove it under Security > API keys on {data.get('cell_url')} "
+              f"if you no longer need it.")
+        if crew:
+            print("  The factory crew on this machine stops reaching Tares until you sign in again "
+                  "with tares login.")
+        return 0
     ok, _how = _revoke(data)
     _forget()
     crew = _crew_follows("", data["key"], json_out=json_out)
