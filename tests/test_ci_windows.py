@@ -42,13 +42,14 @@ FAILING = 'print("  FAIL one")\nprint("\\n0 passed, 1 failed")\nimport sys\nsys.
 SKIPPING = 'print("skip: needs bash")\nprint("\\n0 passed, 0 failed")\n'
 
 
-def parity(scenarios=("alpha", "beta"), coverage_code=0, bad=(), both_skip=False):
+def parity(scenarios=("alpha", "beta"), coverage_code=0, bad=(), both_skip=False, coverage_sleep=0):
     """A stand-in for tests/factory/parity.py: --list, --coverage and one scenario by name."""
     return (
         "import sys\n"
         "a = sys.argv[1:]\n"
         "if a == ['--list']:\n    print(%r)\n    sys.exit(0)\n" % "\n".join(scenarios)
-        + "if a == ['--coverage']:\n    print('coverage: 1 of 2 scenarios pass against Python (50.0%%) in 1 suites')\n"
+        + "if a == ['--coverage']:\n    import time\n    time.sleep(%s)\n" % coverage_sleep
+        + "    print('coverage: 1 of 2 scenarios pass against Python (50.0%%) in 1 suites')\n"
         "    sys.exit(%d)\n" % coverage_code
         + "if a[0] in %r:\n    print('FAIL python: 1 of 1 checks failed')\n    sys.exit(1)\n" % (list(bad),)
         + ("print('SKIP bash: no bash')\nprint('SKIP python: not ported')\n" if both_skip
@@ -118,6 +119,15 @@ ck("a failing coverage run fails the run", code == 1 and "FAIL  parity.py --cove
 print("a test that never finishes")
 code, out = runner(tree({"test_crew_state.py": "import time\ntime.sleep(60)\n"}, parity()), "--timeout", "2")
 ck("it is stopped, reported as exit 124, and fails the run", code == 1 and "exit 124" in out and "timed out after 2s" in out, out)
+
+print("a coverage report that takes longer than a single test may (TR-1230)")
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity(coverage_sleep=3)), "--timeout", "2")
+ck("it gets twice --timeout by default, so a report 1.5 times a test's limit passes", code == 0 and "ok    parity.py --coverage" in out, out)
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity(coverage_sleep=3)), "--timeout", "2", "--coverage-timeout", "1")
+ck("--coverage-timeout sets its own limit: the report is stopped at exit 124 and fails the run",
+   code == 1 and "FAIL  parity.py --coverage" in out and "timed out after 1s" in out, out)
+code, out = runner(tree({"test_crew_state.py": PASSING}, parity(coverage_sleep=3)), "--timeout", "1", "--coverage-timeout", "10")
+ck("...and a longer one lets a slow report finish while a single test still has the short limit", code == 0 and "ok    parity.py --coverage" in out, out)
 
 print("zero tests")
 code, out = runner(tree({}, parity(scenarios=(), both_skip=True), packaging=SKIPPING))
