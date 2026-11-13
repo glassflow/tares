@@ -10047,9 +10047,11 @@ _cc("cc_update_self", "crew update from the orchestrator leaves it out and says 
      "another station fails: the caller's way out is still said"],
     setup=_cb_fake_ps(_cc_setup(have="1.5.4", installed="1.5.5")))
 
-# A halt in the middle of crew update stops it; it does not wait for ever.
+# A halt in the middle of crew update stops it; it does not wait for ever. The halt comes a few seconds in, after the stations that
+# are idle have moved; a Windows runner starts each process slowly, so its timers are tripled (as in cc_pace_slow).
+_PACE_SLOW = 3 if sys.platform == "win32" else 1
 _cc("cc_update_halted", "a halt while crew update waits for a busy station stops it and says so",
-    [Step(["crew", "update", "--wait", "0"], env=CB_ENV, before=_cb_all(_cc_busy(_R), _cb_later(2.5, _cb_halt_file)), after=_cc_after()),
+    [Step(["crew", "update", "--wait", "0"], env=CB_ENV, before=_cb_all(_cc_busy(_R), _cb_later(2.5 * _PACE_SLOW, _cb_halt_file)), after=_cc_after()),
      Step(["crew", "resume"])],
     [("halted in the middle: crew update stops and says so",
       lambda r: r.code(0) not in (0, 124) and "the crew was halted" in r.out(0))],
@@ -10394,7 +10396,6 @@ PACE_FULL_HOOK = ("import os, urllib.request\n"
 
 # The limit fills 2.5 s into the step and the station is free 3.5 s in. A Windows process start takes longer than the
 # gap between those two, so there the timers are 3 times as long (TR-1228).
-_PACE_SLOW = 3 if sys.platform == "win32" else 1
 
 _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is restarted onto the newer Claude Code; slow, not full: "
                        "crew update moves them and says to re-arm at 45 minutes; it fills while crew update waits: it stops there",

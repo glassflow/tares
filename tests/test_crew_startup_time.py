@@ -43,6 +43,10 @@ RUNS = 5
 RATIO = 6.5
 CAP_MS = 450
 DISPATCH_MS = 150 if os.name == "nt" else 100
+# Windows pays more for the same roster: the fake Claude Code is a second Python start (about 190 ms there), and the HTTP
+# client builds its SSL context (about 170 ms), so a CI run measured 633 ms against a dispatcher alone of 91 ms (TR-1228).
+# The ratio is no guide there, so Windows has one bound: 800 ms, well under the 2.6 s a refused connect cost before.
+WIN_LIMIT_MS = 800
 
 P = F = 0
 
@@ -115,8 +119,11 @@ show("dispatcher + help    ", d_ms)
 ck("every run exits 0", codes == [0] * RUNS, str(codes))
 ck("...and prints the roster", first == "crew: crew (orchestrator: crew-orchestrator)", first)
 ck("the dispatcher alone (interpreter, imports, usage) exits 0 every time", d_codes == [0] * RUNS, str(d_codes))
-limit = min(CAP_MS, max(LIMIT_MS, RATIO * statistics.median(d_ms)))
-why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the dispatcher alone on this slower machine, at most {CAP_MS} ms)")
+if os.name == "nt":
+    limit, why = WIN_LIMIT_MS, f"{WIN_LIMIT_MS} ms (Windows)"
+else:
+    limit = min(CAP_MS, max(LIMIT_MS, RATIO * statistics.median(d_ms)))
+    why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the dispatcher alone on this slower machine, at most {CAP_MS} ms)")
 ck(f"median of {RUNS} runs of `tares factory roster` is under {why}", statistics.median(ms) < limit,
    f"median {statistics.median(ms):.0f} ms; dispatcher alone {statistics.median(d_ms):.0f} ms")
 if statistics.median(ms) >= limit:  # where the time goes, for the log of a slow machine
