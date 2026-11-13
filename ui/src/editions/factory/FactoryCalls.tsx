@@ -27,11 +27,11 @@ function PastRow({ c }: { c: PastCall }) {
         </div>
         <div className={cn(MUTED, "whitespace-nowrap")}>{c.state === "kept" ? "Kept" : "Changed"}{c.decided && `, ${c.decided}`}</div>
       </div>
-      <div className={cn("mt-1.5 border-l-[3px] pl-3 [overflow-wrap:anywhere]",
-                         c.state === "kept" ? "border-[color:var(--accent)] font-medium" : "border-border text-muted-foreground line-through")}
+      <div className={cn("mt-1.5 [overflow-wrap:anywhere]",
+                         c.state === "kept" ? "font-medium" : "text-muted-foreground line-through")}
            data-user-text>{c.choice}</div>
       {c.state === "overturned" && c.words && (
-        <div className="mt-1.5 border-l-[3px] border-[color:var(--accent)] pl-3 font-medium [overflow-wrap:anywhere]" data-testid="call-past-words">
+        <div className="mt-1.5 font-medium [overflow-wrap:anywhere]" data-testid="call-past-words">
           <span className="font-normal text-muted-foreground">You said: </span><span data-user-text>{c.words}</span>
         </div>
       )}

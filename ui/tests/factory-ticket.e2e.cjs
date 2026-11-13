@@ -166,6 +166,22 @@ async function waitFor(url, tries = 100) {
     ck("one decision of yours, read as the answer chosen", (await T("decision-row").count()) === 1
        && (await txt(T("decision-row").getByTestId("decision-answer"))) === "tabs"
        && (await T("decision-row").getByTestId("decision-said").count()) === 0, await txt(T("decision-row")));
+    ck("a call's own words are labelled as yours, not marked with a stripe",
+       (await T("call-row").nth(2).getByTestId("call-said").count()) === 1 && (await txt(T("call-row").nth(2).getByTestId("call-said"))).startsWith("You said: "));
+
+    // the page is on the paper (TR-1274): sections and facts open with a 1px rule, with no box and no fill,
+    // and nothing on the page carries a side stripe
+    const edges = (loc) => loc.evaluate((e) => { const s = getComputedStyle(e);
+      return [s.borderTopWidth, s.borderRightWidth, s.borderBottomWidth, s.borderLeftWidth, s.backgroundColor].join(" "); });
+    const shapes = [];
+    for (const id of ["ticket-reviews", "ticket-checks", "ticket-calls", "ticket-history", "ticket-notes", "ticket-facts"]) shapes.push(`${id}: ${await edges(T(id))}`);
+    ck("every section and the facts open with a 1px rule, and none is a box or filled",
+       shapes.every((x) => x.endsWith(": 1px 0px 0px 0px rgba(0, 0, 0, 0)")), shapes.join("; "));
+    const stripes = await T("factory-ticket").evaluate((root) => [...root.querySelectorAll("*")].filter((e) => {
+      const s = getComputedStyle(e);
+      // a stripe is a left edge heavier than the right one; a square drawn all round (a state dot) is not
+      return s.borderLeftStyle !== "none" && parseFloat(s.borderLeftWidth) > 1 && parseFloat(s.borderLeftWidth) > parseFloat(s.borderRightWidth); }).map((e) => e.getAttribute("data-testid") || e.tagName));
+    ck("no side stripes: nothing on the page has a left edge wider than 1px", stripes.length === 0, stripes.join(", "));
 
     // history: fourteen, ten shown
     ck("fourteen lines of history, ten shown", (await txt(T("ticket-history").locator("span").filter({ hasText: /^14 lines$/ }))) === "14 lines"
@@ -233,10 +249,12 @@ async function waitFor(url, tries = 100) {
     await open(page, "T2");
     await setTheme(page, "dark");
     await page.waitForTimeout(THEME_MS);
-    const notesBg = await T("notes-box").evaluate((e) => getComputedStyle(e).backgroundColor);
+    // the notes sit on the paper, so what shows behind them is the first painted colour up the tree
+    const notesBg = await T("notes-box").evaluate((e) => { for (let n = e; n; n = n.parentElement) {
+      const c = getComputedStyle(n).backgroundColor; if (c !== "rgba(0, 0, 0, 0)" && c !== "transparent") return c; } return ""; });
     const fadeBg = await T("notes-box").locator("[aria-hidden]").last().evaluate((e) => getComputedStyle(e).backgroundImage);
-    ck("dark: the notes box is dark, not white", lightness(notesBg) < 80, notesBg);
-    ck("dark: the fade over the cut-off notes ends in the box's own colour", fadeBg.includes(notesBg), `${fadeBg} / ${notesBg}`);
+    ck("dark: the paper behind the notes is dark, not white", notesBg !== "" && lightness(notesBg) < 80, notesBg);
+    ck("dark: the fade over the cut-off notes ends in the paper's colour", fadeBg.includes(notesBg), `${fadeBg} / ${notesBg}`);
     await setTheme(page, "light");
 
     // an old ticket address stays on today's project page for a project the ticket page does not answer for
