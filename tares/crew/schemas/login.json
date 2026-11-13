@@ -65,6 +65,10 @@
                 "keychain",
                 "file"
               ]
+            },
+            "scope_checked": {
+              "const": false,
+              "description": "Present only when the cell has no /api/whoami, so the key's admin scope was not checked."
             }
           },
           "additionalProperties": false
@@ -109,7 +113,11 @@
               ]
             },
             "cloud": {
-              "type": "string"
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "The Tares Cloud console the sign-in came from; null for a cell connected by address and key."
             },
             "cell": {
               "type": "string"
