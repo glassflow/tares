@@ -28,6 +28,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 const esbuild = require(path.join(UI_DIR, "node_modules", "esbuild"));
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8330);
@@ -242,6 +243,8 @@ async function waitFor(url, tries = 100) {
     ck("Copy puts the command on the clipboard and says Copied",
        (await page.evaluate(() => navigator.clipboard.readText())) === "tares factory crew attach project-y-build-m2");
     await checkWords(page, ck, "project-y");
+    const paperY = await checkPaper(page, ck, "project-y");
+    ck("project-y: the paper check saw its sections", paperY.heads.length >= 6, String(paperY.heads.length));
     await shot(page, "live-building-1440.png");
 
     // a #section in the address scrolls to it
@@ -466,6 +469,7 @@ async function waitFor(url, tries = 100) {
         const label = `${name} ${width}`;
         ck(`${label}: no sideways scroll`, (await overflow(p)) <= 0, String(await overflow(p)));
         await checkWords(p, ck, label);
+        if (name !== "err") await checkPaper(p, ck, label);
         const q = (id) => p.getByTestId(id);
         if (width === 1440) {
           if (name === "building") {
