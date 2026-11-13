@@ -36,12 +36,19 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
   const search = React.useRef<HTMLInputElement>(null);
   const groups = React.useMemo(() => searchEmoji(query), [query]);
 
+  const refocus = React.useRef(false);
   const close = React.useCallback((backToTrigger: boolean) => {
     setOpen(false);
     setQuery("");
-    // after a pick the trigger may have been replaced ("Add icon" became the emoji): wait for it
-    if (backToTrigger) requestAnimationFrame(() => trigger.current?.focus());
+    refocus.current = backToTrigger;
   }, []);
+  // after a pick the trigger may have been replaced ("Add icon" became the emoji): focus it right
+  // after the commit that draws it, before the browser paints, so focus is never on nothing
+  React.useLayoutEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    trigger.current?.focus();
+  });
   const pick = (next: string | null) => { close(true); onChange(next); };
 
   React.useEffect(() => {
