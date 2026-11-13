@@ -779,5 +779,5 @@ def crew_restart(client: TaresClient, paths: CrewPaths, args: list, claude_bin=N
     crew_update(client, paths, ["--force", *args], claude_bin)
 
 
-cmd_crew_update = lifecycle._command(crew_update, local_only=False)
-cmd_crew_restart = lifecycle._command(crew_restart, local_only=False)
+cmd_crew_update = lifecycle._command(crew_update, local_only=False, name="crew update")
+cmd_crew_restart = lifecycle._command(crew_restart, local_only=False, name="crew restart")

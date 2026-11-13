@@ -45,10 +45,10 @@ import sys
 import time
 from pathlib import Path
 
-from . import contract, doctor_lsp, state
+from . import contract, doctor_lsp, jsonrun, state
 from . import watch as watch_mod
 from .client import TaresClient, TaresHTTPError, settings_defaults, settings_missing
-from .errors import CrewError
+from .errors import CrewError, SetupNeededError, UsageError
 from .paths import CREW_NAME_RULE, ME, CrewPaths
 
 NAME_PATTERN = "^[a-z0-9][a-z0-9-]{0,30}$"
@@ -598,14 +598,6 @@ class Up:
             self.add_grant(words)
 
 
-def _run(fn) -> int:
-    try:
-        return fn() or 0
-    except CrewError as e:
-        _err(e.line + "\n")
-        return 1
-
-
 def start_stations(client: TaresClient, env: dict, roles: list, claude: str | None = None) -> int:
     """Start the crew's stations, the orchestrator first so the others can check in with it. A station that
     already runs is left alone. FACTORY_PAUSE seconds (default 5) pass after the orchestrator starts."""
@@ -637,7 +629,19 @@ def start_stations(client: TaresClient, env: dict, roles: list, claude: str | No
 
 
 def cmd_crew_up(argv: list, env: dict) -> int:
-    return _run(lambda: _crew_up(argv, env))
+    """With `--json` (TR-1283) the run is silent and ends with one result document on stdout. A program cannot
+    answer the questions, so `--json` needs `--yes`, and settings that still need an answer are refused
+    (`setup_needed`) rather than taken at their recommended value."""
+    def body(args: list) -> int:
+        if jsonrun.FLAG in argv:
+            if not any(a in ("--yes", "-y") for a in args[2:]):
+                raise UsageError(f"usage: {ME} crew up --json --yes [--no-watch] [role...]  (a program cannot answer the setup questions)")
+        return _crew_up(args, env, json_mode=jsonrun.FLAG in argv)
+
+    def text_fail(e: CrewError) -> None:
+        _err(e.line + "\n")
+
+    return jsonrun.run(argv, "crew up", body, text_fail=text_fail)
 
 
 def entry_crew_up(argv: list, env: dict) -> int:
@@ -645,7 +649,7 @@ def entry_crew_up(argv: list, env: dict) -> int:
     return cmd_crew_up(argv, env)
 
 
-def _crew_up(argv: list, env: dict) -> int:
+def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
     claude = claude_bin(env)
     up = Up(env)
     state.crew_name(up.paths)                      # a name that is not valid stops here, not halfway
@@ -663,6 +667,12 @@ def _crew_up(argv: list, env: dict) -> int:
     c.need_capability("integrations")
     c.need_capability("merge_queue")
     c.require_mcp()
+    if json_mode:
+        ids = [q["id"] for q in up.outstanding()]
+        if ids:
+            raise SetupNeededError(f"setup needs answers before crew up --json can run: {', '.join(ids)}. "
+                                   f"Read them with {ME} crew setup --questions, give them with {ME} crew setup --answers <file>, "
+                                   f"then run crew up --json --yes again")
     my_version = kit_version(up.kit)
     clash = installed_tares(env, my_version)
     if clash:
