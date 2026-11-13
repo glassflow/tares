@@ -25,6 +25,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8857);
 const SOLO = PORT + 2;
@@ -150,6 +151,7 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         ck(t("placeholders while the first read is out"), (await page.getByTestId("waiting-row").count()) === 0);
         await shot(page, "loading", width);
         await checkWords(page, ck, t("loading"));
+        await checkPaper(page, ck, t("loading"), { skip: "[data-testid^=start-checklist]" });
         release(); ctl.hold = null;
         await page.getByTestId("factory-home").waitFor();
         await oneRead(ck, t("alex"));
@@ -175,6 +177,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
         await page.getByTestId("factory-home").waitFor();
         await settle(page);
         await oneRead(ck, t("three people"));
+        // TR-1274: the team plan's Home is on the paper too: its waiting lists, crews and repos.
+        const paper = await checkPaper(page, ck, t("alex"), { skip: "[data-testid^=start-checklist]" });
+        ck(t("the paper check saw the team sections"), paper.heads.length >= 4, JSON.stringify(paper.heads.map((h) => h.t)));
         const rows = page.getByTestId("waiting-row");
         ck(t("six things wait for Alex"), (await rows.count()) === 6, String(await rows.count()));
         const senders = await rows.evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="waiting-from"]')?.getAttribute("aria-label")));

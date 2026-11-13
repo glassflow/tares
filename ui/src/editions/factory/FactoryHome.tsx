@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import {
-  Banner, Button, Dialog, EmptyState, ListRow, Panel, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
+  Banner, Button, Dialog, EmptyState, ListRow, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
   Toaster, useToast, type Tone,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
@@ -41,6 +41,8 @@ const GRANT_MAX = 400;
 const WARN_AT = 80;
 
 const SECTION_H = "m-0! text-base!";
+/** Loading rows on the paper: no inset, as the rows they stand for. */
+const FLUSH_ROWS = "[&>div]:px-0!";
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
 const INK_FILL = "[&>div:first-child]:bg-foreground!";
@@ -69,7 +71,7 @@ function useFirstName(): string {
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
       <h2 className={SECTION_H}>{title}</h2>
       {aside}
     </div>
@@ -123,7 +125,7 @@ function WaitingRow({ item, onAction, state, top }: { item: HomeItem; onAction?:
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <ListRow data-testid="waiting-row" className="justify-between gap-y-3">
+    <ListRow data-testid="waiting-row" className="justify-between gap-y-3 px-0">
       <div className="min-w-0 flex-[1_1_280px]">
         <div className={KIND}>{item.label}</div>
         <div className="my-0.5 font-bold" data-user-text><ItemIcon project={item.project} title={item.title} />{item.title}</div>
@@ -151,7 +153,7 @@ function WaitingPending() {
   return (
     <section aria-label="Waiting for you" className="min-w-0" data-testid="waiting-pending">
       <SectionHead title="Waiting for you" />
-      <div className="border border-border bg-card"><SkeletonRows /></div>
+      <SkeletonRows className={FLUSH_ROWS} />
     </section>
   );
 }
@@ -169,23 +171,23 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   return (
     <section aria-label="Waiting for you" className="min-w-0">
       <SectionHead title="Waiting for you" aside={<span className={MUTED}>what holds the crew up first</span>} />
-      <div className="border border-border bg-card">
+      <div>
         {items.length === 0 ? (
           <EmptyState title="Nothing waits for you." className="py-6" />
         ) : (
           <>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
             {g.now.map(row)}
-            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" />}
+            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}
             {more > 0 && (
-              <ListRow>
+              <ListRow className="px-0">
                 <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
                   {more} more
                 </Button>
               </ListRow>
             )}
-            <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
+            <OlderFold items={g.older} className="px-0">{(older) => older.map(row)}</OlderFold>
           </>
         )}
       </div>
@@ -237,11 +239,11 @@ function CrewCard({ data }: { data: HomeData }) {
   return (
     <section aria-label="Your crew" className="min-w-0">
       <SectionHead title="Your crew" />
-      <Panel>
+      <div>
         <div className="mb-2.5 text-[13px] text-muted-foreground">{crew.summary}</div>
         {crew.members.map((m) => <Member key={m.station} m={m} />)}
         {limit ? <Slot name="home.crewLimit" limit={limit} fallback={autonomy} /> : autonomy}
-      </Panel>
+      </div>
     </section>
   );
 }
@@ -252,7 +254,7 @@ function PlanCard({ data }: { data: HomeData }) {
     <section aria-label={plan.title} className="min-w-0">
       <SectionHead title={plan.title} />
       {plan.known ? (
-        <Panel>
+        <div>
           {plan.limits.map((l) => (
             <div key={l.kind} className="mb-3 last:mb-0">
               <div className="flex flex-wrap justify-between gap-x-3 text-xs">
@@ -265,7 +267,7 @@ function PlanCard({ data }: { data: HomeData }) {
           {plan.share_text && (
             <div className={cn(MUTED, "mt-3 border-t border-border pt-3")} data-user-text>{plan.share_text}</div>
           )}
-        </Panel>
+        </div>
       ) : (
         <p className="m-0 text-sm text-muted-foreground">Plan use shows once the crew reports it.</p>
       )}
@@ -371,7 +373,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
 }
 
 function LoadingBox({ rows }: { rows: number }) {
-  return <div className="border border-border bg-card"><SkeletonRows count={rows} /></div>;
+  return <SkeletonRows count={rows} className={FLUSH_ROWS} />;
 }
 
 export function FactoryHomeLoading() {

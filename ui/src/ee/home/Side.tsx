@@ -2,7 +2,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Button, Panel } from "@/components/edition";
+import { Button } from "@/components/edition";
 import type { HomeCrewLimitProps, HomeReposProps, HomeTeamCrewsProps } from "./home.types";
 import { colourOf } from "./Sender";
 
@@ -15,7 +15,7 @@ const OWN_CREW = "Your crew";
 
 function Head({ title, link }: { title: string; link?: { to: string; text: string } }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
       <h2 className="m-0! text-base!">{title}</h2>
       {link && <Link to={link.to} className="text-[13px] text-muted-foreground!">{link.text}</Link>}
     </div>
@@ -56,9 +56,9 @@ export function TeamCrews({ crews, quiet }: HomeTeamCrewsProps) {
   return (
     <section aria-label="The team’s crews" className="min-w-0" data-testid="team-crews">
       <Head title="The team’s crews" />
-      <div className="border border-border bg-card">
+      <div>
         {shown.map((c) => (
-          <div key={c.id} data-testid="team-crew-row" className="flex gap-3 border-t border-border px-[18px] py-3 first:border-t-0">
+          <div key={c.id} data-testid="team-crew-row" className="flex gap-3 border-t border-border py-3 first:border-t-0 first:pt-0">
             <CrewSquare name={c.person?.name ?? c.name} />
             <div className="min-w-0 flex-1">
               <div className="flex justify-between gap-2">
@@ -72,14 +72,14 @@ export function TeamCrews({ crews, quiet }: HomeTeamCrewsProps) {
           </div>
         ))}
         {others.length > shown.length && (
-          <div className="border-t border-border px-[18px] py-3">
+          <div className="border-t border-border py-3">
             <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
               Show all {others.length} crews
             </Button>
           </div>
         )}
         {silent.length > 0 && (
-          <div data-testid="quiet-crews" className="border-t border-border px-[18px] py-2.5 text-[13px] text-muted-foreground first:border-t-0">
+          <div data-testid="quiet-crews" className="border-t border-border py-2.5 text-[13px] text-muted-foreground first:border-t-0">
             Not seen in a day: <span data-user-text>{silent.join(", ")}</span>
           </div>
         )}
@@ -94,14 +94,14 @@ export function ReposYouOwn({ areas }: HomeReposProps) {
   return (
     <section aria-label="Repos you own" className="min-w-0" data-testid="repos-you-own">
       <Head title="Repos you own" link={{ to: "/settings/advanced?tab=areas", text: "All owners" }} />
-      <Panel>
+      <div>
         {areas.map((a) => (
           <div key={a.repo} data-testid="repo-you-own" className="mt-2 flex justify-between gap-2 text-[13px] first:mt-0">
             <code className="font-mono [overflow-wrap:anywhere]" data-user-text>{a.repo}</code>
             <span className="text-right text-muted-foreground">{a.note}</span>
           </div>
         ))}
-      </Panel>
+      </div>
     </section>
   );
 }
