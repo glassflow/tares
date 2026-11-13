@@ -342,7 +342,7 @@ def _command_output(cmd, timeout):
         return None
     if r.returncode != 0:
         return None
-    return r.stdout.decode("utf-8", "replace").rstrip("\n")
+    return r.stdout.decode("utf-8", "replace").rstrip("\r\n")
 
 
 def ensure_crew_home(paths=None, templates=None, *, human_name=None, human_github=None, today=None) -> None:
@@ -358,8 +358,9 @@ def ensure_crew_home(paths=None, templates=None, *, human_name=None, human_githu
     tpl = Path(templates) if templates else kit_templates()
     if human_github is None:
         human_github = ""
-        if shutil.which("gh"):
-            human_github = _command_output(["gh", "api", "user", "-q", ".login"], 60) or ""
+        gh = shutil.which("gh")  # the full path: on Windows CreateProcess finds gh.exe only, never a gh.cmd on the PATH
+        if gh:
+            human_github = _command_output([gh, "api", "user", "-q", ".login"], 60) or ""
     if human_name is None:
         human_name = _command_output(["git", "config", "--global", "user.name"], 30)
         if human_name is None:

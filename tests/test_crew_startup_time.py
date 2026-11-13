@@ -12,6 +12,7 @@ where the time goes.
 
 Run: .venv/bin/python tests/test_crew_startup_time.py
 """
+import http.server
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -41,6 +43,10 @@ RUNS = 5
 RATIO = 6.5
 CAP_MS = 450
 DISPATCH_MS = 150 if os.name == "nt" else 100
+# Windows pays more for the same roster: the fake Claude Code is a second Python start (about 190 ms there), and the HTTP
+# client builds its SSL context (about 170 ms), so a CI run measured 633 ms against a dispatcher alone of 91 ms (TR-1228).
+# The ratio is no guide there, so Windows has one bound: 800 ms, well under the 2.6 s a refused connect cost before.
+WIN_LIMIT_MS = 800
 
 P = F = 0
 
@@ -56,6 +62,30 @@ T = Path(tempfile.mkdtemp(prefix="tares crew startup "))
 ENV = fake_crew_env(T)
 ENV["PYTHONPATH"] = str(ROOT)
 ENV.pop("PYTHONSTARTUP", None)
+# The roster looks for sessions someone has open by reading every process's command line. That costs the machine's
+# process count, which says nothing about the engine, so the test hands the engine an empty process list instead
+# (the hook a suite's fake ps uses).
+(T / "fake-ps").mkdir()
+ENV["TARES_FAKE_PS_DIR"] = str(T / "fake-ps")
+
+# The roster asks once whether Tares answers (/health), and a refused connect to the throwaway crew's closed port takes
+# 2 s on Windows (the profile of a CI run: socket.connect, 2.000 s of 2.6 s) where Linux and macOS refuse at once. That
+# wait says nothing about the engine, so on Windows a local stand-in answers /health and the roster gets its answer
+# at once. Elsewhere the closed port stays, as the limits were measured with it.
+if os.name == "nt":
+    class _Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    _srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Health)
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    ENV["TARESD_URL"] = f"http://127.0.0.1:{_srv.server_address[1]}"
 
 # what `tares factory roster` does, from the interpreter up (the installed `tares` is this same entry point)
 FACTORY = [sys.executable, "-c", "import sys; sys.argv = ['tares', 'factory'] + sys.argv[1:]; from tares.cli import main; main()", "roster"]
@@ -89,13 +119,19 @@ show("dispatcher + help    ", d_ms)
 ck("every run exits 0", codes == [0] * RUNS, str(codes))
 ck("...and prints the roster", first == "crew: crew (orchestrator: crew-orchestrator)", first)
 ck("the dispatcher alone (interpreter, imports, usage) exits 0 every time", d_codes == [0] * RUNS, str(d_codes))
-limit = min(CAP_MS, max(LIMIT_MS, RATIO * statistics.median(d_ms)))
-why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the dispatcher alone on this slower machine, at most {CAP_MS} ms)")
-if os.name == "nt":  # roster runs the fake Claude Code: claude.cmd, then a second Python (about 2 s here), so the limit says nothing
-    print(f"  skip  median of {RUNS} runs of `tares factory roster` is under {why}: on Windows the fake Claude Code costs a Python start and a cmd.exe")
+if os.name == "nt":
+    limit, why = WIN_LIMIT_MS, f"{WIN_LIMIT_MS} ms (Windows)"
 else:
-    ck(f"median of {RUNS} runs of `tares factory roster` is under {why}", statistics.median(ms) < limit,
-       f"median {statistics.median(ms):.0f} ms; dispatcher alone {statistics.median(d_ms):.0f} ms")
+    limit = min(CAP_MS, max(LIMIT_MS, RATIO * statistics.median(d_ms)))
+    why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the dispatcher alone on this slower machine, at most {CAP_MS} ms)")
+ck(f"median of {RUNS} runs of `tares factory roster` is under {why}", statistics.median(ms) < limit,
+   f"median {statistics.median(ms):.0f} ms; dispatcher alone {statistics.median(d_ms):.0f} ms")
+if statistics.median(ms) >= limit:  # where the time goes, for the log of a slow machine
+    # a script file: `python -m cProfile -c` needs Python 3.13
+    (T / "roster_main.py").write_text("import sys\nsys.argv = ['tares', 'factory', 'roster']\nfrom tares.cli import main\nmain()\n", encoding="utf-8")
+    prof = subprocess.run([sys.executable, "-m", "cProfile", "-s", "cumulative", str(T / "roster_main.py")],
+                          capture_output=True, env=ENV, cwd=str(T))
+    print("\n".join((prof.stdout + prof.stderr).decode("utf-8", "replace").splitlines()[:45]))
 ck(f"the dispatcher's own share (interpreter, imports, exec) is under {DISPATCH_MS} ms", statistics.median(d_ms) < DISPATCH_MS,
    f"median {statistics.median(d_ms):.0f} ms")
 
