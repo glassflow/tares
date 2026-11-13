@@ -328,10 +328,10 @@ class Doctor:
         nk, hk = version.parse_version(need), version.parse_version(have)
         if nk is None or hk is None:
             self.warn("min_tares", f"tares version: could not compare the installed {have or 'unknown'} "
-                      f"with the {need} the plugin needs", "uv tool upgrade tares, or pip install -U tares", True)
+                      f"with the {need} the plugin needs", version.upgrade_advice("uv tool upgrade tares, or pip install -U tares"), True)
         elif hk < nk:
             self.no("min_tares", f"tares version: the installed tares {have} is older than the {need} the plugin needs",
-                    "uv tool upgrade tares, or pip install -U tares", True)
+                    version.upgrade_advice("uv tool upgrade tares, or pip install -U tares"), True)
         else:
             self.ok("min_tares", f"tares version: the installed tares {have} meets the {need} the plugin needs", True)
 
@@ -341,7 +341,7 @@ class Doctor:
         found = shutil.which("tares", path=self.env.get("PATH"))
         if not found:
             self.no("tares_path", "tares on PATH: no tares resolves on PATH, and the plugin's hooks call it",
-                    "uv tool install tares (or pip install tares), then open a new terminal", True)
+                    version.upgrade_advice("uv tool install tares (or pip install tares), then open a new terminal"), True)
             return
         r = self.run([found, "--version"], timeout=30)
         ver = (r.stdout.strip().splitlines() or [""])[0] if r is not None and r.returncode == 0 else ""
@@ -351,7 +351,7 @@ class Doctor:
             self.ok("tares_path", f"tares on PATH: {shown}, and it has tares hook", True)
         else:
             self.warn("tares_path", f"tares on PATH: {shown} has no tares hook, which the plugin's hooks will call",
-                      "uv tool upgrade tares, or pip install -U tares", True)
+                      version.upgrade_advice("uv tool upgrade tares, or pip install -U tares"), True)
 
     def check_tares(self, c: TaresClient) -> bool:
         src = self.env.get("TARES_FACTORY_SOURCE") or "environment"
