@@ -107,7 +107,9 @@ async function waitFor(url, tries = 100) {
     ck("the page's heading is Overview", (await txt(T("page-title"))) === "Overview");
     ck("the chip says Waiting on you", (await raw(T("project-chip"))) === "Waiting on you");
     ck("the goal is shown", (await txt(T("project-goal"))).startsWith("Publish 1,000 answers"));
-    ck("the crumb links back to Projects", (await T("crumb").getByRole("link", { name: "Projects" }).getAttribute("href")) === "/projects");
+    // the project's pages hide the main menu, as Settings does; Back is the way out (Projects on a fresh load)
+    ck("the main menu is hidden and Back leads to Projects", (await page.getByTestId("edition-menu").count()) === 0
+       && (await T("project-back").getAttribute("href")) === "/projects" && (await txt(T("project-back"))) === "Back");
     ck("no Close button while tickets are open", (await T("project-close").count()) === 0);
     const steps = T("project-steps").locator("li");
     ck("four stages, Build is the current one, Spec is done",
@@ -117,7 +119,7 @@ async function waitFor(url, tries = 100) {
     const navPages = await T("project-pages").locator("a").evaluateAll((as) => as.map((a) => [a.textContent.replace(/\d+$/, "").trim(), a.getAttribute("href")]));
     ck("the project sidebar lists every page, each with its own address", JSON.stringify(navPages) === JSON.stringify([
       ["Overview", `/projects/${y}`], ["Tickets", `/projects/${y}/tickets`], ["Pull requests", `/projects/${y}/github`], ["Milestones", `/projects/${y}/milestones`],
-      ["Decisions and calls", `/projects/${y}/decisions`], ["Docs and memory", `/projects/${y}/docs`], ["People and access", `/projects/${y}/people`], ["Settings", `/projects/${y}/settings`]]), JSON.stringify(navPages));
+      ["Decisions and calls", `/projects/${y}/calls`], ["Docs and memory", `/projects/${y}/docs`], ["People and access", `/projects/${y}/people`], ["Settings", `/projects/${y}/settings`]]), JSON.stringify(navPages));
     const navCount = async (k) => ((await T(`project-page-${k}`).getByTestId("project-page-count").count()) ? txt(T(`project-page-${k}`).getByTestId("project-page-count")) : "");
     ck("each item counts what is on its page; Overview counts what waits for you",
        (await navCount("overview")) === "4" && (await navCount("tickets")) === "11" && (await navCount("milestones")) === "3" && (await navCount("prs")) === "5"
@@ -199,6 +201,7 @@ async function waitFor(url, tries = 100) {
 
     // calls: the Calls tab of Decisions and calls; keep removes, change needs words
     await open(page, y, "", "calls");
+    ck("Calls is the first tab of Decisions and calls", JSON.stringify(await T("decision-tabs").locator("a").evaluateAll((as) => as.map((a) => a.dataset.testid))) === JSON.stringify(["tab-calls", "tab-decisions"]));
     ck("Calls is a tab of Decisions and calls, with its own address, To confirm first",
        (await T("tab-calls").getAttribute("aria-current")) === "page" && (await T("tab-decisions").getAttribute("href")) === `/projects/${y}/decisions`
        && (await T("project-page-decisions").getAttribute("aria-current")) === "page" && (await T("calls-open").count()) === 1);
@@ -252,7 +255,29 @@ async function waitFor(url, tries = 100) {
        && (await txt(T("page-title"))) === "Docs and memory", page.url());
     await page.getByTestId("doc-pane").waitFor();
     ck("the docs page opens the spec first, with the project's documents in groups",
-       (await txt(T("doc-title"))).startsWith("Spec:") && (await T("project-doc-group").first().getAttribute("data-group")) === "project", await txt(T("doc-title")));
+       (await txt(T("doc-title"))).startsWith("Spec:") && (await txt(T("project-doc-picker-button"))).includes("Spec"), await txt(T("doc-title")));
+    ck("the documents are in a picker above the document, not a list beside it", (await T("project-doc-list").count()) === 0
+       && (await T("project-doc-picker-panel").count()) === 0);
+    await T("project-doc-picker-button").click();
+    await T("project-doc-search").waitFor();
+    ck("the picker opens on a search box, focused, over the documents in their groups",
+       await T("project-doc-search").evaluate((e) => e === document.activeElement) && (await T("project-doc-group").first().getAttribute("data-group")) === "project"
+       && (await T("project-doc-link").count()) >= 4);
+    await checkWords(page, ck, "project-y docs picker open");
+    await T("project-doc-search").fill("plan");
+    ck("typing narrows it to what matches", (await T("project-doc-link").allInnerTexts()).every((t) => /plan/i.test(t)) && (await T("project-doc-link").count()) >= 1,
+       JSON.stringify(await T("project-doc-link").allInnerTexts()));
+    await T("project-doc-search").fill("zzzzzz");
+    ck("nothing matches says so", (await txt(T("project-doc-none"))) === "No document matches.");
+    await T("project-doc-search").fill("plan");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => /^Plan/.test(document.querySelector("[data-testid=doc-title]")?.textContent || ""));
+    ck("Enter opens the first match, at its own address, and the picker closes", /[?&]doc=/.test(page.url()) && (await T("project-doc-picker-panel").count()) === 0
+       && (await txt(T("project-doc-picker-button"))).includes("Plan"), page.url());
+    await T("project-doc-picker-button").click();
+    await page.keyboard.press("Escape");
+    ck("Escape closes it and gives focus back to the button", (await T("project-doc-picker-panel").count()) === 0
+       && await T("project-doc-picker-button").evaluate((e) => e === document.activeElement));
     await checkWords(page, ck, "project-y docs page");
     await open(page, y);
     ck("Work on it yourself sits in the project sidebar", (await T("project-nav").getByTestId("terminal-open").count()) === 1);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "../api";
@@ -138,14 +138,24 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
   );
 }
 
+/** A page with its own menu calls `useOwnMenu()`: the main menu hides while it shows. */
+const OwnMenu = createContext<(on: boolean) => void>(() => undefined);
+
+export function useOwnMenu() {
+  const set = useContext(OwnMenu);
+  useLayoutEffect(() => { set(true); return () => set(false); }, [set]);
+}
+
 export default function EditionShell() {
   const { edition, name, credentialName, open: openCell, personPicture } = useEdition();
   const narrow = useNarrow();
   const [drawer, setDrawer] = useState(false);
   const [text, setText] = useState("");
   const { pathname: here, search } = useLocation();
-  // A factory cell's Settings has its own sidebar with a Back link, in place of the main menu.
-  const noMenu = edition === "factory" && isSettingsPath(here);
+  // A factory cell's Settings has its own sidebar with a Back link, in place of the main menu, and so
+  // has a factory project's frame while it shows (TR-1245; today's page for another kind keeps the menu).
+  const [frame, setFrame] = useState(false);
+  const noMenu = edition === "factory" && (isSettingsPath(here) || frame);
   useEffect(() => { rememberPlace(here, search); }, [here, search]);
   const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to));
 
@@ -239,7 +249,9 @@ export default function EditionShell() {
         )}
         <main className="main min-w-0 flex-1">
           <LicenceBanner />
-          <Outlet />
+          <OwnMenu.Provider value={setFrame}>
+            <Outlet />
+          </OwnMenu.Provider>
         </main>
       </div>
 

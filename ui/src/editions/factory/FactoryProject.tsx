@@ -719,7 +719,7 @@ function Summary({ d }: { d: FactoryProjectData }) {
                    big={now ? `${now.counts.merged} of ${now.counts.total} merged` : "None yet"}
                    line={now ? <span data-user-text>{now.name}</span> : "The crew adds them when it plans the build."}
                    more={ms.length > 0 ? `All ${plural(ms.length, "milestone", "milestones")}` : "Milestones"} />
-      <SummaryCard testid="summary-decisions" to={open > 0 ? `/projects/${encodeURIComponent(d.id)}/calls` : pageHref(d.id, "decisions")}
+      <SummaryCard testid="summary-decisions" to={open > 0 ? pageHref(d.id, "decisions") : `/projects/${encodeURIComponent(d.id)}/decisions`}
                    title="Decisions and calls"
                    big={open > 0 ? `${open} to confirm` : d.decisions.length > 0 ? plural(d.decisions.length, "decision", "decisions") : "None yet"}
                    line={open > 0 ? <span data-user-text>{d.calls[0].question}</span>
@@ -842,7 +842,9 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
   const moved = at ? MOVED.find(([re]) => re.test(at))?.[1] : undefined;
   if (moved) {
     const keep = moved === "people" || moved === "milestones" ? hash : "";
-    return <Navigate replace to={`${pageHref(id, moved)}${search}${keep}`} />;
+    // #decisions is the Decisions tab, not the item's first tab (Calls)
+    const to = moved === "decisions" ? `/projects/${encodeURIComponent(id)}/decisions` : pageHref(id, moved);
+    return <Navigate replace to={`${to}${search}${keep}`} />;
   }
   return (
     <ProjectShell page="overview" onOther={onOther}>
