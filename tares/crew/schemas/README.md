@@ -34,7 +34,7 @@ its types from them.
 - stdout holds the JSON and nothing else: compact, UTF-8, one document per line, LF line ends, on every
   platform. Notes for a person (a station named twice, the crew on another Tares) stay on stderr.
 - Every document has `schema_version` as its first key. It is the number in `schema_version.json`. A change
-  that keeps old readers working (a new optional field) keeps the number; any other change raises it.
+  that keeps old readers working (a new optional field) keeps the number; any other change raises it. `tests/test_schema_compat.py` enforces this rule: it compares the schemas with those of the newest release tag and fails on a breaking change when the number was not raised. The check does not yet catch a name removed from `required` (a reader that relied on it being present); keep such a field unless you raise the number.
 - Callers ignore keys they do not know, and branch on `error.code`, never on `error.message`.
 
 ## Exit codes
