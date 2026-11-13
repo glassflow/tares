@@ -67,12 +67,9 @@ def resource_attributes(labels: dict) -> str:
 
 # ── the stored tracing settings ───────────────────────────────────────────────
 def stored_provider(store) -> str:
-    """The provider the console stored, as tracing.resolve would take it: the one named, else otlp
-    when an endpoint is stored, else rius."""
-    named = (store.get_setting("tracing_provider") or "").strip().lower()
-    if named in tracing.PROVIDERS:
-        return named
-    return "otlp" if (store.get_setting("tracing_endpoint") or "").strip() else "rius"
+    """The provider in use, as tracing.resolve takes it (stored setting, else the TARES_TRACING_*
+    environment, else otlp when an endpoint is set, else rius)."""
+    return tracing.resolve(store).provider
 
 
 def stored(store, name: str) -> dict:
@@ -84,18 +81,26 @@ def stored(store, name: str) -> dict:
     return {k: v for k, v in got.items() if v}
 
 
+def fields_of(name: str) -> tuple:
+    """The settings the integration `name` has, which are the only stored keys it may write."""
+    cls = {"rius": MonitoringRius, "otlp": MonitoringOtlp}.get(name)
+    return tuple(f.name for f in cls.settings_schema) if cls else ()
+
+
 def save(store, name: str, merged: dict) -> None:
     """Choose monitoring integration `name` with `merged` settings (secrets already reconciled
     with `stored`). Off switches tracing off and keeps the rest, so switching it back on needs
-    nothing typed again. Rius and OTLP write the provider and the three values (an empty one
-    clears the stored value, the environment's takes over again) and switch tracing on."""
+    nothing typed again. Rius and OTLP write the provider and the values their own settings have
+    (an empty one clears the stored value, the environment's takes over again) and switch tracing
+    on. A value the integration has no setting for, such as the headers of a Rius choice that were
+    set on /api/settings/tracing, is left as it is."""
     if name == "off":
         store.set_setting("tracing_enabled", "0")
         return
     store.set_setting("tracing_provider", name)
-    for field, key in _KEYS.items():
+    for field in fields_of(name):
         value = str((merged or {}).get(field) or "").strip()
-        store.set_setting(key, value or None)
+        store.set_setting(_KEYS[field], value or None)
     store.set_setting("tracing_enabled", "1")
 
 
@@ -161,18 +166,19 @@ class _Tracing(Monitoring):
         if key and not any(k.lower() == "authorization" for k in headers):
             headers["authorization"] = f"Bearer {key}"
         headers["content-type"] = "application/x-protobuf"
+        shown = clean_endpoint(endpoint)     # never echo a user, password, query or fragment
         url = endpoint.rstrip("/") + "/v1/traces"
         try:
             # an empty body is a valid, empty export request: a collector answers 200 and sends nothing on
             async with httpx.AsyncClient(timeout=8) as cx:
                 r = await cx.post(url, content=b"", headers=headers)
         except httpx.HTTPError as e:
-            return False, f"Could not reach {endpoint}: {type(e).__name__}."
+            return False, f"Could not reach {shown}: {type(e).__name__}."
         if r.status_code in (401, 403):
-            return False, f"{endpoint} refused the key or headers (HTTP {r.status_code})."
+            return False, f"{shown} refused the key or headers (HTTP {r.status_code})."
         if r.status_code >= 400 and r.status_code not in (400, 415):
-            return False, f"{endpoint} answered HTTP {r.status_code} to a trace export."
-        return True, f"{endpoint} accepts trace exports."
+            return False, f"{shown} answered HTTP {r.status_code} to a trace export."
+        return True, f"{shown} accepts trace exports."
 
 
 _SCHEMA_ENDPOINT = "OTLP/HTTP address, without /v1/traces, for example https://collector:4318. "

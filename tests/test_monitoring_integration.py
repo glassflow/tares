@@ -9,7 +9,10 @@ One in-process cell with auth on. Covered:
    or fragment, the resource attributes percent-encoded, {} while off or for another provider, and never a
    key or a header value in any variable;
  - station_settings: the header helper only while there are headers to send;
- - GET /api/factory/monitoring/headers: a station gets the headers, no-store; anyone else 403; {} while off;
+ - GET /api/factory/monitoring/headers: the crew's admin key gets the headers, no-store, with or without the
+   station header; a read key gets 403 even with a station header; {} while off;
+ - one storage: saving Rius keeps headers set on the old route; the provider is the one tracing.resolve names
+   (also from the environment); a leftover choice row for the slot is dropped;
  - the helper script (claude-plugin/scripts/otel_headers.py) against a real local server: it sends the
    crew token and the station labels, prints the headers, and prints {} for no token, no address, a refusal,
    a bad answer or a server that is down;
@@ -218,6 +221,49 @@ async def main():
             ck("rius sends a key, so the helper is named", rius.station_settings() == {
                 "otelHeadersHelper": "tares hook otel-headers"}, rius.station_settings())
 
+            print("== a save writes only the settings the integration has ==")
+            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+                                                           "endpoint": "", "headers": "x-org=acme"})
+            ck("headers set on the old route are stored", store.get_setting("tracing_headers") == "x-org=acme")
+            r = ru(await root.put("/api/factory/integrations/monitoring", json={"name": "rius", "settings": {}}))
+            ck("saving rius through the slot is 200", r.status_code == 200, r.text[:200])
+            ck("the headers set on the old route survive it",
+               store.get_setting("tracing_headers") == "x-org=acme", store.get_setting("tracing_headers"))
+            ck("and so does the key", store.get_setting("tracing_api_key") == KEY)
+            ck("fields_of follows each integration's schema",
+               mon.fields_of("rius") == ("api_key", "endpoint") and mon.fields_of("otlp")
+               == ("endpoint", "headers", "api_key") and mon.fields_of("off") == ()
+               and mon.fields_of("other") == (), (mon.fields_of("rius"), mon.fields_of("otlp")))
+            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+                                                           "endpoint": "", "headers": ""})
+
+            print("== the provider comes from tracing.resolve ==")
+            store.set_setting("tracing_provider", None)
+            os.environ["TARES_TRACING_ENDPOINT"] = "https://env.example.com:4318"
+            try:
+                ck("an endpoint in the environment makes it otlp, as tracing.resolve says",
+                   mon.stored_provider(store) == "otlp", mon.stored_provider(store))
+                ck("so the stored key shows as otlp's", mon.stored(store, "otlp").get("api_key") == KEY, mon.stored(store, "otlp"))
+                r = ru(await root.put("/api/factory/integrations/monitoring", json={
+                    "name": "otlp", "settings": {"endpoint": "https://collector.example.com:4318"}}))
+                ck("a new address with the key left blank asks for the key again (422)",
+                   r.status_code == 422 and "re-enter" in r.text, (r.status_code, r.text[:200]))
+                ck("and the stored key is not wiped", store.get_setting("tracing_api_key") == KEY,
+                   store.get_setting("tracing_api_key"))
+            finally:
+                del os.environ["TARES_TRACING_ENDPOINT"]
+            await root.put("/api/settings/tracing", json={"provider": "rius", "enabled": True, "api_key": KEY,
+                                                           "endpoint": "", "headers": ""})
+
+            print("== a choice row left in the slot is dropped ==")
+            with store._swrite:
+                store.sc.execute("INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) "
+                                 "VALUES ('monitoring', 'otlp', '{}', now(), 'test') ON CONFLICT (slot) DO NOTHING")
+            ck("the row is there", store.get_choice("monitoring") is not None)
+            r = ru(await root.put("/api/factory/integrations/monitoring", json={"name": "rius", "settings": {}}))
+            ck("a save drops it", r.status_code == 200 and store.get_choice("monitoring") is None,
+               (r.status_code, store.get_choice("monitoring")))
+
             print("== bad writes ==")
             for label, body in (("no settings", {"name": "otlp"}),
                                 ("settings null", {"name": "otlp", "settings": None}),
@@ -233,11 +279,30 @@ async def main():
                 "name": "otlp", "settings": {"endpoint": "https://collector.example.com:4318",
                                                     "headers": f"x-token={HDR}"}})
             r = await st.get("/api/factory/monitoring/headers")
-            ck("a station gets the headers", r.status_code == 200 and r.json() == {
+            ck("a station with the crew's admin key gets the headers", r.status_code == 200 and r.json() == {
                 "headers": {"x-token": HDR}}, r.text)
             ck("no-store", "no-store" in r.headers.get("cache-control", ""), dict(r.headers))
             r = await root.get("/api/factory/monitoring/headers")
-            ck("a caller that is not a station gets 403", r.status_code == 403, (r.status_code, r.text[:120]))
+            ck("the admin key without a station header gets them too (the credential decides)",
+               r.status_code == 200 and r.json() == {"headers": {"x-token": HDR}}, (r.status_code, r.text[:120]))
+            made = (await root.post("/api/keys", json={"name": "reader", "scopes": ["read"]})).json()
+            for who, kw in (("a read key", {}), ("a read key that sends the station header",
+                                                  {"station": "crew-build-x"})):
+                async with mk(token=made["secret"], **kw) as rd:
+                    r = ru(await rd.get("/api/factory/monitoring/headers"))
+                    ck(f"{who} gets 403 and no secret", r.status_code == 403 and HDR not in r.text,
+                       (r.status_code, r.text[:120]))
+            async with mk(token="not-a-key", station="crew-build-x") as bad:
+                r = ru(await bad.get("/api/factory/monitoring/headers"))
+                ck("an unknown token is 401", r.status_code == 401, (r.status_code, r.text[:120]))
+            store.set_setting("tracing_headers", None)
+            store.set_setting("tracing_api_key", None)
+            active = registry.get("monitoring", "otlp")(store)
+            ck("an active otlp with no headers and no key: env yes, helper no",
+               active.station_env({}).get("OTEL_EXPORTER_OTLP_ENDPOINT") and active.station_settings() == {},
+               (active.station_env({}), active.station_settings()))
+            r = await st.get("/api/factory/monitoring/headers")
+            ck("and the route gives no headers", r.status_code == 200 and r.json() == {"headers": {}}, r.text)
             await root.put("/api/factory/integrations/monitoring", json={"name": "off"})
             r = await st.get("/api/factory/monitoring/headers")
             ck("off: {} headers", r.status_code == 200 and r.json() == {"headers": {}}, r.text)
@@ -274,6 +339,11 @@ async def main():
                 "name": "otlp", "settings": {"endpoint": base, "headers": f"x-token={HDR}", "api_key": KEY}}))
             ck("nothing listening is not ok, and the message has no secret",
                r.json().get("ok") is False and KEY not in r.text, r.text[:300])
+            direct = await registry.get("monitoring", "otlp")().check_connection(
+                {"endpoint": "http://user:PASSW0RD@127.0.0.1:1/p?token=TOKEN9#frag"})
+            ck("a message shows the address without user, password, query or fragment",
+               direct[0] is False and "127.0.0.1:1/p" in direct[1]
+               and not any(x in direct[1] for x in ("user", "PASSW0RD", "TOKEN9", "frag")), direct)
             direct = await registry.get("monitoring", "otlp")().check_connection({"endpoint": "ftp://h"})
             ck("a non-http address is refused before any call", direct[0] is False and "http" in direct[1], direct)
             direct = await registry.get("monitoring", "otlp")().check_connection({})
