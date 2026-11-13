@@ -1,0 +1,4 @@
+#!/bin/sh
+# Runs the monitoring header helper (TR-866). Claude Code's `otelHeadersHelper` setting points at
+# `tares hook otel-headers`; this path does the same for a setting that names a file.
+exec tares hook otel-headers --plugin-root "${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}" "$@"

@@ -460,6 +460,8 @@ FACTORY_SCHEMA = [
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
 PROJECT_SLOTS = ("tickets", "review", "ci")
+# the monitoring integrations kept in the tracing settings (TR-866)
+MONITORING_NAMES = ("off", "rius", "otlp")
 
 # Words that say "a session" and not a station: shown without parentheses next to a person's name.
 GENERIC_BY = ("", "a session", "claude code session", "github")
@@ -2138,6 +2140,8 @@ class FactoryStore:
         if not name:
             raise ValueError("an integration name is required")
         secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
+        if slot == "monitoring" and name in MONITORING_NAMES:
+            return self._set_monitoring(name, settings, secret, by)
         with self._swrite:
             cur = self.sc.execute("SELECT name, settings FROM integration_choices WHERE slot = ?",
                                   [slot]).fetchone()
@@ -2150,6 +2154,18 @@ class FactoryStore:
                 "settings = excluded.settings, updated_at = excluded.updated_at, "
                 "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
         return self._integration_view(slot, name, merged, at, by)
+
+    def _set_monitoring(self, name: str, settings: dict | None, secret: set | None, by: str) -> dict:
+        """Monitoring off, Rius and OTLP live in the tracing settings, the one storage the old
+        /api/settings/tracing route also writes (TR-866). A secret left blank keeps the stored one
+        while the provider stays the same; another provider starts from nothing. Any choice row an
+        earlier version kept for the slot is dropped, so the two never disagree."""
+        from .integrations.builtin import monitoring_tares as mon
+        merged = self._merge_integration_settings(secret, settings, mon.stored(self, name))
+        mon.save(self, name, merged)
+        with self._swrite:
+            self.sc.execute("DELETE FROM integration_choices WHERE slot = ?", ["monitoring"])
+        return self._integration_view("monitoring", name, merged, now_utc(), by)
 
     # ── a project's secrets (TR-775): sealed values; tares/project_secrets.py seals and opens them ──
     _SECRET_COLS = "project, name, value, set_by, set_at, used_by, used_at"
@@ -2412,6 +2428,9 @@ class FactoryStore:
         connection test over what is saved; never return it from a route."""
         if uid is None:
             self._integration_slot(slot)
+            if slot == "monitoring" and name in MONITORING_NAMES:
+                from .integrations.builtin import monitoring_tares as mon
+                return mon.stored(self, name)
             sql, args = ("SELECT name, settings FROM integration_choices WHERE slot = ?", [slot])
         else:
             self._integration_slot(slot, PROJECT_SLOTS)

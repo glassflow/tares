@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import Body, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from . import licence, outbound
 from .factory_api import caller
@@ -210,6 +211,19 @@ def register(app, store, h):
             out.append({"slot": slot, "integration": a["integration"], "title": a["title"],
                         "source": a["source"], "reason": a["reason"]})
         return {"project": uid, "slots": out}
+
+    @app.get("/api/factory/monitoring/headers")
+    def monitoring_headers(request: Request):
+        """The headers a crew station's Claude Code sends to the monitoring backend (TR-866), for
+        its `otelHeadersHelper`. Only a station asks: a key never rides in a station's environment,
+        so the helper fetches it here at start. `{}` while monitoring is off. Never cached."""
+        if not caller(request)["station"]:
+            refuse(403, "only a crew station reads the monitoring headers")
+        eff = resolve.effective("monitoring", None, store=store)
+        cls = registry.get("monitoring", eff.integration)
+        cfg = cls(store).exporter_config() if cls else {}
+        return JSONResponse({"headers": dict((cfg or {}).get("headers") or {})},
+                            headers={"Cache-Control": "no-store"})
 
     @app.put("/api/factory/integrations/{slot}")
     def put_integration(slot: str, request: Request, body: dict = Body(...)):

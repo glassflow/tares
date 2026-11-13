@@ -168,6 +168,7 @@ test_metrics
 test_milestone_checks
 test_model_provider
 test_model_providers
+test_monitoring_integration
 test_morning_status
 test_no_console
 test_normalize
