@@ -22,12 +22,14 @@ export function ItemIcon({ project, title }: { project?: { name: string; icon?: 
 
 const GHOST = "bg-transparent! border-0! p-0! shadow-none! font-normal! text-muted-foreground! hover:text-foreground! hover:bg-transparent!";
 
-export function ProjectIconHeader({ icon, canEdit, onChange, className, children }: {
+export function ProjectIconHeader({ icon, canEdit, onChange, className, children, shown = false }: {
   icon: string | null;
   canEdit: boolean;
   onChange: (icon: string | null) => void;
   className?: string;
   children: React.ReactNode;
+  /** Show "Add icon" at all times, not only on hover (a settings row has no heading to hover). */
+  shown?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
@@ -36,12 +38,19 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
   const search = React.useRef<HTMLInputElement>(null);
   const groups = React.useMemo(() => searchEmoji(query), [query]);
 
+  const refocus = React.useRef(false);
   const close = React.useCallback((backToTrigger: boolean) => {
     setOpen(false);
     setQuery("");
-    // after a pick the trigger may have been replaced ("Add icon" became the emoji): wait for it
-    if (backToTrigger) requestAnimationFrame(() => trigger.current?.focus());
+    refocus.current = backToTrigger;
   }, []);
+  // after a pick the trigger may have been replaced ("Add icon" became the emoji): focus it right
+  // after the commit that draws it, before the browser paints, so focus is never on nothing
+  React.useLayoutEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    trigger.current?.focus();
+  });
   const pick = (next: string | null) => { close(true); onChange(next); };
 
   React.useEffect(() => {
@@ -96,7 +105,7 @@ export function ProjectIconHeader({ icon, canEdit, onChange, className, children
       {children}
       {!icon && canEdit && (
         <button type="button" ref={trigger} onClick={toggle} aria-haspopup="dialog" aria-expanded={open} data-testid="project-add-icon"
-                className={cn(GHOST, "h-auto! text-[13px]! opacity-0 transition-opacity group-hover/icon:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100 [@media(hover:none)]:opacity-100")}>
+                className={cn(GHOST, "h-auto! text-[13px]!", shown ? "text-[color:var(--accent-deep)]! underline!" : "opacity-0 transition-opacity group-hover/icon:opacity-100 focus-visible:opacity-100 aria-expanded:opacity-100 max-md:opacity-100 [@media(hover:none)]:opacity-100")}>
           Add icon
         </button>
       )}

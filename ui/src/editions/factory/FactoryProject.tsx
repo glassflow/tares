@@ -1,42 +1,36 @@
 import * as React from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 
-import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, Initials, Input, ProgressBar, Skeleton, Textarea, Toaster, useToast } from "../../components/edition";
+import { ApiError } from "../../api";
+import { Banner, Button, Dialog, Initials, Input, ProgressBar, Textarea, useToast } from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
-import { PR_CHIP, PrSize } from "./prParts";
-import { usePagePolling } from "../usePagePolling";
-import { useSample } from "../sample";
 import {
-  acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectIcon, setProjectLead, type ProjectPeople, type ProjectPerson,
-  type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
+  type ProjectPeople, type ProjectPerson,
+  type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type TicketState,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
 import { looksLikeCommand } from "./checkText";
 import { DetailLines } from "./HomeDetail";
-import { ProjectIconHeader } from "./ProjectIcon";
-import { ProjectSecrets } from "./ProjectSecrets";
 import { GroupHead, groupWaiting, OlderFold, QuestionChoices } from "./waitingGroups";
-import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSamples";
+import { sampleClose } from "./projectSamples";
+import { PageHead, pageHref, ProjectShell, waitingItems, type ProjectCtx, type ProjectPage } from "./ProjectShell";
 
-// One factory project, from one read (GET /api/factory/projects/{id}): what waits for you, the few
-// tickets moving now, a compact row per milestone, the calls the crew made, your decisions, the
-// documents and the command that opens a builder's session. The full ticket list is the Tickets
-// screen; "All N tickets" and each milestone's count open it. Allow is done here, in its own dialog,
-// so several can be allowed in a row. Any other button that does something on Home (copy the
-// hand-over command) links there with an arrow and never acts here. The cell
-// shapes every string for people; names, goals, titles, calls, decisions and doc titles are the
-// person's own text and marked data-user-text. The one raw string is the terminal command.
+// A factory project's Overview (/projects/:id, TR-734, TR-1245): only what needs attention. What
+// waits for you, a line for what waits for others, three cards that open the project's pull
+// requests, milestones and decisions, and the few tickets moving now. The rest of the project has
+// a page of its own in the project sidebar (ProjectShell); the milestone rows, the people, the
+// calls and decisions and Delete are drawn here and used by those pages. Allow is done here, in its
+// own dialog, so several can be allowed in a row. Any other button that does something on Home
+// (copy the hand-over command) links there with an arrow and never acts here. The cell shapes every
+// string for people; names, goals, titles, calls, decisions and doc titles are the person's own
+// text and marked data-user-text.
 
-const POLL_MS = 15_000;
 const SHOW_WAITING = 3;
-const SHOW_DECISIONS = 3;
 const NOT_CLOSED = "Try again in a moment.";
-const CLOSE_WORDS = "Closed from the project page";
 const NOT_SAVED = "That was not saved. Try again in a moment.";
 const STEPS = ["Spec", "Build", "Review", "Done"];
 
@@ -46,15 +40,6 @@ const LINK = "text-[color:var(--accent-deep)]! underline!";
 const CARD = "border border-border bg-card";
 const SECTION_H = "m-0! text-base!";
 const ROW = "border-b border-border px-4 py-3 last:border-b-0";
-
-const CHIP: Record<ProjectPageState, string> = {
-  waiting_on_you: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
-  building: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
-  not_started: "border-border bg-muted text-muted-foreground",
-  ready_to_close: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  later: "border-border bg-muted text-muted-foreground",
-  finished: "border-foreground bg-foreground text-background",
-};
 
 const DOT: Record<TicketState, string> = {
   "to do": "border border-[color:var(--ink-faint)]",
@@ -70,18 +55,6 @@ const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
 
-/** The row the cell does not send: every ticket merged and the project still open. */
-function readyRow(d: FactoryProjectData): HomeItem {
-  const merged = d.counts.merged;
-  return {
-    id: "ready_to_close", kind: "signoff", label: "Ready to close",
-    title: `All ${merged} ${merged === 1 ? "ticket is" : "tickets are"} merged`,
-    detail: "Close the project when you have checked the result.", meta: "",
-    project: { id: d.id, name: d.name }, repo: null, from: null, since: null, waited: "", actions: [
-      { label: "Close project", primary: true, do: "close" },
-    ],
-  };
-}
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
@@ -293,50 +266,14 @@ function TicketRow({ t }: { t: MovingTicket }) {
   );
 }
 
-function RecentPrs({ d }: { d: FactoryProjectData }) {
-  const prs = d.prs_recent ?? [];
-  const total = d.prs_total ?? 0;
-  if (total === 0) return null;
-  return (
-    <section id="pull-requests" aria-label="Pull requests" className="min-w-0 scroll-mt-4" data-testid="recent-prs">
-      <SectionHead title="Pull requests" aside={
-        <Link to={`/projects/${encodeURIComponent(d.id)}/github`} data-testid="github-link" className={cn("text-xs", LINK)}>
-          All {total} pull {total === 1 ? "request" : "requests"} {"›"}
-        </Link>} />
-      <div className={CARD}>
-        {prs.map((p) => (
-          <div key={p.url ?? p.ticket} className={ROW} data-testid="recent-pr" data-state={p.state}>
-            <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
-              <div className="flex min-w-0 flex-[1_1_280px] items-baseline gap-2.5">
-                <span className="flex-none font-mono text-xs font-medium">{p.number ? `#${p.number}` : "PR"}</span>
-                {p.url ? (
-                  <a href={p.url} target="_blank" rel="noopener noreferrer" data-user-text
-                     className="font-medium text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
-                    {p.title} <span aria-hidden className="font-normal text-muted-foreground">{"↗"}</span>
-                  </a>
-                ) : <span className="font-medium [overflow-wrap:anywhere]" data-user-text>{p.title}</span>}
-              </div>
-              <span className={cn("flex-none border px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", PR_CHIP[p.state])}>
-                {p.state_label}
-              </span>
-            </div>
-            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-muted-foreground">
-              <Link to={p.ticket_href} className={LINK}>{p.ticket}</Link>
-              {p.when && <><span aria-hidden>{"·"}</span><span>{p.when}</span></>}
-              {p.ci && <><span aria-hidden>{"·"}</span><span className={p.ci === "CI failing" ? "text-[color:var(--err)]" : undefined}>{p.ci}</span></>}
-              {p.size && <><span aria-hidden>{"·"}</span><PrSize s={p.size} /></>}
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
+/** At most this many moving tickets on Overview, so it fits on one screen; the Tickets page has the rest. */
+const SHOW_MOVING = 3;
 
 function Moving({ d }: { d: FactoryProjectData }) {
   const { total, merged, canceled } = d.counts;
   const live = total - canceled;
-  const rest = d.moving_total - d.moving.length;
+  const shown = d.moving.slice(0, SHOW_MOVING);
+  const rest = d.moving_total - shown.length;
   const allLink = total > 0 && (
     <Link to={d.tickets_href} data-testid="all-tickets-moving" className={cn("text-xs", LINK)}>All {total} tickets {"›"}</Link>
   );
@@ -352,7 +289,7 @@ function Moving({ d }: { d: FactoryProjectData }) {
   } else {
     body = (
       <>
-        {d.moving.map((t) => <TicketRow key={t.ref} t={t} />)}
+        {shown.map((t) => <TicketRow key={t.ref} t={t} />)}
         {rest > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border px-4 py-2.5 text-[13px]" data-testid="moving-more">
             <span>{rest} more {rest === 1 ? "ticket is" : "tickets are"} moving.</span>
@@ -443,7 +380,7 @@ function PersonCheck({ c, onAnswer }: {
   );
 }
 
-function MilestoneRow({ m, onAnswer, onAccept }: {
+export function MilestoneRow({ m, onAnswer, onAccept }: {
   m: ProjectMilestone;
   onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
   onAccept?: (m: ProjectMilestone) => Promise<void>;
@@ -580,7 +517,7 @@ function PickPerson({ people, exclude, label, testid, onPick }: {
   );
 }
 
-function People({ people, onLead, onAdd }: {
+export function People({ people, onLead, onAdd }: {
   people: ProjectPeople; onLead?: (id: string) => Promise<void>; onAdd?: (id: string) => Promise<void>;
 }) {
   const { lead, members } = people;
@@ -614,7 +551,8 @@ function People({ people, onLead, onAdd }: {
   );
 }
 
-// ── calls, decisions, docs, terminal ──────────────────────────────────────────
+
+// ── calls and decisions ───────────────────────────────────────────────────────
 
 export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void> }) {
   const [open, setOpen] = React.useState(false);
@@ -690,136 +628,10 @@ export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][nu
   );
 }
 
-function Decisions({ id, items }: { id: string; items: FactoryProjectData["decisions"] }) {
-  const shown = items.slice(0, SHOW_DECISIONS);
-  return (
-    <section id="decisions" aria-label="Decisions" className="min-w-0 scroll-mt-4" data-testid="decisions">
-      <SectionHead title="Decisions" aside={items.length > 0 && (
-        <Link to={`/projects/${encodeURIComponent(id)}/decisions`} className={cn("text-xs", LINK)} data-testid="decisions-all">
-          All {plural(items.length, "decision", "decisions")} {"›"}
-        </Link>
-      )} />
-      {items.length === 0 ? (
-        <Empty testid="decisions-empty">No decisions yet. When you answer the crew, it is kept here.</Empty>
-      ) : (
-        <div className={CARD}>{shown.map((x, i) => <DecisionRow key={i} x={x} />)}</div>
-      )}
-    </section>
-  );
-}
+// ── Delete ────────────────────────────────────────────────────────────────────
 
-function Docs({ id, items, total }: { id: string; items: FactoryProjectData["docs"]; total: number }) {
-  return (
-    <section id="docs" aria-label="Docs" className="min-w-0 scroll-mt-4" data-testid="docs">
-      <SectionHead title="Docs" aside={total > 0 && (
-        <Link to={`/projects/${encodeURIComponent(id)}/docs`} className={cn("text-xs", LINK)} data-testid="docs-all">
-          All {plural(total, "document", "documents")} {"›"}
-        </Link>
-      )} />
-      {items.length === 0 ? (
-        <Empty testid="docs-empty">No docs yet. The spec and plan show here once they are written.</Empty>
-      ) : (
-        <div className={CARD}>
-          {items.map((x) => (
-            <Link key={x.id} to={x.href} data-testid="doc-row"
-                  className="flex flex-col gap-px border-b border-border px-4 py-2.5 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)]">
-              <span className="font-semibold">{x.kind_label}</span>
-              <span className={MUTED}>Updated {x.updated}</span>
-            </Link>
-          ))}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function Command({ label, command }: { label: string; command: string }) {
-  const [copied, setCopied] = React.useState<"" | "yes" | "failed">("");
-  React.useEffect(() => {
-    if (!copied) return;
-    const t = setTimeout(() => setCopied(""), 2000);
-    return () => clearTimeout(t);
-  }, [copied]);
-  const copy = () => {
-    // a cell served over plain http has no clipboard: the command stays on the page to select
-    if (!navigator.clipboard) { setCopied("failed"); return; }
-    navigator.clipboard.writeText(command).then(() => setCopied("yes"), () => setCopied("failed"));
-  };
-  return (
-    <div data-testid="command">
-      <div className="mb-1.5 text-[13px]">{label}</div>
-      <div className="flex items-stretch gap-2">
-        <code data-words-exempt data-testid="command-text"
-              className="flex min-w-0 flex-1 items-center border border-border bg-[var(--input-bg)] px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
-        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
-      </div>
-    </div>
-  );
-}
-
-function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
-  const [first, ...rest] = items;
-  return (
-    <section id="terminal" aria-label="Work on it yourself" className="min-w-0 scroll-mt-4" data-testid="terminal">
-      <SectionHead title="Work on it yourself" />
-      {!first ? (
-        <Empty testid="terminal-empty">No builder is working on this project now. The command that opens its session shows here when one is.</Empty>
-      ) : (
-        <div className={cn(CARD, "p-4")}>
-          <Command label={first.label} command={first.command} />
-          {rest.length > 0 && (
-            <details className="mt-2.5 border-t border-border pt-2" data-testid="terminal-more">
-              <summary className="cursor-pointer text-[13px] text-[color:var(--accent-deep)]">{plural(rest.length, "more command", "more commands")}</summary>
-              <div className="mt-2.5 grid gap-3">
-                {rest.map((c) => <Command key={c.command} label={c.label} command={c.command} />)}
-              </div>
-            </details>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// ── the page ──────────────────────────────────────────────────────────────────
-
-export function Crumb({ name }: { name?: string }) {
-  return (
-    <div className={MUTED} data-testid="crumb">
-      <Link to="/projects" className={LINK}>Projects</Link>
-      {name !== undefined && <> / <span data-user-text>{name}</span></>}
-    </div>
-  );
-}
-
-function Loading() {
-  const block = (n: number) => (
-    <div className="grid gap-2.5">
-      <Skeleton width={180} height={16} />
-      <div className={cn(CARD, "grid gap-2.5 p-4")}>
-        {Array.from({ length: n }, (_, i) => <Skeleton key={i} width={`${[90, 70, 80, 60][i % 4]}%`} />)}
-      </div>
-    </div>
-  );
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" data-testid="project-loading" className="grid gap-5">
-      <Skeleton width={120} />
-      <Skeleton width={280} height={30} />
-      <Skeleton width="80%" />
-      <Skeleton width={260} height={22} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-8">
-        <div className="grid min-w-0 content-start gap-6">{block(3)}{block(5)}{block(4)}</div>
-        <div className="grid min-w-0 content-start gap-6">{block(4)}{block(4)}</div>
-      </div>
-    </div>
-  );
-}
-
-/** The page for a project that was read. `onClose` closes the project and answers when it is done or
- *  throws the cell's answer; `onDecide` keeps or overturns a call the same way. Without them the
- *  buttons only open and shut what they open. `start` is a Close part way, for a sample. */
-/** The last thing on the page: deleting the project, behind a dialog that asks for its name. */
-function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promise<void> }) {
+/** Deleting the project, behind a dialog that asks for its name. */
+export function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promise<void> }) {
   const [open, setOpen] = React.useState(false);
   const [typed, setTyped] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -855,81 +667,96 @@ function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promi
   );
 }
 
-export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAnswer, onAccept, onLead, onAdd, onLater, onDelete, onIcon, start, secrets }: {
-  data: FactoryProjectData;
-  /** Save a new icon, or null to remove it; answers when the cell has it. */
-  onIcon?: (icon: string | null) => Promise<void>;
-  /** Allow is done on this page, and this reads the project again after it. Left out (a sample), Allow links to Home. */
-  onAllowed?: () => void;
-  /** Delete the project for good; the page then leaves for Projects. */
-  onDelete?: () => Promise<void>;
-  onClose?: () => Promise<void>;
-  onDecide?: (c: ProjectCall, state: "kept" | "overturned", words?: string) => Promise<void>;
-  onAnswer?: (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => Promise<void>;
-  onAccept?: (m: ProjectMilestone) => Promise<void>;
-  onLead?: (id: string) => Promise<void>;
-  onAdd?: (id: string) => Promise<void>;
-  /** Keep the project for later (true) or start it again (false); answers when the cell has it. */
-  onLater?: (later: boolean) => Promise<void>;
-  start?: { open: boolean; error: string };
-  /** Show the project's secrets, read from the cell (never on a sample). */
-  secrets?: boolean;
+// ── Overview ──────────────────────────────────────────────────────────────────
+
+/** "Waiting for others: 2 things", with the list behind Show. */
+function OthersLine({ items }: { items: HomeItem[] }) {
+  const [open, setOpen] = React.useState(false);
+  if (items.length === 0) return null;
+  return (
+    <div className="grid min-w-0 gap-3">
+      <div className="text-[13px] text-muted-foreground" data-testid="waiting-others-line">
+        Waiting for others: {plural(items.length, "thing", "things")}.{" "}
+        <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="waiting-others-toggle"
+                className={cn("border-0! bg-transparent! p-0! text-[13px]! font-normal! shadow-none!", LINK)}>
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+      {open && <WaitingOthers items={items} />}
+    </div>
+  );
+}
+
+function SummaryCard({ to, title, big, line, more, testid }: {
+  to: string; title: string; big: string; line: React.ReactNode; more: string; testid: string;
 }) {
+  return (
+    <Link to={to} data-testid={testid}
+          className={cn(CARD, "flex min-h-[132px] min-w-0 flex-col gap-1.5 p-4 text-foreground! no-underline! hover:border-foreground! hover:bg-[var(--row-hover)]")}>
+      <span className="text-[13px] text-muted-foreground">{title}</span>
+      <span className="text-[24px] font-bold leading-tight" data-testid="summary-big">{big}</span>
+      <span className="line-clamp-2 text-[13px] [overflow-wrap:anywhere]" data-testid="summary-line">{line}</span>
+      <span className="mt-auto pt-1 text-[13px] text-[color:var(--accent-deep)]">{more} {"›"}</span>
+    </Link>
+  );
+}
+
+function Summary({ d }: { d: FactoryProjectData }) {
+  const prs = d.prs_counts ?? { open: 0, merged: 0, closed: 0 };
+  const prTotal = d.prs_total ?? 0;
+  const pr = d.prs_recent?.[0];
+  const ms = d.milestones;
+  const now = ms.find((m) => !m.done) ?? ms[ms.length - 1];
+  const open = d.calls.length;
+  return (
+    <div className="grid gap-4 md:grid-cols-3" data-testid="summary">
+      <SummaryCard testid="summary-prs" to={pageHref(d.id, "prs")} title="Pull requests"
+                   big={prTotal === 0 ? "None yet" : prs.open > 0 ? `${prs.open} open` : `${prs.merged} merged`}
+                   line={pr ? <>{pr.number ? `#${pr.number} ` : ""}<span data-user-text>{pr.title}</span>{pr.ci ? `, ${pr.ci}` : ""}</>
+                     : "Each pull request the crew opens shows here."}
+                   more={prTotal > 0 ? `All ${plural(prTotal, "pull request", "pull requests")}` : "Pull requests"} />
+      <SummaryCard testid="summary-milestones" to={pageHref(d.id, "milestones")} title="Milestones"
+                   big={now ? `${now.counts.merged} of ${now.counts.total} merged` : "None yet"}
+                   line={now ? <span data-user-text>{now.name}</span> : "The crew adds them when it plans the build."}
+                   more={ms.length > 0 ? `All ${plural(ms.length, "milestone", "milestones")}` : "Milestones"} />
+      <SummaryCard testid="summary-decisions" to={open > 0 ? pageHref(d.id, "decisions") : `/projects/${encodeURIComponent(d.id)}/decisions`}
+                   title="Decisions and calls"
+                   big={open > 0 ? `${open} to confirm` : d.decisions.length > 0 ? plural(d.decisions.length, "decision", "decisions") : "None yet"}
+                   line={open > 0 ? <span data-user-text>{d.calls[0].question}</span>
+                     : d.decisions[0] ? <span data-user-text>{d.decisions[0].answer}</span> : "When you answer the crew, it is kept here."}
+                   more={open > 0 ? "Calls to confirm" : "All decisions"} />
+    </div>
+  );
+}
+
+/** Overview, for a project that was read. `start` is a Close part way, for a sample. */
+function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; error: string } }) {
+  const { d, act, sample, reload } = ctx;
   const { toast } = useToast();
-  const { hash } = useLocation();
   const [asking, setAsking] = React.useState(Boolean(start?.open));
   const [busy, setBusy] = React.useState(false);
   const [closeError, setCloseError] = React.useState(start?.error ?? "");
   const [kept, setKept] = React.useState<string[]>([]);
   const [allowing, setAllowing] = React.useState<{ item: HomeItem; desk: string; mayLimit: boolean } | null>(null);
   const [moving, setMoving] = React.useState(false);
-  // what the person just picked, shown at once and until the page's data has caught up with it
-  const [iconPicked, setIconPicked] = React.useState<string | null | undefined>(undefined);
-  const iconSave = React.useRef(0);
-  const icon = iconPicked === undefined ? d.icon ?? null : iconPicked;
-  React.useEffect(() => {
-    if (iconPicked !== undefined && iconPicked === (d.icon ?? null)) setIconPicked(undefined);
-  }, [iconPicked, d.icon]);
-  const changeIcon = (next: string | null) => {
-    if (!onIcon) return;
-    const save = ++iconSave.current;
-    setIconPicked(next);
-    onIcon(next).catch(() => {
-      if (save === iconSave.current) { setIconPicked(undefined); toast(NOT_SAVED); }
-    });
-  };
-  const later = async (on: boolean) => {
+  const finished = d.state === "finished";
+  const items = waitingItems(d, kept);
+
+  const startNow = async () => {
     setMoving(true);
     try {
-      await onLater?.(on);
-      toast(on ? `${d.name} is kept for later. It is off your home until you start it.` : `${d.name} is started again. It is back on your home.`);
+      await act.later(false);
+      toast(`${d.name} is started again. It is back on your home.`);
     } catch (err) {
       toast(err instanceof ApiError ? err.message : "Could not reach the cell. Try again in a moment.");
     } finally {
       setMoving(false);
     }
   };
-
-  const finished = d.state === "finished";
-  // a button that opens this very page has no place on it
-  const here = `/projects/${d.id}`;
-  const own = d.waiting.map((w) => ({ ...w, actions: w.actions.filter((a) => a.href !== here) }));
-  const listed = own.filter((w) => !kept.includes(w.id));
-  const items = d.can_close && !listed.some((w) => w.actions.some((a) => a.do === "close")) ? [...listed, readyRow(d)] : listed;
-
-  // an address with a #section scrolls to it once the page is there; a #desk-* one waits in Waiting
-  React.useEffect(() => {
-    if (!hash) return;
-    let id = hash.slice(1);
-    try { id = decodeURIComponent(id); } catch { /* a malformed address keeps its raw text */ }
-    const el = document.getElementById(id) ?? (id.startsWith("desk-") ? document.getElementById("waiting") : null);
-    el?.scrollIntoView({ block: "start" });
-  }, [hash]);
-
   const confirm = async () => {
     setBusy(true);
     try {
-      await onClose?.();
+      await act.close();
       setCloseError("");
       toast(`${d.name} is closed. It moved to Done.`);
     } catch (err) {
@@ -941,84 +768,39 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
   };
 
   // "Keep both" on a calls item keeps each call here; the item leaves the list once they are kept
-  const onKeep = onDecide && (async (refs: string[]) => {
+  const onKeep = async (refs: string[]) => {
     for (const ref of refs) {
       const c = d.calls.find((x) => x.ref === ref) ?? { ref, question: "", choice: "", why: "", made: "", tickets: [] };
-      await onDecide(c, "kept");
+      await act.decide(c, "kept");
     }
     const item = d.waiting.find((w) => w.actions.some((a) => a.do === "keep_assumptions" && Array.isArray(a.refs) && a.refs.join() === refs.join()));
     if (item) setKept((k) => [...k, item.id]);
     toast(refs.length === 1 ? "Kept it. The crew carries on." : refs.length === 2 ? "Kept both. The crew carries on." : `Kept all ${refs.length}. The crew carries on.`);
-  });
+  };
 
   return (
-    <div className="grid min-w-0 gap-6 md:gap-8" data-testid="factory-project" data-state={d.state}>
-      <div className="grid min-w-0 gap-3">
-        <Crumb name={d.name} />
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
-          <ProjectIconHeader icon={icon} canEdit={Boolean(d.can_edit_icon && onIcon)} onChange={changeIcon}
-                             className="flex min-w-0 flex-[1_1_320px] flex-wrap items-center gap-x-3 gap-y-2">
-            <h1 className="m-0! text-[22px]! md:text-[28px]! [overflow-wrap:anywhere]" data-user-text data-testid="project-name">{d.name}</h1>
-            <span data-testid="project-chip"
-                  className={cn("border px-2 py-1 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", CHIP[d.state])}>
-              {d.state_label}
-            </span>
-          </ProjectIconHeader>
-          {(d.can_later || d.later || (d.can_close && !finished)) && (
-            <div className="flex flex-wrap gap-2">
-              {d.can_later && <Button variant="secondary" busy={moving} onClick={() => void later(true)} data-testid="project-later">Later</Button>}
-              {d.later && <Button busy={moving} onClick={() => void later(false)} data-testid="project-start-now">Start now</Button>}
-              {d.can_close && !finished && <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>}
-            </div>
-          )}
-        </div>
-        {d.goal && <p className="m-0! max-w-[820px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
+    <div className="grid min-w-0 gap-6" data-testid="factory-project" data-state={d.state}>
+      <PageHead title="Overview" actions={(d.later || (d.can_close && !finished)) && (
+        <>
+          {d.later && <Button busy={moving} onClick={() => void startNow()} data-testid="project-start-now">Start now</Button>}
+          {d.can_close && !finished && <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>}
+        </>
+      )}>
+        {d.goal && <p className="m-0! max-w-[760px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
         <Steps stage={d.stage} finished={finished} />
-        <div className="flex flex-wrap gap-x-[18px] gap-y-1 text-[13px]" data-testid="project-links">
-          <Link to={`/setup?project=${encodeURIComponent(d.id)}`} className={LINK}>Edit plan</Link>
-          {d.counts.total > 0 && <Link to={d.tickets_href} className={LINK} data-testid="all-tickets-head">All {d.counts.total} tickets</Link>}
-          {(d.calls.length > 0 || (d.calls_past ?? []).length > 0) && (
-            <Link to={`/projects/${encodeURIComponent(d.id)}/calls`} className={LINK} data-testid="calls-link">Calls</Link>
-          )}
-          {d.linked.tickets_in && d.linked.url && (
-            <a href={d.linked.url} target="_blank" rel="noopener noreferrer" className={LINK} data-testid="tracker-link">
-              Tickets in {d.linked.tickets_in} {"↗"}
-            </a>
-          )}
-        </div>
-        {closeError && (
-          <Banner tone="error" data-testid="close-error">
-            <b>The project was not closed.</b> <span className="text-foreground" data-user-text>{closeError}</span>
-          </Banner>
-        )}
+      </PageHead>
+      {closeError && (
+        <Banner tone="error" data-testid="close-error">
+          <b>The project was not closed.</b> <span className="text-foreground" data-user-text>{closeError}</span>
+        </Banner>
+      )}
+      <div className="grid min-w-0 gap-3">
+        <Waiting items={items} onClose={() => setAsking(true)} onKeep={onKeep}
+                 onAllow={sample ? undefined : (item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); }} />
+        {!finished && <OthersLine items={d.waiting_others ?? []} />}
       </div>
-
-      <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1fr)_380px] xl:gap-8">
-        <div className="grid min-w-0 gap-6">
-          <Waiting items={finished ? [] : items} onClose={() => setAsking(true)} onKeep={onKeep}
-                   onAllow={onAllowed && ((item, a) => { if (typeof a.desk === "string") setAllowing({ item, desk: a.desk, mayLimit: a.may_limit === true }); })} />
-          {!finished && <WaitingOthers items={d.waiting_others ?? []} />}
-          <Moving d={d} />
-          <RecentPrs d={d} />
-          <section id="milestones" aria-label="Milestones" className="min-w-0 scroll-mt-4" data-testid="milestones">
-            <SectionHead title="Milestones" />
-            {d.milestones.length === 0 ? (
-              <Empty testid="milestones-empty">No milestones yet. The crew adds them when it plans the build.</Empty>
-            ) : (
-              <div className={CARD}>{d.milestones.map((m) => <MilestoneRow key={m.id} m={m} onAnswer={onAnswer} onAccept={onAccept} />)}</div>
-            )}
-          </section>
-        </div>
-        <div className="grid min-w-0 gap-6">
-          {d.people && <People people={d.people} onLead={onLead} onAdd={onAdd} />}
-          {secrets && d.secrets && <ProjectSecrets project={d.id} initial={d.secrets} />}
-          <Decisions id={d.id} items={d.decisions} />
-          <Docs id={d.id} items={d.docs} total={d.docs_total ?? d.docs.length} />
-          <Terminal items={d.terminal} />
-        </div>
-      </div>
-
-      {onDelete && <DeleteProject name={d.name} onDelete={onDelete} />}
+      <Summary d={d} />
+      <Moving d={d} />
 
       <Dialog open={asking} onOpenChange={(o) => { if (!o && !busy) setAsking(false); }} data-testid="close-dialog"
               title={`Close ${d.name}?`}
@@ -1036,81 +818,37 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
               : "That grant was already kept, so nothing changed.");
             setKept((k) => [...k, allowing.item.id]);
             setAllowing(null);
-            onAllowed?.();
+            reload();
           }} />
       )}
-      <Toaster />
     </div>
   );
 }
 
+// today's sections that have a page of their own now: an old #section link opens that page
+const MOVED: [RegExp, ProjectPage][] = [
+  [/^(people|secrets)$/, "people"],
+  [/^(milestones|milestone-.+)$/, "milestones"],
+  [/^decisions$/, "decisions"],
+  [/^docs$/, "docs"],
+  [/^pull-requests$/, "prs"],
+];
+
 export default function FactoryProject({ onOther }: { onOther?: () => void } = {}) {
   const { id = "" } = useParams();
-  const named = useSample();
-  const sample = isSample(named) ? named : null;
-  const [closedHere, setClosedHere] = React.useState(false);
-  const { data, error, reload } = usePagePolling<FactoryProjectData>(
-    () => (sample ? sampleLoad(sample) : factoryProject(id).catch((e) => {
-      // the cell answers 404 for a project this page is not for: today's page takes it
-      if (e instanceof ApiError && e.status === 404 && onOther) onOther();
-      throw e;
-    })), POLL_MS);
-
-  // a sample has no cell to close on: `fail` answers as the cell does, any other moves the page on this copy
-  const close = async () => {
-    if (sample) {
-      if (sampleClose(sample).error) throw new ApiError(sampleClose(sample).error, 409);
-      setClosedHere(true);
-      return;
-    }
-    await api.finishProject(id, CLOSE_WORDS);
-    reload();
-  };
-  const decide = async (c: ProjectCall, state: "kept" | "overturned", words?: string) => {
-    if (!sample) await decideCall(id, c.ref, state, words);
-    if (!sample) reload();
-  };
-  const answer = async (m: ProjectMilestone, n: number, result: "pass" | "fail", note?: string) => {
-    if (!sample) { await answerCheck(id, m.id, n, result, note); reload(); }
-  };
-  const accept = async (m: ProjectMilestone) => {
-    if (!sample) { await acceptMilestone(id, m.id); reload(); }
-  };
-  const lead = async (person: string) => { if (!sample) { await setProjectLead(id, person); reload(); } };
-  const add = async (person: string) => { if (!sample) { await addProjectMember(id, person); reload(); } };
-  const keepLater = async (on: boolean) => { if (!sample) { await setLater(id, on); reload(); } };
-  const icon = async (next: string | null) => { await setProjectIcon(id, next); reload(); };
-  const navigate = useNavigate();
-  const remove = async () => {
-    if (!sample) await api.deleteProject(id);
-    navigate("/projects", { replace: true });
-  };
-
-  if (!data) {
-    return (
-      <div className="min-w-0" data-testid="factory-project-wait">
-        {error ? (
-          <div className="grid gap-3">
-            <Crumb />
-            <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
-              <b>We could not load this project.</b> <span className="text-foreground">Check your connection, then try again.</span>
-            </Banner>
-          </div>
-        ) : <Loading />}
-      </div>
-    );
+  const { hash, search } = useLocation();
+  let at = hash.slice(1);
+  try { at = decodeURIComponent(at); } catch { /* a malformed address keeps its raw text */ }
+  const moved = at ? MOVED.find(([re]) => re.test(at))?.[1] : undefined;
+  if (moved) {
+    const keep = moved === "people" || moved === "milestones" ? hash : "";
+    // #decisions is the Decisions tab, not the item's first tab (Calls)
+    const to = moved === "decisions" ? `/projects/${encodeURIComponent(id)}/decisions` : pageHref(id, moved);
+    return <Navigate replace to={`${to}${search}${keep}`} />;
   }
-  const shown = closedHere ? sampleClosed(data) : data;
   return (
-    <>
-      {error && (
-        <div className="mb-6">
-          <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
-            <b>This page did not refresh.</b> <span className="text-foreground">Check your connection, then try again.</span>
-          </Banner>
-        </div>
-      )}
-      <FactoryProjectView data={shown} onClose={close} onDecide={decide} onAllowed={sample ? undefined : reload} onAnswer={answer} onAccept={accept} onLead={lead} onAdd={add} onLater={keepLater} onDelete={remove} onIcon={sample ? undefined : icon} start={sample ? sampleClose(sample) : undefined} secrets={!sample} />
-    </>
+    <ProjectShell page="overview" onOther={onOther}>
+      {(ctx) => <Overview ctx={ctx} start={ctx.sample ? sampleClose(ctx.sample) : undefined} />}
+    </ProjectShell>
   );
 }

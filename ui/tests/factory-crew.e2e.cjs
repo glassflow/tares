@@ -351,10 +351,29 @@ async function waitFor(url, tries = 100) {
           ck(`${tag}: it opens at the newest and says it follows`,
              (await convo.getByTestId("conversation-following").count()) === 1
              && (await convo.getByTestId("conversation-scroll").evaluate((e) => e.scrollHeight - e.scrollTop - e.clientHeight < 48)));
+          const bash = convo.locator("[data-testid=tool-card][data-tool=Bash]").first();
+          ck(`${tag}: closed, a Bash card's header says what it does, in words (TR-1317)`,
+             (await bash.getByTestId("tool-summary").innerText()) === "Check the frozen kit");
           await convo.getByTestId("tool-head").nth(1).click();
-          ck(`${tag}: a card opens to its input and output, each with Copy`,
-             (await convo.getByTestId("tool-input").count()) === 1 && /unknown flag --known/.test(await convo.getByTestId("tool-output").innerText())
-             && (await convo.getByTestId("tool-copy").count()) === 2);
+          ck(`${tag}: a Bash card opens to its description, its command and its output with the exit status (TR-1317)`,
+             (await bash.getByTestId("tool-description").innerText()) === "Check the frozen kit"
+             && (await bash.getByTestId("tool-command").innerText()) === "$ bash tests/factory/claude_update_test.sh"
+             && (await bash.getByTestId("tool-mark").innerText()) === "exit 1" && (await bash.getByTestId("tool-mark").getAttribute("data-ok")) === "false"
+             && /^FAIL cc_frozen_midround: unknown flag --known/.test(await bash.getByTestId("tool-output").innerText())
+             && (await bash.getByTestId("tool-input").count()) === 0 && (await bash.getByTestId("tool-copy").count()) === 2,
+             await bash.getByTestId("tool-body").innerText());
+          await p.evaluate(() => {
+            window.__copied = "";
+            Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: (t) => { window.__copied = t; return Promise.resolve(); } } });
+          });
+          await bash.getByTestId("tool-copy").first().click();
+          const copied = await p.evaluate(() => window.__copied);
+          ck(`${tag}: the command's Copy copies the call's input as it came`,
+             (() => { try { return JSON.parse(copied).description === "Check the frozen kit"; } catch { return false; } })(), copied);
+          await bash.getByTestId("tool-raw").click();
+          ck(`${tag}: Raw shows the plain Input and Output blocks, each with Copy, and the switch stays`,
+             (await convo.getByTestId("tool-input").count()) === 1 && /Exit code 1\nFAIL cc_frozen_midround/.test(await bash.getByTestId("tool-output").innerText())
+             && (await bash.getByTestId("tool-copy").count()) === 2 && (await bash.getByTestId("tool-raw").getAttribute("aria-pressed")) === "true");
           const bashInput = convo.getByTestId("tool-input");
           ck(`${tag}: the input is JSON in colour: keys, strings and numbers each their own span`,
              (await bashInput.getAttribute("data-look")) === "json" && (await bashInput.locator("span").count()) >= 4
@@ -368,12 +387,88 @@ async function waitFor(url, tries = 100) {
              (await convo.getByTestId("tool-output").first().getAttribute("data-look")) === "diff"
              && (await convo.getByTestId("tool-output").nth(1).getAttribute("data-look")) === "plain");
           await convo.getByTestId("tool-head").nth(0).click();
+          await bash.getByTestId("tool-formatted").click();
+          ck(`${tag}: Formatted brings the Bash body back`, (await bash.getByTestId("tool-command").count()) === 1);
+          await convo.getByTestId("tool-head").nth(1).click();
+
+          const plan = convo.locator("[data-testid=tool-card][data-tool=TodoWrite]");
+          ck(`${tag}: closed, a TodoWrite card is the plan and counts what is done (TR-1317)`,
+             /^Plan/.test(await plan.getByTestId("tool-head").innerText()) && (await plan.getByTestId("tool-summary").innerText()) === "2 of 4 done · Renaming the variable");
+          await plan.getByTestId("tool-head").click();
+          const stepStates = await plan.getByTestId("plan-step").evaluateAll((a) => a.map((e) => e.dataset.status));
+          ck(`${tag}: open, it is a checklist with a progress bar`,
+             JSON.stringify(stepStates) === JSON.stringify(["completed", "completed", "in_progress", "pending"])
+             && (await plan.locator("[role=img][aria-label='2 of 4 done']").count()) === 1 && (await plan.getByTestId("tool-output").count()) === 0, JSON.stringify(stepStates));
+          await plan.getByTestId("tool-head").click();
+
+          const agent = convo.locator("[data-testid=tool-card][data-tool=Agent]");
+          ck(`${tag}: closed, an Agent card shows its description and the helper's type (TR-1317)`,
+             (await agent.getByTestId("tool-summary").innerText()) === "Find every use of the old name" && (await agent.getByTestId("tool-tag").innerText()) === "Explore");
+          await agent.getByTestId("tool-head").click();
+          ck(`${tag}: open, the brief and the report read as markdown`,
+             (await agent.getByTestId("tool-brief").locator("code").count()) === 3
+             && (await agent.getByTestId("tool-report").locator("h2").innerText()) === "Found 2 places"
+             && (await agent.getByTestId("tool-report").locator("li").count()) === 2 && !/\*\*/.test(await agent.getByTestId("tool-report").innerText())
+             && (await agent.getByTestId("tool-mark").innerText()) === "done");
+          await agent.getByTestId("tool-head").click();
+
+          await convo.getByTestId("group-head").click();
+          const cut = convo.getByTestId("tool-group").locator("[data-testid=tool-card][data-tool=Bash]").nth(1);
+          await cut.getByTestId("tool-head").click();
+          ck(`${tag}: a Bash input the list cut short shows the plain blocks, no switch, no error (TR-1317)`,
+             (await cut.getByTestId("tool-body").getAttribute("data-shaped")) === "false" && (await cut.getByTestId("tool-input").count()) === 1
+             && (await cut.getByTestId("tool-switch").count()) === 0 && /cat > notes\.md/.test(await cut.getByTestId("tool-input").innerText()));
+          await cut.getByTestId("tool-head").click();
+          const fetchCard = convo.locator("[data-testid=tool-card][data-tool=WebFetch]");
+          await fetchCard.getByTestId("tool-head").click();
+          ck(`${tag}: a tool with no view of its own looks as it did`,
+             (await fetchCard.getByTestId("tool-input").count()) === 1 && (await fetchCard.getByTestId("tool-switch").count()) === 0
+             && (await fetchCard.getByTestId("tool-title").innerText()) === "WebFetch"
+             && (await fetchCard.getByTestId("tool-summary").innerText()) === "https://docs.glassflow.ai/tares");
+          await fetchCard.getByTestId("tool-head").click();
+
+          const send = convo.locator("[data-testid=tool-card][data-tool=SendMessage]");
+          ck(`${tag}: closed, a message names who it went to and its first line (TR-1317)`,
+             (await send.getByTestId("tool-title").innerText()) === "To crew-reviewer" && (await send.getByTestId("tool-summary").innerText()) === "PR #595 is ready.");
+          await send.getByTestId("tool-head").click();
+          ck(`${tag}: open, the message reads as markdown and the answer stays in Raw`,
+             (await send.getByTestId("tool-message").locator("li").count()) === 2 && (await send.getByTestId("tool-message").locator("strong").innerText()) === "known"
+             && (await send.getByTestId("tool-output").count()) === 0);
+          await send.getByTestId("tool-head").click();
+
+          const read = convo.locator("[data-testid=tool-card][data-tool=Read]");
+          ck(`${tag}: closed, a Read card names the file and the lines (TR-1317)`,
+             (await read.getByTestId("tool-summary").innerText()) === "/w/shop/tests/factory/lib.sh · lines 10-14");
+          await read.getByTestId("tool-head").click();
+          const nums = await read.getByTestId("line-number").allInnerTexts();
+          ck(`${tag}: open, the code has its line numbers beside it, not in it`,
+             JSON.stringify(nums) === JSON.stringify(["10", "11", "12", "13", "14"])
+             && !/\t/.test(await read.getByTestId("tool-lines").innerText().then((x) => x.replace(/^\d+/gm, "")))
+             && /check\(\) \{/.test(await read.getByTestId("tool-lines").innerText()), JSON.stringify(nums));
+          await read.getByTestId("tool-head").click();
+
+          const grep = convo.locator("[data-testid=tool-card][data-tool=Grep]");
+          ck(`${tag}: closed, a Grep card says its pattern, where, and how many files (TR-1317)`,
+             (await grep.getByTestId("tool-summary").innerText()) === "KNOWN_DIFFS in /w/shop · 2 files");
+          await grep.getByTestId("tool-head").click();
+          const found = await grep.getByTestId("match-file").allInnerTexts();
+          ck(`${tag}: open, the files it found, relative to where it looked, with their counts`,
+             JSON.stringify(found.map((x) => x.replace(/\s+/g, " "))) === JSON.stringify(["tests/factory/claude_update_test.sh 3", "tests/factory/lib.sh 1"]), JSON.stringify(found));
+          await grep.getByTestId("tool-head").click();
+
+          const glob = convo.locator("[data-testid=tool-card][data-tool=Glob]");
+          ck(`${tag}: a Glob that found nothing says so in the header`,
+             (await glob.getByTestId("tool-summary").innerText()) === "docs/**/*.md in /w/shop · no files");
+          await glob.getByTestId("tool-head").click();
+          ck(`${tag}: and in the body`, (await glob.getByTestId("matches-none").count()) === 1);
+          await glob.getByTestId("tool-head").click();
+          await convo.getByTestId("group-head").click();
           await convo.getByTestId("group-head").click();
           await convo.getByTestId("tool-group").getByTestId("tool-head").nth(1).click();
           await p.waitForFunction(() => /case 120/.test(document.querySelector("[data-testid=tool-group] [data-testid=tool-output]")?.textContent || ""));
           ck(`${tag}: an output the list cut loads whole when its card opens`, true);
           await convo.getByTestId("conversation-open-all").click();
-          ck(`${tag}: Open all tools opens every card`, (await convo.getByTestId("tool-body").count()) === 6);
+          ck(`${tag}: Open all tools opens every card`, (await convo.getByTestId("tool-body").count()) === 13);
           await convo.getByTestId("conversation-scroll").evaluate((e) => { e.scrollTop = 0; e.dispatchEvent(new Event("scroll")); });
           await p.waitForTimeout(100);
           ck(`${tag}: scrolled up, it stops following and offers the newest`, (await convo.getByTestId("conversation-newest").count()) === 1);

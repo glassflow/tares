@@ -1,8 +1,8 @@
 /*
- * Browser e2e for a factory project's pull requests: the Pull requests section on the project page
- * (the three newest, a link to all of them) and the project's GitHub page (/projects/:id/github):
+ * Browser e2e for a factory project's pull requests: the Pull requests card on Overview (how many are
+ * open, the newest one, a link to all of them) and the project's Pull requests page (/projects/:id/github):
  * by repo, open first, then merged, then closed without merging, each with its ticket, CI, review,
- * size and who merged it. A project with no pull request has no section and an empty GitHub page.
+ * size and who merged it. A project with no pull request has a card that says none yet and an empty page.
  * Every state shows only words from words.json and none scrolls sideways at 390 px.
  *
  * Seeds a scratch factory cell (tests/seed-factory-github.py, invented names), then runs the real
@@ -74,16 +74,15 @@ async function waitFor(url, tries = 100) {
       const { ctx, page } = await newPage(width);
       console.log(`== the project page at ${width} ==`);
       await page.goto(`${BASE}/projects/${g}`, { waitUntil: "load" });
-      await page.getByTestId("recent-prs").waitFor();
+      await page.getByTestId("summary-prs").waitFor();
       await settle(page);
-      const recent = page.getByTestId("recent-pr");
-      ck("three pull requests, the newest first", (await recent.count()) === 3
-         && (await recent.nth(0).innerText()).includes("#115") && (await recent.nth(2).innerText()).includes("#47"),
-         (await texts(recent)).join(" | "));
-      ck("each says its state", (await recent.nth(0).getAttribute("data-state")) === "draft"
-         && (await recent.nth(1).getAttribute("data-state")) === "open");
-      const link = page.getByTestId("github-link");
-      ck("the link names all of them", (await link.innerText()).trim() === "All 7 pull requests ›", await link.innerText());
+      // TR-1245: Overview has a card for them, the project sidebar a page
+      const link = page.getByTestId("summary-prs");
+      const big = (await link.getByTestId("summary-big").innerText()).trim(), line = (await link.getByTestId("summary-line").innerText()).trim();
+      ck("the card says how many are open and names the newest", big === "3 open" && line.startsWith("#115 "), `${big} | ${line}`);
+      ck("the card names all of them", (await link.innerText()).includes("All 7 pull requests"), await link.innerText());
+      ck("the project sidebar counts them on Pull requests", (await page.getByTestId("project-page-prs").innerText()).replace(/\s+/g, " ").trim() === "Pull requests 7",
+         await page.getByTestId("project-page-prs").innerText());
       ck("no sideways scroll", (await overflow(page)) <= 0);
       await checkWords(page, ck, `project page ${width}`);
       await shot(page, `project-${width}.png`);
@@ -92,7 +91,8 @@ async function waitFor(url, tries = 100) {
       await link.click();
       await page.getByTestId("github-page").waitFor();
       await settle(page);
-      ck("the address is the project's GitHub page", page.url().endsWith(`/projects/${g}/github`), page.url());
+      ck("the address is the project's Pull requests page", page.url().endsWith(`/projects/${g}/github`)
+         && (await page.getByTestId("project-page-prs").getAttribute("aria-current")) === "page", page.url());
       ck("the summary counts them", (await page.getByTestId("github-summary").innerText()).startsWith(
          "3 open, 3 merged, 1 closed without merging on project-g."), await page.getByTestId("github-summary").innerText());
       const repos = page.getByTestId("pr-repo");
@@ -131,7 +131,7 @@ async function waitFor(url, tries = 100) {
       await page.goto(`${BASE}/projects/${n}`, { waitUntil: "load" });
       await page.getByTestId("factory-project").waitFor();
       await settle(page);
-      ck("no Pull requests section", (await page.getByTestId("recent-prs").count()) === 0);
+      ck("the Pull requests card says none yet", (await page.getByTestId("summary-prs").getByTestId("summary-big").innerText()).trim() === "None yet");
       await page.goto(`${BASE}/projects/${n}/github`, { waitUntil: "load" });
       await page.getByTestId("github-empty").waitFor();
       ck("the GitHub page says none yet", (await page.getByTestId("github-summary").innerText()).startsWith("no pull requests on project-n"),
