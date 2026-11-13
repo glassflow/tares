@@ -180,6 +180,7 @@ test_pickup
 test_plugin_challenger
 test_plugin_resume_ship
 test_plugin_shims
+test_plugin_ship_once
 test_postgres
 test_pricing
 test_private_any_licence

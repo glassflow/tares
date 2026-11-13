@@ -1,4 +1,6 @@
 import * as React from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronRight, Pencil, Search, Terminal } from "../../components/icons";
@@ -97,15 +99,12 @@ function toolName(name: string): string {
   return parts[parts.length - 1] || name;
 }
 
-/** Text with `code` in backticks shown as code. */
+/** A message as markdown: bold, lists, headings, code and links. Raw HTML in the text stays text. */
 function Prose({ text }: { text: string }) {
-  const parts = text.split(/(`[^`\n]+`)/g);
   return (
-    <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-      {parts.map((p, i) => (p.length > 2 && p.startsWith("`") && p.endsWith("`")
-        ? <code key={i} className="border border-border bg-muted px-1 font-mono text-[0.9em]">{p.slice(1, -1)}</code>
-        : <React.Fragment key={i}>{p}</React.Fragment>))}
-    </span>
+    <div className="md min-w-0 [overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:text-xs">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
   );
 }
 

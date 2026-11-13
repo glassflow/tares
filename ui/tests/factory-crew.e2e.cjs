@@ -340,6 +340,10 @@ async function waitFor(url, tries = 100) {
           await p.getByTestId("member-conversation").waitFor();
           const convo = p.getByTestId("member-conversation");
           ck(`${tag}: the conversation shows text as text`, /<b>not markup<\/b>/.test(await convo.innerText()) && (await convo.locator("b").count()) === 0);
+          const md = convo.getByTestId("bubble-said").filter({ hasText: "Crew on the machine" });
+          ck(`${tag}: a message reads as markdown: bold, a list and code, no stars left (TR-1177)`,
+             (await md.locator("strong").count()) === 3 && (await md.locator("li").count()) === 2 && (await md.locator("code").count()) === 2
+             && !/\*\*/.test(await md.innerText()));
           ck(`${tag}: messages on both sides, tool cards, a failed one, a group and dividers (TR-1177)`,
              (await convo.getByTestId("bubble-said").count()) > 0 && (await convo.getByTestId("bubble-asked").count()) === 2
              && (await convo.getByTestId("bubble-factory").count()) === 1 && (await convo.locator("[data-failed=true]").count()) === 1
