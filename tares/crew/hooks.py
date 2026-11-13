@@ -31,6 +31,7 @@ HOOKS = {
     "guard": ("py", "hooks/guard.py"),
     "session-start": ("py", "hooks/session_start.py"),
     "mcp-headers": ("py", "scripts/mcp_headers.py"),
+    "otel-headers": ("py", "scripts/otel_headers.py"),
     "compat": ("compat", ""),
 }
 
