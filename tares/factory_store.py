@@ -352,6 +352,21 @@ FACTORY_SCHEMA = [
     )""",
     # Where the answer came from: "console" when the person gave it on the page (TR-740).
     "ALTER TABLE spec_questions ADD COLUMN IF NOT EXISTS via TEXT",
+    # The repos a cell connected to the brain (TR-1197, ee): owner/name in lowercase, the id of the
+    # repo source lore made for it, and how far its index is. The ee routes in
+    # ee/tares_ee/brain/repos.py read and write it; the table exists on every cell.
+    """CREATE TABLE IF NOT EXISTS brain_repos (
+      repo           TEXT PRIMARY KEY,
+      repo_source_id TEXT,
+      state          TEXT,
+      files_done     INTEGER DEFAULT 0,
+      files_total    INTEGER DEFAULT 0,
+      indexed_commit TEXT,
+      last_synced    TIMESTAMPTZ,
+      error          TEXT,
+      added_by       TEXT,
+      added_at       TIMESTAMPTZ
+    )""",
     # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
     # since the hand-over stopped waiting for sign-offs; the rows are kept.
     """CREATE TABLE IF NOT EXISTS signoffs (
@@ -1786,6 +1801,56 @@ class FactoryStore:
                 "state = 'answered', via = ? WHERE project = ? AND id = ? AND state = 'open' "
                 "RETURNING id",
                 [answer, by or None, at, via, project, qid]).fetchone()
+        return hit is not None
+
+    # ── the repos connected to the brain (TR-1197) ────────────────────────────
+    _BR_COLS = ("repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
+                "error, added_by, added_at")
+
+    def _br_rows(self, rows) -> list[dict]:
+        out = [{"repo": r[0], "repo_source_id": r[1], "state": r[2], "files_done": r[3] or 0,
+                "files_total": r[4] or 0, "indexed_commit": r[5], "last_synced": r[6],
+                "error": r[7], "added_by": r[8], "added_at": r[9]} for r in rows]
+        refs = self._person_refs(r["added_by"] for r in out)
+        for r in out:
+            r["added_by_name"] = (refs.get(r["added_by"]) or {}).get("name")
+        return out
+
+    def list_brain_repos(self) -> list[dict]:
+        with self._sread:
+            rows = self.sc.execute(
+                f"SELECT {self._BR_COLS} FROM brain_repos ORDER BY added_at, repo").fetchall()
+        return self._br_rows(rows)
+
+    def get_brain_repo(self, repo: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._BR_COLS} FROM brain_repos WHERE repo = ?",
+                                [repo]).fetchone()
+        return self._br_rows([r])[0] if r else None
+
+    def add_brain_repo(self, repo: str, repo_source_id: str | None, added_by: str | None,
+                       at, state: str = "queued") -> bool:
+        """Keep a connected repo; False when it was already there (the row is left as it was)."""
+        with self._swrite:
+            hit = self.sc.execute(
+                f"INSERT INTO brain_repos ({self._BR_COLS}) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, "
+                "?, ?) ON CONFLICT DO NOTHING RETURNING repo",
+                [repo, repo_source_id or None, state, added_by or None, at]).fetchone()
+        return hit is not None
+
+    def delete_brain_repo(self, repo: str) -> bool:
+        with self._swrite:
+            hit = self.sc.execute("DELETE FROM brain_repos WHERE repo = ? RETURNING repo",
+                                  [repo]).fetchone()
+        return hit is not None
+
+    def requeue_brain_repo(self, repo: str, from_state: str = "failed") -> bool:
+        """Put a repo that is in `from_state` back to queued with its error cleared; False when it
+        is not in that state (or not there), and then the row is left as it was."""
+        with self._swrite:
+            hit = self.sc.execute(
+                "UPDATE brain_repos SET state = 'queued', error = NULL WHERE repo = ? AND state = ? "
+                "RETURNING repo", [repo, from_state]).fetchone()
         return hit is not None
 
     def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:

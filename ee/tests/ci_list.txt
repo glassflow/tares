@@ -3,6 +3,7 @@
 test_areas
 test_areas_licence
 test_brain_lore_client
+test_brain_repos
 test_console_answers
 test_crew_page_by_person
 test_crew_split
