@@ -133,6 +133,7 @@ function Dot({ k }: { k: StateKey }) {
 
 /** The whole row or card is one link to the ticket; its words are the ticket's own. */
 function Row({ t }: { t: TicketRow }) {
+  const scoped = React.useContext(Scope) !== "";
   const canceled = t.state_key === "canceled";
   const pr = prText(t);
   const cell = "min-w-0 text-[13px]";
@@ -148,7 +149,8 @@ function Row({ t }: { t: TicketRow }) {
         {t.title}
       </span>
       <span className={cn("col-span-2 row-start-3 flex min-w-0 flex-wrap gap-y-0.5 text-[12.5px]", "min-[1360px]:contents")}>
-        <span data-user-text className={cn(cell, "font-medium [overflow-wrap:anywhere] after:mx-[7px] after:font-normal after:text-muted-foreground after:content-['·']", "min-[1360px]:pt-px min-[1360px]:after:content-none")}>{t.project.name}</span>
+        {scoped ? <span aria-hidden className="hidden min-[1360px]:block" />
+          : <span data-user-text className={cn(cell, "font-medium [overflow-wrap:anywhere] after:mx-[7px] after:font-normal after:text-muted-foreground after:content-['·']", "min-[1360px]:pt-px min-[1360px]:after:content-none")}>{t.project.name}</span>}
         <span data-user-text title={t.milestone ? `${t.milestone.number} ${t.milestone.name}` : undefined}
               className={cn(cell, MUTED, "after:mx-[7px] after:content-['·'] last:after:content-none", "min-[1360px]:truncate min-[1360px]:pt-px min-[1360px]:after:content-none")}>
           {t.milestone ? `${t.milestone.number} ${t.milestone.name}` : ""}
@@ -165,13 +167,17 @@ function Row({ t }: { t: TicketRow }) {
   );
 }
 
+/** The one project the screen is kept to (the project's Tickets page), or "" for every project. */
+const Scope = React.createContext("");
+
 type CardCtx = "board" | Group;
 
 function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
   const who = whoOf(t);
   const ms = t.milestone?.number ?? "";
-  const meta = (ctx === "board" ? [t.project.name, who]
-    : ctx === "who" ? [t.project.name, ms]
+  const scoped = React.useContext(Scope) !== "";
+  const meta = (ctx === "board" ? [scoped ? ms : t.project.name, who]
+    : ctx === "who" ? [scoped ? "" : t.project.name, ms]
     : ctx === "project" ? [who || ms]
     : [who]).filter(Boolean).join(" · ");
   const blocked = t.state_key === "blocked" && t.blocked_by.length > 0;
@@ -498,24 +504,30 @@ function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
   return <div role="status" aria-busy="true" aria-label="Loading" data-testid="tickets-loading">{body}</div>;
 }
 
-function Tickets() {
+/** The Tickets screen. With `scope` it is kept to that one project: no Project filter, no grouping
+ *  by project, and the project's frame gives the heading. */
+export function Tickets({ scope = "" }: { scope?: string } = {}) {
+  return <Scope.Provider value={scope}><TicketsBody scope={scope} /></Scope.Provider>;
+}
+
+function TicketsBody({ scope }: { scope: string }) {
   const [params, setParams] = useSearchParams();
   const named = useSample();
   const sample = isSample(named) ? named : null;
   const narrow = useNarrow();
 
   const filters: Filters = {
-    project: params.get("project") ?? "",
+    project: scope || (params.get("project") ?? ""),
     state: stateFromUrl(params.get("state") ?? ""),
     milestone: params.get("milestone") ?? "",
     q: params.get("q") ?? "",
     sort: ((s) => (s === "old" || s === "ref" ? s : ""))(params.get("sort")),
   };
-  const hasFilter = !!(filters.project || filters.state || filters.milestone || filters.q);
+  const hasFilter = !!((filters.project && !scope) || filters.state || filters.milestone || filters.q);
   const layoutParam = params.get("layout");
   const layout: Layout = layoutParam === "list" || layoutParam === "board" || layoutParam === "lanes"
     ? layoutParam : (readPref() ?? (hasFilter ? "list" : "board"));
-  const group: Group = ((g) => (g === "milestone" || g === "who" ? g : "project"))(params.get("group"));
+  const group: Group = ((g) => (g === "milestone" || g === "who" ? g : scope ? "milestone" : "project"))(params.get("group"));
 
   // What the read asks for. The List pages by 25; the Board and the Swimlanes take 200, open first.
   const query: TicketsQuery = {
@@ -556,7 +568,7 @@ function Tickets() {
     // Changing a filter does not move the person to another layout: the layout in view is kept in the
     // address when the new filters would open another one, and left out when they would open this one.
     if (!("layout" in changes) && !readPref()) {
-      const filtered = ["project", "state", "milestone", "q"].some((k) => !!next.get(k));
+      const filtered = (scope ? ["state", "milestone", "q"] : ["project", "state", "milestone", "q"]).some((k) => !!next.get(k));
       if (layout === (filtered ? "list" : "board")) next.delete("layout");
       else next.set("layout", layout);
     }
@@ -638,7 +650,7 @@ function Tickets() {
     );
     return (
       <div className="grid gap-5 md:gap-6" data-testid="factory-tickets">
-        <Head />
+        {!scope && <Head />}
         {failed || (
           <>
             <FilterBar layout={layout} filters={filters} qText={qText} group={group} data={undefined} disabled onLayout={pickLayout} patch={patch} setQText={setQText} />
@@ -650,10 +662,10 @@ function Tickets() {
   }
 
   const projectsTotal = resp.projects.reduce((n, p) => n + p.count, 0);
-  if (resp.projects.length === 0) {
+  if (resp.projects.length === 0 && !scope) {
     return (
       <div className="grid gap-5 md:gap-6" data-testid="factory-tickets">
-        <Head />
+        {!scope && <Head />}
         <div className="border border-border bg-card" data-testid="tickets-empty">
           <EmptyState title="No projects yet."
                       action={<Button asChild><Link to="/projects">Go to Projects</Link></Button>}>
@@ -679,9 +691,11 @@ function Tickets() {
       const nothingYet = !hasFilter && projectsTotal === 0;
       return (
         <div className="border border-border bg-card" data-testid="tickets-zero">
-          <EmptyState title={nothingYet ? "No tickets yet." : `No ticket matches${filters.q ? ` "${filters.q}"` : " these filters"}.`}
-                      action={nothingYet ? undefined : <Button variant="secondary" onClick={clear} data-testid="zero-clear">Clear filters</Button>}>
-            {nothingYet ? "Tickets show here once the crew has planned a project." : `Try fewer words, or clear the filters to see all ${projectsTotal} tickets.`}
+          <EmptyState title={nothingYet || (scope && !hasFilter) ? "No tickets yet." : `No ticket matches${filters.q ? ` "${filters.q}"` : " these filters"}.`}
+                      action={nothingYet || (scope && !hasFilter) ? undefined : <Button variant="secondary" onClick={clear} data-testid="zero-clear">Clear filters</Button>}>
+            {scope && !hasFilter ? "They show here once the crew has planned the build."
+              : nothingYet ? "Tickets show here once the crew has planned a project."
+              : scope ? "Try fewer words, or clear the filters to see all of them." : `Try fewer words, or clear the filters to see all ${projectsTotal} tickets.`}
           </EmptyState>
         </div>
       );
@@ -719,7 +733,7 @@ function Tickets() {
 
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-tickets">
-      <Head sub={hasFilter ? "Every ticket of every project the crew holds" : `${plural(resp.counts.total, "ticket", "tickets")} in ${plural(resp.projects.length, "project", "projects")}`} />
+      {!scope && <Head sub={hasFilter ? "Every ticket of every project the crew holds" : `${plural(resp.counts.total, "ticket", "tickets")} in ${plural(resp.projects.length, "project", "projects")}`} />}
       {error && (
         <Banner tone="error" action={retry}>
           <b>We could not load the tickets.</b> <span className="text-foreground">Check your connection, then try again.</span>
@@ -776,6 +790,7 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
   const counts = data?.counts;
   const opt = (k: StateKey) => `${STATE_LABEL[k]}${counts ? ` (${counts[k]})` : ""}`;
   const noProject = !filters.project;
+  const scoped = React.useContext(Scope) !== "";
   return (
     <div role="search" className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center" data-testid="tickets-filters">
       <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-[var(--input-bg)] md:inline-flex md:w-auto">
@@ -789,11 +804,11 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
       </div>
       <input type="text" value={qText} disabled={disabled} onChange={(e) => setQText(e.target.value)} placeholder="Search by ref or title" aria-label="Search tickets"
              data-testid="f-q" className={cn(FIELD, "col-span-full md:min-w-[150px] md:flex-1 md:basis-[150px]")} />
-      <FilterSelect label="Project" testid="f-project" value={filters.project} disabled={disabled} className="md:min-w-[128px]"
+      {!scoped && <FilterSelect label="Project" testid="f-project" value={filters.project} disabled={disabled} className="md:min-w-[128px]"
                     onChange={(v) => patch({ project: v || null, milestone: null })}
                     options={[{ value: "", label: "All projects" },
                       ...(data?.projects ?? []).map((p) => ({ value: p.id, label: `${p.name} (${p.count})`, user: true })),
-                      ...(data && filters.project && !data.projects.some((p) => p.id === filters.project) ? [{ value: filters.project, label: filters.project, user: true }] : [])]} />
+                      ...(data && filters.project && !data.projects.some((p) => p.id === filters.project) ? [{ value: filters.project, label: filters.project, user: true }] : [])]} />}
       <FilterSelect label="State" testid="f-state" value={filters.state} disabled={disabled} className="md:min-w-[128px]"
                     onChange={(v) => patch({ state: v || null })}
                     options={[{ value: "", label: "All states" }, { value: "moving", label: `Moving now${counts ? ` (${counts.moving})` : ""}` },
@@ -808,7 +823,8 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
       )}
       {layout === "lanes" && (
         <FilterSelect label="Group by" testid="f-group" value={group} disabled={disabled} className="col-span-full md:col-auto md:ml-auto md:min-w-[190px]"
-                      onChange={(v) => patch({ group: v === "project" ? null : v })} options={GROUPS} />
+                      onChange={(v) => patch({ group: v === (scoped ? "milestone" : "project") ? null : v })}
+                      options={scoped ? GROUPS.filter((g) => g.value !== "project") : GROUPS} />
       )}
     </div>
   );

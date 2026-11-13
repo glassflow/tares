@@ -627,12 +627,12 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
     {
       const { ctx, page } = await open("alex", 1440);
       const t = (s) => `later: ${s}`;
-      await page.goto(`${BASE}/projects/${ids.projects.portal}`, { waitUntil: "load" });
-      await page.getByTestId("factory-project").waitFor();
-      ck(t("Portal's page offers Later, not Start now"), (await page.getByTestId("project-later").count()) === 1
+      await page.goto(`${BASE}/projects/${ids.projects.portal}/settings`, { waitUntil: "load" });
+      await page.getByTestId("settings-page").waitFor();
+      ck(t("Portal's Settings offer Keep for later, not Start now"), (await page.getByTestId("project-later").count()) === 1
          && (await page.getByTestId("project-start-now").count()) === 0);
       await page.getByTestId("project-later").click();
-      await page.locator('[data-testid="factory-project"][data-state="later"]').waitFor({ timeout: 10000 });
+      await page.waitForFunction(() => document.querySelector("[data-testid=project-chip]")?.textContent.trim().toLowerCase() === "later", null, { timeout: 10000 });
       ck(t("its chip reads Later, and Start now takes the button's place"), (await page.getByTestId("project-chip").innerText()).trim().toLowerCase() === "later"
          && (await page.getByTestId("project-start-now").count()) === 1 && (await page.getByTestId("project-later").count()) === 0);
       await checkWords(page, ck, t("kept for later"));
@@ -651,7 +651,9 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       await page.goto(`${BASE}/projects/${ids.projects.portal}`, { waitUntil: "load" });
       await page.getByTestId("project-start-now").click();
       await page.locator('[data-testid="factory-project"]:not([data-state="later"])').waitFor({ timeout: 10000 });
-      ck(t("Start now brings it back: Later is offered again"), (await page.getByTestId("project-later").count()) === 1);
+      await page.goto(`${BASE}/projects/${ids.projects.portal}/settings`, { waitUntil: "load" });
+      await page.getByTestId("settings-page").waitFor();
+      ck(t("Start now brings it back: Keep for later is offered again"), (await page.getByTestId("project-later").count()) === 1);
       await ctx.close();
     }
 
@@ -1054,6 +1056,8 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("both grants are kept"), [firstCmd, secondCmd].every((c) => JSON.stringify(grants.body).includes(c)), JSON.stringify(grants.body).slice(0, 300));
       // Kim's request is Kim's: on Alex's view it sits under Waiting for others, named for her, with
       // nothing to press (TR-1223 follow-up; before, it had an Allow the cell then refused)
+      // on Overview it is one line, with the list behind Show (TR-1245)
+      if ((await page.getByTestId("waiting-others").count()) === 0) await page.getByTestId("waiting-others-toggle").click();
       const others = page.getByTestId("waiting-other-row").filter({ hasText: kimCmd });
       ck(t("someone else's request is under Waiting for others, named for them, with no Allow"),
          (await others.count()) === 1 && /^Permission for Kim/.test((await others.textContent()).trim())

@@ -1,21 +1,20 @@
 import * as React from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { DocPane } from "./FactoryDocs";
-import { InlineIcon } from "./ProjectIcon";
+import { PageHead, ProjectShell } from "./ProjectShell";
 import { projectDocs, type ProjectDocLink, type ProjectDocsPage } from "./FactoryDocs.api";
 
-// /projects/:id/docs: every document of one project on its own page. The list on the left in
+// /projects/:id/docs, Docs and memory in the project's frame (TR-1245): every document of one project. The list on the left in
 // three groups (the spec, plan, rules and memory; the working notes, one per ticket; the notes),
 // the open document on the right, read as the Docs and memory page reads it. ?doc=<id> opens one.
 // The shared rules and memory stay on Docs and memory.
 
 const POLL_MS = 60_000;
-const MUTED = "text-xs text-muted-foreground";
 const LINK = "text-[color:var(--accent-deep)]! underline!";
 
 function Item({ d, open, to }: { d: ProjectDocLink; open: boolean; to: string }) {
@@ -29,8 +28,7 @@ function Item({ d, open, to }: { d: ProjectDocLink; open: boolean; to: string })
   );
 }
 
-export default function FactoryProjectDocs() {
-  const { id = "" } = useParams();
+function ProjectDocs({ id }: { id: string }) {
   const [params, setParams] = useSearchParams();
   const docId = params.get("doc");
   const seen = React.useRef(docId);
@@ -57,25 +55,12 @@ export default function FactoryProjectDocs() {
   const stale = Boolean(docId) && doc?.id !== docId && !error;
   const all = data ? data.groups.flatMap((g) => g.docs) : [];
   const open = all.find((d) => d.id === doc?.id);
-  const crumb = (
-    <div className={MUTED} data-testid="crumb">
-      <Link to="/projects" className={LINK}>Projects</Link>
-      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text><InlineIcon icon={data.project.icon} className="mr-1" />{data.project.name}</Link></>}
-      {" / "}Docs
-    </div>
-  );
-
   return (
     <div className="grid min-w-0 gap-6" data-testid="project-docs-page">
-      <div className="grid gap-3">
-        {crumb}
-        <div>
-          <h1 className="m-0! text-[22px]! md:text-[28px]!">Docs</h1>
-          <p className={cn(MUTED, "m-0! mt-1!")}>
-            {data ? <>Every document of <span data-user-text>{data.project.name}</span>. The rules and memory for every project are on <Link to="/docs" className={LINK}>Docs and memory</Link>.</> : " "}
-          </p>
-        </div>
-      </div>
+      <PageHead title="Docs and memory" sub={
+        <span className="text-xs">
+          {data ? <>Every document of <span data-user-text>{data.project.name}</span>. The rules and memory for every project are on <Link to="/docs" className={LINK}>Docs and memory</Link>.</> : " "}
+        </span>} />
       {error && !data && (
         <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
           <b>The documents did not load.</b> <span className="text-foreground">Check your connection, then try again.</span>
@@ -124,4 +109,8 @@ export default function FactoryProjectDocs() {
       )}
     </div>
   );
+}
+
+export default function FactoryProjectDocs() {
+  return <ProjectShell page="docs">{({ id }) => <ProjectDocs id={id} />}</ProjectShell>;
 }

@@ -1,20 +1,17 @@
 import * as React from "react";
-import { Link, useParams } from "react-router-dom";
 
-import { Banner, Button, Skeleton, Toaster, useToast } from "../../components/edition";
+import { useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
-import { usePagePolling } from "../usePagePolling";
-import { decideCall, factoryProject, type FactoryProjectData, type PastCall, type ProjectCall } from "./FactoryProject.api";
+import { decideCall, type FactoryProjectData, type PastCall, type ProjectCall } from "./FactoryProject.api";
 import { CallRow } from "./FactoryProject";
-import { InlineIcon } from "./ProjectIcon";
+import { DecisionTabs } from "./FactoryDecisions";
+import { PageHead, ProjectShell } from "./ProjectShell";
 
-// /projects/:id/calls: the calls the crew made without the person, on their own page. The open
+// /projects/:id/calls, the Calls tab of Decisions and calls (TR-1245): the calls the crew made without the person. The open
 // ones first, each kept or changed here; then the ones already kept or changed, newest first.
 // Waiting for you on the project page and Home show a short item that links here.
 
-const POLL_MS = 15000;
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
 const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
 
 function PastRow({ c }: { c: PastCall }) {
@@ -39,46 +36,23 @@ function PastRow({ c }: { c: PastCall }) {
   );
 }
 
-export default function FactoryCalls() {
-  const { id = "" } = useParams();
+function Calls({ d, reload }: { d: FactoryProjectData; reload: () => void }) {
   const { toast } = useToast();
-  const { data, error, reload } = usePagePolling<FactoryProjectData>(() => factoryProject(id), POLL_MS);
   const [gone, setGone] = React.useState<string[]>([]);
   const decide = async (c: ProjectCall, state: "kept" | "overturned", words?: string) => {
-    await decideCall(id, c.ref, state, words);
+    await decideCall(d.id, c.ref, state, words);
     setGone((g) => [...g, c.ref]);
     toast(state === "kept" ? `Kept ${c.ref}. The crew carries on.` : `Sent. The crew changes ${c.ref}.`);
     reload();
   };
-  const crumb = (
-    <div className={MUTED} data-testid="crumb">
-      <Link to="/projects" className={LINK}>Projects</Link>
-      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text><InlineIcon icon={data.icon} className="mr-1" />{data.name}</Link></>}
-      {" / "}Calls
-    </div>
-  );
-  if (!data) {
-    return (
-      <div className="grid min-w-0 gap-3" data-testid="calls-page-wait">
-        {crumb}
-        {error ? (
-          <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
-            <b>We could not load the calls.</b> <span className="text-foreground">Check your connection, then try again.</span>
-          </Banner>
-        ) : <Skeleton className="h-40" />}
-      </div>
-    );
-  }
-  const open = data.calls.filter((c) => !gone.includes(c.ref));
-  const past = data.calls_past ?? [];
+  const open = d.calls.filter((c) => !gone.includes(c.ref));
+  const past = d.calls_past ?? [];
   return (
     <div className="grid min-w-0 gap-6" data-testid="calls-page">
-      <div className="grid gap-3">
-        {crumb}
-        <div>
-          <h1 className="m-0! text-[22px]! md:text-[28px]!">Calls</h1>
-          <p className={cn(MUTED, "m-0! mt-1!")}>What the crew decided on <span data-user-text>{data.name}</span> without you, so the work did not stop.</p>
-        </div>
+      <div className="grid gap-4">
+        <PageHead title="Decisions and calls" />
+        <DecisionTabs d={d} on="calls" />
+        <p className="m-0! text-xs text-muted-foreground">What the crew decided on <span data-user-text>{d.name}</span> without you, so the work did not stop.</p>
       </div>
       <section className="grid gap-3" aria-label="To confirm" data-testid="calls-open">
         <h2 className="m-0! text-base! font-semibold!">To confirm</h2>
@@ -92,7 +66,10 @@ export default function FactoryCalls() {
           {past.map((c) => <PastRow key={c.ref} c={c} />)}
         </section>
       )}
-      <Toaster />
     </div>
   );
+}
+
+export default function FactoryCalls() {
+  return <ProjectShell page="decisions">{({ d, reload }) => <Calls d={d} reload={reload} />}</ProjectShell>;
 }

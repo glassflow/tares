@@ -77,7 +77,7 @@ async function waitFor(url, tries = 100) {
     const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     const txt = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
     const open = async (page) => {
-      await page.goto(`${BASE}/projects/${y}`, { waitUntil: "load" });
+      await page.goto(`${BASE}/projects/${y}/people`, { waitUntil: "load" });
       await page.getByTestId("project-secrets").waitFor();
       await page.waitForLoadState("networkidle");
     };
@@ -87,7 +87,7 @@ async function waitFor(url, tries = 100) {
     const answers = [];
     page.on("response", async (r) => { if (r.url().includes("/secrets")) answers.push(await r.text().catch(() => "")); });
     await open(page);
-    ck("the Secrets section is on the project page", await T("project-secrets").isVisible());
+    ck("the Secrets section is on the project's People and access page", await T("project-secrets").isVisible());
     ck("it comes right after People", await page.evaluate(() => {
       const p = document.querySelector("[data-testid=project-people]"), s = document.querySelector("[data-testid=project-secrets]");
       return !!p && !!s && p.nextElementSibling === s;
@@ -139,7 +139,7 @@ async function waitFor(url, tries = 100) {
     // 390 and dark
     for (const width of [390]) {
       const c = await newPage(width);
-      await c.page.goto(`${BASE}/projects/${y}`, { waitUntil: "load" });
+      await c.page.goto(`${BASE}/projects/${y}/people`, { waitUntil: "load" });
       await c.page.getByTestId("project-secrets").waitFor();
       await c.page.waitForLoadState("networkidle");
       ck(`${width}: no sideways scroll`, (await overflow(c.page)) <= 0);
@@ -169,7 +169,7 @@ async function waitFor(url, tries = 100) {
     daemon = start({});
     ck("daemon up without a secrets key", await waitFor(`${BASE}/health`));
     const off = await newPage(1440);
-    await off.page.goto(`${BASE}/projects/${y}`, { waitUntil: "load" });
+    await off.page.goto(`${BASE}/projects/${y}/people`, { waitUntil: "load" });
     await off.page.getByTestId("secrets-off").waitFor();
     ck("without a key the section says secrets are off and how to turn them on",
        (await txt(off.page.getByTestId("secrets-off"))).includes("TARES_SECRETS_KEY"));

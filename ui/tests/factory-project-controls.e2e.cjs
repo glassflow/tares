@@ -72,7 +72,7 @@ function seed(dir) {
         const chunks = [], errors = [];
         page.on("request", (r) => { if (EE_CHUNK.test(r.url())) chunks.push(r.url()); });
         page.on("pageerror", (e) => errors.push(String(e)));
-        await page.goto(`${d.base}/projects/${uid}`);
+        await page.goto(`${d.base}/projects/${uid}/people`);
         await page.getByTestId("project-people").waitFor({ timeout: 15000 });
         await page.waitForLoadState("networkidle");
         await page.waitForTimeout(THEME_MS);
@@ -93,7 +93,7 @@ function seed(dir) {
       if (state === "valid") {   // last, since it moves the lead away from the person who looks
         const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
         const page = await ctx.newPage();
-        await page.goto(`${d.base}/projects/${uid}`);
+        await page.goto(`${d.base}/projects/${uid}/people`);
         await page.getByTestId("project-people").waitFor({ timeout: 15000 });
         await page.waitForLoadState("networkidle");
         await page.getByTestId("people-set-lead").first().click();

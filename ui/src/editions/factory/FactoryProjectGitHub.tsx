@@ -1,19 +1,18 @@
 import * as React from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { PR_CHIP, PrSize, n } from "./prParts";
-import { InlineIcon } from "./ProjectIcon";
+import { PageHead, ProjectShell } from "./ProjectShell";
 import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type ProjectRepoPrs } from "./FactoryProject.api";
 
-// /projects/:id/github: what happened to the code. Every pull request the project's tickets opened,
+// /projects/:id/github, Pull requests in the project's frame (TR-1245): what happened to the code. Every pull request the project's tickets opened,
 // by repo: the open ones first, then merged, then closed without merging. Each says its ticket, CI,
 // the crew's review, how big the change was and who merged it, as GitHub said when Tares last read it.
 
 const POLL_MS = 30000;
-const MUTED = "text-xs text-muted-foreground";
 const LINK = "text-[color:var(--accent-deep)]! underline!";
 const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
 
@@ -76,20 +75,12 @@ function Repo({ r }: { r: ProjectRepoPrs }) {
   );
 }
 
-export default function FactoryProjectGitHub() {
-  const { id = "" } = useParams();
+function PullRequests({ id }: { id: string }) {
   const { data, error, reload } = usePagePolling<ProjectGitHubData>(() => factoryProjectGitHub(id), POLL_MS);
-  const crumb = (
-    <div className={MUTED} data-testid="crumb">
-      <Link to="/projects" className={LINK}>Projects</Link>
-      {data && <> / <Link to={`/projects/${encodeURIComponent(id)}`} className={LINK} data-user-text><InlineIcon icon={data.icon} className="mr-1" />{data.name}</Link></>}
-      {" / "}GitHub
-    </div>
-  );
   if (!data) {
     return (
-      <div className="grid min-w-0 gap-3" data-testid="github-page-wait">
-        {crumb}
+      <div className="grid min-w-0 gap-5" data-testid="github-page-wait">
+        <PageHead title="Pull requests" />
         {error ? (
           <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
             <b>We could not load the pull requests.</b> <span className="text-foreground">Check your connection, then try again.</span>
@@ -101,14 +92,11 @@ export default function FactoryProjectGitHub() {
   return (
     <div className="grid min-w-0 max-w-[980px] gap-8" data-testid="github-page">
       <div className="grid gap-3">
-        {crumb}
-        <div>
-          <h1 className="m-0! text-[22px]! md:text-[28px]!">GitHub</h1>
-          <p className={cn(MUTED, "m-0! mt-1!")} data-testid="github-summary">
+        <PageHead title="Pull requests" sub={
+          <span className="text-xs" data-testid="github-summary">
             {countsText(data.counts)} on <span data-user-text>{data.name}</span>.
             {data.checked && <> Last read from GitHub {data.checked}.</>}
-          </p>
-        </div>
+          </span>} />
         {data.github_error && (
           <Banner tone="warn" data-testid="github-error">
             <b>Some pull requests could not be read from GitHub.</b> <span className="text-foreground">{data.github_error}</span>
@@ -122,4 +110,8 @@ export default function FactoryProjectGitHub() {
       ) : data.repos.map((r) => <Repo key={r.name ?? ""} r={r} />)}
     </div>
   );
+}
+
+export default function FactoryProjectGitHub() {
+  return <ProjectShell page="prs">{({ id }) => <PullRequests id={id} />}</ProjectShell>;
 }
