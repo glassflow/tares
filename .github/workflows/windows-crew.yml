@@ -55,7 +55,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: windows-latest
-    timeout-minutes: 45
+    # Shard 1 runs the parity coverage report (about 18 minutes, 1055 s on the last run) after its share of the tests,
+    # about 35 minutes in all. A required check must not fail on a slow runner, so the job and the report each keep
+    # at least half as much again as they used (TR-1230).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -96,7 +99,7 @@ jobs:
           FACTORY_CREW_HOME: ${{ env.USERPROFILE }}\factory
         run: |
           .venv\Scripts\activate.ps1
-          python tests/ci_windows.py --floors --timeout 1200 --shard ${{ matrix.shard }} --of 4
+          python tests/ci_windows.py --floors --timeout 1200 --coverage-timeout 1800 --shard ${{ matrix.shard }} --of 4
 
   # The one check to require: green when all four shards are, and green when they were skipped on purpose
   # (a PR without the windows-crew label). A shard that failed, was cancelled, or was skipped by

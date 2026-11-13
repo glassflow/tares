@@ -21,12 +21,13 @@ import re
 import socket
 import sys
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 import httpx
 
 from . import state
-from .errors import CrewError
+from .errors import CrewError, NotSignedInError
 from .paths import ME, CrewPaths
 
 # Settings the crew asks about, in the order bash asks them (SETTING_KEYS).
@@ -295,9 +296,25 @@ class TaresClient:
 
     def require_tares(self) -> None:
         if not self.tares_on():
-            raise CrewError(f"no Tares answers at {self.tares}. Start one with `tares up` in another terminal, "
-                            "connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where "
-                            "yours runs), then try again.")
+            cls = NotSignedInError if self._not_configured() else CrewError
+            raise cls(f"no Tares answers at {self.tares}. Start one with `tares up` in another terminal, "
+                      "connect to your Tares Cloud workspace with `tares login` (or set TARESD_URL to where "
+                      "yours runs), then try again.")
+
+    def _not_configured(self) -> bool:
+        """True when no Tares was ever named: no saved login, no address in the environment or crew.json.
+        Inside `tares factory` the address is always set, so its source says "local default" then."""
+        if state.ccfg("tares", "url", paths=self.paths):
+            return False
+        named = self._e("TARES_FACTORY_URL") or self._e("TARESD_URL") or self._e("TARES_URL")
+        if named and self._e("TARES_FACTORY_SOURCE") != "local default":
+            return False
+        home = Path(self._e("TARES_HOME") or Path.home() / ".tares")
+        try:
+            data = json.loads((home / "login.json").read_text())
+        except (OSError, ValueError):
+            return True
+        return not (isinstance(data, dict) and data.get("cell_url"))
 
     def need_capability(self, name: str) -> None:
         """Stop with an upgrade message when the cell's /health does not list the capability. /health is

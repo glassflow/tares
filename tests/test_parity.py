@@ -114,6 +114,9 @@ ck("...elsewhere case still matters", "<TMP>" not in nc, nc)
 with mock.patch.object(parity, "is_windows", lambda: True):
     q1 = parity.norm_text('tares hook statusline --plugin-root "<TMP>/kit"')
     q2 = parity.norm_text('tares hook statusline --plugin-root "<TMP>\\kit" and <TMP>\\bin\\claude.cmd (2.1.0)')
+with mock.patch.object(parity, "is_windows", lambda: True):
+    qx = parity.norm_text('<TMP>\\bin\\claude.exe (2.1.0) and <TMP>/bin/claude.exe')
+ck("on Windows claude.exe reads as bash printed it too (TR-1183)", qx == "<TMP>/bin/claude (2.1.0) and <TMP>/bin/claude", qx)
 ck("on Windows a quoted kit path and claude.cmd read as bash printed them",
    q1 == "tares hook statusline --plugin-root <TMP>/kit" and q2 == "tares hook statusline --plugin-root <TMP>/kit and <TMP>/bin/claude (2.1.0)", (q1, q2))
 with mock.patch.object(parity, "is_windows", lambda: False):
@@ -185,7 +188,7 @@ ck("...keeps the rest and points HOME at the scenario and pins the Python engine
 
 # TR-1066: the fake Claude Code is a launcher named `claude`, first on PATH and also CLAUDE_BIN.
 launcher = Path(env_b["CLAUDE_BIN"])
-ck("the fake Claude Code is named claude (claude.cmd on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
+ck("the fake Claude Code is named claude (claude.exe on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
 ck("...in the first folder of PATH", env_b["PATH"].split(os.pathsep)[0] == str(launcher.parent), env_b["PATH"][:200])
 found_claude = shutil.which("claude", path=env_b["PATH"])
 ck("...so `claude` by name finds it, not a real one", found_claude is not None and Path(found_claude).resolve() == launcher.resolve(), str(found_claude))

@@ -4136,6 +4136,16 @@
       "note": "Runs on Windows; test_crew_fake_claude.py compares it with the bash fakes."
     },
     {
+      "name": "exe_launcher.py",
+      "kind": "suite",
+      "what": "builds the claude.exe the parity scenarios start on Windows",
+      "ticket": "TR-1183",
+      "dropped": false,
+      "python": "tests/factory/exe_launcher.py",
+      "ported": true,
+      "note": "pip's console launcher plus a zip holding a runner for fake_claude.py; test_crew_exe_launcher.py checks it on every platform."
+    },
+    {
       "name": "fake_up_tares.py",
       "kind": "suite",
       "what": "the stand-in Tares for the crew up scenarios",
@@ -4431,7 +4441,7 @@
       "kind": "touchpoint",
       "file": "tests/factory/parity.py",
       "match": "(?i)cmux",
-      "line": 903,
+      "line": 904,
       "what": "the launch_settings_builder check that station settings do not disable cmux hooks (CMUX_CLAUDE_HOOKS_DISABLED)",
       "ticket": "TR-953",
       "dropped": false,

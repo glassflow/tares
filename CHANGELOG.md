@@ -5,11 +5,25 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- On Windows, `tares factory doctor` and the plugin version check now tell a person to stop the crew before they upgrade or install `tares` by hand, because an upgrade while any tares command runs can leave the install broken. macOS and Linux text is unchanged (TR-1281).
+
+### Added
+- `crew up --yes`, `crew down`, `halt`, `resume`, `freeze`, `unfreeze`, `update`, `restart`, and a station's `restart`, `revive` and `retire` accept `--json`: one result document on stdout (`schemas/result.json`) on success, the error document on failure. Without `--json` nothing changes (TR-1283).
+- `tests/test_schema_compat.py` fails when a change to the crew's JSON schemas would break a reader of the last release and `schema_version` was not raised (TR-1280).
+- `tares factory crew watch --restart` stops the background watch and starts a new one, and touches no station (TR-1279). `--if-running` does nothing when no watch runs, `--only-under <folder>` leaves a watch that runs from a program outside the folder alone, and `--json` prints `{"schema_version":1,"watch":{"action":...}}` (`watch.json`). It lets the desktop app move the watch onto a new engine version.
+
+- A program can sign in to Tares Cloud, read the saved sign-in and sign out through `tares`, reading only JSON: `tares login --json` (one document per line), `tares login --show --json` and `tares logout --json`, with stable error codes (`login_timeout`, `login_refused`, `cell_too_old`, `keychain_unreadable`, `not_signed_in`) and schemas in `tares/crew/schemas/`. The key is never printed (TR-1282).
+
 ### Fixed
+- On Windows, `tares factory crew status` did not adopt a live station that the crew had not recorded when the folder `claude agents --json` lists for it and the folder Tares or the crew home records were the same place spelled differently (backslash against slash, letter case, a trailing separator). Both are now compared as paths (TR-1308).
+- On Windows, a live station could read as stopped when the folder `claude agents --json` lists for it and the folder the crew recorded were the same place spelled differently (backslash against slash, another letter case, a trailing separator). The watch then skipped its grants restart, and the stopped-session checks in `find_live_job` and `is_alive` called it gone. The two folders are now compared as normalised paths (TR-1305). macOS and Linux were not affected, apart from a trailing separator.
+- On Windows, a new crew home could be written with no GitHub login, or with a name and login ending in a carriage return, in `crew.json`. `gh` installed as `gh.cmd` was not started (Windows starts only a `gh.exe` by bare name), and Windows commands end their output with `\r\n` where only `\n` was stripped. `gh` is now run by the full path `shutil.which` finds and the trailing `\r` is stripped too (TR-1228).
 - On Windows, two crew commands or threads writing an event at the same moment could mix their lines or lose one in `events.jsonl` (TR-1229). Each event is now written under a lock, so every line stays whole and none is dropped. macOS and Linux were not affected.
 - The crew's messages were listed two to four times on a ticket (each REVIEW, VERDICT, FYI). The plugin's async hooks shipped the same transcript lines side by side, and Claude Code 2.1.3xx writes `api-request-blob` lines that copy the last assistant message with no timestamp, which Tares stored as new tool calls at the moment they arrived. One shipper per transcript now holds a lock (a turn's end waits up to 5 s for it), the `api-request*` lines are not shipped and are dropped at ingest, and the message list shows each tool call once.
 - A project handed over from a person's session on a named crew went to the wrong crew: `hand_over` recorded it under `crew` and said `crew-orchestrator` was not running, while the person's own crew (for example `kiran-windows-crew`) was up and never got the `[TF:SHIP]` nudge. `tares factory spec` and `session` now tell the plugin the crew's name, and a session that names no crew (a plain `claude` with the plugin) hands over to the person's one running crew.
 - `tares factory doctor` now warns when git has no global `user.name` or `user.email`. On a fresh Windows machine a builder's first commit in a repo that sets none of its own stopped with "Author identity unknown", and `crew up` named the person "the user"; the warn gives the two `git config --global` commands.
+- The `windows-crew` check could fail on a slow Windows runner: shard 1's parity coverage report took 1055 s of its 1200 s limit. The report now has its own limit of 1800 s (`--coverage-timeout`, twice `--timeout` by default) and a shard job may run 60 minutes, so the required check does not fail for speed alone (TR-1230).
 
 ## [1.57.0] - 2026-11-12
 

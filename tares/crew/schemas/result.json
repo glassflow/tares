@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/result.json",
+  "title": "A crew command that ran, run with --json",
+  "type": "object",
+  "required": ["schema_version", "ok", "command", "notes"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ok": {"const": true},
+    "command": {"description": "The command that ran, for example `crew halt` or `retire`.", "type": "string"},
+    "notes": {
+      "description": "The lines the text mode prints on stderr, without the `tares factory: ` prefix. For a person, not for parsing.",
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

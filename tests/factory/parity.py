@@ -60,6 +60,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
 sys.path.insert(0, str(HERE))
+import exe_launcher  # noqa: E402  (the claude.exe of the scenarios on Windows, TR-1183)
 from fake_up_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
 STEP_TIMEOUT = 180
 NOT_PORTED = "not yet ported"
@@ -1121,9 +1122,6 @@ def spawn_step(*args: str, **kw) -> Step:
     return lstep("spawn", *args, **kw)
 
 
-WIN_NOT_YET = ("Windows never ran the Python side of this scenario while a step of it went through bash, which Windows lacks; its first run there fails (TR-975 follow-up: make it run on Windows)")
-WIN_NO_MULTILINE = ("a station is started through claude.cmd here, and cmd.exe cannot take the boot prompt of a builder or helper "
-                    "(several lines); the claude.exe form waits for TR-946")
 
 _SP_REPOS = {"gitrepos": ["{TMP}/links", "{TMP}/other"]}
 _SP_WORLD = lworld("L3-review", projects=[_LINKS])
@@ -1134,7 +1132,6 @@ scenario(Scenario(
     suite="crew",
     about="a builder starts in a repo of its project, with the project in its env; refusals start nothing; a helper keeps its parent's project",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "Links App", "m1", "{TMP}/links", "work T1 and T2", world=_SP_WORLD, setup=_SP_REPOS),
            spawn_step("builder", "Links App", "m1", "{TMP}/links", "again", world=_SP_WORLD),
            spawn_step("builder", "Nobody's", "m1", "{TMP}/links", "x", world=_SP_WORLD),
@@ -1201,7 +1198,6 @@ scenario(Scenario(
     suite="crew",
     about="builders_max is honoured; a project named like the crew is refused before it takes a place",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "Crew Tools", "m1", "{TMP}/blog", "x", world=_SP_LIMIT_WORLD,
                       setup={"gitrepos": ["{TMP}/shop", "{TMP}/blog"]}),
            spawn_step("builder", "shop", "m1", "{TMP}/shop", "work T1", world=_SP_LIMIT_WORLD),
@@ -1230,7 +1226,6 @@ scenario(Scenario(
     suite="crew",
     about="a project handed over stricter keeps it; --autonomy may only be stricter than the crew",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "strict", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD, setup={"gitrepos": ["{TMP}/core"]}),
            spawn_step("builder", "--autonomy", "L5-dark", "strict", "m2", "{TMP}/core", "T2", world=_SP_LEVEL_WORLD),
            spawn_step("builder", "loose", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD),
@@ -1256,7 +1251,6 @@ scenario(Scenario(
     suite="crew",
     about="a helper of a crew station: by its name, by its role word, of the releaser; one already running is not started twice",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[*_UP_STEPS,
            spawn_step("helper", "crew-reviewer", "probe", "look at PR 9", world=_UP_WORLD),
            spawn_step("helper", "reviewer", "probe", "look at PR 10", world=_UP_WORLD),
@@ -3787,7 +3781,6 @@ scenario(Scenario(
          lambda r: not [x for x in (r.crew / "stations").iterdir() if x.name.endswith(".lock")]),
     ],
     covers=[],
-    not_windows="the fake Claude Code's on-bg hook runs through bash",
 ))
 
 # ---------------------------------------------------------------------------------------------
@@ -3942,15 +3935,12 @@ _W1 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT)
 _W_GONE = lworld("L3-review", grants="")
 _W_UNREAD = {**lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT), "grants_status": 500}
 
-WIN_NO_MULTILINE_REGRANT = ("a station is restarted through claude.cmd here, and cmd.exe cannot take the regrant prompt "
-                            "(several lines); the claude.exe form waits for TR-946")
 
 scenario(Scenario(
     name="watch_regrant_restart",
     suite="crew",
     about="a station between turns whose grants changed is restarted in its own conversation, told only what is new, once per change",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            wstep(_W1, before=_busy("crew-reviewer")),                      # 1: busy: waits
            wstep(_W1, before=_idle("crew-reviewer"), after=_sessions_and("crew-reviewer")),   # 2: between turns: restarted
@@ -3998,7 +3988,6 @@ scenario(Scenario(
     suite="crew",
     about="nothing is restarted for a Tares that cannot give the grants, while the crew is halted, for a station without a conversation, one that is done, or one open in a terminal",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("crew-releaser", "releaser", _W0),
            wstep(_W_UNREAD, before=_idle("crew-reviewer", "crew-releaser")),                # 2: grants unreadable
@@ -4109,7 +4098,6 @@ scenario(Scenario(
     suite="crew",
     about="a station blocked on a person is restarted at once; a helper and a project's builder get their grants; a station that kept no grants is quoted all of them",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("shop-build-m1", "builder", _W0, parent="crew-orchestrator", project="shop"),
            _launch("shop-build-m1-e2e", "helper", _W0, parent="shop-build-m1", project="shop"),
@@ -4215,8 +4203,6 @@ def _pc_doc(session, weekly, reset=False, known=True, on=True) -> dict:
     return pace_now({"pace": True if on else None}, {"limits": limits}, now)
 
 
-WIN_NO_PERCENT = ("a station is told through claude.cmd here, and cmd.exe cannot take a note that holds a percent sign ('the 5-hour window is at 85%'); "
-                  "the engine says so and tries again next round; the claude.exe form waits for TR-946")
 
 
 def _pc_world(doc: dict, idle_wake=None) -> dict:
@@ -4282,7 +4268,6 @@ scenario(Scenario(
     suite="pace",
     about="85% of the window or 90% of the week: each station is told once to stretch; 95%: a builder is told to hold; back down: told to go back",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[
         _pc_round(84, 89),      # 0 nothing
@@ -4417,7 +4402,6 @@ scenario(Scenario(
     suite="pace",
     about="with idle_wake on the stations hold no tick of their own: a pace file is dropped, and nothing is sent",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(85, 10, idle_wake=True, before=_pc_put(stretched=PC_STATIONS)),
            _pc_round(95, 10, idle_wake=True), _pc_round(85, 10, idle_wake=False)],
@@ -4456,7 +4440,6 @@ scenario(Scenario(
     suite="pace",
     about="turning the setting off while stations are stretched: each is told once to go back, and then nothing",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(85, 10), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False)],
     checks=[
@@ -4476,7 +4459,6 @@ scenario(Scenario(
     suite="pace",
     about="a note whose restart fails sends no event and marks nothing told; the stations it left stopped are not told again",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(10, 10), _pc_round(85, 10, env={"FAKE_CLAUDE_FAIL_RESUME": "1"}), _pc_round(85, 10)],
     checks=[
@@ -4494,7 +4476,6 @@ scenario(Scenario(
     suite="pace",
     about="a station that is down while a limit is full is not revived into it; after the reset it is revived with a short prompt in its own conversation",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[
         _pc_down(100, 10, "crew-reviewer:ok", "crew-releaser:ok"),    # 0 held down, said once
@@ -4568,7 +4549,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="pace_tidy",
-    not_windows=WIN_NO_MULTILINE,
     suite="pace",
     about="the pace file forgets a station that will not be revived, says the limit is full again in a new episode, and goes when nothing is left",
     driver=LAUNCH_DRIVER,
@@ -4716,7 +4696,6 @@ scenario(Scenario(
     suite="pace",
     about="spawn and restart under the pace: a builder is refused at the slow level and the week's, a helper is not; a restart says when to re-arm",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[
         _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
               setup={"gitrepos": ["{TMP}/links"]}),                                                  # 0
@@ -5109,7 +5088,6 @@ scenario(Scenario(
             "(a builder that stopped at the limit is in the pace file)",
             "the stations a failed restart left stopped come back already on the stretched tick, with no second note",
             "a restart that fails midway is not marked told either", "and the note is sent once the failure is gone"],
-    not_windows=WIN_NO_MULTILINE,
 ))
 
 
@@ -5648,7 +5626,6 @@ scenario(Scenario(
     about="a halted crew, a station open in a terminal, a finished builder and a helper are never woken; a head with a current verdict is no work",
     driver=LAUNCH_DRIVER,
     ignore_calls=_CC_READS,
-    not_windows=WIN_NO_MULTILINE,
     setup=_setup_guards,
     steps=[_round(0, _world()),
            _round(3600, _world(), _halt), _round(7200, _world()),
@@ -5833,7 +5810,6 @@ scenario(Scenario(
     suite="idle_wake",
     about="the crew's three stations and a builder are started: four sessions, the builder among the stations",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[
         _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
               setup={"gitrepos": ["{TMP}/links"]}),
@@ -5940,13 +5916,13 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         s = WIN_PATH_TAIL.sub(lambda m: m.group(1) + re.sub(r"\\+", "/", m.group(2)), s)
         # a path with a space (the profile folder of the Windows job) is quoted in the statusline command, one without is not
         s = WIN_ROOT_QUOTED.sub(r"\1\2", s)
-        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.cmd here, claude elsewhere
+        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.exe (or claude.cmd) here, claude elsewhere
     return s
 
 
 # what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
 WIN_ROOT_QUOTED = re.compile(r'(--plugin-root )"([^"]*)"')
-WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.cmd")
+WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/(?:claude|tares))\.(?:cmd|exe)", re.I)
 WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 
 
@@ -6060,13 +6036,18 @@ def is_windows() -> bool:
     return sys.platform == "win32"
 
 
-def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
-    """An executable that runs the Python fake: a shell script, or a .cmd file on Windows (returns its path).
+def make_launcher(path: Path, extra: list, script: Path | None = None, exe: bool = False) -> Path:
+    """An executable that runs the Python fake: a shell script, or on Windows a .cmd file, or with exe=True a
+    claude.exe (returns its path).
 
     Named `claude`, it is the Claude Code of the scenario: on PATH for a command that runs `claude` by
     name (the bash engine does for some commands, the Python engine will), and CLAUDE_BIN for the rest.
     The .cmd form passes the fake's exit code on, and is written with CRLF whatever the platform.
-    The paths in it must be ASCII: cmd.exe reads a batch file in the console's code page."""
+    The paths in it must be ASCII: cmd.exe reads a batch file in the console's code page.
+    The .exe form (tests/factory/exe_launcher.py, TR-1183) takes the command line as CreateProcess gives it, like the
+    real Claude Code, so a prompt of several lines or with a percent sign reaches the fake whole."""
+    if sys.platform == "win32" and exe:
+        return exe_launcher.build_exe(path.with_suffix(".exe"), sys.executable, script or FAKE_CLAUDE, extra)
     if sys.platform == "win32":
         path = path.with_suffix(".cmd")
         lines = ['@"%s" "%s" %s %%*' % (sys.executable, script or FAKE_CLAUDE, " ".join(extra)), "@exit /b %ERRORLEVEL%"]
@@ -6089,7 +6070,7 @@ def crew_env(tmp: Path) -> dict:
     home, crew, state, bindir = (tmp / n for n in ("home", "crew", "claude", "bin"))
     for d in (home, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
-    claude = make_launcher(bindir / "claude", [])  # claude.cmd on Windows, which is also what `claude` finds on PATH
+    claude = make_launcher(bindir / "claude", [], exe=True)  # claude.exe on Windows, which is also what `claude` finds on PATH
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
@@ -7642,9 +7623,17 @@ def g4_wait(seconds: float, ok) -> bool:
 
 def g4_up_after(tmp: Path) -> dict:
     """After a crew up: the watch's pid, whether it runs, and whether its log has the banner (given up to 6 seconds)."""
-    pid = g4_pid(tmp)
     log = tmp / "crew" / "watch.log"
     banner = g4_wait(6, lambda: log.is_file() and "watching the crew" in log.read_text(encoding="utf-8", errors="replace"))
+    # On Windows the pid file first names the venv launcher; the loop writes its own pid over it in its first round,
+    # just after the banner. So the pid counts once it has stayed the same for a second.
+    seen: list = []
+
+    def settled() -> bool:
+        seen.append(g4_pid(tmp))
+        return len(seen) >= 5 and len(set(seen[-5:])) == 1 and seen[-1] != 0
+    g4_wait(6, lambda: (time.sleep(0.2), settled())[1])
+    pid = g4_pid(tmp)
     return {"pid": pid, "alive": g4_alive(pid), "log": banner}
 
 
@@ -7669,7 +7658,6 @@ def g4_quiet(tmp: Path) -> None:
 scenario(Scenario(
     name="crew_g4_up_watch",
     suite="crew",
-    not_windows=WIN_NOT_YET,
     about="crew up starts the watch in the background and logs; a second crew up keeps it; crew down stops it; --no-watch starts none",
     ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
@@ -7740,7 +7728,6 @@ scenario(Scenario(
     suite="crew",
     about="a permission allowed in Tares reaches a station between turns, in its conversation, once; busy and attached stations wait; helpers and blocked stations get it",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-orchestrator", "orchestrator", G4_W0),                                            # 0
            _launch("crew-reviewer", "reviewer", G4_W0),                                                    # 1
            g4_recording(_launch("shop-build-m1", "builder", G4_W0, parent="crew-orchestrator", project="shop")),   # 2
@@ -7819,7 +7806,6 @@ scenario(Scenario(
     suite="crew",
     about="a builder that has finished sleeps through a grant that does not name it (noted once), and is restarted, no longer done, by one that does",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("shop-build-m1", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 0
            _launch("shop-build-m2", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 1
            wstep(D_W1, before=_both(_idle("shop-build-m1", "shop-build-m2"), _touch_done("shop-build-m1"),
@@ -7925,7 +7911,6 @@ def g4_restarted(tmp: Path) -> dict:
 scenario(Scenario(
     name="crew_g4_watch_update",
     suite="crew",
-    not_windows=WIN_NOT_YET,
     about="a watch that crew up started restarts itself on the new version when the plugin is updated",
     ignore_calls=_CC_READS,
     tares=G4_UP_TARES,
@@ -8016,7 +8001,6 @@ CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAI
 # Reads of Tares are left out, as in the cc_move scenarios: the engines make them in a different number and order
 # (the pace is real in Python since TR-962). What is written to Tares, started and stopped is compared.
 CU_NO_PACE = ("GET ",)
-CU_NO_HOOK = "the new session's version is set by the fake Claude Code's on-bg hook, which runs through bash"
 
 CU_HOOK = '''import json, os
 S = os.environ["FAKE_CLAUDE_STATE"]
@@ -8215,7 +8199,6 @@ scenario(Scenario(
     setup=_cu_world(runs=CU_NEW),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "restart"], env=CU_ENV), Step(["crew", "update", "--force"], env=CU_ENV)],
     checks=[
         ("already current: nothing restarted",
@@ -8236,7 +8219,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV)],
     checks=[
         ("every station runs the new version, the orchestrator last",
@@ -8260,7 +8242,6 @@ scenario(Scenario(
                     states={"crew-builder": "stopped"}),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV)],
     checks=[
         ("a stopped station waits for the watch",
@@ -8280,7 +8261,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     ignore_calls=(("agents",),),  # how often the wait polls depends on the machine's speed
     steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
     checks=[
@@ -8300,7 +8280,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}),
            Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}, before=_cu_orchestrator_current),
            Step(["crew", "update", "--force"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"})],
@@ -8358,7 +8337,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV, before=_cu_halt_file)],
     checks=[("halted in the middle: crew update stops and says so",
              lambda r: r.code(0) != 0 and "the crew was halted; nothing more was restarted" in r.out(0)
@@ -8381,7 +8359,6 @@ scenario(Scenario(
     setup=_cu_with_key(_cu_world(spawn=CU_OLD)),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)),
            Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait(60))],
     checks=[
@@ -8420,7 +8397,6 @@ scenario(Scenario(
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
            for _ in range(3)],
     checks=[
@@ -8439,7 +8415,6 @@ scenario(Scenario(
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "1"}),
            Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "5"})],
     checks=[
@@ -8457,7 +8432,6 @@ scenario(Scenario(
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares={**CU_TARES, CU_RETRY: (500, "boom")},
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV)],
     checks=[("the run fails as it would, naming the station and the retry",
              lambda r: r.code(0) != 0 and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)
@@ -8653,7 +8627,7 @@ def _cn_add_sessions(*rows):
         f = r.state / "agents.json"
         cur = json.loads(f.read_text(encoding="utf-8"))
         for row in rows:
-            cur.append({**row, "cwd": str(r.tmp / "shop")})
+            cur.append({**row, "cwd": f"{r.tmp}/shop"})  # as the project's repo path reads (_CN_REPO), slashes and all
         f.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
     return run_before
 
@@ -8686,7 +8660,6 @@ CN_ORCH_LINE = "a-orchestrator\torchestrator\t\tworking\t"
 scenario(Scenario(
     name="crewname_stations",
     suite="crewname",
-    not_windows=WIN_NOT_YET,
     about="the default crew and two named crews build the same project side by side, each under its own names; the roster adopts only its own",
     stand_in={"settings": {**SAVED, "releaser": False}},
     tares=_CN_TARES,
@@ -9019,7 +8992,6 @@ def _usage_sid(r) -> str:
 scenario(Scenario(
     name="usage_statusline",
     suite="usage",
-    not_windows=WIN_NOT_YET,
     about="a station is told where it compacts and runs the plugin's status line, which prints a line and tells Tares only when something changed",
     stand_in={"settings": {**SAVED, "releaser": False, "challenger": False, "builders_max": 2}},
     prepare=trust_crew,
@@ -9034,8 +9006,8 @@ scenario(Scenario(
         ("a station is told where it compacts",
          lambda r: str(env_of(r, "crew-orchestrator", "FACTORY_AUTOCOMPACT")) == "200000"),
         ("a station runs the plugin's status line",
-         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command")
-         == f"tares hook statusline --plugin-root {KIT}"
+         lambda r: r.station_settings("crew-orchestrator").get("statusLine", {}).get("command", "").replace('"', "")
+         == f"tares hook statusline --plugin-root {fwd(KIT)}"  # Windows: forward slashes, in quotes when the path has a space
          and r.station_settings("crew-orchestrator").get("statusLine", {}).get("type") == "command"),
         ("the status line prints the window and the plan",
          lambda r: r.code(1) == 0 and r.out(1).strip() == "Opus 5.5 · context 48% of 1.0M · 5h 31% · week 6%"),
@@ -9125,7 +9097,10 @@ def tares_mode_600(f: Path) -> bool:
 
 def tares_bare(text: str, home: Path) -> str:
     """A settings file with the crew home written as CREW (as the JSON file writes the path)."""
-    return text.replace(json.dumps(str(home))[1:-1], "CREW")
+    for form in (str(home), fwd(home)):  # Windows: the engine writes forward slashes and keeps non-ASCII as it is
+        for ascii_only in (True, False):
+            text = text.replace(json.dumps(form, ensure_ascii=ascii_only)[1:-1], "CREW")
+    return text
 
 
 def tares_no_token_in(folder: Path) -> bool:
@@ -9135,7 +9110,6 @@ def tares_no_token_in(folder: Path) -> bool:
 scenario(Scenario(
     name="tares_up_auth",
     suite="tares",
-    not_windows=WIN_NOT_YET,
     about="crew up against a Tares with auth on: a wrong key stops it, the key is kept in a file only the person reads, "
           "a second machine asks nothing",
     stand_in={"token": TARES_KEY},
@@ -9279,7 +9253,6 @@ TARES_WIDE_ROW = (r"^\U0001F504 Emoji App ",)
 scenario(Scenario(
     name="tares_spawn_auth",
     suite="tares",
-    not_windows=WIN_NOT_YET,
     about="builders against a Tares with auth on: their project's grants, an emoji project by id, the orchestrator's own "
           "spawn through the token file, and a key the person's shell holds never reaches a station",
     stand_in={"token": TARES_KEY, "projects": TARES_PROJECTS,
@@ -9772,6 +9745,15 @@ def _cb_file(name: str, text: str):
     return before
 
 
+def _cb_pyhook(name: str, source: str):
+    """A one-shot hook of the fake Claude Code written in Python, so it runs the same through sh and cmd.exe:
+    the hook file `name` holds `"python" "<name>.py"` and the .py holds the source."""
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / (name + ".py")).write_text(source, encoding="utf-8")
+        (tmp / "claude" / name).write_text('"%s" "%s"' % (sys.executable, tmp / "claude" / (name + ".py")), encoding="utf-8")
+    return before
+
+
 def _cb_rows(tmp: Path, fn) -> None:
     """Edit the rows of agents.json (fn(row) for each), in one step the fake never sees half-written."""
     p = tmp / "claude" / "agents.json"
@@ -10092,9 +10074,11 @@ _cc("cc_update_self", "crew update from the orchestrator leaves it out and says 
      "another station fails: the caller's way out is still said"],
     setup=_cb_fake_ps(_cc_setup(have="1.5.4", installed="1.5.5")))
 
-# A halt in the middle of crew update stops it; it does not wait for ever.
+# A halt in the middle of crew update stops it; it does not wait for ever. The halt comes a few seconds in, after the stations that
+# are idle have moved; a Windows runner starts each process slowly, so its timers are tripled (as in cc_pace_slow).
+_PACE_SLOW = 3 if sys.platform == "win32" else 1
 _cc("cc_update_halted", "a halt while crew update waits for a busy station stops it and says so",
-    [Step(["crew", "update", "--wait", "0"], env=CB_ENV, before=_cb_all(_cc_busy(_R), _cb_later(2.5, _cb_halt_file)), after=_cc_after()),
+    [Step(["crew", "update", "--wait", "0"], env=CB_ENV, before=_cb_all(_cc_busy(_R), _cb_later(2.5 * _PACE_SLOW, _cb_halt_file)), after=_cc_after()),
      Step(["crew", "resume"])],
     [("halted in the middle: crew update stops and says so",
       lambda r: r.code(0) not in (0, 124) and "the crew was halted" in r.out(0))],
@@ -10365,7 +10349,7 @@ _st_cc("cc_frozen_midround", "a freeze that lands in the middle of a round wins:
        [("frozen in the middle of the round: nothing moves onto the newer Claude Code",
          lambda r: r.snap(0)["launched"] == [] and _st_line(r, 1, r"^FROZEN"))],
        ["frozen in the middle of the round: nothing moves onto the newer Claude Code"],
-       _cc_setup(have="1.10.4", installed="1.10.5"), not_windows=CU_NO_HOOK)
+       _cc_setup(have="1.10.4", installed="1.10.5"))
 
 
 
@@ -10408,7 +10392,6 @@ def _rt_new(r: Run, i: int, j: int) -> int:
 
 
 _RT_SETTLE = "the notes pace sends to a crew at its limit are restarts too; let them go first"
-_RT_NO = WIN_NO_PERCENT + "; the fake Claude Code's mid-round hook is a shell command"
 
 # Pace: a Claude Code move is a restart, a model turn, so it never goes into a plan limit that is full and has not reset (the watch
 # moves nothing, `crew update` says why and restarts nothing), and moves again once the limit has reset.
@@ -10428,23 +10411,28 @@ _st_cc("cc_pace_limit", "a plan limit that is full: the watch moves no station o
          lambda r: _rt_new(r, 11, 7) > 0 and r.snap(11)["runs"][r.snap(11)["launched"][-1]] == "1.11.0")],
        ["limit full: the watch moves no station onto the newer Claude Code", "limit full: crew update says so and restarts nothing",
         "the limit has reset: the watch moves a station again"],
-       _cc_setup(have="1.10.9", installed="1.10.9"), not_windows=WIN_NO_PERCENT)
+       _cc_setup(have="1.10.9", installed="1.10.9"))
 
 
 # The limit fills in the middle of a round (the watch read the plan before it did): the move waits. Below the limit, slow, the
 # restart tells the station to tick every 45 minutes. The limit fills while crew update waits for a busy station: it stops there.
-PACE_FULL_HOOK = ("curl -sS -X POST -H 'Content-Type: application/json' --data '" + json.dumps(_pc_doc(100, 10))
-                  + "' \"$TARESD_URL/test/pace\"")
+PACE_FULL_HOOK = ("import os, urllib.request\n"
+                  "urllib.request.urlopen(urllib.request.Request(os.environ['TARESD_URL'] + '/test/pace', "
+                  "data=%r, headers={'Content-Type': 'application/json'}, method='POST'), timeout=30).read()\n"
+                  % json.dumps(_pc_doc(100, 10)).encode("utf-8"))
+
+# The limit fills 2.5 s into the step and the station is free 3.5 s in. A Windows process start takes longer than the
+# gap between those two, so there the timers are 3 times as long (TR-1228).
 
 _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is restarted onto the newer Claude Code; slow, not full: "
                        "crew update moves them and says to re-arm at 45 minutes; it fills while crew update waits: it stops there",
        [Step(["crew", "watch", "--once"], env={}, after=_st_after,                                            # 0
-             before=_cb_all(_all_idle, _cb_file("on-agents", PACE_FULL_HOOK), _cb_file("on-agents-at", "1\n")),
+             before=_cb_all(_all_idle, _cb_pyhook("on-agents", PACE_FULL_HOOK), _cb_file("on-agents-at", "1\n")),
              run_before=_st_run(_st_set(pace=True, idle_wake=False), _st_plan(10, 10))),
         _rw(run_before=_st_run(_st_mark("filled"), _st_plan(90, 10))), _rw(), _rw(),                          # 1-3
         _ru(before=_cc_installed("1.11.2")),                                                                  # 4
-        _ru(before=_cb_all(_cc_installed("1.11.3"), _cb_idle_later(_R, 3.5)), env={}, wait="30",              # 5
-            run_before=_st_run(_st_plan(10, 10), _st_plan_later(2.5, 100, 10)))],
+        _ru(before=_cb_all(_cc_installed("1.11.3"), _cb_idle_later(_R, 3.5 * _PACE_SLOW)), env={}, wait="30",  # 5
+            run_before=_st_run(_st_plan(10, 10), _st_plan_later(2.5 * _PACE_SLOW, 100, 10)))],
        [("the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
          lambda r: r.marks["filled"]["at_limit"] is True and not _st_line(r, 0, r"restarting .* on 1\.11\.1") and r.snap(0)["launched"] == []),
         ("below the limit, crew update moves them",
@@ -10458,7 +10446,7 @@ _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is res
        ["the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
         "below the limit, crew update moves them", "and the restart says to re-arm at 45 minutes",
         "the limit fills while crew update waits: it stops, says until when, and restarts nothing more"],
-       _cc_setup(have="1.11.0", installed="1.11.1"), not_windows=_RT_NO)
+       _cc_setup(have="1.11.0", installed="1.11.1"))
 
 
 # A helper follows its station onto a new Claude Code, but its task lives only in its spawn prompt, so it is never started in a new

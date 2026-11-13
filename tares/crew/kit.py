@@ -426,18 +426,18 @@ def unfreeze(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: s
         client.say("kit unfrozen: the watch moves each station onto the checkout's kit when it's idle")
 
 
-def _command(fn):
+def _command(fn, name: str):
     """cmd_x(argv, env) for fn(client, paths, args): primed like every command that is not local_only."""
     def run(argv: list, env: dict) -> int:
         from . import lifecycle   # here, not at the top: lifecycle imports launch, and launch imports this module
-        return lifecycle._command(fn, local_only=False)(argv, env)
+        return lifecycle._command(fn, local_only=False, name=name)(argv, env)
     run.__name__ = f"cmd_{fn.__name__}"
     run.__doc__ = fn.__doc__
     return run
 
 
-cmd_freeze = _command(freeze)
-cmd_unfreeze = _command(unfreeze)
+cmd_freeze = _command(freeze, "crew freeze")
+cmd_unfreeze = _command(unfreeze, "crew unfreeze")
 
 
 # ---------- the watch's round ----------

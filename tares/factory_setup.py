@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import select
 import shutil
 import subprocess
 import sys
@@ -18,6 +17,13 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .crew.state import trust_keys
+
+if os.name == "nt":
+    import msvcrt
+else:
+    import select
 
 PROD_PATTERN = "(^|[-_.])(prod|production)([-_.]|$)"
 
@@ -273,17 +279,60 @@ def read_key(fd: int) -> str:
     return b.decode("utf-8", "replace")
 
 
+# The Windows console sends an arrow key as a prefix character then a letter.
+_WIN_ARROWS = {"H": UP, "P": DOWN, "M": RIGHT, "K": LEFT}
+
+
+def read_key_windows() -> str:
+    """One key press from the Windows console (msvcrt reads it without echo or line buffering)."""
+    c = msvcrt.getwch()
+    # A special key is a prefix then a code, and the code is already waiting. A typed a-grave is also U+00E0 but
+    # nothing follows it, so it is only a prefix when another key is waiting.
+    if c == "\x00" or (c == "\xe0" and msvcrt.kbhit()):
+        return _WIN_ARROWS.get(msvcrt.getwch(), "")
+    if c == "\x1b":
+        return ESC
+    if c in ("\r", "\n"):
+        return ENTER
+    if c in ("\x7f", "\x08"):
+        return BACKSPACE
+    if c == "\t":
+        return TAB
+    if c == "\x03":
+        raise KeyboardInterrupt
+    return c
+
+
+def _windows_vt_on() -> None:
+    """Have the Windows console honour the escape codes the box draws with (cursor moves, colour)."""
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)                     # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+    except (AttributeError, OSError):
+        pass
+
+
 def run_form(form: Form) -> Form:
     """Shows the box until the person saves or cancels; redraws it in place."""
-    import termios   # here, not at the top: Windows has no termios, and the daemon imports this module (TR-862)
-    import tty
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    windows = os.name == "nt"
+    if windows:
+        _windows_vt_on()
+        fd, old = -1, None
+    else:
+        import termios   # here, not at the top: Windows has no termios, and the daemon imports this module (TR-862)
+        import tty
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
     color = not os.environ.get("NO_COLOR")
     drawn = 0
     out = sys.stdout
     try:
-        tty.setcbreak(fd)
+        if not windows:
+            tty.setcbreak(fd)
         out.write("\x1b[?25l")
         while not form.result:
             width = shutil.get_terminal_size((80, 24)).columns
@@ -293,11 +342,12 @@ def run_form(form: Form) -> Form:
             out.write("\n".join(lines) + "\n")
             out.flush()
             drawn = len(lines)
-            form.key(read_key(fd))
+            form.key(read_key_windows() if windows else read_key(fd))
     except KeyboardInterrupt:
         form.result = "cancel"
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        if not windows:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
         if drawn:
             out.write(f"\x1b[{drawn}F\x1b[J")
         out.write("\x1b[?25h")
@@ -331,7 +381,7 @@ def home_trusted(home: Path) -> bool:
     except (OSError, ValueError):
         return False
     projects = cfg.get("projects") or {}
-    paths = {str(home), str(home.resolve())}
+    paths = {k for p in (str(home), str(home.resolve())) for k in trust_keys(p)}
     return any((projects.get(p) or {}).get("hasTrustDialogAccepted") is True for p in paths)
 
 
