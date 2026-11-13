@@ -24,8 +24,6 @@ if os.name == "nt":
     import msvcrt
 else:
     import select
-    import termios
-    import tty
 
 PROD_PATTERN = "(^|[-_.])(prod|production)([-_.]|$)"
 
@@ -325,6 +323,8 @@ def run_form(form: Form) -> Form:
         _windows_vt_on()
         fd, old = -1, None
     else:
+        import termios   # here, not at the top: Windows has no termios, and the daemon imports this module (TR-862)
+        import tty
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
     color = not os.environ.get("NO_COLOR")

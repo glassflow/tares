@@ -431,6 +431,12 @@ tares factory: the plan's limit is full until <TS>, and a restart is a model tur
 {"at": "<TS>", "detail": "00000007", "event": "started", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "00000007", "event": "revived", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "1.11.3", "event": "claude-updated", "station": "crew-releaser"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.pace ==

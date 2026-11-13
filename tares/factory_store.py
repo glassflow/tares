@@ -291,6 +291,33 @@ FACTORY_SCHEMA = [
       consents         TEXT,
       state            TEXT
     )""",
+    # Your own deny rules for the crew's guardrails (TR-862): a sentence a station's soft_deny list
+    # gets, for every project (scope factory, project NULL) or one project. Allow rules are the
+    # grants above, read in place; there is no allow row here.
+    """CREATE TABLE IF NOT EXISTS guardrail_rules (
+      id         TEXT PRIMARY KEY,
+      scope      TEXT,
+      project    TEXT,
+      kind       TEXT,
+      text       TEXT,
+      created_by TEXT,
+      created_at TIMESTAMPTZ
+    )""",
+    # Guardrail pairs (TR-863): a hook point paired with a guardrail integration, for every project
+    # (scope factory, project_uid NULL) or one project. `settings` is the integration's own settings
+    # as JSON text, secrets included; on_fail says whether a guardrail that denies, or does not
+    # answer, blocks or only warns.
+    """CREATE TABLE IF NOT EXISTS guardrail_pairs (
+      id          TEXT PRIMARY KEY,
+      scope       TEXT,
+      project_uid TEXT,
+      hook        TEXT,
+      integration TEXT,
+      settings    TEXT,
+      on_fail     TEXT DEFAULT 'block',
+      created_at  TIMESTAMPTZ,
+      created_by  TEXT
+    )""",
     # a project grant from someone who is neither the project's lead nor an admin also waits
     # for the lead (for an admin when the project has none)
     "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
@@ -565,6 +592,8 @@ class FactoryStore:
         self.sc.execute("DELETE FROM review_findings WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM desk_items WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
+        self.sc.execute("DELETE FROM guardrail_pairs WHERE project_uid = ?", [uid])
         self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
@@ -1856,6 +1885,164 @@ class FactoryStore:
             if consents is not None:
                 self.sc.execute("UPDATE grants SET consents = ? WHERE id = ?",
                                  [json.dumps(consents), gid])
+
+    # ── your own guardrail rules (TR-862) ─────────────────────────────────────
+    _RULE_COLS = "id, scope, project, kind, text, created_by, created_at"
+
+    @staticmethod
+    def _rule_row(r) -> dict:
+        return {"id": r[0], "scope": r[1], "project": r[2], "kind": r[3], "text": r[4],
+                "created_by": r[5], "created_at": r[6]}
+
+    def add_guardrail_rule(self, scope: str, project: str | None, kind: str, text: str,
+                           by: str | None = None) -> dict:
+        """One rule, numbered R1, R2... for the cell; nothing is checked here."""
+        with self._swrite:
+            top = self.sc.execute("SELECT max(CAST(substr(id, 2) AS INTEGER)) FROM guardrail_rules"
+                                   ).fetchone()[0] or 0
+            rid = f"R{top + 1}"
+            self.sc.execute(
+                f"INSERT INTO guardrail_rules ({self._RULE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [rid, scope, project, kind, text, by, now_utc()])
+        return self.get_guardrail_rule(rid)
+
+    def get_guardrail_rule(self, rid: str) -> dict | None:
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules WHERE id = ?",
+                                 [str(rid or "").strip().upper()]).fetchone()
+        return self._rule_row(r) if r else None
+
+    def list_guardrail_rules(self) -> list[dict]:
+        """Every rule of every scope, oldest first."""
+        with self._sread:
+            rows = self.sc.execute(f"SELECT {self._RULE_COLS} FROM guardrail_rules").fetchall()
+        return sorted((self._rule_row(r) for r in rows), key=lambda g: int(g["id"][1:]))
+
+    def set_guardrail_rule_text(self, rid: str, text: str) -> dict | None:
+        with self._swrite:
+            self.sc.execute("UPDATE guardrail_rules SET text = ? WHERE id = ?",
+                             [text, str(rid or "").strip().upper()])
+        return self.get_guardrail_rule(rid)
+
+    def delete_guardrail_rule(self, rid: str) -> bool:
+        """True when a rule was removed."""
+        with self._swrite:
+            gone = self.sc.execute("DELETE FROM guardrail_rules WHERE id = ? RETURNING id",
+                                    [str(rid or "").strip().upper()]).fetchone()
+        return gone is not None
+
+    # ── guardrail pairs (TR-863) ──────────────────────────────────────────────
+    _PAIR_COLS = "id, scope, project_uid, hook, integration, settings, on_fail, created_at, created_by"
+
+    @staticmethod
+    def _pair_raw(r) -> dict:
+        """A pair row with its real settings, secrets included: for the runner and the merge only."""
+        return {"id": r[0], "scope": r[1], "project_uid": r[2], "hook": r[3], "integration": r[4],
+                "settings": FactoryStore._load_settings(r[5]), "on_fail": r[6] or "block",
+                "created_at": r[7], "created_by": r[8]}
+
+    @classmethod
+    def _pair_view(cls, raw: dict) -> dict:
+        """A pair as a read shows it: each secret is "" and `secrets` says whether one is set."""
+        from .integrations import registry
+        values, secrets = cls._redact_integration("guardrails", raw["integration"], raw["settings"])
+        found = registry.get("guardrails", raw["integration"])
+        return {"id": raw["id"], "scope": raw["scope"], "project_uid": raw["project_uid"],
+                "hook": raw["hook"], "integration": raw["integration"],
+                "title": (found.title or raw["integration"]) if found else raw["integration"],
+                "settings": values, "secrets": secrets, "on_fail": raw["on_fail"],
+                "created_at": raw["created_at"], "created_by": raw["created_by"]}
+
+    def _pair_rows(self) -> list[dict]:
+        """Every pair with its real settings, oldest first. Lock held, or a read."""
+        rows = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs").fetchall()
+        return sorted((self._pair_raw(r) for r in rows), key=lambda p: int(p["id"][2:]))
+
+    def list_guardrail_pairs(self, scope: str | None = None, project_uid: str | None = None) -> list[dict]:
+        """The pairs of one scope as a read shows them (secrets redacted), oldest first: every pair
+        when `scope` is None, the factory's for "factory", one project's for "project"."""
+        with self._sread:
+            rows = self._pair_rows()
+        return [self._pair_view(p) for p in rows
+                if (scope is None or p["scope"] == scope)
+                and (scope != "project" or p["project_uid"] == project_uid)]
+
+    def get_guardrail_pair(self, pid: str) -> dict | None:
+        """One pair as a read shows it, or None."""
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
+                                [str(pid or "").strip().upper()]).fetchone()
+        return self._pair_view(self._pair_raw(r)) if r else None
+
+    def guardrail_pair_stored(self, pid: str) -> dict | None:
+        """One pair with its real settings, secrets included, or None. For merging a form over what
+        is saved; never return it from a route."""
+        with self._sread:
+            r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
+                                [str(pid or "").strip().upper()]).fetchone()
+        return self._pair_raw(r) if r else None
+
+    def guardrail_pairs_for_run(self, hook: str, project_uid: str | None) -> list[dict]:
+        """The pairs to run at `hook`, with their real settings (secrets included; the hook runner
+        only): the factory's first, then the project's own, each oldest first."""
+        with self._sread:
+            rows = self._pair_rows()
+        mine = [p for p in rows if p["hook"] == hook]
+        return ([p for p in mine if p["scope"] == "factory"]
+                + [p for p in mine if p["scope"] == "project" and project_uid
+                   and p["project_uid"] == project_uid])
+
+    def save_guardrail_pair(self, scope: str, project_uid: str | None, hook: str, integration: str,
+                            settings: dict | None, on_fail: str, by: str | None = None,
+                            pair_id: str | None = None) -> tuple[dict, str]:
+        """Add a pair, or with `pair_id` change one of the same scope and project. Returns
+        (the pair as a read shows it, "added" | "updated" | "twin"). Secrets are reconciled with
+        this pair's own stored row of the same integration only (a blank one keeps the stored value,
+        JSON null clears it); a pair never reads another pair's row, so a project pair can never
+        take a factory secret, and choosing another integration starts from nothing. An exact twin
+        (same scope, project, hook, integration, settings and on_fail) adds nothing. A `pair_id`
+        that names no pair of this scope and project raises LookupError. Nothing else is checked here."""
+        secret = self._secret_fields("guardrails", integration)   # before the write lock: it loads the registry
+        with self._swrite:
+            rows = self._pair_rows()
+            if pair_id:
+                cur = next((p for p in rows if p["id"] == str(pair_id).strip().upper()
+                            and p["scope"] == scope and p["project_uid"] == project_uid), None)
+                if cur is None:
+                    raise LookupError(f"there is no pair {pair_id}")
+                stored = cur["settings"] if cur["integration"] == integration else {}
+                merged = self._merge_integration_settings(secret, settings, stored)
+                self.sc.execute("UPDATE guardrail_pairs SET hook = ?, integration = ?, settings = ?, "
+                                "on_fail = ? WHERE id = ?",
+                                [hook, integration, json.dumps(merged), on_fail, cur["id"]])
+                raw, how = {**cur, "hook": hook, "integration": integration,
+                            "settings": merged, "on_fail": on_fail}, "updated"
+            else:
+                merged = self._merge_integration_settings(secret, settings, {})
+                canon = json.dumps(merged, sort_keys=True)
+                twin = next((p for p in rows if (p["scope"], p["project_uid"], p["hook"], p["integration"],
+                                                 p["on_fail"]) == (scope, project_uid, hook, integration, on_fail)
+                             and json.dumps(p["settings"], sort_keys=True) == canon), None)
+                if twin:
+                    raw, how = twin, "twin"
+                else:
+                    top = max((int(p["id"][2:]) for p in rows), default=0)
+                    raw, how = {"id": f"GP{top + 1}", "scope": scope, "project_uid": project_uid,
+                                "hook": hook, "integration": integration, "settings": merged,
+                                "on_fail": on_fail, "created_at": now_utc(), "created_by": by}, "added"
+                    self.sc.execute(
+                        f"INSERT INTO guardrail_pairs ({self._PAIR_COLS}) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        [raw["id"], scope, project_uid, hook, integration, json.dumps(merged), on_fail,
+                         raw["created_at"], by])
+        return self._pair_view(raw), how
+
+    def delete_guardrail_pair(self, pid: str) -> bool:
+        """True when a pair was removed."""
+        with self._swrite:
+            gone = self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ? RETURNING id",
+                                   [str(pid or "").strip().upper()]).fetchone()
+        return gone is not None
 
     # ── integration choices and their settings (TR-839) ───────────────────────
     # Secrets are stored as they come, in the state database, exactly as connector secrets are

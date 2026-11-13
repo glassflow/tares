@@ -57,6 +57,10 @@ exit: 0
     "url": null
   }
 }
+== file crew/rules/argus-build-m1-charts.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/argus-build-m1-charts.settings.json ==
 {
   "autoMode": {

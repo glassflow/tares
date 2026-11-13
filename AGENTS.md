@@ -126,8 +126,16 @@ Final releases are held while the file `RELEASE_BLOCK` exists; `scripts/check_re
 enforces it in `release.sh`, `release.yml` and `docker-publish.yml`. Release candidates (`-rc.N`) pass.
 
 `scripts/release.sh <version>` bumps `pyproject.toml`, commits and tags. Pushing the tag runs
-`release.yml` (PyPI) and `docker-publish.yml` (`ghcr.io/glassflow/tares:<version>`). Add a
-`CHANGELOG.md` entry first.
+`release.yml` (PyPI) and `docker-publish.yml` (`ghcr.io/glassflow/tares:<version>`). Changes do not
+edit `CHANGELOG.md`: each adds a file under `changelog.d/` in its PR, and `scripts/release.sh` collects
+them into a new `CHANGELOG.md` section and commits it with the bump. `CHANGELOG_SUMMARY="..."
+scripts/release.sh <version>` gives the section its summary paragraph.
+
+## Changelog
+
+Add a file under changelog.d/, never edit CHANGELOG.md. It is `changelog.d/<ticket>.md`, the first line is
+`Added`, `Changed` or `Fixed`, the rest is the entry (see `changelog.d/README.md`). CI asks for one on a PR
+that changes `tares/` or `ui/src/`; the label `no changelog` skips that check.
 
 ## Writing rules
 
