@@ -89,6 +89,10 @@ def main():
     if not tag:
         git("fetch", "--tags", "--depth=200", "origin")
         tag = newest_tag()
+        if not tag:
+            # a shallow checkout of a branch keeps its own depth: fetch more of its history
+            git("fetch", "--deepen=200", "origin")
+            tag = newest_tag()
     if not tag:
         print("no release tag reachable")
         return 1 if os.environ.get("CI") else 0
