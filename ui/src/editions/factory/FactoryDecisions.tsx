@@ -13,8 +13,8 @@ import { PageHead, ProjectShell } from "./ProjectShell";
 export function DecisionTabs({ d, on }: { d: FactoryProjectData; on: "decisions" | "calls" }) {
   const base = `/projects/${encodeURIComponent(d.id)}`;
   const tabs = [
-    { key: "decisions", label: "Decisions", n: d.decisions.length, to: `${base}/decisions` },
     { key: "calls", label: "Calls", n: d.calls.length, to: `${base}/calls` },
+    { key: "decisions", label: "Decisions", n: d.decisions.length, to: `${base}/decisions` },
   ] as const;
   return (
     <nav aria-label="Decisions and calls" className="flex min-w-0 gap-1 border-b border-border" data-testid="decision-tabs">

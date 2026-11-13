@@ -5,6 +5,8 @@ import { api, ApiError } from "../../api";
 import { Banner, Button, Dialog, Skeleton, Toaster } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
+import { placeBeforeProject } from "../settingsBack";
+import { useOwnMenu } from "../Shell";
 import { useSample } from "../sample";
 import {
   acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectIcon, setProjectLead,
@@ -37,7 +39,8 @@ const PAGES: { key: ProjectPage; label: string; to: string }[] = [
   { key: "tickets", label: "Tickets", to: "/tickets" },
   { key: "prs", label: "Pull requests", to: "/github" },
   { key: "milestones", label: "Milestones", to: "/milestones" },
-  { key: "decisions", label: "Decisions and calls", to: "/decisions" },
+  // Calls is the first of its two tabs: what the crew decided without you, to confirm
+  { key: "decisions", label: "Decisions and calls", to: "/calls" },
   { key: "docs", label: "Docs and memory", to: "/docs" },
   { key: "people", label: "People and access", to: "/people" },
   { key: "settings", label: "Settings", to: "/settings" },
@@ -209,6 +212,18 @@ function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
 
 // ── the frame ────────────────────────────────────────────────────────────────
 
+const BACK_ARROW = (
+  <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 2L4 6l4 4" /></svg>
+);
+
+/** The way out: the project's pages hide the main menu, as Settings does. Back goes to the page before the project. */
+function Back() {
+  return (
+    <Link to={placeBeforeProject()} data-testid="project-back"
+          className="inline-flex! h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">{BACK_ARROW}Back</Link>
+  );
+}
+
 function ProjectNav({ d, page, search }: { d: FactoryProjectData; page: ProjectPage; search: string }) {
   // at phone width the row scrolls on its own: bring the page in view into it, without moving the page
   const row = React.useRef<HTMLUListElement>(null);
@@ -220,14 +235,14 @@ function ProjectNav({ d, page, search }: { d: FactoryProjectData; page: ProjectP
   }, [page]);
   return (
     <nav aria-label="This project" data-testid="project-nav"
-         className="min-w-0 lg:sticky lg:top-4 lg:w-[220px] lg:flex-none lg:border-r lg:border-border lg:pr-4">
-      <div className={cn(MUTED, "mb-2")} data-testid="crumb"><Link to="/projects" className={LINK}>Projects</Link></div>
-      <div className="flex min-w-0 items-center gap-2 text-[17px] font-bold" data-testid="project-title">
-        <InlineIcon icon={d.icon} className="mr-0 text-[20px] leading-none" />
-        <span className="min-w-0 [overflow-wrap:anywhere]" data-user-text data-testid="project-name">{d.name}</span>
-      </div>
-      <div className={cn("mt-1 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", CHIP[d.state])} data-testid="project-chip">
-        {d.state_label}
+         className="min-w-0 lg:sticky lg:top-[89px] lg:w-[216px] lg:flex-none">
+      <Back />
+      <div className="mt-2 grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-start gap-x-2 px-2.5 lg:px-2.5" data-testid="project-title">
+        {d.icon ? <InlineIcon icon={d.icon} className="mr-0 text-[20px] leading-[26px]" /> : <span aria-hidden />}
+        <span className={cn("min-w-0 text-[18px] font-bold leading-[26px] [overflow-wrap:anywhere]", !d.icon && "-col-start-1 col-span-2")} data-user-text data-testid="project-name">{d.name}</span>
+        <span className={cn("mt-1 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", d.icon ? "col-start-2" : "col-span-2", CHIP[d.state])} data-testid="project-chip">
+          {d.state_label}
+        </span>
       </div>
       <ul ref={row} className="relative m-0! mt-3 flex list-none! gap-1.5 overflow-x-auto p-0! pb-1 lg:mt-4 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0" data-testid="project-pages">
         {PAGES.map((p) => {
@@ -236,9 +251,9 @@ function ProjectNav({ d, page, search }: { d: FactoryProjectData; page: ProjectP
           return (
             <li key={p.key} className="m-0! flex-none">
               <Link to={`${pageHref(d.id, p.key)}${search}`} aria-current={on ? "page" : undefined} data-testid={`project-page-${p.key}`}
-                    className={cn("flex items-center justify-between gap-3 whitespace-nowrap border border-border px-3 py-1.5 text-[14px] text-foreground! no-underline! hover:bg-[var(--row-hover)]",
+                    className={cn("flex items-center justify-between gap-3 whitespace-nowrap border border-border px-3 py-1.5 text-[14px] no-underline! hover:bg-muted",
                                   "lg:border-0 lg:px-2.5 lg:py-[7px]",
-                                  on && "border-foreground bg-[var(--input-bg)] font-semibold lg:bg-transparent lg:shadow-[inset_3px_0_0_var(--accent)]")}>
+                                  on ? "border-foreground bg-card font-semibold text-foreground! lg:border lg:border-border" : "text-muted-foreground!")}>
                 <span>{p.label}</span>
                 {n > 0 && (
                   <span className={cn("font-mono text-xs font-normal", p.key === "overview" ? "text-[color:var(--accent-deep)]" : "text-muted-foreground")}
@@ -302,6 +317,7 @@ export function ProjectShell({ page, onOther, children }: {
   const { id = "" } = useParams();
   const { hash } = useLocation();
   const { data, error, reload, act, sample } = useProject(id, onOther);
+  useOwnMenu();
   const keep = sample ? `?sample=${encodeURIComponent(sample)}` : "";
 
   // an address with a #section scrolls to it once the page is there
@@ -320,7 +336,7 @@ export function ProjectShell({ page, onOther, children }: {
       <div className="min-w-0" data-testid="factory-project-wait">
         {error ? (
           <div className="grid gap-3">
-            <div className={MUTED} data-testid="crumb"><Link to="/projects" className={LINK}>Projects</Link></div>
+            <Back />
             <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
               <b>We could not load this project.</b> <span className="text-foreground">Check your connection, then try again.</span>
             </Banner>
