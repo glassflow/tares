@@ -309,13 +309,30 @@ async function waitFor(url, tries = 100) {
     ck("Tickets is kept to this project: no Project filter, every ticket of it",
        (await T("f-project").count()) === 0 && (await T("f-milestone").isDisabled()) === false && /^11 tickets/.test(await txt(T("tickets-count"))), await txt(T("tickets-count")));
     await open(page, y, "", "settings");
-    ck("Settings: Edit plan opens the plan of this project", (await T("edit-plan").getAttribute("href")) === `/setup?project=${y}`);
+    ck("Settings: Read the plan opens the project's docs", (await T("read-plan").getAttribute("href")) === `/projects/${y}/docs`);
     ck("Settings: the tickets live in Tares, and the repo handed over is named",
        (await txt(T("settings-tickets"))).includes("The tickets live in Tares.") && JSON.stringify(await T("repo-name").allInnerTexts()) === JSON.stringify(["example-org/docs-site"]));
     ck("Settings: a project the crew works on cannot be kept for later", (await T("later-not-now").count()) === 1 && (await T("project-later").count()) === 0);
     ck("Settings ends with Delete", (await T("delete-project").count()) === 1);
     await open(page, y, "", "people");
     ck("People and access: the people and the secrets, side by side", (await T("project-people").count()) === 1 && (await T("project-secrets").count()) === 1);
+
+    // TR-1318: every link inside the console on the project's pages opens a page, never "This page does not exist"
+    {
+      const hrefs = new Set();
+      for (const sub of Object.keys(ROOT)) {
+        await open(page, y, "", sub);
+        await settle(page);
+        for (const h of await page.locator("a[href^='/']").evaluateAll((as) => as.map((a) => a.getAttribute("href")))) if (!h.startsWith("/api/")) hrefs.add(h);
+      }
+      const dead = [];
+      for (const h of hrefs) {
+        await page.goto(`${BASE}${h}`, { waitUntil: "load" });
+        await settle(page);
+        if ((await page.getByText("This page does not exist.").count()) > 0) dead.push(h);
+      }
+      ck(`every link on the project's pages opens a page (${hrefs.size} links)`, hrefs.size > 0 && dead.length === 0, dead.join(", "));
+    }
 
     // an old #section link opens the page that section moved to
     await page.goto(`${BASE}/projects/${y}#milestones`, { waitUntil: "load" });

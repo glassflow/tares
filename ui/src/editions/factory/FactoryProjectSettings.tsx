@@ -93,7 +93,7 @@ export default function FactoryProjectSettings() {
               <Part title="Icon" testid="settings-icon"><Icon d={d} act={act} /></Part>
               <Part title="Plan" testid="settings-plan">
                 <p className="m-0!">The goal, the milestones and how the crew builds them.</p>
-                <div><Link to={`/setup?project=${encodeURIComponent(d.id)}`} className={LINK} data-testid="edit-plan">Edit plan</Link></div>
+                <div><Link to={`/projects/${encodeURIComponent(d.id)}/docs`} className={LINK} data-testid="read-plan">Read the plan</Link></div>
               </Part>
               <Part title="Tickets" testid="settings-tickets">
                 {d.linked.tickets_in ? (
