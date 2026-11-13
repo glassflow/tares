@@ -3,12 +3,13 @@ import * as React from "react";
 // Colour for a tool card's input and output (TR-1177, review of PR 602). Every token is a React <span>
 // holding text, never HTML, so markup in a transcript still shows as text. The blocks are dark in both
 // themes, so the colours are the dark-scale tokens (as on the login card): green and red for a diff,
-// the accent tones for JSON.
+// green strings and muted numbers for JSON. No amber: in the console amber means an action, a selection
+// or live work (TR-1273).
 
-export const KEY = "text-[color:var(--kit-accent)]";
+export const KEY = "text-[color:var(--on-brown-100)]";
 export const STR = "text-[color:var(--green-300)]";
-export const NUM = "text-[color:var(--kit-accent-hover)]";
-export const LIT = "text-[color:var(--sand-300)]";
+export const NUM = "text-[color:var(--on-brown-300)]";
+export const LIT = "text-[color:var(--on-brown-300)]";
 export const ADD = "text-[color:var(--green-300)]";
 export const DEL = "text-[color:var(--red-300)]";
 export const HUNK = "text-[color:var(--on-brown-500)]";

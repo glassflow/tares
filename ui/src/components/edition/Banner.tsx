@@ -6,7 +6,7 @@ export type BannerTone = "note" | "warn" | "error";
 
 const TONES: Record<BannerTone, string> = {
   note: "border-border bg-card text-foreground",
-  warn: "border-[color:var(--warn)] bg-[var(--warn-soft)] text-foreground",
+  warn: "border-foreground bg-muted text-foreground",
   error: "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]",
 };
 

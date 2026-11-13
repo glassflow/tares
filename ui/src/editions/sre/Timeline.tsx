@@ -48,7 +48,7 @@ const TAG: Record<TimelineItem["kind"], string> = {
 };
 const TONE: Record<TimelineTone, string> = {
   bad: "bg-[var(--err-soft)] text-[color:var(--err)]",
-  warn: "bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
+  warn: "border-b border-dashed border-[color:var(--ink-soft)] bg-[var(--wash-2)] text-foreground",
   ok: "bg-[var(--ok-soft)] text-[color:var(--ok)]",
   info: "bg-[var(--wash-2)] text-foreground",
 };
@@ -134,8 +134,7 @@ const btnBase = "inline-flex! items-center! rounded-none! border! border-border!
 const btnOn = "font-semibold! text-foreground! bg-[var(--row-hover)]! dark:bg-[var(--row-hover)]! shadow-[inset_0_-2px_0_var(--accent)]";
 
 function Tag({ item }: { item: TimelineItem }) {
-  // a metric is drawn amber whatever the cell's tone, as the mock has it
-  const tone = item.kind === "metric" ? "warn" : item.tone;
+  const tone = item.tone;
   return (
     <span data-testid="timeline-tag" data-tone={tone}
           className={cn("inline-block px-1.5 py-px font-mono text-[11px] font-medium uppercase tracking-[0.04em] whitespace-nowrap", TONE[tone])}>
@@ -470,7 +469,7 @@ export default function Timeline() {
             <button key={k} type="button" aria-pressed={on} aria-disabled={last || undefined} data-testid={`timeline-kind-${k}`}
                     title={last ? "At least one kind stays on" : undefined} onClick={() => toggleKind(k)}
                     className={cn(btnBase, "h-[30px] cursor-pointer gap-1.5! px-2.5! py-0!", on && btnOn, last && "cursor-default")}>
-              <b aria-hidden className={cn("inline-block size-2 bg-[var(--accent)]", !on && "opacity-25")} />
+              <b aria-hidden className={cn("inline-block size-2 bg-foreground", !on && "opacity-25")} />
               {KIND_LABEL[k]}
             </button>
           );

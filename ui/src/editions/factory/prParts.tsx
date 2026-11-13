@@ -6,7 +6,7 @@ import type { PrState, ProjectPr } from "./FactoryProject.api";
 // size of the change.
 
 export const PR_CHIP: Record<PrState, string> = {
-  open: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
+  open: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
   draft: "border-border bg-muted text-muted-foreground",
   merged: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
   closed: "border-border bg-muted text-muted-foreground",

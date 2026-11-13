@@ -396,7 +396,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
   return (
     <Sec id="people" title={people.title} sub={SUBTITLE.people}>
       {created && (
-        <div className="grid gap-2 border-b border-border bg-[var(--warn-soft)] px-4 py-3.5 md:px-[18px]" data-testid="created-key" role="status">
+        <div className="grid gap-2 border-b border-border bg-muted px-4 py-3.5 md:px-[18px]" data-testid="created-key" role="status">
           <div className="text-sm">
             <b>Key created: <span data-user-text>{created.name}</span>.</b> {created.scopes_words}. Copy it now, it is not shown again.
           </div>

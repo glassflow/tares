@@ -16,7 +16,7 @@ import { projectDocs, type ProjectDocLink, type ProjectDocsPage } from "./Factor
 
 const POLL_MS = 60_000;
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 
 function Item({ d, open, to }: { d: ProjectDocLink; open: boolean; to: string }) {
   return (

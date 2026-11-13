@@ -70,8 +70,8 @@ const stateFromUrl = (s: string): StateKey | "moving" | "" => {
 const DOT: Record<StateKey, string> = {
   to_do: "border-[color:var(--ink-faint)] bg-transparent",
   in_progress: "border-[color:var(--accent)] bg-[var(--accent)]",
-  in_review: "border-[color:var(--accent-deep)] bg-[var(--accent-deep)] dark:border-[3px] dark:bg-transparent",
-  changes_asked: "border-[color:var(--warn)] bg-[var(--warn)]",
+  in_review: "border-foreground bg-foreground",
+  changes_asked: "border-2 border-foreground bg-transparent",
   merged: "border-[color:var(--ok)] bg-[var(--ok)]",
   blocked: "border-[color:var(--err)] bg-[var(--err)]",
   canceled: "border-[color:var(--ink-faint)] bg-[var(--ink-faint)]",

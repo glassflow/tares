@@ -14,7 +14,7 @@ import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type Proj
 
 const POLL_MS = 30000;
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
 
 

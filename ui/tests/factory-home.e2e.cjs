@@ -148,7 +148,7 @@ function cleanEnv(extra) {
       ck(`busy @${width}: a do action is a button`, (await second.count()) === 1 && (await second.innerText()) === "Close project");
       ck(`busy @${width}: the crew card lists 3 members with their memory`, (await page.getByTestId("crew-member").count()) === 3
          && (await page.getByText("memory 82% full").count()) === 1);
-      ck(`busy @${width}: only the member at 80% or more has the amber memory bar`, (await page.getByTestId("memory-warn").count()) === 1
+      ck(`busy @${width}: only the member at 80% or more is marked as nearly full`, (await page.getByTestId("memory-warn").count()) === 1
          && (await page.getByTestId("memory").count()) === 2);
       const fillOf = (loc) => loc.evaluate((e) => {
         const probe = document.createElement("i"); document.body.appendChild(probe);
@@ -164,7 +164,7 @@ function cleanEnv(extra) {
         const warn = await fillOf(page.getByTestId("memory-warn").first());
         const calm = await fillOf(page.getByTestId("memory").first());
         const plan = await fillOf(page.getByRole("progressbar", { name: "Current 5 hours" }));
-        ck(`busy @${width} (${theme}): the memory bar at 80% or more is amber`, warn.fill === warn.amber, `${warn.fill} vs ${warn.amber}`);
+        ck(`busy @${width} (${theme}): the memory bar at 80% or more is ink too, not amber`, warn.fill === warn.ink && warn.fill !== warn.amber, `${warn.fill} vs ${warn.ink}`);
         ck(`busy @${width} (${theme}): a calmer memory bar is ink`, calm.fill === calm.ink, `${calm.fill} vs ${calm.ink}`);
         ck(`busy @${width} (${theme}): a plan bar is ink`, plan.fill === plan.ink, `${plan.fill} vs ${plan.ink}`);
       }

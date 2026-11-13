@@ -36,7 +36,7 @@ const TABS: { key: Filter; label: string }[] = [
 const isFilter = (v: string | null): v is Filter => TABS.some((t) => t.key === v);
 
 const CHIP: Record<ProjectState, string> = {
-  waiting_on_you: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
+  waiting_on_you: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
   building: "border-border bg-[var(--wash)] text-foreground",
   not_started: "border-border bg-transparent text-foreground",
   ready_to_close: "border-[color:var(--ok)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
@@ -184,7 +184,7 @@ export function FactoryProjectsView({ data, onClose, start }: {
                 {shown.map((p) => <Row key={p.id} p={p} error={errors[p.id]} onClose={(r) => setAsking(r.id)} />)}
                 {tab === "open" && finished > 0 && (
                   <Link to="?state=done" data-testid="show-finished"
-                        className="block border-t border-border px-4 py-3 text-[13px] text-[color:var(--accent-deep)]! underline!">
+                        className="block border-t border-border px-4 py-3 text-[13px] text-foreground! underline!">
                     Show {finished} finished
                   </Link>
                 )}

@@ -128,7 +128,9 @@ async function waitFor(url, tries = 100) {
     const y = member(page, "Not heard from in 2 hours");
     ck("a builder not heard from for two hours says so", (await y.count()) === 1 && (await y.getAttribute("data-state")) === "not heard" && /Memory 88% full/.test(await y.innerText()));
     const bars = await page.getByTestId("memory-bar").evaluateAll((b) => b.map((x) => [x.getAttribute("aria-valuenow"), x.className.includes("--warn") ? "warn" : x.className.includes("bg-foreground") ? "ink" : "?"]));
-    ck("a memory bar is amber from 80%, ink below", JSON.stringify(bars) === JSON.stringify([["82", "warn"], ["41", "ink"], ["58", "ink"], ["63", "ink"], ["88", "warn"]]), JSON.stringify(bars));
+    ck("every memory bar is ink, amber stays for action (TR-1273)", JSON.stringify(bars) === JSON.stringify([["82", "ink"], ["41", "ink"], ["58", "ink"], ["63", "ink"], ["88", "ink"]]), JSON.stringify(bars));
+    const loud = await page.getByTestId("memory-bar").evaluateAll((b) => b.map((x) => x.nextElementSibling?.className.includes("text-foreground") ? "ink" : "muted"));
+    ck("the words beside a bar at 80% or more are in ink, the rest muted", JSON.stringify(loud) === JSON.stringify(["ink", "muted", "muted", "muted", "ink"]), JSON.stringify(loud));
     const body = await page.getByTestId("factory-crew").innerText();
     ck("no station name, session or version shows outside the fold", !/project-x-build|crew-orchestrator|crew-reviewer|crew-releaser|ctx|claude_version|\bv\d+\.\d+/.test(body)
        && !/\bsession\b/i.test(body), body.slice(0, 200));
@@ -273,7 +275,7 @@ async function waitFor(url, tries = 100) {
       ck("no Releaser now, and the words follow", JSON.stringify(await heads(p)).indexOf("Releaser") < 0
          && /The crew merges after its review and green CI\./.test(await p.getByTestId("crew-how-far").innerText())
          && /No releases\. Up to 4 builders at once\./.test(await p.getByTestId("crew-how-far").innerText()));
-      ck("the 5-hour bar is amber", await p.getByTestId("crew-plan").locator("[role=progressbar]").first().evaluate((b) => b.className.includes("--warn")));
+      ck("the 5-hour bar at 86% is ink, the pacing sentence says it is full (TR-1273)", await p.getByTestId("crew-plan").locator("[role=progressbar]").first().evaluate((b) => !b.className.includes("--warn") && b.className.includes("bg-foreground")));
       await checkWords(p, ck, "live paced");
       await shot(p, "live-paced-1440.png");
       await c.close();

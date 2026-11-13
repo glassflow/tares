@@ -14,7 +14,7 @@ import { InlineIcon } from "./ProjectIcon";
 
 const POLL_MS = 15000;
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-[color:var(--accent-deep)]! underline!";
+const LINK = "text-foreground! underline!";
 const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
 
 function PastRow({ c }: { c: PastCall }) {

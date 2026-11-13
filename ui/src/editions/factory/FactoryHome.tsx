@@ -41,10 +41,9 @@ const GRANT_MAX = 400;
 const WARN_AT = 80;
 
 const SECTION_H = "m-0! text-base!";
-const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--accent-deep)]";
+const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
 const INK_FILL = "[&>div:first-child]:bg-foreground!";
-const WARN_FILL = "[&>div:first-child]:bg-[var(--kit-accent)]!";
 
 function greetingWord(hour: number): string {
   if (hour < 12) return "Good morning";
@@ -181,7 +180,7 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
             {rest.map(row)}
             {more > 0 && (
               <ListRow>
-                <Button variant="quiet" className="px-0! text-[color:var(--accent-deep)]!" onClick={() => setAll(true)}>
+                <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
                   {more} more
                 </Button>
               </ListRow>
@@ -217,8 +216,8 @@ function Member({ m }: { m: HomeCrewMember }) {
         {m.memory_pct !== null && (
           <>
             <ProgressBar value={m.memory_pct} aria-label={`Memory of ${m.name}`}
-                         className={cn("mt-1 h-1", high ? WARN_FILL : INK_FILL)} data-testid={high ? "memory-warn" : "memory"} />
-            <div className="mt-0.5 text-[11px] text-muted-foreground">{m.memory ?? `memory ${m.memory_pct}% full`}</div>
+                         className={cn("mt-1 h-1", INK_FILL)} data-testid={high ? "memory-warn" : "memory"} />
+            <div className={cn("mt-0.5 text-[11px]", high ? "font-medium text-foreground" : "text-muted-foreground")}>{m.memory ?? `memory ${m.memory_pct}% full`}</div>
           </>
         )}
       </div>
