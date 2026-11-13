@@ -208,8 +208,8 @@ async def main():
             hdr = (await cx.get("/api/crew/my-work", headers={**keys["Q"], "X-Tares-Crew": "qq"})).json()
         ck("the crew comes from the X-Tares-Crew header when no parameter says", hdr["crew"] == "qq", hdr)
         ck("the shape has desk and spec_questions, empty", wp["desk"] == [] and wp["spec_questions"] == []
-           and set(wp) == {"person", "crew", "ready", "in_progress", "led_projects", "desk",
-                           "spec_questions"}, set(wp))
+           and set(wp) == {"person", "crew", "ready", "in_progress", "bouncing", "led_projects",
+                           "desk", "spec_questions"}, set(wp))
 
         print("== a ticket that is only assigned to a station (stage todo) is in progress, not ready ==")
         store.update_ticket(t2["id"], holder="a-shop-build-m1")
@@ -320,8 +320,29 @@ async def main():
             ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
         ck("the latest hand-over keeps the crew it was made from", ho["crew"] == "other", ho)
 
-        print("== the default crew, and a cell of one person ==")
+        print("== a session that names no crew means the caller's one running crew ==")
         os.environ.pop("FACTORY_CREW")
+        out = await mf.hand_over(project="Shop", repos=[{"path": "/w/shop"}])
+        ck("P's only running crew is a: it names a-orchestrator and the message to send",
+           "a-orchestrator" in out and "[TF:SHIP]" in out and "No orchestrator" not in out, out)
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
+        ck("and the hand-over is recorded under crew a, not the default", ho["crew"] == "a", ho)
+        # two running crews is no guess to make: the default, as before
+        await push("P", orch_lines("p-o2", "b-orchestrator", "b", "m1"))
+        out = await mf.hand_over(project="Shop", repos=[{"path": "/w/shop"}])
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
+        ck("with two running crews (a and b) it stays on the default crew", ho["crew"] == "crew", ho)
+        # an orchestrator that ended does not count as running
+        await push("P", [{"type": "session_state", "timestamp": ts(0), "sessionId": "p-o2", "state": "ended",
+                          "reason": "test"}])
+        out = await mf.hand_over(project="Shop", repos=[{"path": "/w/shop"}])
+        async with mk() as cx:
+            ho = (await cx.get(f"/api/projects/{shop}/crew", headers=keys["P"])).json()["handover"]
+        ck("and once b has ended, a is the one running crew again", ho["crew"] == "a", ho)
+
+        print("== the default crew, and a cell of one person ==")
         await push(None, orch_lines("l-o1", "crew-orchestrator", "crew", ""))
         as_(root)
         out = await mf.hand_over(project="Blog", repos=[{"path": "/w/blog"}])

@@ -191,6 +191,7 @@ export function sampleDetail(): Promise<MemberDetail> {
       { kind: "asked", at: at("10:05"), from: "The factory", quiet: true,
         text: "Builder tick: follow the Tick section of your skill." },
       { kind: "said", at: at("10:06"), text: "Renaming it now." },
+      { kind: "said", at: at("10:06"), text: "**Crew on the machine**\n- **Python is the only crew engine;** to check: `crew up` and `crew status`.\n- **Licence:** a crew stays one crew." },
       { kind: "said", at: at("10:07"), text: "Told the reviewer: pull request ready <b>not markup</b>" },
     ],
   });

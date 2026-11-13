@@ -77,9 +77,10 @@ def check_model(model: str, station: str) -> None:
 
 def level_text(level: str) -> str:
     if level == "L3-review":
-        return ("builders open PRs but every merge waits for the human's yes, relayed by the orchestrator; "
+        return ("builders open PRs and Tares merges each one after the human's yes on the desk; "
                 "nothing is deployed to production")
-    return "builders merge after the crew reviewer's verdict and green CI; nothing is deployed to production"
+    return ("builders open PRs and Tares merges them after the review gate passes and CI is green; "
+            "nothing is deployed to production")
 
 
 def level_rank(level: str):
@@ -371,21 +372,6 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     elif work_role == "builder":
         allow.append(f"Pushing `factory/*` branches to {where}, and opening pull requests there, is expected "
                      f"work that {human} authorized.")
-        if level != "L3-review":
-            allow.append(
-                f"Merging a pull request in {where}, that this crew opened from a `factory/*` branch is expected "
-                f"work that {human} pre-authorized at level {level}, once CI on its head commit is green (or the "
-                "repository has no CI checks configured, in which case the reviewer's run of the tests stands in "
-                "for CI) and the crew reviewer station's `factory/review` commit status on that head commit is "
-                f"`success`. The reviewer station's verdict is the review {human} chose to rely on. Deleting the "
-                "merged `factory/*` branch is expected.")
-        if level == "L3-review":
-            allow.append(
-                f"Merging a pull request in {where}, that this crew opened from a `factory/*` branch is expected "
-                "work once the merge gate holds (CI green, or no CI checks configured with the reviewer's run of "
-                "the tests standing in; the crew reviewer's `factory/review` status `success` on the head commit) "
-                f"and the orchestrator has relayed {human}'s yes for that pull request, quoted verbatim from the "
-                "desk.")
     elif work_role == "reviewer":
         allow.append(
             f"Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in "
@@ -406,7 +392,9 @@ def write_settings(client: TaresClient, station: str, role: str, parent: str, pr
     if role == "orchestrator":
         cmds = ["tidy *", "spawn *", "revive *", "restart *", "retire *", "roster", "projects", "crew status",
                 "crew halt", "crew halt *", "crew resume"]
-    perms = {"allow": [f"Bash(tares factory {c})" for c in cmds]}
+    perms = {"allow": [f"Bash(tares factory {c})" for c in cmds],
+             # Tares merges pull requests (the merge queue); a crew station never does (TR-860)
+             "deny": ["Bash(gh pr merge:*)"]}
 
     wt = f"{repo_f}/.factory/worktrees" if repo else f"{home}/worktrees"
     tok_file = ""

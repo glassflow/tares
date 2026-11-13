@@ -34,6 +34,7 @@ test_private_routes
 test_private_services
 test_private_writes
 test_project_access
+test_project_page_others
 test_project_secrets
 test_recording_person_team
 test_setup_flow_team

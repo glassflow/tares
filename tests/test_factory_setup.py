@@ -47,11 +47,11 @@ ck("five tabs: four settings and the grants", [q.tab for q in f.questions]
    == ["Merging", "Releasing", "Codex check", "Builders", "Grants"])
 first = f.lines(80, color=False)
 ck("the tabs say what is still open", first[0].count("☐") == 5 and "Done" in first[0], first[0])
-ck("the question is said in plain words", any("Who merges pull requests?" in l for l in first), first)
+ck("the question is said in plain words", any("Who approves merging pull requests?" in l for l in first), first)
 ck("the recommended option is marked and preselected",
    any(l.startswith(" ❯ 1. The crew, once its reviewer approves and tests pass   (recommended)") for l in first),
    first)
-ck("each option says what it means", any("Every merge waits for your yes" in l for l in first))
+ck("each option says what it means", any("Every merge waits for your yes on the desk" in l for l in first))
 ck("the keys are named", "Enter to select · ↑/↓ to move · ←/→ between questions · Esc to cancel" in first[-1],
    first[-1])
 keys(f, ENTER, ENTER, ENTER, ENTER, ENTER)

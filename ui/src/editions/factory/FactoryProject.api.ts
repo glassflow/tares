@@ -95,6 +95,9 @@ export interface FactoryProjectData {
   /** the three newest pull requests */
   prs_recent?: ProjectPr[];
   waiting: HomeItem[];
+  /** On a team cell, the questions and permission requests on this project addressed to someone
+   *  else: labelled for that person, with nothing to press (only they may answer). */
+  waiting_others?: HomeItem[];
   counts: {
     total: number; to_do: number; in_progress: number; in_review: number;
     changes_asked: number; blocked: number; merged: number; canceled: number;

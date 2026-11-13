@@ -51,11 +51,13 @@ class Verdict:
 @dataclass
 class CIState:
     """A CI source's answer for one head. `state` is one of CI_STATES; `failing` names the
-    failing required checks."""
+    failing required checks; `summary` is one plain sentence on why, when the state alone does not
+    say (empty when it does)."""
     state: str
     head: str = ""
     failing: list[str] = field(default_factory=list)
     url: str = ""
+    summary: str = ""
 
 
 @dataclass

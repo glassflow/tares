@@ -3,7 +3,7 @@
 
 It answers what crew up and the station launches ask, from memory, on one free port of 127.0.0.1:
 
-    GET  /health                    ok, with the capabilities list (default: integrations)
+    GET  /health                    ok, with the capabilities list (default: integrations, merge_queue)
     GET  /api/crew/settings         the crew settings saved so far (a flat object)
     PUT  /api/crew/settings         merge the body into them
     GET  /api/grants                {"all": "- \\"<words>\\" (<date>)\\n..."}
@@ -44,8 +44,8 @@ class FakeTares:
         self.settings = dict(settings or {})
         self.people = list(people if people is not None else [{"id": "local", "name": "Local"}])
         self.grants = list(grants or [])
-        # what /health lists: crew up wants "integrations" (need_capability); capabilities=[] is an old Tares
-        self.capabilities = list(["integrations"] if capabilities is None else capabilities)
+        # what /health lists: crew up wants "integrations" and "merge_queue" (need_capability); capabilities=[] is an old Tares
+        self.capabilities = list(["integrations", "merge_queue"] if capabilities is None else capabilities)
         self.health = health                # None: the short /health body; a dict: that whole body (an old cell, or the real daemon's)
         self.token = token                  # "": no auth
         self.mcp_auth: list = []            # the Authorization header (or None) of each POST /mcp

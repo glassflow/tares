@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -230,20 +231,59 @@ def builder_name(project_slug: str, slug: str, paths=None) -> str:
 # ---------- events ----------
 
 
+_EVENT_LOCK = threading.Lock()
+_LOCK_AT = 1 << 40   # a byte far past the end of the file: locking it keeps writers apart without blocking the writes
+
+
+def _lock_events(fd: int) -> bool:
+    """Windows only: take a lock other processes honour, so two crew commands never mix a line either.
+    The CRT fakes O_APPEND with a seek then a write, which is not atomic. Best effort: False when it
+    could not be taken (the in-process lock still holds)."""
+    try:
+        import msvcrt
+        os.lseek(fd, _LOCK_AT, os.SEEK_SET)
+        for _ in range(100):
+            try:
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                return True
+            except OSError:
+                time.sleep(0.01)
+    except Exception:
+        pass
+    return False
+
+
+def _unlock_events(fd: int) -> None:
+    try:
+        import msvcrt
+        os.lseek(fd, _LOCK_AT, os.SEEK_SET)
+        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except Exception:
+        pass
+
+
 def event(name: str, station: str = "", detail: str = "", *, paths=None, at=None) -> None:
     """Append one line to events.jsonl: {at, station, event, detail}, compact. Only when the crew home
-    exists, and never fails. One write of one line, so two writers never mix a line."""
+    exists, and never fails. One write of one line under a lock, so two writers never mix a line: POSIX
+    appends are atomic, but on Windows the CRT emulates O_APPEND, so threads of one process (and
+    processes) overwrite each other without the lock."""
     try:
         paths = paths or CrewPaths.from_env()
         if not paths.home.is_dir():
             return
         line = dumps_compact({"at": at or utc_stamp(), "station": station, "event": name, "detail": detail}) + "\n"
         flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
-        fd = os.open(paths.events, flags, 0o666)
-        try:
-            os.write(fd, line.encode("utf-8"))
-        finally:
-            os.close(fd)
+        with _EVENT_LOCK:
+            fd = os.open(paths.events, flags, 0o666)
+            locked = False
+            try:
+                if os.name == "nt":
+                    locked = _lock_events(fd)
+                os.write(fd, line.encode("utf-8"))
+            finally:
+                if locked:
+                    _unlock_events(fd)
+                os.close(fd)
     except Exception:
         pass
 

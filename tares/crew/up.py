@@ -65,9 +65,9 @@ _SHIPPING = [("kind", "To a local kind cluster first"), ("github-release", "Tags
 
 QUESTIONS = {
     "autonomy": {
-        "text": "Who merges pull requests?", "kind": "choice",
+        "text": "Who approves merging pull requests?", "kind": "choice",
         "choices": [("L4-ship", "The crew, once its reviewer approves and tests pass"), ("L3-review", "You, each one")],
-        "recommended": "L4-ship", "why": "Builders merge on their own; you answer only what the crew can't decide.",
+        "recommended": "L4-ship", "why": "Tares merges on its own; you answer only what the crew can't decide.",
     },
     "releaser": {
         "text": "Should the crew release and deploy finished work?", "kind": "bool",
@@ -661,6 +661,7 @@ def _crew_up(argv: list, env: dict) -> int:
         else:
             roles.append(a)
     c.need_capability("integrations")
+    c.need_capability("merge_queue")
     c.require_mcp()
     my_version = kit_version(up.kit)
     clash = installed_tares(env, my_version)

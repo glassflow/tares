@@ -1052,15 +1052,19 @@ const overflow = (page) => page.evaluate(() => document.documentElement.scrollWi
       ck(t("both are answered on the cell"), answered.includes(first) && answered.includes(second), answered.join());
       const grants = await api("GET", `/api/grants?project=${ids.project}`);
       ck(t("both grants are kept"), [firstCmd, secondCmd].every((c) => JSON.stringify(grants.body).includes(c)), JSON.stringify(grants.body).slice(0, 300));
-      await allow(kimCmd);
-      await ad.getByTestId("dialog-error").waitFor();
-      ck(t("a refusal says why in the dialog"), (await ad.getByTestId("dialog-error").innerText()) === `${kims} is for Kim: only they allow it`, await ad.getByTestId("dialog-error").innerText());
-      await checkWords(page, ck, t("a refusal in the dialog"));
-      ck(t("and the page did not move"), page.url() === here && await page.evaluate(() => !!localStorage.getItem("tares_token")), page.url());
+      // Kim's request is Kim's: on Alex's view it sits under Waiting for others, named for her, with
+      // nothing to press (TR-1223 follow-up; before, it had an Allow the cell then refused)
+      const others = page.getByTestId("waiting-other-row").filter({ hasText: kimCmd });
+      ck(t("someone else's request is under Waiting for others, named for them, with no Allow"),
+         (await others.count()) === 1 && /^Permission for Kim/.test((await others.textContent()).trim())
+         && (await others.locator("button").count()) === 0 && (await row(page, kimCmd).count()) === 0,
+         (await others.count()) ? await others.textContent() : "missing");
+      await checkWords(page, ck, t("waiting for others"));
+      const refused = await api("POST", `/api/desk/${kims}/allow`, { words: kimCmd, scope: "project" }, ids.keys.alex);
+      ck(t("the cell still refuses Alex allowing it, and it stays open"),
+         refused.status === 403 && (await api("GET", "/api/desk?state=open")).body.desk.some((d) => d.label === kims),
+         `${refused.status}`);
       ck(t("the page never loaded again"), await page.evaluate(() => window.__sameDocument === true));
-      await ad.getByRole("button", { name: "Cancel" }).click();
-      ck(t("the refused row stays, still open on the cell"), (await row(page, kimCmd).count()) === 1
-         && (await api("GET", "/api/desk?state=open")).body.desk.some((d) => d.label === kims));
       ck(t("no horizontal scroll"), (await overflow(page)) <= 0, String(await overflow(page)));
       await ctx.close();
     }

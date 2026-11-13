@@ -20,7 +20,9 @@ test_challenger_workflow
 test_check_ledger
 test_ci_check
 test_ci_e2e
+test_ci_github
 test_ci_list
+test_ci_local
 test_ci_windows
 test_ci_workflows
 test_claude_usage
@@ -38,6 +40,7 @@ test_crew_dispatch
 test_crew_docker_cleanup
 test_crew_doctor
 test_crew_doctor_lsp
+test_crew_exe_launcher
 test_crew_fake_claude
 test_crew_guard_hook
 test_crew_heavy
@@ -147,6 +150,8 @@ test_mcp_ee_tools
 test_mcp_remote
 test_mcp_setup
 test_mcp_station_headers
+test_merge_queue
+test_merge_ready
 test_metrics
 test_milestone_checks
 test_model_provider
@@ -167,6 +172,7 @@ test_pickup
 test_plugin_challenger
 test_plugin_resume_ship
 test_plugin_shims
+test_plugin_ship_once
 test_postgres
 test_pricing
 test_private_any_licence
@@ -183,6 +189,7 @@ test_rca_callback_anchor
 test_recording_person
 test_release_block
 test_resources
+test_review_gate
 test_rius_rca
 test_run_results
 test_schedule_trigger

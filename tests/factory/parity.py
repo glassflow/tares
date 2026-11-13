@@ -60,6 +60,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 FAKE_CLAUDE = HERE / "fake_claude.py"
 sys.path.insert(0, str(HERE))
+import exe_launcher  # noqa: E402  (the claude.exe of the scenarios on Windows, TR-1183)
 from fake_up_tares import FakeTares as StandInTares  # noqa: E402  (the stand-in daemon `crew up` talks to; FakeTares below is the route table of the read commands)
 STEP_TIMEOUT = 180
 NOT_PORTED = "not yet ported"
@@ -349,7 +350,7 @@ scenario(Scenario(
     checks=[
         ("crew up exits 0", lambda r: r.code(0) == 0),
         ("the settings are asked one at a time",
-         lambda r: all(q in r.out(0) for q in ("Who merges pull requests?", "Should the crew release and deploy finished work?",
+         lambda r: all(q in r.out(0) for q in ("Who approves merging pull requests?", "Should the crew release and deploy finished work?",
                                                "How does the releaser ship?", "Should a second AI (Codex) check every commit before review?",
                                                "How many builders may work at the same time?"))),
         ("settings saved on Tares", lambda r: [r.stand_in.settings.get(k) for k in
@@ -829,8 +830,21 @@ def tmp_path(r: "Run", *parts: str) -> str:
     return fwd(r.tmp.joinpath(*parts))
 
 
-def relayed(allow: list) -> bool:
-    return any(re.search(r"relayed .*yes", a) for a in allow)
+def desk_yes(r: "Run", station: str) -> bool:
+    """The station's autonomy text says Tares merges after the human's yes on the desk (L3-review)."""
+    return any("yes on the desk" in e for e in station_json(r, station)["autoMode"]["environment"])
+
+
+def merge_barred(r: "Run", station: str) -> bool:
+    """No allow sentence merges a pull request, and the station's permissions deny gh pr merge (TR-860)."""
+    doc = station_json(r, station)
+    return (not any(re.search(r"Merging a pull request|pre-authorized|relayed", a) for a in doc["autoMode"]["allow"])
+            and doc["permissions"].get("deny") == ["Bash(gh pr merge:*)"])
+
+
+def tares_merges_on_gate(r: "Run", station: str) -> bool:
+    return any("Tares merges them after the review gate passes and CI is green; nothing is deployed to production" in e
+               for e in station_json(r, station)["autoMode"]["environment"])
 
 
 def per_role(label: str, fn) -> list:
@@ -860,6 +874,11 @@ scenario(Scenario(
          lambda r: station_json(r, "crew-reviewer")["enabledPlugins"]["tares@inline"] is True),
         ("orchestrator may spawn",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
+        ("every station denies gh pr merge and keeps its own commands",
+         lambda r: all("Bash(gh pr merge:*)" in station_json(r, s)["permissions"].get("deny", [])
+                       and station_json(r, s)["permissions"]["allow"]
+                       and not any("Merging a pull request" in a for a in allow_of(r, s))
+                       for s in ("crew-orchestrator", "crew-reviewer", "crew-releaser"))),
         ("orchestrator may spawn as tares factory",
          lambda r: "Bash(tares factory spawn *)" in station_json(r, "crew-orchestrator")["permissions"]["allow"]),
         ("the resolved tares path is in the station env when tares is on PATH (TR-1069)",
@@ -877,7 +896,7 @@ scenario(Scenario(
             "crew-$r has no TARES_PROJECT", "crew-$r is told the shared MCP endpoint", "no Rius, no comms",
             "stations turn the plugin on, whatever the person's settings say", "orchestrator may spawn",
             "orchestrator may spawn as tares factory", "nothing goes to production without the person",
-            "grant quoted in the allow rules"],
+            "grant quoted in the allow rules", "every station denies gh pr merge and keeps its own commands"],
 ))
 
 _LINKS = {"id": "uc_links", "name": "Links App", "repos": [{"path": "{TMP}/links"}]}
@@ -896,17 +915,22 @@ scenario(Scenario(
         ("builder FACTORY_REPO", lambda r: station_json(r, "links-app-build-m1")["env"]["FACTORY_REPO"] == tmp_path(r, "links")),
         ("builder worktrees in its repo",
          lambda r: station_json(r, "links-app-build-m1")["env"]["FACTORY_WORKTREES"] == tmp_path(r, "links") + "/.factory/worktrees"),
-        ("L3: builder waits for the relayed yes", lambda r: relayed(allow_of(r, "links-app-build-m1"))),
-        ("L3: the no-CI clause holds at L3 too",
-         lambda r: any(re.search(r"relayed .*yes", a) and "no CI checks configured" in a for a in allow_of(r, "links-app-build-m1"))),
-        ("L3: no pre-authorized merge",
-         lambda r: not any("pre-authorized at level" in a for a in allow_of(r, "links-app-build-m1"))),
+        ("L3: the autonomy text says Tares merges after the yes on the desk",
+         lambda r: any(re.search(r"Tares merges each one after the human.s yes on the desk; nothing is deployed to production", e)
+                       for e in station_json(r, "links-app-build-m1")["autoMode"]["environment"])),
+        ("L3: no allow sentence merges a pull request",
+         lambda r: not any(re.search(r"Merging a pull request|pre-authorized|relayed", a) for a in allow_of(r, "links-app-build-m1"))),
+        ("L3: the builder keeps its push and open-PR allow",
+         lambda r: len([a for a in allow_of(r, "links-app-build-m1") if a.startswith("Pushing")]) == 1),
+        ("L3: the builder's permissions deny gh pr merge",
+         lambda r: station_json(r, "links-app-build-m1")["permissions"].get("deny") == ["Bash(gh pr merge:*)"]),
         ("stations leave cmux hooks on, so its permission alerts stay",
          lambda r: "CMUX_CLAUDE_HOOKS_DISABLED" not in station_json(r, "links-app-build-m1")["env"]),
     ],
     covers=["builder TARES_PROJECT is the project id, the name beside it", "builder FACTORY_PARENT", "builder FACTORY_REPO",
-            "builder worktrees in its repo", "L3: builder waits for the relayed yes",
-            "L3: the no-CI clause holds at L3 too", "L3: no pre-authorized merge",
+            "builder worktrees in its repo", "L3: the autonomy text says Tares merges after the yes on the desk",
+            "L3: no allow sentence merges a pull request", "L3: the builder keeps its push and open-PR allow",
+            "L3: the builder's permissions deny gh pr merge",
             "stations leave cmux hooks on, so its permission alerts stay"],
 ))
 
@@ -923,11 +947,12 @@ scenario(Scenario(
            lstep("write_settings", "loose-build-m1", "builder", "crew-orchestrator", "loose", "{TMP}/core",
                  world=lworld("L4-ship", projects=[_CORE, _LOOSE]))],
     checks=[
-        ("a project handed over stricter keeps it", lambda r: relayed(allow_of(r, "strict-build-m1"))),
-        ("L4: the builder merges on the gate",
-         lambda r: any("pre-authorized at level L4-ship" in a for a in allow_of(r, "loose-build-m1"))),
+        ("a project handed over stricter keeps it", lambda r: desk_yes(r, "strict-build-m1")),
+        ("L4: the text says Tares merges after the review gate and green CI", lambda r: tares_merges_on_gate(r, "loose-build-m1")),
+        ("L4: no allow sentence merges a pull request, and gh pr merge is denied", lambda r: merge_barred(r, "loose-build-m1")),
     ],
-    covers=["a project handed over stricter keeps it", "L4: the builder merges on the gate"],
+    covers=["a project handed over stricter keeps it", "L4: the text says Tares merges after the review gate and green CI",
+            "L4: no allow sentence merges a pull request, and gh pr merge is denied"],
 ))
 
 scenario(Scenario(
@@ -938,7 +963,7 @@ scenario(Scenario(
     steps=[lstep("write_settings", "loose-build-m1", "builder", "crew-orchestrator", "loose", "{TMP}/core",
                  world=lworld("L3-review", projects=[_LOOSE]),
                  setup={"stations": {"loose-build-m1": {"autonomy": "L4-ship", "project_id": "uc_loose"}}})],
-    checks=[("a crew lowered later takes the project down with it", lambda r: relayed(allow_of(r, "loose-build-m1")))],
+    checks=[("a crew lowered later takes the project down with it", lambda r: desk_yes(r, "loose-build-m1"))],
     covers=["a crew lowered later takes the project down with it"],
 ))
 
@@ -954,8 +979,8 @@ scenario(Scenario(
     checks=[
         ("multi: each builder runs in its repo",
          lambda r: station_json(r, "argus-build-m1-charts")["env"]["FACTORY_REPO"] == tmp_path(r, "argus", "charts")),
-        ("multi: a builder may push and merge only in its own repo",
-         lambda r: (lambda rules: len(rules) == 2 and all(tmp_path(r, "argus", "charts") in x and tmp_path(r, "argus", "core") not in x
+        ("multi: a builder may push only in its own repo",
+         lambda r: (lambda rules: len(rules) == 1 and all(tmp_path(r, "argus", "charts") in x and tmp_path(r, "argus", "core") not in x
                                                            for x in rules))(
              [x for x in allow_of(r, "argus-build-m1-charts") if re.match(r"^(Pushing|Merging)", x)])),
         ("multi: a builder's worktrees stay within its project",
@@ -966,7 +991,7 @@ scenario(Scenario(
          lambda r: any(tmp_path(r, "argus", "core") in x and tmp_path(r, "argus", "charts") in x and "factory/review" in x
                        for x in allow_of(r, "crew-reviewer"))),
     ],
-    covers=["multi: each builder runs in its repo", "multi: a builder may push and merge only in its own repo",
+    covers=["multi: each builder runs in its repo", "multi: a builder may push only in its own repo",
             "multi: a builder's worktrees stay within its project", "multi: the reviewer's grant names every repo"],
 ))
 
@@ -1105,8 +1130,6 @@ def spawn_step(*args: str, **kw) -> Step:
 
 
 WIN_NOT_YET = ("Windows never ran the Python side of this scenario while a step of it went through bash, which Windows lacks; its first run there fails (TR-975 follow-up: make it run on Windows)")
-WIN_NO_MULTILINE = ("a station is started through claude.cmd here, and cmd.exe cannot take the boot prompt of a builder or helper "
-                    "(several lines); the claude.exe form waits for TR-946")
 
 _SP_REPOS = {"gitrepos": ["{TMP}/links", "{TMP}/other"]}
 _SP_WORLD = lworld("L3-review", projects=[_LINKS])
@@ -1117,7 +1140,6 @@ scenario(Scenario(
     suite="crew",
     about="a builder starts in a repo of its project, with the project in its env; refusals start nothing; a helper keeps its parent's project",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "Links App", "m1", "{TMP}/links", "work T1 and T2", world=_SP_WORLD, setup=_SP_REPOS),
            spawn_step("builder", "Links App", "m1", "{TMP}/links", "again", world=_SP_WORLD),
            spawn_step("builder", "Nobody's", "m1", "{TMP}/links", "x", world=_SP_WORLD),
@@ -1137,8 +1159,11 @@ scenario(Scenario(
         ("builder FACTORY_REPO", lambda r: same_dir(station_json(r, _B)["env"]["FACTORY_REPO"], r.tmp / "links")),
         ("builder worktrees in its repo",
          lambda r: fwd(station_json(r, _B)["env"]["FACTORY_WORKTREES"]).endswith("/links/.factory/worktrees")),
-        ("L3: builder waits for the relayed yes", lambda r: relayed(allow_of(r, _B))),
-        ("L3: no pre-authorized merge", lambda r: not any("pre-authorized at level" in x for x in allow_of(r, _B))),
+        ("L3: the autonomy text says Tares merges after the yes on the desk", lambda r: desk_yes(r, _B)),
+        ("L3: no allow sentence merges a pull request", lambda r: not any(re.search(r"Merging a pull request|pre-authorized|relayed", x)
+                                                                           for x in allow_of(r, _B))),
+        ("L3: the builder keeps its push and open-PR allow", lambda r: len([x for x in allow_of(r, _B) if x.startswith("Pushing")]) == 1),
+        ("L3: the builder's permissions deny gh pr merge", lambda r: station_json(r, _B)["permissions"].get("deny") == ["Bash(gh pr merge:*)"]),
         ("no duplicate builder", lambda r: r.code(1) == 1 and f"{_B} is already running; message it instead" in r.out(1)),
         ("a project not handed over is refused",
          lambda r: r.code(2) == 1 and "is not handed to the crew on Tares" in r.out(2) and "Nobody's" in r.out(2)),
@@ -1165,8 +1190,9 @@ scenario(Scenario(
         ("spawn takes builder or helper", lambda r: r.code(9) == 1 and "spawn takes builder or helper" in r.out(9)),
     ],
     covers=["builder recorded", "builder runs in its repo", "builder TARES_PROJECT is the project id, the name beside it",
-            "builder FACTORY_PARENT", "builder FACTORY_REPO", "builder worktrees in its repo", "L3: builder waits for the relayed yes",
-            "L3: no pre-authorized merge", "no duplicate builder", "a project not handed over is refused",
+            "builder FACTORY_PARENT", "builder FACTORY_REPO", "builder worktrees in its repo", "L3: the autonomy text says Tares merges after the yes on the desk",
+            "L3: no allow sentence merges a pull request", "L3: the builder keeps its push and open-PR allow",
+            "L3: the builder's permissions deny gh pr merge", "no duplicate builder", "a project not handed over is refused",
             "a repo the project was not handed over with is refused", "helper name", "helper parent", "helper project"],
 ))
 
@@ -1180,7 +1206,6 @@ scenario(Scenario(
     suite="crew",
     about="builders_max is honoured; a project named like the crew is refused before it takes a place",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "Crew Tools", "m1", "{TMP}/blog", "x", world=_SP_LIMIT_WORLD,
                       setup={"gitrepos": ["{TMP}/shop", "{TMP}/blog"]}),
            spawn_step("builder", "shop", "m1", "{TMP}/shop", "work T1", world=_SP_LIMIT_WORLD),
@@ -1195,10 +1220,9 @@ scenario(Scenario(
         ("a higher builders_max lets the next builder in",
          lambda r: r.code(4) == 0 and stations_json(r)["blog-build-m1"]["role"] == "builder"),
         ("each builder of the two projects started", lambda r: r.launches() == 3),
-        ("L4: the builder merges on the gate",
-         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "shop-build-m1"))),
+        ("L4: the text says Tares merges after the review gate and green CI", lambda r: tares_merges_on_gate(r, "shop-build-m1")),
     ],
-    covers=["a project can't be named like the crew", "builders_max is honoured", "L4: the builder merges on the gate"],
+    covers=["a project can't be named like the crew", "builders_max is honoured", "L4: the text says Tares merges after the review gate and green CI"],
 ))
 
 _STRICT = {"id": "uc_strict", "name": "strict", "autonomy": "L3-review", "repos": [{"path": "{TMP}/core"}]}
@@ -1210,23 +1234,22 @@ scenario(Scenario(
     suite="crew",
     about="a project handed over stricter keeps it; --autonomy may only be stricter than the crew",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[spawn_step("builder", "strict", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD, setup={"gitrepos": ["{TMP}/core"]}),
            spawn_step("builder", "--autonomy", "L5-dark", "strict", "m2", "{TMP}/core", "T2", world=_SP_LEVEL_WORLD),
            spawn_step("builder", "loose", "m1", "{TMP}/core", "T1", world=_SP_LEVEL_WORLD),
            spawn_step("builder", "--autonomy", "L3-review", "loose", "m2", "{TMP}/core", "T2", world=_SP_LEVEL_WORLD),
            spawn_step("builder", "--autonomy", "L4-ship", "loose", "m3", "{TMP}/core", "T3", world=lworld("L3-review", projects=[_LOOSE]))],
     checks=[
-        ("a project handed over stricter keeps it", lambda r: relayed(allow_of(r, "strict-build-m1"))),
+        ("a project handed over stricter keeps it", lambda r: desk_yes(r, "strict-build-m1")),
         ("L5 is no level any more", lambda r: r.code(1) == 1 and "autonomy must be L3-review or L4-ship" in r.out(1)),
-        ("L4: the builder merges on the gate",
-         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "loose-build-m1"))),
-        ("--autonomy makes a builder stricter than the crew", lambda r: r.code(3) == 0 and relayed(allow_of(r, "loose-build-m2"))),
+        ("L4: the text says Tares merges after the review gate and green CI", lambda r: tares_merges_on_gate(r, "loose-build-m1")),
+        ("--autonomy makes a builder stricter than the crew", lambda r: r.code(3) == 0 and desk_yes(r, "loose-build-m2")),
         ("--autonomy never makes it looser than the crew",
          lambda r: r.code(4) == 1 and "a project can only be stricter than the crew (crew autonomy is L3-review)" in r.out(4)
          and "loose-build-m3" not in stations_json(r)),
     ],
-    covers=["a project handed over stricter keeps it", "L5 is no level any more", "L4: the builder merges on the gate"],
+    covers=["a project handed over stricter keeps it", "L5 is no level any more",
+            "L4: the text says Tares merges after the review gate and green CI"],
 ))
 
 _UP_STEPS = [lstep("launch", f"crew-{role}", role, "", "", "", "{TMP}/crew", model, "high", f"Boot as the {role} station", world=_UP_WORLD)
@@ -1236,7 +1259,6 @@ scenario(Scenario(
     suite="crew",
     about="a helper of a crew station: by its name, by its role word, of the releaser; one already running is not started twice",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[*_UP_STEPS,
            spawn_step("helper", "crew-reviewer", "probe", "look at PR 9", world=_UP_WORLD),
            spawn_step("helper", "reviewer", "probe", "look at PR 10", world=_UP_WORLD),
@@ -3238,6 +3260,7 @@ def _cc_setup(have: str = "1.0.0", installed: str = "1.1.0", versions: dict | No
         _setup_views(tmp, env)
         _cc_doctor_tools(tmp)
         crew, state = tmp / "crew", tmp / "claude"
+        env["TARES_FAKE_PS_DIR"] = str(state)   # the process list is the folder's, not the machine's (see _cc_spares)
         kit = _cc_kit(_cc_plugin(tmp, env))
         base = {"status": "active", "repo": "", "project": "", "cwd": str(crew), "model": "opus", "effort": "high", "kit": kit}
         rows, agents = {}, []
@@ -3374,6 +3397,7 @@ def _moved(r: Run, name: str, old_session: str, version: str) -> bool:
     return bool(_bg_of(r, name)) and _cc_checks_moved(r, name, old_session, version)
 
 
+_CC_ARGV: dict = {}    # key -> the command line a process in _CC_PROCS stands for
 _CC_PROCS: dict = {}   # (scenario folder, key) -> a process that stands for someone attached, or for a spare
 
 
@@ -3381,6 +3405,7 @@ def _cc_process(tmp: Path, key: str, argv0: str) -> None:
     """A process whose command line starts with argv0 (`exec -a`), for `attached` and the process listing to find."""
     import time
     own_the_process_list()
+    _CC_ARGV[key] = argv0
     _CC_PROCS[(str(tmp), key)] = subprocess.Popen(["bash", "-c", f"exec -a '{argv0}' sleep 120"],
                                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(0.4)   # until bash has exec'd
@@ -3552,6 +3577,15 @@ def _cc_spares(tmp: Path) -> None:
     for key, sock, version in (("unclaimed", "unclaimed", "1.1.0"), ("claimed", "gone", "1.1.0"), ("fresh", "new", "1.2.0")):
         _cc_process(tmp, key, f"claude bg-pty-host --bg-pty-host {tmp}/{sock}.pty.sock 200 50 -- /x/versions/{version} "
                               f"--bg-spare {tmp}/{sock}.claim.sock")
+    # The process list is the fake folder's: these three, by their real pids (the engine stops the unclaimed one by its pid).
+    # The file does not change when one ends, so a stopped spare is reaped at once: its pid is then gone, as a real listing
+    # would not show it, and the engine skips it the next time it reads the list.
+    import threading
+    for (f, k), proc in _CC_PROCS.items():
+        if f == str(tmp):
+            threading.Thread(target=proc.wait, daemon=True).start()
+    (tmp / "claude" / "ps-list").write_text("".join(f"{p.pid} {_CC_ARGV[k]}\n" for (f, k), p in _CC_PROCS.items() if f == str(tmp)
+                                                    and k in ("unclaimed", "claimed", "fresh")), encoding="utf-8")
 
 
 _cc("cc_move_stale_spare", "a restart that lands on an older spare is tried again; an unclaimed older spare is stopped, a claimed one and a new one are left",
@@ -3738,7 +3772,6 @@ scenario(Scenario(
          lambda r: not [x for x in (r.crew / "stations").iterdir() if x.name.endswith(".lock")]),
     ],
     covers=[],
-    not_windows="the fake Claude Code's on-bg hook runs through bash",
 ))
 
 # ---------------------------------------------------------------------------------------------
@@ -3891,15 +3924,12 @@ _W1 = lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT)
 _W_GONE = lworld("L3-review", grants="")
 _W_UNREAD = {**lworld("L3-review", grants=LAUNCH_GRANT + REGRANT_GRANT), "grants_status": 500}
 
-WIN_NO_MULTILINE_REGRANT = ("a station is restarted through claude.cmd here, and cmd.exe cannot take the regrant prompt "
-                            "(several lines); the claude.exe form waits for TR-946")
 
 scenario(Scenario(
     name="watch_regrant_restart",
     suite="crew",
     about="a station between turns whose grants changed is restarted in its own conversation, told only what is new, once per change",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            wstep(_W1, before=_busy("crew-reviewer")),                      # 1: busy: waits
            wstep(_W1, before=_idle("crew-reviewer"), after=_sessions_and("crew-reviewer")),   # 2: between turns: restarted
@@ -3947,7 +3977,6 @@ scenario(Scenario(
     suite="crew",
     about="nothing is restarted for a Tares that cannot give the grants, while the crew is halted, for a station without a conversation, one that is done, or one open in a terminal",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("crew-releaser", "releaser", _W0),
            wstep(_W_UNREAD, before=_idle("crew-reviewer", "crew-releaser")),                # 2: grants unreadable
@@ -4058,7 +4087,6 @@ scenario(Scenario(
     suite="crew",
     about="a station blocked on a person is restarted at once; a helper and a project's builder get their grants; a station that kept no grants is quoted all of them",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-reviewer", "reviewer", _W0),
            _launch("shop-build-m1", "builder", _W0, parent="crew-orchestrator", project="shop"),
            _launch("shop-build-m1-e2e", "helper", _W0, parent="shop-build-m1", project="shop"),
@@ -4164,8 +4192,6 @@ def _pc_doc(session, weekly, reset=False, known=True, on=True) -> dict:
     return pace_now({"pace": True if on else None}, {"limits": limits}, now)
 
 
-WIN_NO_PERCENT = ("a station is told through claude.cmd here, and cmd.exe cannot take a note that holds a percent sign ('the 5-hour window is at 85%'); "
-                  "the engine says so and tries again next round; the claude.exe form waits for TR-946")
 
 
 def _pc_world(doc: dict, idle_wake=None) -> dict:
@@ -4231,7 +4257,6 @@ scenario(Scenario(
     suite="pace",
     about="85% of the window or 90% of the week: each station is told once to stretch; 95%: a builder is told to hold; back down: told to go back",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[
         _pc_round(84, 89),      # 0 nothing
@@ -4366,7 +4391,6 @@ scenario(Scenario(
     suite="pace",
     about="with idle_wake on the stations hold no tick of their own: a pace file is dropped, and nothing is sent",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(85, 10, idle_wake=True, before=_pc_put(stretched=PC_STATIONS)),
            _pc_round(95, 10, idle_wake=True), _pc_round(85, 10, idle_wake=False)],
@@ -4405,7 +4429,6 @@ scenario(Scenario(
     suite="pace",
     about="turning the setting off while stations are stretched: each is told once to go back, and then nothing",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(85, 10), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False), _pc_round(0, 0, on=False)],
     checks=[
@@ -4425,7 +4448,6 @@ scenario(Scenario(
     suite="pace",
     about="a note whose restart fails sends no event and marks nothing told; the stations it left stopped are not told again",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[_pc_round(10, 10), _pc_round(85, 10, env={"FAKE_CLAUDE_FAIL_RESUME": "1"}), _pc_round(85, 10)],
     checks=[
@@ -4443,7 +4465,6 @@ scenario(Scenario(
     suite="pace",
     about="a station that is down while a limit is full is not revived into it; after the reset it is revived with a short prompt in its own conversation",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_PERCENT,
     setup=_setup_pace,
     steps=[
         _pc_down(100, 10, "crew-reviewer:ok", "crew-releaser:ok"),    # 0 held down, said once
@@ -4517,7 +4538,6 @@ scenario(Scenario(
 
 scenario(Scenario(
     name="pace_tidy",
-    not_windows=WIN_NO_MULTILINE,
     suite="pace",
     about="the pace file forgets a station that will not be revived, says the limit is full again in a new episode, and goes when nothing is left",
     driver=LAUNCH_DRIVER,
@@ -4665,7 +4685,6 @@ scenario(Scenario(
     suite="pace",
     about="spawn and restart under the pace: a builder is refused at the slow level and the week's, a helper is not; a restart says when to re-arm",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[
         _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
               setup={"gitrepos": ["{TMP}/links"]}),                                                  # 0
@@ -5058,7 +5077,6 @@ scenario(Scenario(
             "(a builder that stopped at the limit is in the pace file)",
             "the stations a failed restart left stopped come back already on the stretched tick, with no second note",
             "a restart that fails midway is not marked told either", "and the note is sent once the failure is gone"],
-    not_windows=WIN_NO_MULTILINE,
 ))
 
 
@@ -5597,7 +5615,6 @@ scenario(Scenario(
     about="a halted crew, a station open in a terminal, a finished builder and a helper are never woken; a head with a current verdict is no work",
     driver=LAUNCH_DRIVER,
     ignore_calls=_CC_READS,
-    not_windows=WIN_NO_MULTILINE,
     setup=_setup_guards,
     steps=[_round(0, _world()),
            _round(3600, _world(), _halt), _round(7200, _world()),
@@ -5782,7 +5799,6 @@ scenario(Scenario(
     suite="idle_wake",
     about="the crew's three stations and a builder are started: four sessions, the builder among the stations",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE,
     steps=[
         _pcsp("launch", "crew-orchestrator", "orchestrator", "", "", "", "{TMP}/crew", "opus", "high", "Boot as the orchestrator station",
               setup={"gitrepos": ["{TMP}/links"]}),
@@ -5889,13 +5905,13 @@ def norm_text(s: str, tmp: Path | None = None) -> str:
         s = WIN_PATH_TAIL.sub(lambda m: m.group(1) + re.sub(r"\\+", "/", m.group(2)), s)
         # a path with a space (the profile folder of the Windows job) is quoted in the statusline command, one without is not
         s = WIN_ROOT_QUOTED.sub(r"\1\2", s)
-        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.cmd here, claude elsewhere
+        s = WIN_CLAUDE_CMD.sub(r"\1", s)     # the Claude Code of a scenario is claude.exe (or claude.cmd) here, claude elsewhere
     return s
 
 
 # what follows a path placeholder on Windows: the rest of the path, its backslashes single or doubled (JSON text)
 WIN_ROOT_QUOTED = re.compile(r'(--plugin-root )"([^"]*)"')
-WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.cmd")
+WIN_CLAUDE_CMD = re.compile(r"(<TMP>/bin/claude)\.(?:cmd|exe)")
 WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 
 
@@ -6009,13 +6025,18 @@ def is_windows() -> bool:
     return sys.platform == "win32"
 
 
-def make_launcher(path: Path, extra: list, script: Path | None = None) -> Path:
-    """An executable that runs the Python fake: a shell script, or a .cmd file on Windows (returns its path).
+def make_launcher(path: Path, extra: list, script: Path | None = None, exe: bool = False) -> Path:
+    """An executable that runs the Python fake: a shell script, or on Windows a .cmd file, or with exe=True a
+    claude.exe (returns its path).
 
     Named `claude`, it is the Claude Code of the scenario: on PATH for a command that runs `claude` by
     name (the bash engine does for some commands, the Python engine will), and CLAUDE_BIN for the rest.
     The .cmd form passes the fake's exit code on, and is written with CRLF whatever the platform.
-    The paths in it must be ASCII: cmd.exe reads a batch file in the console's code page."""
+    The paths in it must be ASCII: cmd.exe reads a batch file in the console's code page.
+    The .exe form (tests/factory/exe_launcher.py, TR-1183) takes the command line as CreateProcess gives it, like the
+    real Claude Code, so a prompt of several lines or with a percent sign reaches the fake whole."""
+    if sys.platform == "win32" and exe:
+        return exe_launcher.build_exe(path.with_suffix(".exe"), sys.executable, script or FAKE_CLAUDE, extra)
     if sys.platform == "win32":
         path = path.with_suffix(".cmd")
         lines = ['@"%s" "%s" %s %%*' % (sys.executable, script or FAKE_CLAUDE, " ".join(extra)), "@exit /b %ERRORLEVEL%"]
@@ -6038,7 +6059,7 @@ def crew_env(tmp: Path) -> dict:
     home, crew, state, bindir = (tmp / n for n in ("home", "crew", "claude", "bin"))
     for d in (home, state, bindir):
         d.mkdir(parents=True, exist_ok=True)
-    claude = make_launcher(bindir / "claude", [])  # claude.cmd on Windows, which is also what `claude` finds on PATH
+    claude = make_launcher(bindir / "claude", [], exe=True)  # claude.exe on Windows, which is also what `claude` finds on PATH
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(STRIPPED_PREFIXES)
            and k not in ("TARESD_URL", "NAVFLOW_DB", "PWD", "OLDPWD")}
@@ -6667,7 +6688,7 @@ scenario(Scenario(
 # --- no MCP server at the endpoint -----------------------------------------------------------------------------
 
 G1_NOMCP = "http://127.0.0.1:9/mcp"
-G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations"]})}
+G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue"]})}
 
 scenario(Scenario(
     name="crew_g1_no_mcp",
@@ -7582,7 +7603,7 @@ def g4_up_after(tmp: Path) -> dict:
     return {"pid": pid, "alive": g4_alive(pid), "log": banner}
 
 
-G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations"]}),
+G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue"]}),
                "GET /api/crew/settings": (200, {**SAVED, "releaser": False}),
                "GET /api/people": (200, {"people": [{"id": "local", "name": "Local"}]}),
                "GET /api/grants": (200, {"all": ""}),
@@ -7674,7 +7695,6 @@ scenario(Scenario(
     suite="crew",
     about="a permission allowed in Tares reaches a station between turns, in its conversation, once; busy and attached stations wait; helpers and blocked stations get it",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("crew-orchestrator", "orchestrator", G4_W0),                                            # 0
            _launch("crew-reviewer", "reviewer", G4_W0),                                                    # 1
            g4_recording(_launch("shop-build-m1", "builder", G4_W0, parent="crew-orchestrator", project="shop")),   # 2
@@ -7753,7 +7773,6 @@ scenario(Scenario(
     suite="crew",
     about="a builder that has finished sleeps through a grant that does not name it (noted once), and is restarted, no longer done, by one that does",
     driver=LAUNCH_DRIVER,
-    not_windows=WIN_NO_MULTILINE_REGRANT,
     steps=[_launch("shop-build-m1", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 0
            _launch("shop-build-m2", "builder", D_W0, parent="crew-orchestrator", project="shop"),           # 1
            wstep(D_W1, before=_both(_idle("shop-build-m1", "shop-build-m2"), _touch_done("shop-build-m1"),
@@ -7942,13 +7961,14 @@ CU_RETRY = "PUT /api/crew/claude-retry?crew=crew"
 CU_SETTINGS = {"autonomy": "L4-ship", "releaser": True, "release_profile": "kind", "challenger": False, "builders_max": 3}
 CU_TARES = {"GET /api/crew/settings": (200, {"settings": CU_SETTINGS}), "GET /api/crew/projects": (200, {"projects": []}),
             "GET /api/grants": (200, {"all": ""}), CU_RETRY: (200, {"ok": True})}
-CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2"}
+# TARES_FAKE_PS_DIR: the process list is the folder's (empty here), never the machine's. Without it `crew update` read the
+# machine's real `--bg-spare` processes, and ended an old one of a Claude Code session running beside the suite.
+CU_ENV = {"TARESD_URL": "{tares}", "FACTORY_UPDATE_POLL": "1", "FACTORY_STOP_WAIT": "2", "TARES_FAKE_PS_DIR": "{tmp}/claude"}
 # bash reads GET /api/crew/pace before it starts a session; the Python pace is a stub until TR-962, so the
 # read is left out of the list of what was asked (the pace itself is not what these scenarios test).
 # Reads of Tares are left out, as in the cc_move scenarios: the engines make them in a different number and order
 # (the pace is real in Python since TR-962). What is written to Tares, started and stopped is compared.
 CU_NO_PACE = ("GET ",)
-CU_NO_HOOK = "the new session's version is set by the fake Claude Code's on-bg hook, which runs through bash"
 
 CU_HOOK = '''import json, os
 S = os.environ["FAKE_CLAUDE_STATE"]
@@ -8147,7 +8167,6 @@ scenario(Scenario(
     setup=_cu_world(runs=CU_NEW),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "restart"], env=CU_ENV), Step(["crew", "update", "--force"], env=CU_ENV)],
     checks=[
         ("already current: nothing restarted",
@@ -8168,7 +8187,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV), Step(["crew", "update"], env=CU_ENV)],
     checks=[
         ("every station runs the new version, the orchestrator last",
@@ -8192,7 +8210,6 @@ scenario(Scenario(
                     states={"crew-builder": "stopped"}),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV)],
     checks=[
         ("a stopped station waits for the watch",
@@ -8212,7 +8229,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     ignore_calls=(("agents",),),  # how often the wait polls depends on the machine's speed
     steps=[Step(["crew", "update", "--wait", "2"], env=CU_ENV, before=_cu_busy_reviewer)],
     checks=[
@@ -8232,7 +8248,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}),
            Step(["crew", "update"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"}, before=_cu_orchestrator_current),
            Step(["crew", "update", "--force"], env={**CU_ENV, "FACTORY_STATION": "crew-orchestrator"})],
@@ -8290,7 +8305,6 @@ scenario(Scenario(
     setup=_cu_world(),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV, before=_cu_halt_file)],
     checks=[("halted in the middle: crew update stops and says so",
              lambda r: r.code(0) != 0 and "the crew was halted; nothing more was restarted" in r.out(0)
@@ -8313,7 +8327,6 @@ scenario(Scenario(
     setup=_cu_with_key(_cu_world(spawn=CU_OLD)),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)), Step(["crew", "update"], env=CU_RETRY_ENV, after=_cu_wait(60)),
            Step(["crew", "update"], env=CU_RETRY_ENV, before=_cu_seq(CU_NEW), after=_cu_wait(60))],
     checks=[
@@ -8352,7 +8365,6 @@ scenario(Scenario(
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_BACKOFF": "100", "FACTORY_CC_BACKOFF_MAX": "150"}, after=_cu_wait())
            for _ in range(3)],
     checks=[
@@ -8371,7 +8383,6 @@ scenario(Scenario(
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares=CU_TARES,
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "1"}),
            Step(["crew", "update"], env={**CU_ENV, "FACTORY_CC_TRIES": "5"})],
     checks=[
@@ -8389,7 +8400,6 @@ scenario(Scenario(
     setup=_cu_world(stations={"crew-reviewer": CU_STATIONS["crew-reviewer"]}, spawn=CU_OLD),
     tares={**CU_TARES, CU_RETRY: (500, "boom")},
     ignore_asked=CU_NO_PACE,
-    not_windows=CU_NO_HOOK,
     steps=[Step(["crew", "update"], env=CU_ENV)],
     checks=[("the run fails as it would, naming the station and the retry",
              lambda r: r.code(0) != 0 and f"not every station runs Claude Code {CU_NEW}: crew-reviewer" in r.out(0)
@@ -9249,8 +9259,8 @@ scenario(Scenario(
          lambda r: allow_has(r, "links-app-build-m1", 'for project Links App, in their own words: "%s". Acting' % TARES_PROJECT_GRANT)),
         ("and the grants for all",
          lambda r: allow_has(r, "links-app-build-m1", 'in their own words: "%s"' % TARES_WORDS)),
-        ("L4: builder may merge on the gate",
-         lambda r: any("pre-authorized at level L4-ship" in x for x in allow_of(r, "links-app-build-m1"))),
+        ("L4: the builder's text says Tares merges on the gate, and nothing allows a merge",
+         lambda r: tares_merges_on_gate(r, "links-app-build-m1") and merge_barred(r, "links-app-build-m1")),
         ("a builder for an emoji project starts", lambda r: "started emoji-app-build-m1" in r.out(3)),
         ("its TARES_PROJECT is the project id", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT") == "uc_emoji"),
         ("and the name is kept for reading", lambda r: env_of(r, "emoji-app-build-m1", "TARES_PROJECT_NAME") == TARES_EMOJI),
@@ -9286,7 +9296,8 @@ scenario(Scenario(
          lambda r: "no Tares answers at" in r.results[17]["stderr"] and "tares up" in r.results[17]["stderr"]
          and r.results[17]["stdout"] == ""),
     ],
-    covers=["project grant quoted for the builder", "and the grants for all", "L4: builder may merge on the gate",
+    covers=["project grant quoted for the builder", "and the grants for all",
+            "L4: the builder's text says Tares merges on the gate, and nothing allows a merge",
             "a builder for an emoji project starts", "its TARES_PROJECT is the project id", "and the name is kept for reading",
             "the header value is plain ASCII", "Tares resolves the id the header carries",
             "a station kept by name gets the id when its settings are written again",
@@ -9486,19 +9497,22 @@ scenario(Scenario(
 COMPAT_MSG = "This needs a newer Tares on the cell (missing integrations). Upgrade Tares, then run this again."
 COMPAT_OLD = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "version": "1.0.0"}
 COMPAT_OTHER = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "capabilities": ["merge_queue"]}
-_COMPAT_OTHERS: dict = {}   # scenario folder -> the second fake cell (the one with other capabilities)
+COMPAT_NOMQ = {"status": "ok", "auth_required": False, "sources": [], "pct_used": None, "capabilities": ["integrations"]}
+COMPAT_MSGQ = "This needs a newer Tares on the cell (missing merge_queue). Upgrade Tares, then run this again."
+_COMPAT_OTHERS: dict = {}   # scenario folder -> the other fake cells: {"other": capabilities that lack integrations, "nomq": integrations but no merge_queue}
 
 
 def _compat_prepare(r: Run) -> None:
     trust_crew(r)
-    _COMPAT_OTHERS[str(r.tmp)] = FakeTares({"GET /health": (200, COMPAT_OTHER)})
+    _COMPAT_OTHERS[str(r.tmp)] = {"other": FakeTares({"GET /health": (200, COMPAT_OTHER)}),
+                                  "nomq": FakeTares({"GET /health": (200, COMPAT_NOMQ)})}
 
 
 def _compat_cell(which: str):
     """The step's env: TARESD_URL names the old cell, the one with other capabilities, or the stand-in Tares."""
     def env(r: Run) -> dict:
-        url = {"old": r.tares.url if r.tares else "", "other": _COMPAT_OTHERS[str(r.tmp)].url,
-               "real": r.stand_in.url}[which]
+        url = {"old": r.tares.url if r.tares else "", "other": _COMPAT_OTHERS[str(r.tmp)]["other"].url,
+               "nomq": _COMPAT_OTHERS[str(r.tmp)]["nomq"].url, "real": r.stand_in.url}[which]
         return {"TARESD_URL": url}
     return env
 
@@ -9511,8 +9525,7 @@ def _compat_after(stop: bool = False):
         except OSError:
             calls = []
         if stop:
-            cell = _COMPAT_OTHERS.pop(str(tmp), None)
-            if cell:
+            for cell in (_COMPAT_OTHERS.pop(str(tmp), None) or {}).values():
                 cell.stop()
         return {"launches": sum(1 for c in calls if "--bg" in c["args"])}
     return after
@@ -9545,11 +9558,14 @@ scenario(Scenario(
     steps=[
         Step(["crew", "up", "--yes"], env=_compat_cell("old"), after=_compat_after()),                                # 0
         Step(["crew", "up", "--yes"], env=_compat_cell("other"), after=_compat_after()),                              # 1
-        Step(["crew", "up"], env=_compat_cell("real"), stdin="L3-review\nno\nno\n2\n\n"),                           # 2
+        Step(["crew", "up"], env=_compat_cell("real"), stdin="L3-review\nno\nno\n2\n\n", after=_compat_after()),  # 2
         Step(["crew", "status"], env=_compat_cell("real")),                                                           # 3
         Step(["crew", "status"], env=_compat_cell("old")),                                                            # 4
         Step(["crew", "down"], env=_compat_cell("old")),                                                              # 5
-        Step(["crew", "status"], env=_compat_cell("other"), after=_compat_after(stop=True)),                          # 6
+        Step(["crew", "status"], env=_compat_cell("other")),                                                          # 6
+        Step(["crew", "up", "--yes"], env=_compat_cell("nomq"), after=_compat_after()),                               # 7
+        Step(["crew", "status"], env=_compat_cell("nomq")),                                                           # 8
+        Step(["crew", "down"], env=_compat_cell("nomq"), after=_compat_after(stop=True)),                             # 9
     ],
     checks=[
         ("crew up against a cell with no capabilities stops with the upgrade message",
@@ -9568,6 +9584,13 @@ scenario(Scenario(
          lambda r: r.code(5) == 0 and "needs a newer Tares" not in r.out(5) and ("stopped" in r.out(5) or "down" in r.out(5))),
         ("crew status works against a cell with other capabilities",
          lambda r: r.code(6) == 0 and "needs a newer Tares" not in r.out(6)),
+        ("crew up against a cell without merge_queue stops and names it",
+         lambda r: r.code(7) != 0 and COMPAT_MSGQ in r.out(7) and r.snap(7)["launches"] == r.snap(2)["launches"]),
+        ("crew status works against a cell without merge_queue",
+         lambda r: r.code(8) == 0 and "needs a newer Tares" not in r.out(8)),
+        ("crew down works against a cell without merge_queue",
+         lambda r: r.code(9) == 0 and "needs a newer Tares" not in r.out(9)),
+        ("a real cell lists merge_queue on /health", lambda r: "merge_queue" in (_compat_health(r).get("capabilities") or [])),
         ("the CLI never asks for a capability in status or down", lambda r: _compat_no_capability_ask()),
     ],
     covers=["crew up against a cell with no capabilities stops with the upgrade message", "it starts nothing",
@@ -9575,6 +9598,8 @@ scenario(Scenario(
             "a real cell lists integrations on /health", "crew up against a cell with the capability proceeds",
             "crew status works against a cell with the capability", "crew status works against a cell without the capability",
             "crew down works against a cell without the capability", "crew status works against a cell with other capabilities",
+            "crew up against a cell without merge_queue stops and names it", "crew status works against a cell without merge_queue",
+            "crew down works against a cell without merge_queue", "a real cell lists merge_queue on /health",
             "the CLI never asks for a capability in status or down"],
 ))
 
@@ -9686,6 +9711,15 @@ def _cb_file(name: str, text: str):
         if "attach" in text:    # the hook starts a process that says `attach <id>`
             own_the_process_list()
         (tmp / "claude" / name).write_text(text, encoding="utf-8")
+    return before
+
+
+def _cb_pyhook(name: str, source: str):
+    """A one-shot hook of the fake Claude Code written in Python, so it runs the same through sh and cmd.exe:
+    the hook file `name` holds `"python" "<name>.py"` and the .py holds the source."""
+    def before(tmp: Path) -> None:
+        (tmp / "claude" / (name + ".py")).write_text(source, encoding="utf-8")
+        (tmp / "claude" / name).write_text('"%s" "%s"' % (sys.executable, tmp / "claude" / (name + ".py")), encoding="utf-8")
     return before
 
 
@@ -10282,7 +10316,7 @@ _st_cc("cc_frozen_midround", "a freeze that lands in the middle of a round wins:
        [("frozen in the middle of the round: nothing moves onto the newer Claude Code",
          lambda r: r.snap(0)["launched"] == [] and _st_line(r, 1, r"^FROZEN"))],
        ["frozen in the middle of the round: nothing moves onto the newer Claude Code"],
-       _cc_setup(have="1.10.4", installed="1.10.5"), not_windows=CU_NO_HOOK)
+       _cc_setup(have="1.10.4", installed="1.10.5"))
 
 
 
@@ -10325,7 +10359,6 @@ def _rt_new(r: Run, i: int, j: int) -> int:
 
 
 _RT_SETTLE = "the notes pace sends to a crew at its limit are restarts too; let them go first"
-_RT_NO = WIN_NO_PERCENT + "; the fake Claude Code's mid-round hook is a shell command"
 
 # Pace: a Claude Code move is a restart, a model turn, so it never goes into a plan limit that is full and has not reset (the watch
 # moves nothing, `crew update` says why and restarts nothing), and moves again once the limit has reset.
@@ -10345,18 +10378,20 @@ _st_cc("cc_pace_limit", "a plan limit that is full: the watch moves no station o
          lambda r: _rt_new(r, 11, 7) > 0 and r.snap(11)["runs"][r.snap(11)["launched"][-1]] == "1.11.0")],
        ["limit full: the watch moves no station onto the newer Claude Code", "limit full: crew update says so and restarts nothing",
         "the limit has reset: the watch moves a station again"],
-       _cc_setup(have="1.10.9", installed="1.10.9"), not_windows=WIN_NO_PERCENT)
+       _cc_setup(have="1.10.9", installed="1.10.9"))
 
 
 # The limit fills in the middle of a round (the watch read the plan before it did): the move waits. Below the limit, slow, the
 # restart tells the station to tick every 45 minutes. The limit fills while crew update waits for a busy station: it stops there.
-PACE_FULL_HOOK = ("curl -sS -X POST -H 'Content-Type: application/json' --data '" + json.dumps(_pc_doc(100, 10))
-                  + "' \"$TARESD_URL/test/pace\"")
+PACE_FULL_HOOK = ("import os, urllib.request\n"
+                  "urllib.request.urlopen(urllib.request.Request(os.environ['TARESD_URL'] + '/test/pace', "
+                  "data=%r, headers={'Content-Type': 'application/json'}, method='POST'), timeout=30).read()\n"
+                  % json.dumps(_pc_doc(100, 10)).encode("utf-8"))
 
 _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is restarted onto the newer Claude Code; slow, not full: "
                        "crew update moves them and says to re-arm at 45 minutes; it fills while crew update waits: it stops there",
        [Step(["crew", "watch", "--once"], env={}, after=_st_after,                                            # 0
-             before=_cb_all(_all_idle, _cb_file("on-agents", PACE_FULL_HOOK), _cb_file("on-agents-at", "1\n")),
+             before=_cb_all(_all_idle, _cb_pyhook("on-agents", PACE_FULL_HOOK), _cb_file("on-agents-at", "1\n")),
              run_before=_st_run(_st_set(pace=True, idle_wake=False), _st_plan(10, 10))),
         _rw(run_before=_st_run(_st_mark("filled"), _st_plan(90, 10))), _rw(), _rw(),                          # 1-3
         _ru(before=_cc_installed("1.11.2")),                                                                  # 4
@@ -10375,7 +10410,8 @@ _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is res
        ["the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
         "below the limit, crew update moves them", "and the restart says to re-arm at 45 minutes",
         "the limit fills while crew update waits: it stops, says until when, and restarts nothing more"],
-       _cc_setup(have="1.11.0", installed="1.11.1"), not_windows=_RT_NO)
+       _cc_setup(have="1.11.0", installed="1.11.1"),
+       not_windows="the limit fills on timers of 2.5 and 3.5 seconds, and a Windows process start takes longer than the gap between them")
 
 
 # A helper follows its station onto a new Claude Code, but its task lives only in its spawn prompt, so it is never started in a new

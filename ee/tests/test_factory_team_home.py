@@ -684,8 +684,8 @@ async def main():
         r = await call("alex", "PUT", "/api/crew/settings", {"autonomy": "L3-review"})
         ck("Alex keeps his own at review", r.status_code == 200, r.text)
         cl = (await home_of("alex"))["crew_limit"]
-        ck("the team's limit and Alex's own, apart", cl["team"] == "a builder merges after the reviewer's pass "
-           "and green CI" and cl["mine"] == "you approve each merge" and cl["text"] == (
+        ck("the team's limit and Alex's own, apart", cl["team"] == "Tares merges after the review gate passes "
+           "and CI is green" and cl["mine"] == "you approve each merge" and cl["text"] == (
                "The team allows merging on its own after review and green CI. Yours can be stricter, "
                "not looser."), cl)
         cl = (await home_of("kim"))["crew_limit"]
