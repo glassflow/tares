@@ -15,6 +15,7 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `crew setup --questions` | one document | `setup_questions.json` |
 | `crew setup --answers <file> --json` | one document | `setup_answers.json` |
 | `settings <station>` | Claude Code's settings file, no `schema_version` | `settings.json` |
+| `crew watch --restart --json` | one document | `watch.json` |
 | `tidy --json` | nothing on success; the error shape on a refusal | `error.json` |
 | any of them, when it fails with `--json` | one document | `error.json` |
 
