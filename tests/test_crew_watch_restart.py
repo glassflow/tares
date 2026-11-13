@@ -83,19 +83,35 @@ def wait_for(cond, seconds=20.0):
     return False
 
 
+def parent_of(pid):
+    try:
+        return psutil.Process(pid).ppid()
+    except psutil.Error:
+        return None
+
+
 def settled(seconds=20.0):
     """The watch's pid once the pid file names the loop itself. On Windows a start first writes the venv launcher's
     pid, and the loop writes its own over it a moment later (`claim_pidfile`), so the pid changes with no restart."""
     out = []
 
-    def done():
+    def read():
         pid = watch.running_pid(paths)
         if pid is None:
-            return False
+            return None
         try:
             if any("crew watch" in " ".join(c.cmdline()) for c in psutil.Process(pid).children(recursive=True)):
-                return False
+                return None
         except psutil.Error:
+            return None
+        return pid
+
+    def done():
+        pid = read()
+        if pid is None:
+            return False
+        time.sleep(0.3)   # a launcher that has not yet spawned its loop has no child to see: the same pid twice
+        if read() != pid:
             return False
         out.append(pid)
         return True
@@ -137,7 +153,7 @@ try:
     ck("...the old watch process is gone", wait_for(lambda: gone(pid1)), pid1)
     w2 = settled()
     ck("...the new one runs and the pid file names it (or the loop it started)",
-       w2 is not None and (w2 == pid2 or psutil.Process(w2).ppid() == pid2), (w2, pid2))
+       w2 is not None and (w2 == pid2 or parent_of(w2) == pid2), (w2, pid2))
     ck("...stations.json is byte for byte the same", (CREW / "stations.json").read_bytes() == STATIONS)
     ck("...no stop file is left behind", not (CREW / "watch.stop").exists())
 
@@ -156,6 +172,11 @@ try:
        code == 0 and out.startswith("the watch runs from another install (") and out.strip().endswith("): left alone"), out)
     # the folder the interpreter lives in, spelled with another case on Windows
     folder = str(exe.parent)
+    # A venv's python may start the base interpreter as the watch (a hosted Windows runner's does): then the folder the
+    # watch really runs from is the one to name, because the venv folder holds only its launcher.
+    running_exes = watch._watch_executables(watch.running_pid(paths) or 0)
+    if running_exes and not any(watch._under(e, folder) for e in running_exes):
+        folder = str(Path(running_exes[0]).parent)
     if os.name == "nt":
         folder = folder.swapcase()
     code, out, err = run("--restart", "--only-under", folder, "--json")
