@@ -11,12 +11,13 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from tares import factory_setup as fs
-from tares.factory_setup import DOWN, ENTER, ESC, LEFT, RIGHT, UP, BACKSPACE, Form
+from tares.factory_setup import DOWN, ENTER, ESC, LEFT, RIGHT, TAB, UP, BACKSPACE, Form
 
 P = F = 0
 
@@ -137,6 +138,43 @@ ck("a releaser without its shipping asks that", fs.missing_settings(
    == ["release_profile"])
 
 print("== the crew's folder: trusted as Claude Code records it ==")
+print("== the Windows key reader, on a fake msvcrt ==")
+had_msvcrt = hasattr(fs, "msvcrt")
+real_msvcrt = getattr(fs, "msvcrt", None)
+
+
+def win_keys(*presses):
+    """read_key_windows over the given key presses, one at a time as a console delivers them: (what it returned for
+    each, characters left over). A press is its characters at once (a special key is a prefix and a code)."""
+    got, leftover = [], []
+    for press in presses:
+        chars = list(press)
+        fs.msvcrt = SimpleNamespace(getwch=lambda: chars.pop(0), kbhit=lambda: bool(chars))
+        got.append(fs.read_key_windows())
+        leftover += chars
+    return got, leftover
+
+
+try:
+    got, left = win_keys("\xe0H", "\xe0P", "\x00M", "\x00K")
+    ck("the four arrows map to up, down, right, left (both prefixes)", got == [UP, DOWN, RIGHT, LEFT] and not left, got)
+    got, left = win_keys("\r", "\n", "\x1b", "\x08", "\x7f", "\t", "x")
+    ck("enter, escape, backspace, tab and a typed letter", got == [ENTER, ENTER, ESC, BACKSPACE, BACKSPACE, TAB, "x"], got)
+    got, left = win_keys("\xe0S")
+    ck("an unmapped special key (delete) is swallowed whole: nothing returned, nothing left over", got == [""] and not left, (got, left))
+    got, left = win_keys("\xe0", "x")
+    ck("a typed a-grave (U+00E0) with nothing waiting is the letter, and does not swallow the next key", got == ["\xe0", "x"], got)
+    try:
+        win_keys("\x03")
+        ck("ctrl-c raises KeyboardInterrupt", False)
+    except KeyboardInterrupt:
+        ck("ctrl-c raises KeyboardInterrupt", True)
+finally:
+    if had_msvcrt:
+        fs.msvcrt = real_msvcrt
+    else:
+        del fs.msvcrt
+
 tmp = Path(tempfile.mkdtemp(prefix="tares-setup-"))
 home = tmp / "factory"
 home.mkdir()
@@ -149,6 +187,10 @@ try:
     (tmp / ".claude.json").write_text(json.dumps({"projects": {str(home.resolve()): {
         "hasTrustDialogAccepted": True}}}))
     ck("recorded under its real path: trusted", fs.home_trusted(home))
+    # Claude Code on Windows writes the key with forward slashes (C:/Users/me/factory); on POSIX it is the same key
+    (tmp / ".claude.json").write_text(json.dumps({"projects": {str(home.resolve()).replace("\\", "/"): {
+        "hasTrustDialogAccepted": True}}}))
+    ck("recorded with forward slashes, as Claude Code writes it on Windows: trusted", fs.home_trusted(home))
 
     print("== setup saves the answers on Tares ==")
     seen = []

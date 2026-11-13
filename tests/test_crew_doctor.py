@@ -25,16 +25,18 @@ import re
 import stat
 import subprocess
 import sys
+import ntpath
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 
 from tares import login  # noqa: E402
-from tares.crew import doctor, perms  # noqa: E402
+from tares.crew import doctor, perms, state  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -520,6 +522,22 @@ dupes = sorted({i for i in got if got.count(i) > 1})
 ck("a multi-repo project: no two checks share an id", got and not dupes, dupes)
 ck("the per-repo ids carry the repo", "project_Shop_api_trust" in got and "project_Shop_api-2_trust" in got and "project_Shop_gone" in got, got)
 ck("a repo of another project with the same folder name keeps its own ids", "project_Other_web_trust" in got, got)
+
+print("trust under the key Claude Code writes on Windows (TR-1236)")
+d, home, th, paths = make("trust-slash")
+slash = paths.raw.replace("\\", "/")
+Path(home, ".claude.json").write_text(json.dumps({"projects": {slash: {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
+ck("a home recorded with forward slashes (C:/Users/me/factory on Windows) is accepted", d.accepted(paths.raw), (paths.raw, slash))
+d, home, th, paths = make("trust-none")
+Path(home, ".claude.json").write_text(json.dumps({"projects": {paths.raw + "-other": {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
+ck("a different folder's record does not count", not d.accepted(paths.raw))
+with mock.patch.object(state, "os", SimpleNamespace(name="nt", path=ntpath)):
+    keys = state.trust_keys("C:\\Users\\Jane\\factory")
+    keys_dots = state.trust_keys("C:\\Users\\Jane\\.\\factory")
+ck("trust_keys on Windows (any OS runs this one): the path as given, then with forward slashes",
+   keys == ["C:\\Users\\Jane\\factory", "C:/Users/Jane/factory"], keys)
+ck("...and the normalised path too", "C:/Users/Jane/factory" in keys_dots and keys_dots[0] == "C:\\Users\\Jane\\.\\factory", keys_dots)
+ck("trust_keys off Windows is the path alone", os.name == "nt" or state.trust_keys("/a/b") == ["/a/b"])
 
 print("the doctor stays light")
 r = subprocess.run([sys.executable, "-c",

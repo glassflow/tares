@@ -288,7 +288,9 @@ _WIN_ARROWS = {"H": UP, "P": DOWN, "M": RIGHT, "K": LEFT}
 def read_key_windows() -> str:
     """One key press from the Windows console (msvcrt reads it without echo or line buffering)."""
     c = msvcrt.getwch()
-    if c in ("\x00", "\xe0"):
+    # A special key is a prefix then a code, and the code is already waiting. A typed a-grave is also U+00E0 but
+    # nothing follows it, so it is only a prefix when another key is waiting.
+    if c == "\x00" or (c == "\xe0" and msvcrt.kbhit()):
         return _WIN_ARROWS.get(msvcrt.getwch(), "")
     if c == "\x1b":
         return ESC

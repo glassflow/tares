@@ -27,7 +27,7 @@ Differences from the old bash crew (each one a decision, none an accident):
  4. The claude binary: CLAUDE_BIN, else the first `claude` on PATH that is not a cmux wrapper script
     (the old bash claude_bin). It is looked up when crew up starts, as
     bash does at its own start.
- 5. The terminal box (tares/factory_setup.py) is not imported here: it needs termios, which Windows lacks.
+ 5. The terminal box (tares/factory_setup.py) is not imported here: it stays out of the engine, so the plain prompts need no terminal.
     `tares factory` runs it before the dispatcher, so a terminal user still sees the box.
  6. prod_pattern is saved with the release profile as the default pattern, as bash does; the box keeps a
     pattern Tares already has. The contract follows bash.
