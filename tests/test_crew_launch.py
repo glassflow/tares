@@ -220,6 +220,8 @@ def launch_seen(name, station, role, parent, project, repo_name, out, world_=Non
         c.prime()
         err = raises(L.launch, c, station, role, parent, project, str(tmp / repo_name), str(tmp / "crew"), "sonnet", "high",
                      "go", claude="claude-stand-in", sleep=lambda _s: None)
+        if err is None:
+            seen["plan"] = L.launch_plan(c, station, role, parent, project, str(tmp / repo_name), "sonnet", "high")
     finally:
         L.cl.run_claude = old
         os.environ.pop("TARES_PLUGIN_DIR", None)
@@ -241,6 +243,9 @@ ck("claude is run without the person's key and key sources", tuple(kw.get("drop_
    and "TARES_AUTH_TOKEN" in L.KEPT_FROM_CHILDREN, str(kw.get("drop_env")))
 ck("claude is run with FORCE_COLOR=0", kw.get("env_extra", {}).get("FORCE_COLOR") == "0", str(kw.get("env_extra")))
 env = doc.get("env", {})
+ck("the settings file launch wrote is exactly the plan's env and settings (what the cell's spec has to equal)",
+   doc == {"env": seen["plan"]["env"], **seen["plan"]["settings"]} and "autoMode" in doc and "statusLine" in doc,
+   str(sorted(doc)))
 ck("the settings file names the key file twice: TARES_FACTORY_TOKEN_FILE and TARES_FACTORY_CRED_FILE, the same file",
    env.get("TARES_FACTORY_CRED_FILE") and env.get("TARES_FACTORY_CRED_FILE") == env.get("TARES_FACTORY_TOKEN_FILE"), str(env))
 ck("a project Tares does not list, with a plain name: the name is the default project", env.get("TARES_PROJECT") == "Links App",

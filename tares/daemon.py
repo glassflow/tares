@@ -249,7 +249,7 @@ UI_DIST = _ui_dist()
 # What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
 # cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
 # launch_spec, recall). A daemon that could not start lists none.
-CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs", "recall"]
+CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs", "recall", "launch_spec"]
 
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.

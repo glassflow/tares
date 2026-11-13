@@ -128,8 +128,9 @@ def register(app, store, h):
         return row or store.get_choice(slot)
 
     def applying(slot: str, uid: str | None) -> dict:
-        """What applies to the slot. The reason a stored default is "not installed" is left out:
-        nothing ships built in yet, so a cell that picked the default would be told it is missing."""
+        """What applies to the slot. The reason a stored default is "not installed" is left out: a
+        slot whose default is not installed on this cell (the default is a name, not a guarantee that
+        the class is registered) would tell a cell that picked the default that it is missing."""
         row = choice_of(slot, uid)
         eff = resolve.effective(slot, uid, store=store)
         reason = eff.reason
