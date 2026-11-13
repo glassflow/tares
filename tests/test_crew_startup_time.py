@@ -99,10 +99,11 @@ why = f"{limit:.0f} ms" + ("" if limit == LIMIT_MS else f" ({RATIO} times the di
 ck(f"median of {RUNS} runs of `tares factory roster` is under {why}", statistics.median(ms) < limit,
    f"median {statistics.median(ms):.0f} ms; dispatcher alone {statistics.median(d_ms):.0f} ms")
 if statistics.median(ms) >= limit:  # where the time goes, for the log of a slow machine
-    prof = subprocess.run([sys.executable, "-m", "cProfile", "-s", "cumulative", "-c",
-                           "import sys; sys.argv = ['tares', 'factory', 'roster']; from tares.cli import main; main()"],
+    # a script file: `python -m cProfile -c` needs Python 3.13
+    (T / "roster_main.py").write_text("import sys\nsys.argv = ['tares', 'factory', 'roster']\nfrom tares.cli import main\nmain()\n", encoding="utf-8")
+    prof = subprocess.run([sys.executable, "-m", "cProfile", "-s", "cumulative", str(T / "roster_main.py")],
                           capture_output=True, env=ENV, cwd=str(T))
-    print("\n".join(prof.stdout.decode("utf-8", "replace").splitlines()[:45]))
+    print("\n".join((prof.stdout + prof.stderr).decode("utf-8", "replace").splitlines()[:45]))
 ck(f"the dispatcher's own share (interpreter, imports, exec) is under {DISPATCH_MS} ms", statistics.median(d_ms) < DISPATCH_MS,
    f"median {statistics.median(d_ms):.0f} ms")
 

@@ -8600,7 +8600,7 @@ def _cn_add_sessions(*rows):
         f = r.state / "agents.json"
         cur = json.loads(f.read_text(encoding="utf-8"))
         for row in rows:
-            cur.append({**row, "cwd": str(r.tmp / "shop")})
+            cur.append({**row, "cwd": f"{r.tmp}/shop"})  # as the project's repo path reads (_CN_REPO), slashes and all
         f.write_text(json.dumps(cur, indent=2) + "\n", encoding="utf-8")
     return run_before
 
