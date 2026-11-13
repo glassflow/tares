@@ -9,7 +9,6 @@ import AreasPanel from "./settings/AreasPanel";
 import { PeopleAdd, PersonTeamLines } from "./people/FactoryPeopleTeam";
 import { KeyPersonCell, KeyPersonPick, PeoplePanel } from "./people/SettingsPeople";
 import TeamActions from "./home/actions";
-import { HiddenRows, LeadLine, PrivateLock, ProjectsSwitch } from "./home/Projects";
 import { HOME_SAMPLES_EE } from "./home/samples";
 import { CrewLimit, ReposYouOwn, TeamCrews } from "./home/Side";
 import { WaitingForYou, YouAreWaitingOn } from "./home/Waiting";
@@ -36,10 +35,6 @@ export function register(registerSlot: RegisterSlot, registerSamples: RegisterSa
   registerSlot("home.waiting", WaitingForYou);
   registerSlot("home.waitingOn", YouAreWaitingOn);
   registerSlot("home.teamActions", TeamActions);
-  registerSlot("home.projectsSwitch", ProjectsSwitch);
-  registerSlot("home.projectLock", PrivateLock);
-  registerSlot("home.projectLead", LeadLine);
-  registerSlot("home.hiddenRows", HiddenRows);
   registerSlot("home.crewLimit", CrewLimit);
   registerSlot("home.teamCrews", TeamCrews);
   registerSlot("home.reposYouOwn", ReposYouOwn);

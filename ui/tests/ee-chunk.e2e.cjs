@@ -10,8 +10,7 @@
  *   - expired licence: the chunk is still requested (the cell's ee_allowed stays true).
  *   - a licensed cell where the chunk fails to load: the console still renders, with a console warning.
  *   - the chunk failed and a team Waiting row's Agree is pressed: the row says the part did not load, not that a
- *     licence is needed (#502 F3); a home with only hidden private projects has no empty Projects box (F2), and
- *     with the chunk loaded it shows the hidden row.
+ *     licence is needed (#502 F3). Home has no Projects box at all (TR-1275), with the chunk loaded or not.
  *   - a licensed cell whose licence read fails: Agree and Answer say the cell did not answer, never that a licence is
  *     needed (#507 F1), at 1440 and 390.
  * Every page also loads with no page error.
@@ -151,8 +150,6 @@ async function visit(browser, base, { blockChunk = false } = {}) {
       const words = (await err.innerText()).trim();
       ck("chunk fails to load: Agree says the part did not load", failedWords.test(words), words);
       ck("chunk fails to load: Agree does not say a licence is needed", !/licence/i.test(words), words);
-      ck("chunk fails to load: only hidden projects leave no empty Projects box",
-         (await page.locator('[data-testid="projects"] > div.border').count()) === 0, "an empty box is drawn");
       await ctx.close();
     }
     // The answer to a spec question is the team's part too: with the chunk blocked, Answer says the part did not load (no box opens).
@@ -202,9 +199,10 @@ async function visit(browser, base, { blockChunk = false } = {}) {
       const page = await ctx.newPage();
       await teamHome(page, { waiting: [], projects: [stub] });
       await page.goto(`${valid.base}/`, { waitUntil: "load" });
-      await page.getByTestId("hidden-row").first().waitFor();
-      ck("chunk loaded: only hidden projects show the hidden row in the Projects box",
-         (await page.getByTestId("hidden-row").count()) === 1 && (await page.locator('[data-testid="projects"] > div.border').count()) === 1);
+      await page.getByTestId("factory-home").waitFor();
+      await page.waitForLoadState("networkidle");
+      ck("chunk loaded: Home draws no Projects box and no hidden row, whatever the projects (TR-1275)",
+         (await page.getByTestId("projects").count()) === 0 && (await page.getByTestId("hidden-row").count()) === 0);
       await ctx.close();
     }
   } catch (e) {

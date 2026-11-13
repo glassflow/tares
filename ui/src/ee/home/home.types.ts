@@ -5,7 +5,7 @@
 export type {
   HomeAction, HomeArea, HomeCrewLimit, HomeData, HomeHiddenProject, HomeItem, HomeProject, HomeProjectRow, HomeRef,
   HomeSample, HomeTeamCrew, HomeWaitingOn, ProjectsView, TeamHomeHandler,
-  HomeCrewLimitProps, HomeHiddenRowsProps, HomeProjectLeadProps, HomeProjectsSwitchProps, HomeReposProps,
+  HomeCrewLimitProps, HomeReposProps,
   HomeRun, HomeTeamActionsProps, HomeTeamCrewsProps, HomeWaitingOnProps, HomeWaitingProps,
 } from "@/editions/factory/home.types";
 export type { SlotName, SlotProps } from "@/slotProps";

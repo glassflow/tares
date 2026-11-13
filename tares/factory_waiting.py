@@ -443,5 +443,25 @@ def projects_to_close(store, fx, now) -> list[dict]:
     return out
 
 
+# ── rules the crew proposes ───────────────────────────────────────────────────
+
+def rules_to_decide(store, fx, now) -> list[dict]:
+    """Each open rule proposal (TR-443): a finding that kept coming back in review, offered as a
+    rule. Accept and Reject live on the Crew page; Home says one waits (TR-1275). A proposal about
+    one project carries it, so a private project's proposal stays with that project's people. The
+    tickets it came from are not named here: the Crew page leaves out the ones a caller may not see."""
+    names = {p["id"]: p["name"] for p in store.list_projects()}
+    out = []
+    for rp in store.list_rule_proposals("open"):
+        pid = rp.get("project") if rp.get("project") in names else None
+        out.append(fh.home_item(
+            "rule", label="Rule proposed", title=names[pid] if pid else "Every project",
+            detail=rp["text"], meta="Proposed by the crew, " + fh.plain_ago(rp["created_at"], now),
+            since=rp["created_at"], now=now, project={"id": pid, "name": names[pid]} if pid else None,
+            repo=rp.get("repo"), id=f"rule:{rp['id']}",
+            actions=[{"label": "Accept or reject", "primary": True, "href": "/crew#rules"}]))
+    return out
+
+
 fh.WAITING_BUILDERS.extend([prs_to_review, ready_to_start, calls_to_confirm, desk_items,
-                            milestones_to_check, projects_to_close])
+                            milestones_to_check, projects_to_close, rules_to_decide])

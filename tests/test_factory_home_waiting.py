@@ -1,6 +1,6 @@
 """What waits for you on the factory home (TR-769): the `waiting_for_you` of GET /api/home.
 
-Six kinds, built from what the cell stores, oldest first: pull requests the reviewer passed,
+Six kinds (and the rule proposals of TR-1275), built from what the cell stores, oldest first: pull requests the reviewer passed,
 projects ready to hand to the crew, calls the crew made without you, questions and permission
 requests on the desk, and milestones whose tickets all merged. Each ends when the person
 answers it (or the work moves on), and nothing is kept for them. The same texts, action shapes
@@ -108,9 +108,9 @@ async def main():
         print("== an empty cell ==")
         h = await get_home()
         ck("nothing waits", h["waiting_for_you"] == [] and h["waiting_total"] == 0, h["waiting_for_you"])
-        ck("the six builders are registered once", [f.__name__ for f in fh.WAITING_BUILDERS] == [
+        ck("the builders are registered once", [f.__name__ for f in fh.WAITING_BUILDERS] == [
             "prs_to_review", "ready_to_start", "calls_to_confirm", "desk_items", "milestones_to_check",
-            "projects_to_close"],
+            "projects_to_close", "rules_to_decide"],
            [f.__name__ for f in fh.WAITING_BUILDERS])
 
         # project-x: two passed pull requests (one holds up a milestone), two that do not wait for
@@ -434,6 +434,39 @@ async def main():
         cu = [i for i in by_kind(await get_home())["permission"] if (i["project"] or {}).get("name") == "project-u"]
         ck("a crew station's request inside a project still cannot be limited to it",
            len(cu) == 1 and cu[0]["actions"][-1]["may_limit"] is False, cu)
+
+        print("== rule proposals (TR-1275) ==")
+        pr_ = project("project-r")
+        rp1 = store.upsert_rule_proposal("example-org/docs-site", "missing_test", pr_, "repo",
+                                         "Every change to the parser comes with a test.", ["t1"], ago(hours=3))
+        rp2 = store.upsert_rule_proposal("example-org/api", "no_log", None, "all",
+                                         "A fallback logs once.", [], ago(hours=1))
+        rp3 = store.upsert_rule_proposal("example-org/api", "decided", None, "all", "Already decided.", [], ago(hours=2))
+        store.decide_rule_proposal(rp3["id"], "accepted", None, now_utc())
+        rules = {i["id"]: i for i in by_kind(await get_home()).get("rule", [])}
+        ck("each open proposal is a rule item, a decided one is not",
+           sorted(rules) == sorted([f"rule:{rp1['id']}", f"rule:{rp2['id']}"]), sorted(rules))
+        r1 = rules.get(f"rule:{rp1['id']}", {})
+        ck("the row: label, the project as title, the rule as detail, who proposed it and when",
+           r1.get("label") == "Rule proposed" and r1.get("title") == "project-r"
+           and r1.get("detail") == "Every change to the parser comes with a test."
+           and r1.get("meta") == "Proposed by the crew, 3 hours ago" and r1.get("project", {}).get("id") == pr_
+           and r1.get("repo") == "example-org/docs-site" and r1.get("blocking") is False, r1)
+        ck("a proposal for every project says so and has no project",
+           rules.get(f"rule:{rp2['id']}", {}).get("title") == "Every project"
+           and rules.get(f"rule:{rp2['id']}", {}).get("project") is None, rules.get(f"rule:{rp2['id']}"))
+        ck("its one action is a primary link to the rules on Crew", all(i["actions"] == [
+            {"label": "Accept or reject", "primary": True, "href": "/crew#rules"}] for i in rules.values()),
+           [i["actions"] for i in rules.values()])
+        ck("a proposal about a project the person may not see is left out",
+           f"rule:{rp1['id']}" not in {i["id"] for i in fh.waiting_items(store, fx, now_utc(), {pr_})}
+           and f"rule:{rp2['id']}" in {i["id"] for i in fh.waiting_items(store, fx, now_utc(), {pr_})})
+        ck("rule is a kind the home knows", "rule" in fh.KINDS)
+        ck("the rule rows pass the words check", words.offenders_in(list(rules.values())) == [],
+           words.offenders_in(list(rules.values())))
+        store.decide_rule_proposal(rp1["id"], "rejected", None, now_utc())
+        store.decide_rule_proposal(rp2["id"], "accepted", None, now_utc())
+        ck("deciding them ends the items", "rule" not in by_kind(await get_home()))
 
         print("== the cost of a read ==")
         for i in range(50):
