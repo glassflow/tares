@@ -5,6 +5,8 @@
     python tests/ci_windows.py --list       print what would run (and what is skipped, and why), run nothing
     python tests/ci_windows.py --root DIR   a tree other than this checkout (test_ci_windows.py uses a fake one)
     python tests/ci_windows.py --timeout S  seconds a single test may take (default 600)
+    python tests/ci_windows.py --coverage-timeout S  seconds the parity coverage report may take (default twice --timeout:
+                                            it runs every scenario once, so it is far longer than a single test)
     python tests/ci_windows.py --floors     apply the per-test floors below (the Windows job passes it)
     python tests/ci_windows.py --shard N --of M   only the Nth of M slices (1-based) of the runs below; the Windows job
                                             runs M slices side by side so no slice nears the job's time limit
@@ -53,7 +55,8 @@ SKIP = {
 # runner against fake trees in a folder with a space and a non-ASCII letter. test_parity.py is left out: it takes
 # about 15 minutes, too much for the job, and the claude.exe launcher it checks is what every parity scenario
 # here already starts the fake Claude Code through (tests/test_crew_exe_launcher.py runs it on Windows).
-EXTRA = ["test_ci_windows.py"]
+# test_factory_setup.py (TR-1236) drives the guided setup form, which has a Windows keyboard path of its own.
+EXTRA = ["test_ci_windows.py", "test_factory_setup.py"]
 
 # The fewest checks a test may pass on Windows (TR-976, the TR-1066 review's F3). Each number is what the
 # Windows job counted when it was written; it only guards against a drop, so a test that gains checks needs no
@@ -88,6 +91,7 @@ FLOOR = {
     "test_crew_tidy_safety.py": 78,
     "test_crew_unicode_home.py": 8,
     "test_crew_watch_process.py": 47,
+    "test_crew_watch_restart.py": 20,
     "test_crew_watch_revive.py": 53,
 }
 
@@ -212,6 +216,7 @@ def pick(items, shard, of):
 
 def main(argv):
     root, timeout, only_list = HERE.parent, 600, False
+    coverage_timeout = None
     use_floors, extra_floors = False, {}
     shard, of = 1, 1
     args = list(argv)
@@ -223,6 +228,8 @@ def main(argv):
             root = Path(args.pop(0)).resolve()
         elif a == "--timeout" and args:
             timeout = int(args.pop(0))
+        elif a == "--coverage-timeout" and args:
+            coverage_timeout = int(args.pop(0))
         elif a == "--floors":
             use_floors = True
         elif a == "--shard" and args:
@@ -239,6 +246,8 @@ def main(argv):
     if not 1 <= shard <= of:
         print("ci_windows: --shard must be between 1 and --of")
         return 2
+    if coverage_timeout is None:
+        coverage_timeout = 2 * timeout
 
     missing = [p for p in REQUIRED if not (root / p).is_file()]
     to_run, skipped = plan_tests(root)
@@ -283,7 +292,7 @@ def main(argv):
         results.append(r)
 
     if shard == 1:
-        code, secs, out = run([sys.executable, str(root / "tests" / "factory" / "parity.py"), "--coverage"], root, timeout)
+        code, secs, out = run([sys.executable, str(root / "tests" / "factory" / "parity.py"), "--coverage"], root, coverage_timeout)
         r = Result("parity.py --coverage", code, secs, last_line(out), out, "coverage")
         show(r)
         results.append(r)

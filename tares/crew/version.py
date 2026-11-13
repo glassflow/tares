@@ -11,6 +11,7 @@ Standard library only (no duckdb, fastapi or tares.daemon), like the rest of tar
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -97,6 +98,27 @@ def plugin_min_version(plugin_root) -> str:
         return ""
 
 
+WINDOWS_UPGRADE_NOTE = ("On Windows an upgrade while a tares command is running can leave the install broken; "
+                        "if that happens, stop every tares process and run the same command again.")
+
+
+def on_windows() -> bool:
+    return os.name == "nt"
+
+
+def upgrade_advice(text: str, sentence: bool = False) -> str:
+    """The advice to upgrade or install tares. On Windows it first says to stop the crew, because an upgrade
+    while any tares command runs can leave the install broken (TR-1281); elsewhere `text` comes back as given.
+    `sentence` is for a full sentence, which starts with a capital."""
+    if not on_windows():
+        return text
+    lead = "stop the crew first (tares factory crew down), then "
+    body = text.rstrip(".")
+    if sentence:
+        lead, body = lead[0].upper() + lead[1:], body[:1].lower() + body[1:]
+    return f"{lead}{body}. {WINDOWS_UPGRADE_NOTE}"
+
+
 def check_plugin_compat(plugin_root) -> str:
     """One line when the installed tares is older than the plugin's `min_tares`, else ""."""
     try:
@@ -106,6 +128,6 @@ def check_plugin_compat(plugin_root) -> str:
         if need_key is None or have_key is None or have_key >= need_key:
             return ""
         return (f"This Tares plugin needs tares {needed} or newer, but tares {have} is installed. "
-                "Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.")
+                + upgrade_advice("Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.", sentence=True))
     except Exception:
         return ""

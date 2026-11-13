@@ -278,13 +278,22 @@ def _mcp(args: argparse.Namespace):
 
 def _login(args: argparse.Namespace):
     """Connect this machine to a Tares Cloud workspace through the browser (TR-490)."""
-    from .login import login
-    raise SystemExit(login(args.cloud, open_browser=not args.no_browser))
+    from .login import login, show
+    if args.show:
+        if args.cloud or args.no_browser:
+            msg = "tares login: --show only reads the saved login; it cannot be combined with --cloud or --no-browser."
+            if args.json:
+                from .crew import contract
+                contract.fail("usage", msg, contract.EXIT_USAGE)
+            print(msg, file=sys.stderr)
+            raise SystemExit(2)
+        raise SystemExit(show(json_out=args.json))
+    raise SystemExit(login(args.cloud, open_browser=not args.no_browser, json_out=args.json))
 
 
 def _logout(args: argparse.Namespace):
     from .login import logout
-    raise SystemExit(logout())
+    raise SystemExit(logout(json_out=args.json))
 
 
 def plugin_dir() -> Path:
@@ -411,8 +420,11 @@ def main():
     li.add_argument("--cloud", default="", help="the Tares Cloud console to sign in at (default "
                                                 "$TARES_CLOUD_URL or https://console.tares-glassflow.com)")
     li.add_argument("--no-browser", action="store_true", help="only print the address to open")
+    li.add_argument("--show", action="store_true", help="print the saved login (never its key) and whether the key works")
+    li.add_argument("--json", action="store_true", help="machine-readable output: one JSON document per line")
     li.set_defaults(func=_login)
     lo = sub.add_parser("logout", help="remove this machine's key from its workspace and forget the login")
+    lo.add_argument("--json", action="store_true", help="machine-readable output")
     lo.set_defaults(func=_logout)
 
     st = sub.add_parser("status", help="readiness checklist for a running instance, and the next step")

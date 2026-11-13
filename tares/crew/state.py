@@ -19,6 +19,18 @@ from . import perms
 from .errors import CrewError
 from .paths import CREW_NAME_RULE, CrewPaths
 
+def trust_keys(path: str) -> list:
+    """The keys Claude Code may file a folder's trust under in ~/.claude.json: the path as given and,
+    on Windows, with forward slashes, the way Claude Code writes them there (C:/Users/me/factory)."""
+    keys = [path]
+    if os.name == "nt":
+        for p in (path, os.path.normpath(path)):
+            k = p.replace("\\", "/")
+            if k not in keys:
+                keys.append(k)
+    return keys
+
+
 # ---------- JSON text the way jq prints it ----------
 
 
@@ -330,7 +342,7 @@ def _command_output(cmd, timeout):
         return None
     if r.returncode != 0:
         return None
-    return r.stdout.decode("utf-8", "replace").rstrip("\n")
+    return r.stdout.decode("utf-8", "replace").rstrip("\r\n")
 
 
 def ensure_crew_home(paths=None, templates=None, *, human_name=None, human_github=None, today=None) -> None:
@@ -346,8 +358,9 @@ def ensure_crew_home(paths=None, templates=None, *, human_name=None, human_githu
     tpl = Path(templates) if templates else kit_templates()
     if human_github is None:
         human_github = ""
-        if shutil.which("gh"):
-            human_github = _command_output(["gh", "api", "user", "-q", ".login"], 60) or ""
+        gh = shutil.which("gh")  # the full path: on Windows CreateProcess finds gh.exe only, never a gh.cmd on the PATH
+        if gh:
+            human_github = _command_output([gh, "api", "user", "-q", ".login"], 60) or ""
     if human_name is None:
         human_name = _command_output(["git", "config", "--global", "user.name"], 30)
         if human_name is None:

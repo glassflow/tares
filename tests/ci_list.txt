@@ -52,6 +52,7 @@ test_crew_import_without_tty
 test_crew_kit
 test_crew_launch
 test_crew_lifecycle
+test_crew_lifecycle_json
 test_crew_mcp_headers
 test_crew_pace
 test_crew_packaging
@@ -72,6 +73,7 @@ test_crew_unicode_home
 test_crew_views
 test_crew_watch_locks
 test_crew_watch_process
+test_crew_watch_restart
 test_crew_watch_revive
 test_crew_with_secrets
 test_crews_single
@@ -151,6 +153,7 @@ test_licence_cloud
 test_linear
 test_linear_write_scope
 test_login
+test_login_json
 test_login_keyring
 test_loki
 test_mcp_auth
@@ -204,6 +207,7 @@ test_review_post
 test_rius_rca
 test_run_results
 test_schedule_trigger
+test_schema_compat
 test_seed
 test_seed_new_cell_only
 test_services

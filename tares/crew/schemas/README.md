@@ -15,10 +15,15 @@ against them, and `tests/fixtures/crew_contract/` holds a sample of each.
 | `crew setup --questions` | one document | `setup_questions.json` |
 | `crew setup --answers <file> --json` | one document | `setup_answers.json` |
 | `settings <station>` | Claude Code's settings file, no `schema_version` | `settings.json` |
+| `crew watch --restart --json` | one document | `watch.json` |
+| `tares login --json` (not a factory command) | one document per line: `step: open`, then `step: done` | `login.json` |
+| `tares login --show [--json]` | one document | `login.json` |
+| `tares logout --json` | one document | `logout.json` |
+| `crew up --yes`, `crew down`, `crew halt`, `crew resume`, `crew freeze`, `crew unfreeze`, `crew update`, `crew restart`, and a station's `restart`, `revive`, `retire`, each with `--json` | one document | `result.json` |
 | `tidy --json` | nothing on success; the error shape on a refusal | `error.json` |
 | any of them, when it fails with `--json` | one document | `error.json` |
 
-A command run without `--json` prints its text, unchanged. `tidy --json` shapes failures only: on success it prints nothing on stdout, as
+A command run without `--json` prints its text, unchanged. For the commands of `result.json`, `notes` are the lines the text mode prints on stderr, for a person, not for parsing; with `--json` they are collected and sent in the one document when the command ends (`crew update` and `restart` can take minutes). `crew up --json` without `--yes` is `usage` (exit 2); with `--yes` it stops with `setup_needed` (exit 1) while a setup question is outstanding: read it with `crew setup --questions` and answer it with `crew setup --answers`. `tidy --json` shapes failures only: on success it prints nothing on stdout, as
 `tidy` does without it.
 
 `settings <station>` prints the Claude Code settings file a station launches with. Claude Code reads that file, so
@@ -34,7 +39,7 @@ its types from them.
 - stdout holds the JSON and nothing else: compact, UTF-8, one document per line, LF line ends, on every
   platform. Notes for a person (a station named twice, the crew on another Tares) stay on stderr.
 - Every document has `schema_version` as its first key. It is the number in `schema_version.json`. A change
-  that keeps old readers working (a new optional field) keeps the number; any other change raises it.
+  that keeps old readers working (a new optional field) keeps the number; any other change raises it. `tests/test_schema_compat.py` enforces this rule: it compares the schemas with those of the newest release tag and fails on a breaking change when the number was not raised. The check does not yet catch a name removed from `required` (a reader that relied on it being present); keep such a field unless you raise the number.
 - Callers ignore keys they do not know, and branch on `error.code`, never on `error.message`.
 
 ## Exit codes
@@ -46,8 +51,17 @@ its types from them.
 | 2 | A usage error or a refusal before the command ran: an unknown argument, a cursor that is not one, `events` without `--json`. The message is text on stderr; with `--json`, a usage error of a command that has JSON is the error shape. |
 
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
-`station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `tares_error`
-(a call to Tares failed). A bug with `--json` is `error` with the exception named.
+`station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `setup_needed`, `tares_error`
+(a call to Tares failed), `not_signed_in` (no Tares is configured: no saved `tares login`, no address set, and nothing at
+the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
+
+## login and logout
+
+`tares login --json` prints one document per line (like `events`): first `{"login": {"step": "open", "url", "expires_in"}}`
+as soon as the sign-in page address is ready, then `{"login": {"step": "done", ...}}` once the key is saved. The key
+is never printed, on stdout or stderr. A failure is the error shape and exit 1; notes for a person go to stderr.
+`tares login --show --json` and `tares logout --json` print one document. `--show` cannot be combined with
+`--cloud` or `--no-browser` (a usage error, exit 2).
 
 ## events
 

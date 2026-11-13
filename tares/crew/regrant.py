@@ -214,7 +214,7 @@ def step(paths: CrewPaths, env=None) -> None:
                     continue
                 cwd = state.stations_get(station, "cwd", paths=paths) or paths.raw
                 sid = state.stations_get(station, "id", paths=paths)
-                if not any(not claude.gone(r) and ((r.get("name") == station and r.get("cwd") == cwd)
+                if not any(not claude.gone(r) and ((r.get("name") == station and claude.same_dir(r.get("cwd"), cwd))
                                                    or (sid != "" and r.get("id") == sid)) for r in agents):
                     continue   # stopped: the revive step starts it with fresh settings
                 if watch_revive.stuck_on_context(paths, binary, station, agents):
