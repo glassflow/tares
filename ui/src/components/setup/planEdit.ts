@@ -231,11 +231,6 @@ export function useFieldChoices(watches: PlanWatch[], connectors?: Record<string
   return out;
 }
 
-/** Focus the element with this id once React has drawn it (closing an editor hands focus back to
- *  the button that opened it). */
-export const focusSoon = (id: string) =>
-  window.requestAnimationFrame(() => document.getElementById(id)?.focus());
-
 /** A name a person knows for an MCP server's address: GitHub for api.githubcopilot.com, else
  *  the host. */
 const KNOWN_HOSTS: [RegExp, string][] = [

@@ -593,10 +593,15 @@ async function waitFor(url, tries = 100) {
       ck("every emoji is a named button", await p.locator("[data-testid=icon-option]:not([aria-label])").count() === 0);
       ck("no Remove while there is no icon", (await T2("icon-remove").count()) === 0);
       await checkWords(p, ck, "icon: picker open");
-      await p.keyboard.press("Escape");
-      await T2("icon-picker").waitFor({ state: "detached" });
+      // Escape and the focus read in one go, in the page: focus must be back on the control in the
+      // same tick the picker closes, not a frame later (TR-1311)
+      const focusNow = await p.evaluate(async () => {
+        document.querySelector("[data-testid=icon-search]").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await Promise.resolve(); await Promise.resolve();
+        return document.activeElement?.getAttribute("data-testid") || document.activeElement?.tagName;
+      });
       ck("Escape closes the picker", (await T2("icon-picker").count()) === 0);
-      ck("and focus goes back to the control", await add.evaluate((e) => e === document.activeElement));
+      ck("and focus goes back to the control", focusNow === "project-add-icon", focusNow);
       ck("Escape saved nothing", (await iconNow()) === null);
 
       await add.click();
