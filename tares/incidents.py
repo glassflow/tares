@@ -193,10 +193,11 @@ def resolve(store, incident_id: str, by_id: str | None, by_name: str | None,
         return None
     if inc["state"] == "resolved":
         return inc
-    out = store.set_incident_state(incident_id, "resolved", by_id, by_name, via,
-                                   resolution="person")
+    # The notes first: a reader that sees "resolved" must already see them handled (TR-1335).
     for note in store.incident_notes(incident_id):
         store.set_run_handled(note["run_id"], by_name or by_id or "console")
+    out = store.set_incident_state(incident_id, "resolved", by_id, by_name, via,
+                                   resolution="person")
     _changed(store, out, via)
     return out
 
