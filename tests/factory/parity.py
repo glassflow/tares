@@ -10392,6 +10392,10 @@ PACE_FULL_HOOK = ("import os, urllib.request\n"
                   "data=%r, headers={'Content-Type': 'application/json'}, method='POST'), timeout=30).read()\n"
                   % json.dumps(_pc_doc(100, 10)).encode("utf-8"))
 
+# The limit fills 2.5 s into the step and the station is free 3.5 s in. A Windows process start takes longer than the
+# gap between those two, so there the timers are 3 times as long (TR-1228).
+_PACE_SLOW = 3 if sys.platform == "win32" else 1
+
 _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is restarted onto the newer Claude Code; slow, not full: "
                        "crew update moves them and says to re-arm at 45 minutes; it fills while crew update waits: it stops there",
        [Step(["crew", "watch", "--once"], env={}, after=_st_after,                                            # 0
@@ -10399,8 +10403,8 @@ _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is res
              run_before=_st_run(_st_set(pace=True, idle_wake=False), _st_plan(10, 10))),
         _rw(run_before=_st_run(_st_mark("filled"), _st_plan(90, 10))), _rw(), _rw(),                          # 1-3
         _ru(before=_cc_installed("1.11.2")),                                                                  # 4
-        _ru(before=_cb_all(_cc_installed("1.11.3"), _cb_idle_later(_R, 3.5)), env={}, wait="30",              # 5
-            run_before=_st_run(_st_plan(10, 10), _st_plan_later(2.5, 100, 10)))],
+        _ru(before=_cb_all(_cc_installed("1.11.3"), _cb_idle_later(_R, 3.5 * _PACE_SLOW)), env={}, wait="30",  # 5
+            run_before=_st_run(_st_plan(10, 10), _st_plan_later(2.5 * _PACE_SLOW, 100, 10)))],
        [("the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
          lambda r: r.marks["filled"]["at_limit"] is True and not _st_line(r, 0, r"restarting .* on 1\.11\.1") and r.snap(0)["launched"] == []),
         ("below the limit, crew update moves them",
@@ -10414,8 +10418,7 @@ _st_cc("cc_pace_slow", "the limit fills in the middle of a round: nothing is res
        ["the limit fills in the middle of the round: nothing is restarted onto the newer Claude Code",
         "below the limit, crew update moves them", "and the restart says to re-arm at 45 minutes",
         "the limit fills while crew update waits: it stops, says until when, and restarts nothing more"],
-       _cc_setup(have="1.11.0", installed="1.11.1"),
-       not_windows="the limit fills on timers of 2.5 and 3.5 seconds, and a Windows process start takes longer than the gap between them")
+       _cc_setup(have="1.11.0", installed="1.11.1"))
 
 
 # A helper follows its station onto a new Claude Code, but its task lives only in its spawn prompt, so it is never started in a new
