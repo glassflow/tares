@@ -43,6 +43,9 @@ def breaking(old, new, path="$"):
             found.append((f"{path}.{name}", "property removed"))
         else:
             found += breaking(sub, np_[name], f"{path}.{name}")
+    oa, na = old.get("additionalProperties"), new.get("additionalProperties")
+    if isinstance(oa, dict) and isinstance(na, dict):
+        found += breaking(oa, na, f"{path}.*")
     if "items" in old and "items" in new:
         found += breaking(old["items"], new["items"], f"{path}[]")
     elif "items" in old:
@@ -64,6 +67,12 @@ def breaking(old, new, path="$"):
     return found
 
 
+def raised(old, new):
+    """True only when schema_version went up between two integers; a lowered or odd value is not a raise."""
+    ints = all(isinstance(v, int) and not isinstance(v, bool) for v in (old, new))
+    return ints and new > old
+
+
 # the comparison itself, on small cases
 _base = {"type": "object", "required": ["a"], "properties": {"a": {"type": "string"}, "b": {"type": "integer"}}}
 assert breaking(_base, {**_base, "properties": {"a": {"type": "string"}}}) == [("$.b", "property removed")]
@@ -72,6 +81,12 @@ assert breaking(_base, {**_base, "required": ["a", "b"]}) == [("$", "added to re
 assert breaking(_base, {**_base, "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}})[0][0] == "$.a"
 assert breaking({"enum": ["x", "y"]}, {"enum": ["x"]}) == [("$", "enum value removed: ['y']")]
 assert breaking({"enum": ["x"]}, {"enum": ["x", "y"]}) == []
+assert breaking({"additionalProperties": {"type": "boolean"}}, {"additionalProperties": {"type": "string"}})[0][0] == "$.*"
+assert breaking({"additionalProperties": {"type": "boolean"}}, {"additionalProperties": {"type": "boolean"}}) == []
+assert breaking({"$defs": {"d": {"type": "string"}}}, {"$defs": {"d": {"type": "integer"}}})[0][0] == "$/$defs/d"
+assert breaking({"$defs": {"d": {}}}, {}) == [("$/$defs/d", "definition removed")]
+assert breaking({"anyOf": [{"type": "string"}, {"type": "null"}]}, {"anyOf": [{"type": "string"}]}) == [("$/anyOf/1", "branch removed")]
+assert raised(1, 2) and not raised(1, 1) and not raised(1, 0) and not raised(1, "2") and not raised(1, None) and not raised(True, 2)
 assert breaking({"items": {"properties": {"k": {}}}}, {"items": {"properties": {}}}) == [("$[].k", "property removed")]
 
 
@@ -118,7 +133,7 @@ def main():
     if not findings:
         print("no breaking change")
         return 0
-    if new_version is not None and old_version is not None and new_version != old_version:
+    if raised(old_version, new_version):
         for f, p, what in findings:
             print(f"  accepted (schema_version raised): {f} {p}: {what}")
         return 0
