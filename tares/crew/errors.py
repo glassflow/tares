@@ -17,6 +17,13 @@ class CrewError(Exception):
         return f"{ME}: {self}"
 
 
+class NotSignedInError(CrewError):
+    """No Tares to talk to and none configured: no saved `tares login`, no address in the environment or
+    crew.json, and nothing answers at the local default."""
+
+    code = "not_signed_in"
+
+
 class StationLockedError(CrewError):
     """Another live factory command holds the station's lock."""
 
