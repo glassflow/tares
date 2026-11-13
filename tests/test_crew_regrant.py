@@ -132,14 +132,14 @@ class StepClient:
         pass
 
 
-def run_step(round_, stations):
+def run_step(round_, stations, listed_cwd="/w", recorded_cwd="/w", same_id=True):
     """regrant.step over `stations` (all running, between turns, due), with the revive step's `round_` as its last."""
     acted = []
     saved = (claude.claude_bin, claude.active_json, claude.between_turns, claude.gone, regrant.TaresClient,
              regrant.regrant_due, regrant.regrant_station, watch_revive.stuck_on_context, watch_revive.last)
     try:
         claude.claude_bin = lambda env: "claude"
-        claude.active_json = lambda binary: [{"id": f"id-{s}", "name": s, "cwd": "/w"} for s in stations]
+        claude.active_json = lambda binary: [{"id": f"id-{s}" if same_id else f"new-{s}", "name": s, "cwd": listed_cwd} for s in stations]
         claude.between_turns = lambda *a, **k: True
         claude.gone = lambda row: False
         regrant.TaresClient = lambda paths, env: StepClient()
@@ -147,7 +147,7 @@ def run_step(round_, stations):
         regrant.regrant_station = lambda paths, station, **k: acted.append(station)
         watch_revive.stuck_on_context = lambda *a, **k: False
         watch_revive.last = round_
-        rows = {s: {"status": "active", "role": "reviewer", "cwd": "/w", "id": f"id-{s}"} for s in stations}
+        rows = {s: {"status": "active", "role": "reviewer", "cwd": recorded_cwd, "id": f"id-{s}"} for s in stations}
         regrant.step(crew(rows), env={})
     finally:
         (claude.claude_bin, claude.active_json, claude.between_turns, claude.gone, regrant.TaresClient,
@@ -164,6 +164,15 @@ check("a station the revive step started this round is left alone, the others go
 r = watch_revive.Round()
 r.unread = True
 check("a round whose session list the revive step could not read restarts nothing", run_step(r, ["a", "b"]) == [])
+
+# TR-1305: a running station is found by its folder spelled another way (a trailing separator here; on Windows
+# also the slash and the letter case), when the session list's id is not the recorded one
+check("a station whose listed folder has a trailing separator is running, so it is restarted",
+      run_step(watch_revive.Round(), ["a"], listed_cwd="/w/", same_id=False) == ["a"])
+check("a station whose recorded folder has a trailing separator is running too",
+      run_step(watch_revive.Round(), ["a"], recorded_cwd="/w/", same_id=False) == ["a"])
+check("a session in another folder under another id is not the station: nothing is restarted",
+      run_step(watch_revive.Round(), ["a"], listed_cwd="/w/x", same_id=False) == [])
 
 # the steps after this one leave a restarted station alone this round (bash's elif chain; TR-961 idle wake reads it)
 r = watch_revive.Round()

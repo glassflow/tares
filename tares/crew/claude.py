@@ -360,11 +360,21 @@ def _jq_order(v):
     return (5 if isinstance(v, list) else 6, 0)
 
 
+def same_dir(a, b, pathmod=os.path) -> bool:
+    """True when two folders are the same place as the filesystem sees it: slash direction, a trailing separator
+    and (on Windows) letter case do not matter. A session lists its folder as the OS wrote it
+    (`C:\\Users\\me\\shop`) while the crew's record can hold `C:/Users/me/shop`; the raw strings called that a
+    different folder and a live station "stopped". `pathmod` is for tests (ntpath on any machine)."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    return pathmod.normcase(pathmod.normpath(a)) == pathmod.normcase(pathmod.normpath(b))
+
+
 def find_live_job(name: str, cwd: str, claude=None) -> str:
     """The id of the newest live session with exactly this name in cwd ("" for any folder); "" when there is
     none. Raises SessionListUnreadableError where bash prints nothing and exits non-zero."""
     rows = [r for r in active_json(claude)
-            if r.get("name") == name and (cwd == "" or r.get("cwd") == cwd) and not gone(r)]
+            if r.get("name") == name and (cwd == "" or same_dir(r.get("cwd"), cwd)) and not gone(r)]
     rows.sort(key=lambda r: _jq_order(r.get("startedAt")))
     return jq_raw(_val(rows[-1].get("id"), "")) if rows else ""
 
@@ -381,7 +391,7 @@ def is_alive(station: str, cwd: str = "", claude=None, paths=None) -> bool:
         rows = active_json(claude)
     except SessionListUnreadableError as e:
         raise SessionListUnreadableError(f"{UNREAD}; not guessing whether {station} runs") from e
-    return any(not gone(r) and ((r.get("name") == station and r.get("cwd") == cwd)
+    return any(not gone(r) and ((r.get("name") == station and same_dir(r.get("cwd"), cwd))
                                 or (sid != "" and r.get("id") == sid)) for r in rows)
 
 
