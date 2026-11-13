@@ -2,7 +2,8 @@
 
 The newest release tag reachable from HEAD is the baseline. A change is breaking when a schema file is gone, a name is
 gone from an object's properties, a property's type changed, a name was added to required, a name was removed from required, a const changed, or a value left an enum.
-Anything else (a new optional property, a new file, a new enum value, a new description) keeps old readers working.
+anyOf, oneOf and allOf branches are paired by position, so a branch inserted in the middle reads as a change:
+append a new branch at the end. Anything else (a new optional property, a new file, a new enum value, a new description) keeps old readers working.
 """
 import json
 import os
@@ -104,7 +105,7 @@ assert breaking({"const": 1}, {}) == []
 
 
 def git(*args):
-    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def newest_tag():
@@ -124,7 +125,11 @@ def main():
     if not tag:
         print("no release tag reachable")
         return 1 if os.environ.get("CI") else 0
-    listed = git("ls-tree", "-r", "-z", "--name-only", tag, SCHEMAS + "/").stdout.split("\0")
+    tree = git("ls-tree", "-r", "-z", "--name-only", tag, SCHEMAS + "/")
+    if tree.returncode != 0:
+        print(f"FAIL could not list the schema files of {tag}")
+        return 1
+    listed = tree.stdout.split("\0")
     prefix = SCHEMAS + "/"
     names = [n[len(prefix):] for n in listed if n.startswith(prefix) and n.endswith(".json")]
     findings, ok, unreadable = [], 0, False
@@ -152,14 +157,18 @@ def main():
         ok += 1
     print(f"baseline {tag}: {ok} schema files compared, schema_version {old_version} -> {new_version}")
     if not findings:
+        if unreadable:
+            return 1
         print("no breaking change")
-        return 1 if unreadable else 0
+        return 0
     if raised(old_version, new_version) and not unreadable:
         for f, p, what in findings:
             print(f"  accepted (schema_version raised): {f} {p}: {what}")
         return 0
     for f, p, what in findings:
         print(f"FAIL {f} {p}: {what}: raise schema_version or keep the old shape")
+    if unreadable and raised(old_version, new_version):
+        print("schema_version was raised, but a file could not be read, so nothing was compared for it")
     return 1
 
 
