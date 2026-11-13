@@ -10,6 +10,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 - `tests/test_schema_compat.py` fails when a change to the crew's JSON schemas would break a reader of the last release and `schema_version` was not raised (TR-1280).
+- `tares factory crew watch --restart` stops the background watch and starts a new one, and touches no station (TR-1279). `--if-running` does nothing when no watch runs, `--only-under <folder>` leaves a watch that runs from a program outside the folder alone, and `--json` prints `{"schema_version":1,"watch":{"action":...}}` (`watch.json`). It lets the desktop app move the watch onto a new engine version.
 
 ### Fixed
 - On Windows, two crew commands or threads writing an event at the same moment could mix their lines or lose one in `events.jsonl` (TR-1229). Each event is now written under a lock, so every line stays whole and none is dropped. macOS and Linux were not affected.
