@@ -93,6 +93,10 @@ Opus 5.5 · context 52% of 1.0M · 5h 33% · week 6%
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

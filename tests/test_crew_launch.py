@@ -1,6 +1,6 @@
 """Building and starting a station in Python (tares/crew/launch.py, TR-953).
 
-The bash crew is gone (TR-975), so this test no longer compares with it. Part 1: the small rules (model check, levels, the parent's role, grants into allow rules), the
+The bash crew is gone (TR-975), so this test no longer compares with it. Part 1: the small rules (model check, levels, the parent's role), the
 quoting of the status line command on Mac and on Windows (the Windows form is tested without Windows), the
 cksum that fingerprints the kit, the kit folder, the two notes that are not ported yet, the idle wake, and what
 a started session is given (its environment holds no key, its command line holds no token).
@@ -105,19 +105,6 @@ for value, want, speaks in ((None, "200000", False), (100000, "150000", True), (
     said.clear()
     got = L.compact_window(paths, said.append)
     ck(f"compact_window: {value!r} gives {want}{' and says so' if speaks else ''}", got == want and bool(said) == speaks, f"{got!r} {said}")
-
-print("grants into allow rules")
-text = ('- "restart staging" (2026-01-02)\n@project - "push to main on Fridays" (2026-02-03)\n'
-        '* 2026-03-04: deploy the docs\n2026-03-05 - tidy the cache\n- no date at all\nnot a grant\n- ""\n'
-        '- "dropped, the last line has no newline" (2026-04-05)')
-rules = L.grant_rules(text, "Links App", "Pat")
-ck("six grants are read, the unterminated last line is dropped (as bash's read loop drops it)",
-   len(rules) == 6 and not any("dropped" in r for r in rules), str(len(rules)))
-ck("a quoted grant keeps the words and the date",
-   'granted this on 2026-01-02 for all projects, in their own words: "restart staging". Acting' in rules[0], rules[0])
-ck("an @project grant says which project", "for project Links App" in rules[1], rules[1])
-ck("a grant without a date says so", any("(undated)" in r for r in rules))
-ck("no grants, no rules", L.grant_rules("", "p", "Pat") == [])
 
 print("the status line command")
 HEAD = ["tares", "hook", "statusline", "--plugin-root"]

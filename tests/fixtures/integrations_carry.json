@@ -181,14 +181,22 @@
       "slot": "monitoring"
     },
     {
-      "available": [],
+      "available": [
+        {
+          "allowed": true,
+          "ee": false,
+          "name": "tares",
+          "settings_schema": [],
+          "title": "Tares guardrails"
+        }
+      ],
       "choice": null,
       "effective": {
         "integration": "tares",
         "reason": "",
         "settings": {},
         "source": "default",
-        "title": "tares"
+        "title": "Tares guardrails"
       },
       "slot": "guardrails"
     },
@@ -249,7 +257,7 @@
           "reason": "",
           "slot": "guardrails",
           "source": "default",
-          "title": "tares"
+          "title": "Tares guardrails"
         },
         {
           "integration": "claude-code",
@@ -303,7 +311,7 @@
           "reason": "",
           "slot": "guardrails",
           "source": "default",
-          "title": "tares"
+          "title": "Tares guardrails"
         },
         {
           "integration": "claude-code",
@@ -357,7 +365,7 @@
           "reason": "",
           "slot": "guardrails",
           "source": "default",
-          "title": "tares"
+          "title": "Tares guardrails"
         },
         {
           "integration": "claude-code",
@@ -411,7 +419,7 @@
           "reason": "",
           "slot": "guardrails",
           "source": "default",
-          "title": "tares"
+          "title": "Tares guardrails"
         },
         {
           "integration": "claude-code",

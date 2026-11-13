@@ -17,6 +17,8 @@ test_budget_period
 test_builder_flow
 test_catalog_sync
 test_challenger_workflow
+test_changelog_collect
+test_check_changelog
 test_check_ledger
 test_ci_check
 test_ci_e2e
@@ -46,6 +48,7 @@ test_crew_guard_hook
 test_crew_heavy
 test_crew_hooks
 test_crew_idle_wake
+test_crew_import_without_tty
 test_crew_kit
 test_crew_launch
 test_crew_lifecycle
@@ -56,6 +59,7 @@ test_crew_packaging
 test_crew_person
 test_crew_readings
 test_crew_regrant
+test_crew_rules
 test_crew_scratch_home
 test_crew_session
 test_crew_session_start
@@ -74,6 +78,7 @@ test_crew_watch_revive
 test_crew_with_secrets
 test_crews_single
 test_decision_answers
+test_default_rules_in_sync
 test_degraded
 test_delete_cascade
 test_docs
@@ -120,10 +125,13 @@ test_github_credentials
 test_github_tickets
 test_goal_first
 test_grants_single
+test_guardrail_pairs
+test_guardrail_rules
 test_handoffs
 test_handover_single
 test_homebrew_formula
 test_hook_start
+test_hooks
 test_hooks_json
 test_host
 test_http_poll
@@ -143,6 +151,7 @@ test_licence
 test_licence_api
 test_licence_cloud
 test_linear
+test_linear_write_scope
 test_login
 test_login_json
 test_login_keyring
@@ -191,8 +200,10 @@ test_push_wins
 test_rca_callback_anchor
 test_recording_person
 test_release_block
+test_release_changelog
 test_resources
 test_review_gate
+test_review_post
 test_rius_rca
 test_run_results
 test_schedule_trigger

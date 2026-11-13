@@ -62,7 +62,7 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
+from . import claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -70,7 +70,7 @@ from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
-from .integrations import registry as integrations_registry, tickets as _tickets_integ
+from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -247,7 +247,7 @@ UI_DIST = _ui_dist()
 # What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
 # cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
 # launch_spec, recall). A daemon that could not start lists none.
-CAPABILITIES = ["integrations", "merge_queue"]
+CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs"]
 
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
@@ -755,6 +755,7 @@ def make_app() -> FastAPI:
     # the interactive API reference lives under /api so /docs is the console's Docs and memory page
     app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
+    integrations_hooks.bind(store)   # the guardrail hooks resolve a project's guardrails from it
     app.state.runtime = runtime
     app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
@@ -792,7 +793,7 @@ def make_app() -> FastAPI:
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke|decline))?$")
     _REPLY_WRITE = re.compile(r"^/api/desk/[^/]+/reply$")
     _PROJECT_INTEGRATION = re.compile(
-        r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks)$")
+        r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks|guardrails/pairs(/[^/]+)?)$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
 
     def _required_scope(method: str, path: str) -> str | None:
@@ -823,7 +824,7 @@ def make_app() -> FastAPI:
                               # the handler decides by the credential's person
         if method != "GET" and _PROJECT_INTEGRATION.match(path):
             return "ingest"   # a project's own integration choice and its test (TR-842), and
-                              # its required checks (TR-854): an admin or the project's lead;
+                              # its required checks (TR-854) and its guardrail pairs (TR-863): an admin or the project's lead;
                               # the handler decides, it needs the credential's person. A read
                               # key is refused here
         if method == "PATCH" and path.startswith("/api/people/"):
@@ -6220,6 +6221,7 @@ def make_app() -> FastAPI:
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)
+    guardrails_api.register(app, store, h)
     project_secrets.register(app, store, h)   # TR-775
 
     @app.get("/api/home")

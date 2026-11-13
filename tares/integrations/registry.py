@@ -44,6 +44,7 @@ BUILTINS: list[str] = [
     "tares.integrations.builtin.review_tares:TaresReview",
     "tares.integrations.builtin.ci_github:GithubCI",
     "tares.integrations.builtin.ci_local:LocalCI",
+    "tares.integrations.builtin.guardrails_tares:TaresGuardrails",
 ]
 
 _loaded: dict[tuple[str, str], type[Integration]] | None = None

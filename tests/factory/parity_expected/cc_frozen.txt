@@ -454,6 +454,12 @@ tares factory: crew-orchestrator runs an older version of the plugin; restarting
 {"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-orchestrator"}
 == file crew/kit-checkout ==
 <TMP>/kit/claude-plugin
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

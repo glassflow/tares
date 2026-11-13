@@ -360,13 +360,13 @@ class TaresClient:
 
     # -- calls --
 
-    def tares_http(self, method: str, path: str, body=None) -> str:
+    def tares_http(self, method: str, path: str, body=None, headers: dict | None = None) -> str:
         """A call to Tares; the answer's body. `body` is sent as is when it is text or bytes, else as
         compact JSON. The key goes in the Authorization header, from memory. A status of 400 or more, or no
         answer, raises TaresHTTPError with curl's text. 15 seconds at most."""
         if not self.tares:
             self.tares = self.tares_url()
-        headers = {"Accept": "application/json", **self._auth(self.tares_token())}
+        headers = {"Accept": "application/json", **self._auth(self.tares_token()), **(headers or {})}
         content = None
         if body is not None:
             headers["Content-Type"] = "application/json"

@@ -660,6 +660,12 @@ exit: 0
 {"at": "<TS>", "detail": "00000007", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000007", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "liveness: wake 1 with nothing pending", "event": "idle_wake", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

@@ -248,8 +248,8 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
         sid = _tsv(row.get("id"))
         if not sid:
             continue
-        # The folder as Claude Code writes it, not as jq @tsv prints it: bash compares two @tsv-escaped texts, so a
-        # backslash path (Windows) matches there; here the repo path from Tares is raw, so cwd must be raw too (TR-1167).
+        # The folder as Claude Code writes it, not as jq @tsv prints it (TR-1167). Compared with the recorded one
+        # through claude.same_dir, so `C:\x\shop` and `C:/x/shop` are one folder on Windows (TR-1308).
         session, cwd = _tsv(row.get("sessionId")), _text(row.get("cwd")) if row.get("cwd") is not None else ""
         # A second live session under a recorded live station is a duplicate for status to show, not a replacement.
         recorded = state.stations_get(name, "id", paths=paths)
@@ -258,7 +258,7 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
         project = repo = ""
         if name in (f"{crew}-orchestrator", f"{crew}-reviewer", f"{crew}-releaser"):
             role = name[len(crew) + 1:]
-            if cwd != paths.raw:
+            if not claude.same_dir(cwd, paths.raw):
                 continue
         elif "-build-" in name:
             role, repo = "builder", cwd
@@ -266,7 +266,8 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
             if rows is None:
                 rows = client.project_repo_rows()
             for pname, prepo in rows:
-                if prepo == cwd and name.startswith(state.builder_name(state.slugify(_text(pname)), "", paths)):
+                mine = state.builder_name(state.slugify(_text(pname)), "", paths)
+                if claude.same_dir(prepo, cwd) and name.startswith(mine):
                     project = _text(pname)
                     break
             if not project:

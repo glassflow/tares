@@ -740,6 +740,14 @@ exit: 0
 {"at": "<TS>", "detail": "00000006", "event": "started", "station": "links-app-build-m1"}
 {"at": "<TS>", "detail": "00000006", "event": "revived", "station": "links-app-build-m1"}
 {"at": "<TS>", "detail": "work: T1 (CI failed)", "event": "idle_wake", "station": "links-app-build-m1"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/links-app-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

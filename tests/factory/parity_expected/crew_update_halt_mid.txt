@@ -61,6 +61,8 @@ tares factory: the crew was halted; nothing more was restarted (tares factory cr
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000001", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "2.1.200", "event": "claude-updated", "station": "crew-reviewer"}
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.grants ==
 
 == file crew/stations/crew-reviewer.settings.json ==

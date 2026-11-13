@@ -211,6 +211,16 @@ tares factory: crew-reviewer has new permissions from Tares; restarting it with 
 {"at": "<TS>", "detail": "0000000a", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "0000000a", "event": "revived", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "2727157353", "event": "regranted", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/shop-build-m1-e2e.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/shop-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/shop-build-m2.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-orchestrator.settings.json ==

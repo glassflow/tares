@@ -62,6 +62,8 @@ exit: 0
 {"at": "<TS>", "detail": "", "event": "thrashing", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000001", "event": "restarted-fresh", "station": "crew-orchestrator"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

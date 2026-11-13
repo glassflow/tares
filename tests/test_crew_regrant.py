@@ -207,13 +207,13 @@ class RestartClient(StepClient):
 def run_failing_restart(error):
     paths = crew({"s": {"grants": str(grants_sum(A)), "sessionId": "abc", "status": "active"}})
     client = RestartClient(A + B)
-    saved = (regrant.TaresClient, claude.between_turns, launch._ccfg_or, launch.grant_rules, lifecycle.restart,
+    saved = (regrant.TaresClient, claude.between_turns, launch._ccfg_or, regrant._new_rules, lifecycle.restart,
              lifecycle.rearm_text)
     try:
         regrant.TaresClient = lambda p, e: client
         claude.between_turns = lambda *a, **k: True
         launch._ccfg_or = lambda *a, **k: "Kiran"
-        launch.grant_rules = lambda *a, **k: ["may merge"]
+        regrant._new_rules = lambda *a, **k: ["may merge"]
         lifecycle.rearm_text = lambda c: ""
 
         def boom(*a, **k):
@@ -221,7 +221,7 @@ def run_failing_restart(error):
         lifecycle.restart = boom
         regrant.regrant_station(paths, "s", claude_bin="claude", env={})
     finally:
-        (regrant.TaresClient, claude.between_turns, launch._ccfg_or, launch.grant_rules, lifecycle.restart,
+        (regrant.TaresClient, claude.between_turns, launch._ccfg_or, regrant._new_rules, lifecycle.restart,
          lifecycle.rearm_text) = saved
     return paths, client
 
