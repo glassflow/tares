@@ -12,6 +12,7 @@ where the time goes.
 
 Run: .venv/bin/python tests/test_crew_startup_time.py
 """
+import http.server
 import json
 import os
 import shutil
@@ -19,6 +20,7 @@ import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -57,10 +59,29 @@ ENV = fake_crew_env(T)
 ENV["PYTHONPATH"] = str(ROOT)
 ENV.pop("PYTHONSTARTUP", None)
 # The roster looks for sessions someone has open by reading every process's command line. That costs the machine's
-# process count (2 s of 2.6 s on a Windows runner), which says nothing about the engine, so the test hands the engine
-# an empty process list instead (the hook a suite's fake ps uses).
+# process count, which says nothing about the engine, so the test hands the engine an empty process list instead
+# (the hook a suite's fake ps uses).
 (T / "fake-ps").mkdir()
 ENV["TARES_FAKE_PS_DIR"] = str(T / "fake-ps")
+
+# The roster asks once whether Tares answers (/health), and a refused connect to the throwaway crew's closed port takes
+# 2 s on Windows (the profile of a CI run: socket.connect, 2.000 s of 2.6 s) where Linux and macOS refuse at once. That
+# wait says nothing about the engine, so on Windows a local stand-in answers /health and the roster gets its answer
+# at once. Elsewhere the closed port stays, as the limits were measured with it.
+if os.name == "nt":
+    class _Health(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    _srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Health)
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    ENV["TARESD_URL"] = f"http://127.0.0.1:{_srv.server_address[1]}"
 
 # what `tares factory roster` does, from the interpreter up (the installed `tares` is this same entry point)
 FACTORY = [sys.executable, "-c", "import sys; sys.argv = ['tares', 'factory'] + sys.argv[1:]; from tares.cli import main; main()", "roster"]
