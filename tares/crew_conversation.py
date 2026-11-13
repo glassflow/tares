@@ -100,12 +100,40 @@ def _plan(todos: list) -> str | None:
     return _one_line(line)
 
 
+def _int(v) -> int | None:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+
+
+def _lines(inp: dict) -> str:
+    """A Read call's line range: "lines 84-96", "from line 84", "lines 1-160"; empty for the whole file."""
+    start, count = _int(inp.get("offset")), _int(inp.get("limit"))
+    if count:
+        first = start or 1
+        return f"lines {first}-{first + count - 1}"
+    return f"from line {start}" if start else ""
+
+
+def _first_line(v: str) -> str:
+    return next((ln for ln in v.splitlines() if ln.strip()), "")
+
+
 def summary(name: str, inp) -> str:
     """One line about a call: its command, its file, its pattern... else the start of its input.
 
-    A Bash call says what it does in its description, so that comes before the command; a TodoWrite call
-    counts the steps done (TR-1317)."""
+    The most common calls say what they did (TR-1317): a Bash call its description before its command, a
+    TodoWrite call the steps done, a SendMessage its summary or first line (the header names who it went
+    to), a Read call its file and line range, a Grep or Glob call its pattern and where it looked."""
     if isinstance(inp, dict):
+        if name == "SendMessage":
+            said = str(inp.get("summary") or "").strip() or _first_line(str(inp.get("message") or ""))
+            if said.strip():
+                return _one_line(said)
+        if name == "Read" and isinstance(inp.get("file_path"), str) and inp["file_path"].strip():
+            lines = _lines(inp)
+            return _one_line(f"{inp['file_path']} · {lines}" if lines else inp["file_path"])
+        if name in ("Grep", "Glob") and isinstance(inp.get("pattern"), str) and inp["pattern"].strip():
+            where = next((str(inp[k]) for k in ("path", "glob") if isinstance(inp.get(k), str) and inp[k].strip()), "")
+            return _one_line(f"{inp['pattern']} in {where}" if where else inp["pattern"])
         if name == "Bash" and isinstance(inp.get("description"), str) and inp["description"].strip():
             return _one_line(inp["description"])
         if name == "TodoWrite" and isinstance(inp.get("todos"), list):

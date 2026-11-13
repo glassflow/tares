@@ -198,8 +198,21 @@ async def main():
     ck("an Agent call reads its description, not its brief",
        cc.summary("Agent", {"description": "Find the views", "subagent_type": "Explore", "prompt": "Search ui/src"})
        == "Find the views")
+    ck("a message says its summary when it has one, else its first line",
+       cc.summary("SendMessage", {"to": "crew-reviewer", "summary": "PR ready", "message": "PR #671 is ready.\n\n- more"}) == "PR ready"
+       and cc.summary("SendMessage", {"to": "crew-reviewer", "message": "\nPR #671 is ready.\n\n- more"}) == "PR #671 is ready.")
+    ck("a Read call names its file and the lines it read",
+       cc.summary("Read", {"file_path": "/w/a.py", "offset": 84, "limit": 13}) == "/w/a.py · lines 84-96"
+       and cc.summary("Read", {"file_path": "/w/a.py", "limit": 160}) == "/w/a.py · lines 1-160"
+       and cc.summary("Read", {"file_path": "/w/a.py", "offset": 40}) == "/w/a.py · from line 40"
+       and cc.summary("Read", {"file_path": "/w/a.py"}) == "/w/a.py")
+    ck("a Grep or Glob call names its pattern and where it looked",
+       cc.summary("Grep", {"pattern": "changeOf", "path": "ui/src"}) == "changeOf in ui/src"
+       and cc.summary("Glob", {"pattern": "**/*.tsx", "path": "ui"}) == "**/*.tsx in ui"
+       and cc.summary("Grep", {"pattern": "x", "glob": "*.py"}) == "x in *.py"
+       and cc.summary("Grep", {"pattern": "changeOf", "description": "x"}) == "changeOf")
     ck("another tool keeps the first field that says most",
-       cc.summary("Grep", {"pattern": "changeOf", "description": "x"}) == "changeOf")
+       cc.summary("WebFetch", {"url": "https://x.dev", "prompt": "y"}) == "https://x.dev")
 
     print(f"{P} passed, {F} failed")
     return F
