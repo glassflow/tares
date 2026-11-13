@@ -52,7 +52,7 @@ its types from them.
 `error.code` is one of: `error` (a refusal with no more specific name), `usage`, `bad_cursor`,
 `station_locked`, `claude_not_found`, `sessions_unreadable`, `job_state_unreadable`, `tares_error`
 (a call to Tares failed), `not_signed_in` (no Tares is configured: no saved `tares login`, no address set, and nothing at
-the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old` and `keychain_unreadable`. A bug with `--json` is `error` with the exception named.
+the local default). `tares login` adds `login_timeout`, `login_refused`, `cell_too_old`, `keychain_unreadable` and (for `tares logout`) `logout_failed`: the saved login is deleted but the key was not removed on the cell. A bug with `--json` is `error` with the exception named.
 
 ## login and logout
 

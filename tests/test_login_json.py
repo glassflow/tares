@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import urllib.request
+import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -23,6 +24,8 @@ os.environ["TARES_HOME"] = HOME
 os.environ["TARES_KEYRING"] = "off"
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
+
+REAL_OPEN = webbrowser.open       # before any test replaces it
 
 from tares import cli as C  # noqa: E402
 from tares import login as L  # noqa: E402
@@ -38,7 +41,7 @@ def ck(label, cond, detail=""):
 
 
 WORLD = {"version": "1.44.0", "exchange_status": 200, "logout_status": 200, "delete_status": 200,
-         "good_keys": set(), "n": 0, "challenge": ""}
+         "good_keys": set(), "n": 0, "challenge": "", "settings_force": 0, "cell_url": ""}
 OUTPUTS = []        # everything any call printed, to look for a key in
 
 
@@ -55,6 +58,8 @@ class Fake(BaseHTTPRequestHandler):
         if self.path == "/health":
             return self._json(200, {"status": "ok", "version": WORLD["version"]})
         if self.path == "/api/crew/settings":
+            if WORLD["settings_force"]:
+                return self._json(WORLD["settings_force"], {})
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
             return self._json(200 if bearer in WORLD["good_keys"] else 401, {"settings": {}})
         self._json(404, {})
@@ -68,7 +73,7 @@ class Fake(BaseHTTPRequestHandler):
             kid = f"k{WORLD['n']}"
             WORLD["good_keys"].add(f"nvf_{kid}_topsecret")
             return self._json(200, {"token": f"nvf_{kid}_topsecret", "key_id": kid, "cell": "factory",
-                                    "cell_url": BASE})
+                                    "cell_url": WORLD["cell_url"] or BASE})
         if self.path == "/api/cli/logout":
             return self._json(WORLD["logout_status"], {"revoked": True})
         self._json(404, {})
@@ -85,8 +90,8 @@ BASE = f"http://127.0.0.1:{srv.server_address[1]}"
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
-def browser(callback=True, state_override=None):
-    def open_(url):
+def _opener(callback=True, state_override=None):
+    def open_(url, *_a, **_k):
         q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
         WORLD["challenge"] = q.get("challenge", "")
         if not callback:
@@ -100,7 +105,11 @@ def browser(callback=True, state_override=None):
                 pass
         threading.Timer(0.2, go).start()
         return True
-    L.webbrowser.open = open_
+    return open_
+
+
+def browser(callback=True, state_override=None):
+    L.webbrowser.open = _opener(callback, state_override)
 
 
 def run(fn, *a, **kw):
@@ -208,7 +217,7 @@ WORLD["logout_status"] = 500
 WORLD["delete_status"] = 500
 rc, out, err = run(L.logout, json_out=True)
 msg = docs(out)[0].get("error", {}).get("message", "")
-ck("revoke failed: error document naming the cell and key, exit 1", rc == 1 and err_code(out) == "error"
+ck("revoke failed: logout_failed naming the cell and key, exit 1", rc == 1 and err_code(out) == "logout_failed"
    and "factory" in msg and f"key {kid}" in msg and "not removed" in msg, (rc, out))
 ck("and the local login is deleted anyway", L.saved() is None)
 WORLD["logout_status"] = WORLD["delete_status"] = 200
@@ -255,15 +264,128 @@ try:
         except CrewError as e:
             return e
         return None
-    e = need({"TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
+    e = need({"TARES_HOME": HOME, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
     ck("nothing named and no saved login: not_signed_in", isinstance(e, NotSignedInError) and e.code == "not_signed_in", e)
     ck("...with the old message text", e is not None and "no Tares answers at" in str(e), e)
-    e = need({"TARESD_URL": "http://127.0.0.1:1"})
+    e = need({"TARES_HOME": HOME, "TARESD_URL": "http://127.0.0.1:1"})
     ck("an address named by the person stays a plain error", e is not None and not isinstance(e, NotSignedInError)
        and e.code == "error", e)
+    (crew_home / "crew.json").write_text(json.dumps({"tares": {"url": "http://127.0.0.1:1"}}))
+    e = need({"TARES_HOME": HOME})
+    ck("an address in crew.json is a named Tares: plain error", e is not None and e.code == "error", e)
+    (crew_home / "crew.json").unlink()
+    L.login_file().write_text(json.dumps({"cell_url": BASE, "key": "x"}))
+    e = need({"TARES_HOME": HOME, "TARES_FACTORY_SOURCE": "local default", "TARESD_URL": "http://127.0.0.1:1"})
+    ck("a saved login (in the client's TARES_HOME) is not 'not signed in'", e is not None and e.code == "error", e)
+    L.login_file().unlink()
 finally:
     if saved_login is not None:
         login_path.write_bytes(saved_login)
+
+print("more failures and facts")
+browser()
+WORLD["settings_force"] = 403
+run(L.login, BASE, wait=10, json_out=True)
+rc, out, err = run(L.show, json_out=True)
+ck("403 from the cell: key_works false", docs(out)[0]["login"]["key_works"] is False, out)
+for status in (302, 500):
+    WORLD["settings_force"] = status
+    rc, out, err = run(L.show, json_out=True)
+    ck(f"{status} from the cell: key_works null", docs(out)[0]["login"]["key_works"] is None, out)
+WORLD["settings_force"] = 0
+os.environ["TARESD_URL"] = "http://elsewhere:8787"
+rc, out, err = run(L.show, json_out=True)
+ck("show: source is environment when TARESD_URL is set", docs(out)[0]["login"]["source"] == "environment", out)
+os.environ.pop("TARESD_URL")
+WORLD["cell_url"] = "http://127.0.0.1:9"
+rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+ck("cell unreachable: code error, not cell_too_old", rc == 1 and docs(out)[-1]["error"]["code"] == "error", (rc, out))
+WORLD["cell_url"] = ""
+import httpx  # noqa: E402
+real_http = L._http
+
+
+def bad_url(*a, **k):
+    raise httpx.InvalidURL("Invalid URL")     # what httpx raises for a --cloud it cannot parse
+
+
+L._http = bad_url
+browser()
+rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+L._http = real_http
+ck("a bad --cloud (InvalidURL): open document then an error document, no traceback", rc == 1
+   and docs(out)[-1]["error"]["code"] == "error" and "Traceback" not in err, (rc, out, err))
+
+print("the crew key file notice goes to stderr with --json")
+crew = Path(HOME) / "crew-home"
+(crew / ".tares-token").mkdir(parents=True)      # a directory where the file goes: the write fails
+os.environ["FACTORY_CREW_HOME"] = str(crew)
+rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+ck("login still succeeds", rc == 0 and docs(out)[-1]["login"]["step"] == "done", (rc, out))
+ck("stdout holds only the two documents", len(docs(out)) == 2, out)
+ck("the notice is on stderr", "could not update the crew's key file" in err, err)
+os.environ["FACTORY_CREW_HOME"] = os.path.join(HOME, "no-crew")
+
+print("the keychain as the key store")
+try:
+    import keyring.backend
+
+    class Mem(keyring.backend.KeyringBackend):
+        priority = 1
+        store = {}
+
+        def get_password(self, service, username):
+            return self.store.get((service, username))
+
+        def set_password(self, service, username, password):
+            self.store[(service, username)] = password
+
+        def delete_password(self, service, username):
+            self.store.pop((service, username), None)
+    keyring.set_keyring(Mem())
+    os.environ["TARES_KEYRING"] = "on"
+    L.login_file().unlink(missing_ok=True)
+    rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+    ck("done document says keychain", rc == 0 and docs(out)[-1]["login"]["key_store"] == "keychain", (rc, out))
+    rc, out, err = run(L.show, json_out=True)
+    ck("show says keychain and the key works", docs(out)[0]["login"]["key_store"] == "keychain"
+       and docs(out)[0]["login"]["key_works"] is True, out)
+    run(L.logout, json_out=True)
+    os.environ["TARES_KEYRING"] = "off"
+except ImportError:
+    print("  skip keyring is not installed")
+
+print("a browser that writes to fd 1 cannot break the stream")
+
+
+class Noisy(webbrowser.BaseBrowser):
+    def open(self, url, new=0, autoraise=True):
+        os.write(1, b"STRAY BROWSER OUTPUT\n")
+        return _opener()(url)
+
+
+webbrowser.register("noisy-test-browser", None, Noisy(), preferred=True)
+L.webbrowser.open = REAL_OPEN
+tmp1, tmp2 = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+sys.stdout.flush()
+sys.stderr.flush()
+save1, save2 = os.dup(1), os.dup(2)
+os.dup2(tmp1.fileno(), 1)
+os.dup2(tmp2.fileno(), 2)
+try:
+    rc, out, err = run(L.login, BASE, wait=10, json_out=True)
+finally:
+    os.dup2(save1, 1)
+    os.dup2(save2, 2)
+    os.close(save1)
+    os.close(save2)
+tmp1.seek(0)
+tmp2.seek(0)
+fd1, fd2 = tmp1.read(), tmp2.read()
+ck("the login worked", rc == 0 and len(docs(out)) == 2, (rc, out))
+ck("the browser's output did not reach fd 1", b"STRAY" not in fd1, fd1)
+ck("it went to stderr", b"STRAY" in fd2, fd2)
+ck("fd 1 is back to what it was", os.write(1, b"") == 0)
 
 print("the key is in no output")
 ck("no stdout or stderr held a key", all("topsecret" not in o and "nvf_" not in o for o in OUTPUTS)

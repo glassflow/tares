@@ -346,7 +346,7 @@ def _revoke(data: dict) -> tuple[bool, str]:
                         token=data["key"])
         if code == 200:
             return True, "control plane"
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
         pass
     key_id = data.get("key_id") or ""
     if key_id:
@@ -355,7 +355,7 @@ def _revoke(data: dict) -> tuple[bool, str]:
                             token=data["key"])
             if code in (200, 204, 404):
                 return True, "workspace"
-        except httpx.HTTPError:
+        except (httpx.HTTPError, httpx.InvalidURL):
             pass
     return False, ""
 
@@ -414,6 +414,25 @@ def _err(json_out: bool, code: str, text: str) -> int:
     return 1
 
 
+def _open_browser(url: str, json_out: bool) -> None:
+    """Open the sign-in page. With --json, stdout holds the documents only, and a browser started in the
+    background (xdg-open and the like) inherits file descriptor 1: point it at stderr while it starts."""
+    saved = None
+    if json_out:
+        try:
+            sys.stdout.flush()
+            saved = os.dup(1)
+            os.dup2(2, 1)
+        except OSError:
+            saved = None
+    try:
+        webbrowser.open(url)
+    finally:
+        if saved is not None:
+            os.dup2(saved, 1)
+            os.close(saved)
+
+
 def _key_store(data: dict) -> str:
     """Where the key is kept: "keychain" or "file". An old login.json with a key and no key_store is a file."""
     return "keychain" if data.get("key_store") == "keychain" else "file"
@@ -462,7 +481,7 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
         print("tares login: pick the workspace this machine works with, in your browser:")
         print(f"  {url}", flush=True)
     if open_browser:
-        webbrowser.open(url)
+        _open_browser(url, json_out)
     got = Handler.done.wait(wait)
     time.sleep(0.2)          # let the "Connected" page finish sending
     server.shutdown()
@@ -474,7 +493,7 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
     try:
         code, out = _http("POST", f"{cloud}/exchange", {"code": Handler.result["code"],
                                                          "code_verifier": verifier})
-    except httpx.HTTPError as e:
+    except (httpx.HTTPError, httpx.InvalidURL) as e:
         return _err(json_out, "error", f"tares login: could not reach {cloud} to finish signing in ({e}).")
     if code != 200 or not out.get("token") or not out.get("cell_url"):
         return _err(json_out, "login_refused", f"tares login: the control plane did not accept the sign-in "
@@ -489,7 +508,7 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
     try:
         status, health = _http("GET", f"{data['cell_url']}/health", timeout=10)
         version = str(health.get("version") or "") if status == 200 else ""
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
         version = ""
         unreachable = True
     if (_version(version) or (0, 0, 0)) < MIN_VERSION:
@@ -551,8 +570,8 @@ def show(json_out: bool = False) -> int:
     if key:
         try:
             status, _ = _http("GET", f"{_account(data)}/api/crew/settings", token=key, timeout=10)
-            works = True if status < 400 else False if status in (401, 403) else None
-        except (httpx.HTTPError, OSError):
+            works = True if 200 <= status < 300 else False if status in (401, 403) else None
+        except (httpx.HTTPError, httpx.InvalidURL, OSError):
             works = None
     info = {"signed_in": True, "source": source, "cloud": data.get("cloud") or "", "cell": data.get("cell") or "",
             "cell_url": _account(data), "machine": data.get("machine") or "",
@@ -603,7 +622,7 @@ def _logout(data, key: str, json_out: bool) -> int:
         if ok:
             contract.emit({"logout": {"was_signed_in": True, "key_removed": True}}, "logout")
             return 0
-        return _err(True, "error",
+        return _err(True, "logout_failed",
                     f"tares logout: the saved login is deleted, but the key was not removed on "
                     f"{data.get('cell')} (key {data.get('key_id') or 'unknown'}): remove it under Security > "
                     f"API keys on {data.get('cell_url')} (named cli: {data.get('machine')}).")

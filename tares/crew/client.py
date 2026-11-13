@@ -21,6 +21,7 @@ import re
 import socket
 import sys
 import time
+from pathlib import Path
 from urllib.parse import quote
 
 import httpx
@@ -308,8 +309,12 @@ class TaresClient:
         named = self._e("TARES_FACTORY_URL") or self._e("TARESD_URL") or self._e("TARES_URL")
         if named and self._e("TARES_FACTORY_SOURCE") != "local default":
             return False
-        from .. import login
-        return login._read_file() is None
+        home = Path(self._e("TARES_HOME") or Path.home() / ".tares")
+        try:
+            data = json.loads((home / "login.json").read_text())
+        except (OSError, ValueError):
+            return True
+        return not (isinstance(data, dict) and data.get("cell_url"))
 
     def need_capability(self, name: str) -> None:
         """Stop with an upgrade message when the cell's /health does not list the capability. /health is
