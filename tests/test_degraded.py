@@ -69,7 +69,7 @@ async def main():
         # the keys AuthGate + the cloud login handoff + the control plane's uptime check depend on
         ck("keeps auth_required/sources", h and "auth_required" in h and "sources" in h, h)
         # what the crew CLI and the plugin read to refuse clearly when the cell is too old (TR-843)
-        ck("lists the integrations, merge_queue, guardrail_rules, hook_points and guardrail_pairs capabilities", h and h.get("capabilities") == ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs"], h)
+        ck("lists the integrations, merge_queue, guardrail_rules, hook_points, guardrail_pairs and recall capabilities", h and h.get("capabilities") == ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs", "recall"], h)
         # no limit configured: the volume the database sits on is the denominator (TR-290)
         ck("pct_used is measured against the volume with no limit configured",
            h and h.get("pct_used") is not None and h["pct_used"] < 100, h)
