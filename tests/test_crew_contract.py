@@ -216,6 +216,10 @@ readme = (SCHEMAS / "README.md").read_text(encoding="utf-8") if (SCHEMAS / "READ
 ck("the README documents the exit codes", all(re.search(rf"^\|\s*{c}\s*\|", readme, re.M) for c in "012"), readme[:200])
 _GOOD_QUESTION = {"id": "q", "text": "t", "kind": "text", "choices": [], "default": "", "recommendation": "",
                   "why": "w", "pattern": "", "when": None}
+ck("error.json takes notes beside error, a list of strings only, and no other new key",
+   problems("error", {"schema_version": 1, "error": {"code": "error", "message": "m"}, "notes": ["a"]}) == []
+   and problems("error", {"schema_version": 1, "error": {"code": "error", "message": "m"}, "notes": "a"}) != []
+   and problems("error", {"schema_version": 1, "error": {"code": "error", "message": "m"}, "other": 1}) != [])
 ck("a document that is not the shape fails",
    problems("roster", {"schema_version": 1, "crew": "x", "orchestrator": "y"}) != []
    and problems("error", {"schema_version": 1, "error": {"code": "Bad Code", "message": "m"}}) != []

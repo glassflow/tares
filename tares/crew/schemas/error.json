@@ -6,6 +6,11 @@
   "required": ["schema_version", "error"],
   "properties": {
     "schema_version": {"const": 1},
+    "notes": {
+      "description": "Only from the commands of result.json: the lines the command printed before it failed, without the `tares factory: ` prefix. What had already happened. For a person, not for parsing. Absent when nothing was printed.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "error": {
       "type": "object",
       "required": ["code", "message"],
