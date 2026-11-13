@@ -66,7 +66,7 @@ is never printed, on stdout or stderr. A failure is the error shape and exit 1; 
 made: it reads the key as one line from standard input (never from an argument; `--cell` without `--key-stdin` is a
 usage error, exit 2), checks `/health` and the key, saves the login with `cloud` null and prints the same `done`
 document. `cell_unreachable` carries the connection or certificate error, `key_refused` is a 401 or 403 and
-`key_lacks_admin` a key without the admin scope or a project key (the cell says so at `/api/whoami`; a cell that does not answer there is trusted on the key check alone). `tares logout` after such a login deletes the saved login and
+`key_lacks_admin` a key without the admin scope or a project key (the cell says so at `/api/whoami`; a cell that answers 404 there is trusted on the key check alone and the `done` document carries `scope_checked` false; any other answer there that is not a scopes list is `cell_unreachable`). `tares logout` after such a login deletes the saved login and
 leaves the key on the cell (`key_removed` false).
 
 ## events

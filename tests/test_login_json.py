@@ -64,6 +64,8 @@ class Fake(BaseHTTPRequestHandler):
             return self._json(200, {"status": "ok", "version": WORLD["version"]})
         if self.path == "/api/whoami":
             bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+            if WORLD["whoami_status"] == 298:       # answers 200 with no scopes list
+                return self._json(200, {"id": "k1"})
             if WORLD["whoami_status"] != 200:
                 return self._json(WORLD["whoami_status"], {})
             if bearer in WORLD["project_keys"]:
@@ -502,6 +504,15 @@ WORLD["health_status"] = 200
 WORLD["whoami_status"] = 404
 rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + "\n")
 ck("a cell with no /api/whoami: the key that worked is accepted", rc == 0, (rc, out))
+ck("...and the result says the scope was not checked", '"scope_checked":false' in out.replace(" ", ""), (rc, out))
+for st, what in ((500, "a 5xx"), (503, "a 503"), (200, "a 200 with no scopes list")):
+    L.login_file().unlink(missing_ok=True)
+    WORLD["whoami_status"] = st if st != 200 else 298
+    rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--json", stdin=KEY + chr(10))
+    ck(f"/api/whoami answers {what}: cell_unreachable, nothing saved", rc == 1 and err_code(out) == "cell_unreachable"
+       and not L.login_file().exists(), (rc, out))
+WORLD["whoami_status"] = 404
+L.login_file().unlink(missing_ok=True)
 WORLD["whoami_status"] = 200
 L.login_file().unlink(missing_ok=True)
 rc, out, err = cli("login", "--cell", BASE, "--key-stdin", "--show", "--json", stdin=KEY + "\n")

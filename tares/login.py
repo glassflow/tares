@@ -627,6 +627,14 @@ def _connect_cell(address: str, key: str, json_out: bool) -> int:
                     f"tares login: {address} accepted the key but it lacks the admin scope ({why}), which "
                     "tares factory needs. Make a key with the admin scope under Security > API keys. "
                     "Nothing was saved.")
+    scope_unchecked = False
+    if 200 <= status2 < 300 and not isinstance(scopes, list):
+        if who_status == 404:      # an older cell without the endpoint: the key that worked is accepted
+            scope_unchecked = True
+        else:                      # fail closed: a read-only key must not pass as connected
+            return _err(json_out, "cell_unreachable",
+                        f"tares login: {address} accepted the key but did not say what it may do "
+                        f"(/api/whoami answered {who_status}). Nothing was saved.")
     if status2 in (401, 403):
         return _err(json_out, "key_refused",
                     f"tares login: {address} refused the key ({status2}). Check it, or make a new one under "
@@ -654,10 +662,15 @@ def _connect_cell(address: str, key: str, json_out: bool) -> int:
         _kc_delete(_account(old))
     store = "file" if where == str(login_file()) else "keychain"
     if json_out:
-        contract.emit({"login": {"step": "done", "cell": data["cell"], "cell_url": address, "machine": machine,
-                                 "key_store": store}}, "login")
+        doc = {"step": "done", "cell": data["cell"], "cell_url": address, "machine": machine, "key_store": store}
+        if scope_unchecked:
+            doc["scope_checked"] = False
+            print(f"tares login: {address} has no /api/whoami, so the key's scope was not checked.", file=sys.stderr)
+        contract.emit({"login": doc}, "login")
         return 0
     print(f"tares login: this machine is connected to {address}")
+    if scope_unchecked:
+        print("tares login: this cell has no /api/whoami, so the key's scope was not checked.")
     return 0
 
 
