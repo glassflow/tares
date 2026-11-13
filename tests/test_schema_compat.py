@@ -1,8 +1,9 @@
 """The crew's JSON schemas must not break a reader of the last release unless schema_version was raised (TR-1280).
 
 The newest release tag reachable from HEAD is the baseline. A change is breaking when a schema file is gone, a name is
-gone from an object's properties, a property's type changed, a name was added to required, or a value left an enum.
-Anything else (a new optional property, a new file, a new enum value, a new description) keeps old readers working.
+gone from an object's properties, a property's type changed, a name was added to required, a name was removed from required, a const changed, or a value left an enum.
+anyOf, oneOf and allOf branches are paired by position, so a branch inserted in the middle reads as a change:
+append a new branch at the end. Anything else (a new optional property, a new file, a new enum value, a new description) keeps old readers working.
 """
 import json
 import os
@@ -37,6 +38,13 @@ def breaking(old, new, path="$"):
     added = [n for n in new.get("required", []) if n not in old.get("required", [])]
     if added:
         found.append((path, f"added to required: {added}"))
+    dropped = [n for n in old.get("required", []) if n not in new.get("required", [])]
+    if dropped:
+        found.append((path, f"removed from required: {dropped}"))
+    if "const" in old and "const" in new:
+        o_c, n_c = json.dumps(old["const"], sort_keys=True), json.dumps(new["const"], sort_keys=True)
+        if o_c != n_c:
+            found.append((path, f"const changed from {o_c} to {n_c}"))
     op, np_ = old.get("properties", {}), new.get("properties", {})
     for name, sub in op.items():
         if name not in np_:
@@ -88,10 +96,16 @@ assert breaking({"$defs": {"d": {}}}, {}) == [("$/$defs/d", "definition removed"
 assert breaking({"anyOf": [{"type": "string"}, {"type": "null"}]}, {"anyOf": [{"type": "string"}]}) == [("$/anyOf/1", "branch removed")]
 assert raised(1, 2) and not raised(1, 1) and not raised(1, 0) and not raised(1, "2") and not raised(1, None) and not raised(True, 2)
 assert breaking({"items": {"properties": {"k": {}}}}, {"items": {"properties": {}}}) == [("$[].k", "property removed")]
+assert breaking(_base, {**_base, "required": []}) == [("$", "removed from required: ['a']")]
+assert breaking(_base, {**_base}) == []
+assert breaking({"const": 1}, {"const": 2}) == [("$", "const changed from 1 to 2")]
+assert breaking({"const": 1}, {"const": 1.0}) == [("$", "const changed from 1 to 1.0")]
+assert breaking({"const": 1}, {"const": 1}) == []
+assert breaking({"const": 1}, {}) == []
 
 
 def git(*args):
-    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, encoding="utf-8")
+    return subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 
 def newest_tag():
@@ -111,13 +125,25 @@ def main():
     if not tag:
         print("no release tag reachable")
         return 1 if os.environ.get("CI") else 0
-    names = git("ls-tree", "-r", "--name-only", tag, SCHEMAS + "/").stdout.split()
-    names = [n.rsplit("/", 1)[1] for n in names if n.endswith(".json")]
-    findings, ok = [], 0
+    tree = git("ls-tree", "-r", "-z", "--name-only", tag, SCHEMAS + "/")
+    if tree.returncode != 0:
+        print(f"FAIL could not list the schema files of {tag}")
+        return 1
+    listed = tree.stdout.split("\0")
+    prefix = SCHEMAS + "/"
+    names = [n[len(prefix):] for n in listed if n.startswith(prefix) and n.endswith(".json")]
+    findings, ok, unreadable = [], 0, False
     old_version = new_version = None
     for name in sorted(names):
         shown = git("show", f"{tag}:{SCHEMAS}/{name}")
-        old = json.loads(shown.stdout)
+        try:
+            if shown.returncode != 0:
+                raise ValueError("git show failed")
+            old = json.loads(shown.stdout)
+        except ValueError:
+            print(f"FAIL {name}: could not read it from {tag}")
+            unreadable = True
+            continue
         cur = ROOT / SCHEMAS / name
         if name == VERSION_FILE:
             old_version = old.get("schema_version")
@@ -131,14 +157,18 @@ def main():
         ok += 1
     print(f"baseline {tag}: {ok} schema files compared, schema_version {old_version} -> {new_version}")
     if not findings:
+        if unreadable:
+            return 1
         print("no breaking change")
         return 0
-    if raised(old_version, new_version):
+    if raised(old_version, new_version) and not unreadable:
         for f, p, what in findings:
             print(f"  accepted (schema_version raised): {f} {p}: {what}")
         return 0
     for f, p, what in findings:
         print(f"FAIL {f} {p}: {what}: raise schema_version or keep the old shape")
+    if unreadable and raised(old_version, new_version):
+        print("schema_version was raised, but a file could not be read, so nothing was compared for it")
     return 1
 
 
