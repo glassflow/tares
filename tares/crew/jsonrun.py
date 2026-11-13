@@ -6,7 +6,8 @@ same command with everything it prints collected, and prints one document on std
 
     {"schema_version": 1, "ok": true, "command": "crew halt", "notes": ["crew halted: ..."]}
 
-or, for a refusal, the error document (schemas/error.json). `notes` are the lines the text mode prints on
+or, for a refusal, the error document (schemas/error.json), which carries the notes collected so far as `notes`
+beside `error` when the command printed any before it failed. `notes` are the lines the text mode prints on
 stderr, for a person, not for parsing. Without `--json` the command runs exactly as before.
 
 Standard library plus contract.py.
@@ -84,7 +85,7 @@ def run(argv: list, command: str, body: Callable[[list], int], *, text_fail: Cal
     if error is None and code:
         error = CrewError(f"{command} failed (exit {code})")
     if error is not None:
-        contract.refuse(error, [FLAG])
+        contract.refuse(error, [FLAG], notes=_notes(buf.getvalue()))
         return contract.EXIT_USAGE if error.code == "usage" else contract.EXIT_FAILED
     contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue())}, "result")
     return 0

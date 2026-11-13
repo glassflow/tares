@@ -151,6 +151,7 @@ ck("retire --json, no station: the usage text is the message", "usage" in d.get(
 code, out, err = crew(["retire", "nobody", "--json"])
 d = doc_of("retire --json, unknown station", code, out, err, 1, "error")
 ck("retire --json, unknown station: code error", d.get("error", {}).get("code") == "error", d)
+ck("...and no notes key when nothing was printed", "notes" not in d, d)
 
 # ---------- 4. revive ----------
 print("== revive")
@@ -206,6 +207,33 @@ p = subprocess.run([sys.executable, "-c", probe, "--json"], capture_output=True,
                    env=dict(BASE, PYTHONPATH=str(ROOT)), timeout=60)
 d = doc_of("a child writing to stdout", p.returncode, p.stdout.replace("\r\n", "\n"), p.stderr, 0, "result")
 ck("...its text went to stderr and the note is kept", "child out" in p.stderr and d.get("notes") == ["a note"], (p.stderr, d))
+
+# failing after printing: the error document keeps the notes collected so far (TR-1309)
+print("== notes on a failure")
+probe2 = """import sys
+from tares.crew import jsonrun
+from tares.crew.errors import CrewError
+def body(a):
+    print('tares factory: stopped crew-builder', file=sys.stderr)
+    print('a line on stdout')
+    if 'exit3' in a:
+        return 3
+    raise CrewError('could not stop crew-reviewer')
+sys.exit(jsonrun.run(sys.argv[1:], 'probe', body, text_fail=lambda e: None))
+"""
+NOTES = ["stopped crew-builder", "a line on stdout"]
+p = subprocess.run([sys.executable, "-c", probe2, "--json"], capture_output=True, text=True, cwd=str(ROOT),
+                   env=dict(BASE, PYTHONPATH=str(ROOT)), timeout=60)
+d = doc_of("a failure after printing", p.returncode, p.stdout.replace("\r\n", "\n"), p.stderr, 1, "error")
+ck("...the error document carries the notes, in the order schema_version, error, notes",
+   d == {"schema_version": 1, "error": {"code": "error", "message": "could not stop crew-reviewer"}, "notes": NOTES}
+   and list(d) == ["schema_version", "error", "notes"], d)
+ck("...and nothing reached stderr", p.stderr == "", p.stderr)
+p = subprocess.run([sys.executable, "-c", probe2, "--json", "exit3"], capture_output=True, text=True, cwd=str(ROOT),
+                   env=dict(BASE, PYTHONPATH=str(ROOT)), timeout=60)
+d = doc_of("a body that returns exit 3", p.returncode, p.stdout.replace("\r\n", "\n"), p.stderr, 1, "error")
+ck("...error.code error, message probe failed (exit 3), and the notes",
+   d.get("error") == {"code": "error", "message": "probe failed (exit 3)"} and d.get("notes") == NOTES, d)
 
 # ---------- 7. up ----------
 print("== up")
