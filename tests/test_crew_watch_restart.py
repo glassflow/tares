@@ -172,11 +172,6 @@ try:
        code == 0 and out.startswith("the watch runs from another install (") and out.strip().endswith("): left alone"), out)
     # the folder the interpreter lives in, spelled with another case on Windows
     folder = str(exe.parent)
-    # A venv's python may start the base interpreter as the watch (a hosted Windows runner's does): then the folder the
-    # watch really runs from is the one to name, because the venv folder holds only its launcher.
-    running_exes = watch._watch_executables(watch.running_pid(paths) or 0)
-    if running_exes and not any(watch._under(e, folder) for e in running_exes):
-        folder = str(Path(running_exes[0]).parent)
     if os.name == "nt":
         folder = folder.swapcase()
     code, out, err = run("--restart", "--only-under", folder, "--json")
@@ -213,6 +208,54 @@ try:
     ck("a restart that could not start a new watch fails before stopping the old one",
        code == 1 and "FACTORY_NO_WATCH" in (out + err), (code, out, err))
     ck("...the running watch is still the same one", watch.running_pid(paths) == live, (watch.running_pid(paths), live))
+
+    print("_watch_executables: a watch started by a launcher (TR-1319)")
+    # A Windows venv's python.exe is a launcher that runs the base interpreter as the loop, so the loop alone is
+    # never under the venv. Stand-ins: a "launcher" with `crew watch` in its command line and its own argv[0], and
+    # a child that has another argv[0].
+    lfolder = SCRATCH / "venv" / "Scripts"
+    bfolder = SCRATCH / "base"
+    BASEPY = getattr(sys, "_base_executable", sys.executable)   # a venv's own python.exe may itself be a launcher
+    child_code = "import time; time.sleep(60)"
+    launch_code = ("import subprocess, sys, time; "
+                   f"subprocess.Popen([{str(bfolder / 'pythonw')!r}, '-c', {child_code!r}], executable={BASEPY!r}); "
+                   "time.sleep(60)")
+
+    def start_pair(launcher_args):
+        lp = subprocess.Popen([str(lfolder / "pythonw"), "-c", launch_code, *launcher_args], executable=BASEPY,
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        kid = []
+
+        def seen():
+            try:
+                kid[:] = [c.pid for c in psutil.Process(lp.pid).children()]
+            except psutil.Error:
+                pass
+            return bool(kid)
+        wait_for(seen)
+        return lp, (kid[0] if kid else None)
+
+    pair = []
+    try:
+        lp, cp = start_pair(["crew", "watch"])
+        pair.append(lp)
+        ck("a launcher and its loop child started", cp is not None)
+        ck("the loop alone is not under the launcher's folder",
+           not any(watch._under(e, str(lfolder)) for e in watch._program_paths(psutil.Process(cp))), watch._program_paths(psutil.Process(cp)))
+        ck("...but its `crew watch` launcher is: the folder is accepted",
+           any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp)), watch._watch_executables(cp))
+        ck("...and a folder that neither is in is still not",
+           not any(watch._under(e, str(elsewhere)) for e in watch._watch_executables(cp)), watch._watch_executables(cp))
+        lp2, cp2 = start_pair(["serve"])
+        pair.append(lp2)
+        ck("a parent that is not a `crew watch` launcher is not counted",
+           cp2 is not None and not any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp2)),
+           watch._watch_executables(cp2) if cp2 else None)
+    finally:
+        for q in pair:
+            for c in psutil.Process(q.pid).children(recursive=True) if q.poll() is None else []:
+                c.kill()
+            q.kill()
 
     print("_under")
     base = SCRATCH / "install"

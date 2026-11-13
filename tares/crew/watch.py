@@ -442,18 +442,31 @@ def _under(path: str, folder: str) -> bool:
     return False
 
 
+def _program_paths(proc) -> list:
+    """The program paths of one process: its own executable, then the first word of its command line."""
+    out: list = []
+    for get in (proc.exe, lambda: proc.cmdline()[0]):
+        with contextlib.suppress(psutil.Error, OSError, IndexError, SystemError):
+            out.append(get())
+    return [p for p in out if p]
+
+
 def _watch_executables(pid: int) -> list:
-    """The program paths of the watch's process: its own executable, then the first word of its command line
-    (a venv's python is a link to the base one on macOS and Linux, so the resolved path alone would miss it)."""
+    """The program paths of the watch: its process's own executable, then the first word of its command line
+    (a venv's python is a link to the base one on macOS and Linux, so the resolved path alone would miss it), then
+    the same two of its parent when that is a `crew watch` launcher. A Windows venv's python.exe is a launcher
+    that runs the base interpreter as the loop (a uv venv on 3.12 does), so the loop alone never names the venv."""
     out: list = []
     try:
         proc = psutil.Process(pid)
-        for get in (proc.exe, lambda: proc.cmdline()[0]):
-            with contextlib.suppress(psutil.Error, OSError, IndexError, SystemError):
-                out.append(get())
+        out = _program_paths(proc)
+        with contextlib.suppress(psutil.Error, OSError, SystemError):
+            parent = psutil.Process(proc.ppid())
+            if parent.pid != pid and "crew watch" in " ".join(parent.cmdline()):
+                out += _program_paths(parent)
     except (psutil.Error, OSError, SystemError):
         pass
-    return [p for p in out if p]
+    return out
 
 
 def restart_watch(paths: CrewPaths, env: dict, *, if_running: bool = False, only_under: str = "") -> dict:
