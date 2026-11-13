@@ -373,9 +373,14 @@ r = c.run(["crew", "up", "--yes"], env={"TARES_FACTORY_MCP_URL": "http://127.0.0
 ck("an old Tares with no MCP server up: the upgrade message wins over the MCP one",
    "missing integrations" in r.stderr and "no MCP server answers" not in r.stderr, (r.returncode, r.stderr[-300:]))
 c.close()
-c = Case(capabilities=["integrations", "merge_queue", "other"])
+c = Case(capabilities=["integrations", "merge_queue", "guardrail_rules", "other"])
 r = c.run(["crew", "up", "--yes", "--no-watch"])
-ck("a Tares that lists integrations and merge_queue among others is not refused", "needs a newer Tares" not in r.stderr, r.stderr[-300:])
+ck("a Tares that lists integrations, merge_queue and guardrail_rules among others is not refused", "needs a newer Tares" not in r.stderr, r.stderr[-300:])
+c.close()
+c = Case(capabilities=["integrations", "merge_queue"])
+r = c.run(["crew", "up", "--yes", "--no-watch"])
+ck("a Tares without guardrail_rules refuses crew up and names it (a station never starts without rules, TR-864)",
+   r.returncode != 0 and "missing guardrail_rules" in r.stderr, (r.returncode, r.stderr[-300:]))
 c.close()
 c = Case(capabilities=["integrations"])
 r = c.run(["crew", "up", "--yes", "--no-watch"])
@@ -384,6 +389,15 @@ ck("it started nothing", c.tares.written() == [] or not any("--bg" in str(x) for
 c.close()
 
 # ====================================================================================
+print("up.home_trusted reads the key Claude Code writes on Windows (TR-1236)")
+c = Case()
+(c.tmp / "home" / ".claude.json").write_text(
+    json.dumps({"projects": {str(c.crew).replace("\\", "/"): {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
+ck("a crew home recorded with forward slashes is trusted", up.home_trusted(CrewPaths(str(c.crew)), {"HOME": str(c.tmp / "home")}))
+(c.tmp / "home" / ".claude.json").write_text(json.dumps({"projects": {}}), encoding="utf-8")
+ck("no record: not trusted", not up.home_trusted(CrewPaths(str(c.crew)), {"HOME": str(c.tmp / "home")}))
+c.close()
+
 print("the module")
 src = (ROOT / "tares" / "crew" / "up.py").read_text(encoding="utf-8")
 ck("up.py has no em dash", "\u2014" not in src)

@@ -57,6 +57,10 @@ exit: 0
     "url": null
   }
 }
+== file crew/rules/loose-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/strict-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/loose-build-m1.settings.json ==
 {
   "autoMode": {

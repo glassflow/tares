@@ -25,16 +25,18 @@ import re
 import stat
 import subprocess
 import sys
+import ntpath
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.fail.Keyring"
 
 from tares import login  # noqa: E402
-from tares.crew import doctor, perms  # noqa: E402
+from tares.crew import doctor, perms, state  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -212,6 +214,32 @@ Path(d.root, ".claude-plugin", "plugin.json").write_text('{"min_tares": "999.1"}
 d.check_tares_version()
 r = one(d, "min_tares")
 ck("min_tares is read from plugin.json too", r and r.level == "fix" and "999.1" in r.message, r)
+
+print("the upgrade advice on Windows and elsewhere (TR-1281)")
+PLAIN = "uv tool upgrade tares, or pip install -U tares"
+NOTE = "On Windows an upgrade while a tares command is running can leave the install broken"
+with mock.patch.object(doctor.version, "on_windows", lambda: True):
+    d, *_ = make("minv-win", plugin={"min_tares.txt": "999.0.0\n"})
+    d.check_tares_version()
+    r = one(d, "min_tares")
+    ck("on Windows the version FIX says to stop the crew first, then the upgrade, then the note",
+       r and r.fix.startswith("stop the crew first (tares factory crew down), then " + PLAIN + ". ") and NOTE in r.fix
+       and r.fix.endswith("run the same command again."), r)
+    d, *_ = make("path-none-win", env={"PATH": str(fresh("empty-win"))})
+    d.check_tares_path()
+    r = one(d, "tares_path")
+    ck("...and so does the install advice when no tares is on PATH, keeping its own ending",
+       r and r.fix.startswith("stop the crew first (tares factory crew down), then uv tool install tares")
+       and "then open a new terminal. " + NOTE in r.fix, r)
+    sentence = doctor.version.upgrade_advice("Upgrade it with `x`.", sentence=True)
+    ck("a full sentence starts with a capital and keeps one full stop before the note",
+       sentence.startswith("Stop the crew first (tares factory crew down), then upgrade it with `x`. On Windows"), sentence)
+with mock.patch.object(doctor.version, "on_windows", lambda: False):
+    d, *_ = make("minv-other", plugin={"min_tares.txt": "999.0.0\n"})
+    d.check_tares_version()
+    r = one(d, "min_tares")
+    ck("elsewhere the version FIX is the old text, byte for byte", r and r.fix == PLAIN, r)
+    ck("...and a sentence comes back as given", doctor.version.upgrade_advice("Upgrade it with `x`.", sentence=True) == "Upgrade it with `x`.")
 
 print("tares on PATH, and tares hook (TR-1068)")
 bindir = fresh("bin")
@@ -418,6 +446,33 @@ d, *_ = make("git-none", run=fake_run({}))
 d.check_git()
 r = one(d, "git")
 ck("git that will not run is a FIX", r and r.level == "fix" and r.fix, r)
+ck("git that will not run: no identity line", not by_id(d, "git_identity"))
+
+print("git identity")
+ver = ("--version",)
+d, *_ = make("gid-ok", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(0, "Kiran\n"),
+                                     ("user.email",): res(0, "k@example.com\n")}))
+d.check_git()
+r = one(d, "git_identity")
+ck("a global name and email are ok", r and r.level == "ok" and r.new and r.message.startswith("git identity"), r)
+d, *_ = make("gid-none", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(1),
+                                       ("user.email",): res(1)}))
+d.check_git()
+r = one(d, "git_identity")
+ck("no global identity is a warn that names both keys and the fix",
+   r and r.level == "warn" and "user.name or user.email" in r.message and "Author identity unknown" in r.message
+   and "git config --global user.name" in r.fix and "git config --global user.email" in r.fix
+   and r.new and "&&" not in r.fix, r)   # new: shown as a new check; no &&: PowerShell 5.1 refuses it
+d, *_ = make("gid-email", run=fake_run({ver: res(0, "git version 2.50\n"), ("user.name",): res(0, "Kiran\n"),
+                                        ("user.email",): res(0, "  \n")}))
+d.check_git()
+r = one(d, "git_identity")
+ck("a blank email alone is named", r and r.level == "warn" and "no user.email" in r.message
+   and "user.name" not in r.fix, r)
+d, *_ = make("gid-cannot", run=fake_run({ver: res(0, "git version 2.50\n")}))
+d.check_git()
+ck("git config that cannot be asked: no identity line", not by_id(d, "git_identity"))
+ck("the identity line's label is one of NEW_LABELS", any("git identity: x".startswith(l) for l in doctor.NEW_LABELS))
 
 print("the watch's pid file, read with psutil")
 d, home, th, paths = make("watch")
@@ -493,6 +548,22 @@ dupes = sorted({i for i in got if got.count(i) > 1})
 ck("a multi-repo project: no two checks share an id", got and not dupes, dupes)
 ck("the per-repo ids carry the repo", "project_Shop_api_trust" in got and "project_Shop_api-2_trust" in got and "project_Shop_gone" in got, got)
 ck("a repo of another project with the same folder name keeps its own ids", "project_Other_web_trust" in got, got)
+
+print("trust under the key Claude Code writes on Windows (TR-1236)")
+d, home, th, paths = make("trust-slash")
+slash = paths.raw.replace("\\", "/")
+Path(home, ".claude.json").write_text(json.dumps({"projects": {slash: {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
+ck("a home recorded with forward slashes (C:/Users/me/factory on Windows) is accepted", d.accepted(paths.raw), (paths.raw, slash))
+d, home, th, paths = make("trust-none")
+Path(home, ".claude.json").write_text(json.dumps({"projects": {paths.raw + "-other": {"hasTrustDialogAccepted": True}}}), encoding="utf-8")
+ck("a different folder's record does not count", not d.accepted(paths.raw))
+with mock.patch.object(state, "os", SimpleNamespace(name="nt", path=ntpath)):
+    keys = state.trust_keys("C:\\Users\\Jane\\factory")
+    keys_dots = state.trust_keys("C:\\Users\\Jane\\.\\factory")
+ck("trust_keys on Windows (any OS runs this one): the path as given, then with forward slashes",
+   keys == ["C:\\Users\\Jane\\factory", "C:/Users/Jane/factory"], keys)
+ck("...and the normalised path too", "C:/Users/Jane/factory" in keys_dots and keys_dots[0] == "C:\\Users\\Jane\\.\\factory", keys_dots)
+ck("trust_keys off Windows is the path alone", os.name == "nt" or state.trust_keys("/a/b") == ["/a/b"])
 
 print("the doctor stays light")
 r = subprocess.run([sys.executable, "-c",

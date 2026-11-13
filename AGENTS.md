@@ -100,15 +100,25 @@ scenario; re-record it with `python tests/factory/parity.py --record <scenario>`
 (`tests/factory/parity_labels.json`) has a scenario. The spare-session scenarios (`cc_*`) list the machine's real Claude
 processes, so on a machine with real spare sessions they can differ; run them alone (`PARITY_JOBS=1`).
 
-The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test), split over 4 shards (`--shard N --of 4`) to stay inside the job limit. Its `windows-crew` job is green only when every shard is, and a red run is a real break: read it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason. On a PR the shards run only when it changes the crew engine, its tests, the harness or the workflow (the `changes` job), and not while it is a draft; `windows-crew` is green when they were skipped on purpose.
+The `windows-crew` workflow runs the `tests/test_crew_*.py` scripts and the parity scenarios on Windows (`python tests/ci_windows.py`, which fails if it ran no test), split over 4 shards (`--shard N --of 4`) to stay inside the job limit. Its `windows-crew` job is green only when every shard is, and a red run is a real break: read it. A new crew test is picked up by its name; one that cannot run there goes in the skip list in `tests/ci_windows.py`, with its reason. It never runs on a push to main (TR-1235). The shards run on a release tag `v*` (rc included), on a manual run (`gh workflow run windows-crew.yml --ref <ref>`), and on a PR that carries the label `windows-crew`; a PR without the label still gets the `windows-crew` check, green because the shards were skipped on purpose, so it can stay a required check.
 
 ## CI cost
 
-One push to a crew PR is hours of runner time, so the heavy checks run once, not on every push (TR-1233):
+One push to a crew PR is hours of runner time, and main gets many merges, so the heavy checks run when asked for (TR-1233, TR-1235):
 
-- A draft PR runs the light set: `test (duckdb)`, Linux parity, `console`, `wheel` and `secrets`. Marking it ready runs the full set once, and every later push to it runs the full set.
-- The macOS parity shards (`parity-macos.yml`) run after a merge to main, not on PR pushes. To get them on a PR, add the label `macos-parity` (they run now and on every later push until the label is removed), or run `gh workflow run parity-macos.yml --ref <branch>`.
-- `windows-crew` is skipped on a draft and on a PR that changes none of the crew engine's paths.
+| Event | Light Linux set (`console`, `test (duckdb)`, `wheel`, `secrets`) | Rest of the Linux set (`test` postgres and mit, `test-ee`, `e2e`, `wheel-clean`) | Linux parity | `parity-macos` | `windows-crew` |
+|---|---|---|---|---|---|
+| Push to main | yes | no | no | no | no |
+| Draft PR | yes | no | yes | no | no (check green, skipped) |
+| PR marked ready, and every push to it | yes | yes | yes | no | no (check green, skipped) |
+| PR with label `macos-parity` | yes | as above | yes | yes, on every push until the label is removed | no |
+| PR with label `windows-crew` | yes | as above | yes | no | yes, on every push until the label is removed |
+| Release tag `v*` (rc too) | yes | yes | yes | yes | yes |
+| Manual run (`workflow_dispatch`) | ci.yml: yes | ci.yml: yes | yes | yes | yes |
+
+- A push to a `factory-modular/*` branch starts no run; its PR runs cover it.
+- The release (`release.yml`, `docker-publish.yml`) does not wait for the tag's heavy suites: they run beside it. A red one on a tag means a fix release, never a re-pushed tag.
+- Run the heavy suites by hand on any branch: `gh workflow run parity-macos.yml --ref <branch>` and `gh workflow run windows-crew.yml --ref <branch>`.
 
 ## Release
 
@@ -116,8 +126,16 @@ Final releases are held while the file `RELEASE_BLOCK` exists; `scripts/check_re
 enforces it in `release.sh`, `release.yml` and `docker-publish.yml`. Release candidates (`-rc.N`) pass.
 
 `scripts/release.sh <version>` bumps `pyproject.toml`, commits and tags. Pushing the tag runs
-`release.yml` (PyPI) and `docker-publish.yml` (`ghcr.io/glassflow/tares:<version>`). Add a
-`CHANGELOG.md` entry first.
+`release.yml` (PyPI) and `docker-publish.yml` (`ghcr.io/glassflow/tares:<version>`). Changes do not
+edit `CHANGELOG.md`: each adds a file under `changelog.d/` in its PR, and `scripts/release.sh` collects
+them into a new `CHANGELOG.md` section and commits it with the bump. `CHANGELOG_SUMMARY="..."
+scripts/release.sh <version>` gives the section its summary paragraph.
+
+## Changelog
+
+Add a file under changelog.d/, never edit CHANGELOG.md. It is `changelog.d/<ticket>.md`, the first line is
+`Added`, `Changed` or `Fixed`, the rest is the entry (see `changelog.d/README.md`). CI asks for one on a PR
+that changes `tares/` or `ui/src/`; the label `no changelog` skips that check.
 
 ## Writing rules
 

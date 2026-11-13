@@ -147,6 +147,10 @@ tares factory: crew-releaser runs an older version of the plugin; restarting it 
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "00000002", "event": "revived", "station": "crew-releaser"}
 {"at": "<TS>", "detail": "<KIT>", "event": "upgraded", "station": "crew-releaser"}
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-releaser.grants ==
 
 == file crew/stations/crew-releaser.settings.json ==

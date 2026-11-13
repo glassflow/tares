@@ -1,9 +1,13 @@
-# Build the console, run the backend tests against it, and scan for secrets — on every push / PR.
+# Build the console, run the backend tests against it, and scan for secrets: on every PR, on a push to main and on a
+# release tag (TR-1235). A push to main runs the light Linux set only (console, test duckdb, wheel, secrets): the tree
+# it merges already ran the full set on its PR. A tag `v*` (rc included) runs the full Linux set; the heavy
+# cross-platform suites (windows-crew.yml, parity-macos.yml) run on a tag, a manual run, or a PR that asks by label.
 name: CI
 
 on:
   push:
-    branches: [main, "factory-modular/*"]
+    branches: [main]
+    tags: ["v*"]
     paths-ignore:
       - "README.md"
       - "AGENTS.md"
@@ -58,8 +62,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # A draft PR runs duckdb only; postgres and mit come with ready_for_review and on every later push.
-        suite: ${{ fromJSON(github.event.pull_request.draft && '["duckdb"]' || '["duckdb","postgres","mit"]') }}
+        # A draft PR and a push to main run duckdb only; postgres and mit come with ready_for_review, on every later
+        # push to the PR and on a release tag.
+        suite: ${{ fromJSON((github.event.pull_request.draft || github.ref == 'refs/heads/main') && '["duckdb"]' || '["duckdb","postgres","mit"]') }}
         shard: [1, 2, 3, 4, 5]
     # test_state_postgres moves a store into it; the postgres suite keeps every store in it
     services:
@@ -108,12 +113,13 @@ jobs:
   # The crew's parity scenarios (tests/factory/parity.py) on the Python engine alone, on Linux: each runs
   # in a throwaway crew and must print and write what the bash engine did when its result was recorded
   # (tests/factory/parity_expected). Split into shards, one scenario at a time per runner (PARITY_JOBS=1: the cc_*
-  # scenarios share session ids). The 43 scenarios marked not_windows run only here. tests/test_parity.py (in the
+  # scenarios share session ids). The 17 scenarios marked not_windows run only here. tests/test_parity.py (in the
   # test job) checks that every recorded check label (parity_labels.json) has a scenario, without running them again.
-  # Linux runs them on every push and PR, draft or not. The same scenarios on macOS are parity-macos.yml: after a
-  # merge to main, and on a PR only when someone asks.
+  # Linux runs them on every PR, draft or not, and on a release tag; a push to main skips them (its PR ran them).
+  # The same scenarios on macOS are parity-macos.yml: on a release tag and by hand, and on a PR only when asked.
   parity:
     name: parity (${{ matrix.os }} ${{ matrix.shard }}/12)
+    if: ${{ github.ref != 'refs/heads/main' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     strategy:
@@ -140,7 +146,7 @@ jobs:
   # state in DuckDB and in Postgres. They run with a test licence the test root signed.
   test-ee:
     name: test-ee (${{ matrix.db }})
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && github.ref != 'refs/heads/main' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -243,7 +249,7 @@ jobs:
   # without the console that installs and runs. TARES_REQUIRE_CONSOLE=1 must turn that into an error.
   wheel-clean:
     name: wheel from a clean checkout (${{ matrix.os }})
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && github.ref != 'refs/heads/main' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -296,7 +302,7 @@ jobs:
   # Chromium comes with it. Screenshots are uploaded only when a shard fails.
   e2e:
     name: e2e (${{ matrix.shard }}/2)
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && github.ref != 'refs/heads/main' }}
     # Pinned: Playwright does not install Chromium on the Ubuntu that ubuntu-latest points at now.
     runs-on: ubuntu-24.04
     # The runner kills a silent suite after 10 minutes; this stops the job itself if something else hangs.

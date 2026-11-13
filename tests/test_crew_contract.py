@@ -39,6 +39,7 @@ import _crew_guard  # noqa: E402  (read before HOME changes: it remembers the re
 
 _crew_guard.scratch_home()   # the probes below inherit this process's HOME: not the real one (TR-1164)
 import fake_claude  # noqa: E402
+from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 from _crew_fake import fake_crew_env  # noqa: E402
 
 from tares.crew import contract, dispatch, events  # noqa: E402
@@ -89,8 +90,10 @@ class Stub(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def do_GET(self):  # noqa: N802
-        path = self.path.split("?")[0]
-        body = {"/health": {"status": "ok"},
+        path, _, query = self.path.partition("?")
+        q = dict(kv.split("=", 1) for kv in query.split("&") if "=" in kv)
+        body = {"/health": {"status": "ok", "capabilities": ["guardrail_rules"]},
+                RULES_PATH: rules_answer(q.get("station", ""), q.get("role", "builder"), "", "", ""),
                 "/api/crew/settings": {"settings": WORLD["settings"]},
                 "/api/crew/projects": {"projects": WORLD["projects"]},
                 "/api/desk": {"desk": WORLD["desk"]}}.get(path)
@@ -204,7 +207,7 @@ def pretty(doc):
 
 print("== the schemas")
 ck("a schema for every --json output and for the error shape",
-   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "error"}
+   {"status", "roster", "desk", "events", "settings", "doctor", "projects", "setup_questions", "setup_answers", "result", "error", "login", "logout"}
    <= set(VALIDATORS), sorted(VALIDATORS))
 version = json.loads((SCHEMAS / "schema_version.json").read_text(encoding="utf-8"))["schema_version"]
 ck("every schema pins schema_version to the number in schema_version.json",
@@ -420,6 +423,24 @@ else:
     ck("doctor, an unknown argument: usage", doc.get("error", {}).get("code") == "usage", doc)
     code, out, err = tares(env, ["doctor", "--nope"])
     ck("doctor without --json: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory doctor" in err, (code, out, err))
+
+    # ---------- watch --restart ----------
+
+    print("== watch --restart")
+    env, tmp = world(crew_of(), sessions())
+    code, out, err = tares(env, ["crew", "watch", "--restart", "--if-running", "--json"])
+    doc = one_document("watch --restart --if-running, none running", code, out, err, "watch")
+    ck("watch --restart --if-running: none_running, no pid", doc.get("watch") == {"action": "none_running"}, doc)
+    fixture("watch.json", stable(out, tmp))
+    for sample in ({"action": "restarted", "pid": 4242}, {"action": "started", "pid": 7},
+                   {"action": "other_install", "executable": "C:/x/tares.exe"}):
+        ck(f"watch: a {sample['action']} document follows the schema", not problems("watch", {"schema_version": 1, "watch": sample}), sample)
+    ck("watch: a pid below 1 fails the schema", problems("watch", {"schema_version": 1, "watch": {"action": "started", "pid": 0}}) != [])
+    ck("watch: an unknown action fails the schema", problems("watch", {"schema_version": 1, "watch": {"action": "gone"}}) != [])
+    doc = one_document("watch --json without --restart", *tares(env, ["crew", "watch", "--json", "--if-running"]), "error", want_code=2)
+    ck("watch --json without --restart: usage", doc.get("error", {}).get("code") == "usage", doc)
+    code, out, err = tares(env, ["crew", "watch", "--restart", "--only-under"])
+    ck("watch --restart --only-under without a folder: a usage line on stderr, exit 2", code == 2 and out == "" and "usage: tares factory crew watch --restart" in err, (code, out, err))
 
     # ---------- the error shape ----------
 
@@ -802,7 +823,7 @@ finally:
 
 print("== the samples")
 for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor.json", "projects.json",
-             "setup_questions.json", "setup_answers.json", "error.json"):
+             "setup_questions.json", "setup_answers.json", "result.json", "error.json", "watch.json"):
     path = FIXTURES / name
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -814,6 +835,21 @@ for name in ("status.json", "roster.json", "desk.json", "settings.json", "doctor
 sample_lines = (FIXTURES / "events.jsonl").read_text(encoding="utf-8").splitlines() if (FIXTURES / "events.jsonl").is_file() else []
 ck("sample events.jsonl validates line by line against events.json",
    len(sample_lines) == 4 and all(not problems("events", json.loads(x)) for x in sample_lines), sample_lines)
+
+for name, schema in (("login-open", "login"), ("login-done", "login"), ("login-show", "login"), ("logout", "logout")):
+    try:
+        doc = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        ck(f"sample {name}.json is JSON", False, e)
+        continue
+    bad = problems(schema, doc)
+    ck(f"sample {name}.json validates against {schema}.json", not bad, bad)
+ck("login documents that are not the shape fail",
+   problems("login", {"schema_version": 1, "login": {"step": "done", "cell": "c"}}) != []
+   and problems("login", {"schema_version": 1, "login": {"signed_in": True}}) != []
+   and problems("login", {"schema_version": 1, "login": {"signed_in": False}}) == []
+   and problems("login", {"schema_version": 1, "login": {"signed_in": False, "key": "x"}}) != []
+   and problems("logout", {"schema_version": 1, "logout": {"was_signed_in": True}}) != [])
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

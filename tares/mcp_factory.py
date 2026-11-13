@@ -124,6 +124,24 @@ async def merge_ready(pr: str, project: str = "") -> str:
     return _out(r)
 
 
+@mcp.tool()
+async def release_ready(project: str = "", commit: str = "", repo: str = "", milestone: str = "",
+                        merged_prs: list[str] | None = None) -> str:
+    """May this commit be shipped? Asks the project's guardrails at the pre_release hook. Returns
+    `ready` (false when a guardrail blocks, cannot be reached, or the project or commit is
+    missing), `reasons` (a sentence for each thing holding the release back), `warnings`
+    (shown, not blocking) and `guardrails` (each guardrail's decision). Call it before tagging or
+    deploying and stop when it is not ready.
+    `repo` is owner/name, `milestone` the milestone being shipped, `merged_prs` the pull requests
+    in it (`owner/repo#12`). It changes nothing."""
+    project = (project or "").strip() or _default_project()
+    async with _cx(30) as cx:
+        r = await cx.get(f"{TARESD}/api/factory/release-ready", params={
+            "project": project, "commit": commit, "repo": repo, "milestone": milestone,
+            "merged_prs": ",".join(merged_prs or [])})
+    return _out(r)
+
+
 @writable()
 async def set_required_checks(commands: list[str], project: str = "") -> str:
     """Set the commands a pull request of this project must have recorded as passing checks
@@ -287,10 +305,13 @@ async def record_review(ticket: str, head: str, verdict: str, verified: str,
     and what it showed, `not_verified` what you did not cover and why, `findings`
     [{"severity": "P1|P2|P3", "file": "", "line": 0, "blocking": true, "text": ""}], and on a
     re-review `resolved` marking each earlier finding {"F1": "fixed", "F2": "open"}. A pass
-    leaves no blocking finding open. Only the reviewer records reviews."""
+    leaves no blocking finding open. Only the reviewer records reviews. When the cell holds a
+    GitHub App that can write to the repo, Tares also posts the review to the PR as the App (the
+    comment and the `factory/review` check run); the answer's `github` says what went up and,
+    when something did not, `why`: post that part with `gh`."""
     body = {"head": head, "verdict": verdict, "verified": verified,
             "not_verified": not_verified, "findings": findings or [], "resolved": resolved or {}}
-    async with _cx(15) as cx:
+    async with _cx(60) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
@@ -300,7 +321,7 @@ async def record_review(ticket: str, head: str, verdict: str, verified: str,
     d = r.json()
     return json.dumps({"round": d["round"], "verdict": d["verdict"],
                        "findings": [f["label"] for f in d["findings"]], "fixed": d["fixed"],
-                       "still_open": d["open"]})
+                       "still_open": d["open"], "github": d.get("github")})
 
 
 @mcp.tool()
@@ -722,22 +743,33 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     SendMessage so it starts now rather than on its tick. If your crew is not running (the
     reply says so), tell the person to run `tares factory crew up` first. Other people's crews
     pick up their own tickets on their next tick. Needs a key with a person. A project kept for
-    later (set_later) starts with it."""
-    crew_name = _caller("crew") or "crew"
-    body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
-    if repo:
-        body["repo"] = repo
-    if autonomy:
-        body["autonomy"] = autonomy
+    later (set_later) starts with it. A guardrail that blocks refuses the hand-over with its reason;
+    one that only warns is shown in the reply."""
+    live = ("working", "idle", "waiting", "quiet")
     async with _cx(10) as cx:
         uid, why = await _project_id(cx, project)
         if uid is None:
             return why
+        crew = await cx.get(f"{TARESD}/api/crew", params={"mine": 1})   # the caller's own crews (TR-633)
+        crew_name = _caller("crew")
+        if not crew_name and crew.status_code == 200:
+            # a session that names no crew (a plain `claude` with the plugin) means the caller's one
+            # running crew when there is exactly one; else the default, as before
+            running = {s.get("crew") for s in crew.json().get("stations") or []
+                       if s.get("role") == "orchestrator" and s.get("state") in live and s.get("crew")}
+            if len(running) == 1:
+                crew_name = running.pop()
+        crew_name = crew_name or "crew"
+        body: dict = {"repos": repos or [], "by_default": "claude code session", "crew": crew_name}
+        if repo:
+            body["repo"] = repo
+        if autonomy:
+            body["autonomy"] = autonomy
         r = await cx.post(f"{TARESD}/api/projects/{uid}/handover", json=body)
         if r.status_code >= 400:
             return _out(r)
-        crew = await cx.get(f"{TARESD}/api/crew", params={"mine": 1})   # the caller's own crews (TR-633)
     ho = r.json().get("handover") or {}
+    warned = "".join(f"\nGuardrail warning: {w}" for w in r.json().get("warnings") or [])
     crew_name = ho.get("crew") or crew_name
     orch_name = f"{crew_name}-orchestrator"
     lines = [f"repo: {x.get('path') or '?'}" + (f" ({x['name']})" if x.get("name") else "")
@@ -747,19 +779,19 @@ async def hand_over(project: str = "", repos: list[dict] | None = None, autonomy
     others = "Other people's crews pick up their own tickets on their next tick."
     orch = [s for s in (crew.json().get("stations") or []) if s.get("role") == "orchestrator"
             and s.get("name") == orch_name and s.get("crew") == crew_name
-            and s.get("state") in ("working", "idle", "waiting", "quiet")] if crew.status_code == 200 else []
+            and s.get("state") in live] if crew.status_code == 200 else []
     if not orch:
         return ("Recorded as handed to the crew with:\n" + "\n".join(lines) + f"\nNo orchestrator "
                 f"of crew {crew_name} ({orch_name}) is running: tell the person to run `tares "
                 "factory crew up` in a terminal. The orchestrator finds this project on Tares when "
-                f"it starts; no message is needed. {others}")
+                f"it starts; no message is needed. {others}{warned}")
     note = ""
     if orch[0].get("state") == "quiet":
         note = (f"\n{orch[0]['name']} has been silent for {orch[0].get('quiet_minutes')} min: if "
                 "the message bounces, tell the person to run `tares factory crew watch`; the "
                 "orchestrator finds the project on Tares when it is back.")
     return (f"Recorded. Now send {orch[0]['name']} a message with SendMessage, so it starts now "
-            f"rather than on its next tick. {others}{note}\n"
+            f"rather than on its next tick. {others}{note}{warned}\n"
             f"[TF:SHIP] {project or uid} is ready to build\nproject: {project or uid}\n"
             + "\n".join(lines))
 

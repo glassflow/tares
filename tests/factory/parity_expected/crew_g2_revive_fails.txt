@@ -89,6 +89,14 @@ exit: 0
 {"at": "<TS>", "detail": "00000003", "event": "revived", "station": "shop-build-m1"}
 {"at": "<TS>", "detail": "00000004", "event": "started", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "00000004", "event": "revived", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-releaser.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/shop-build-m1.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

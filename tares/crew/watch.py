@@ -67,6 +67,8 @@ TERMINATE_WAIT = 3.0        # seconds a terminated watch has before it is killed
 IDENTITY_SLACK = 1.0        # seconds the create time in the pid file may differ from the process's own
 
 WATCH_USAGE = "usage: tares factory crew watch [--once] [--interval <seconds>]"
+RESTART_USAGE = "usage: tares factory crew watch --restart [--if-running] [--only-under <folder>] [--json]"
+RESTART_FLAGS = ("--restart", "--if-running", "--only-under", "--json")
 
 # What a round does, in this order. A later ticket registers the function for its name.
 STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker")
@@ -428,13 +430,120 @@ def _say_unreadable_settings(paths: CrewPaths, env: dict) -> None:
             print(e.line, file=sys.stderr, flush=True)
 
 
+def _under(path: str, folder: str) -> bool:
+    """Is `path` the folder itself or inside it: case-insensitive on Windows. It counts when the path as written or
+    with its links resolved is inside the folder as written or resolved (a venv's python links outside the venv)."""
+    def forms(p: str) -> set:
+        return {os.path.normcase(os.path.abspath(p)), os.path.normcase(os.path.realpath(p))}
+    for f in forms(folder):
+        base = f.rstrip(os.sep) + os.sep
+        if any(x == f or x.startswith(base) for x in forms(path)):
+            return True
+    return False
+
+
+def _watch_executables(pid: int) -> list:
+    """The program paths of the watch's process: its own executable, then the first word of its command line
+    (a venv's python is a link to the base one on macOS and Linux, so the resolved path alone would miss it)."""
+    out: list = []
+    try:
+        proc = psutil.Process(pid)
+        for get in (proc.exe, lambda: proc.cmdline()[0]):
+            with contextlib.suppress(psutil.Error, OSError, IndexError, SystemError):
+                out.append(get())
+    except (psutil.Error, OSError, SystemError):
+        pass
+    return [p for p in out if p]
+
+
+def restart_watch(paths: CrewPaths, env: dict, *, if_running: bool = False, only_under: str = "") -> dict:
+    """Stop the background watch and start a new one, touching no station. The `watch` object of the JSON document:
+    action `restarted`, `started`, `none_running` or `other_install` (then with the `executable` that runs it)."""
+    pid = running_pid(paths)
+    if pid is None:
+        if if_running:
+            return {"action": "none_running"}
+        action = "started"
+    else:
+        if only_under:
+            exes = _watch_executables(pid)
+            if not any(_under(e, only_under) for e in exes):
+                return {"action": "other_install", "executable": exes[0] if exes else "unknown"}
+        if env.get("FACTORY_NO_WATCH"):
+            raise CrewError(f"FACTORY_NO_WATCH is set, so a new watch would not start: the running watch (pid {pid}) is left alone")
+        said: list = []
+        stop(paths, said.append, env=env)
+        if running_pid(paths) is not None:
+            raise CrewError(said[0] if said else f"could not stop the watch (pid {pid})")
+        action = "restarted"
+    start(paths, env, note=lambda m: None)
+    new_pid = running_pid(paths)
+    if new_pid is None:
+        why = "FACTORY_NO_WATCH is set" if env.get("FACTORY_NO_WATCH") else "see " + paths.shown(LOG_FILE)
+        raise CrewError(f"the watch did not start: {why}")
+    return {"action": action, "pid": new_pid}
+
+
+def _restart_line(doc: dict) -> str:
+    action = doc["action"]
+    if action == "none_running":
+        return "no watch is running"
+    if action == "other_install":
+        return f"the watch runs from another install ({doc['executable']}): left alone"
+    return f"watch {action}, pid {doc['pid']}"
+
+
+def _cmd_restart(args: list, env: dict) -> int:
+    from . import contract   # here, not at the top: contract is only needed by this branch
+    as_json = contract.wants_json(args)
+    if_running, only_under, restart = False, "", False
+    rest = list(args)
+    problem = ""
+    while rest and not problem:
+        a = rest.pop(0)
+        if a == "--restart":
+            restart = True
+        elif a == "--if-running":
+            if_running = True
+        elif a == "--json":
+            pass
+        elif a == "--only-under" and rest and rest[0].strip() and not rest[0].startswith("--"):
+            only_under = rest.pop(0)
+        elif a == "--only-under":
+            problem = "--only-under needs a folder"
+        else:
+            problem = f"unknown option {a}"
+    if not problem and not restart:
+        problem = "--if-running, --only-under and --json go with --restart"
+    if problem:
+        if as_json:
+            contract.fail("usage", f"{RESTART_USAGE}: {problem}", contract.EXIT_USAGE)
+        print(f"{RESTART_USAGE}: {problem}", file=sys.stderr)
+        return contract.EXIT_USAGE
+    try:
+        paths = CrewPaths.from_env()
+        state.require_crew(paths)
+        doc = restart_watch(paths, env, if_running=if_running, only_under=only_under)
+    except CrewError as e:
+        if not contract.refuse(e, args):
+            print(e.line, file=sys.stderr)
+        return 1
+    if as_json:
+        contract.emit({"watch": doc}, "watch")
+    else:
+        print(_restart_line(doc))
+    return 0
+
+
 def cmd_watch(argv: list, env: dict) -> int:
-    """tares factory [crew] watch [--once] [--interval <seconds>]"""
+    """tares factory [crew] watch [--once] [--interval <seconds>] | --restart [--if-running] [--only-under <folder>] [--json]"""
     args = list(argv)
     if args and args[0] == "crew":
         args = args[1:]
     if args and args[0] == "watch":
         args = args[1:]
+    if any(a in RESTART_FLAGS for a in args):
+        return _cmd_restart(args, env)
     paths = CrewPaths.from_env()
     state.require_crew(paths)
     state.merge_crew_defaults(paths)   # bash primes before every command but a local one: the crew's defaults are filled in

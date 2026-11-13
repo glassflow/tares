@@ -85,6 +85,8 @@ tares factory: crew-reviewer keeps coming back on an older Claude Code than 1.2.
 {"at": "<TS>", "detail": "00000004", "event": "restarted-fresh", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "1.1.0", "event": "stale-spare", "station": "crew-reviewer"}
 {"at": "<TS>", "detail": "1.2.1", "event": "claude-retry", "station": "crew-reviewer"}
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-reviewer.grants ==
 
 == file crew/stations/crew-reviewer.settings.json ==

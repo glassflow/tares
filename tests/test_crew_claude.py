@@ -587,6 +587,34 @@ def is_alive_by_name_folder_or_id():
         ck("...as `tares factory: ...`", got is not None and got.line.startswith("tares factory: could not read"))
 
 
+@test
+def a_session_folder_is_compared_as_a_path():
+    # TR-1305 (F1 of the TR-1228 review): `claude agents --json` lists the folder as the OS wrote it, the crew's record
+    # can hold the same folder with the other slash, another letter case or a trailing separator. The raw strings
+    # called that another folder, so a live station read as stopped.
+    import ntpath
+    nt = ntpath
+    ck("windows: backslashes against slashes are one folder", cc.same_dir("C:\\Users\\me\\shop", "C:/Users/me/shop", nt) is True)
+    ck("windows: letter case does not matter", cc.same_dir("c:\\users\\ME\\Shop", "C:/Users/me/shop", nt) is True)
+    ck("windows: a trailing separator does not matter", cc.same_dir("C:\\Users\\me\\shop\\", "C:/Users/me/shop", nt) is True)
+    ck("windows: another folder is another folder", cc.same_dir("C:\\Users\\me\\shop", "C:/Users/me/shop2", nt) is False)
+    ck("windows: another drive is another folder", cc.same_dir("D:\\Users\\me\\shop", "C:/Users/me/shop", nt) is False)
+    ck("a trailing separator does not matter", cc.same_dir("/w/", "/w") is True)
+    ck("a parent is not the folder", cc.same_dir("/w/x", "/w") is False and cc.same_dir("/w", "/w/x") is False)
+    ck("no folder listed (None) or no folder asked for is not a match", cc.same_dir(None, "/w") is False and cc.same_dir("/w", None) is False)
+    if not needs_fake("find_live_job and is_alive on a folder spelled another way"):
+        return
+    reset()
+    agents(sess("0000000a", "bob", "/w"))
+    ck("find_live_job: the same folder with a trailing separator is the same session", cc.find_live_job("bob", "/w/") == "0000000a")
+    ck("find_live_job: another folder is still another session", cc.find_live_job("bob", "/w/x/") == "")
+    station("crew-reviewer", id="0000000f", cwd="/w/")
+    agents(sess("0000000b", "crew-reviewer", "/w"))
+    ck("is_alive: the recorded folder with a trailing separator finds the listed session", cc.is_alive("crew-reviewer", paths=PATHS) is True)
+    ck("is_alive: ...and an explicit one too", cc.is_alive("crew-reviewer", "/w//", paths=PATHS) is True)
+    ck("is_alive: another folder is still another session", cc.is_alive("crew-reviewer", "/w/x", paths=PATHS) is False)
+
+
 # ============================================================ transcript_of
 
 

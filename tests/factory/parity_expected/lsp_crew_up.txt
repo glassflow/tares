@@ -352,6 +352,10 @@ The crew takes a few minutes to check in. Next:
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-orchestrator"}
 {"at": "<TS>", "detail": "00000002", "event": "started", "station": "crew-reviewer"}
+== file crew/rules/crew-orchestrator.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/rules/crew-reviewer.json ==
+rules copy: allow sentences yes, soft_deny sentences yes
 == file crew/stations/crew-orchestrator.grants ==
 
 == file crew/stations/crew-orchestrator.settings.json ==

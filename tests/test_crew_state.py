@@ -57,8 +57,11 @@ GITCFG.write_text("[user]\n\tname = Zoë Ørsted 名前\n", encoding="utf-8")
 EMPTYGIT = T / "gitconfig-empty"
 EMPTYGIT.write_text("", encoding="utf-8")
 # a gh that answers like `gh api user -q .login`, or fails (FAKE_GH=fail)
-(BIN / "gh").write_text('#!/bin/sh\n[ "${FAKE_GH:-ok}" = ok ] && echo zoe-gh || exit 1\n')
-(BIN / "gh").chmod(0o755)
+if os.name == "nt":  # a batch file; the engine finds it through shutil.which, as CreateProcess would only find gh.exe
+    (BIN / "gh.cmd").write_text('@echo off\r\nif "%FAKE_GH%"=="fail" exit /b 1\r\necho zoe-gh\r\n')
+else:
+    (BIN / "gh").write_text('#!/bin/sh\n[ "${FAKE_GH:-ok}" = ok ] && echo zoe-gh || exit 1\n')
+    (BIN / "gh").chmod(0o755)
 
 for k in list(os.environ):
     if k.startswith("FACTORY_") or k in ("TARES_FACTORY_TOKEN_FILE", "TARES_FACTORY_URL"):
@@ -208,11 +211,8 @@ for label, e, gh, who in (("git name, gh login", {}, "zoe-gh", "Zoë Ørsted 名
         state.ensure_crew_home(CrewPaths.at(hp))
     cfg = json.loads(read_bytes(hp / "crew.json"))
     ck(f"ensure_crew_home ({label}): the folders", all((hp / d).is_dir() for d in ("stations", "reports", "worktrees")))
-    if os.name == "nt":  # the stub gh is a sh script, and CreateProcess finds the runner's own gh.exe first: check the name alone
-        ck(f"ensure_crew_home ({label}): the person is {who!r}", cfg["human"]["name"] == who and cfg["authorized"]["by"] == who, short(cfg["human"]))
-    else:
-        ck(f"ensure_crew_home ({label}): the person is {who!r}, the login {gh!r}",
-           cfg["human"] == {"name": who, "github": gh} and cfg["authorized"]["by"] == who, short(cfg["human"]))
+    ck(f"ensure_crew_home ({label}): the person is {who!r}, the login {gh!r}",
+       cfg["human"] == {"name": who, "github": gh} and cfg["authorized"]["by"] == who, short(cfg["human"]))
     ck(f"ensure_crew_home ({label}): the rest is the template's", merge(template, {"human": cfg["human"], "authorized": cfg["authorized"]}) == cfg)
 hp = newhome("ens-p")
 state.ensure_crew_home(CrewPaths.at(hp))
@@ -220,7 +220,7 @@ raw = read_bytes(hp / "crew.json")
 ck("crew.json: non-ASCII is written as is, not escaped", "Zoë Ørsted 名前".encode() in raw and b"\\u" not in raw)
 ck("crew.json: LF only, ends with one newline", b"\r" not in raw and raw.endswith(b"}\n") and not raw.endswith(b"\n\n"))
 ck("ccfg reads it back", state.ccfg("human", "name", paths=CrewPaths.at(hp)) == "Zoë Ørsted 名前"
-   and (os.name == "nt" or state.ccfg("human", "github", paths=CrewPaths.at(hp)) == "zoe-gh")
+   and state.ccfg("human", "github", paths=CrewPaths.at(hp)) == "zoe-gh"
    and state.ccfg("stations", "orchestrator", "model", paths=CrewPaths.at(hp)) == template["stations"]["orchestrator"]["model"])
 hh = newhome("req")
 try:
@@ -386,17 +386,57 @@ for t in ths:
     t.start()
 for t in ths:
     t.join()
-lines = read_bytes(hc / "events.jsonl").decode().split("\n")[:-1]
-ok = True
-for ln in lines:
-    try:
-        json.loads(ln)
-    except ValueError:
-        ok = False
-if os.name == "nt":  # Windows emulates O_APPEND, so threads of one process overwrite and mix lines (281 of 360 seen): a follow-up
-    print("  skip  events: 6 threads x 60 lines: Windows does not append atomically between threads")
-else:
-    ck("events: 6 threads x 60 lines, every line whole", ok and len(lines) == 6 * 60, f"{len(lines)} lines, parse ok={ok}")
+def whole(path, want):
+    """Every line of the file parses as an event, and the set of (station, n) is exactly `want`."""
+    got = []
+    bad = 0
+    for ln in read_bytes(path).decode().split("\n")[:-1]:
+        try:
+            r = json.loads(ln)
+            got.append((r["station"], int(r["detail"].split()[0])))
+        except (ValueError, KeyError, IndexError):
+            bad += 1
+    return bad, len(got), sorted(got) == sorted(want)
+
+
+bad, n_lines, same = whole(hc / "events.jsonl", [(f"t{n}", i) for n in range(6) for i in range(60)])
+ck("events: 6 threads x 60 lines, every line whole and none lost", bad == 0 and n_lines == 6 * 60 and same, f"{n_lines} lines, {bad} broken")
+# a write that lands in two pieces (what Windows' emulated append does under load) still keeps lines apart
+hs = newhome("ev-split")
+hs.mkdir()
+_real_write = os.write
+
+
+def split_write(fd, data):
+    h = len(data) // 2
+    n = _real_write(fd, data[:h])
+    time.sleep(0.001)
+    return n + _real_write(fd, data[h:])
+
+
+os.write = split_write
+try:
+    ths = [threading.Thread(target=lambda n=n: [state.event("w", f"t{n}", f"{i} {big}", paths=CrewPaths.at(hs)) for i in range(20)]) for n in range(6)]
+    for t in ths:
+        t.start()
+    for t in ths:
+        t.join()
+finally:
+    os.write = _real_write
+bad, n_lines, same = whole(hs / "events.jsonl", [(f"t{n}", i) for n in range(6) for i in range(20)])
+ck("events: writes that land in two pieces never mix a line", bad == 0 and n_lines == 120 and same, f"{n_lines} lines, {bad} broken")
+# and several processes at once (a crew command per process)
+hq = newhome("ev-procs")
+hq.mkdir()
+child = ("import sys; from tares.crew import state; from tares.crew.paths import CrewPaths\n"
+         "p = CrewPaths.at(sys.argv[1])\n"
+         "for i in range(40): state.event('w', 'p' + sys.argv[2], str(i) + ' ' + 'x' * 3000, paths=p)\n")
+procs = [subprocess.Popen([sys.executable, "-c", child, str(hq), str(n)], cwd=str(ROOT)) for n in range(4)]
+rcs = [pr.wait(timeout=120) for pr in procs]
+bad, n_lines, same = whole(hq / "events.jsonl", [(f"p{n}", i) for n in range(4) for i in range(40)])
+ck("events: 4 processes x 40 lines, every line whole and none lost", rcs == [0] * 4 and bad == 0 and n_lines == 160 and same,
+   f"{n_lines} lines, {bad} broken, exit codes {rcs}")
+
 
 # ====================================================================================
 print("\n== HALT, pace, wake, token ==")

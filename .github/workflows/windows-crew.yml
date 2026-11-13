@@ -1,36 +1,25 @@
-# The crew tests and the parity harness on Windows, from the first milestone (TR-1066), so a Windows
-# break shows up in the PR that causes it. Its own workflow, so ci.yml stays as it is.
+# The crew tests and the parity harness on Windows, from the first milestone (TR-1066). Its own workflow, so ci.yml
+# stays as it is.
 # One run of everything took longer than the 60 minute job limit (235 runs ok, then cancelled), so the runs are
 # split over 4 shards (`--shard N --of 4`, round robin, the parity coverage report in shard 1). The matrix jobs are
 # named windows-crew (shard N); the job `windows-crew` below waits for all of them and fails unless every shard
 # passed, so one stable check name can be required.
-# A PR runs the shards only when it changes the crew engine or what it runs on (the `changes` job below), and not
-# while it is a draft: marking it ready (ready_for_review) runs them once (TR-1233). A push to main always runs them.
+# The shards never run on a push to main (TR-1235). They run when a release tag `v*` is pushed (rc included), beside the
+# release, which does not wait for them; when someone runs this workflow by hand on any ref; and on a PR that carries the
+# label `windows-crew` (at once, and again on every later push, until the label is removed). A PR without the label
+# still gets the `windows-crew` check: the shards are skipped and the check is green, so it can stay a required check.
 # The runner is tests/ci_windows.py: it runs the tests/test_crew_*.py, test_ci_windows.py and the parity scenarios, and fails
 # if it ran no test, if a test printed no summary, or (--floors) if a test passed fewer checks than its floor (TR-976).
 name: windows-crew
 
 on:
+  # No paths-ignore: the required `windows-crew` check must be reported on every PR, a docs-only one included.
+  # Another label than windows-crew on a PR that has it runs the shards again (the check must say what the head's
+  # shards did); on a PR without it, the run is the quick skip.
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "README.md"
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - "SECURITY.md"
-      - "THIRD_PARTY_NOTICES.md"
-      - "docs/**"
-      - ".github/ISSUE_TEMPLATE/**"
+    types: [opened, synchronize, reopened, labeled]
   push:
-    branches: [main]
-    paths-ignore:
-      - "README.md"
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - "SECURITY.md"
-      - "THIRD_PARTY_NOTICES.md"
-      - "docs/**"
-      - ".github/ISSUE_TEMPLATE/**"
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -41,36 +30,24 @@ permissions:
   contents: read
 
 jobs:
-  # Does this PR need the Windows run? A push to main and a manual run: yes. A draft PR: no. Any other PR: yes
-  # when it changes the crew engine, its tests, the harness or this workflow.
+  # Do the shards run? A release tag and a manual run: yes. A PR: only with the label `windows-crew`.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.diff.outputs.run }}
+      run: ${{ steps.decide.outputs.run }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - id: diff
+      - id: decide
         env:
           EVENT: ${{ github.event_name }}
-          DRAFT: ${{ github.event.pull_request.draft }}
-          BASE: ${{ github.event.pull_request.base.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           if [ "$EVENT" != "pull_request" ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-          if [ "$DRAFT" = "true" ]; then
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "a draft PR: the Windows shards run when it is marked ready"
-            exit 0
-          fi
-          changed=$(git diff --name-only "$BASE"...HEAD)
-          echo "$changed"
-          if grep -qE '^(tares/crew/|claude-plugin/|tests/factory/|tests/test_crew_|tests/_crew_|tests/_env\.py$|tests/test_ci_windows\.py$|tests/ci_windows\.py$|tares/cli\.py$|tares/login\.py$|tares/__init__\.py$|pyproject\.toml$|\.github/workflows/windows-crew\.yml$)' <<<"$changed"; then
+          if tr ',' '\n' <<<"$LABELS" | grep -qx 'windows-crew'; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "no crew engine change: the Windows shards are skipped"
+            echo "no windows-crew label: the Windows shards are skipped (gh pr edit --add-label windows-crew, or run the workflow by hand)"
           fi
 
   shard:
@@ -78,7 +55,10 @@ jobs:
     needs: changes
     if: needs.changes.outputs.run == 'true'
     runs-on: windows-latest
-    timeout-minutes: 45
+    # Shard 1 runs the parity coverage report (about 18 minutes, 1055 s on the last run) after its share of the tests,
+    # about 35 minutes in all. A required check must not fail on a slow runner, so the job and the report each keep
+    # at least half as much again as they used (TR-1230).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -119,10 +99,10 @@ jobs:
           FACTORY_CREW_HOME: ${{ env.USERPROFILE }}\factory
         run: |
           .venv\Scripts\activate.ps1
-          python tests/ci_windows.py --floors --timeout 1200 --shard ${{ matrix.shard }} --of 4
+          python tests/ci_windows.py --floors --timeout 1200 --coverage-timeout 1800 --shard ${{ matrix.shard }} --of 4
 
   # The one check to require: green when all four shards are, and green when they were skipped on purpose
-  # (a draft or a PR that changes nothing the shards test). A shard that failed, was cancelled, or was skipped by
+  # (a PR without the windows-crew label). A shard that failed, was cancelled, or was skipped by
   # accident (the `changes` job failed) is red.
   windows-crew:
     name: windows-crew

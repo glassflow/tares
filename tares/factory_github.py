@@ -1,5 +1,5 @@
 """A factory ticket's pull request as GitHub has it (TR-410): head, CI, the reviewer's verdict (the
-`factory/review` commit status), merged or not. A ticket's PR state is a fact Tares reads from
+`factory/review` commit status, or a check run of that name, whoever posted it), merged or not. A ticket's PR state is a fact Tares reads from
 GitHub, not a station's claim.
 
 Tares reads it with the cell's own GitHub credentials (Settings, GitHub), trying each until one
@@ -79,6 +79,8 @@ def _ci(statuses: list[dict], runs: list[dict]) -> str:
     pending, or none (no checks at all)."""
     states = [s.get("state") for s in statuses if s.get("context") != REVIEW_CONTEXT]
     for r in runs:
+        if r.get("name") == REVIEW_CONTEXT:
+            continue
         if r.get("status") != "completed":
             states.append("pending")
         elif r.get("conclusion") in ("success", "neutral", "skipped"):
@@ -121,6 +123,8 @@ def _check_list(statuses: list[dict], runs: list[dict]) -> list[dict]:
         if s.get("context") != REVIEW_CONTEXT:
             out.append({"name": str(s.get("context") or ""), "state": _status_state(s.get("state"))})
     for r in runs or []:
+        if r.get("name") == REVIEW_CONTEXT:
+            continue
         if r.get("status") != "completed":
             state = "pending"
         elif r.get("conclusion") in ("success", "neutral", "skipped"):
@@ -129,6 +133,33 @@ def _check_list(statuses: list[dict], runs: list[dict]) -> list[dict]:
             state = "failure"
         out.append({"name": str(r.get("name") or ""), "state": state})
     return out
+
+
+def _review_of(statuses: list[dict], runs: list[dict]) -> dict | None:
+    """The reviewer's verdict on a commit as {state, text}, from the `factory/review` commit
+    status or the check run of that name, whichever was posted last (the person's `gh` posts the
+    first, the cell's GitHub App the second). `state` is success, failure or pending; an `error`
+    status is the reviewer failing to run, not a verdict, and a check run that is not finished
+    waits as pending."""
+    found = []
+    for s in statuses or []:
+        if s.get("context") == REVIEW_CONTEXT:
+            found.append((str(s.get("updated_at") or s.get("created_at") or ""),
+                          {"state": s.get("state"), "text": s.get("description")}))
+    for r in runs or []:
+        if r.get("name") != REVIEW_CONTEXT:
+            continue
+        if r.get("status") != "completed":
+            state = "pending"
+        elif r.get("conclusion") == "success":
+            state = "success"
+        else:
+            state = "failure"
+        found.append((str(r.get("completed_at") or r.get("started_at") or ""),
+                      {"state": state, "text": (r.get("output") or {}).get("title")}))
+    if not found:
+        return None
+    return max(found, key=lambda x: x[0])[1]   # the later one; equal stamps keep the first read
 
 
 async def _tokens(store, repo: str) -> list[tuple[str, str]]:
@@ -192,7 +223,7 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                         partial = True
                 except Exception:
                     partial = True
-            review = next((s for s in statuses if s.get("context") == REVIEW_CONTEXT), None)
+            review = _review_of(statuses, check_runs)
             out.update({
                 "title": pr.get("title"), "branch": (pr.get("head") or {}).get("ref"),
                 "head_repo": ((pr.get("head") or {}).get("repo") or {}).get("full_name"),
@@ -215,9 +246,9 @@ async def read_pr(store, repo: str, number: int, prev: dict | None = None) -> di
                 "additions": pr.get("additions"), "deletions": pr.get("deletions"),
                 # an `error` status is the reviewer failing to run, not a verdict
                 "verdict": {"success": "pass", "failure": "changes",
-                            "pending": "pending"}.get(review.get("state")) if review else None,
+                            "pending": "pending"}.get(review["state"]) if review else None,
                 "verdict_head": head if review else None,
-                "verdict_text": review.get("description") if review else None,
+                "verdict_text": review["text"] if review else None,
                 "url": pr.get("html_url") or out["url"], "error": None})
             return out
         except Exception as e:   # one credential failing is not the end
@@ -280,6 +311,117 @@ async def merge_pr(store, repo: str, number: int, sha: str, method: str = "squas
     out["no_write"] = (not tokens or refused == len(tokens)) and not out["rate_limited"]
     if not tokens:
         out["message"] = "no GitHub credential on this Tares"
+    return out
+
+
+REVIEW_POST_TIMEOUT = 45    # seconds the whole post may take; the MCP call waits longer than this
+REVIEW_TITLE_MAX = 100     # GitHub shows a check run's title in one line; the status text had this too
+_VERDICT_CONCLUSION = {"pass": "success", "changes": "failure", "block": "failure"}
+_VERDICT_WORDS = {"pass": "Pass", "changes": "Changes requested", "block": "Blocked"}
+
+
+def _plain(text) -> str:
+    """User text for a comment: an `@name` in it would notify that GitHub user, so a zero-width
+    space after the @ keeps the words and drops the mention."""
+    return re.sub(r"@(?=[A-Za-z0-9_])", "@\u200b", str(text or ""))
+
+
+def _finding_line(f: dict, n) -> str:
+    where = str(f.get("file") or "").strip()
+    if where and f.get("line"):
+        where += f":{f['line']}"
+    tag = ", ".join(x for x in (str(f.get("severity") or "").strip(),
+                                "blocking" if f.get("blocking") else "", where) if x)
+    return f"- **{f.get('label') or n}** {_plain(f.get('text')).strip()}" + (f" ({tag})" if tag else "")
+
+
+def review_comment(verdict: str, by: str, person: str, verified: str, not_verified: str,
+                   findings: list[dict], head: str, fixed: list[str] | None = None,
+                   earlier_open: list[dict] | None = None) -> str:
+    """The PR comment for one review: who reviewed (named in text, no @-mention), the verdict,
+    what was verified and what was not, this round's findings with the blocking ones first (each
+    under its F label, so a later round's "Fixed" and "Still open" lines point at it), the
+    earlier findings this round marked fixed, and those still open."""
+    who = f"{by} ({person}'s crew)" if person else by
+    lines = [f"**{_VERDICT_WORDS.get(verdict, verdict)}** on `{str(head)[:7]}`", "",
+             f"Reviewed by {_plain(who)}.", ""]
+    if verified:
+        lines += ["**Verified**", "", _plain(verified).strip(), ""]
+    if not_verified:
+        lines += ["**Not verified**", "", _plain(not_verified).strip(), ""]
+    rows = sorted(findings or [], key=lambda f: (not f.get("blocking"), str(f.get("severity") or "")))
+    if rows:
+        lines += ["**Findings**", ""]
+        lines += [_finding_line(f, i) for i, f in enumerate(rows, 1)]
+        lines.append("")
+    else:
+        lines += ["No findings.", ""]
+    if fixed:
+        lines += [f"**Fixed since the last review:** {', '.join(str(x) for x in fixed)}", ""]
+    still = sorted(earlier_open or [], key=lambda f: (not f.get("blocking"), str(f.get("severity") or "")))
+    if still:
+        lines += ["**Still open from earlier reviews**", ""]
+        lines += [_finding_line(f, i) for i, f in enumerate(still, 1)]
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+async def post_review(store, repo: str, number: int, head: str, verdict: str, comment: str,
+                      title: str) -> dict:
+    """Post one review to the pull request as the cell's GitHub App: the check run `factory/review`
+    on `head` (the gate reads it like the commit status) and one comment. Only an App credential
+    posts; a personal token is the person's own login and stays with the reviewer's `gh`. Never
+    raises.
+
+    Returns {posted_check, posted_comment, posted, why}: `posted` is true when both went up. When
+    no App credential can write to the repo nothing is posted and `why` says so; when only one of
+    the two went up `why` names the other, so the reviewer posts just that one with `gh`."""
+    out = {"posted_check": False, "posted_comment": False, "posted": False, "why": ""}
+    from .github_credentials import get_token, is_app
+    creds = [c for c in store.list_github_credentials() if is_app(c)]
+    if not creds:
+        out["why"] = "no GitHub App credential on this Tares (Settings, GitHub)"
+        return out
+    conclusion = _VERDICT_CONCLUSION.get(verdict, "failure")
+    refused = ""
+    for c in creds:
+        try:
+            tok = await get_token(store, c["name"], repo)
+        except Exception as e:
+            refused = f"the App {c['name']!r} has no token for {repo}: {e}"
+            continue
+        api = (c.get("api_url") or API).rstrip("/")
+        try:
+            async with httpx.AsyncClient(timeout=15, transport=_transport,
+                                         headers=_headers(tok)) as cx:
+                r = await cx.post(f"{api}/repos/{repo}/check-runs", json={
+                    "name": REVIEW_CONTEXT, "head_sha": head, "status": "completed",
+                    "conclusion": conclusion,
+                    "output": {"title": str(title)[:REVIEW_TITLE_MAX], "summary": comment[:60000]}})
+                note_rate(api, r)
+                if r.status_code not in (200, 201):
+                    refused = (f"GitHub answered {r.status_code} to the App {c['name']!r} "
+                               f"for the check run on {repo}")
+                    continue
+                out["posted_check"] = True
+                r = await cx.post(f"{api}/repos/{repo}/issues/{number}/comments",
+                                  json={"body": comment})
+                note_rate(api, r)
+                out["posted_comment"] = r.status_code in (200, 201)
+        except Exception as e:
+            refused = f"could not reach GitHub: {type(e).__name__}"
+            if not out["posted_check"]:
+                continue
+        break
+    out["posted"] = out["posted_check"] and out["posted_comment"]
+    if out["posted"]:
+        return out
+    if out["posted_check"]:
+        out["why"] = "the check run went up but the comment did not: post the comment with gh"
+    elif out["posted_comment"]:
+        out["why"] = "the comment went up but the check run did not: post the status with gh"
+    else:
+        out["why"] = refused or "no App credential could post to the repo"
     return out
 
 
