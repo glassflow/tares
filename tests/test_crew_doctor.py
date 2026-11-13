@@ -215,6 +215,32 @@ d.check_tares_version()
 r = one(d, "min_tares")
 ck("min_tares is read from plugin.json too", r and r.level == "fix" and "999.1" in r.message, r)
 
+print("the upgrade advice on Windows and elsewhere (TR-1281)")
+PLAIN = "uv tool upgrade tares, or pip install -U tares"
+NOTE = "On Windows an upgrade while a tares command is running can leave the install broken"
+with mock.patch.object(doctor.version, "on_windows", lambda: True):
+    d, *_ = make("minv-win", plugin={"min_tares.txt": "999.0.0\n"})
+    d.check_tares_version()
+    r = one(d, "min_tares")
+    ck("on Windows the version FIX says to stop the crew first, then the upgrade, then the note",
+       r and r.fix.startswith("stop the crew first (tares factory crew down), then " + PLAIN + ". ") and NOTE in r.fix
+       and r.fix.endswith("run the same command again."), r)
+    d, *_ = make("path-none-win", env={"PATH": str(fresh("empty-win"))})
+    d.check_tares_path()
+    r = one(d, "tares_path")
+    ck("...and so does the install advice when no tares is on PATH, keeping its own ending",
+       r and r.fix.startswith("stop the crew first (tares factory crew down), then uv tool install tares")
+       and "then open a new terminal. " + NOTE in r.fix, r)
+    sentence = doctor.version.upgrade_advice("Upgrade it with `x`.", sentence=True)
+    ck("a full sentence starts with a capital and keeps one full stop before the note",
+       sentence.startswith("Stop the crew first (tares factory crew down), then upgrade it with `x`. On Windows"), sentence)
+with mock.patch.object(doctor.version, "on_windows", lambda: False):
+    d, *_ = make("minv-other", plugin={"min_tares.txt": "999.0.0\n"})
+    d.check_tares_version()
+    r = one(d, "min_tares")
+    ck("elsewhere the version FIX is the old text, byte for byte", r and r.fix == PLAIN, r)
+    ck("...and a sentence comes back as given", doctor.version.upgrade_advice("Upgrade it with `x`.", sentence=True) == "Upgrade it with `x`.")
+
 print("tares on PATH, and tares hook (TR-1068)")
 bindir = fresh("bin")
 exe = bindir / ("tares.cmd" if WIN else "tares")
