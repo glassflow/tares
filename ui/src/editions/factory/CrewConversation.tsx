@@ -13,6 +13,14 @@ import { changeOf, DiffText, JsonText, looksLikeDiff } from "./codeColours";
 // A failed call has a red edge and a "Failed" mark. Three or more calls in a row with no words between
 // them fold into one card. Session events are dividers. Oldest first, opening at the newest and
 // following new lines unless the reader has scrolled up. Every string from the cell is drawn as text.
+//
+// The most common calls have a body built for them (TR-1317, VIEWS below): Bash shows its description,
+// its command and its output with the exit status, TodoWrite its plan as a checklist, Agent its brief and
+// report as markdown, SendMessage its message under who it went to, Read the lines it read with their
+// numbers, Grep and Glob the files they found, Edit and Write their change. Each has a Formatted / Raw
+// switch, and its Copy copies the call's input as it came. An input the list cut short does not parse,
+// and a view can say no (null): either way the card shows the plain Input and Output blocks, as every
+// other tool does.
 
 const GROUP_AT = 3;
 const NEAR_BOTTOM = 48;
@@ -78,6 +86,20 @@ function ToolIcon({ name }: { name: string }) {
       </svg>
     );
   }
+  if (name === "TodoWrite") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={cls} aria-hidden>
+        <path d="M9 6h11M9 12h11M9 18h11" /><path d="m3 6 1 1 2-2M3 12l1 1 2-2M3 18l1 1 2-2" />
+      </svg>
+    );
+  }
+  if (name === "Agent" || name === "Task") {
+    return (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={cls} aria-hidden>
+        <rect x="4" y="8" width="16" height="12" /><path d="M12 4v4M9 13v2M15 13v2" />
+      </svg>
+    );
+  }
   if (name.startsWith("mcp__")) {
     return (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={cls} aria-hidden>
@@ -123,21 +145,360 @@ function Copy({ text }: { text: string }) {
 }
 
 type Look = "json" | "diff" | "plain";
+const LABEL = "font-mono text-[11px] uppercase tracking-wide text-muted-foreground";
+const PRE = cn("m-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border border-border px-3 py-2 font-mono text-xs leading-normal", DARK);
 
-function Block({ label, text, testid, look, copy }: { label: React.ReactNode; text: string; testid: string; look: Look; copy?: string }) {
+/** One labelled part of a card's body; `right` holds its controls (the switch, Copy). */
+function Section({ label, right, children, testid }: { label: React.ReactNode; right?: React.ReactNode; children: React.ReactNode; testid?: string }) {
   return (
-    <div className="px-3 pb-3">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="font-mono text-[11px] uppercase tracking-wide text-muted-foreground">{label}</span>
-        <Copy text={copy ?? text} />
+    <div className="min-w-0 px-3 pb-3" data-testid={testid}>
+      <div className="mb-1 flex min-w-0 items-center justify-between gap-2">
+        <span className={cn(LABEL, "flex min-w-0 items-center gap-2")}>{label}</span>
+        {right && <span className="flex shrink-0 items-center gap-1.5">{right}</span>}
       </div>
-      <pre data-words-exempt data-testid={testid} data-look={look}
-           className={cn("m-0 max-h-72 overflow-auto whitespace-pre-wrap break-words border border-border px-3 py-2 font-mono text-xs leading-normal", DARK)}>
-        {!text ? " " : look === "json" ? <JsonText text={text} /> : look === "diff" ? <DiffText text={text} /> : text}
-      </pre>
+      {children}
     </div>
   );
 }
+
+function Block({ label, text, testid, look, copy, extra }: { label: React.ReactNode; text: string; testid: string; look: Look; copy?: string; extra?: React.ReactNode }) {
+  return (
+    <Section label={label} right={<>{extra}<Copy text={copy ?? text} /></>}>
+      <pre data-words-exempt data-testid={testid} data-look={look} className={PRE}>
+        {!text ? " " : look === "json" ? <JsonText text={text} /> : look === "diff" ? <DiffText text={text} /> : text}
+      </pre>
+    </Section>
+  );
+}
+
+/** How a call ended, as a small coloured mark: green for done, red for failed. */
+function Mark({ ok, children }: { ok: boolean; children: React.ReactNode }) {
+  return (
+    <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] normal-case tracking-normal",
+      ok ? "text-[color:var(--ok)]" : "text-[color:var(--err)]")} data-testid="tool-mark" data-ok={ok ? "true" : "false"}>
+      <span aria-hidden className="inline-block size-1.5 bg-current" />{children}
+    </span>
+  );
+}
+
+/** Formatted or Raw: the view built for the tool, or the call's input and output as they came. */
+function Switch({ raw, setRaw }: { raw: boolean; setRaw: (raw: boolean) => void }) {
+  const btn = (on: boolean) => cn("h-auto! min-h-0! border-0! px-2! py-0.5! font-mono text-[11px]! leading-tight!",
+    on ? "bg-foreground! text-background!" : "bg-card! text-muted-foreground!");
+  return (
+    <span className="inline-flex border border-border" role="group" aria-label="How to show the call" data-testid="tool-switch">
+      <button type="button" className={btn(!raw)} aria-pressed={!raw} onClick={() => setRaw(false)} data-testid="tool-formatted">Formatted</button>
+      <button type="button" className={btn(raw)} aria-pressed={raw} onClick={() => setRaw(true)} data-testid="tool-raw">Raw</button>
+    </span>
+  );
+}
+
+/** The call's input as an object, or null when it is not one (cut short by the list, or not JSON). */
+export function parseInput(text: string): Record<string, unknown> | null {
+  try {
+    const o: unknown = JSON.parse(text);
+    return o && typeof o === "object" && !Array.isArray(o) ? (o as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
+
+/** A Bash result's exit status and the output without the "Exit code N" line Claude Code puts first. A
+ *  failed call with no such line (a blocked command) has no code; one that did not fail exited 0. */
+export function exitOf(output: string, failed: boolean): { code: number | null; text: string } {
+  const m = /^Exit code (\d+)\n?/.exec(output);
+  if (m) return { code: Number(m[1]), text: output.slice(m[0].length) };
+  return { code: failed ? null : 0, text: output };
+}
+
+interface ViewArgs {
+  t: ConvoTool; input: Record<string, unknown>;
+  /** The output, whole once it loaded; `loading` while the rest of a cut one is on its way. */
+  output: string | null; loading: boolean; missed: boolean;
+  /** The Formatted / Raw switch, for the view to put on its first label row. */
+  toggle: React.ReactNode;
+}
+
+interface ToolView {
+  /** The name on the header, when it says more than the tool's own ("Plan", "To crew-reviewer"). */
+  title?: string | ((input: Record<string, unknown>) => string);
+  /** A muted note after the summary, read from the result (how many files matched). */
+  note?: (t: ConvoTool, input: Record<string, unknown>, output: string | null) => string;
+  /** The header's summary is words (a description, a plan), not code. */
+  prose?: (input: Record<string, unknown>) => boolean;
+  /** A short tag after the summary, such as a sub-agent's type. */
+  tag?: (input: Record<string, unknown>) => string;
+  /** The body, or null to show the plain Input and Output blocks. */
+  body: (a: ViewArgs) => React.ReactNode | null;
+}
+
+const rest = (loading: boolean, label: string) => (loading ? `${label} (loading the rest...)` : label);
+
+/** The output part every view ends with, as the plain card shows it. */
+function OutputPart({ output, loading, missed, label = "Output", mark, text }: {
+  output: string | null; loading: boolean; missed: boolean; label?: string; mark?: React.ReactNode; text?: string;
+}) {
+  if (output === null) return <p className="m-0 px-3 pb-3 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>;
+  const shown = text ?? output;
+  return (
+    <>
+      <Block label={<>{rest(loading, label)}{mark}</>} text={shown} copy={output} testid="tool-output"
+             look={looksLikeDiff(shown) ? "diff" : "plain"} />
+      {missed && <p className="m-0 px-3 pb-3 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the output did not load.</p>}
+    </>
+  );
+}
+
+function BashView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const command = typeof input.command === "string" ? input.command : "";
+  if (!command.trim()) return null;
+  const description = str(input.description);
+  const ended = output === null ? null : exitOf(output, t.failed);
+  const background = input.run_in_background === true && !t.failed;
+  const mark = !ended ? null : background ? <Mark ok>in the background</Mark>
+    : ended.code === null ? <Mark ok={false}>failed</Mark> : <Mark ok={ended.code === 0}>exit {ended.code}</Mark>;
+  return (
+    <>
+      {description && (
+        <Section label="Description" right={toggle}>
+          <p className="m-0 text-sm [overflow-wrap:anywhere]" data-words-exempt data-testid="tool-description">{description}</p>
+        </Section>
+      )}
+      <Section label="Command" right={<>{!description && toggle}<Copy text={t.input} /></>}>
+        <pre data-words-exempt data-testid="tool-command" className={PRE}>
+          <span aria-hidden className="select-none text-[color:var(--kit-accent)]">$ </span>{command}
+        </pre>
+      </Section>
+      <OutputPart output={output} loading={loading} missed={missed} mark={mark} text={ended?.text} />
+    </>
+  );
+}
+
+interface Step { content: string; status: string; activeForm: string }
+
+function steps(input: Record<string, unknown>): Step[] | null {
+  if (!Array.isArray(input.todos) || input.todos.length === 0) return null;
+  const out: Step[] = [];
+  for (const s of input.todos) {
+    if (!s || typeof s !== "object") return null;
+    const r = s as Record<string, unknown>;
+    if (typeof r.content !== "string") return null;
+    out.push({ content: r.content, status: str(r.status), activeForm: str(r.activeForm) });
+  }
+  return out;
+}
+
+function PlanView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const plan = steps(input);
+  if (!plan) return null;
+  const done = plan.filter((s) => s.status === "completed").length;
+  return (
+    <>
+      <Section label="Plan" right={<>{toggle}<Copy text={t.input} /></>} testid="tool-plan">
+        <div className="mb-2 h-1 border border-border bg-muted" role="img" aria-label={`${done} of ${plan.length} done`}>
+          <i className="block h-full bg-[var(--ok)]" style={{ width: `${Math.round((done / plan.length) * 100)}%` }} />
+        </div>
+        <ul className="m-0 grid list-none gap-1.5 p-0 pl-0! text-sm" data-words-exempt>
+          {plan.map((s, i) => {
+            const isDone = s.status === "completed";
+            const now = s.status === "in_progress";
+            return (
+              <li key={i} className={cn("grid grid-cols-[18px_minmax(0,1fr)] items-start gap-2 [overflow-wrap:anywhere]",
+                isDone && "text-muted-foreground line-through", now && "font-semibold")} data-testid="plan-step" data-status={s.status || "pending"}>
+                <span aria-hidden className={cn("mt-[3px] inline-block size-3.5 border-[1.5px]",
+                  isDone ? "border-[var(--ok)] bg-[var(--ok)]" : now ? "border-[var(--kit-accent)] bg-[var(--accent-soft)]" : "border-muted-foreground")} />
+                <span>{s.content}{now && <small className="ml-1.5 font-mono text-[10px] font-normal uppercase tracking-wide text-muted-foreground">now</small>}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </Section>
+      {t.failed && <OutputPart output={output} loading={loading} missed={missed} mark={<Mark ok={false}>failed</Mark>} />}
+    </>
+  );
+}
+
+function AgentView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const brief = str(input.prompt);
+  if (!brief) return null;
+  const mark = output === null ? null : t.failed ? <Mark ok={false}>failed</Mark> : <Mark ok>done</Mark>;
+  return (
+    <>
+      <Section label="Brief" right={<>{toggle}<Copy text={t.input} /></>} testid="tool-brief">
+        <div className="text-sm" data-words-exempt><Prose text={brief} /></div>
+      </Section>
+      {output === null ? (
+        <p className="m-0 px-3 pb-3 text-xs text-muted-foreground" data-testid="tool-no-result">No report yet.</p>
+      ) : (
+        <Section label={<>{rest(loading, "Report")}{mark}</>} right={<Copy text={output} />} testid="tool-report">
+          <div className="max-h-96 overflow-auto border-l-2 border-border pl-3 text-sm" data-words-exempt><Prose text={output} /></div>
+          {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the report did not load.</p>}
+        </Section>
+      )}
+    </>
+  );
+}
+
+function ChangeView({ t, output, loading, missed, toggle }: ViewArgs) {
+  const change = changeOf(t.name, t.input);
+  if (!change) return null;
+  return (
+    <>
+      <Block label={<>Change{change.file && <> to <span className="normal-case" data-words-exempt>{change.file}</span></>}</>}
+             text={change.diff} copy={t.input} testid="tool-input" look="diff" extra={toggle} />
+      <OutputPart output={output} loading={loading} missed={missed} />
+    </>
+  );
+}
+
+function MessageView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const message = str(input.message);
+  if (!message || !str(input.to)) return null;
+  return (
+    <>
+      <Section label="Message" right={<>{toggle}<Copy text={t.input} /></>} testid="tool-message">
+        <div className="border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-sm dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]"
+             data-words-exempt><Prose text={message} /></div>
+      </Section>
+      {t.failed && <OutputPart output={output} loading={loading} missed={missed} mark={<Mark ok={false}>not sent</Mark>} />}
+    </>
+  );
+}
+
+/** A Read result's lines with their numbers: Claude Code writes each as "84<tab>text" (older ones "84→text").
+ *  A line without a number (a note the session added) keeps its text, with no number. */
+export function numbered(output: string): { n: string; text: string }[] | null {
+  const lines = output.split("\n");
+  if (lines.length && lines[lines.length - 1] === "") lines.pop();
+  if (!lines.length || !/^\s*\d+(?:\t|\u2192)/.test(lines[0])) return null;
+  return lines.map((l) => {
+    const m = /^\s*(\d+)(?:\t|\u2192)(.*)$/.exec(l);
+    return m ? { n: m[1], text: m[2] } : { n: "", text: l };
+  });
+}
+
+function ReadView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  const file = str(input.file_path);
+  if (!file) return null;
+  const lines = output !== null && !t.failed ? numbered(output) : null;
+  const width = lines ? Math.max(...lines.map((l) => l.n.length)) : 0;
+  return (
+    <>
+      <Section label={<span className="truncate normal-case" data-words-exempt>{rest(loading, file)}</span>}
+               right={<>{toggle}<Copy text={t.input} /></>} testid="tool-file">
+        {lines ? (
+          <pre data-words-exempt data-testid="tool-lines" className={PRE}>
+            {lines.map((l, i) => (
+              <span key={i} className="flex">
+                <span aria-hidden className="mr-3 shrink-0 select-none text-right text-[color:var(--sand-300)] opacity-70" style={{ width: `${width}ch` }}
+                      data-testid="line-number">{l.n}</span>
+                <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{l.text || " "}</span>
+              </span>
+            ))}
+          </pre>
+        ) : output === null ? (
+          <p className="m-0 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
+        ) : (
+          <pre data-words-exempt data-testid="tool-output" data-look="plain" className={PRE}>{output || " "}</pre>
+        )}
+        {t.failed && <div className="mt-1"><Mark ok={false}>failed</Mark></div>}
+        {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the file did not load.</p>}
+      </Section>
+    </>
+  );
+}
+
+interface Matches { files: { path: string; n: number | null }[]; total: number | null; cut: boolean }
+
+/** A Grep or Glob result as files: Grep lists them under "Found 3 files" (a "path:N" line each when it
+ *  counts), Glob one path a line; "No files found" is none. Null for what is not a list of files (Grep's
+ *  matching lines, an answer in another shape). */
+export function matchesOf(name: string, input: Record<string, unknown>, output: string): Matches | null {
+  const mode = name === "Grep" ? str(input.output_mode) || "files_with_matches" : "files";
+  if (mode === "content") return null;
+  const out: Matches = { files: [], total: null, cut: false };
+  for (const raw of output.split("\n")) {
+    const l = raw.trim();
+    if (!l) continue;
+    if (/^No (files|matches) found/i.test(l)) continue;
+    const found = /^Found (\d+) (files?|total occurrences?)\b/i.exec(l);
+    if (found) { if (/^file/i.test(found[2])) out.total = Number(found[1]); continue; }
+    if (/^\(Results are truncated/i.test(l)) { out.cut = true; continue; }
+    if (mode === "count") {
+      const m = /^(.*):(\d+)$/.exec(l);
+      if (!m) return null;
+      out.files.push({ path: m[1], n: Number(m[2]) });
+    } else {
+      out.files.push({ path: l, n: null });
+    }
+  }
+  return out;
+}
+
+const files = (n: number, more: boolean) => (n === 0 ? "no files" : `${n}${more ? "+" : ""} ${n === 1 && !more ? "file" : "files"}`);
+
+function matchNote(t: ConvoTool, input: Record<string, unknown>, output: string | null): string {
+  if (output === null || t.failed) return "";
+  const m = matchesOf(t.name, input, output);
+  if (!m) return "";
+  const n = m.total ?? m.files.length;
+  return files(n, m.total === null && (m.cut || (t.more && output === t.output)));
+}
+
+function MatchesView({ t, input, output, loading, missed, toggle }: ViewArgs) {
+  if (output === null || t.failed) {
+    return (
+      <Section label="Files" right={<>{toggle}<Copy text={t.input} /></>}>
+        {output === null ? <p className="m-0 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
+          : <><pre data-words-exempt data-testid="tool-output" data-look="plain" className={PRE}>{output || " "}</pre><div className="mt-1"><Mark ok={false}>failed</Mark></div></>}
+      </Section>
+    );
+  }
+  const m = matchesOf(t.name, input, output);
+  if (!m) return null;
+  const base = str(input.path).replace(/\/+$/, "");
+  const strip = base.startsWith("/") && m.files.length > 0 && m.files.every((f) => f.path.startsWith(`${base}/`));
+  return (
+    <Section label={<>{rest(loading, "Files")}{strip && <span className="truncate normal-case" data-words-exempt>in {base}</span>}</>}
+             right={<>{toggle}<Copy text={t.input} /></>} testid="tool-matches">
+      {m.files.length === 0 ? (
+        <p className="m-0 text-sm text-muted-foreground" data-testid="matches-none">No files matched.</p>
+      ) : (
+        <ul className="m-0 grid max-h-72 list-none gap-0.5 overflow-auto p-0 pl-0! font-mono text-xs" data-words-exempt>
+          {m.files.map((f, i) => (
+            <li key={i} className="flex min-w-0 justify-between gap-3" data-testid="match-file">
+              <span className="min-w-0 truncate" title={f.path}>{strip ? f.path.slice(base.length + 1) : f.path}</span>
+              {f.n !== null && <span className="shrink-0 tabular-nums text-muted-foreground">{f.n}</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(m.cut || (t.more && !loading && output === t.output)) && <p className="m-0 mt-1 text-xs text-muted-foreground">The list goes on past these.</p>}
+      {missed && <p className="m-0 mt-2 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the list did not load.</p>}
+    </Section>
+  );
+}
+
+const MATCHES: ToolView = { note: matchNote, body: MatchesView };
+
+const AGENT: ToolView = { prose: (i) => !!str(i.description), tag: (i) => str(i.subagent_type), body: AgentView };
+
+/** The tools with a body of their own; every other tool shows its Input and Output blocks. */
+const VIEWS: Record<string, ToolView> = {
+  Bash: { prose: (i) => !!str(i.description), body: BashView },
+  TodoWrite: { title: "Plan", prose: () => true, body: PlanView },
+  Agent: AGENT,
+  Task: AGENT,
+  SendMessage: { title: (i) => (str(i.to) ? `To ${str(i.to)}` : "SendMessage"), prose: (i) => !!str(i.message), body: MessageView },
+  Read: { body: ReadView },
+  Grep: MATCHES,
+  Glob: MATCHES,
+  Edit: { body: ChangeView },
+  MultiEdit: { body: ChangeView },
+  Write: { body: ChangeView },
+};
 
 function ToolCard({ t, open, onToggle, loadFull }: {
   t: ConvoTool; open: boolean; onToggle: () => void; loadFull: (id: string) => Promise<string>;
@@ -152,11 +513,21 @@ function ToolCard({ t, open, onToggle, loadFull }: {
     }
   }, [open, t.more, t.id, full, loading, missed, loadFull]);
   const output = full ?? t.output;
-  const change = React.useMemo(() => (open ? changeOf(t.name, t.input) : null), [open, t.name, t.input]);
+  const [raw, setRaw] = React.useState(false);
+  const view = VIEWS[t.name];
+  const input = React.useMemo(() => (view ? parseInput(t.input) : null), [view, t.input]);
+  const shaped = view && input ? view : null;
+  const custom = open && shaped && input
+    ? shaped.body({ t, input, output, loading, missed, toggle: <Switch raw={raw} setRaw={setRaw} /> })
+    : null;
+  const tag = shaped && input && shaped.tag ? shaped.tag(input) : "";
+  const prose = !!(shaped && input && shaped.prose?.(input));
+  const title = shaped && input && shaped.title ? (typeof shaped.title === "string" ? shaped.title : shaped.title(input)) : toolName(t.name);
+  const note = shaped && input && shaped.note ? shaped.note(t, input, output) : "";
   const meta = [took(t.ms), hm(t.at)].filter(Boolean).join(" · ");
   return (
     <div className={cn("border bg-card", t.failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-card"
-         data-failed={t.failed ? "true" : "false"}>
+         data-failed={t.failed ? "true" : "false"} data-tool={t.name}>
       <button type="button" className="block w-full min-w-0 px-2.5 py-2 text-left" aria-expanded={open}
               onClick={onToggle} data-testid="tool-head">
         <span className="flex w-full min-w-0 items-center gap-2">
@@ -164,8 +535,10 @@ function ToolCard({ t, open, onToggle, loadFull }: {
           t.failed ? "border-[var(--err)] text-[color:var(--err)]" : "border-border text-muted-foreground")}>
           <ToolIcon name={t.name} />
         </span>
-        <span className="shrink-0 font-mono text-[13px] font-semibold" data-words-exempt>{toolName(t.name)}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" data-words-exempt>{t.summary}</span>
+        <span className="max-w-[45%] shrink-0 truncate font-mono text-[13px] font-semibold" data-words-exempt data-testid="tool-title">{title}</span>
+        <span className={cn("min-w-0 flex-1 truncate", prose ? "text-[13px] text-foreground" : "font-mono text-xs text-muted-foreground")}
+              data-words-exempt data-testid="tool-summary">{t.summary}{note && <span className="text-muted-foreground" data-testid="tool-note"> · {note}</span>}</span>
+        {tag && <span className="shrink-0 border border-border px-1.5 font-mono text-[10.5px]" data-words-exempt data-testid="tool-tag">{tag}</span>}
         {t.failed && (
           <span className="shrink-0 border border-[var(--err)] px-1.5 font-mono text-[10px] uppercase text-[color:var(--err)]"
                 data-testid="tool-failed">Failed</span>
@@ -176,20 +549,13 @@ function ToolCard({ t, open, onToggle, loadFull }: {
         </span>
       </button>
       {open && (
-        <div className="border-t border-border pt-2" data-testid="tool-body">
-          {change ? (
-            <Block label={<>Change{change.file && <> to <span className="normal-case" data-words-exempt>{change.file}</span></>}</>} text={change.diff} copy={t.input} testid="tool-input" look="diff" />
-          ) : (
-            <Block label="Input" text={t.input} testid="tool-input" look="json" />
-          )}
-          {t.output !== null ? (
+        <div className="border-t border-border pt-2" data-testid="tool-body" data-shaped={custom ? "true" : "false"}>
+          {custom && !raw ? custom : (
             <>
-              <Block label={loading ? "Output (loading the rest...)" : "Output"} text={output ?? ""} testid="tool-output"
-                     look={looksLikeDiff(output ?? "") ? "diff" : "plain"} />
-              {missed && <p className="m-0 px-3 pb-3 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the output did not load.</p>}
+              <Block label="Input" text={t.input} testid="tool-input" look="json"
+                     extra={custom ? <Switch raw={raw} setRaw={setRaw} /> : undefined} />
+              <OutputPart output={output} loading={loading} missed={missed} />
             </>
-          ) : (
-            <p className="m-0 px-3 pb-3 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
           )}
         </div>
       )}
