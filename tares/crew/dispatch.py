@@ -80,6 +80,14 @@ def _settings(argv: list[str], env: dict) -> int:
 PORTED[("settings",)] = _settings
 
 
+def _launch_plan(argv: list[str], env: dict) -> int:
+    from .stations import cmd_launch_plan  # imported when used (TR-867)
+    return cmd_launch_plan(argv, env)
+
+
+PORTED[("launch-plan",)] = _launch_plan
+
+
 def _lifecycle(name: str) -> Callable[[list[str], dict], int]:
     """A lifecycle command (TR-955), imported when it runs."""
     def run_it(argv: list[str], env: dict) -> int:

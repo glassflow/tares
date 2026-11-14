@@ -53,13 +53,23 @@ class TaresHTTPError(CrewError):
     """A call to Tares that did not give a 2xx/3xx answer. The text is what curl prints with `-sS -f`
     ("curl: (22) The requested URL returned error: 404"), because bash callers read it: grants_read looks
     for `error: 404`, and crew_projects shows the last line. `status` is the HTTP status, None when no
-    answer came at all."""
+    answer came at all. `detail` is the `detail` text of a JSON error body ("" when there is none)."""
 
     code = "tares_error"
 
-    def __init__(self, text: str, status=None):
+    def __init__(self, text: str, status=None, detail: str = ""):
         super().__init__(text)
         self.status = status
+        self.detail = detail
+
+
+def _detail(body: bytes) -> str:
+    """The `detail` of a JSON error body as text, "" when the body has none."""
+    try:
+        got = json.loads(body.decode("utf-8", "replace")).get("detail")
+    except (ValueError, AttributeError):
+        return ""
+    return got.strip() if isinstance(got, str) else ""
 
 
 def _say(msg: str) -> None:
@@ -374,7 +384,8 @@ class TaresClient:
                 body if isinstance(body, str) else state.dumps_compact(body)).encode("utf-8")
         r = self._request(method, f"{self.tares}{path}", headers, content, 15)
         if r.status_code >= 400:
-            raise TaresHTTPError(f"curl: (22) The requested URL returned error: {r.status_code}", r.status_code)
+            raise TaresHTTPError(f"curl: (22) The requested URL returned error: {r.status_code}", r.status_code,
+                                 _detail(r.content))
         return r.content.decode("utf-8", "replace")
 
     def key_ok(self, key: str) -> bool:
@@ -537,9 +548,13 @@ class TaresClient:
 
     # -- once per command --
 
-    def prime(self) -> None:
-        """Decide once where Tares is and what the crew settings are, so later calls reuse the answer."""
+    def prime(self, offline_ok: bool = False) -> None:
+        """Decide once where Tares is and what the crew settings are, so later calls reuse the answer. With
+        Tares down it stops with the "no Tares answers" message, unless `offline_ok`: then it only merges the
+        crew.json defaults, for a command that can go on from what an earlier start kept."""
         state.merge_crew_defaults(self.paths)
+        if offline_ok and not self.tares_on():
+            return
         self.require_tares()
         self.keep_token()
         if self.paths.crew_cfg.is_file():
