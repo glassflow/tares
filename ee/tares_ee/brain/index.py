@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import datetime, timedelta, timezone
 
 from tares import github_credentials
 from tares import licence
@@ -88,6 +89,28 @@ def failed_words(repo: str, error) -> str:
         return (f"GitHub refused to let the brain clone {repo}: the token could not read it. "
                 "Check that a GitHub connection on this cell can read the repo, then retry.")
     return f"The index of {repo} failed: {line.rstrip('.')}. Retry to start it again."
+
+
+CLOCK_SLACK = timedelta(seconds=60)   # the cell's clock and lore's database clock may differ a little
+
+
+def _when(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str) and value:
+        try:
+            when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+    return None
+
+
+def _older_than_job(finished_at, job_started_at) -> bool:
+    """True when lore's finished run ended before this Job was asked for: it is the run of an
+    earlier attempt (a Retry after a failure), not this one. Unknown times count as not older."""
+    done, asked = _when(finished_at), _when(job_started_at)
+    return bool(done and asked and done < asked - CLOCK_SLACK)
 
 
 class Indexer:
@@ -229,7 +252,7 @@ class Indexer:
             async with self._lore() as lore:
                 p = await lore.repo_progress(row["repo_source_id"])
             done, total = _count(p.get("files_done")), _count(p.get("files_total"))
-            if p.get("state") == "indexing" or total:
+            if p.get("stage") == "indexing" or total:   # lore's run: queued, cloning, indexing, done, failed
                 phase = "indexing"
         except LoreError as e:
             log.info("brain progress of %s not read: %s", repo, _line(e))
@@ -245,7 +268,7 @@ class Indexer:
                 p = await lore.repo_progress(row["repo_source_id"])
         except LoreError:
             p = {}
-        if p.get("state") == "done":
+        if p.get("stage") == "done" and not _older_than_job(p.get("finished_at"), row.get("job_started_at")):
             return await self._adopt(row)
         self._fail(repo, f"The index job for {repo} is gone and the brain did not finish it. "
                          "Retry to start it again.")

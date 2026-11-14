@@ -24,7 +24,7 @@ second job); one whose job finished is replaced. A status of a repo with no job 
 
 Where the fake differs from the control plane (tares-cloud `control-plane/app/brain_index.py` is the
 authority): source ids are not required to be UUIDs, jobs never end by themselves (a test says when),
-and `queued` with a `place` is answered as TR-1218 will.
+and `queued` with a `place` is answered as its queue does (`brain_index_queue.py`, TR-1218).
 """
 from __future__ import annotations
 

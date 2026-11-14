@@ -11,8 +11,10 @@ one repo and then asks how that Job is doing:
 Secret by the control plane), and the slug is `TARES_CELL_SLUG`, or `TARES_INSTANCE_NAME` when that is
 unset (the cell chart sets it to the slug). A cell missing any of the three raises `CpNotConfigured`.
 
-The control plane answers `started`, `done` or `failed` today; `queued` with a `place` comes with its
-queue (TR-1218). A repo with no Job answers 404, and `index_status` returns None for it.
+The control plane answers `queued` (with a `place`, 1 = next, while its limit of running Jobs is
+reached, TR-1218), `started`, `done` or `failed` (with an `error`, also for a queued repo whose Job
+could not be started). The POST answers `started` or `queued`. A repo with no Job answers 404, and
+`index_status` returns None for it.
 
 Every failure is a `CpError` whose message is plain words. The message never holds the GitHub token
 or the cell's token: whatever the control plane said and any transport error pass through `scrub`

@@ -148,7 +148,7 @@ async def main():
     index_mod.cp_client = cp.client
     os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
     os.environ["TARES_BRAIN_KEY"] = BRAIN_KEY
-    names = ("one", "two", "three", "c1", "c2", "c3", "c4", "poll", "poll2", "gone", "gone2", "adopt", "lic", "nobrain",
+    names = ("one", "two", "three", "c1", "c2", "c3", "c4", "poll", "poll2", "gone", "gone2", "gone3", "adopt", "lic", "nobrain",
              "race", "old", "inprog", "nulls", "nocp", "nocp2", "odd", "wake", "asked", "mid", "dup", "leak")
     readable = [{"full_name": f"acme/{n}"} for n in names]
 
@@ -217,14 +217,14 @@ async def main():
         await state_is("acme/one", "queued", place=1)
         cp.set(src("acme/one"), "started")
         await state_is("acme/one", "cloning", place=None, files_done=0, files_total=0)
-        lore.progress[src("acme/one")] = {"state": "indexing", "files_done": 12, "files_total": 40}
+        lore.progress[src("acme/one")] = {"stage": "indexing", "files_done": 12, "files_total": 40}
         await state_is("acme/one", "indexing", files_done=12, files_total=40)
         j = (await cx.get("/api/brain")).json()["repos"][0]
         ck("GET /api/brain shows the counts", (j["state"], j["files_done"], j["files_total"], j["place"]) == ("indexing", 12, 40, None), str(j))
-        lore.progress[src("acme/one")] = {"state": "indexing", "files_done": None, "files_total": None}
+        lore.progress[src("acme/one")] = {"stage": "indexing", "files_done": None, "files_total": None}
         await state_is("acme/one", "indexing", files_done=0, files_total=0)
         ck("... null counts from lore do not break it", row("acme/one")["error"] is None)
-        lore.progress[src("acme/one")] = {"state": "indexing", "files_done": 30, "files_total": 40}
+        lore.progress[src("acme/one")] = {"stage": "indexing", "files_done": 30, "files_total": 40}
         await state_is("acme/one", "indexing", files_done=30, files_total=40)
         ck("the cell has not asked lore to sync yet", not lore.calls("POST", "sync_repo"))
         store.upsert_github_credential("setup", T2)   # the token is rotated while the Job runs
@@ -422,15 +422,22 @@ async def main():
         await connect("acme/gone")
         await state_is("acme/gone", "cloning")
         del cp.jobs[src("acme/gone")]
-        lore.progress[src("acme/gone")] = {"state": "indexing", "files_done": 1, "files_total": 5}
+        lore.progress[src("acme/gone")] = {"stage": "indexing", "files_done": 1, "files_total": 5}
         await state_is("acme/gone", "failed")
         ck("a Job that is gone and not finished fails, in words", "is gone" in row("acme/gone")["error"], row("acme/gone")["error"])
         await connect("acme/gone2")
         await state_is("acme/gone2", "cloning")
         del cp.jobs[src("acme/gone2")]
-        lore.progress[src("acme/gone2")] = {"state": "done"}
+        lore.progress[src("acme/gone2")] = {"stage": "done"}
         await state_is("acme/gone2", "ready")
         ck("a Job that is gone but lore finished is adopted", True)
+        await connect("acme/gone3")
+        await state_is("acme/gone3", "cloning")
+        del cp.jobs[src("acme/gone3")]
+        lore.progress[src("acme/gone3")] = {"stage": "done", "finished_at": "2001-01-01T00:00:00Z"}
+        await state_is("acme/gone3", "failed")
+        ck("a Job that is gone and a done run older than it (an earlier attempt) is not adopted",
+           "is gone" in row("acme/gone3")["error"], row("acme/gone3")["error"])
         await connect("acme/adopt")
         await state_is("acme/adopt", "cloning")
         lore.fail("repo_progress", 500, "progress is down")
