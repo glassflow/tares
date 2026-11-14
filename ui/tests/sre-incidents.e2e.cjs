@@ -236,7 +236,12 @@ async function waitFor(url, tries = 150) {
     ck("a short note is not cut", (await page.getByTestId("note-toggle").count()) === 0 && (await page.getByTestId("note-fade").count()) === 0);
     const ev = await page.getByTestId("evidence-row").allInnerTexts();
     const evTimes = ev.map((e) => e.trim().slice(0, 5));
-    ck("What it read lists 3 steps in time order", ev.length === 3 && JSON.stringify(evTimes) === JSON.stringify([...evTimes].sort()), JSON.stringify(evTimes));
+    // the order is the cell's own times, oldest first; sorting the shown HH:MM strings fails when the steps straddle midnight UTC (TR-1338)
+    const inTimeOrder = async (rows) => {
+      const want = [...(await api(incApi("open-a"))).evidence].sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+      return rows.length === want.length && want.every((w, i) => rows[i].includes(w.text.slice(0, 20)));
+    };
+    ck("What it read lists 3 steps in time order", ev.length === 3 && (await inTimeOrder(ev)), JSON.stringify(evTimes));
     ck("the Slack section names the place and links nowhere without a link from Slack", /The note was posted in Slack\./.test(await txt(page.getByTestId("slack"))) && (await page.getByTestId("slack-link").count()) === 0, await txt(page.getByTestId("slack")));
     ck("Who was on it says nobody yet", (await txt(page.getByTestId("who-line"))) === "Nobody yet.", await txt(page.getByTestId("who-line")));
     ck("one later note joined", (await page.getByTestId("joined-row").count()) === 1 && /It did not start a new one/.test(await txt(page.getByTestId("joined-row"))));
@@ -247,8 +252,9 @@ async function waitFor(url, tries = 150) {
     await page.route(isOpenA, flip);
     await page.reload({ waitUntil: "load" });
     await page.getByTestId("evidence-row").first().waitFor();
-    const flipped = (await page.getByTestId("evidence-row").allInnerTexts()).map((e) => e.trim().slice(0, 5));
-    ck("What it read stays in time order when the cell sends it reversed", JSON.stringify(flipped) === JSON.stringify([...flipped].sort()) && flipped.length === 3, JSON.stringify(flipped));
+    const flippedRows = await page.getByTestId("evidence-row").allInnerTexts();
+    const flipped = flippedRows.map((e) => e.trim().slice(0, 5));
+    ck("What it read stays in time order when the cell sends it reversed", flipped.length === 3 && (await inTimeOrder(flippedRows)), JSON.stringify(flipped));
     await page.unroute(isOpenA, flip);
     await checkWords(page, ck, "open incident");
     await shot(page, "live-inc-open-1440.png");
