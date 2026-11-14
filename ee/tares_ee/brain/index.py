@@ -151,9 +151,10 @@ class Indexer:
     async def cancel(self, row: dict) -> None:
         """Stop the control plane's queued entry or running Job for `row` before its source goes.
         Only a repo that is still running and was asked for can have one. Raises CpError when the
-        control plane could not be asked. Not an error: a control plane that has no cancel route yet (405,
-        501), has no brain index (503) or could not reach its cluster (502, lore still refuses to forget a repo
-        while a run on it is live), or one that is not set up here."""
+        control plane did not say the Job is gone: a wrong token (401), no brain index (503), no cancel
+        route yet (405, 501), a cluster error (502, the caller asks again) or any other failure. That is
+        "not cancelled", never "gone": the caller must not delete anything in lore then. A control plane
+        that has no Job for it (404) or one that is not set up here has nothing to cancel."""
         if row["state"] not in RUNNING or not row["job_started_at"] or not row["repo_source_id"]:
             return
         try:
@@ -161,11 +162,6 @@ class Indexer:
                 await cp.cancel_index(row["repo_source_id"])
         except CpNotConfigured:
             return
-        except CpError as e:
-            if e.status in (405, 501, 502, 503):
-                log.info("brain: the control plane did not cancel %s's index (status %s)", row["repo"], e.status)
-                return
-            raise
 
     # -- starting ---------------------------------------------------------------------------
 

@@ -41,8 +41,11 @@ __all__ = ["MAX_CONNECT", "STATES", "lore_client", "register_routes"]
 STATES = indexing.STATES   # queued, cloning, indexing, ready, failed
 MAX_CONNECT = 50           # repos in one POST
 GITHUB_TIMEOUT = 60        # seconds the available list waits for GitHub
-REMOVE_WAIT = 120.0        # seconds removing a repo waits for lore's run on it to stop (lore answers 409)
-REMOVE_STEP = 3.0          # seconds between asks while it waits
+REMOVE_WAIT = 240.0        # seconds removing a repo waits for lore's run on it to stop (lore answers 409 for 90 s
+                           # after its last write, and a cancelled Job's pod runs on through its grace period)
+REMOVE_STEP = 3.0          # seconds before the second ask; each wait is half as long again as the last
+REMOVE_STEP_MAX = 20.0     # ... up to this
+CP_WAIT = 60.0             # seconds removing a repo asks again while the control plane answers 502 (a cluster error)
 
 
 def lore_client() -> LoreClient:
@@ -203,10 +206,12 @@ def register_routes(app, host) -> None:
     @app.delete("/api/brain/repos/{owner}/{name}")
     async def remove_repo(owner: str, name: str, request: Request):
         """Admin only. Remove the repo: its queued or running index is cancelled at the control
-        plane, lore deletes the repo and everything it indexed from it (source, chunks, mirror,
-        checkout, documents), then the row goes. While lore still runs the index it answers 409:
-        the delete is asked again for up to two minutes, then this answers 409 "Still indexing. Try
-        again in a minute." and the row stays, so removing again finishes it."""
+        plane (a cluster error, 502, is asked again for a minute; a wrong token, no brain index or no cancel
+        route is 502 here with the row and lore untouched), lore deletes the repo and everything it indexed
+        from it (source, chunks, mirror, checkout, documents), then the row goes. While lore still runs the
+        index it answers 409 (for 90 s after its last write, and a cancelled Job's pod may write until its
+        grace period ends): the delete is asked again with a growing wait for up to four minutes, then this
+        answers 409 "Still indexing. Try again in a minute." and the row stays, so removing again finishes it."""
         need_brain()
         host.require_admin(request)
         repo = repo_from(owner, name)
@@ -219,19 +224,32 @@ def register_routes(app, host) -> None:
             row = store.get_brain_repo(repo)
             if row is None:   # a second remove finished first
                 host.err(KeyError(f"{repo} is not connected to the brain"), 404)
-            try:
-                await indexer.cancel(row)
-            except CpError as e:
-                again = "" if "Try again" in str(e) else " Try again in a minute."
-                host.err(ValueError(f"Could not stop the index of {repo}: {e}{again}"), 502)
+            await cancel_job(repo, row)
             if row["repo_source_id"]:
                 await forget_in_lore(repo, row["repo_source_id"])
             store.delete_brain_repo(repo)
         return {"ok": True, "removed": True}
 
+    async def cancel_job(repo: str, row: dict) -> None:
+        """Cancel the repo's Job at the control plane. A 502 is a cluster error that a second call
+        finishes, so it is asked again for CP_WAIT. Any other error (401, 503, 405, 501, ...) means "not
+        cancelled", not "gone": this answers 502 with it and nothing in lore or the row is touched."""
+        deadline, step = time.monotonic() + CP_WAIT, REMOVE_STEP
+        while True:
+            try:
+                await indexer.cancel(row)
+                return
+            except CpError as e:
+                if e.status != 502 or time.monotonic() + step > deadline:
+                    again = "" if "Try again" in str(e) else " Try again in a minute."
+                    host.err(ValueError(f"Could not stop the index of {repo}: {e}{again}"), 502)
+            await asyncio.sleep(step)
+            step = min(step * 1.5, REMOVE_STEP_MAX)
+
     async def forget_in_lore(repo: str, source: str) -> None:
-        """Delete the repo's source in lore, asking again while its index run is live (409)."""
-        deadline = time.monotonic() + REMOVE_WAIT
+        """Delete the repo's source in lore, asking again while its index run is live (409), with a
+        growing wait, for REMOVE_WAIT. The row is kept until lore answers 204 or 404."""
+        deadline, step = time.monotonic() + REMOVE_WAIT, REMOVE_STEP
         while True:
             try:
                 async with lore_client() as lore:
@@ -242,9 +260,10 @@ def register_routes(app, host) -> None:
                     return
                 if e.status != 409:
                     host.err(ValueError(f"Could not remove {repo} from the brain: {e}"), 502)
-            if time.monotonic() + REMOVE_STEP > deadline:
+            if time.monotonic() + step > deadline:
                 host.err(ValueError("Still indexing. Try again in a minute."), 409)
-            await asyncio.sleep(REMOVE_STEP)
+            await asyncio.sleep(step)
+            step = min(step * 1.5, REMOVE_STEP_MAX)
 
     @app.post("/api/brain/repos/{owner}/{name}/retry")
     async def retry_repo(owner: str, name: str, request: Request):

@@ -1,7 +1,7 @@
 # Tares enterprise licence, see ee/LICENSE
 """Removing a repo deletes everything lore holds for it (TR-1199). DELETE /api/brain/repos/{owner}/{name}
 cancels the repo's queued or running index at the control plane, asks lore to delete the repo's source
-(asking again while lore's run on it is live, up to a limit), and only then deletes the row. Everything
+(asking again with a growing wait while lore's run on it is live, up to a limit), and only then deletes the row. Everything
 runs in process against the shared fake lore and the fake control plane (ee/tests/fake_lore.py,
 ee/tests/fake_cp.py), with the real background task polling every 50 ms.
 
@@ -9,13 +9,16 @@ Covered: a running repo (the Job is cancelled, lore's source and progress are go
 poll does not bring the Job back); a ready, a failed and a repo with no lore id (no cancel, no lore call
 where there is nothing to forget); lore answering 409 and then letting go; lore answering 409 the whole wait
 (409 "Still indexing", the row stays, removing again finishes it); lore already without it (404); a control
-plane with no cancel route (405, 501), with no brain index (503), with a cluster error (502), one that is not
-set up (the removal goes on); one that fails another way (502 from the cell, the row stays, lore is not asked); the poll leaving a repo that is being removed alone; a second remove or a retry while one is
+plane that did not say the Job is gone (wrong token 401, no brain index 503, no cancel route 405 or 501, any other
+failure: 502 from the cell, the row stays, lore is not asked, removing again finishes it); a cluster error (502) asked
+again and then ok, or all through the wait (502 from the cell, nothing touched); a cell with no control plane
+settings (the removal goes on); the poll leaving a repo that is being removed alone; a second remove or a retry while one is
 running (409); a non-admin (403); no licence (404); the repo can be connected again afterwards.
 
 The request the cell sends the control plane (for TR-1349 to match): DELETE
-/internal/cells/{slug}/brain/index/{repo_source_id}, the cell's bearer token, no body; 200 for a queued entry
-or a running Job, 404 when there is none.
+/internal/cells/{slug}/brain/index/{repo_source_id}, the cell's bearer token, no body; 200 {"state": "gone"} once the
+entry or Job is deleted (the same on a second call). Only that answer, or a 404, lets the removal go on to lore: 401
+and 503 mean "not cancelled" and stop it, 502 is asked again.
 
 In process, no ports. With CI's Postgres run (TARES_TEST_PG and tests/pg_harness on PYTHONPATH) the same
 script keeps its state in Postgres.
@@ -78,12 +81,14 @@ async def main():
     index_mod.IDLE_SECONDS = 0.05
     repos_mod.REMOVE_WAIT = 0.4
     repos_mod.REMOVE_STEP = 0.05
+    repos_mod.REMOVE_STEP_MAX = 0.2
+    repos_mod.CP_WAIT = 0.4
     lore, cp = fake_lore.FakeLore(), fake_cp.FakeCp()
     repos_mod.lore_client = lore.client
     index_mod.cp_client = cp.client
     os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
     os.environ["TARES_BRAIN_KEY"] = BRAIN_KEY
-    names = ("run", "ready", "failed", "nolore", "retry", "stuck", "gone", "c405", "c501", "c502", "c503", "c500", "nocp", "poll", "twice",
+    names = ("run", "ready", "failed", "nolore", "retry", "stuck", "gone", "c405", "c501", "c502", "c502b", "c503", "c401", "cgone", "c500", "nocp", "poll", "twice",
              "admin", "again", "lic", "bare")
     readable = [{"full_name": f"acme/{n}"} for n in names]
 
@@ -185,7 +190,8 @@ async def main():
         took = time.monotonic() - t0
         ck("409 the whole wait: 409 with plain words, no em dash", r.status_code == 409 and "Still indexing. Try again in a minute." in r.text
            and "—" not in r.text, f"{r.status_code} {r.text[:200]}")
-        ck("... it waited about the limit and asked more than twice", 0.3 <= took < 3 and len(forgets(s)) > 2, f"{took:.2f}s {len(forgets(s))}")
+        ck("... it waited about the limit, asked more than twice, and the waits grew (a fixed 0.05 s step would ask about 8 times)",
+           0.2 <= took < 3 and 2 < len(forgets(s)) <= 6, f"{took:.2f}s {len(forgets(s))}")
         ck("... the row and lore's source stay, so removing again can finish", row("acme/stuck").get("repo_source_id") == s and s in lore.repos)
         ck("... nothing is left marked as being removed", not indexer.is_removing("acme/stuck"))
         lore._fail.clear()
@@ -209,12 +215,48 @@ async def main():
         ck("... removing again works", r.status_code == 200 and store.get_brain_repo("acme/c500") is None, f"{r.status_code} {r.text[:200]}")
 
         print("== the control plane ==")
-        for repo, status in (("acme/c405", 405), ("acme/c501", 501), ("acme/c502", 502), ("acme/c503", 503)):
+        for repo, status in (("acme/c405", 405), ("acme/c501", 501), ("acme/c503", 503), ("acme/c401", 401)):
             s = await connect(repo)
             cp.fail("cancel_index", status, "no such route")
+            n = len(lore.calls("DELETE", "delete_repo"))
             r = await remove(repo)
-            ck(f"the control plane answers {status}: not an error, lore still deletes, the row goes", r.status_code == 200 and len(forgets(s)) == 1
-               and store.get_brain_repo(repo) is None, f"{r.status_code} {r.text[:200]}")
+            ck(f"the control plane answers {status}: not cancelled, so 502, the row stays, lore is not asked", r.status_code == 502
+               and "Could not stop the index of " + repo in r.text and row(repo).get("repo_source_id") == s
+               and len(lore.calls("DELETE", "delete_repo")) == n and s in lore.repos and len(cancels(s)) == 1,
+               f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+            ck(f"... {status} is not asked again, and nothing is left marked as being removed", len(cancels(s)) == 1 and not indexer.is_removing(repo))
+            r = await remove(repo)
+            ck(f"... removing again, with the control plane back, deletes in lore and the row", r.status_code == 200
+               and s not in lore.repos and store.get_brain_repo(repo) is None, f"{r.status_code} {r.text[:200]}")
+        s = await connect("acme/c502")
+        cp.fail("cancel_index", 502, "could not reach the cluster")
+        cp.fail("cancel_index", 502, "could not reach the cluster")
+        r = await remove("acme/c502")
+        ck("a cluster error (502) is asked again: the third ask cancels, lore deletes, the row goes", r.status_code == 200
+           and len(cancels(s)) == 3 and len(forgets(s)) == 1 and s not in lore.repos and store.get_brain_repo("acme/c502") is None,
+           f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+        s = await connect("acme/c502b")
+        for _ in range(40):
+            cp.fail("cancel_index", 502, "could not reach the cluster")
+        n = len(lore.calls("DELETE", "delete_repo"))
+        t0 = time.monotonic()
+        r = await remove("acme/c502b")
+        took = time.monotonic() - t0
+        ck("502 all through the wait: 502 from the cell with the reason and Try again once, lore not asked, the row stays",
+           r.status_code == 502 and "Could not stop the index of acme/c502b" in r.text and r.text.count("Try again") == 1
+           and len(lore.calls("DELETE", "delete_repo")) == n and row("acme/c502b").get("repo_source_id") == s and s in lore.repos,
+           f"{r.status_code} {r.text[:300]}")
+        ck("... it waited about the limit and asked more than twice, not endlessly", 0.2 <= took < 2 and 2 < len(cancels(s)) < 30, f"{took:.2f}s {len(cancels(s))}")
+        ck("... nothing is left marked as being removed", not indexer.is_removing("acme/c502b"))
+        cp._fail.clear()
+        r = await remove("acme/c502b")
+        ck("... removing again, with the cluster back, finishes it", r.status_code == 200 and s not in lore.repos
+           and store.get_brain_repo("acme/c502b") is None, f"{r.status_code} {r.text[:200]}")
+        s = await connect("acme/cgone")
+        cp.jobs.pop(s, None)
+        r = await remove("acme/cgone")
+        ck("a control plane with no Job for it (the same 200 'gone'): lore deletes, the row goes", r.status_code == 200
+           and s not in lore.repos and store.get_brain_repo("acme/cgone") is None, f"{r.status_code} {r.text[:200]}")
         s = await connect("acme/c500")
         cp.fail("cancel_index", 500, "internal error")
         n = len(lore.calls("DELETE", "delete_repo"))
@@ -226,13 +268,6 @@ async def main():
         r = await remove("acme/c500")
         ck("... removing again, with the control plane back, works", r.status_code == 200 and store.get_brain_repo("acme/c500") is None
            and s not in lore.repos, f"{r.status_code} {r.text[:200]}")
-        s = await connect("acme/c500")
-        cp.fail("cancel_index", 401, "invalid cell token")
-        r = await remove("acme/c500")
-        ck("a wrong token (401) is not tolerated: 502, the row stays", r.status_code == 502 and row("acme/c500").get("repo_source_id") == s,
-           f"{r.status_code} {r.text[:200]}")
-        r = await remove("acme/c500")
-        ck("... and again, it is removed", r.status_code == 200 and store.get_brain_repo("acme/c500") is None)
         s = await connect("acme/nocp")
         real = index_mod.cp_client
 
