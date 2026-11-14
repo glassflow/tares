@@ -58,7 +58,7 @@ class _Tee(io.TextIOBase):
         try:
             self.real.write(line + "\n")
             self.real.flush()
-        except (OSError, ValueError):   # a closed or broken stderr must not fail the command
+        except (OSError, ValueError, AttributeError):   # a closed, broken or missing (pythonw) stderr must not fail the command
             pass
 
     def flush(self) -> None:
