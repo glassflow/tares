@@ -406,6 +406,14 @@ def cmd_status(argv: list, env: dict) -> int:
     doc["pace"] = line or None
     if line:
         out.write(line + "\n")
+    from . import strays
+    try:
+        n_claude, n_other = strays.counts(strays.scan(paths, env))
+    except Exception:   # a process that cannot be read must not end status
+        n_claude = n_other = 0
+    doc["strays"] = {"claude": n_claude, "other": n_other}
+    if n_claude or n_other:
+        out.write(f"strays: {n_claude} claude, {n_other} other ({ME} doctor)\n")
     pid = watch_pid(paths)
     doc["watch"] = {"running": bool(pid), "pid": int(pid) if str(pid).isdigit() else None}
     if pid:
