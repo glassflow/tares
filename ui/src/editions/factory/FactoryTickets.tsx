@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ChevronDown, ChevronRight } from "../../components/icons";
-import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
+import { Banner, Button, EmptyState, Skeleton, StatusDot, STATUS_TONES } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -67,16 +67,6 @@ const stateFromUrl = (s: string): StateKey | "moving" | "" => {
   return (Object.keys(STATE_URL) as StateKey[]).find((k) => STATE_URL[k] === s) ?? "";
 };
 
-const DOT: Record<StateKey, string> = {
-  to_do: "border-[color:var(--ink-faint)] bg-transparent",
-  in_progress: "border-[color:var(--accent)] bg-[var(--accent)]",
-  in_review: "border-foreground bg-foreground",
-  changes_asked: "border-2 border-foreground bg-transparent",
-  merged: "border-[color:var(--ok)] bg-[var(--ok)]",
-  blocked: "border-[color:var(--err)] bg-[var(--err)]",
-  canceled: "border-[color:var(--ink-faint)] bg-[var(--ink-faint)]",
-};
-
 const MUTED = "text-muted-foreground";
 const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-[var(--input-bg)]! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
 const LINKISH = "cursor-pointer! border-0! bg-transparent! p-0! text-[length:inherit]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]";
@@ -126,7 +116,7 @@ function useNarrow(): boolean {
 }
 
 function Dot({ k }: { k: StateKey }) {
-  return <i aria-hidden className={cn("inline-block size-[9px] shrink-0 border", DOT[k])} />;
+  return <StatusDot tone={STATUS_TONES.ticket[k]} className="size-[9px]" />;
 }
 
 // ----------------------------------------------------------------------------------------- tickets

@@ -3,7 +3,8 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Panel, Select, Skeleton, SkeletonRows, Toaster, useToast,
+  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Panel, Select, Skeleton, SkeletonRows, StatusLabel, STATUS_TONES,
+  Toaster, useToast,
 } from "../../components/edition";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { cn } from "../../lib/utils";
@@ -234,11 +235,9 @@ export default function Incidents() {
 
 // ── one incident ─────────────────────────────────────────────────────────────
 
-const GROUP_TAG: Record<GroupState, { label: string; cls: string }> = {
-  open: { label: "Open", cls: "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]" },
-  on_it: { label: "Someone on it", cls: "border-[color:var(--warn-border)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]" },
-  resolved: { label: "Resolved", cls: "border-[color:var(--ok)] bg-[var(--ok-soft)] text-[color:var(--ok)]" },
-  raised: { label: "Raised", cls: "border-border bg-transparent text-foreground" },
+/** The incident page's state word; its tone comes from STATUS_TONES.incident. */
+const GROUP_LABEL: Record<GroupState, string> = {
+  open: "Open", on_it: "Someone on it", resolved: "Resolved", raised: "Raised",
 };
 
 function Back() {
@@ -472,7 +471,6 @@ function IncidentView({ id }: { id: string }) {
 
   const at = now(sample);
   const opened = Date.parse(d.opened_at);
-  const tag = GROUP_TAG[d.state];
   const can = (a: IncidentAction) => d.actions.includes(a);
   const slackUrl = d.slack?.url && /^https?:\/\//i.test(d.slack.url) ? d.slack.url : null;
   const worth = d.worth;
@@ -488,7 +486,7 @@ function IncidentView({ id }: { id: string }) {
     <>
       <header className="grid gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={cn("border px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", tag.cls)} data-testid="incident-tag">{tag.label}</span>
+          <StatusLabel tone={STATUS_TONES.incident[d.state]} data-testid="incident-tag">{GROUP_LABEL[d.state]}</StatusLabel>
           <span className="border border-border bg-card px-2 py-0.5 text-xs" data-user-text data-testid="incident-service">{d.service}</span>
           {openedWords && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {openedWords}</span>}
         </div>

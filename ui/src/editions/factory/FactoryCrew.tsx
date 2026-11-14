@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, ProgressBar, Skeleton } from "../../components/edition";
+import { Banner, Button, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
 import { ApiError } from "../../api";
 import { cn } from "@/lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -39,14 +39,6 @@ export interface CrewActions {
   ask: (station: string, crew?: string | null) => Promise<unknown>;
   decide: (id: string, decision: "accept" | "reject") => Promise<unknown>;
 }
-
-const DOT: Record<string, string> = {
-  working: "bg-[var(--accent)]",
-  idle: "bg-[var(--ok)]",
-  "waiting for you": "border border-foreground bg-transparent",
-  "not heard": "bg-[var(--ink-faint)]",
-  ended: "border border-[var(--ink-faint)] bg-transparent",
-};
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
@@ -157,7 +149,7 @@ function Member({ m, actions }: { m: CrewMember; actions: CrewActions }) {
       className="grid grid-cols-[10px_minmax(0,1fr)] gap-x-3 gap-y-1 border-b border-border px-4 py-3.5 last:border-b-0 md:grid-cols-[10px_minmax(0,1fr)_auto]"
       data-testid="crew-member" data-state={m.state}
     >
-      <span aria-hidden className={cn("mt-1.5 inline-block size-2", DOT[m.state] ?? DOT["not heard"])} />
+      <StatusDot tone={toneOf("crew", m.state)} className="mt-1.5" />
       <div className="min-w-0">
         <div className="font-semibold" data-user-text>{m.doing}</div>
         <div className={MUTED}><b className="font-semibold text-foreground">{m.role_label}</b> · {m.state_text}</div>

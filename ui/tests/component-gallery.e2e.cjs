@@ -21,6 +21,36 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
 
 let pass = 0, fail = 0;
+// TR-1265: every status in STATUS_TONES renders from the one StatusLabel, and amber is live work only.
+// The gallery walks the table, so a status or a domain added later is checked here without a new line.
+async function checkStatuses(page, theme) {
+  const got = await page.evaluate(() => {
+    const paint = (v) => { const p = document.createElement("span"); p.style.color = `var(${v})`; document.body.append(p); const c = getComputedStyle(p).color; p.remove(); return c; };
+    const amber = [paint("--accent"), paint("--accent-deep"), paint("--warn")];
+    const labels = [...document.querySelectorAll("[data-testid=status-every] [data-status]")].map((e) => {
+      const s = getComputedStyle(e);
+      return { key: `${e.dataset.domain}:${e.dataset.status}`, tone: e.dataset.tone, text: e.textContent.trim(), color: s.color,
+               line: s.textDecorationLine, lineColor: s.textDecorationColor, lineStyle: s.textDecorationStyle,
+               shown: e.getBoundingClientRect().width > 0 };
+    });
+    return { amber, labels, domains: new Set(labels.map((l) => l.key.split(":")[0])).size };
+  });
+  const { amber, labels } = got;
+  const isAmber = (c) => amber.includes(c);
+  ck(`${theme}: the gallery lists every status table (${got.domains} domains, ${labels.length} statuses)`, got.domains >= 12 && labels.length >= 57, `${got.domains} / ${labels.length}`);
+  ck(`${theme}: every status shows its words`, labels.every((l) => l.shown && l.text.length > 0), labels.filter((l) => !l.shown || !l.text).map((l) => l.key).join(", "));
+  const stray = labels.filter((l) => l.tone !== "working" && (isAmber(l.color) || isAmber(l.lineColor)));
+  ck(`${theme}: no status but live work uses the action amber`, stray.length === 0, stray.map((l) => `${l.key} ${l.color}`).join(", "));
+  const working = labels.filter((l) => l.tone === "working");
+  ck(`${theme}: live work is amber, underlined in the accent`, working.length > 0 && working.every((l) => isAmber(l.color) && l.lineColor === amber[0] && l.line.includes("underline")),
+     working.map((l) => `${l.key} ${l.color} ${l.lineColor}`).join(", "));
+  const waits = labels.filter((l) => l.tone === "waiting");
+  ck(`${theme}: a waiting status has a dashed underline`, waits.length > 0 && waits.every((l) => l.lineStyle === "dashed" && l.line.includes("underline")),
+     waits.map((l) => `${l.key} ${l.lineStyle}`).join(", "));
+  const done = labels.filter((l) => l.tone === "done");
+  ck(`${theme}: a done status is plain`, done.length > 0 && done.every((l) => !l.line.includes("underline")), done.map((l) => `${l.key} ${l.line}`).join(", "));
+}
+
 const ck = (label, cond, detail = "") => {
   cond ? pass++ : fail++;
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
@@ -172,6 +202,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     }
 
     ck("no horizontal scroll at 1440px", (await wide()) <= 0, `${await wide()}px`);
+    await checkStatuses(page, "light");
     await page.getByTestId("theme-light").click();
     await shot("gallery-light.png");
 
@@ -180,6 +211,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     ck("dark theme applies from storage", (await page.evaluate(() => document.documentElement.getAttribute("data-theme"))) === "dark");
     ck("the page background changes with the theme", (await page.evaluate(() => getComputedStyle(document.body).backgroundColor)) !== "rgb(255, 255, 255)");
     await shot("gallery-dark.png");
+    await checkStatuses(page, "dark");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await open();

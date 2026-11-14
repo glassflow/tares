@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import { CopyButton, ErrorState, Picker, TimeAgo, usePolling } from "../components/bits";
+import { StatusLabel, STATUS_TONES } from "../components/edition";
 import { ContextBadge, PlanPanel, StationUsage } from "../components/ClaudeUsage";
 import ConfirmDialog from "../components/ConfirmDialog";
 import { ProgressRing } from "../components/ProgressRing";
@@ -36,11 +37,10 @@ const AUTONOMY_TEXT: Record<string, string> = {
 
 const CREW_ROLES = ["orchestrator", "reviewer", "releaser"];
 
+/** A station's state word; its tone comes from STATUS_TONES.crew, like every status in the console. */
 export function CrewState({ s }: { s: CrewStation }) {
   const title = s.state === "quiet" ? `nothing sent for ${s.quiet_minutes} min` : s.state_reason ?? undefined;
-  const cls = s.state === "working" ? "fo-st-in_progress" : s.state === "waiting" ? "fo-st-wait"
-    : s.state === "quiet" ? "fo-st-quiet" : "";
-  return <span className={`fo-st ${cls}`} title={title}>{s.state}</span>;
+  return <StatusLabel tone={STATUS_TONES.crew[s.state]} title={title}>{s.state}</StatusLabel>;
 }
 
 /** A capital first letter and a full stop, for a phrase a station wrote as a reason. */

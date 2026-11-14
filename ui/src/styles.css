@@ -550,7 +550,8 @@ td .dim, .dim { color: var(--ink-faint); }
 .badge::before { content: ""; width: 5px; height: 5px; border-radius: 0; background: currentColor; }
 .badge.ok { background: var(--ok-soft); color: var(--ok); }
 .badge.error { background: var(--err-soft); color: var(--err); }
-.badge.paused { background: var(--warn-soft); color: var(--warn); }
+/* Waiting or paused: a person's turn, not live work, so a dashed neutral edge and no amber (TR-1265). */
+.badge.paused { background: transparent; color: var(--ink); outline: 1px dashed var(--ink-soft); outline-offset: -1px; }
 .badge.push { background: var(--slate-soft); color: var(--slate); }
 /* A value rewritten to nothing. Deliberately NOT `ok` — blanking is a legitimate rule, but it is
    not a success to be congratulated, and it must not look like a target that failed to render.
@@ -2085,7 +2086,8 @@ pre.payload {
 button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
 /* the session view of a crew station: the command that opens it in a terminal */
 .fo-attach { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
-.fo-st-wait { color: var(--accent-deep); border-color: var(--accent-deep); background: var(--accent-soft); }
+/* waiting is a person's turn: a dashed neutral edge, not the action amber (TR-1265) */
+.fo-st-wait { color: var(--ink); border-color: var(--ink-soft); border-style: dashed; background: transparent; }
 .fo-st-quiet { color: var(--err); border-color: var(--err); }
 /* a fold's pin: a pinned section is open on every visit and does not fold */
 .fo-fold-right { display: inline-flex; align-items: center; gap: 10px; }

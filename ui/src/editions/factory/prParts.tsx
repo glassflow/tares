@@ -1,16 +1,9 @@
 import * as React from "react";
 
-import type { PrState, ProjectPr } from "./FactoryProject.api";
+import type { ProjectPr } from "./FactoryProject.api";
 
-// What a pull request row shows on the project page and its GitHub page: the state chip and the
-// size of the change.
-
-export const PR_CHIP: Record<PrState, string> = {
-  open: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
-  draft: "border-border bg-muted text-muted-foreground",
-  merged: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  closed: "border-border bg-muted text-muted-foreground",
-};
+// What a pull request row shows on the project page and its GitHub page: the size of the change.
+// Its state is a StatusLabel with the tone from STATUS_TONES.pr.
 
 export const n = (x: number) => x.toLocaleString("en-US");
 

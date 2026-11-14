@@ -2,11 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import type { TriggerCondition } from "../types";
 import { copyText } from "../editions/copyText";
 
-export function StatusBadge({ status }: { status: string | undefined }) {
-  const s = status ?? "starting";
-  return <span className={`badge ${s}`}>{s}</span>;
-}
-
 /** "22s ago", "5m ago", "3h ago", "2d ago": what TimeAgo shows, as text for a title. */
 export function agoText(ts: string): string {
   const secs = Math.max(0, (Date.now() - new Date(ts).getTime()) / 1000);

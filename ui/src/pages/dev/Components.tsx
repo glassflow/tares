@@ -20,6 +20,7 @@ import {
   Stat,
   StatusDot,
   StatusLabel,
+  STATUS_TONES,
   Switch,
   Tabs,
   Textarea,
@@ -412,6 +413,24 @@ export default function Components() {
             </StatusLabel>
           </Row>
         ))}
+      </Section>
+
+      <Section title="Every status, by where it shows">
+        <div className="grid gap-3" data-testid="status-every">
+          {Object.entries(STATUS_TONES).map(([domain, table]) => (
+            <div key={domain} className="grid gap-1.5 md:grid-cols-[120px_1fr] md:items-baseline">
+              <span className="font-mono text-xs text-muted-foreground">{domain}</span>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {Object.entries(table).map(([status, tone]) => (
+                  <span key={status} className="inline-flex items-center gap-1.5">
+                    <StatusDot tone={tone} />
+                    <StatusLabel tone={tone} data-domain={domain} data-status={status}>{status.replace(/_/g, " ")}</StatusLabel>
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       </Section>
 
       <Section title="Skeleton">

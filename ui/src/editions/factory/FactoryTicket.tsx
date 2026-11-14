@@ -4,13 +4,13 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, Skeleton, StatusDot, StatusLabel, STATUS_TONES, toneOf, type Tone } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
   factoryTicket,
-  type FactoryTicketData, type TicketCall, type TicketFinding, type TicketLink, type TicketReview, type TicketStateKey,
+  type FactoryTicketData, type TicketCall, type TicketFinding, type TicketLink, type TicketReview,
 } from "./FactoryTicket.api";
 import { isSample, sampleLoad } from "./ticketSamples";
 import { InlineIcon } from "./ProjectIcon";
@@ -33,32 +33,13 @@ const NONE = "text-[13px] text-muted-foreground";
 const LINK = "text-foreground! underline!";
 const KIND = "m-0! font-mono text-[11px]! font-medium uppercase tracking-[0.06em] text-muted-foreground";
 const TAG = "whitespace-nowrap border border-border bg-muted px-1.5 py-px text-[11.5px] font-semibold";
-const TAG_OK = "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]";
-const TAG_WAIT = "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground";
 const TAG_BAD = "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]";
 const MORE = "h-8 self-start text-[13px]!";
-
-const DOT: Record<TicketStateKey, string> = {
-  to_do: "border border-[color:var(--ink-faint)]",
-  in_progress: "bg-[var(--accent)]",
-  in_review: "bg-foreground",
-  changes_asked: "border-2 border-foreground",
-  blocked: "bg-[var(--err)]",
-  merged: "bg-[var(--ok)]",
-  canceled: "bg-[var(--ink-faint)]",
-};
-
-const KEY_OF_LABEL: Record<string, TicketStateKey> = {
-  "To do": "to_do", "In progress": "in_progress", "In review": "in_review", "Changes asked": "changes_asked",
-  Blocked: "blocked", Merged: "merged", Canceled: "canceled",
-};
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
-const Dot = ({ state }: { state: TicketStateKey }) => (
-  <i aria-hidden className={cn("inline-block size-[9px] flex-none", DOT[state])} />
-);
+const Dot = ({ tone }: { tone: Tone }) => <StatusDot tone={tone} className="size-[9px]" />;
 
 function Section({ id, title, aside, children }: { id: string; title: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -86,13 +67,11 @@ function Finding({ f }: { f: TicketFinding }) {
           </code>
         )}
         <span className={cn(TAG, f.blocking && TAG_BAD)}>{f.blocking ? "Must fix" : "Suggestion"}</span>
-        <span className={cn(TAG, open ? TAG_WAIT : TAG_OK)}>{sentence(f.state_text)}</span>
+        <StatusLabel tone={STATUS_TONES.finding[open ? "open" : "fixed"]}>{sentence(f.state_text)}</StatusLabel>
       </div>
     </div>
   );
 }
-
-const VERDICT: Record<string, string> = { passed: TAG_OK, "asked for changes": TAG_WAIT, blocked: TAG_BAD };
 
 function Round({ r, startOpen }: { r: TicketReview; startOpen: boolean }) {
   const [open, setOpen] = React.useState(startOpen);
@@ -102,7 +81,7 @@ function Round({ r, startOpen }: { r: TicketReview; startOpen: boolean }) {
               className="flex! w-full! flex-wrap items-center gap-2.5! border-0! bg-transparent! px-0! py-2! text-left! text-sm! font-normal! text-foreground! hover:bg-transparent!">
         <i aria-hidden className={cn("size-[7px] flex-none border-b-2 border-r-2 border-foreground", open ? "rotate-45" : "-rotate-45")} />
         <b className="text-sm">Round {r.round}</b>
-        <span className={cn(TAG, "font-mono text-[10.5px] uppercase tracking-[0.06em]", VERDICT[r.verdict_text])}>{r.verdict_text}</span>
+        <StatusLabel tone={toneOf("verdict", r.verdict_text)}>{r.verdict_text}</StatusLabel>
         <span className="ml-auto text-[12.5px] text-muted-foreground">{[r.by, r.when].filter(Boolean).join(", ")}</span>
       </button>
       {open && (
@@ -177,7 +156,6 @@ function Checks({ items }: { items: FactoryTicketData["checks"] }) {
 }
 
 function CallRow({ c }: { c: TicketCall }) {
-  const tone = c.state_text === "waiting for you" ? TAG_WAIT : c.state_text === "confirmed" ? TAG_OK : "";
   return (
     <div className="flex min-w-0 flex-col gap-[3px]" data-testid="call-row" data-ref={c.ref}>
       <span className="text-[13.5px] font-semibold [overflow-wrap:anywhere]" data-user-text>{c.question}</span>
@@ -185,7 +163,7 @@ function CallRow({ c }: { c: TicketCall }) {
       {c.why && <span className="text-[12.5px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{c.why}</span>}
       {c.words && <span className="text-[13.5px] [overflow-wrap:anywhere]" data-testid="call-said"><span className="text-muted-foreground">You said: </span><span data-user-text>{c.words}</span></span>}
       <span className="text-[12.5px] text-muted-foreground">
-        {sentence(c.made)}. <span className={cn(TAG, tone)}>{sentence(c.state_text)}</span>
+        {sentence(c.made)}. <StatusLabel tone={toneOf("call", c.state_text)} className="ml-1">{sentence(c.state_text)}</StatusLabel>
       </span>
     </div>
   );
@@ -301,10 +279,9 @@ function Links({ items, testid }: { items: TicketLink[]; testid: string }) {
   return (
     <ul className="m-0! flex list-none flex-col gap-1.5 p-0!">
       {items.map((t) => {
-        const key = KEY_OF_LABEL[t.state_label] ?? "to_do";
         return (
           <li key={t.ref} className="flex items-start gap-2 text-[13.5px]" data-testid={testid} data-ref={t.ref}>
-            <span className="mt-[5px] flex"><Dot state={key} /></span>
+            <span className="mt-[5px] flex"><Dot tone={toneOf("ticket", t.state_label)} /></span>
             <span className="min-w-0">
               <Link to={t.href} className="text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
                 <span className="font-mono text-xs text-muted-foreground">{t.ref}</span> <span data-user-text>{t.title}</span>
@@ -460,9 +437,9 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
       <div className="grid min-w-0 gap-2.5">
         <div className="flex flex-wrap items-center gap-2.5">
           <span className="border border-border bg-muted px-2 py-0.5 font-mono text-[13px] font-medium" data-testid="ticket-ref">{d.ref}</span>
-          <span className="inline-flex items-center gap-[7px] border border-border bg-card px-2.5 py-[3px] text-[12.5px] font-semibold" data-testid="ticket-state">
-            <Dot state={d.state} />
-            {d.state_label}
+          <span className="inline-flex items-center gap-[7px]" data-testid="ticket-state">
+            <Dot tone={STATUS_TONES.ticket[d.state]} />
+            <StatusLabel tone={STATUS_TONES.ticket[d.state]}>{d.state_label}</StatusLabel>
           </span>
         </div>
         <h1 className="m-0! text-[22px]! md:text-[28px]! [overflow-wrap:anywhere]" data-user-text data-testid="ticket-title">{d.title}</h1>

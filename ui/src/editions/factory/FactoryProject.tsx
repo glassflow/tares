@@ -2,17 +2,19 @@ import * as React from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, Initials, Input, ProgressBar, Skeleton, Textarea, Toaster, useToast } from "../../components/edition";
+import {
+  Banner, Button, Dialog, Initials, Input, ProgressBar, Skeleton, StatusDot, StatusLabel, STATUS_TONES, Textarea, Toaster, toneOf, useToast,
+} from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
-import { PR_CHIP, PrSize } from "./prParts";
+import { PrSize } from "./prParts";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
 import {
   acceptMilestone, addProjectMember, answerCheck, decideCall, factoryProject, setLater, setProjectIcon, setProjectLead, type ProjectPeople, type ProjectPerson,
-  type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone, type ProjectPageState, type TicketState,
+  type FactoryProjectData, type MovingTicket, type ProjectCall, type ProjectMilestone,
 } from "./FactoryProject.api";
 import type { HomeAction, HomeItem } from "./home.types";
 import { AllowDialog } from "./FactoryHome";
@@ -47,25 +49,6 @@ const LINK = "text-foreground! underline!";
 const CARD = "min-w-0";
 const SECTION_H = "m-0! text-base!";
 const ROW = "border-b border-border py-3 last:border-b-0";
-
-const CHIP: Record<ProjectPageState, string> = {
-  waiting_on_you: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
-  building: "border-[color:var(--warn-border)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
-  not_started: "border-border bg-muted text-muted-foreground",
-  ready_to_close: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  later: "border-border bg-muted text-muted-foreground",
-  finished: "border-foreground bg-foreground text-background",
-};
-
-const DOT: Record<TicketState, string> = {
-  "to do": "border border-[color:var(--ink-faint)]",
-  "in progress": "bg-[var(--accent)]",
-  "in review": "bg-foreground",
-  "changes asked": "border-2 border-foreground",
-  blocked: "bg-[var(--err)]",
-  merged: "bg-[var(--ok)]",
-  canceled: "bg-[var(--ink-faint)]",
-};
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -286,7 +269,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
         )}
       </span>
       <span className="col-start-2 flex items-center gap-[7px] whitespace-nowrap pt-px text-[13px] md:col-start-auto">
-        <i aria-hidden className={cn("inline-block size-[9px] flex-none", DOT[t.state])} />
+        <StatusDot tone={toneOf("ticket", t.state)} className="size-[9px]" />
         {sentence(t.state)}
       </span>
       <span className="col-start-2 pt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere] md:col-start-auto md:row-start-auto">{t.pr?.state_text ?? ""}</span>
@@ -318,9 +301,9 @@ function RecentPrs({ d }: { d: FactoryProjectData }) {
                   </a>
                 ) : <span className="font-medium [overflow-wrap:anywhere]" data-user-text>{p.title}</span>}
               </div>
-              <span className={cn("flex-none border px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", PR_CHIP[p.state])}>
+              <StatusLabel tone={STATUS_TONES.pr[p.state]} className="flex-none">
                 {p.state_label}
-              </span>
+              </StatusLabel>
             </div>
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-muted-foreground">
               <Link to={p.ticket_href} className={LINK}>{p.ticket}</Link>
@@ -961,10 +944,9 @@ export function FactoryProjectView({ data: d, onClose, onDecide, onAllowed, onAn
           <ProjectIconHeader icon={icon} canEdit={Boolean(d.can_edit_icon && onIcon)} onChange={changeIcon}
                              className="flex min-w-0 flex-[1_1_320px] flex-wrap items-center gap-x-3 gap-y-2">
             <h1 className="m-0! text-[22px]! md:text-[28px]! [overflow-wrap:anywhere]" data-user-text data-testid="project-name">{d.name}</h1>
-            <span data-testid="project-chip"
-                  className={cn("border px-2 py-1 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", CHIP[d.state])}>
+            <StatusLabel data-testid="project-chip" tone={STATUS_TONES.project[d.state]}>
               {d.state_label}
-            </span>
+            </StatusLabel>
           </ProjectIconHeader>
           {(d.can_later || d.later || (d.can_close && !finished)) && (
             <div className="flex flex-wrap gap-2">
