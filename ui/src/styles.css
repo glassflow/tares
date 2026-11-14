@@ -2388,6 +2388,27 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   --color-warn: var(--warn);
   --color-err: var(--err);
   --color-track: var(--track);
+  /* The roles editions reached through arbitrary values (TR-1263). One utility per role, named for
+     the role, never the hue. `accent` above is shadcn's hover surface, so the amber action colour is
+     `brand`, as in Rius. Raw palette tokens (`--kit-*`, `--green-300`) stay out of here on purpose. */
+  --color-brand: var(--accent);
+  --color-brand-soft: var(--accent-soft);
+  --color-brand-deep: var(--accent-deep);
+  --color-brand-foreground: var(--on-accent);
+  --color-faint: var(--ink-faint);
+  --color-rule-strong: var(--border-strong);
+  --color-field: var(--input-bg);
+  --color-field-focus: var(--input-bg-focus);
+  --color-row-hover: var(--row-hover);
+  --color-wash: var(--wash);
+  --color-wash-strong: var(--wash-2);
+  --color-scrim: var(--overlay);
+  --color-ok-soft: var(--ok-soft);
+  --color-ok-border: var(--ok-border);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-border: var(--warn-border);
+  --color-err-soft: var(--err-soft);
+  --color-err-border: var(--danger-border);
   --radius-sm: 0;
   --radius-md: 0;
   --radius-lg: 0;
