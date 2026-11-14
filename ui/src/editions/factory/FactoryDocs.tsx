@@ -220,8 +220,8 @@ function DocList({ page, openId, project, to, onPick }: {
 }) {
   const item = (id: string, label: string) => (
     <Link key={id} to={to(id)} data-testid="doc-link" aria-current={id === openId ? "page" : undefined}
-          className={cn("flex items-center gap-2 border-l-[3px] border-transparent px-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-[var(--row-hover)]",
-                        id === openId && "border-[color:var(--accent)] bg-muted font-semibold")}>
+          className={cn("flex items-center gap-2 pl-[17px] pr-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-[var(--row-hover)]",
+                        id === openId && "shadow-[inset_3px_0_0_var(--accent)] bg-muted font-semibold")}>
       {label}
     </Link>
   );

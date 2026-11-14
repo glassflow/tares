@@ -48,6 +48,7 @@ jobs:
           npx tsc --noEmit
           node tests/words.selftest.cjs
           node tests/words.check.cjs
+          npm run design-contract
           npm run build
         working-directory: ui
 
