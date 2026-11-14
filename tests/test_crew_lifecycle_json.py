@@ -289,6 +289,41 @@ ck("stdout holds only the document, whose notes hold the same lines", d.get("not
     "restarting crew-builder", "a bare note", "stdout text", "done"], d)
 ck("the rest of stderr is the last live line", rest == "tares factory: done\n", rest)
 
+print("== the live tee, in process")
+import io  # noqa: E402
+from tares.crew import jsonrun as _jr  # noqa: E402
+
+
+class _Real:
+    def __init__(self):
+        self.out, self.flushes = [], 0
+
+    def write(self, t):
+        self.out.append(t)
+
+    def flush(self):
+        self.flushes += 1
+
+
+def tee_of(real, *chunks):
+    buf = io.StringIO()
+    t = _jr._Tee(buf, real)
+    for c in chunks:
+        t.write(c)
+    return t, buf
+
+
+real = _Real()
+t, buf = tee_of(real, "tares factory: a\r\n", "\n", "   \n", "b")
+ck("a CRLF line is stripped, blank lines are skipped, a partial line waits", real.out == ["tares factory: a\n"], real.out)
+t.flush()
+ck("flush sends the last partial line, with the prefix", real.out[-1] == "tares factory: b\n", real.out)
+ck("every live line is flushed", real.flushes == 2, real.flushes)
+ck("the buffer keeps all the text for the notes", buf.getvalue() == "tares factory: a\r\n\n   \nb", buf.getvalue())
+t, buf = tee_of(None, "tares factory: x\n")
+t.flush()
+ck("no stderr at all (pythonw): nothing fails, the notes are kept", buf.getvalue() == "tares factory: x\n")
+
 # ---------- 7. up ----------
 print("== up")
 reset()
