@@ -410,7 +410,7 @@ def scan(paths: CrewPaths, env=None, now=None, procs=None) -> dict:
         parent = next((p for p in procs if me and p.pid == me.ppid), None)
         # the Windows venv launcher that runs the watch
         if (parent and parent.pid != watch_pid and "crew watch" in " ".join(parent.cmdline)
-                and parent.started <= me.started):
+                and not (parent.started and me.started and parent.started > me.started)):   # unreadable: protect, as _parent_gone does
             protect.add(parent.pid)
         protect |= _descendants(procs, {watch_pid})
     protect |= _descendants(procs, set(owned))
