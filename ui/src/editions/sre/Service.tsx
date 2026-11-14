@@ -3,8 +3,8 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, Checkbox, Dialog, EmptyState, Input, LineChart, ListRow, ListSection, Panel, Select,
-  Skeleton, StatusDot, StatusLabel, Switch, Tabs,
+  Banner, Button, Checkbox, Dialog, EmptyState, Input, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton,
+  StatusDot, StatusLabel, Switch, Tabs,
 } from "../../components/edition";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
@@ -31,13 +31,13 @@ const WINDOWS: { value: SreWindow; label: string }[] = [
 
 type Loaded = { page: SreService } | { missing: true };
 
-function Loading() {
+function ServiceSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="grid gap-6" data-testid="service-loading">
+    <Loading className="grid gap-6" data-testid="service-loading">
       <div className="grid gap-3"><Skeleton width="30%" /><Skeleton width="55%" /></div>
       <div className="border border-border bg-card p-4"><Skeleton width="100%" height={160} /></div>
       <div className="border border-border bg-card p-4 grid gap-3"><Skeleton width="40%" /><Skeleton width="70%" /><Skeleton width="55%" /></div>
-    </div>
+    </Loading>
   );
 }
 
@@ -477,7 +477,7 @@ function ServiceLoader({ name }: { name: string }) {
   }
   const shown = answered ?? page;
   const waiting = !shown || (!decided.current && shown.state === "silent");
-  if (waiting || !shown) return <Loading />;
+  if (waiting || !shown) return <ServiceSkeleton />;
   const w = win ?? "24h";
   return (
     <>

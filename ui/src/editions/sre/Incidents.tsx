@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import {
-  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Panel, Select, Skeleton, SkeletonRows, StatusLabel, STATUS_TONES,
+  Banner, Button, EmptyState, LineChart, ListRow, ListSection, Loading, Panel, Select, Skeleton, SkeletonRows, StatusLabel, STATUS_TONES,
   Toaster, useToast,
 } from "../../components/edition";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
@@ -460,12 +460,12 @@ function IncidentView({ id }: { id: string }) {
   }
   if (!d) {
     return frame(
-      <div className="grid gap-4" data-testid="incident-loading" role="status" aria-busy="true" aria-label="Loading">
+      <Loading className="grid gap-4" data-testid="incident-loading">
         <Skeleton width={220} height={14} />
         <Skeleton width="62%" height={28} />
         <Skeleton height={64} />
         <Skeleton height={180} />
-      </div>,
+      </Loading>,
     );
   }
 

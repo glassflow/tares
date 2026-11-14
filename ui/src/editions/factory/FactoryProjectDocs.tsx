@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { DocPane } from "./FactoryDocs";
@@ -83,9 +83,9 @@ export default function FactoryProjectDocs() {
       )}
       {!data && !error && <Skeleton className="h-60" />}
       {data && data.total === 0 && (
-        <div className="border border-border bg-card px-4 py-7 text-muted-foreground" data-testid="project-docs-empty">
-          No documents yet. The spec and plan show here once they are written.
-        </div>
+        <EmptyState title="No documents yet" className="border border-border bg-card" data-testid="project-docs-empty">
+          The spec and plan show here once they are written.
+        </EmptyState>
       )}
       {data && data.total > 0 && (
         <>

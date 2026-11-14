@@ -70,11 +70,6 @@ export function ErrorState({ error, what, onRetry }: {
   );
 }
 
-/** "There is genuinely nothing here" — only ever rendered when the load SUCCEEDED. */
-export function EmptyState({ children }: { children: React.ReactNode }) {
-  return <div className="empty">{children}</div>;
-}
-
 /** A button that copies `text` and says "Copied" for a moment. `what` names the text for a
  *  screen reader ("Copy the address", then "Copied the address"). Keep the text itself on screen
  *  next to it: when the clipboard is refused, the person selects it by hand. Both words sit in

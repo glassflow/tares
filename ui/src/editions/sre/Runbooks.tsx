@@ -2,7 +2,7 @@ import * as React from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
+import { Banner, Button, EmptyState, Loading, Skeleton } from "../../components/edition";
 import { Textarea } from "../../components/ui/textarea";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -29,16 +29,16 @@ const countWords = (n: number) => (n === 0 ? "none" : n === 1 ? "1 line" : `${n}
 const meta = (l: RunbookLine) => [l.by, l.when_words].filter(Boolean).join(", ");
 const sentence = (e: unknown, fallback: string) => (e instanceof ApiError && e.message ? e.message : fallback);
 
-function Loading() {
+function RunbooksSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="grid items-start gap-[18px] md:grid-cols-[260px_minmax(0,1fr)]" data-testid="rb-loading">
+    <Loading className="grid items-start gap-[18px] md:grid-cols-[260px_minmax(0,1fr)]" data-testid="rb-loading">
       <div className="hidden border border-border bg-card md:block">
         {[0, 1, 2, 3, 4].map((i) => <div key={i} className="border-t border-border px-3.5 py-3.5 first:border-t-0"><Skeleton width="55%" height={10} /></div>)}
       </div>
       <div className="border border-border bg-card">
         {[0, 1, 2, 3].map((i) => <div key={i} className="border-t border-border px-[18px] py-4 first:border-t-0"><Skeleton width={i === 0 ? "60%" : "85%"} height={10} /></div>)}
       </div>
-    </div>
+    </Loading>
   );
 }
 
@@ -256,7 +256,7 @@ export default function Runbooks() {
           <b>Runbooks did not load.</b> <span className="text-foreground">Tares could not read them just now. It will try again in 60 seconds.</span>
         </Banner>
       )}
-      {!shown && !error && <Loading />}
+      {!shown && !error && <RunbooksSkeleton />}
       {shown && services.length === 0 && (
         <EmptyState title="No services yet" className="border border-dashed border-border" data-testid="rb-empty">
           Services show here once the watcher has seen logs from them. Then you can write what the investigator should know about each one.

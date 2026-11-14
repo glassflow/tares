@@ -56,7 +56,7 @@ predate the kit.
 
 - **Build from the kit.** Import from `@/components/edition` (barrel `index.ts`): `Button`,
   `Input`, `Select`, `Textarea`, `Checkbox`, `Switch`, `Dialog`, `Panel`, `ListSection`, `ListRow`,
-  `StatusLabel`, `EmptyState`, `Skeleton`, `Stat`, `Tabs`, `Banner`, `Toaster`. Look at
+  `StatusLabel`, `EmptyState`, `Loading`, `Skeleton`, `Stat`, `Tabs`, `Banner`, `Toaster`. Look at
   `/dev/components` (`ui/src/pages/dev/Components.tsx`) before writing a component. A new shared
   component goes in `components/edition`, with a gallery section and a check in
   `ui/tests/component-gallery.e2e.cjs` in the same PR. `components/ui` holds the primitives the kit

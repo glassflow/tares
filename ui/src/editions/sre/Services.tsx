@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link } from "react-router-dom";
 
 import {
-  Banner, Button, EmptyState, ServiceRows, Skeleton, type ServiceRowItem,
+  Banner, Button, EmptyState, LoadingBlocks, ServiceRows, type ServiceRowItem,
 } from "../../components/edition";
 import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
@@ -45,15 +45,6 @@ export function summary(rows: SreServiceRow[]): string {
   return `${count(rows.length, "service")}. ${parts.length ? up(parts.join(", ")) : "All normal"}.`;
 }
 
-function Loading() {
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card p-4" data-testid="services-loading">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="28%" /><Skeleton width="60%" /><Skeleton width="42%" /></div>
-      ))}
-    </div>
-  );
-}
 
 function Head({ intro, children }: { intro?: string; children?: React.ReactNode }) {
   return (
@@ -149,7 +140,7 @@ export default function Services() {
       <b>Services did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );
-  if (!data) return <Head>{banner || <Loading />}</Head>;
+  if (!data) return <Head>{banner || <LoadingBlocks data-testid="services-loading" count={4} widths={["28%", "60%", "42%"]} />}</Head>;
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}

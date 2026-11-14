@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, EmptyState, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { factoryProject, type FactoryProjectData } from "./FactoryProject.api";
@@ -46,9 +46,9 @@ export default function FactoryDecisions() {
         <p className={cn(MUTED, "m-0! mt-1!")}>Your answers to the crew on <span data-user-text>{data.name}</span>, newest first.</p>
       </div>
       {items.length === 0 ? (
-        <div className="border-t border-border py-4 text-muted-foreground" data-testid="decisions-empty">
+        <EmptyState className="border-t border-border py-4" data-testid="decisions-empty">
           No decisions yet. When you answer the crew, it is kept here.
-        </div>
+        </EmptyState>
       ) : (
         <div className="border-t border-border" data-testid="decisions-list">
           {items.map((x, i) => <DecisionRow key={i} x={x} wide />)}

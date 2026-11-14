@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ChevronDown, ChevronRight } from "../../components/icons";
-import { Banner, Button, EmptyState, Skeleton, StatusDot, STATUS_TONES } from "../../components/edition";
+import { Banner, Button, EmptyState, Loading, Skeleton, StatusDot, STATUS_TONES } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -447,7 +447,7 @@ function Head({ sub }: { sub?: string }) {
   );
 }
 
-function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
+function TicketsSkeleton({ layout, narrow }: { layout: Layout; narrow: boolean }) {
   const card = (i: number) => (
     <div key={i} className="grid gap-2 border border-border bg-card p-2.5">
       <Skeleton width="40%" /><Skeleton width="92%" /><Skeleton width="70%" />
@@ -485,7 +485,7 @@ function SkeletonBody({ layout, narrow }: { layout: Layout; narrow: boolean }) {
       </div>
     );
   }
-  return <div role="status" aria-busy="true" aria-label="Loading" data-testid="tickets-loading">{body}</div>;
+  return <Loading data-testid="tickets-loading">{body}</Loading>;
 }
 
 function Tickets() {
@@ -632,7 +632,7 @@ function Tickets() {
         {failed || (
           <>
             <FilterBar layout={layout} filters={filters} qText={qText} group={group} data={undefined} disabled onLayout={pickLayout} patch={patch} setQText={setQText} />
-            <SkeletonBody layout={layout} narrow={narrow} />
+            <TicketsSkeleton layout={layout} narrow={narrow} />
           </>
         )}
       </div>

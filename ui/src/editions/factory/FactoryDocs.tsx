@@ -4,7 +4,7 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, EmptyState, Loading, Skeleton, SkeletonLines } from "../../components/edition";
 import { Check, ChevronDown } from "../../components/icons";
 import { Input } from "../../components/ui/input";
 import { cn } from "../../lib/utils";
@@ -271,18 +271,18 @@ function DocSelect({ page, openId, project, pick, onPick }: {
   );
 }
 
-function Loading() {
+function DocsSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="grid gap-5 md:grid-cols-[260px_minmax(0,1fr)]" data-testid="docs-loading">
+    <Loading className="grid gap-5 md:grid-cols-[260px_minmax(0,1fr)]" data-testid="docs-loading">
       <div className="hidden gap-3 border border-border bg-card p-3.5 md:grid">
         {[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} width="70%" />)}
       </div>
       <div className="grid gap-3 border border-border bg-card p-5">
         {[0, 1, 2, 3].map((i) => (
-          <div key={i} className="grid gap-2"><Skeleton width="90%" /><Skeleton width="60%" /></div>
+          <SkeletonLines key={i} widths={["90%", "60%"]} />
         ))}
       </div>
-    </div>
+    </Loading>
   );
 }
 
@@ -341,11 +341,11 @@ export default function FactoryDocs() {
           <b>Documents did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
         </Banner>
       )}
-      {!data && !error && <Loading />}
+      {!data && !error && <DocsSkeleton />}
       {data?.empty && (
-        <div className="border border-border bg-card px-4 py-7 text-muted-foreground" data-testid="docs-empty">
-          Nothing written yet. The crew writes its rules and memory here as it works.
-        </div>
+        <EmptyState title="Nothing written yet" className="border border-border bg-card" data-testid="docs-empty">
+          The crew writes its rules and memory here as it works.
+        </EmptyState>
       )}
       {data && !data.empty && (
         <>

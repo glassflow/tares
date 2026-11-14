@@ -368,10 +368,6 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
   );
 }
 
-function LoadingBox({ rows }: { rows: number }) {
-  return <SkeletonRows count={rows} className={FLUSH_ROWS} />;
-}
-
 export function FactoryHomeLoading() {
   const name = useFirstName();
   return (
@@ -380,11 +376,11 @@ export function FactoryHomeLoading() {
       <div className={COLS}>
         <div className={LEFT}>
           <StartChecklistLoading title={START_TITLE} />
-          <section className="min-w-0"><SectionHead title="Waiting for you" /><LoadingBox rows={3} /></section>
+          <section className="min-w-0"><SectionHead title="Waiting for you" /><SkeletonRows count={3} className={FLUSH_ROWS} /></section>
         </div>
         <aside className={RIGHT}>
-          <section className="min-w-0"><SectionHead title="Your crew" /><LoadingBox rows={3} /></section>
-          <section className="min-w-0"><SectionHead title="Claude plan" /><LoadingBox rows={2} /></section>
+          <section className="min-w-0"><SectionHead title="Your crew" /><SkeletonRows count={3} className={FLUSH_ROWS} /></section>
+          <section className="min-w-0"><SectionHead title="Claude plan" /><SkeletonRows count={2} className={FLUSH_ROWS} /></section>
         </aside>
       </div>
     </div>

@@ -1,7 +1,7 @@
 import * as React from "react";
 
 import { ApiError, request } from "../../api";
-import { Button, Dialog, Input } from "../../components/edition";
+import { Button, Dialog, EmptyState, Input } from "../../components/edition";
 import { cn } from "../../lib/utils";
 
 // A project's secrets (TR-775): the names, who set each and when, and when a builder last used one, as
@@ -102,9 +102,9 @@ export function ProjectSecrets({ project, initial }: { project: string; initial:
         {doc.enabled && (
           <>
             {doc.secrets.length === 0 ? (
-              <div className="py-1 text-[13px] text-muted-foreground" data-testid="secrets-empty">
+              <EmptyState className="py-1" data-testid="secrets-empty">
                 No secrets yet. Add a key the builders need, such as another cell's read-only key.
-              </div>
+              </EmptyState>
             ) : doc.secrets.map((s) => (
               <div key={s.name} className="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 border-b border-border py-2 last:border-b-0"
                    data-testid="secret-row">

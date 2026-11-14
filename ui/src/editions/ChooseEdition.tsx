@@ -2,7 +2,7 @@ import * as React from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
-import { Banner, Button, Skeleton } from "../components/edition";
+import { Banner, Button, Loading, Skeleton } from "../components/edition";
 import { cn } from "../lib/utils";
 import type { Edition } from "../types";
 import { useEdition } from "./edition";
@@ -72,10 +72,10 @@ export default function ChooseEdition() {
   if (edition === undefined) {
     return (
       <Frame lead="Checking">
-        <div role="status" aria-busy="true" aria-label="Loading" className="grid gap-3 md:grid-cols-2" data-testid="choose-loading">
+        <Loading className="grid gap-3 md:grid-cols-2" data-testid="choose-loading">
           <Skeleton height={84} />
           <Skeleton height={84} />
-        </div>
+        </Loading>
       </Frame>
     );
   }
