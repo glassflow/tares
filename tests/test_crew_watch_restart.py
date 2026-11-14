@@ -36,6 +36,7 @@ sys.path.insert(0, str(ROOT))
 
 import psutil  # noqa: E402
 from tares.crew import watch  # noqa: E402
+from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 
 P = F = 0
@@ -234,6 +235,21 @@ try:
     ck("...the running watch is still the same one", watch.running_pid(paths) == live, (watch.running_pid(paths), live))
     one_tree("after the FACTORY_NO_WATCH step")
 
+    print("restart_watch: a stop that did not work is not reported as restarted (TR-1307)")
+    real_stop = watch.stop
+    watch.stop = lambda paths, say, **kw: None
+    try:
+        try:
+            doc, err = watch.restart_watch(paths, ENV), None
+        except CrewError as e:
+            doc, err = None, str(e)
+    finally:
+        watch.stop = real_stop
+    ck("a stop that left the watch running raises, it does not return restarted",
+       err is not None and "could not stop the watch" in err, (doc, err))
+    ck("...the old watch is still the one recorded", watch.running_pid(paths) == live, (watch.running_pid(paths), live))
+    ck("...and its process is still running", not gone(live))
+
     print("_watch_executables: a watch started by a launcher (TR-1319)")
     # A Windows venv's python.exe is a launcher that runs the base interpreter as the loop, so the loop alone is
     # never under the venv. Stand-ins: a "launcher" with `crew watch` in its command line and its own argv[0], and
@@ -294,6 +310,26 @@ try:
             for c in psutil.Process(q.pid).children(recursive=True) if q.poll() is None else []:
                 c.kill()
             q.kill()
+
+    print("_watch_executables: a relative program path is ignored (TR-1307)")
+    class _Stand:
+        argv0 = "python"
+        def __init__(self, pid):
+            pass
+        def exe(self):
+            raise psutil.AccessDenied()
+        def cmdline(self):
+            return [_Stand.argv0, "-m", "tares.crew"]
+        def ppid(self):
+            raise psutil.NoSuchProcess(1)
+    real_process = watch.psutil.Process
+    watch.psutil.Process = _Stand
+    try:
+        ck("a bare program name in the command line is not a program path", watch._watch_executables(1) == [], watch._watch_executables(1))
+        _Stand.argv0 = sys.executable
+        ck("an absolute one is kept", watch._watch_executables(1) == [sys.executable], watch._watch_executables(1))
+    finally:
+        watch.psutil.Process = real_process
 
     print("_under")
     base = SCRATCH / "install"
