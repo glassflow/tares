@@ -370,34 +370,16 @@ def register(app, store, h, ctx):
         nxt = ({"ticket": refs[pick["id"]], "title": clean(pick["title"]),
                 "why": "ready, nothing it depends on is open"} if pick is not None else None)
 
-        waiting = [w for w in fh.waiting_items(store, fh.for_caller(ctx.fx, request), now)
-                   if (w.get("project") or {}).get("id") == uid]
-        for w in waiting:        # ids, links and what a button does stay as they are
+        # what waits for the caller here is what their home lists for this project; on a team
+        # cell what waits for someone else is under "Waiting for others", named for them, with
+        # nothing to press, and does not make the project "Waiting on you" (fh.project_waiting)
+        waiting, others = fh.project_waiting(store, fh.for_caller(ctx.fx, request), now, request, uid)
+        for w in [*waiting, *others]:        # ids, links and what a button does stay as they are
             for k in ("label", "title", "detail", "meta"):
                 if isinstance(w.get(k), str):
                     w[k] = clean(w[k])
             w["actions"] = [{**a, "label": clean(a["label"])} if isinstance(a.get("label"), str) else a
                             for a in w.get("actions") or []]
-        # On a team cell a question or permission request addressed to someone else is theirs, not
-        # the viewer's (TR-1223 follow-up): it moves to `waiting_others`, named for that person,
-        # with nothing to press (only the person it is for may answer it), and does not make the
-        # project "Waiting on you".
-        others: list[dict] = []
-        me = (h.current_person(request) or {}).get("id")
-        if me and not store.only_local_person():
-            kept = []
-            for w in waiting:
-                kind, _, ref = str(w.get("id") or "").partition(":")
-                d = store.get_desk_item(ref) if kind in ("question", "permission") and ref else None
-                to = (d or {}).get("to_person_id")
-                if to and to != me:
-                    person = store.get_person(to) or {}
-                    who = person.get("name") or "someone else"
-                    others.append({**w, "label": f"{'Question' if kind == 'question' else 'Permission'} for {who}",
-                                   "actions": [], "for_person": {"id": to, "name": person.get("name")}})
-                else:
-                    kept.append(w)
-            waiting = kept
         gids = set(h.global_ids().values())
         own = [d for d in store.list_docs(uid) if d["id"] not in gids]
         has_start = any(d["kind"] == "start" for d in own)

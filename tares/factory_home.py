@@ -465,6 +465,39 @@ def _cut(fx, name: str, request, rows, *more):
     return fn(request, rows, *more) if fn is not None and request is not None else rows
 
 
+def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
+    """THE list of what waits for the caller, which every screen that says "Waiting on you" reads
+    (the home, Projects, Tickets, a project's page): on a team cell the team home's
+    `waiting_for_you` (only what is the caller's: their desk, the projects they lead), else every
+    builder's items, without another person's desk item, licence or not (core, TR-1048). `fx` is
+    for_caller's; `team` is a `fx.team_home` answer the caller has already read."""
+    if team is None:
+        team = fx.team_home(request, now) if fx is not None and request is not None and hasattr(fx, "team_home") else {}
+    if team:
+        return team["waiting_for_you"]
+    waiting = waiting_items(store, fx, now, hidden)
+    desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
+    mine_desk = _cut(fx, "own_desk", request, desk)
+    if len(mine_desk) != len(desk):
+        gone = {f"{kind}:{d['label']}" for d in desk if d not in mine_desk
+                for kind in ("permission", "question")}
+        waiting = [w for w in waiting if w["id"] not in gone]
+    return waiting
+
+
+def project_waiting(store, fx, now, request, project: str) -> tuple[list[dict], list[dict]]:
+    """(what waits for the caller in `project`, what waits there for other people). The first is
+    caller_waiting's items of the project, so a project page and the home agree; the second comes
+    from the team (`fx.project_waiting`) and is empty on a cell of one person."""
+    fn = getattr(fx, "project_waiting", None)
+    got = fn(request, project, now) if fn is not None and request is not None else None
+    if got is not None:
+        return got["mine"], got["others"]
+    hidden = fx.hidden_ids() if fx is not None and hasattr(fx, "hidden_ids") else set()
+    return [w for w in caller_waiting(store, fx, now, request, hidden)
+            if (w.get("project") or {}).get("id") == project], []
+
+
 def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     """Everything the home page shows, from one read of the projects, their tickets, the stations,
     the plan and the desk. On a cell with more than one person, `fx.team_home(request)` adds what
@@ -484,16 +517,11 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     tickets = store.tickets_by_project(ids)
     milestones = store.milestones_by_project(ids)
     desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
-    waiting = with_icons(store, team["waiting_for_you"] if team else
-                         waiting_items(store, fx, now, hidden))
+    waiting = with_icons(store, caller_waiting(store, fx, now, request, hidden, team))
     if team:
         team = {**team, "waiting_for_you": waiting}
-    # a person's home never lists another person's desk item, licence or not (core, TR-1048)
+    # a person's home never counts another person's desk item, licence or not (core, TR-1048)
     mine_desk = _cut(fx, "own_desk", request, desk)
-    if not team and len(mine_desk) != len(desk):
-        gone = {f"{kind}:{d['label']}" for d in desk if d not in mine_desk
-                for kind in ("permission", "question")}
-        waiting = [w for w in waiting if w["id"] not in gone]
     rows = []
     for p in open_ps:
         row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
