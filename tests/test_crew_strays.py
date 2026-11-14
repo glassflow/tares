@@ -67,7 +67,8 @@ ENV = {"TARES_FAKE_STRAYS_DIR": str(SCRATCH / "ps")}
 
 
 def P_(pid, ppid, cmd, started=OLD, session=None, cwd="", crew=""):
-    return Proc(pid, ppid, started, tuple(cmd.split(" ")), session, cwd, crew)
+    words = tuple(cmd) if isinstance(cmd, (list, tuple)) else tuple(cmd.split(" "))   # a path with a space stays one word
+    return Proc(pid, ppid, started, words, session, cwd, crew)
 
 
 def healthy() -> list:
@@ -169,28 +170,28 @@ def orph(procs, **kw):
 
 
 base = [P_(70, 1, "bash", started=OLD)]
-ck("3601 s old is reported", orph(base + [P_(71, 999, "node " + inside, started=NOW - 3601)]) == [71])
-ck("3599 s old is not", orph(base + [P_(71, 999, "node " + inside, started=NOW - 3599)]) == [])
-ck("a live parent is not an orphan", orph(base + [P_(72, 70, "node " + inside)]) == [])
+ck("3601 s old is reported", orph(base + [P_(71, 999, ["node", inside], started=NOW - 3601)]) == [71])
+ck("3599 s old is not", orph(base + [P_(71, 999, ["node", inside], started=NOW - 3599)]) == [])
+ck("a live parent is not an orphan", orph(base + [P_(72, 70, ["node", inside])]) == [])
 ck("a reused parent pid (parent younger than the child) is gone",
-   orph([P_(73, 1, "bash", started=NOW - 10), P_(74, 73, "node " + inside, started=OLD)]) == [74])
+   orph([P_(73, 1, "bash", started=NOW - 10), P_(74, 73, ["node", inside], started=OLD)]) == [74])
 ck("a protected pid is skipped", [s.proc.pid for s in strays.orphans(
-    [P_(75, 999, "node " + inside)], ROOTS, "crew", {75}, NOW)] == [])
+    [P_(75, 999, ["node", inside])], ROOTS, "crew", {75}, NOW)] == [])
 
 ck("a parent that is a reaper (systemd) is gone even though it exists",
-   orph([P_(76, 1, "systemd", started=OLD), P_(77, 76, "node " + inside, started=OLD)]) == [77])
-ck("a parent that is a plain process is not", orph([P_(78, 1, "bash"), P_(79, 78, "node " + inside)]) == [])
+   orph([P_(76, 1, "systemd", started=OLD), P_(77, 76, ["node", inside], started=OLD)]) == [77])
+ck("a parent that is a plain process is not", orph([P_(78, 1, "bash"), P_(79, 78, ["node", inside])]) == [])
 
 print("6 the marker and the roots")
 outside = str(SCRATCH / "elsewhere" / "tool")
-ck("the marker beats the path: outside the roots, marked", orph([P_(80, 999, "node " + outside, crew="crew")]) == [80])
-ck("another crew's marker inside the roots is not ours", orph([P_(81, 999, "node " + inside, crew="other")]) == [])
-ck("no marker, inside the roots (cmdline)", orph([P_(82, 999, "node " + inside)]) == [82])
+ck("the marker beats the path: outside the roots, marked", orph([P_(80, 999, ["node", outside], crew="crew")]) == [80])
+ck("another crew's marker inside the roots is not ours", orph([P_(81, 999, ["node", inside], crew="other")]) == [])
+ck("no marker, inside the roots (cmdline)", orph([P_(82, 999, ["node", inside])]) == [82])
 ck("no marker, cwd inside the roots", orph([P_(83, 999, "node x", cwd=str(root / "ticket"))]) == [83])
-ck("no marker, outside the roots", orph([P_(84, 999, "node " + outside)]) == [])
+ck("no marker, outside the roots", orph([P_(84, 999, ["node", outside])]) == [])
 seen = []
 ck("fill() is asked only for an old candidate whose parent is gone",
-   orph(base + [P_(85, 999, "node " + inside, started=NOW - 5), P_(86, 70, "node")], fill=lambda p: seen.append(p.pid))
+   orph(base + [P_(85, 999, ["node", inside], started=NOW - 5), P_(86, 70, "node")], fill=lambda p: seen.append(p.pid))
    == [] and seen == [70])
 
 print("6b the watch's Windows launcher is not an orphan")
@@ -332,7 +333,7 @@ for obj, n in targets:
     setattr(obj, n, boom(f"{getattr(obj, '__name__', 'Process')}.{n}"))
 try:
     strays.scan(PATHS, ENV, now=NOW, procs=healthy() + [left, P_(50, 1, "claude daemon run", started=OLD + 5),
-                                                         P_(90, 999, "node " + inside)])
+                                                         P_(90, 999, ["node", inside])])
     strays.scan(PATHS, ENV, now=NOW)
     d2 = doctor.Doctor(dict(os.environ) | ENV, PATHS)
     d2.check_strays()
