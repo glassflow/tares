@@ -408,7 +408,9 @@ def scan(paths: CrewPaths, env=None, now=None, procs=None) -> dict:
         protect.add(watch_pid)
         me = next((p for p in procs if p.pid == watch_pid), None)
         parent = next((p for p in procs if me and p.pid == me.ppid), None)
-        if parent and parent.pid != watch_pid and "crew watch" in " ".join(parent.cmdline)                 and parent.started <= me.started:   # the Windows venv launcher that runs the watch
+        # the Windows venv launcher that runs the watch
+        if (parent and parent.pid != watch_pid and "crew watch" in " ".join(parent.cmdline)
+                and parent.started <= me.started):
             protect.add(parent.pid)
         protect |= _descendants(procs, {watch_pid})
     protect |= _descendants(procs, set(owned))
