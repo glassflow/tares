@@ -62,8 +62,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
   tares factory crew unfreeze               lift the freeze; the watch moves each station onto the
                                             checkout's kit when it's idle
   tares factory crew down                   stop the watch and every station (Tares keeps the record);
-                                            it withdraws your own "stop the crew?" questions and every
-                                            finished project's questions, never another person's
+                                            it withdraws your own "stop the crew?" questions, plus
+                                            every question on a finished project
   tares factory spec ["<idea>"]             plan a project with Claude and /tares:spec, in the repo it
                                             builds on or a folder of its repos; it ends with the
                                             hand-over to the crew. Name a project someone else leads

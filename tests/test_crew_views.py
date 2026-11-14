@@ -354,12 +354,11 @@ def desk_holds_only_the_persons_own_items():
     pn = check("desk --json, two people's items", ["desk", "--json"], lambda: world(crew_of(), sessions()), expect_rc=0)
     ck("desk --json: my item only", '"D2"' in pn[1] and "D1" not in pn[1] and "D3" not in pn[1], pn[1])
     ck("the desk was asked for mine=1", SEEN and all("mine=1" in u for u in SEEN), SEEN)
-    # a cell that rejects the parameter is asked again without it: today's behaviour
-    WORLD["mine_status"] = 422
+    # a key with no person is refused (403): the person is told, not shown an empty desk
+    WORLD["mine_status"] = 403
     del SEEN[:]
-    pn = check("status, a cell that rejects mine", ["status"], lambda: world(crew_of(), sessions()),
-               want="desk: 3 waiting for you")
-    ck("then asked again without it", any("mine=1" in u for u in SEEN) and any("mine=1" not in u for u in SEEN), SEEN)
+    pn = check("status, a key with no person", ["status"], lambda: world(crew_of(), sessions()),
+               want="the desk cannot be read: This key has no person")
     WORLD["mine_status"] = 200
     WORLD["desk"] = []
 
