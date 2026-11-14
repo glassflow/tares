@@ -341,6 +341,12 @@ finally:
     os.dup, os.dup2, os.close = _real
 ck("the copy of descriptor 1 is closed, not leaked", _dups == [1] and _closed == [987], (_dups, _closed))
 
+print("== add_result outside a --json run")
+_jr.add_result("k", 1)   # plain text mode: no scope, nothing to collect, nothing raised
+with _jr.scope() as _later:
+    pass
+ck("add_result with no scope neither raises nor leaks into the next run's keys", _later == {}, _later)
+
 print("== a failing run keeps the optional key")
 
 
