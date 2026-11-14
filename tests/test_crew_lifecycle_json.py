@@ -292,6 +292,7 @@ ck("the rest of stderr is the last live line", rest == "tares factory: done\n", 
 print("== the live tee, in process")
 import io  # noqa: E402
 from tares.crew import jsonrun as _jr  # noqa: E402
+from tares.crew.errors import CrewError  # noqa: E402
 
 
 class _Real:
@@ -323,6 +324,37 @@ ck("the buffer keeps all the text for the notes", buf.getvalue() == "tares facto
 t, buf = tee_of(None, "tares factory: x\n")
 t.flush()
 ck("no stderr at all (pythonw): nothing fails, the notes are kept", buf.getvalue() == "tares factory: x\n")
+real = _Real()
+tee_of(real, "   tares factory: lead\n")
+ck("leading spaces are stripped as well", real.out == ["tares factory: lead\n"], real.out)
+
+print("== _collect when descriptor 2 cannot be copied onto 1")
+_closed, _dups = [], []
+_real = (os.dup, os.dup2, os.close)
+os.dup = lambda fd: (_dups.append(fd) or 987)
+os.dup2 = lambda a, b: (_ for _ in ()).throw(OSError("bad descriptor"))
+os.close = lambda fd: _closed.append(fd)
+try:
+    with _jr._collect(io.StringIO()):
+        pass
+finally:
+    os.dup, os.dup2, os.close = _real
+ck("the copy of descriptor 1 is closed, not leaked", _dups == [1] and _closed == [987], (_dups, _closed))
+
+print("== a failing run keeps the optional key")
+
+
+def _fail_body(a):
+    _jr.add_result("left_to_watch", ["shop-build-m1"])
+    raise CrewError("not every station runs it: shop-build-m2")
+
+
+_buf = io.StringIO()
+with contextlib.redirect_stdout(_buf):
+    _rc = jsonrun.run(["--json"], "crew update", _fail_body, text_fail=lambda e: None)
+_d = json.loads(_buf.getvalue())
+ck("the error document lists the stations left to the watch, and validates", _rc == 1
+   and _d.get("left_to_watch") == ["shop-build-m1"] and ERROR.is_valid(_d), (_rc, _d))
 
 # ---------- 7. up ----------
 print("== up")

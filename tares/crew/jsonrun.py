@@ -16,6 +16,7 @@ Standard library plus contract.py.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import io
 import os
 import sys
@@ -27,13 +28,28 @@ from .paths import ME
 
 FLAG = "--json"
 
-_extra: dict = {}   # optional keys a command adds to its result document (add_result), cleared when a run starts
+# optional keys a command adds to its result document (add_result); one dict per --json run, held for that run only
+_extra: contextvars.ContextVar = contextvars.ContextVar("tares_crew_json_extra", default=None)
+
+
+@contextlib.contextmanager
+def scope():
+    """Collect the keys add_result gets inside the block; yields the dict. run() opens one for every --json run."""
+    d: dict = {}
+    token = _extra.set(d)
+    try:
+        yield d
+    finally:
+        _extra.reset(token)
 
 
 def add_result(key: str, value) -> None:
     """A command names an optional key for the result document it prints with --json (`crew update` lists the
-    stations it left to the watch). Without --json it is not used."""
-    _extra[key] = value
+    stations it left to the watch). The document carries it on success and on a failure. Without --json it is not
+    used."""
+    d = _extra.get()
+    if d is not None:
+        d[key] = value
 
 
 class _Tee(io.TextIOBase):
@@ -86,10 +102,15 @@ def _collect(buf: io.StringIO):
     except (OSError, ValueError):
         pass
     try:
-        saved = os.dup(1)
-        os.dup2(2, 1)
+        dup = os.dup(1)
     except OSError:   # no descriptor 1 (closed): nothing to guard
-        saved = None
+        dup = None
+    if dup is not None:
+        try:
+            os.dup2(2, 1)
+            saved = dup
+        except OSError:   # no descriptor 2 (pythonw): nothing to point 1 at; do not leak the copy
+            os.close(dup)
     try:
         tee = _Tee(buf, sys.stderr)
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(tee):
@@ -127,19 +148,19 @@ def run(argv: list, command: str, body: Callable[[list], int], *, text_fail: Cal
             text_fail(e)
             return 1
     args = [a for a in argv if a != FLAG]
-    _extra.clear()
     buf = io.StringIO()
     error = None
     code = 0
-    try:
-        with _collect(buf):
-            code = body(args) or 0
-    except CrewError as e:
-        error = e
+    with scope() as extra:
+        try:
+            with _collect(buf):
+                code = body(args) or 0
+        except CrewError as e:
+            error = e
     if error is None and code:
         error = CrewError(f"{command} failed (exit {code})")
     if error is not None:
-        contract.refuse(error, [FLAG], notes=_notes(buf.getvalue()))
+        contract.refuse(error, [FLAG], notes=_notes(buf.getvalue()), extra=extra)
         return contract.EXIT_USAGE if error.code == "usage" else contract.EXIT_FAILED
-    contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue()), **_extra}, "result")
+    contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue()), **extra}, "result")
     return 0
