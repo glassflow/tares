@@ -121,7 +121,8 @@ ck("halt --json: ok, command, the halted note", d.get("ok") is True and d.get("c
    and any(n.startswith("crew halted:") for n in d.get("notes", [])), d)
 ck("halt --json: no 'tares factory: ' prefix on a note", not any(n.startswith("tares factory:") for n in d.get("notes", [])), d)
 ck("halt --json: default reason", halt_reason() == "halted by the human", halt_reason())
-ck("halt --json: stderr is empty", err == "", err)
+ck("halt --json: stderr carries the same lines live, each with the prefix (TR-1344)",
+   [l for l in err.splitlines() if l] == [f"tares factory: {n}" for n in d.get("notes", [])], (err, d.get("notes")))
 for args in (["crew", "halt", "--json", "why"], ["crew", "halt", "why", "--json"]):
     (CREW / "HALT").unlink(missing_ok=True)
     code, out, err = crew(args)
@@ -247,12 +248,46 @@ d = doc_of("a failure after printing", p.returncode, p.stdout.replace("\r\n", "\
 ck("...the error document carries the notes, in the order schema_version, error, notes",
    d == {"schema_version": 1, "error": {"code": "error", "message": "could not stop crew-reviewer"}, "notes": NOTES}
    and list(d) == ["schema_version", "error", "notes"], d)
-ck("...and nothing reached stderr", p.stderr == "", p.stderr)
+ck("...stderr got only the stderr line, live, and no stdout line", p.stderr.strip() == "tares factory: stopped crew-builder", p.stderr)
 p = subprocess.run([sys.executable, "-c", probe2, "--json", "exit3"], capture_output=True, text=True, cwd=str(ROOT),
                    env=dict(BASE, PYTHONPATH=str(ROOT)), timeout=60)
 d = doc_of("a body that returns exit 3", p.returncode, p.stdout.replace("\r\n", "\n"), p.stderr, 1, "error")
 ck("...error.code error, message probe failed (exit 3), and the notes",
    d.get("error") == {"code": "error", "message": "probe failed (exit 3)"} and d.get("notes") == NOTES, d)
+
+# ---------- 6b. live lines (TR-1344) ----------
+print("== live progress on stderr")
+probe3 = """
+import os, sys, time
+from tares.crew import jsonrun
+GO = sys.argv[-1]
+def body(a):
+    print('tares factory: restarting crew-builder', file=sys.stderr, flush=True)
+    print('a bare note', file=sys.stderr)
+    print('stdout text')
+    t = time.time()
+    while not os.path.exists(GO) and time.time() - t < 60:
+        time.sleep(0.05)
+    print('tares factory: done', file=sys.stderr)
+    return 0
+sys.exit(jsonrun.run(sys.argv[1:-1], 'probe', body, text_fail=lambda e: None))
+"""
+GOFILE = TMP / "go"
+proc = subprocess.Popen([sys.executable, "-c", probe3, "--json", str(GOFILE)], stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE, text=True, encoding="utf-8", cwd=str(ROOT),
+                        env=dict(BASE, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8"))
+first = proc.stderr.readline().replace("\r\n", "\n")
+ck("a lifecycle line reaches stderr while the command still runs", first == "tares factory: restarting crew-builder\n"
+   and proc.poll() is None, (first, proc.poll()))
+second = proc.stderr.readline().replace("\r\n", "\n")
+ck("a line without the prefix gets it", second == "tares factory: a bare note\n", second)
+GOFILE.write_text("go", encoding="utf-8")
+out3, rest = proc.communicate(timeout=60)
+rest = rest.replace("\r\n", "\n")
+d = doc_of("live probe", proc.returncode, out3.replace("\r\n", "\n"), rest, 0, "result")
+ck("stdout holds only the document, whose notes hold the same lines", d.get("notes") == [
+    "restarting crew-builder", "a bare note", "stdout text", "done"], d)
+ck("the rest of stderr is the last live line", rest == "tares factory: done\n", rest)
 
 # ---------- 7. up ----------
 print("== up")

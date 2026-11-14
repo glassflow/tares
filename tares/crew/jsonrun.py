@@ -2,7 +2,8 @@
 
 The lifecycle commands (up, down, halt, resume, freeze, unfreeze, update, restart, and a station's restart,
 revive and retire) print what they do as lines on stderr and leave stdout empty. With `--json` this module runs the
-same command with everything it prints collected, and prints one document on stdout when it is done:
+same command with everything it prints collected (the lines on stderr also go live to the real stderr, one line
+each, so a caller can show progress; stdout holds only the document), and prints one document on stdout when done:
 
     {"schema_version": 1, "ok": true, "command": "crew halt", "notes": ["crew halted: ..."]}
 
@@ -35,10 +36,50 @@ def add_result(key: str, value) -> None:
     _extra[key] = value
 
 
+class _Tee(io.TextIOBase):
+    """Python's stderr under --json (TR-1344): every complete line goes into buf, for the document's notes, and,
+    as it happens, to the real stderr as "tares factory: <msg>", flushed, so a program that runs the command can
+    show what it is doing. They are the same text as the notes."""
+
+    def __init__(self, buf: io.StringIO, real):
+        self.buf = buf
+        self.real = real
+        self.pending = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self.buf.write(text)
+        self.pending += text
+        while "\n" in self.pending:
+            line, self.pending = self.pending.split("\n", 1)
+            self._live(line)
+        return len(text)
+
+    def _live(self, raw: str) -> None:
+        line = raw.strip()
+        if not line:
+            return
+        if not line.startswith(f"{ME}: "):
+            line = f"{ME}: {line}"
+        try:
+            self.real.write(line + "\n")
+            self.real.flush()
+        except (OSError, ValueError):   # a closed or broken stderr must not fail the command
+            pass
+
+    def flush(self) -> None:
+        if self.pending:
+            line, self.pending = self.pending, ""
+            self._live(line)
+
+
 @contextlib.contextmanager
 def _collect(buf: io.StringIO):
-    """Python's stdout and stderr go to buf, and file descriptor 1 goes to stderr, so a child process that
-    inherits it cannot write into the document. Everything is put back on exit, before the caller prints."""
+    """Python's stdout goes to buf, stderr to buf and live to the real stderr (_Tee), and file descriptor 1 goes
+    to stderr, so a child process that inherits it cannot write into the document. Everything is put back on exit,
+    before the caller prints."""
     saved = None
     try:
         sys.stdout.flush()
@@ -50,8 +91,12 @@ def _collect(buf: io.StringIO):
     except OSError:   # no descriptor 1 (closed): nothing to guard
         saved = None
     try:
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            yield
+        tee = _Tee(buf, sys.stderr)
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(tee):
+            try:
+                yield
+            finally:
+                tee.flush()
     finally:
         if saved is not None:
             try:
