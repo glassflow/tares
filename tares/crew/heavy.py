@@ -75,6 +75,28 @@ def _holder_gone(lock: str) -> bool:
         return True
 
 
+def _clear_stale(lock: str) -> bool:
+    """Take a stale lock out of the way; True when it no longer blocks the mkdir.
+
+    The rename is atomic, so of two waiters that judged one lock stale only one moves it. A waiter that
+    was slow moves whatever is at the path by then, so it looks at what it moved and puts a live lock back."""
+    moved = f"{lock}.stale-{os.getpid()}-{time.monotonic_ns()}"
+    try:
+        os.rename(lock, moved)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False   # Windows: a handle is open on the folder; try again on the next poll
+    if _holder_gone(moved):
+        shutil.rmtree(moved, ignore_errors=True)
+        return True
+    try:
+        os.rename(moved, lock)
+    except OSError:
+        pass
+    return False
+
+
 def _write(path: str, text: str) -> None:
     with open(path, "wb") as f:
         f.write(text.encode("utf-8"))
@@ -88,7 +110,6 @@ def _acquire(lock: str, what: str) -> int | None:
     while True:
         try:
             os.mkdir(lock)
-            break
         except FileExistsError:
             pass
         except PermissionError:
@@ -96,8 +117,14 @@ def _acquire(lock: str, what: str) -> int | None:
         except OSError as e:
             print(f"factory-heavy: cannot make {lock}: {e}", file=sys.stderr)
             return 1
-        if _holder_gone(lock):
-            shutil.rmtree(lock, ignore_errors=True)
+        else:
+            try:
+                _write(os.path.join(lock, "pid"), f"{os.getpid()}\n")
+                _write(os.path.join(lock, "what"), what + "\n")
+                return None
+            except FileNotFoundError:
+                continue   # a slow waiter has this new lock renamed aside: make it again
+        if _holder_gone(lock) and _clear_stale(lock):
             continue
         waited = time.monotonic() - start
         if waited >= WAIT_LIMIT:
@@ -109,9 +136,6 @@ def _acquire(lock: str, what: str) -> int | None:
             print(f"factory-heavy: waiting for "
                   f"{_read(os.path.join(lock, 'what')) or 'another heavy command'} to finish", file=sys.stderr)
         time.sleep(POLL)
-    _write(os.path.join(lock, "pid"), f"{os.getpid()}\n")
-    _write(os.path.join(lock, "what"), what + "\n")
-    return None
 
 
 def _release(lock: str) -> None:
