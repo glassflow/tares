@@ -110,7 +110,6 @@ def _acquire(lock: str, what: str) -> int | None:
     while True:
         try:
             os.mkdir(lock)
-            break
         except FileExistsError:
             pass
         except PermissionError:
@@ -118,6 +117,13 @@ def _acquire(lock: str, what: str) -> int | None:
         except OSError as e:
             print(f"factory-heavy: cannot make {lock}: {e}", file=sys.stderr)
             return 1
+        else:
+            try:
+                _write(os.path.join(lock, "pid"), f"{os.getpid()}\n")
+                _write(os.path.join(lock, "what"), what + "\n")
+                return None
+            except FileNotFoundError:
+                continue   # a slow waiter has this new lock renamed aside: make it again
         if _holder_gone(lock) and _clear_stale(lock):
             continue
         waited = time.monotonic() - start
@@ -130,9 +136,6 @@ def _acquire(lock: str, what: str) -> int | None:
             print(f"factory-heavy: waiting for "
                   f"{_read(os.path.join(lock, 'what')) or 'another heavy command'} to finish", file=sys.stderr)
         time.sleep(POLL)
-    _write(os.path.join(lock, "pid"), f"{os.getpid()}\n")
-    _write(os.path.join(lock, "what"), what + "\n")
-    return None
 
 
 def _release(lock: str) -> None:
