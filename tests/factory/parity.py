@@ -1394,7 +1394,7 @@ sys.path.insert(0, str(HERE))
 import fake_tares  # noqa: E402
 import fake_rules  # noqa: E402
 
-NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows)\b",)
+NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows|Claude processes|Claude's background service|orphaned crew processes)\b",)
 DOCTOR_DROP = NEW_CHECKS
 # When Tares refuses the key in the environment, the bash doctor stops silently at the crew settings (its
 # `crew_settings` dies inside a pipe). The Python doctor says the settings are unanswered and goes on to the
@@ -6083,6 +6083,7 @@ def crew_env(tmp: Path) -> dict:
         GIT_CONFIG_GLOBAL=str(tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
         PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8",
         TARES_HOME=str(tmp / "tares-home"),
+        TARES_FAKE_STRAYS_DIR=str(state),  # no ps-table.json there: the strays scan sees an empty table, never the machine
         PATH=str(bindir) + os.pathsep + os.environ.get("PATH", ""),  # `claude` by name finds the fake first
     )
     (tmp / "gitconfig").write_text("[user]\n\tname = Test Crew\n")

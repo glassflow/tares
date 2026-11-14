@@ -71,7 +71,7 @@ RESTART_USAGE = "usage: tares factory crew watch --restart [--if-running] [--onl
 RESTART_FLAGS = ("--restart", "--if-running", "--only-under", "--json")
 
 # What a round does, in this order. A later ticket registers the function for its name.
-STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker")
+STEP_NAMES = ("revive", "regrant", "idle_wake", "pace", "updates", "docker", "strays")
 # What a nap does on each of its ticks (the readings the Crew page asks for, TR-967).
 TICK_NAME = "readings"
 # What a round does before its first step: bash reads the pace at the top of a round (TR-1157).
@@ -617,3 +617,7 @@ register("readings", _readings.step)   # TR-1163: the Crew page's asks and the p
 from . import docker_cleanup as _docker_cleanup  # noqa: E402
 
 register("docker", _docker_cleanup.step)   # TR-700: Docker's leftovers, once a day, never during a heavy command
+
+from . import strays as _strays  # noqa: E402
+
+register("strays", _strays.step)   # TR-1332: Claude processes and orphans the crew does not own, reported, never stopped
