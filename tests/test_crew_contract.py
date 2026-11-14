@@ -160,6 +160,7 @@ def sessions():
 def tares(env, argv, extra=None):
     """(exit code, stdout, stderr) of `python -m tares.crew <argv>` with the Python engine."""
     e = dict(env, PYTHONPATH=str(ROOT), PYTHONIOENCODING="utf-8", **(extra or {}))
+    e.setdefault("TARES_FAKE_STRAYS_DIR", str(FIXTURES))   # no ps-table.json there: an empty process table, never the machine's
     e.pop("PYTHONSTARTUP", None)
     p = subprocess.run([sys.executable, "-m", "tares.crew"] + argv, env=e, cwd=str(ROOT), capture_output=True,
                        text=True, encoding="utf-8", errors="replace", timeout=120)

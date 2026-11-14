@@ -46,7 +46,8 @@ from .paths import ME, CrewPaths
 USAGE = f"usage: {ME} doctor [--json]"
 LABELS = {"ok": "ok   ", "warn": "warn ", "fix": "FIX  "}
 # What the new checks' text starts with (after the level word), for a test that sets them aside.
-NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows")
+NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows",
+              "Claude processes", "Claude's background service", "orphaned crew processes")
 TEMP_FLAGS = re.compile(r"/var/folders/|/tmp/cmux|cmux-claude-settings")
 RUN_TIMEOUT = 60
 WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "OWNER RIGHTS", "CREATOR OWNER")
@@ -721,6 +722,31 @@ class Doctor:
                 self.no(f"job_{job}", f"station job {job} has temp paths in its saved launch flags; it will fail to "
                         f"respawn. {ME} crew down + {ME} crew up", f"{ME} crew down, then {ME} crew up")
 
+    def check_strays(self) -> None:
+        """Claude processes the crew does not own, the background service's session (Windows), and orphaned crew
+        processes (TR-1332). Reported only: nothing is stopped."""
+        from . import strays
+        try:
+            found = strays.scan(self.paths, self.env)
+        except Exception:   # a process that cannot be read must not end the doctor
+            return
+        cl = found["claude"]
+        if cl:
+            self.warn("claude_processes", f"Claude processes the crew does not own ({len(cl)}): {strays.listing(cl)}",
+                      strays.CLAUDE_FIX, True)
+        else:
+            self.ok("claude_processes", "Claude processes: none the crew does not own", True)
+        if found["service"]:
+            self.no("claude_service", "Claude's background service runs in the wrong session", found["service"], True)
+        else:
+            self.ok("claude_service", "Claude's background service: runs where the crew does", True)
+        orph = found["orphan"]
+        if orph:
+            self.warn("orphan_processes", f"orphaned crew processes older than an hour ({len(orph)}): "
+                      f"{strays.listing(orph)}", strays.ORPHAN_FIX, True)
+        else:
+            self.ok("orphan_processes", "orphaned crew processes: none older than an hour", True)
+
     # -- the whole run --
 
     def collect(self) -> list:
@@ -748,6 +774,7 @@ class Doctor:
         self.check_git()
         self.check_gh()
         self.check_stations()
+        self.check_strays()
         return self.checks
 
     def check_crew_offline(self) -> None:
