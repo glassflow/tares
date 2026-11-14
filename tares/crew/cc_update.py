@@ -646,12 +646,22 @@ def _full(client: TaresClient, tail: str) -> CrewError:
     return CrewError(f"the plan's limit is full{_pace_until(client)}, and a restart is a model turn into it; {tail}")
 
 
+def _watch_will_move(client: TaresClient, paths: CrewPaths, station: str, target: str, agents) -> bool:
+    """Whether the watch will move this station by itself: it is behind the target, claude_update is on and the
+    crew is not frozen. Only then is an attached station left to the watch; otherwise (a restart of a station
+    that is already current, the setting off, a frozen crew) nobody else would move it, so it is waited for."""
+    return (claude.older_than(station_cc(paths, station, agents), target)
+            and claude_auto(client) and not upgrades_frozen(paths, client))
+
+
 def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=None) -> None:
     """`crew update [--force] [--wait <seconds>]`: every station onto the Claude Code now on PATH, each when idle,
     the orchestrator last. `crew restart` is the same with --force: a station already on it is restarted too.
-    A busy station is waited for, up to --wait seconds (default 1800; 0 waits for ever). The station running
-    the command cannot wait for itself, so it is left to the watch or to another session. A refusal ends it
-    with exit 1."""
+    A busy station is waited for, up to --wait seconds (default 1800; 0 waits for ever). A station a person has
+    open in a terminal is not waited for when the watch will move it (it is behind, claude_update is on, the crew
+    is not frozen): it is said, left to the watch, and listed as `left_to_watch` in the --json result; otherwise
+    it is waited for. The station running the command cannot wait for itself, so it is left to the watch or to
+    another session. A refusal ends it with exit 1."""
     state.require_crew(paths)
     force, limit = _wait_limit(args)
     env = client.env
@@ -702,11 +712,13 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
                                 "update again)")
             still: list = []
             for s in left:
-                if claude.attached(s, paths):   # a person has it open: not waited for, the watch moves it when free
+                open_now = claude.attached(s, paths)
+                if open_now and _watch_will_move(client, paths, s, target, agents):
+                    # a person has it open and the watch will move it when it is free: not waited for
                     client.say(f"{s} is open in a terminal; the watch moves it when it is free")
                     skipped.append(s)
                     continue
-                if not claude.quiet(s, claude=claude_bin, paths=paths):
+                if open_now or not claude.quiet(s, claude=claude_bin, paths=paths):
                     still.append(s)
                     continue
                 client.say(f"restarting {s} on Claude Code {target}, in the same conversation")
@@ -749,7 +761,8 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
                 break
             for s in left:
                 if s not in told:
-                    client.say(f"waiting for {s} to be idle (it is working)")
+                    why = "someone has it open" if claude.attached(s, paths) else "it is working"
+                    client.say(f"waiting for {s} to be idle ({why})")
                     told.append(s)
             time.sleep(_poll(env))
     try:

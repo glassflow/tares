@@ -43,7 +43,8 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             its own conversation once the limit has reset
   tares factory crew update [--wait <s>]    move every station onto the Claude Code installed now,
                                             right away: each when it is idle (one someone has open
-                                            waits), the orchestrator last, same conversation; then
+                                            is left to the watch when it will move it, else waits),
+                                            the orchestrator last, same conversation; then
                                             checks each runs it, one session per name; gives up on a
                                             busy one after --wait seconds (default 1800, 0 = never);
                                             run from a station, it leaves that station to the watch
