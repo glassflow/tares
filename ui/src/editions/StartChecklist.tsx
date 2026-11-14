@@ -111,8 +111,9 @@ function Step({ step, onDo, doing }: DoProps & { step: StartStep }) {
   );
 }
 
-const PANEL = "min-w-0 border border-border bg-card [overflow-wrap:anywhere]";
-const HEAD = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-[18px] py-3.5";
+// On the paper (TR-1274): a rule over the heading, the steps flush with it. Both Homes show it.
+const PANEL = "min-w-0 border-t border-border [--row-x:0px] [overflow-wrap:anywhere]";
+const HEAD = "flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-3 pt-3";
 
 export interface StartChecklistProps {
   block: StartBlock;
@@ -156,12 +157,12 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo,
         </div>
       </div>
       {error && (
-        <div role="alert" data-testid="start-error" className="border-b border-border px-[18px] py-2.5 text-[13px] text-[color:var(--err)]">
+        <div role="alert" data-testid="start-error" className="border-b border-border py-2.5 text-[13px] text-[color:var(--err)]">
           {HIDE_FAILED}
         </div>
       )}
       {notice && (
-        <div role="alert" data-testid="start-notice" className="border-b border-border px-[18px] py-2.5 text-[13px] text-[color:var(--err)]">
+        <div role="alert" data-testid="start-notice" className="border-b border-border py-2.5 text-[13px] text-[color:var(--err)]">
           {notice}
         </div>
       )}

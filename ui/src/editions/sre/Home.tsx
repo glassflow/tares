@@ -83,8 +83,9 @@ function Head({ title, sub }: { title: React.ReactNode; sub?: string }) {
 }
 
 function Loading() {
+  // What loads: a rule and rows, as the sections are (TR-1274).
   const box = (rows: number, key: string) => (
-    <div key={key} className="border border-border bg-card p-4">
+    <div key={key} className="border-t border-border pt-3">
       {Array.from({ length: rows }, (_, i) => (
         <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="28%" /><Skeleton width="60%" /><Skeleton width="42%" /></div>
       ))}
@@ -102,10 +103,10 @@ function Loading() {
 function ServicesBox({ home }: { home: SreHome }) {
   const rows = home.services.slice(0, SERVICES_SHOWN);
   return (
-    <ListSection title="Services" aside={home.services_from_words ? <span data-user-text>{home.services_from_words}</span> : undefined} data-testid="home-services">
+    <ListSection paper title="Services" aside={home.services_from_words ? <span data-user-text>{home.services_from_words}</span> : undefined} data-testid="home-services">
       <ServiceRows rows={rows.map(asRow)} />
       {home.services.length > SERVICES_SHOWN && (
-        <div className="border-t border-border px-[18px] py-3 text-[13px]">
+        <div className="border-t border-border py-3 text-[13px]">
           <Link to="/services" className="text-foreground underline underline-offset-2" data-testid="all-services">All {plural(home.services.length, "service")}</Link>
         </div>
       )}
@@ -117,8 +118,8 @@ function Today({ home }: { home: SreHome }) {
   const t = home.today;
   const quiet = t.quiet >= t.checks ? "all quiet" : `all quiet but ${t.checks - t.quiet}`;
   return (
-    <ListSection title="Today" data-testid="home-today">
-      <div className="grid gap-3 p-[18px]">
+    <ListSection paper title="Today" data-testid="home-today">
+      <div className="grid gap-3 py-3">
         <div className="grid grid-cols-2 gap-4">
           <div><div className="text-[22px] font-semibold leading-tight">{t.checks}</div><div className="text-[13px] text-muted-foreground">{t.checks === 1 ? "check" : "checks"}, {quiet}</div></div>
           <div><div className="text-[22px] font-semibold leading-tight">{t.investigated}</div><div className="text-[13px] text-muted-foreground">investigated</div></div>
@@ -235,7 +236,7 @@ export default function Home() {
   );
 
   const main = isNew ? (
-    <div className="border border-border bg-card" data-testid="home-empty">
+    <div className="border-t border-border" data-testid="home-empty">
       <EmptyState
         title="No services yet"
         action={<Button asChild><Link to={SETUP_TO} data-testid="connect-link">Connect</Link></Button>}
@@ -255,8 +256,8 @@ export default function Home() {
     <>
       {home.on_watch.length > 0 && <OnWatch items={home.on_watch} notesGoTo={home.notes_go_to} />}
       {home.watch.on && <Today home={home} />}
-      <BlindSpots items={home.blind_spots} />
-      <Tools items={home.tools} />
+      <BlindSpots paper items={home.blind_spots} />
+      <Tools paper items={home.tools} />
     </>
   );
 
