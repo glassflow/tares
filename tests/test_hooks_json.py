@@ -160,14 +160,13 @@ else:
     ck("a session start that fails for another reason does not claim tares is old", "needs tares" not in r.stdout, r.stdout)
 
 print("the shell helpers are only shims, and .mcp.json uses `tares hook`")
-SHIMS = ("hooks/guard.sh", "hooks/session-start.sh", "bin/mcp-headers")
+SHIMS = ("hooks/guard.sh", "hooks/session-start.sh")
 for rel in SHIMS:
     t = (plugin / rel).read_text(encoding="utf-8") if (plugin / rel).is_file() else ""
     code = [l for l in t.splitlines() if l and not l.startswith("#")]
     ck(f"claude-plugin/{rel} is a shim: one `tares hook` call, and no bash shebang",
        len(code) == 1 and bool(re.match(r"(exec )?tares hook ", code[0])) and not re.match(r"#!.*bash", t), t)
-ck("bin/factory and bin/factory-heavy are gone (`tares factory` and `tares factory heavy` replace them)",
-   not (plugin / "bin" / "factory").exists() and not (plugin / "bin" / "factory-heavy").exists())
+ck("the plugin has no bin folder (`tares factory`, `tares factory heavy` and `tares hook` replace its scripts)", not (plugin / "bin").exists())
 mcp = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["tares"]
 ck(".mcp.json starts its header helper with `tares hook mcp-headers`", mcp["headersHelper"].startswith("tares hook mcp-headers "), mcp["headersHelper"])
 words = shlex.split(mcp["headersHelper"].replace("${CLAUDE_PLUGIN_ROOT}", "/p q"))
@@ -179,7 +178,7 @@ for f in list(plugin.rglob("*")):
             t = f.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        if re.search(r"hooks/guard\.sh|hooks/session-start\.sh|bin/mcp-headers", t) and f.relative_to(plugin).as_posix() not in SHIMS:
+        if re.search(r"hooks/guard\.sh|hooks/session-start\.sh", t) and f.relative_to(plugin).as_posix() not in SHIMS:
             left.append(str(f.relative_to(plugin)))
 ck("nothing in the plugin but the shims themselves still names a replaced helper", not left, left)
 
