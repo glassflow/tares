@@ -318,9 +318,14 @@ async def main():
         ck("the summary has a sentence for none, one and many", [th.summary([{}] * n) for n in (0, 1, 4)]
            == ["Nothing waits for you.", "1 thing waits for you.", "4 things wait for you."])
         h = await home("root")
-        ck("the cell's own key is the person local: nothing addressed to them, and every pull "
-           "request, as the key of a cell of one sees it", [i["kind"] for i in h["waiting_for_you"]]
-           == ["prs_to_review"] and h["summary"] == "1 thing waits for you.", h["waiting_for_you"])
+        # the cell's own credential is no person: it sees what waits on the whole cell, as the key
+        # of a cell of one does (factory_owners.mine)
+        everyone = set()
+        for who in ("alex", "kim", "lee"):
+            everyone |= {i["id"] for i in (await home(who))["waiting_for_you"]}
+        ck("the cell's own key sees everything that waits for anyone on the cell",
+           everyone <= {i["id"] for i in h["waiting_for_you"]}
+           and h["summary"] == th.summary(h["waiting_for_you"]), (everyone, [i["id"] for i in h["waiting_for_you"]]))
         print("== two keys of one name, two people ==")
         for who in ("alex", "lee"):
             r = await call("root", "POST", "/api/keys", {"name": "shared-name", "scopes": ["admin"],
@@ -390,7 +395,7 @@ async def main():
         ck("the cell's own key asks Alex a question there", r.status_code == 201, r.text)
         ck("a project the cell's own key made has no lead", store.get_project(nolead).get("lead_person_id") is None)
         e = {x["project"]["id"]: x for x in (await home("root"))["you_are_waiting_on"]}.get(nolead) or {}
-        ck("it waits on Alex and falls to local: listed, marked no_lead, with Set a lead to its People card",
+        ck("it waits on Alex; the cell's own key, which waits on every project, lists it marked no_lead, with Set a lead to its People card",
            e.get("no_lead") is True and e.get("actions") == [{"label": "Set a lead", "primary": False,
                                                                "href": f"/projects/{nolead}#people"}], e)
         ck("nobody else sees the project with no lead in their list",
@@ -522,11 +527,13 @@ async def main():
         counts = {w: desk_of(await home_of(w)) for w in ("alex", "kim", "lee")}
         mine_open = lambda who, hide=(): len([d for d in store.list_desk("open", None)
                                               if d.get("to_person_id") == pid[who] and d["project"] not in hide])
-        ck("the crew's open questions are the ones addressed to the caller's person, not the cell's",
-           counts == {"alex": mine_open("alex", (vault,)), "kim": mine_open("kim"), "lee": mine_open("lee")},
+        # an item addressed to someone who cannot see the private project falls to its lead
+        # (factory_owners): Alex is not on Vault, so "Rotate the vault keys?" is Lee's
+        ck("the crew's open questions are the ones that wait for the caller's person, not the cell's",
+           counts == {"alex": mine_open("alex", (vault,)), "kim": mine_open("kim"), "lee": mine_open("lee") + 1},
            counts)
-        ck("... Lee's Vault items are his alone, and the one addressed to Alex on Vault is not Alex's to count",
-           counts["lee"] == 1 and counts["alex"] == mine_open("alex") - 1, counts)
+        ck("... the one addressed to Alex on Vault, which he cannot see, is Lead Lee's, not Alex's",
+           counts["lee"] == 2 and counts["alex"] == mine_open("alex") - 1, counts)
         ck("... Kim has none addressed to her, and her headline counts no questions",
            counts["kim"] == 0 and "question" not in (await home_of("kim"))["headline"], counts)
         two = [{"open_questions": [{"to": {"id": "p1", "name": "Sam"}}]},
@@ -769,7 +776,8 @@ async def main():
             {"label": "Change some", "primary": False, "href": f"/projects/{orbit}/calls"},
             {"label": "Keep both", "primary": True, "do": "keep_batch", "desk": kims["label"], "kept": [c1, c2]}], row["actions"])
         lines = next(i for i in k["calls_to_confirm"] if i["title"] == "Orbit")["lines"]
-        ck("a call on the lead's own desk shows once; one addressed to someone else stays with the lead", "8080" not in lines and "eu" not in lines and "a" in lines, lines)
+        ck("a call on a desk shows once, there, whoever's desk it is: not again in the lead's calls",
+           "8080" not in lines and "eu" not in lines and "a" not in lines, lines)
         l = by_kind(await home("lee"))
         ck("someone who is not the lead still gets a batch addressed to them", any(i["id"] == f"desk:{lees['label']}" for i in l.get("desk", [])), l)
         r = await call("kim", "POST", f"/api/desk/{kims['label']}/reply", {"words": "Keep both", "choice": "Keep both", "standing": False, "kept": [c1]})

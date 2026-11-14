@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import claude_usage
 from . import factory as factory_mod
+from . import factory_owners as owners_mod
 from . import linear as linear_mod
 from . import start_steps
 from .envelope import now_utc
@@ -134,7 +135,10 @@ def home_item(kind: str, *, label: str, title: str, detail: str, meta: str, sinc
             # holds crew work up until the person answers (TR-1021); `older` is set by order_waiting
             "blocking": bool(blocking), "older": False,
             # a desk question's own options and the crew's recommendation, answerable on the row
-            "question": question, "lines": list(lines or [])}
+            "question": question, "lines": list(lines or []),
+            # whom it waits for (factory_owners.tag): the people, whether any admin may act, and
+            # whether it fell to the admins because its project has no lead
+            "for_people": [], "for_admin": False, "no_lead": False}
 
 
 OLDER_DAYS = 7
@@ -241,6 +245,7 @@ def project_row(p: dict, tickets: list[dict], handover: dict | None, waiting: li
             "tickets": {"merged": prog["done"], "blocked": prog["blocked"], "total": prog["total"]},
             "repos": repos, "builders": builders, "last_activity_at": _iso(at),
             "last_activity": ago or None, "meta": " · ".join(meta),
+            # whether this caller may close it is the screen's to add (caller_owns)
             "can_close": state == "ready_to_close"}
 
 
@@ -465,37 +470,60 @@ def _cut(fx, name: str, request, rows, *more):
     return fn(request, rows, *more) if fn is not None and request is not None else rows
 
 
+def _caller(store, fx, request) -> dict:
+    """Who "you" is for factory_owners.mine: {me, everything, admin}. A cell of one person, the
+    system credential and a call with no request see every item as theirs; a key with no person
+    on a cell of several people has nothing addressed to it."""
+    if request is None or fx is None or store.only_local_person():
+        return {"me": "local", "everything": True, "admin": True}
+    if getattr(fx, "is_system", lambda r: False)(request):
+        return {"me": None, "everything": True, "admin": True}
+    me = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id")
+    return {"me": me, "everything": False, "admin": bool(getattr(fx, "is_admin", lambda r: False)(request))}
+
+
 def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
-    """THE list of what waits for the caller, which every screen that says "Waiting on you" reads
-    (the home, Projects, Tickets, a project's page): on a team cell the team home's
-    `waiting_for_you` (only what is the caller's: their desk, the projects they lead), else every
-    builder's items, without another person's desk item, licence or not (core, TR-1048). `fx` is
-    for_caller's; `team` is a `fx.team_home` answer the caller has already read."""
+    """THE list of what waits for the caller, which every screen that says "Waiting for you" or
+    "Waiting on you" reads (the home, Projects, Tickets, a project's page): every builder's items
+    kept to those whose `for_people` (factory_owners, one rule) names the caller. On a team cell
+    the team home builds them (it adds spec questions and grants); without a licence the core
+    builders do, by the same rule. `team` is a `fx.team_home` answer the caller already read."""
     if team is None:
         team = fx.team_home(request, now) if fx is not None and request is not None and hasattr(fx, "team_home") else {}
     if team:
         return team["waiting_for_you"]
-    waiting = waiting_items(store, fx, now, hidden)
-    desk = [d for d in store.list_desk("open", None) if d.get("project") not in hidden]
-    mine_desk = _cut(fx, "own_desk", request, desk)
-    if len(mine_desk) != len(desk):
-        gone = {f"{kind}:{d['label']}" for d in desk if d not in mine_desk
-                for kind in ("permission", "question")}
-        waiting = [w for w in waiting if w["id"] not in gone]
-    return waiting
+    return owners_mod.mine(waiting_items(store, fx, now, hidden), **_caller(store, fx, request))
 
 
 def project_waiting(store, fx, now, request, project: str) -> tuple[list[dict], list[dict]]:
-    """(what waits for the caller in `project`, what waits there for other people). The first is
-    caller_waiting's items of the project, so a project page and the home agree; the second comes
-    from the team (`fx.project_waiting`) and is empty on a cell of one person."""
+    """(what waits for the caller in `project`, what waits there for other people, named for
+    them). Both come from one build of the items: the first is caller_waiting's items of the
+    project, so a project page and the home agree."""
     fn = getattr(fx, "project_waiting", None)
     got = fn(request, project, now) if fn is not None and request is not None else None
     if got is not None:
         return got["mine"], got["others"]
     hidden = fx.hidden_ids() if fx is not None and hasattr(fx, "hidden_ids") else set()
-    return [w for w in caller_waiting(store, fx, now, request, hidden)
-            if (w.get("project") or {}).get("id") == project], []
+    items = [w for w in waiting_items(store, fx, now, hidden)
+             if (w.get("project") or {}).get("id") == project]
+    return split_waiting(store, items, _caller(store, fx, request), now)
+
+
+def caller_owns(store, fx, request, project: dict, owners=None) -> bool:
+    """The caller owns the project's work (factory_owners: its lead, else the admins), so Close
+    and its person checks are theirs; the system credential and a cell of one own everything."""
+    who = _caller(store, fx, request)
+    if who["everything"]:
+        return True
+    return bool(who["me"]) and who["me"] in (owners or owners_mod.Owners(store)).project(project)
+
+
+def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dict], list[dict]]:
+    """`items` split into (the caller's, the others' said for them)."""
+    mine = owners_mod.mine(items, **caller)
+    ids = {i["id"] for i in mine}
+    rest = [i for i in items if i["id"] not in ids]
+    return mine, order_waiting(owners_mod.for_others(owners_mod.Owners(store), rest), now)
 
 
 def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
@@ -522,10 +550,12 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
         team = {**team, "waiting_for_you": waiting}
     # a person's home never counts another person's desk item, licence or not (core, TR-1048)
     mine_desk = _cut(fx, "own_desk", request, desk)
+    owners = owners_mod.Owners(store)
     rows = []
     for p in open_ps:
         row = project_row(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
                           milestones[p["id"]])
+        row["can_close"] = row["can_close"] and caller_owns(store, fx, request, p, owners)
         rows.append(row)
     rows.sort(key=lambda r: (_STATE_ORDER[r["state"]],
                              -(_dt(r["last_activity_at"]) or datetime.fromtimestamp(0, timezone.utc)).timestamp()))

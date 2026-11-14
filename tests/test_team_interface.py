@@ -187,10 +187,10 @@ def defaults(store):
        t.team_home(one, None, None) == {} and t.project_waiting(one, None, None, "p") is None and t.own_stations(one, None, rows) is rows
        and t.own_desk(one, None, rows) is rows and t.own_tickets(one, None, tickets, []) is tickets
        and t.team_projects(one, None, [], [], [], "all", None, []) == {})
-    many = NS(store=NS(only_local_person=lambda: False),
+    many = NS(store=NS(only_local_person=lambda: False, list_people=lambda: []),
               h=NS(current_person=lambda r: {"id": "ann"}, is_system=lambda r: False),
               work_person=lambda r: {"id": "ann"},
-              desk_is_mine=lambda d, me: d["to"] == me, is_mine=lambda tk, me, p: tk["who"] == me)
+              desk_is_mine=lambda d, me, o=None: d["to"] == me, is_mine=lambda tk, me, p, o=None: tk["who"] == me)
     stations = [{"person": {"id": "ann"}}, {"person": {"id": "bob"}}, {"person": None}]
     desk = [{"to": "ann"}, {"to": "bob"}]
     tks = {"p": [{"who": "ann"}, {"who": "bob"}]}

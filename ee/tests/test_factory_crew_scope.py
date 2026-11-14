@@ -99,12 +99,12 @@ async def main():
         from tares.envelope import now_utc
         store.set_project_kind("prj-x", "software_factory")
         store.update_project("prj-x", status="active")
-        # on a team cell a pull request waits for its project's lead and the people holding a
-        # ticket there: Kim leads Project X, the ticket is Alex's, so the PR is a candidate for both
-        # and only each one's how-far decides
+        # a pull request waits for the owner of its ticket (factory_owners), at the level the merge
+        # queue merges its project at: the hand-over's, else the crew of whoever handed it over
+        # (merge_queue.autonomy_of). Never the viewer's own how-far.
         store.set_project_lead("prj-x", pids["kim"])
         t = store.create_ticket("prj-x", "tares", "Page", repo="example-org/svc")
-        store.update_ticket(t, assignee_person_id=pids["alex"])
+        store.update_ticket(t, assignee_person_id=pids["kim"])
         store.update_ticket(t, stage="review", pr={
             "url": "https://github.com/example-org/svc/pull/7", "number": 7, "repo": "example-org/svc",
             "head": "cccc333", "ci": "success", "title": "PR: Page"})
@@ -119,15 +119,14 @@ async def main():
             return ("PR to review" in row["meta"],
                     any(w["kind"] == "prs_to_review" for w in pg["waiting"]))
 
-        ck("under the cell's L3-review default a passed PR waits on the second person on the Projects row and the project page",
+        ck("not handed over, under the cell's L3-review default, a passed PR waits on its ticket's owner",
            await waits("kim") == (True, True), str(await waits("kim")))
-        ck("the owner who saved L4-ship has the crew merge it: nothing waits on the Projects row and the project page",
+        ck("not on Alex, whose ticket it is not, whatever Alex saved",
            await waits("alex") == (False, False), str(await waits("alex")))
 
         print("== the Tickets filter orders its projects by what waits on the person ==")
         # a project whose tickets are all out of the builders' hands but for a passed PR waits on
-        # the person under L3-review; a busier project is newer. Under the owner's L4-ship nothing
-        # waits, so the newer project leads.
+        # its owner; a busier project is newer. For someone it does not wait on, the newer leads.
         store.create_project("prj-y", "software_factory", "Project Y", {}, goal="Build Y")
         store.set_project_kind("prj-y", "software_factory")
         store.update_project("prj-y", status="active")
@@ -142,7 +141,12 @@ async def main():
 
         ok_kim, ok_alex = await order("kim"), await order("alex")
         ck("the person who must merge sees the project with the passed PR first", ok_kim[0] == "prj-x", str(ok_kim))
-        ck("the owner whose crew merges sees the busier project first", ok_alex[0] == "prj-y", str(ok_alex))
+        ck("someone it does not wait on sees the busier project first", ok_alex[0] == "prj-y", str(ok_alex))
+
+        print("== handed over by the owner who saved L4-ship: the crew merges it ==")
+        store.set_handover("prj-x", [], None, "alex", now_utc(), person_id=pids["alex"])
+        ck("the hand-over person's L4-ship has the crew merge it: nothing waits on Kim",
+           await waits("kim") == (False, False), str(await waits("kim")))
 
         print("== pacing follows the saved value ==")
         from datetime import timedelta

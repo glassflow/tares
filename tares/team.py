@@ -33,6 +33,7 @@ import logging
 import threading
 from typing import Any, Callable
 
+from . import factory_owners as owners_mod
 from . import licence
 
 log = logging.getLogger("tares.team")
@@ -249,14 +250,16 @@ class SingleTeam(Team):
         if not self._applies(c, request):
             return rows
         me = c.work_person(request)["id"]
-        return [d for d in rows if c.desk_is_mine(d, me)]
+        o = owners_mod.Owners(c.store)   # one read of the people for every row
+        return [d for d in rows if c.desk_is_mine(d, me, o)]
 
     def own_tickets(self, c, request, tickets, projects):
         if not self._applies(c, request):
             return tickets
         me = c.work_person(request)["id"]
         by_id = {p["id"]: p for p in projects}
-        return {pid: [t for t in ts if c.is_mine(t, me, by_id.get(pid))]
+        o = owners_mod.Owners(c.store)
+        return {pid: [t for t in ts if c.is_mine(t, me, by_id.get(pid), o)]
                 for pid, ts in tickets.items()}
 
     def team_projects(self, c, request, open_ps, tickets, rows, which, now, waiting):

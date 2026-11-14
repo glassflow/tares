@@ -143,7 +143,8 @@ async def main():
             ck("empty lists, the L3 sentence, no project", a["waiting_for_you"] == [] and a["with_the_crew"] == []
                and a["autonomy_text"] == "You merge every pull request after the crew's review."
                and a["project"] is None and "now" in a, a)
-            ck("the answer's keys", set(a) == {"waiting_for_you", "with_the_crew", "nobody_on_it", "autonomy_text", "project", "now"}, sorted(a))
+            ck("the answer's keys", set(a) == {"waiting_for_you", "waiting_for_others", "with_the_crew", "nobody_on_it",
+                                               "autonomy_text", "project", "now"}, sorted(a))
 
             px, py, pu = project("project-x"), project("project-y"), project("project-u")
             # the crew has project-x and project-y (handed over, autonomy the crew's own)
@@ -254,8 +255,11 @@ async def main():
             await put_crew(cx, "L3-review")
             store.set_handover(px, [{"path": "/w/a", "name": "example-org/service-a"}], "L4-ship", None, now_utc())
             a = await agree(cx, "project L4 under crew L3")
-            ck("project-x is with the crew under a crew at L3-review, project-y still waits",
-               refs(a["waiting_for_you"]) == [("project-y", "Batch the lists")], refs(a["waiting_for_you"]))
+            # the cell's L3-review is a ceiling the merge queue keeps (merge_queue.autonomy_of): a
+            # project's own L4-ship does not let the crew merge, so its passed PRs still wait
+            ck("under a cell at L3-review a project's own L4-ship does not let the crew merge: both still wait",
+               ("project-y", "Batch the lists") in refs(a["waiting_for_you"])
+               and any(r[0] == "project-x" for r in refs(a["waiting_for_you"])), refs(a["waiting_for_you"]))
             store.set_handover(px, [{"path": "/w/a", "name": "example-org/service-a"}], None, None, now_utc())
             a = await agree(cx, "crew default again")
             ck("a project with no autonomy follows the crew again", len(a["waiting_for_you"]) == 4, len(a["waiting_for_you"]))

@@ -335,6 +335,12 @@ def register(app, store, h, ctx):
                         key=lambda t: _MOVING.index(states[t["id"]]))
         moving = [ticket_out(t) for t in movers[:_MOVING_CAP]]
 
+        # whom the project's checks wait for, by the one rule (factory_owners): its lead, else the
+        # admins; the caller answers them only when they are among them
+        owners = fh.owners_mod.Owners(store)
+        who = fh._caller(store, fh.for_caller(ctx.fx, request), request)
+        check_for = owners.who(owners.project(p))
+        yours = who["everything"] or who["me"] in {w["id"] for w in check_for}
         out_ms = []
         results = store.milestone_check_results([m["id"] for m in milestones])
         crew_with_it = fw.crew_has(store, p)
@@ -359,7 +365,9 @@ def register(app, store, h, ctx):
                                       for j, c in enumerate(m["checks"])],
                            "accepted": st["accepted"], "needs_person": st["needs_person"],
                            # accept as it is: the crew never recorded its checks and none is for you
-                           "can_accept": st["needs_person"] and not st["person_open"],
+                           "can_accept": st["needs_person"] and not st["person_open"] and yours,
+                           # the person checks wait for these people; `yours` when the caller is one
+                           "checks_for": check_for, "yours": yours,
                            "tickets_href": f"/projects/{uid}/tickets?milestone={m['id']}"})
 
         # the ticket that goes next: the first ready one that has not started. Moving now lists
@@ -460,7 +468,8 @@ def register(app, store, h, ctx):
                 "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "docs_total": docs_total, "terminal": terminal,
                 "linked": {"tickets_in": {"linear": "Linear", "github": "GitHub"}.get(home or ""),
                            "url": (link or {}).get("url")},
-                "can_close": factory_mod.ready_to_close(p, tickets),
+                # Close is for whoever owns the project's work (factory_owners)
+                "can_close": factory_mod.ready_to_close(p, tickets) and yours,
                 "later": later, "can_later": not later and not closed and not with_crew,
                 "people": people,
                 # the repos handed over to the crew, by name only: their folders stay on the crew's machine

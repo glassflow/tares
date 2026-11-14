@@ -174,8 +174,8 @@ function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClos
   );
 }
 
-/** What waits on someone else in this project (a team cell): their questions and permission
- *  requests, each named for them. Nothing to press: only the person it is for may answer it. */
+/** What waits on someone else in this project (a team cell), each item named for the people it
+ *  waits for (factory_owners on the cell). Nothing to press: only they may act on it. */
 function WaitingOthers({ items }: { items: HomeItem[] }) {
   if (items.length === 0) return null;
   return (
@@ -186,7 +186,9 @@ function WaitingOthers({ items }: { items: HomeItem[] }) {
         {items.map((it) => (
           <div key={it.id} className={cn(ROW, "min-w-0")} data-testid="waiting-other-row" data-kind={it.kind}>
             <div className={KIND} data-user-text>{it.label}</div>
+            <div className="my-0.5 font-bold [overflow-wrap:anywhere]" data-user-text>{it.title}</div>
             <div className="mt-0.5" data-user-text>{it.detail}</div>
+            <DetailLines lines={it.lines} />
             {it.meta && <div className={cn(MUTED, "mt-0.5")}>{it.meta}</div>}
           </div>
         ))}
@@ -331,10 +333,18 @@ function Moving({ d }: { d: FactoryProjectData }) {
 // ── milestones ────────────────────────────────────────────────────────────────
 
 /** What a check's latest result says, in words: passed, failed, or not checked yet. */
-function checkWords(c: ProjectMilestone["checks"][number]): string {
+function checkWords(c: ProjectMilestone["checks"][number], forWhom = "you"): string {
   if (c.result === "pass") return c.for === "person" ? "Works" : `Passed${c.by ? `, checked by ${c.by}` : ""}`;
   if (c.result === "fail") return c.for === "person" ? "Something's wrong" : `Failed${c.by ? `, checked by ${c.by}` : ""}`;
-  return c.for === "person" ? "Waiting for you" : "Not checked yet";
+  return c.for === "person" ? `Waiting for ${forWhom}` : "Not checked yet";
+}
+
+/** Whom a milestone's person checks wait for, in words: "you", or "Kiran", "Kiran and Adam", "no one". */
+function checksForWhom(m: ProjectMilestone): string {
+  if (m.yours !== false) return "you";
+  const names = (m.checks_for ?? []).map((w) => w.name);
+  if (names.length === 0) return "no one";
+  return names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
 /** One check for a person: Works, or Something's wrong with a sentence (TR-1017). */
@@ -425,10 +435,10 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
                       : <span data-user-text>{c.check}</span>}
                     {c.expect && <span className="block text-xs text-muted-foreground">Should show: <span data-user-text>{c.expect}</span></span>}
                     <span className="block text-xs text-muted-foreground" data-testid="check-state">
-                      {c.for === "person" ? "For you. " : "The crew's. "}{checkWords(c)}
+                      {c.for === "person" ? (m.yours === false ? `For ${checksForWhom(m)}. ` : "For you. ") : "The crew's. "}{checkWords(c, checksForWhom(m))}
                       {c.note && <>: <span data-user-text>{c.note}</span></>}
                     </span>
-                    {c.for === "person" && m.done && <PersonCheck c={c} onAnswer={onAnswer && ((n, r, note) => onAnswer(m, n, r, note))} />}
+                    {c.for === "person" && m.done && m.yours !== false && <PersonCheck c={c} onAnswer={onAnswer && ((n, r, note) => onAnswer(m, n, r, note))} />}
                   </li>
                 ))}
               </ol>

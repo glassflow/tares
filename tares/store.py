@@ -4828,8 +4828,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
         return self.get_person(pid)
 
     def remove_person(self, pid: str) -> bool:
-        """They left: off the list of people and the seat count, every key bound to them revoked.
-        The row stays so what they did keeps their name, and coming back makes a new person.
+        """They left: off the list of people and the seat count, every key bound to them revoked, no
+        longer lead of a project or assignee of a ticket. The row stays so what they did keeps their
+        name, and coming back makes a new person.
         False when there is no such person on the cell. `local` owns what has no owner: ValueError."""
         if pid == "local":
             raise ValueError("this person cannot be removed")
@@ -4843,6 +4844,10 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             self.revoke_api_key(kid)
         with self._swrite:
             self.sc.execute("UPDATE people SET removed_at = ? WHERE id = ?", [now_utc(), pid])
+            # what they led or held is nobody's now: it falls to the next owner in line
+            # (factory_owners), and the project says it has no lead
+            self.sc.execute("UPDATE usecases SET lead_person_id = NULL WHERE lead_person_id = ?", [pid])
+            self.sc.execute("UPDATE tickets SET assignee_person_id = NULL WHERE assignee_person_id = ?", [pid])
         return True
 
     def claim_local(self, email: str, name: str | None = None) -> dict | None:

@@ -1,8 +1,9 @@
 """The factory Reviews page (TR-735): GET /api/factory/reviews.
 
-Every pull request that is in review, across projects, in three lists: the ones that wait for the
-person, the ones a named role of the crew has next, and the ones nobody is on (TR-1009). Which is
-which is decided in one place,
+Every pull request that is in review, across projects, in four lists: the ones that wait for the
+caller's merge, the ones that wait for someone else's (named for them), the ones a named role of
+the crew has next, and the ones nobody is on (TR-1009). Whose merge it is comes from
+`factory_waiting.pr_owners` (the owner of the ticket, factory_owners). Which list is decided in one place,
 `factory_waiting.review_split` (assumption A10: a pull request waits for the person when its
 project's autonomy is L3-review and the reviewer passed it on its current commit), the same
 function the home page's "PRs to review" reads, so the two always agree.
@@ -94,8 +95,10 @@ def _row(q: dict, now, milestones: dict[str, list[dict]]) -> dict:
 def register(app, store, h, ctx):
     @app.get("/api/factory/reviews")
     def factory_reviews(request: Request, project: str = Query("")):
-        """{waiting_for_you: [row], with_the_crew: [row], nobody_on_it: [row], autonomy_text,
-        project, now}. Every list has the longest waiting first; a crew row's `why` names who has
+        """{waiting_for_you: [row], waiting_for_others: [row], with_the_crew: [row], nobody_on_it:
+        [row], autonomy_text, project, now}. A pull request that waits for a person's merge is the
+        caller's when its ticket is theirs (factory_owners), else under waiting_for_others with
+        `for_people` [{id, name}]. Every list has the longest waiting first; a crew row's `why` names who has
         it next, a nobody row's says why nobody does (factory_waiting.review_split).
         `?project=<id>` keeps one project's pull requests; an id
         the cell does not know gives three empty lists. `project` is {id, name} of the filter, or
@@ -110,7 +113,17 @@ def register(app, store, h, ctx):
         rows = fx.queue() if fx else []
         if project:
             rows = [q for q in rows if q["project"] == project]
-        mine, theirs, nobody = fw.review_split(store, fx, rows)
+        waits, theirs, nobody = fw.review_split(store, fx, rows)
+        # of those that wait for a person's merge, the caller's, and the others' named for them
+        # (factory_owners: the owner of each ticket, the rule the home reads too)
+        o = fh.owners_mod.Owners(store)
+        owners = fw.pr_owners(store, waits, o)
+        for q in waits:
+            q["for_people"] = list(owners[(q["project"], q["ticket"])])
+        caller = fh._caller(store, fx, request)
+        mine = fh.owners_mod.mine(waits, **caller)
+        ids = {(q["project"], q["ticket"]) for q in mine}
+        others = [q for q in waits if (q["project"], q["ticket"]) not in ids]
         key = lambda q: (fh._dt(q.get("waiting_since")) or now, q["project_name"], q["ticket"])
         milestones = {pid: store.list_milestones(pid)
                       for pid in sorted({q["project"] for q in rows if q.get("blocks_milestone")})}
@@ -118,6 +131,8 @@ def register(app, store, h, ctx):
         level = (fw.effective_autonomy(store, fx, shown["id"], crew) if shown
                  else crew or fw.DEFAULT_AUTONOMY)
         return {"waiting_for_you": [_row(q, now, milestones) for q in sorted(mine, key=key)],
+                "waiting_for_others": [{**_row(q, now, milestones), "for_people": o.who(q["for_people"])}
+                                       for q in sorted(others, key=key)],
                 "with_the_crew": [_row(q, now, milestones) for q in sorted(theirs, key=key)],
                 "nobody_on_it": [_row(q, now, milestones) for q in sorted(nobody, key=key)],
                 "autonomy_text": AUTONOMY_TEXT.get(level, AUTONOMY_TEXT[fw.DEFAULT_AUTONOMY]),

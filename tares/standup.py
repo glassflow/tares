@@ -44,6 +44,10 @@ def _ticket(t: dict, **extra) -> dict:
             "pr": _pr_url(t), "url": t.get("url"), **extra}
 
 
+def _names(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
 def project_facts(store, uid: str, name: str, tickets: list[dict], history: list[dict],
                   since: datetime, until: datetime, progress: dict, finished_at=None) -> dict:
     """One project's standup: done, started, blocked, in review and in progress, plus the
@@ -83,8 +87,14 @@ def project_facts(store, uid: str, name: str, tickets: list[dict], history: list
     started_ids = {x["ref"] for x in started}
     doing = [_ticket(t) for t in tickets if t["stage"] == "doing" and not factory_mod.finished(t)
              and factory_mod.label(t) not in started_ids]
+    # the report can go to a shared place: on a cell of several people each item names whom it
+    # waits for (factory_owners, the rule the home reads), never "you"
+    from . import factory_owners as owners_mod
+    o = owners_mod.Owners(store)
+    proj = store.get_project(uid) if not o.single else None
     desk = [{"label": d["label"], "question": d["question"], "blocking": d["blocking"],
-             "permission": bool(d.get("command")), "asked_at": d["created_at"]}
+             "permission": bool(d.get("command")), "asked_at": d["created_at"],
+             **({} if o.single else {"for": [w["name"] for w in o.who(o.desk(d, proj))] or ["no one"]})}
             for d in store.list_desk("open", uid)]
     desk.sort(key=lambda d: (not d["blocking"], str(d["asked_at"])))
     moved = bool(history or done or _in(finished_at, since, until)
@@ -180,8 +190,10 @@ def markdown(report: dict, summary: dict | None = None) -> str:
                       lambda x: _line(x, ", changes asked" if x["stage"] == "changes" else ""))
         out += _group("Blocked", p["blocked"],
                       lambda x: _line(x, f": {x['reason']}" if x["reason"] else ""))
-        out += _group("Needs you", p["needs_you"],
+        team = any("for" in d for d in p["needs_you"])
+        out += _group("Needs a person" if team else "Needs you", p["needs_you"],
                       lambda d: f"- {d['label']} {d['question']}"
+                                + (f" (for {_names(d['for'])})" if d.get("for") else "")
                                 + (" (permission)" if d["permission"] else "")
                                 + (" (blocking)" if d["blocking"] else ""))
     if report["quiet"]:

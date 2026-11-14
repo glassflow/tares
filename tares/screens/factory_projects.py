@@ -17,8 +17,9 @@ from datetime import datetime, timezone
 from fastapi import Request
 
 from ..envelope import now_utc
+from .. import factory_owners as owners_mod
 from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
-                            caller_waiting)
+                            caller_owns, caller_waiting)
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
@@ -107,6 +108,12 @@ def register(app, store, h, ctx):
         waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
         rows = [row_for(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
                         milestones[p["id"]]) for p in projects]
+        # Close is for whoever owns the project's work (factory_owners)
+        owners = owners_mod.Owners(store)
+        by_id = {p["id"]: p for p in projects}
+        for r in rows:
+            r["can_close"] = r["can_close"] and caller_owns(store, for_caller(fx, request), request,
+                                                            by_id[r["id"]], owners)
         rows.sort(key=lambda r: (ORDER[r["state"]],
                                  -(_dt(r["last_activity_at"]) or _EPOCH).timestamp()))
         counts = {"all": len(rows), **{s: sum(1 for r in rows if r["state"] == s) for s in STATES}}

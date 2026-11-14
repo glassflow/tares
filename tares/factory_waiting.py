@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from . import factory as factory_mod
 from . import factory_home as fh
+from . import factory_owners as owners_mod
 
 # the role words a person reads ("The reviewer wants to use ..."), by the role the crew keeps
 _ROLE_WORD = {"orchestrator": "the orchestrator", "reviewer": "the reviewer",
@@ -136,16 +137,19 @@ def review_split(store, fx, rows: list[dict] | None = None
                  ) -> tuple[list[dict], list[dict], list[dict]]:
     """THE rule for who has each pull request in review (assumption A10, TR-1009): the queue rows
     (`fx.queue()`) split into (waits for the person, with the crew, nobody is on it), each row
-    with `why` in words. A pull request waits for the person when its project's autonomy is
-    L3-review and the reviewer passed it on its current commit, unless its project is finished or
+    with `why` in words. A pull request waits for a person when the merge queue merges its
+    project at L3-review (merge_queue.autonomy_of: the hand-over's level, else the crew of whoever
+    handed it over, under the cell's ceiling; never the viewer's) and the reviewer passed it on its
+    current commit; which person is pr_owners' (the ticket's owner). Unless its project is finished or
     the pull request was closed without merging. It is with the crew only when the crew has the
     project (handed over, not finished, not taken back) and a named role has the next step
     (`_crew_has`). Everything else is nobody's, with the reason (`NOBODY`). The Home page and
-    the Reviews page both read this and nowhere else, so their lists are always the same."""
+    the Reviews page both read this and pr_owners and nowhere else, so their lists are always the
+    same. `fx` gives the queue."""
     if fx is None:
         return [], [], []
+    from .merge_queue import autonomy_of   # merge_queue imports this module
     rows = fx.queue() if rows is None else rows
-    crew = (fx.settings() or {}).get("autonomy")
     projects = {p["id"]: p for p in store.list_projects()}
     level: dict[str, str] = {}
     held: dict[str, str | None] = {}
@@ -153,7 +157,9 @@ def review_split(store, fx, rows: list[dict] | None = None
     for q in rows:
         pid = q["project"]
         if pid not in level:
-            level[pid] = effective_autonomy(store, fx, pid, crew)
+            # the level the merge queue merges this project at (its hand-over, else the crew of
+            # whoever handed it over): the same for every viewer, so Home and Reviews agree
+            level[pid] = autonomy_of(store, pid)
             ho = store.get_handover(pid)
             p = projects.get(pid) or {}
             held[pid] = ("finished" if p.get("status") == "done" or (ho or {}).get("finished")
@@ -177,6 +183,21 @@ def review_split(store, fx, rows: list[dict] | None = None
     return mine, theirs, nobody
 
 
+def pr_owners(store, rows: list[dict], o=None) -> dict[tuple[str, str], tuple[str, ...]]:
+    """{(project, ticket ref): the people} a pull request in review waits for: the owner of its
+    ticket (factory_owners, the one rule). The home's "PRs to review" and the Reviews page read
+    this and nowhere else, so who merges a pull request is the same on both."""
+    o = o or owners_mod.Owners(store)
+    pids = sorted({q["project"] for q in rows})
+    if not pids:
+        return {}
+    projects = {p["id"]: p for p in store.list_projects() if p["id"] in pids}
+    tickets = {(pid, factory_mod.label(t)): t for pid, ts in store.tickets_by_project(pids).items() for t in ts}
+    return {(q["project"], q["ticket"]): o.ticket(tickets.get((q["project"], q["ticket"])) or {},
+                                                  projects.get(q["project"]))
+            for q in rows}
+
+
 def waits_for_person(store, fx) -> list[dict]:
     """The queue rows that wait for the person to merge: the first half of review_split."""
     return review_split(store, fx)[0]
@@ -188,11 +209,18 @@ def prs_to_review(store, fx, now) -> list[dict]:
     The others wait for the reviewer, the builder or the crew."""
     if fx is None:
         return []
-    by: dict[str, list[dict]] = {}
-    for q in waits_for_person(store, fx):
-        by.setdefault(q["project"], []).append(q)
+    o = owners_mod.Owners(store)
+    rows_in = waits_for_person(store, fx)
+    owners = pr_owners(store, rows_in, o)
+    # a pull request waits for the owner of its ticket: one item per project and set of owners
+    by: dict[tuple, list[dict]] = {}
+    for q in rows_in:
+        by.setdefault((q["project"], owners[(q["project"], q["ticket"])]), []).append(q)
+    groups: dict[str, int] = {}
+    for pid, _ in by:
+        groups[pid] = groups.get(pid, 0) + 1
     out = []
-    for pid, rows in by.items():
+    for (pid, ids), rows in by.items():
         n = len(rows)
         titles = ", ".join(_trim(r["title"], 80) for r in rows)
         blocking = sum(1 for r in rows if r["blocks_milestone"])
@@ -205,16 +233,17 @@ def prs_to_review(store, fx, now) -> list[dict]:
                     key=lambda t: fh._dt(t) or now)
         repos = list(dict.fromkeys(r["repo"] for r in rows if r.get("repo")))
         waited = _for(fh.plain_wait(fh._minutes(since, now)))
-        out.append(fh.home_item(
+        key = f"prs_to_review:{pid}" + (f":{'+'.join(ids)}" if groups[pid] > 1 else "")
+        out.append(owners_mod.tag(fh.home_item(
             "prs_to_review", label="1 PR to review" if n == 1 else f"{n} PRs to review",
             title=rows[0]["project_name"], detail=titles + "." + note,
             meta="Waiting " + waited + (" · " + ", ".join(repos) if repos else ""),
             since=since, now=now, project={"id": pid, "name": rows[0]["project_name"]},
-            repo=repos[0] if len(repos) == 1 else None, id=f"prs_to_review:{pid}",
+            repo=repos[0] if len(repos) == 1 else None, id=key,
             actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
             blocking=True,
             # whose merge waits for the person: not in the crew's hands (project_state)
-            tickets=[r["ticket"] for r in rows]))
+            tickets=[r["ticket"] for r in rows]), o, ids))
     return out
 
 
@@ -226,6 +255,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
     projects = _open_projects(store)
     if not projects:
         return []
+    o = owners_mod.Owners(store)
     tickets = store.tickets_by_project([p["id"] for p in projects])
     handed = set(store.handed_over_projects())
     asking = {q["project"] for q in store.list_spec_questions(state="open")}   # one read, every project
@@ -241,7 +271,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
             continue
         since = min(specs[p["id"]], key=lambda t: fh._dt(t) or now)
         where = next((_TRACKER[t["owner"]] for t in ts if t.get("owner") in _TRACKER), "")
-        out.append(fh.home_item(
+        out.append(owners_mod.tag(fh.home_item(
             "ready_to_start", label="Ready to start", title=p["name"],
             detail=f"Spec and plan written, {fh._count(len(ts), 'ticket')}{where}. "
                    "The crew has not picked it up.",
@@ -250,7 +280,7 @@ def ready_to_start(store, fx, now) -> list[dict]:
             actions=[{"label": "Read the spec", "primary": False, "href": f"/projects/{p['id']}"},
                      {"label": "Later", "primary": False, "do": "later", "project": p["id"]},
                      {"label": "Copy the hand-over command", "primary": True, "do": "copy",
-                      "text": f"/tares:ship {p['name']}"}]))
+                      "text": f"/tares:ship {p['name']}"}]), o, o.project(p), p))
     return out
 
 
@@ -272,7 +302,9 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
     rows = [a for a in store.open_assumptions() if (a["project"], a["label"]) not in (skip or ())]
     if not rows:
         return []
-    names = {p["id"]: p["name"] for p in _open_projects(store)}
+    open_ps = {p["id"]: p for p in _open_projects(store)}
+    names = {pid: p["name"] for pid, p in open_ps.items()}
+    o = owners_mod.Owners(store)
     by: dict[str, list[dict]] = {}
     for a in rows:
         if a["project"] in names:
@@ -284,7 +316,7 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
         keep = "both" if n == 2 else "it" if n == 1 else "them"
         roles = list(dict.fromkeys(_ROLE_WORD.get(a["made_role"] or "", "the crew") for a in items))
         since = min((a["made_at"] for a in items), key=lambda t: fh._dt(t) or now)
-        out.append(fh.home_item(
+        out.append(owners_mod.tag(fh.home_item(
             "calls_to_confirm", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
             title=names[pid], detail="The crew decided without you:", lines=shown,
             meta="Made by " + _and(roles), since=since, now=now,
@@ -292,7 +324,7 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
             actions=[{"label": "Read them", "primary": False, "href": f"/projects/{pid}/calls"},
                      {"label": {"both": "Keep both", "it": "Keep it", "them": "Keep all"}[keep],
                       "primary": True, "do": "keep_assumptions", "project": pid,
-                      "refs": [a["label"] for a in items]}]))
+                      "refs": [a["label"] for a in items]}]), o, o.project(open_ps[pid]), open_ps[pid]))
     return out
 
 
@@ -304,10 +336,15 @@ def desk_items(store, fx, now) -> list[dict]:
     rows = [d for d in store.list_desk("open", None) if not d.get("assumptions")]
     if not rows:
         return []
-    names = {p["id"]: p["name"] for p in store.list_projects()}
+    projects = {p["id"]: p for p in store.list_projects()}
+    names = {pid: p["name"] for pid, p in projects.items()}
+    o = owners_mod.Owners(store)
     out = []
     for d in rows:
         pid = d["project"] if d["project"] in names else None
+        ids = o.desk(d, projects.get(pid))
+        # addressed to nobody who is here: it fell to the project's owner, who should know why
+        fell = projects.get(pid) if pid and o.here(d.get("to_person_id")) is None else None
         project = {"id": pid, "name": names[pid]} if pid else None
         # a question about a project opens on its page; one for every project, on the crew page
         href = f"/projects/{pid}#desk-{d['label']}" if pid else f"/crew#desk-{d['label']}"
@@ -319,7 +356,7 @@ def desk_items(store, fx, now) -> list[dict]:
             may_limit = bool(pid) and not str(d.get("station") or "the station").startswith("crew-")
             # the command is the crew's own text, in backticks so the page can show it in a
             # monospace span
-            out.append(fh.home_item(
+            out.append(owners_mod.tag(fh.home_item(
                 "permission", label="Permission", title=names[pid] if pid else "Every project",
                 detail=f"{who[0].upper()}{who[1:]} wants to use: `{d['command']}`",
                 meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
@@ -327,14 +364,14 @@ def desk_items(store, fx, now) -> list[dict]:
                 blocking=True,
                 actions=[{**answer, "primary": False},
                          {"label": "Allow", "primary": True, "do": "allow", "desk": d["label"], "station": d.get("station"),
-                          "may_limit": may_limit}]))
+                          "may_limit": may_limit}]), o, ids, fell))
         else:
-            out.append(fh.home_item(
+            out.append(owners_mod.tag(fh.home_item(
                 "question", label="Question for you", title=names[pid] if pid else "Every project",
                 detail=d["question"], meta="Asked by the crew, " + fh.plain_ago(d["created_at"], now),
                 since=d["created_at"], now=now, project=project, id=f"question:{d['label']}",
                 blocking=desk_blocks(d), question=desk_question(d),
-                actions=[answer]))
+                actions=[answer]), o, ids, fell))
     return out
 
 
@@ -378,6 +415,7 @@ def milestones_to_check(store, fx, now) -> list[dict]:
         return []
     states = _milestone_states(store, projects)
     tickets = store.tickets_by_project([p["id"] for p in projects])
+    o = owners_mod.Owners(store)
     out = []
     for p in projects:
         if factory_mod.ready_to_close(p, tickets.get(p["id"]) or []):
@@ -396,12 +434,12 @@ def milestones_to_check(store, fx, now) -> list[dict]:
                 n = len(st["crew_unrun"])
                 detail = (f"Every ticket of this milestone merged, but the crew has not recorded "
                           f"{'its check' if n == 1 else f'its {n} checks'}. Accept it as it is, or ask the crew.")
-            out.append(fh.home_item(
+            out.append(owners_mod.tag(fh.home_item(
                 "milestone_to_check", label="Milestone to check", title=f"{p['name']}, {m['name']}",
                 detail=detail, meta="Merged " + fh.plain_ago(since, now), since=since, now=now,
                 project=_ref(p), id=f"milestone_to_check:{p['id']}:{m['id']}",
                 actions=[{"label": "Check it", "primary": True,
-                          "href": f"/projects/{p['id']}#milestone-{m['id']}"}]))
+                          "href": f"/projects/{p['id']}#milestone-{m['id']}"}]), o, o.project(p), p))
     return out
 
 
@@ -422,6 +460,7 @@ def projects_to_close(store, fx, now) -> list[dict]:
     tickets = store.tickets_by_project([p["id"] for p in projects])
     ready = [p for p in projects if factory_mod.ready_to_close(p, tickets.get(p["id"]) or [])]
     states = _milestone_states(store, ready) if ready else {}
+    o = owners_mod.Owners(store)
     out = []
     for p in ready:
         ts = tickets.get(p["id"]) or []
@@ -432,14 +471,14 @@ def projects_to_close(store, fx, now) -> list[dict]:
         open_ms = [f"M{i}" for i, _, st, _ in states.get(p["id"]) or [] if st["delivered"] and not st["accepted"]]
         note = ("" if not open_ms else
                 f" {_and(open_ms)} {'is' if len(open_ms) == 1 else 'are'} not accepted yet.")
-        out.append(fh.home_item(
+        out.append(owners_mod.tag(fh.home_item(
             "signoff", label="Ready to close", title=p["name"],
             detail=(f"All {n} tickets are merged" if n > 1 else "Its ticket is merged")
                    + "." + note + " Close the project when you have checked the result.",
             meta=_ready_for(since, now), since=since, now=now, project=_ref(p),
             id=f"signoff:{p['id']}",
             actions=[{"label": "Open project", "primary": False, "href": f"/projects/{p['id']}"},
-                     {"label": "Close project", "primary": True, "do": "close"}]))
+                     {"label": "Close project", "primary": True, "do": "close"}]), o, o.project(p), p))
     return out
 
 

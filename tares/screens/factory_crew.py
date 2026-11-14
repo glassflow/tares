@@ -104,7 +104,9 @@ def register(app, store, h, ctx):
              "sent to review", "sent to review"),
             ("blocked", sum(1 for p in ps for x in p["blocked"] if x.get("new")), "blocked", "blocked"),
             ("needs_you", sum(1 for p in ps for d in p["needs_you"] if asked_in_range(d)),
-             "question for you", "questions for you"),
+             # every open question on the cell: "for you" only when the cell has one person
+             *(("question for you", "questions for you") if store.only_local_person()
+               else ("question asked", "questions asked"))),
         )
         parts = [f"{n} {one if n == 1 else many}" for _, n, one, many in counts if n]
         if not parts:
@@ -130,10 +132,18 @@ def register(app, store, h, ctx):
                 if t.get("holder"):
                     by_holder.setdefault(t["holder"], []).append(t)
         by_name = {s["name"]: s for s in stations}
-        desk_open = len([d for d in store.list_desk("open", None) if d.get("project") not in hidden])
+        # the caller's own open desk (factory_owners), never another person's questions
+        desk_open = len(fx_.own_desk(request, [d for d in store.list_desk("open", None)
+                                              if d.get("project") not in hidden]))
+        me = (h.current_person(request) or {}).get("id")
+        team = not store.only_local_person() and not h.is_system(request)
 
         def member(s: dict) -> dict:
             m = crew_member(s, by_holder, desk_open, now, by_name)
+            owner = s.get("person") or {}
+            if team and m["state"] == "waiting" and owner.get("id") and owner["id"] != me:
+                # another person's crew waits for them, not for the caller
+                m = {**m, "state_text": f"Waiting for {owner.get('name') or 'its person'}"}
             doing, ended = m["doing"], s["state"] == "ended"
             if ended:
                 doing = "Finished its work."
