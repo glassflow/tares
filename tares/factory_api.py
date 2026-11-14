@@ -1145,7 +1145,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
         nothing narrows the list: the system credential, or a key with no person (a project key)."""
         if h.is_system(request) or not h.current_person(request):
             return None
-        me = h.current_person(request)["id"]
+        return projects_of(h.current_person(request)["id"])
+
+    def projects_of(me: str) -> set[str]:
+        """The projects person `me` leads or holds a ticket assignment in (my_projects' rule)."""
         out = set()
         for row in store.list_projects():
             p = store.get_project(row["id"])
@@ -1329,8 +1332,10 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The `c` of the team interface (tares/team.py): what the team hooks read of this module
         (TR-739). Also `h.team_reader`."""
         return SimpleNamespace(store=store, h=h, stations=stations, work_of=work_of,
-                               work_person=work_person, my_projects=my_projects, queue=queue_all,
+                               work_person=work_person, my_projects=my_projects,
+                               projects_of=projects_of, queue=queue_all,
                                settings=settings,
+                               settings_of=lambda person: crew_settings(store, person),
                                desk_is_mine=desk_is_mine, is_mine=is_mine, leads=leads,
                                stored=stored, crews_of=crews_of, mirror_in=mirror_in,
                                mirror_out=mirror_out, visible_grant=visible_grant,
@@ -1342,6 +1347,11 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """The team part of GET /api/home for the caller's person (TR-739), or {} on a cell of
         one person: see the team interface. It reads what this module holds; the route stays in daemon.py."""
         return team_mod.get().team_home(team_reader(), request, now or now_utc())
+
+    def project_waiting(request: Request, uid: str, now=None) -> dict | None:
+        """What waits in one project on a team cell: {mine, others} (see the team interface), or
+        None on a cell of one person."""
+        return team_mod.get().project_waiting(team_reader(), request, now or now_utc(), uid)
 
     def own_stations(request: Request, rows: list[dict]) -> list[dict]:
         """`rows` kept to the caller's own crews on a team cell (see the team interface)."""
@@ -3170,7 +3180,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"repos": [r for r in rows if r["path"] or r["name"]]}
 
     fx = SimpleNamespace(stations=stations, queue=queue_all, pace=pace, settings=settings,
-                         team_home=team_home, team_projects=team_projects, own_stations=own_stations,
+                         team_home=team_home, project_waiting=project_waiting,
+                         team_projects=team_projects, own_stations=own_stations,
                          own_desk=own_desk, own_tickets=own_tickets,
                          hidden_ids=lambda: h.hidden_ids(),
                          caller_person=lambda request: h.current_person(request))

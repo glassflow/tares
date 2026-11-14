@@ -18,7 +18,7 @@ from fastapi import Request
 
 from ..envelope import now_utc
 from ..factory_home import (_STATE_ORDER, _count, _dt, for_caller, plain_ago, project_row,
-                            waiting_items)
+                            caller_waiting)
 
 # the order of the list: what needs you first, kept for later and finished last
 ORDER = {**_STATE_ORDER, "later": 4, "done": 5}
@@ -103,7 +103,8 @@ def register(app, store, h, ctx):
         ids = [p["id"] for p in projects]
         tickets = store.tickets_by_project(ids)
         milestones = store.milestones_by_project(ids)
-        waiting = waiting_items(store, for_caller(fx, request), now, hidden)
+        # what waits for the caller, as their home has it (never another person's items)
+        waiting = caller_waiting(store, for_caller(fx, request), now, request, hidden)
         rows = [row_for(p, tickets[p["id"]], store.get_handover(p["id"]), waiting, stations, now,
                         milestones[p["id"]]) for p in projects]
         rows.sort(key=lambda r: (ORDER[r["state"]],

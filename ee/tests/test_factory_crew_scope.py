@@ -43,7 +43,7 @@ def ck(label, cond, detail=""):
 async def main():
     from tares.daemon import make_app
     app = make_app()
-    keys = {}
+    keys, pids = {}, {}
 
     async def call(who, method, path, body=None):
         hdr = {"Authorization": f"Bearer {TOKEN}"} if who == "root" else keys[who]
@@ -57,6 +57,7 @@ async def main():
                 "name": f"{who}-laptop", "scopes": ["admin"],
                 "person": {"email": f"{who}-cs@example.com", "name": who.capitalize()}})
             keys[who] = {"Authorization": f"Bearer {r.json()['secret']}"}
+            pids[who] = r.json()["person"]["id"]
         store = app.state.store
         store.create_project("prj-x", "software_factory", "Project X", {}, goal="Build X")
 
@@ -98,7 +99,12 @@ async def main():
         from tares.envelope import now_utc
         store.set_project_kind("prj-x", "software_factory")
         store.update_project("prj-x", status="active")
+        # on a team cell a pull request waits for its project's lead and the people holding a
+        # ticket there: Kim leads Project X, the ticket is Alex's, so the PR is a candidate for both
+        # and only each one's how-far decides
+        store.set_project_lead("prj-x", pids["kim"])
         t = store.create_ticket("prj-x", "tares", "Page", repo="example-org/svc")
+        store.update_ticket(t, assignee_person_id=pids["alex"])
         store.update_ticket(t, stage="review", pr={
             "url": "https://github.com/example-org/svc/pull/7", "number": 7, "repo": "example-org/svc",
             "head": "cccc333", "ci": "success", "title": "PR: Page"})

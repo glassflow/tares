@@ -136,6 +136,13 @@ class Team:
         """The team page's body for the caller, or {} when the cell has no team page."""
         raise NotImplementedError
 
+    def project_waiting(self, c, request, now, project: str) -> dict | None:
+        """What waits in one project, by the rule of `team_home`: {mine, others}. `mine` is the
+        caller's items of the project, exactly as their home lists them; `others` is what the same
+        rule gives each other person there, named for them, with nothing to press. None when the
+        cell has no team page (the single-person list then answers)."""
+        raise NotImplementedError
+
     def own_stations(self, c, request, rows: list) -> list:
         """`rows` (the crew's stations) cut to what the caller may see. A one-person cell sees all
         of them; on a cell with more than one person a person caller sees only their own. The
@@ -220,6 +227,9 @@ class SingleTeam(Team):
 
     def team_home(self, c, request, now):
         return {}
+
+    def project_waiting(self, c, request, now, project):
+        return None
 
     @staticmethod
     def _applies(c, request) -> bool:

@@ -20,39 +20,81 @@ YOUR_CREW = {"crew": True, "name": "Your crew"}
 
 
 class HomeRead:
-    """One read of the home for one person: who they are, what they cannot see, and the crew
-    rows, read once and only when something asks for them."""
+    """One read of the home for one person: who they are, what the caller cannot see, and the crew
+    rows, read once and only when something asks for them.
 
-    def __init__(self, c, request, me: dict, now):
+    `viewer` is False when the read is for someone other than the caller (the project page's
+    "Waiting for others"): then what the builders ask of "the person" is asked of `me`, never of
+    the request's credential. `share` is another read of the same request whose reads (stations,
+    names, people, queue, the cell-wide item lists) this one reuses."""
+
+    def __init__(self, c, request, me: dict, now, viewer: bool = True, share: "HomeRead | None" = None):
         self.c, self.request, self.me, self.now = c, request, me, now
         self.store = c.store
-        self.hidden = c.h.hidden_ids()
-        self._stations = None
-        self._names = None
-        self._people = None
+        self.viewer = viewer
+        self._reads: dict = share._reads if share is not None else {}
+        self.hidden = share.hidden if share is not None else c.h.hidden_ids()
+
+    def _read(self, key: str, fn):
+        if key not in self._reads:
+            self._reads[key] = fn()
+        return self._reads[key]
 
     def stations(self) -> list[dict]:
-        if self._stations is None:
-            self._stations = self.c.stations()
-        return self._stations
+        return self._read("stations", self.c.stations)
+
+    def queue(self, keep=None) -> list[dict]:
+        """The review queue, read once per request."""
+        return self.c.queue(keep) if keep is not None else self._read("queue", self.c.queue)
 
     def names(self) -> dict[str, str]:
         """{project id: name} of every project."""
-        if self._names is None:
-            ps = self.store.list_projects()
-            self._names = {p["id"]: p["name"] for p in ps}
-            self.later = {p["id"] for p in ps if p.get("status") == "later"}
-        return self._names
+        return self._read("names", self._projects)[0]
+
+    @property
+    def later(self) -> set[str]:
+        """The ids of the projects kept for later."""
+        return self._read("names", self._projects)[1]
+
+    def _projects(self):
+        ps = self.store.list_projects()
+        return {p["id"]: p["name"] for p in ps}, {p["id"] for p in ps if p.get("status") == "later"}
 
     def people(self) -> dict[str, str]:
         """{person id: name} of everyone on the cell."""
-        if self._people is None:
-            self._people = {p["id"]: p.get("name") or p["id"] for p in self.store.list_people()}
-        return self._people
+        return self._read("people", lambda: {p["id"]: p.get("name") or p["id"]
+                                             for p in self.store.list_people()})
 
     def person(self, pid: str | None) -> dict | None:
         """{id, name} of a person by id, or None."""
         return {"id": pid, "name": self.people().get(pid) or pid} if pid else None
+
+    def leads(self, pid: str | None) -> bool:
+        """`me` leads the project (core's rule, c.leads) and the caller can see it."""
+        return bool(pid) and pid not in self.hidden and self.c.leads(self.store.get_project(pid), self.me["id"])
+
+    def projects(self) -> set[str] | None:
+        """The projects whose pull requests wait for `me`: those they lead or hold a ticket in
+        (core's my_projects rule). None narrows nothing: the caller is the system credential."""
+        if self.viewer:
+            return self.c.my_projects(self.request)
+        return self.c.projects_of(self.me["id"])
+
+    def settings(self) -> dict:
+        """`me`'s crew settings (their own over the cell's default): what decides whether a passed
+        pull request waits for them to merge."""
+        return self.c.settings(self.request) if self.viewer else self.c.settings_of(self.me)
+
+    def consents(self, g: dict) -> str | None:
+        """How `me` may agree to grant `g`: "person", "admin" or None (grants.waits_for_me's rule)."""
+        if self.viewer:
+            return grants_mod.waits_for_me(self.c, g, self.request)
+        ids = {w["id"] for w in grants_mod.waiting_for(self.c, g)}
+        if self.me["id"] in ids:
+            return "person"
+        if "admin" in ids and (self.store.get_person(self.me["id"]) or {}).get("is_admin"):
+            return "admin"
+        return None
 
 
 def _for_team(c, request) -> bool:
@@ -103,7 +145,7 @@ def question_items(t: HomeRead) -> list[dict]:
 def grant_items(t: HomeRead) -> list[dict]:
     rows = [g for g in t.store.all_grant_rows()
             if g["state"] == "waiting" and g["kind"] == "project"
-            and grants_mod.waits_for_me(t.c, g, t.request)]
+            and t.consents(g)]
     if not rows:
         return []
     refs = t.store._person_refs({g["given_by"] for g in rows})
@@ -117,7 +159,7 @@ def grant_items(t: HomeRead) -> list[dict]:
         if owned:
             detail = (f"{who} gave this for {fw._and(owned)}, which you "
                       f"own. It takes effect when you agree.")
-        elif grants_mod.waits_for_me(t.c, g, t.request) == "admin":
+        elif t.consents(g) == "admin":
             detail = "It takes effect when an admin agrees."
         else:
             detail = (f"{who} gave this on {project['name'] if project else 'a project'}, which you "
@@ -211,19 +253,22 @@ def milestone_items(t: HomeRead) -> list[dict]:
     """The single-person rule (factory_waiting.milestones_to_check, TR-1017 and TR-1021), kept to
     the projects the person leads: only what truly needs them, nothing for a project ready to
     close, and the crew's unrecorded checks stay the crew's on a project it works on."""
-    return [{**i, "from": YOUR_CREW} for i in fw.milestones_to_check(t.store, None, t.now)
-            if (i.get("project") or {}).get("id") not in t.hidden
-            and t.c.leads(t.store.get_project(i["project"]["id"]), t.me["id"])]
+    rows = t._read("milestones", lambda: fw.milestones_to_check(t.store, None, t.now))
+    return [{**i, "from": YOUR_CREW} for i in rows if t.leads((i.get("project") or {}).get("id"))]
 
 
 # ── pull requests the reviewer passed, in the projects the person leads or holds tickets in ──
 
 def pr_items(t: HomeRead) -> list[dict]:
     from types import SimpleNamespace
-    mine = t.c.my_projects(t.request)   # None: nothing narrows the list (the cell's own credential)
-    fx = SimpleNamespace(queue=t.c.queue, settings=lambda: t.c.settings(t.request))
-    return [i for i in fw.prs_to_review(t.store, fx, t.now)
-            if mine is None or (i["project"] or {}).get("id") in mine]
+    mine = t.projects()   # None: nothing narrows the list (the cell's own credential)
+    settings = t.settings()
+    fx = SimpleNamespace(queue=t.queue, settings=lambda: settings)
+    # which pull requests wait for a merge depends on the person's how-far: read once per value
+    rows = t._read(f"prs:{settings.get('autonomy')}", lambda: fw.prs_to_review(t.store, fx, t.now))
+    return [i for i in rows
+            if (i["project"] or {}).get("id") not in t.hidden
+            and (mine is None or (i["project"] or {}).get("id") in mine)]
 
 
 # ── what the single-person home asks of whoever leads a project, kept for its lead ──
@@ -232,20 +277,23 @@ def lead_items(t: HomeRead) -> list[dict]:
     """A spec ready to hand to the crew, calls the crew made, a project ready to close: the
     single-person home shows them to the one person, a team home to the project's lead."""
     from types import SimpleNamespace
-    fx = SimpleNamespace(queue=t.c.queue, settings=lambda: t.c.settings(t.request))
+    fx = SimpleNamespace(queue=t.queue, settings=t.settings)
     led: dict[str, bool] = {}
 
     def mine(pid: str | None) -> bool:
         if pid not in led:
-            led[pid] = pid not in t.hidden and t.c.leads(t.store.get_project(pid), t.me["id"])
+            led[pid] = t.leads(pid)
         return led[pid]
 
     # calls already on this person's desk as a batch show once, there
     batched = {(d["project"], x) for d in t.store.list_desk("open")
                if d.get("assumptions") and t.c.desk_is_mine(d, t.me["id"]) for x in d["assumptions"]}
     calls = lambda store, fx_, now: fw.calls_to_confirm(store, fx_, now, skip=batched)
-    return [i for build in (fw.ready_to_start, calls, fw.projects_to_close)
-            for i in build(t.store, fx, t.now) if mine((i["project"] or {}).get("id"))]
+    # the calls depend on what is on this person's desk; the other two are read once per request
+    ready = t._read("ready_to_start", lambda: fw.ready_to_start(t.store, fx, t.now))
+    close = t._read("projects_to_close", lambda: fw.projects_to_close(t.store, fx, t.now))
+    return [i for i in [*ready, *calls(t.store, fx, t.now), *close]
+            if mine((i["project"] or {}).get("id"))]
 
 
 # ── the whole answer ─────────────────────────────────────────────────────────
@@ -476,3 +524,48 @@ def team_home(c, request, now) -> dict:
             "summary": summary(waiting, waiting_counts(on)), "you_are_waiting_on": on,
             "crews": crew_rows, "crews_quiet": quiet, "crew_limit": crew_limit(t),
             "areas": areas(t, waiting)}
+
+
+def _for_whom(label: str, names: list[str]) -> str:
+    """An item's label said for someone else: "Question for you" becomes "Question for Kiran",
+    "Milestone to check" becomes "Milestone to check for Kiran and Adam"."""
+    who = fw._and(names)
+    base = label[: -len(" for you")] if label.endswith(" for you") else label
+    return f"{base} for {who}"
+
+
+def project_waiting(c, request, now, project: str) -> dict | None:
+    """What waits in one project on a team cell, by the one rule of the team home (the BUILDERS):
+    `mine` is the caller's items of the project, the ones their home lists, so the project page
+    and the home never disagree on what is "waiting on you". `others` is what the same builders
+    give every other person on the cell in this project: named for them ("Milestone to check for
+    Kiran"), with nothing to press, since only they may act on it. An item waiting for the caller
+    and someone else (a pull request in a project both work in) is the caller's. None on a cell
+    the single-person home answers."""
+    if not _for_team(c, request):
+        return None
+    t = HomeRead(c, request, c.work_person(request), now)
+
+    def of(r: HomeRead) -> list[dict]:
+        return [i for build in BUILDERS for i in build(r)
+                if (i.get("project") or {}).get("id") == project]
+
+    mine = fh.order_waiting(of(t), now)
+    seen = {i["id"] for i in mine}
+    others: dict[str, dict] = {}
+    for p in t.store.list_people():
+        # `local` nobody claimed is no one a person would know by name ("You"): left out
+        if p.get("removed_at") or p["id"] == t.me["id"] or (p["id"] == "local" and not p.get("email")):
+            continue
+        who = {"id": p["id"], "name": p.get("name") or p["id"]}
+        for i in of(HomeRead(c, request, who, now, viewer=False, share=t)):
+            if i["id"] in seen:
+                continue
+            o = others.setdefault(i["id"], {**i, "for_people": []})
+            o["for_people"].append(who)
+    out = []
+    for o in others.values():
+        names = [w["name"] for w in o["for_people"]]
+        out.append({**o, "label": _for_whom(o["label"], names), "actions": [], "question": None,
+                    "for_person": o["for_people"][0]})
+    return {"mine": mine, "others": fh.order_waiting(out, now)}
