@@ -193,7 +193,7 @@ export default function Incidents() {
               <TabsList aria-label="Incidents by state" className="h-auto w-auto max-w-full flex-wrap gap-0 border border-border bg-card">
                 {TAB_STATES.map((t) => (
                   <TabsTrigger key={t} value={t} data-testid={`tab-${t}`}
-                               className="border-r! border-r-border! px-3! max-sm:px-2! max-sm:text-[13px]! last:border-r-0! data-[state=active]:border-b-[color:var(--accent)]! data-[state=active]:hover:border-b-[color:var(--accent)]!">
+                               className="border-r! border-r-border! px-3! max-sm:px-2! max-sm:text-[13px]! last:border-r-0! data-[state=active]:border-b-brand! data-[state=active]:hover:border-b-brand!">
                     {{ all: "All", open: "Open", on_it: "Someone on it", resolved: "Resolved" }[t]}
                     <b className="ml-1 font-mono text-xs font-medium" data-testid={`tab-count-${t}`}>{count(t)}</b>
                   </TabsTrigger>

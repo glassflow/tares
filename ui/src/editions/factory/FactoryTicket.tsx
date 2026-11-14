@@ -38,7 +38,7 @@ const LINK = "text-foreground! underline!";
 const KIND = "m-0 font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground";
 const SUB = "m-0! text-[14px]!";
 const TAG = "whitespace-nowrap border border-border bg-muted px-1.5 py-px text-[11.5px] font-semibold";
-const TAG_BAD = "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]";
+const TAG_BAD = "border-err-border bg-err-soft text-err";
 const MORE = "h-8 self-start text-[13px]!";
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -129,8 +129,8 @@ function Reviews({ items }: { items: TicketReview[] }) {
 
 /** A result in the colour of what it says: failures red, passes green, anything else plain. */
 function resultTone(result: string): string {
-  if (/\b[1-9]\d* (failed|errors?)\b|\bFAILED\b|Traceback/.test(result)) return "text-[color:var(--err)]";
-  if (/\bpassed\b|\bok\b/i.test(result)) return "text-[color:var(--ok)]";
+  if (/\b[1-9]\d* (failed|errors?)\b|\bFAILED\b|Traceback/.test(result)) return "text-err";
+  if (/\bpassed\b|\bok\b/i.test(result)) return "text-ok";
   return "text-foreground";
 }
 

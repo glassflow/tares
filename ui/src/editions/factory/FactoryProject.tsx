@@ -95,8 +95,8 @@ function Steps({ stage, finished }: { stage: FactoryProjectData["stage"]; finish
               className={cn("flex min-w-0 flex-[1_1_0] items-center gap-1.5 text-[13px] text-muted-foreground sm:gap-2 last:flex-none",
                             "after:mx-1 after:h-0.5 after:min-w-2 after:flex-1 after:bg-border after:content-[''] last:after:hidden sm:after:mx-2",
                             done && "text-foreground after:bg-foreground", now && "font-semibold text-foreground")}>
-            <span className={cn("grid size-[22px] flex-none place-items-center border border-foreground bg-[var(--input-bg)] font-mono text-[11px] text-foreground",
-                                done && "bg-foreground text-background", now && "bg-[var(--accent)] text-[color:var(--on-accent)]")}>
+            <span className={cn("grid size-[22px] flex-none place-items-center border border-foreground bg-field font-mono text-[11px] text-foreground",
+                                done && "bg-foreground text-background", now && "bg-brand text-brand-foreground")}>
               {done ? "✓" : i + 1}
             </span>
             {name}
@@ -139,7 +139,7 @@ function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: Home
     return (
       <span className="grid gap-1">
         <Button variant={variant} className={cn(cls, strong)} busy={busy} onClick={() => void keep()} data-testid="waiting-keep">{action.label}</Button>
-        {error && <span role="alert" className="text-[13px] text-[color:var(--err)]">{error}</span>}
+        {error && <span role="alert" className="text-[13px] text-err">{error}</span>}
       </span>
     );
   }
@@ -165,7 +165,7 @@ function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: Home
 function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClose: () => void; onKeep?: (refs: string[]) => Promise<void>; onAllow?: (item: HomeItem, a: HomeAction) => void }) {
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-[var(--row-hover)]")}
+    <div className={cn(ROW, "flex flex-wrap items-center justify-between gap-x-4 gap-y-3 hover:bg-row-hover")}
          data-testid="waiting-row" data-kind={item.kind} id={`waiting-${item.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`}>
       <div className="min-w-0 flex-[1_1_260px]">
         <div className={KIND}>{item.label}</div>
@@ -175,7 +175,7 @@ function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClos
         {item.meta && <div className={cn(MUTED, "mt-0.5")}>{item.meta}</div>}
         {/* the options show here; they are answered on Home, where the Answer button opens */}
         <QuestionChoices item={item} render={(a) => (
-          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground! no-underline! hover:bg-[var(--row-hover)]" data-user-text>{a.label} ↗</Link>
+          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground! no-underline! hover:bg-row-hover" data-user-text>{a.label} ↗</Link>
         )} />
       </div>
       {actions.length > 0 && (
@@ -253,7 +253,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
   const sub = [t.who, t.review].filter(Boolean).join(" · ");
   return (
     <Link to={t.href} data-testid="moving-row" data-ref={t.ref}
-          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
+          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground! no-underline! last:border-b-0 hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
       <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{t.ref}</span>
       <span className="min-w-0">
         <span className="line-clamp-2 block font-semibold [overflow-wrap:anywhere]" data-user-text>{t.title}</span>
@@ -263,7 +263,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
             {t.blocked_by.length > 0 && (
               <>
                 {sub && " · "}
-                <span className="text-[color:var(--err)]">waits for {t.blocked_by.join(", ")}</span>
+                <span className="text-err">waits for {t.blocked_by.join(", ")}</span>
               </>
             )}
           </span>
@@ -309,7 +309,7 @@ function RecentPrs({ d }: { d: FactoryProjectData }) {
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-muted-foreground">
               <Link to={p.ticket_href} className={LINK}>{p.ticket}</Link>
               {p.when && <><span aria-hidden>{"·"}</span><span>{p.when}</span></>}
-              {p.ci && <><span aria-hidden>{"·"}</span><span className={p.ci === "CI failing" ? "text-[color:var(--err)]" : undefined}>{p.ci}</span></>}
+              {p.ci && <><span aria-hidden>{"·"}</span><span className={p.ci === "CI failing" ? "text-err" : undefined}>{p.ci}</span></>}
               {p.size && <><span aria-hidden>{"·"}</span><PrSize s={p.size} /></>}
             </div>
           </div>
@@ -362,7 +362,7 @@ function Moving({ d }: { d: FactoryProjectData }) {
           <>
             <div className="border-t border-border pb-1 pt-4 text-xs font-semibold text-muted-foreground">Next up</div>
             <Link to={`/projects/${encodeURIComponent(d.id)}/tickets/${encodeURIComponent(d.next.ticket)}`} data-testid="next-up"
-                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 py-3 text-foreground! no-underline! hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_14px]">
+                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 py-3 text-foreground! no-underline! hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_14px]">
               <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{d.next.ticket}</span>
               <span className="min-w-0">
                 <span className="block font-semibold [overflow-wrap:anywhere]" data-user-text>{d.next.title}</span>
@@ -424,7 +424,7 @@ function PersonCheck({ c, onAnswer }: {
           </div>
         </div>
       )}
-      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]" data-testid="check-error">{error}</div>}
+      {error && <div role="alert" className="text-[13px] text-err" data-testid="check-error">{error}</div>}
     </div>
   );
 }
@@ -449,7 +449,7 @@ function MilestoneRow({ m, onAnswer, onAccept }: {
           <div className="flex flex-wrap items-center gap-2 font-semibold [overflow-wrap:anywhere]">
             <span data-user-text>{m.name}</span>
             {m.done && (
-              <span className="border border-[color:var(--ok-border)] bg-[var(--ok-soft)] px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--ok)]">
+              <span className="border border-ok-border bg-ok-soft px-1.5 py-0.5 font-mono text-[10.5px] font-medium uppercase tracking-[0.06em] text-ok">
                 {m.accepted ? "Accepted" : "Merged"}
               </span>
             )}
@@ -486,7 +486,7 @@ function MilestoneRow({ m, onAnswer, onAccept }: {
           {m.can_accept && onAccept && (
             <div className="mt-1.5">
               <Button variant="secondary" className="h-8 text-[13px]!" busy={busy} onClick={accept} data-testid="milestone-accept">Accept as it is</Button>
-              {error && <div role="alert" className="mt-1 text-[13px] text-[color:var(--err)]">{error}</div>}
+              {error && <div role="alert" className="mt-1 text-[13px] text-err">{error}</div>}
             </div>
           )}
         </div>
@@ -534,7 +534,7 @@ function ChangeLead({ people, lead, onPick }: { people: ProjectPerson[]; lead: s
           {choices.map((x) => <SelectItem key={x.id} value={x.id} data-user-text>{x.name}</SelectItem>)}
         </SelectContent>
       </Select>
-      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]">{error}</div>}
+      {error && <div role="alert" className="text-[13px] text-err">{error}</div>}
     </>
   );
 }
@@ -561,7 +561,7 @@ function PickPerson({ people, exclude, label, testid, onPick }: {
           {choices.map((x) => <SelectItem key={x.id} value={x.id} data-user-text>{x.name}</SelectItem>)}
         </SelectContent>
       </Select>
-      {error && <div role="alert" className="text-[13px] text-[color:var(--err)]">{error}</div>}
+      {error && <div role="alert" className="text-[13px] text-err">{error}</div>}
     </div>
   );
 }
@@ -646,7 +646,7 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
           </div>
         </div>
       )}
-      {error && <div role="alert" className="mt-2 text-[13px] text-[color:var(--err)]" data-testid="call-error">{error}</div>}
+      {error && <div role="alert" className="mt-2 text-[13px] text-err" data-testid="call-error">{error}</div>}
     </div>
   );
 }
@@ -708,7 +708,7 @@ function Docs({ id, items, total }: { id: string; items: FactoryProjectData["doc
         <div className={CARD}>
           {items.map((x) => (
             <Link key={x.id} to={x.href} data-testid="doc-row"
-                  className="flex flex-col gap-px border-b border-border py-2.5 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)]">
+                  className="flex flex-col gap-px border-b border-border py-2.5 text-foreground! no-underline! last:border-b-0 hover:bg-row-hover">
               <span className="font-semibold">{x.kind_label}</span>
               <span className={MUTED}>Updated {x.updated}</span>
             </Link>
@@ -736,7 +736,7 @@ function Command({ label, command }: { label: string; command: string }) {
       <div className="mb-1.5 text-[13px]">{label}</div>
       <div className="flex items-stretch gap-2">
         <code data-words-exempt data-testid="command-text"
-              className="flex min-w-0 flex-1 items-center border border-border bg-[var(--input-bg)] px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
+              className="flex min-w-0 flex-1 items-center border border-border bg-field px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
         <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
       </div>
     </div>
@@ -823,7 +823,7 @@ function DeleteProject({ name, onDelete }: { name: string; onDelete: () => Promi
           <h2 className="m-0! text-base!">Delete this project</h2>
           <p className="m-0! mt-0.5 text-[13px] text-muted-foreground">Removes its tickets, decisions, calls and docs from Tares. Pull requests and branches on GitHub stay.</p>
         </div>
-        <Button variant="secondary" className="text-[color:var(--err)]!" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
+        <Button variant="secondary" className="text-err!" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
       </div>
       <Dialog open={open} onOpenChange={(o) => { if (!o) shut(); }} data-testid="delete-dialog"
               title={`Delete ${name}?`}

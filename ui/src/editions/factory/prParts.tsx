@@ -15,8 +15,8 @@ export function PrSize({ s }: { s: NonNullable<ProjectPr["size"]> }) {
   return (
     <span data-testid="pr-size">
       {count(s.files, "file")}{" "}
-      <span className="text-[color:var(--ok)]">+{n(s.additions)}</span>{" "}
-      <span className="text-[color:var(--err)]">{"−"}{n(s.deletions)}</span>
+      <span className="text-ok">+{n(s.additions)}</span>{" "}
+      <span className="text-err">{"−"}{n(s.deletions)}</span>
     </span>
   );
 }

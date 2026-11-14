@@ -84,7 +84,7 @@ export function OlderFold({ items, children, className }: { items: HomeItem[]; c
 /** On the paper (`flush`) it is a plain line with no band and no inset; inside a box it keeps both. */
 export function GroupHead({ title, testid, flush }: { title: string; testid: string; flush?: boolean }) {
   return (
-    <div className={cn("border-b border-border bg-[var(--wash)] px-4 py-2 text-[12.5px] font-semibold", flush && "border-b-0 bg-transparent px-0 pb-1 pt-4")} data-testid={testid}>
+    <div className={cn("border-b border-border bg-wash px-4 py-2 text-[12.5px] font-semibold", flush && "border-b-0 bg-transparent px-0 pb-1 pt-4")} data-testid={testid}>
       {title}
     </div>
   );

@@ -112,7 +112,7 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
       {open && (
         <div data-testid="member-detail">
           {failed && (
-            <p className="m-0 mt-2 text-[13px] text-[color:var(--err)]">
+            <p className="m-0 mt-2 text-[13px] text-err">
               It did not load. <button type="button" className={FOLD_BTN} onClick={load}>Try again</button>
             </p>
           )}
@@ -131,7 +131,7 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
                   Read memory again
                 </Button>
                 {asked === "asked" && <span className={MUTED} role="status">Asked. It answers in a few seconds.</span>}
-                {asked === "failed" && <span className="text-xs text-[color:var(--err)]" role="status">It could not be asked. Try again.</span>}
+                {asked === "failed" && <span className="text-xs text-err" role="status">It could not be asked. Try again.</span>}
               </div>
             </>
           )}
@@ -279,7 +279,7 @@ function BuilderGroup({ g, actions }: { g: CrewBuilders; actions: CrewActions })
   const finished = g.members.filter((m) => m.state === "ended");
   return (
     <div data-testid="crew-group">
-      <div className="flex items-baseline justify-between gap-3 border-b border-border bg-[var(--wash-2)] px-4 py-2.5 text-[13px] font-semibold">
+      <div className="flex items-baseline justify-between gap-3 border-b border-border bg-wash-strong px-4 py-2.5 text-[13px] font-semibold">
         <span data-user-text><InlineIcon icon={g.project.icon} />{g.project.name}</span>
         <span className="shrink-0 whitespace-nowrap font-mono text-xs font-normal text-muted-foreground">{running.length} running · {g.members.length}</span>
       </div>
@@ -339,7 +339,7 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
                     {" "}(<span data-user-text>{p.tickets.slice(0, 4).join(", ")}{p.tickets.length > 4 ? ` and ${p.tickets.length - 4} more` : ""}</span>)</>
                 ) : <>from the reviews</>}, {p.when}
               </div>
-              {failed === p.id && <div className="mt-1 text-xs text-[color:var(--err)]" role="alert">It could not be saved. Try again.</div>}
+              {failed === p.id && <div className="mt-1 text-xs text-err" role="alert">It could not be saved. Try again.</div>}
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" className="h-8 border-foreground! text-[13px]!" onClick={() => decide(p.id, "accept")}>Accept</Button>

@@ -9,22 +9,22 @@ export type Tone = "working" | "waiting" | "ready" | "done" | "bad" | "quiet";
 // States are typographic (.impeccable.md): a mono word with a 1px underline. Amber is for live work
 // only; waiting and quiet take a dashed neutral line, so a ticket that waits does not look like a button.
 const TONE_TEXT: Record<Tone, string> = {
-  working: "text-[color:var(--accent-deep)] decoration-[color:var(--accent)]",
-  waiting: "text-foreground decoration-[color:var(--ink-soft)] decoration-dashed",
-  ready: "text-[color:var(--ok)] decoration-[color:var(--ok)]",
-  done: "text-[color:var(--ink-soft)] no-underline",
-  bad: "text-[color:var(--err)] decoration-[color:var(--err)]",
-  quiet: "text-[color:var(--ink-faint)] decoration-[color:var(--ink-faint)] decoration-dashed",
+  working: "text-brand-deep decoration-brand",
+  waiting: "text-foreground decoration-muted-foreground decoration-dashed",
+  ready: "text-ok decoration-ok",
+  done: "text-muted-foreground no-underline",
+  bad: "text-err decoration-err",
+  quiet: "text-faint decoration-faint decoration-dashed",
 };
 // The dot repeats the tone in a list where the word sits apart: solid for a state with colour,
 // a 1px ring for the neutral ones.
 const TONE_DOT: Record<Tone, string> = {
-  working: "bg-[var(--accent)]",
-  waiting: "border border-[color:var(--ink-soft)]",
-  ready: "bg-[var(--ok)]",
-  done: "bg-[var(--ink-soft)]",
-  bad: "bg-[var(--err)]",
-  quiet: "border border-[color:var(--ink-faint)]",
+  working: "bg-brand",
+  waiting: "border border-muted-foreground",
+  ready: "bg-ok",
+  done: "bg-muted-foreground",
+  bad: "bg-err",
+  quiet: "border border-faint",
 };
 
 export interface StatusLabelProps extends React.HTMLAttributes<HTMLSpanElement> {

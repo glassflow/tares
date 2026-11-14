@@ -143,7 +143,7 @@ const Help = ({ children, ...p }: React.HTMLAttributes<HTMLParagraphElement>) =>
 
 function SaveBar({ group, dirty, busy, message, onSave }: { group: string; dirty: boolean; busy: boolean; message?: string; onSave: () => void }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-t border-border bg-[var(--wash)] px-4 py-3 md:px-[18px]">
+    <div className="flex items-center justify-between gap-3 border-t border-border bg-wash px-4 py-3 md:px-[18px]">
       <span className="min-w-0 text-[13px] text-muted-foreground" data-testid={`save-msg-${group}`} role="status">
         {message ?? (dirty ? "You have changes that are not saved." : "")}
       </span>
@@ -221,7 +221,7 @@ function RuleRow({ rule, text, editable, value, set }: {
         )}
       </div>
       {text?.text && (
-        <div data-words-exempt data-testid="rule-text" className="max-w-[640px] whitespace-pre-line border border-border bg-[var(--wash)] px-3.5 py-2.5 text-sm [overflow-wrap:anywhere]">
+        <div data-words-exempt data-testid="rule-text" className="max-w-[640px] whitespace-pre-line border border-border bg-wash px-3.5 py-2.5 text-sm [overflow-wrap:anywhere]">
           {text.text}
         </div>
       )}
@@ -288,7 +288,7 @@ function FieldGroupSection({ name, group, can, edit, set, busy, message, onSave,
   return (
     <Sec id={name} title={title} sub={SUBTITLE[name]}>
       {readOnlyNote && (
-        <div className="border-b border-border bg-[var(--wash)] px-4 py-2.5 text-[13px] text-muted-foreground md:px-[18px]" data-testid="readonly-note">
+        <div className="border-b border-border bg-wash px-4 py-2.5 text-[13px] text-muted-foreground md:px-[18px]" data-testid="readonly-note">
           You can read these settings but not change them. Ask someone with admin access.
         </div>
       )}
@@ -345,7 +345,7 @@ function ToolsSection({ tools, can }: { tools: SreSettings["tools"]; can: boolea
         </div>
       )}
       {can && (
-        <div className="flex flex-wrap items-center gap-2 bg-[var(--wash)] px-4 py-3 md:px-[18px]" data-testid="tools-add">
+        <div className="flex flex-wrap items-center gap-2 bg-wash px-4 py-3 md:px-[18px]" data-testid="tools-add">
           <span className="mr-1 text-[13px] text-muted-foreground">Add a tool</span>
           {tools.add.map((a) => (
             <Button key={a.label} asChild variant="secondary" className="h-8 px-2.5 text-[13px]">
@@ -408,7 +408,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
           </div>
         </div>
       )}
-      {notice && <div className="border-b border-border px-4 py-2.5 text-[13px] text-[color:var(--err)] md:px-[18px]" role="alert" data-testid="people-notice">{notice}</div>}
+      {notice && <div className="border-b border-border px-4 py-2.5 text-[13px] text-err md:px-[18px]" role="alert" data-testid="people-notice">{notice}</div>}
       {people.keys.length === 0 ? (
         <EmptyState className="border-b border-border px-4 py-3.5 md:px-[18px]" data-testid="keys-empty">{people.empty_words}</EmptyState>
       ) : (
@@ -417,7 +417,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
         </div>
       )}
       {(editable || people.workspace) && (
-        <div className="grid gap-3 bg-[var(--wash)] px-4 py-3 md:px-[18px]">
+        <div className="grid gap-3 bg-wash px-4 py-3 md:px-[18px]">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             {editable && !form && <Button variant="secondary" className="h-8 px-2.5 text-[13px]" data-testid="key-create-open" onClick={() => setForm(true)}>Create a key</Button>}
             {people.workspace && (
@@ -442,7 +442,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
                 <Button type="submit" busy={working === "create"} data-testid="key-create">Create</Button>
                 <Button variant="quiet" onClick={() => { setForm(false); setProblem(""); }}>Cancel</Button>
               </div>
-              {problem && <p className="m-0 text-[13px] text-[color:var(--err)] md:col-span-3" role="alert" data-testid="key-problem">{problem}</p>}
+              {problem && <p className="m-0 text-[13px] text-err md:col-span-3" role="alert" data-testid="key-problem">{problem}</p>}
             </form>
           )}
         </div>
@@ -476,7 +476,7 @@ function AdvancedSection({ advanced }: { advanced: SreSettings["advanced"] }) {
       <div className="grid md:grid-cols-2">
         {advanced.links.map((l) => (
           <Link key={l.value} to={l.value} data-testid="advanced-link"
-                className="block min-w-0 border-b border-border px-4 py-3 no-underline! hover:bg-[var(--row-hover)] md:px-[18px] md:odd:border-r">
+                className="block min-w-0 border-b border-border px-4 py-3 no-underline! hover:bg-row-hover md:px-[18px] md:odd:border-r">
             <span className="block text-[13px] font-bold text-foreground">{l.label}</span>
             <span className="block text-[13px] text-muted-foreground">{l.help}</span>
           </Link>
@@ -745,7 +745,7 @@ function Settings() {
                   <Button busy={switchBusy} onClick={() => void doSwitch()} data-testid="edition-confirm">Switch</Button>
                 </>
               }>
-        {switchProblem && <p className="m-0 text-[13px] text-[color:var(--err)]" role="alert" data-testid="edition-problem">{switchProblem}</p>}
+        {switchProblem && <p className="m-0 text-[13px] text-err" role="alert" data-testid="edition-problem">{switchProblem}</p>}
       </Dialog>
       <Toaster />
     </div>

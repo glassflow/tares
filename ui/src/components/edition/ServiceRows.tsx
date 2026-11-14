@@ -42,12 +42,12 @@ export interface ServiceRowsProps extends Omit<React.HTMLAttributes<HTMLDivEleme
 const CALM = new Set<Tone>(["ready", "quiet", "done"]);
 
 const SPARK_TEXT: Record<Tone, string> = {
-  working: "text-[color:var(--ink-soft)]",
-  waiting: "text-[color:var(--warn)]",
-  ready: "text-[color:var(--ink-soft)]",
-  done: "text-[color:var(--ink-soft)]",
-  bad: "text-[color:var(--err)]",
-  quiet: "text-[color:var(--ink-faint)]",
+  working: "text-muted-foreground",
+  waiting: "text-warn",
+  ready: "text-muted-foreground",
+  done: "text-muted-foreground",
+  bad: "text-err",
+  quiet: "text-faint",
 };
 
 // One grid for the heading and every row, so the columns line up.
@@ -72,8 +72,8 @@ export function ServiceRows({ rows, sparkHeading = "Last day", className, ...pro
             <Link
               to={r.to}
               className={cn(
-                "grid min-w-0 gap-y-2 px-[var(--row-x,18px)] py-4 [overflow-wrap:anywhere] no-underline! hover:bg-[var(--row-hover)]",
-                "text-foreground! focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--accent)]",
+                "grid min-w-0 gap-y-2 px-[var(--row-x,18px)] py-4 [overflow-wrap:anywhere] no-underline! hover:bg-row-hover",
+                "text-foreground! focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand",
                 COLS,
                 "md:items-start",
               )}

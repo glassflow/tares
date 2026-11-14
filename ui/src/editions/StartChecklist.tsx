@@ -95,7 +95,7 @@ function Actions({ actions, onDo, doing }: DoProps & { actions: StartAction[] })
 function Step({ step, onDo, doing }: DoProps & { step: StartStep }) {
   return (
     <li data-testid="start-step" data-key={step.key} data-done={step.done}
-        className={cn(ROW_CLASS, "items-start gap-y-3 hover:bg-[var(--row-hover)]")}>
+        className={cn(ROW_CLASS, "items-start gap-y-3 hover:bg-row-hover")}>
       <div className="flex min-w-0 flex-[1_1_240px] items-start gap-4">
         <Tick done={step.done} />
         <div className="min-w-0 flex-1">
@@ -157,12 +157,12 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo,
         </div>
       </div>
       {error && (
-        <div role="alert" data-testid="start-error" className="border-b border-border py-2.5 text-[13px] text-[color:var(--err)]">
+        <div role="alert" data-testid="start-error" className="border-b border-border py-2.5 text-[13px] text-err">
           {HIDE_FAILED}
         </div>
       )}
       {notice && (
-        <div role="alert" data-testid="start-notice" className="border-b border-border py-2.5 text-[13px] text-[color:var(--err)]">
+        <div role="alert" data-testid="start-notice" className="border-b border-border py-2.5 text-[13px] text-err">
           {notice}
         </div>
       )}
@@ -203,7 +203,7 @@ export function StartChecklistHidden({ block, title, show = showStart, onShown }
       <Button variant="quiet" className="px-1! underline" disabled={busy} onClick={onShow} data-testid="start-show">
         Show it again
       </Button>
-      {error && <span role="alert" data-testid="start-show-error" className="text-[color:var(--err)]">{SHOW_FAILED}</span>}
+      {error && <span role="alert" data-testid="start-show-error" className="text-err">{SHOW_FAILED}</span>}
     </div>
   );
 }

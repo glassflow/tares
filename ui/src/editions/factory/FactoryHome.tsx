@@ -140,7 +140,7 @@ function WaitingRow({ item, onAction, state, top }: { item: HomeItem; onAction?:
         </div>
       )}
       {state?.error && (
-        <div role="alert" data-testid="row-error" className="basis-full text-[13px] text-[color:var(--err)]" data-words-exempt>
+        <div role="alert" data-testid="row-error" className="basis-full text-[13px] text-err" data-words-exempt>
           {state.error}
         </div>
       )}
@@ -279,7 +279,7 @@ function Tools({ data }: { data: HomeData }) {
       <div className="flex flex-wrap gap-2">
         {data.tools.map((t) => (
           <Link key={t.name} to="/settings#tools" data-testid="tool-chip" data-on={t.connected}
-                className={cn(chip, "border-border bg-card text-foreground! no-underline! hover:bg-[var(--row-hover)]")}>
+                className={cn(chip, "border-border bg-card text-foreground! no-underline! hover:bg-row-hover")}>
             <StatusDot tone={t.connected ? "ready" : "quiet"} label={t.connected ? "connected" : "not connected"} />
             <span>{t.name}</span>
             {t.connected && t.short && <span className="text-muted-foreground" data-user-text>· {t.short}</span>}
@@ -469,7 +469,7 @@ export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
         </pre>
         <Textarea label="The grant, kept in your words" rows={3} value={words} disabled={busy} data-testid="allow-words"
           onChange={(e) => { setWords(e.target.value); setEdited(true); }} />
-        {length > GRANT_MAX && <p className="m-0 text-[13px] text-[color:var(--err)]">The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
+        {length > GRANT_MAX && <p className="m-0 text-[13px] text-err">The grant is {length} characters; keep it to {GRANT_MAX}.</p>}
         {either ? (
           <fieldset className="m-0 flex flex-wrap gap-x-4 gap-y-1 border-0 p-0" disabled={busy}>
             <label className="flex items-center gap-1.5 text-sm">
@@ -486,7 +486,7 @@ export function AllowDialog({ item, desk, mayLimit, onClose, onDone }: {
             Kept for every project{project ? `: ${who.toLowerCase()} works for all of them` : ""}.
           </p>
         )}
-        {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
+        {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-err" data-words-exempt>{err}</p>}
       </div>
     </Dialog>
   );
@@ -512,7 +512,7 @@ function CloseDialog({ item, project, onClose, onDone }: {
           <Button busy={busy} onClick={submit} data-testid="close-confirm">Close</Button>
         </>
       )}>
-      {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{err}</p>}
+      {err && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-err" data-words-exempt>{err}</p>}
     </Dialog>
   );
 }

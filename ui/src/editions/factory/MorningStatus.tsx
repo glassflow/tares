@@ -36,7 +36,7 @@ export function missingFor(d: MorningStatus, slackConnected: boolean, emailAvail
 }
 
 const LOWER = (s: string) => s.toLowerCase();
-const TICK = "data-[state=unchecked]:bg-[var(--input-bg)]!";
+const TICK = "data-[state=unchecked]:bg-field!";
 
 export function MorningStatusPane({ value, slackConnected, people, dim, onSave, onSendNow }: {
   value: MorningStatus;
@@ -126,7 +126,7 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
               {draft.to_slack && slackConnected && (
                 <div className="ml-7 grid gap-1.5">
                   <SlackPick value={draft.channel} onChange={(c) => set({ channel: c })} disabled={off} emptyLabel="Pick a channel" />
-                  {!draft.channel && <div className="text-[13px] text-[color:var(--err)]" data-testid="morning-need-channel">Pick a channel to send it to.</div>}
+                  {!draft.channel && <div className="text-[13px] text-err" data-testid="morning-need-channel">Pick a channel to send it to.</div>}
                 </div>
               )}
             </div>
@@ -152,7 +152,7 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                 </div>
               )}
               {draft.to_email && emailAvailable && !draft.recipients.length && people !== null && emails.length > 0 && (
-                <div className="ml-7 text-[13px] text-[color:var(--err)]" data-testid="morning-need-people">Pick at least one person to email.</div>
+                <div className="ml-7 text-[13px] text-err" data-testid="morning-need-people">Pick at least one person to email.</div>
               )}
             </div>
           </div>
@@ -163,13 +163,13 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                     onValueChange={(z) => set({ timezone: z })} data-testid="morning-zone" />
           </div>
 
-          {blocked && <div className="text-[13px] text-[color:var(--err)]" role="alert" data-testid="morning-missing">{missing}</div>}
+          {blocked && <div className="text-[13px] text-err" role="alert" data-testid="morning-missing">{missing}</div>}
 
           <div className="flex flex-wrap items-center gap-3">
             <Button busy={busy === "save"} disabled={off || blocked || !draft.time || busy !== null} onClick={() => void save()} data-testid="morning-save">Save</Button>
             <Button variant="secondary" busy={busy === "send"} disabled={!canSend || !draft.time || busy !== null} onClick={() => void sendNow()} data-testid="morning-send-now">Send one now</Button>
             {note && <span className="text-[13px] text-muted-foreground" role="status" data-testid="morning-note">{note}</span>}
-            {error && <span className="text-[13px] text-[color:var(--err)]" role="alert" data-testid="morning-error">{error}</span>}
+            {error && <span className="text-[13px] text-err" role="alert" data-testid="morning-error">{error}</span>}
           </div>
           {lastResult && <div className="text-[13px] text-muted-foreground" data-testid="morning-last-result">{lastResult}</div>}
         </div>

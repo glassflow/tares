@@ -14,7 +14,7 @@ export function Skeleton({ width, height = 12, className, style, ...props }: Ske
   return (
     <div
       aria-hidden
-      className={cn("animate-pulse bg-[var(--wash-2)] motion-reduce:animate-none", className)}
+      className={cn("animate-pulse bg-wash-strong motion-reduce:animate-none", className)}
       style={{ width: width ?? "100%", height, ...style }}
       {...props}
     />

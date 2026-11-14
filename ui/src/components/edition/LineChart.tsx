@@ -30,8 +30,8 @@ export interface LineChartProps extends Omit<React.HTMLAttributes<HTMLDivElement
 }
 
 // Series colours come from the tokens: the first is the error colour, the second the soft ink.
-const STROKE = ["stroke-[color:var(--err)]", "stroke-[color:var(--ink-soft)]"];
-const SWATCH = ["bg-[var(--err)]", "bg-[var(--ink-soft)]"];
+const STROKE = ["stroke-err", "stroke-muted-foreground"];
+const SWATCH = ["bg-err", "bg-muted-foreground"];
 
 const WIDTH = 100;
 // A lone point has no direction: a segment this wide, centred on its time, so it is still visible.
@@ -133,13 +133,13 @@ export function LineChart({ series, marks = [], marksList = false, height = 160,
         <div className="py-2">
           <svg role="img" viewBox={`0 0 ${WIDTH} ${height}`} preserveAspectRatio="none" width="100%" height={height} className="block overflow-visible" aria-label={ariaLabel}>
             {lines.map(({ f }) => (
-              <line key={f} x1={0} x2={WIDTH} y1={y(top * f)} y2={y(top * f)} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-[color:var(--line)]" />
+              <line key={f} x1={0} x2={WIDTH} y1={y(top * f)} y2={y(top * f)} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-border" />
             ))}
-            <line x1={0} x2={WIDTH} y1={height} y2={height} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-[color:var(--ink-faint)]" />
+            <line x1={0} x2={WIDTH} y1={height} y2={height} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-faint" />
             {/* The svg is an image to assistive tech, so these hover titles are not read: `marksList` is the text form. */}
             {inRange.map((m) => (
               <g key={`${m.at}-${m.label}`} data-mark>
-                <line x1={x(m.ms)} x2={x(m.ms)} y1={0} y2={height} strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" className="stroke-[color:var(--ink-soft)]" />
+                <line x1={x(m.ms)} x2={x(m.ms)} y1={0} y2={height} strokeWidth={1} strokeDasharray="4 3" vectorEffect="non-scaling-stroke" className="stroke-muted-foreground" />
                 {/* A wide, invisible line gives the hover a target a pixel could not. */}
                 <line x1={x(m.ms)} x2={x(m.ms)} y1={0} y2={height} strokeWidth={12} stroke="transparent" vectorEffect="non-scaling-stroke">
                   <title>{m.label}</title>

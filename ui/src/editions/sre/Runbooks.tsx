@@ -51,7 +51,7 @@ function ServiceList({ services, current, pick }: { services: RunbookService[]; 
             key={s.name} type="button" data-testid="rb-service" data-service={s.name}
             aria-current={s.name === current ? "true" : undefined} onClick={() => pick(s.name)}
             className={cn(
-              "flex! w-full items-center justify-between gap-2.5 border-0! border-t! border-border! bg-transparent! px-3.5! py-2.5! text-left text-sm! font-normal! text-foreground! first:border-t-0! hover:bg-[var(--row-hover)]! cursor-pointer",
+              "flex! w-full items-center justify-between gap-2.5 border-0! border-t! border-border! bg-transparent! px-3.5! py-2.5! text-left text-sm! font-normal! text-foreground! first:border-t-0! hover:bg-row-hover! cursor-pointer",
               s.name === current && "bg-muted! font-semibold! shadow-[inset_3px_0_0_var(--accent)]",
             )}
           >
@@ -67,7 +67,7 @@ function ServiceList({ services, current, pick }: { services: RunbookService[]; 
 /** The phone's list: one select with every service, the open one chosen. */
 function ServicePicker({ services, current, pick }: { services: RunbookService[]; current: string; pick: (name: string) => void }) {
   return (
-    <label className="flex h-10 items-center justify-between gap-3 border border-border bg-[var(--input-bg)] px-3 text-sm md:hidden">
+    <label className="flex h-10 items-center justify-between gap-3 border border-border bg-field px-3 text-sm md:hidden">
       <span className="text-muted-foreground">Service</span>
       <span className="flex min-w-0 max-w-[70%] items-center gap-1.5">
         <select
@@ -119,12 +119,12 @@ function AddLine({ service, sample, shown, start, onData, reload }: {
           aria-invalid={error ? true : undefined} aria-describedby={`${id}-note`}
           onChange={(e) => { setText(e.target.value); if (error) setError(""); }}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); formRef.current?.requestSubmit(); } }}
-          className="min-h-9 max-h-40 min-w-[200px] flex-1 resize-none bg-[var(--input-bg)]! py-[7px]! [field-sizing:content]"
+          className="min-h-9 max-h-40 min-w-[200px] flex-1 resize-none bg-field! py-[7px]! [field-sizing:content]"
         />
         <Button type="submit" busy={busy} className="max-md:w-full">Add line</Button>
       </div>
       {error ? (
-        <p id={`${id}-note`} role="alert" data-testid="rb-add-error" className="m-0! mt-2.5! text-[13px] text-[color:var(--err)]">{error}</p>
+        <p id={`${id}-note`} role="alert" data-testid="rb-add-error" className="m-0! mt-2.5! text-[13px] text-err">{error}</p>
       ) : (
         <p id={`${id}-note`} className="m-0! mt-2.5! text-[13px] text-muted-foreground">
           One line, up to {MAX_LINE} characters. The investigator reads it from its next investigation.
@@ -206,7 +206,7 @@ function Pane({ svc, sample, shown, start, onData, reload }: {
         ) : (
           svc.runbook.map((l, i) => <Line key={`${i}-${l.text}`} line={l} index={i} busy={removing === i} remove={remove} label={svc.name} />)
         )}
-        {removeError && <p role="alert" data-testid="rb-remove-error" className="m-0! border-t border-border px-[18px] py-2.5 text-[13px] text-[color:var(--err)]">{removeError}</p>}
+        {removeError && <p role="alert" data-testid="rb-remove-error" className="m-0! border-t border-border px-[18px] py-2.5 text-[13px] text-err">{removeError}</p>}
         <AddLine key={svc.name} service={svc.name} sample={sample} shown={shown} start={start} onData={onData} reload={reload} />
       </section>
       {svc.memory.length > 0 && <Memory svc={svc} />}

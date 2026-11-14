@@ -37,7 +37,7 @@ export function FieldNote({ ids, hint, error }: { ids: Ids } & Pick<FieldProps, 
         </p>
       )}
       {error && (
-        <p id={ids.errorId} className="m-0 text-xs text-[color:var(--err)]">
+        <p id={ids.errorId} className="m-0 text-xs text-err">
           {error}
         </p>
       )}
@@ -75,4 +75,4 @@ export function InlineField({ ids, label, hint, error, children }: { ids: Ids; c
   );
 }
 
-export const ERROR_BORDER = "border-[color:var(--err)]! hover:border-[color:var(--err)]! focus:border-[color:var(--err)]!";
+export const ERROR_BORDER = "border-err! hover:border-err! focus:border-err!";

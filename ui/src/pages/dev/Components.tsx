@@ -524,7 +524,7 @@ export default function Components() {
 
       <Section title="Sparkline">
         <Row>
-          <div className="w-40 text-[color:var(--err)]">
+          <div className="w-40 text-err">
             <Sparkline points={ERRORS} marks={[5]} aria-label="Errors for service-a, with one deploy" data-testid="sparkline" />
           </div>
           <div className="w-40">
@@ -539,7 +539,7 @@ export default function Components() {
         </Row>
         <Caption>Values that are not numbers, and one value</Caption>
         <Row>
-          <div className="w-40 text-[color:var(--err)]">
+          <div className="w-40 text-err">
             <Sparkline points={DIRTY_SPARK} marks={[2]} aria-label="Errors for service-a with gaps" data-testid="sparkline-dirty" />
           </div>
           <div className="w-40">

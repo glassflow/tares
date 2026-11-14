@@ -114,7 +114,7 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
             <span aria-hidden data-state={theme === "dark" ? "dark" : "light"}
                   className="relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border border-border bg-muted transition-colors motion-reduce:transition-none data-[state=dark]:border-foreground data-[state=dark]:bg-foreground">
               <span data-state={theme === "dark" ? "dark" : "light"}
-                    className="block size-3.5 translate-x-0.5 rounded-full bg-[var(--accent)] transition-transform motion-reduce:transition-none data-[state=dark]:translate-x-[18px] data-[state=dark]:bg-background" />
+                    className="block size-3.5 translate-x-0.5 rounded-full bg-brand transition-transform motion-reduce:transition-none data-[state=dark]:translate-x-[18px] data-[state=dark]:bg-background" />
             </span>
           </button>
           {workspaceUrl && (
@@ -194,13 +194,13 @@ export default function EditionShell() {
                 className={"whitespace-nowrap text-base text-muted-foreground " + (cellName ? "shrink-0" : "min-w-0 truncate")}>{name}</span>
           {!narrow && switcher && (
             <>
-              <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
+              <span aria-hidden className="shrink-0 text-base text-faint">/</span>
               <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0! [&_.ws-switch]:py-1.5!">{switcher}</div>
             </>
           )}
           {cellName && (
             <>
-              <span aria-hidden className="shrink-0 text-base text-[var(--ink-faint)]">/</span>
+              <span aria-hidden className="shrink-0 text-base text-faint">/</span>
               <span data-testid="cell-name" data-user-text title={cellName} className="min-w-0 truncate text-base">{cellName}</span>
             </>
           )}
@@ -245,7 +245,7 @@ export default function EditionShell() {
 
       {narrow && drawer && (
         <>
-          <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-[var(--overlay)]" onClick={() => setDrawer(false)} />
+          <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-scrim" onClick={() => setDrawer(false)} />
           <nav id="edition-drawer" aria-label="Main" data-testid="edition-menu"
                className="fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
             {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0!">{switcher}</div>}

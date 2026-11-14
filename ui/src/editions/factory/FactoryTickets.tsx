@@ -68,9 +68,9 @@ const stateFromUrl = (s: string): StateKey | "moving" | "" => {
 };
 
 const MUTED = "text-muted-foreground";
-const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-[var(--input-bg)]! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
+const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-field! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
 const LINKISH = "cursor-pointer! border-0! bg-transparent! p-0! text-[length:inherit]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]";
-const TILE_LINK = "no-underline! text-foreground! hover:text-foreground! focus-visible:outline-2 focus-visible:outline-[color:var(--accent)]";
+const TILE_LINK = "no-underline! text-foreground! hover:text-foreground! focus-visible:outline-2 focus-visible:outline-brand";
 
 // ----------------------------------------------------------------------------------------- small things
 
@@ -130,7 +130,7 @@ function Row({ t }: { t: TicketRow }) {
     <Link to={t.href} data-testid="ticket-row" data-ref={t.ref} data-state={t.state_key}
           className={cn("group grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2.5 gap-y-1 border-t border-border px-3.5 py-3 first:border-t-0",
             "min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_108px_130px_140px_88px] min-[1360px]:gap-x-3 min-[1360px]:px-4 min-[1360px]:py-2.5",
-            "hover:bg-[var(--row-hover)] hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
+            "hover:bg-row-hover hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
       <span className={cn("col-start-1 row-start-1 pt-0.5 font-mono text-xs font-medium", "min-[1360px]:col-auto min-[1360px]:row-auto")} data-testid="ticket-ref">{t.ref}</span>
       <span data-user-text data-testid="ticket-title" title={t.title}
             className={cn("col-span-2 row-start-2 line-clamp-2 min-w-0 font-semibold [overflow-wrap:anywhere] group-hover:underline",
@@ -180,7 +180,7 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
         {t.title}
       </span>
       {meta && <span data-user-text className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{meta}</span>}
-      {pr && <span className={cn("text-xs [overflow-wrap:anywhere]", blocked ? "font-medium text-[color:var(--err)]" : MUTED)}>{pr}</span>}
+      {pr && <span className={cn("text-xs [overflow-wrap:anywhere]", blocked ? "font-medium text-err" : MUTED)}>{pr}</span>}
     </Link>
   );
 }
@@ -273,7 +273,7 @@ function LaneHead({ lane, open, toggle, sub, userText }: { lane: Lane; open: boo
   const Chev = open ? ChevronDown : ChevronRight;
   return (
     <button type="button" aria-expanded={open} onClick={toggle} data-testid="lane-toggle"
-            className={cn("flex! w-full items-center! gap-2.5 border-0! bg-card! px-3! py-2.5! text-left! text-foreground! hover:bg-[var(--row-hover)]!", open && "border-b! border-border!")}>
+            className={cn("flex! w-full items-center! gap-2.5 border-0! bg-card! px-3! py-2.5! text-left! text-foreground! hover:bg-row-hover!", open && "border-b! border-border!")}>
       <Chev className="size-3.5 shrink-0" aria-hidden />
       <b className="min-w-0 text-[15px] [overflow-wrap:anywhere]" {...(userText ? { "data-user-text": true } : {})}>{lane.label}</b>
       <span className="ml-auto text-right text-[12.5px] font-normal text-muted-foreground" data-testid="lane-sub">{sub}</span>
@@ -308,8 +308,8 @@ function StateTabs({ cols, data, tab, setTab }: { cols: StateKey[]; data: Factor
     <div role="tablist" aria-label="State" className="grid grid-cols-3 gap-1.5" data-testid="state-tabs">
       {cols.map((k) => (
         <button key={k} type="button" role="tab" aria-selected={k === tab} data-testid="state-tab" data-state={k} onClick={() => setTab(k)}
-                className={cn("flex! min-h-[50px] min-w-0 flex-col! items-start! justify-center! gap-0.5 border! border-border! bg-[var(--input-bg)]! px-2! py-1.5! text-left! text-[12.5px]! font-normal! text-foreground!",
-                  k === tab && "border-foreground! bg-[var(--wash)]! font-semibold! shadow-[inset_0_-3px_0_var(--accent)]")}>
+                className={cn("flex! min-h-[50px] min-w-0 flex-col! items-start! justify-center! gap-0.5 border! border-border! bg-field! px-2! py-1.5! text-left! text-[12.5px]! font-normal! text-foreground!",
+                  k === tab && "border-foreground! bg-wash! font-semibold! shadow-[inset_0_-3px_0_var(--accent)]")}>
           <span className="flex min-w-0 items-center gap-1.5"><Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span></span>
           <b className="pl-[15px] text-[15px]">{countOf(data, k)}</b>
         </button>
@@ -335,7 +335,7 @@ function BoardBody(p: BodyProps) {
       {cols.map((k) => {
         const list = rows.filter((r) => r.state_key === k);
         return (
-          <section key={k} className="min-w-0 border border-border bg-[var(--wash)]" data-testid="board-col" data-state={k}>
+          <section key={k} className="min-w-0 border border-border bg-wash" data-testid="board-col" data-state={k}>
             <div className="flex min-w-0 items-center gap-[7px] border-b border-border px-2.5 py-[9px] text-[13px] font-semibold">
               <Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span>
               <span className="ml-auto text-[12.5px] font-medium text-muted-foreground" data-testid="col-count">{countOf(data, k)}</span>
@@ -375,7 +375,7 @@ function LanesBody(p: BodyProps) {
             <section key={id} className="border border-border bg-card" data-testid="lane" data-lane={l.label}>
               <LaneHead lane={l} open={open} toggle={() => flip(id)} sub={plural(l.rows.length, "ticket", "tickets")} userText={userText} />
               {open && (
-                <div className="bg-[var(--wash)] p-2.5">
+                <div className="bg-wash p-2.5">
                   <Cell rows={l.rows} total={l.rows.length} cap={BOARD_CAP} id={`l|${id}|${tab}`} ctx={ctx} caps={caps} bump={bump} />
                 </div>
               )}
@@ -392,7 +392,7 @@ function LanesBody(p: BodyProps) {
       <div className="sticky top-0 z-[2] bg-background px-[11px]" data-testid="lane-heads">
         <div className="grid gap-2.5" style={tpl}>
           {cols.map((k) => (
-            <div key={k} className="flex min-w-0 items-center gap-[7px] border border-border bg-[var(--wash)] px-2.5 py-[9px] text-[13px] font-semibold">
+            <div key={k} className="flex min-w-0 items-center gap-[7px] border border-border bg-wash px-2.5 py-[9px] text-[13px] font-semibold">
               <Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span>
               <span className="ml-auto text-[12.5px] font-medium text-muted-foreground" data-testid="col-count">{countOf(data, k)}</span>
             </div>
@@ -406,7 +406,7 @@ function LanesBody(p: BodyProps) {
           <section key={id} className="border border-border bg-card" data-testid="lane" data-lane={l.label}>
             <LaneHead lane={l} open={open} toggle={() => flip(id)} sub={`${plural(l.rows.length, "ticket", "tickets")}, ${movingIn(l.rows)} moving`} userText={userText} />
             {open && (
-              <div className="grid items-start gap-2.5 bg-[var(--wash)] p-2.5" style={tpl}>
+              <div className="grid items-start gap-2.5 bg-wash p-2.5" style={tpl}>
                 {cols.map((k) => {
                   const list = l.rows.filter((r) => r.state_key === k);
                   return <Cell key={k} rows={list} total={list.length} cap={LANE_CAP} id={`l|${id}|${k}`} ctx={ctx} quiet caps={caps} bump={bump} />;
@@ -424,7 +424,7 @@ function ListBody({ rows }: { rows: TicketRow[] }) {
   const th = "text-xs font-semibold text-muted-foreground";
   return (
     <div className="border border-border bg-card" data-testid="list">
-      <div className={cn("hidden items-center gap-x-3 border-b border-border bg-[var(--wash)] px-4 py-2", th, "min-[1360px]:grid min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_108px_130px_140px_88px]")} aria-hidden>
+      <div className={cn("hidden items-center gap-x-3 border-b border-border bg-wash px-4 py-2", th, "min-[1360px]:grid min-[1360px]:grid-cols-[56px_minmax(0,1fr)_100px_120px_108px_130px_140px_88px]")} aria-hidden>
         <div>Ref</div><div>Title</div><div>Project</div><div>Milestone</div><div>Worked by</div><div>State</div><div>Pull request</div><div>Changed</div>
       </div>
       {rows.map((t) => <Row key={keyOf(t)} t={t} />)}
@@ -468,7 +468,7 @@ function TicketsSkeleton({ layout, narrow }: { layout: Layout; narrow: boolean }
     body = (
       <div className="grid gap-3">
         <div className="grid grid-cols-3 gap-1.5">
-          {Array.from({ length: 6 }, (_, i) => <div key={i} className="grid min-h-[50px] gap-2 border border-border bg-[var(--input-bg)] p-2"><Skeleton width="80%" /><Skeleton width="30%" /></div>)}
+          {Array.from({ length: 6 }, (_, i) => <div key={i} className="grid min-h-[50px] gap-2 border border-border bg-field p-2"><Skeleton width="80%" /><Skeleton width="30%" /></div>)}
         </div>
         {[0, 1, 2, 3].map(card)}
       </div>
@@ -477,7 +477,7 @@ function TicketsSkeleton({ layout, narrow }: { layout: Layout; narrow: boolean }
     body = (
       <div className="grid items-start gap-2.5" style={{ gridTemplateColumns: "repeat(6, minmax(0, 1fr))" }}>
         {COLUMNS.map((k) => (
-          <section key={k} className="min-w-0 border border-border bg-[var(--wash)]">
+          <section key={k} className="min-w-0 border border-border bg-wash">
             <div className="border-b border-border px-2.5 py-3"><Skeleton width="60%" /></div>
             <div className="grid gap-2 p-2">{[0, 1, 2].map(card)}</div>
           </section>
@@ -747,7 +747,7 @@ function FilterSelect({ label, testid, value, options, onChange, disabled, title
   return (
     <Select value={wrap(value)} disabled={disabled} onValueChange={(v) => onChange(v === ALL ? "" : v)}>
       <SelectTrigger aria-label={label} data-testid={testid} title={title}
-                     className={cn("w-full! md:w-auto! min-w-0 border-border! bg-[var(--input-bg)]! px-2.5! disabled:opacity-60!", className)}>
+                     className={cn("w-full! md:w-auto! min-w-0 border-border! bg-field! px-2.5! disabled:opacity-60!", className)}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -768,10 +768,10 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
   const noProject = !filters.project;
   return (
     <div role="search" className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center" data-testid="tickets-filters">
-      <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-[var(--input-bg)] md:inline-flex md:w-auto">
+      <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-field md:inline-flex md:w-auto">
         {LAYOUTS.map((l) => (
           <button key={l.value} type="button" aria-pressed={layout === l.value} disabled={disabled} data-testid={`layout-${l.value}`} onClick={() => onLayout(l.value)}
-                  className={cn("h-full! flex-1 border-0! border-r! border-border! bg-transparent! px-3.5! py-0! text-[13px]! font-medium! text-foreground! last:border-r-0! hover:bg-[var(--row-hover)]! disabled:opacity-60 max-md:px-1.5!",
+                  className={cn("h-full! flex-1 border-0! border-r! border-border! bg-transparent! px-3.5! py-0! text-[13px]! font-medium! text-foreground! last:border-r-0! hover:bg-row-hover! disabled:opacity-60 max-md:px-1.5!",
                     layout === l.value && "bg-foreground! text-background! hover:bg-foreground!")}>
             {l.label}
           </button>
