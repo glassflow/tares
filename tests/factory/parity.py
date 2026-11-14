@@ -1885,7 +1885,7 @@ def _freeze_state(tmp: Path) -> dict:
     frozen = _frozen_of(tmp) or {}
     snap = tmp / "crew" / "frozen-kit"
     return {"frozen": bool(frozen), "keys": sorted(frozen), "at": frozen.get("at"), "by": frozen.get("by"),
-            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "mcp-headers").exists(),
+            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "hooks" / "guard.sh").exists(),
             "extra": (tmp / "crew" / "frozen-kit.new").exists() or (tmp / "crew" / "freezing").exists()}
 
 
@@ -2024,7 +2024,7 @@ def _fz_marks(tmp: Path) -> dict:
             "plugin": {s: v.get("plugin") for s, v in rows.items()}, "kit": {s: v.get("kit") for s, v in rows.items()},
             "line": {s: line(s) for s in rows},
             "plugin_arg": {s: plugin_dir(s) for s in rows}, "resume_arg": {s: resumed(s) for s in rows},
-            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "mcp-headers", os.X_OK),
+            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "hooks" / "guard.sh", os.X_OK),
             "same": _same_tree(snap, kit), "kept": (snap / ".kept").exists(), "marker": (crew / "freezing").exists(),
             "checkout_file": (crew / "kit-checkout").exists()}
 
