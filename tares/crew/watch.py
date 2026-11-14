@@ -467,7 +467,7 @@ def _watch_executables(pid: int) -> list:
                 out += _program_paths(parent)
     except (psutil.Error, OSError, SystemError):
         pass
-    return out
+    return [p for p in out if os.path.isabs(p)]   # a bare name would be read against the caller's folder by _under
 
 
 def restart_watch(paths: CrewPaths, env: dict, *, if_running: bool = False, only_under: str = "") -> dict:
