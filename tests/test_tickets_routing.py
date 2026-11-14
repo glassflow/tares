@@ -236,7 +236,7 @@ async def main():
 
         print("== a write that waits on a rate limit ==")
         factory_api.STATUS_WAIT = 0.2
-        LIN["delay"] = 3.0     # far above STATUS_WAIT: a route that waited would take 3 s, a slow runner adds well under 1 (TR-1337)
+        LIN["delay"] = 3.0     # far above STATUS_WAIT: a route that waited would take 6 s, a slow runner adds well under 1 (TR-1337)
         LIN["moves"].clear()
         t0 = time.monotonic()
         r = await stage(lp, lt["id"], "review")
@@ -244,7 +244,7 @@ async def main():
         row = pending(store, lt["id"])
         ck("the route did not wait for it", r.status_code == 200 and took < 2.0, f"{took:.2f}s")
         ck("a row holds the wanted status meanwhile", row is not None and row["status"] == "in_review", row)
-        for _ in range(200):   # the write lands about 3 s after it started; poll, up to 10 s
+        for _ in range(200):   # a Linear move makes two calls, so the write lands about 6 s after it started; poll, up to 10 s
             if LIN["moves"] and pending(store, lt["id"]) is None:
                 break
             await asyncio.sleep(0.05)

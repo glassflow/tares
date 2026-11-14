@@ -110,7 +110,7 @@ def upgrade_advice(text: str, sentence: bool = False, stop_crew: bool = True) ->
     """The advice to upgrade or install tares. On Windows it first says to stop the crew, because an upgrade
     while any tares command runs can leave the install broken (TR-1281); elsewhere `text` comes back as given.
     `sentence` is for a full sentence, which starts with a capital. `stop_crew=False` leaves out the stop-the-crew
-    lead, for a place with no crew to stop yet (no tares is installed, TR-1304)."""
+    lead, for a place with no crew to stop yet (no tares is installed, TR-1304); it ignores `sentence`."""
     if not on_windows():
         return text
     if not stop_crew:
