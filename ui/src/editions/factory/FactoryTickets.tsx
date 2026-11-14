@@ -817,3 +817,4 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
 export default function FactoryTickets() {
   return <Tickets />;
 }
+export const probe = "bg-[#ff0000]";
