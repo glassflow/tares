@@ -118,6 +118,27 @@ def settled(seconds=20.0):
     return out[0] if wait_for(done, seconds) else None
 
 
+def watch_trees():
+    """The `crew watch` loops of the scratch crew home, as a list of root pids (a root is a watch process whose parent
+    is not one too): a launcher with its loop is one tree, a leftover second watch or an orphaned loop is another."""
+    mine = {}
+    for pr in psutil.process_iter():
+        try:
+            if "crew watch" not in " ".join(pr.cmdline()) or "--restart" in pr.cmdline():
+                continue
+            if os.path.normcase(pr.environ().get("FACTORY_CREW_HOME", "")) != os.path.normcase(str(CREW)):
+                continue
+            mine[pr.pid] = pr.ppid()
+        except (psutil.Error, OSError, SystemError):
+            continue
+    return sorted(p for p, pp in mine.items() if pp not in mine)
+
+
+def one_tree(label):
+    ok = wait_for(lambda: len(watch_trees()) == 1, 15)
+    ck(label + ": exactly one watch tree for the scratch crew home", ok, watch_trees())
+
+
 def cleanup():
     pid = watch.running_pid(paths)
     if pid is not None:
@@ -142,6 +163,7 @@ try:
        (code, out, err))
     pid1 = settled()
     ck("...the pid file names a live watch", pid1 is not None)
+    one_tree("after the first start")
 
     print("restart")
     code, out, err = run("--restart", "--json")
@@ -156,6 +178,7 @@ try:
        w2 is not None and (w2 == pid2 or parent_of(w2) == pid2), (w2, pid2))
     ck("...stations.json is byte for byte the same", (CREW / "stations.json").read_bytes() == STATIONS)
     ck("...no stop file is left behind", not (CREW / "watch.stop").exists())
+    one_tree("after the first restart")
 
     print("--only-under")
     exe = Path(sys.executable)
@@ -183,6 +206,7 @@ try:
     ck("...the second old watch is gone", wait_for(lambda: gone(pid2) and gone(w2)), (pid2, w2))
     ck("...a restart without --json prints one line",
        run("--restart")[1].startswith("watch restarted, pid "))
+    one_tree("after the restarts with --only-under and without --json")
 
     print("refusals")
     code, out, err = run("--if-running")
@@ -208,6 +232,7 @@ try:
     ck("a restart that could not start a new watch fails before stopping the old one",
        code == 1 and "FACTORY_NO_WATCH" in (out + err), (code, out, err))
     ck("...the running watch is still the same one", watch.running_pid(paths) == live, (watch.running_pid(paths), live))
+    one_tree("after the FACTORY_NO_WATCH step")
 
     print("_watch_executables: a watch started by a launcher (TR-1319)")
     # A Windows venv's python.exe is a launcher that runs the base interpreter as the loop, so the loop alone is
@@ -251,6 +276,19 @@ try:
         ck("a parent that is not a `crew watch` launcher is not counted",
            cp2 is not None and not any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp2)),
            watch._watch_executables(cp2) if cp2 else None)
+        # F4: the parent's pid reused by a process that started after the watch is not its launcher
+        real_process = psutil.Process
+        late = real_process(lp.pid).create_time() + 3600
+
+        class LateParent(real_process):
+            def create_time(self):
+                return late if self.pid == lp.pid else super().create_time()
+        watch.psutil.Process = LateParent
+        try:
+            ck("a `crew watch` parent younger than the watch is not its launcher",
+               not any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp)), watch._watch_executables(cp))
+        finally:
+            watch.psutil.Process = real_process
     finally:
         for q in pair:
             for c in psutil.Process(q.pid).children(recursive=True) if q.poll() is None else []:

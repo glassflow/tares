@@ -462,7 +462,8 @@ def _watch_executables(pid: int) -> list:
         out = _program_paths(proc)
         with contextlib.suppress(psutil.Error, OSError, SystemError):
             parent = psutil.Process(proc.ppid())
-            if parent.pid != pid and "crew watch" in " ".join(parent.cmdline()):
+            if (parent.pid != pid and "crew watch" in " ".join(parent.cmdline())
+                    and parent.create_time() <= proc.create_time()):   # a reused pid is younger than the watch
                 out += _program_paths(parent)
     except (psutil.Error, OSError, SystemError):
         pass
