@@ -57,10 +57,12 @@
   --kit-accent-soft: #ffac0026;       /* accent/accent-soft (light) */
   --kit-snow: #fcfcfc;                /* base colors/snow (dark-mode foreground) */
 
-  --kit-dark-background: #1e0f00;     /* background/background (dark) = eclipse */
-  --kit-dark-surface: #492400;        /* surface/surface (dark) */
+  /* the kit V2 dark ladder, as argus-ui src/app/theme.css (--agency-dark-*); TR-1271 */
+  --kit-dark-background: #2b1600;     /* background/background (dark), V2: lifted off eclipse */
+  --kit-dark-surface: #492400;        /* surface/surface (dark), all three surface tiers */
+  --kit-dark-field-focus: #582f06;    /* field/background-focus (dark), the rung between surface and default */
   --kit-dark-default: #663b11;        /* default/default (dark) */
-  --kit-dark-background-tertiary: #5a3109;
+  --kit-dark-segment: #783e06;        /* segment (dark), the rung above default: what floats */
   --kit-dark-muted: #c2b197;          /* foreground/muted (dark) */
   --kit-dark-separator: #895523;      /* separator/separator (dark) */
   --kit-dark-accent-soft: #ffac001f;  /* accent/accent-soft (dark) */
@@ -70,9 +72,6 @@
 :root {
   /* the brown ink scale, anchored on eclipse; intermediates keep the deck's warm ramp */
   --brown-950: var(--kit-foreground);
-  --brown-900: oklch(0.222 0.05 64);
-  --brown-850: oklch(0.256 0.0594 61.05);
-  --brown-800: oklch(0.3047 0.0725 58.57);
   --brown-700: oklch(0.38 0.072 58);
   --brown-600: var(--kit-muted);
   --brown-500: oklch(0.51 0.05 64);
@@ -119,6 +118,8 @@
   --ink-faint: var(--brown-500);
   --line: var(--kit-border);
   --input-bg: var(--kit-overlay);      /* field/background */
+  --input-bg-focus: var(--input-bg);   /* field/background-focus */
+  --popover: var(--panel);             /* menus, selects and other floating lists */
 
   /* accent — Space Sand carries fills; sand-700 is the AA text/ink form */
   --accent: var(--kit-accent);
@@ -178,14 +179,16 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* kit dark anchors: eclipse canvas, warm-brown surfaces, snow ink */
+  /* kit V2 dark ladder: canvas < panel < field focus < default < segment, snow ink */
   --bg: var(--kit-dark-background);
   --panel: var(--kit-dark-surface);
+  --popover: var(--kit-dark-segment);
   --ink: var(--kit-snow);
   --ink-soft: var(--kit-dark-muted);
   --ink-faint: var(--on-brown-500);
   --line: var(--kit-dark-separator);
   --input-bg: var(--kit-dark-surface);
+  --input-bg-focus: var(--kit-dark-field-focus);
 
   --accent: var(--kit-accent);
   --accent-soft: var(--kit-dark-accent-soft);
@@ -205,7 +208,7 @@
   /* the kit's dark neutrals beyond these are zinc leftovers (held); warm-brown ramp stays */
   --hover: var(--kit-dark-default);
   --row-hover: var(--kit-dark-default);
-  --th-bg: var(--kit-dark-background-tertiary);
+  --th-bg: var(--kit-dark-field-focus);  /* V2 replaced the old #5a3109 rung with this one */
   --chip-bg: var(--kit-dark-default);
   --starting-bg: var(--kit-dark-default);
   --border-strong: var(--kit-dark-separator);
@@ -620,7 +623,7 @@ button.linklike {
 button.linklike:hover { border: none; opacity: 0.8; }
 .btnrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 /* small dropdown popover (e.g. the Sources catalog menu) */
-.menu-pop { background: var(--panel); border: 1px solid var(--line); border-radius: 0; padding: 4px;
+.menu-pop { background: var(--popover); border: 1px solid var(--line); border-radius: 0; padding: 4px;
   min-width: 160px; box-shadow: 0 8px 28px var(--sheet-shadow); display: flex; flex-direction: column; }
 .menu-pop .menu-item { padding: 7px 10px; border-radius: 0; color: var(--ink); font-size: 13px;
   text-decoration: none; white-space: nowrap; }
@@ -812,7 +815,7 @@ select:disabled {
 textarea.code { font-family: var(--mono); font-size: 12.5px; min-height: 110px; }
 /* background-color, not the background shorthand: the shorthand resets background-repeat, and the
    select's chevron then tiles across the whole box on focus. */
-input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; background-color: var(--input-bg); border-color: var(--accent); box-shadow: none; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; background-color: var(--input-bg-focus); border-color: var(--accent); box-shadow: none; }
 button:focus-visible, .btn:focus-visible, .navlink:focus-visible, .navbtn:focus-visible, .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -1px; box-shadow: none; }
 
 /* ── panels / cards ── */
@@ -916,6 +919,7 @@ pre.payload {
   background: var(--input-bg); border: 1px solid var(--line); border-radius: 0;
   box-shadow: 0 8px 24px var(--sheet-shadow); max-height: 240px; overflow-y: auto; padding: 4px;
 }
+[data-theme="dark"] .combo-list { background: var(--popover); } /* it floats: the segment rung in dark (TR-1271) */
 .combo-list.up { top: auto; bottom: calc(100% + 4px); }
 .combo-item {
   padding: 6px 10px; border-radius: 0; cursor: pointer; white-space: nowrap;
@@ -1003,13 +1007,14 @@ pre.payload {
 
 /* auth login gate — the brown ground, like the cloud console */
 .login-wrap {
-  --bg: var(--brown-800);
-  --panel: var(--brown-850);
+  --bg: var(--kit-dark-background);
+  --panel: var(--kit-dark-surface);
   --ink: var(--on-brown-100);
   --ink-soft: var(--on-brown-300);
   --ink-faint: var(--on-brown-500);
   --line: var(--on-brown-border);
-  --input-bg: var(--brown-900);
+  --input-bg: var(--kit-dark-surface);
+  --input-bg-focus: var(--kit-dark-field-focus);
   --border-strong: var(--on-brown-border);
   /* on the brown card, status/accent text needs the dark-scale values even in light theme */
   --err: var(--red-300);
@@ -1194,7 +1199,7 @@ pre.payload {
 .menu {
   position: absolute; top: calc(100% + 5px); left: 0; z-index: 40;
   min-width: 190px; max-width: 280px;
-  background: var(--panel); border: 1px solid var(--line); border-radius: 0;
+  background: var(--popover); border: 1px solid var(--line); border-radius: 0;
   padding: 5px; box-shadow: 0 8px 28px var(--sheet-shadow);
 }
 .menu-item {
@@ -2364,7 +2369,7 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   --color-foreground: var(--ink);
   --color-card: var(--panel);
   --color-card-foreground: var(--ink);
-  --color-popover: var(--panel);
+  --color-popover: var(--popover);
   --color-popover-foreground: var(--ink);
   --color-primary: var(--btn-primary-bg);
   --color-primary-hover: var(--btn-primary-bg-hover);
