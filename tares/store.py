@@ -4829,7 +4829,7 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
 
     def remove_person(self, pid: str) -> bool:
         """They left: off the list of people and the seat count, every key bound to them revoked, no
-        longer lead of a project or assignee of a ticket. The row stays so what they did keeps their
+        longer lead of a project or assignee of an open ticket. The row stays so what they did keeps their
         name, and coming back makes a new person.
         False when there is no such person on the cell. `local` owns what has no owner: ValueError."""
         if pid == "local":
@@ -4847,7 +4847,9 @@ class Store(FactoryStore, ClaudeUsageStore, SreStore):
             # what they led or held is nobody's now: it falls to the next owner in line
             # (factory_owners), and the project says it has no lead
             self.sc.execute("UPDATE usecases SET lead_person_id = NULL WHERE lead_person_id = ?", [pid])
-            self.sc.execute("UPDATE tickets SET assignee_person_id = NULL WHERE assignee_person_id = ?", [pid])
+            # open tickets only: a finished one keeps the name of who did it
+            self.sc.execute("UPDATE tickets SET assignee_person_id = NULL WHERE assignee_person_id = ? "
+                            "AND status NOT IN ('done', 'canceled') AND stage NOT IN ('merged', 'shipped')", [pid])
         return True
 
     def claim_local(self, email: str, name: str | None = None) -> dict | None:

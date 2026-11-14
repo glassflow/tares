@@ -215,6 +215,24 @@ async def main():
         ck("the Projects row offers Close to Kiran only", ps[done]["can_close"] is False
            and {p["id"]: p for p in (await get("kiran", "/api/factory/projects"))["projects"]}[done]["can_close"] is True)
 
+        async with mk(keys["adam"]) as cx:
+            r = await cx.post(f"/api/projects/{done}/finish", json={"words": "done"})
+        ck("Adam, with an admin key but not its lead, may not close it", r.status_code == 403, r.text)
+
+        print("== the root credential is shown only what it may act on ==")
+        async with mk() as cx:
+            fh.clear_cache()
+            rh = (await cx.get("/api/home")).json()
+            r = await cx.post("/api/desk", json={"question": "Ship the tray today?", "recommendation": "yes",
+                                                 "why": "w", "project": desktop, "to": "kiran@example.com"})
+            ck("a question for Kiran", r.status_code < 300, r.text)
+            fh.clear_cache()
+            rh = (await cx.get("/api/home")).json()
+        ck("root's home does not list Kiran's question or Kiran's milestone",
+           not any("tray today" in (w.get("detail") or "") for w in rh["waiting_for_you"])
+           and not any((w.get("project") or {}).get("id") == desktop and w["kind"] == "milestone_to_check"
+                       for w in rh["waiting_for_you"]), [w["label"] for w in rh["waiting_for_you"]])
+
         print("== a desk item of a project kept for later stays on its page ==")
         later = project("kept-later", pid["kiran"])
         store.update_project(later, status="later")
@@ -236,6 +254,8 @@ async def main():
             r = await cx.delete(f"/api/people/{pid['adam']}")
             ck("Adam is removed", r.status_code < 300, r.text)
         ck("the project no longer names him as lead", store.get_project(gone).get("lead_person_id") is None)
+        merged = next(t for t in store.list_tickets(gone) if t["stage"] == "merged")
+        ck("a finished ticket of his keeps his name", merged.get("assignee_person_id") in (None, pid["adam"]))
         a = await page("ashish", gone)
         ck("Ashish, an admin, has its items, each saying it has no lead",
            sorted(w["kind"] for w in a["waiting"]) == ["calls_to_confirm", "milestone_to_check"]
@@ -262,6 +282,19 @@ async def main():
                                                           if (w.get("project") or {}).get("id") == gone) == 2)
         store.update_person("local", is_admin=True)
 
+        print("== a private project with no lead: never to an admin who cannot open it ==")
+        secret = project("secret", pid["kiran"])
+        with store._swrite:
+            store.sc.execute("UPDATE usecases SET scope = 'private', lead_person_id = NULL WHERE id = ?", [secret])
+        store.add_project_member(secret, pid["kiran"], added_by=pid["kiran"])
+        await lead_items(secret)
+        k = await page("kiran", secret)
+        ck("for its member Kiran the milestone waits for no one, with No lead, set one, not for Ashish",
+           any(w["label"] == "Milestone to check for no one" and w["meta"].startswith("No lead, set one")
+               for w in k["waiting_others"]), [w["label"] for w in k["waiting_others"]])
+        h = await get("ashish", "/api/home")
+        ck("and nothing of it is on Ashish's home", home_ids(h, secret) == [])
+
         print("== a key with no person on a team cell: nothing is addressed to it ==")
         async with mk() as cx:
             r = await cx.post("/api/keys", json={"name": "no-person", "scopes": ["admin"]})
@@ -273,9 +306,11 @@ async def main():
            and r.json()["state"] != "waiting_on_you", r.text[:300])
 
         print("== without a licence the rule holds: each person sees their own ==")
-        async with mk() as cx:
-            r = await cx.delete("/api/licence")
-            ck("the licence is removed", r.status_code < 300, r.text)
+        # the licence comes from the environment here, so a DELETE would not end it: take the ee
+        # team away, as a cell without a licence runs
+        from tares import team as team_mod
+        team_mod._set_ee_for_tests(None)
+        ck("no ee team now", not team_mod.enabled())
         a, k = await page("ashish", desktop), await page("kiran", desktop)
         ck("Ashish: nothing of Kiran's as his, and named for Kiran",
            a["waiting"] == [] and a["state"] != "waiting_on_you"

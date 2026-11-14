@@ -127,7 +127,10 @@ def facts(store, since: datetime, until: datetime, progress_of, hide=()) -> dict
                                  history.get(uid, []), since, until, progress_of(uid),
                                  finished_at))
     out.sort(key=lambda p: (not p["moved"], -len(p["done"]), p["name"].lower()))
-    return {"since": since, "until": until,
+    # a cell of several people: the report names whom each question is for, never "you"
+    from . import factory_owners as owners_mod
+    team = not owners_mod.Owners(store).single
+    return {"team": team, "since": since, "until": until,
             "projects": [p for p in out if p["moved"]],
             "quiet": [{"id": p["id"], "name": p["name"], "progress": p["progress"],
                        "blocked": len(p["blocked"]), "needs_you": len(p["needs_you"])}

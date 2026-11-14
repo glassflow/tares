@@ -109,7 +109,8 @@ def top_line(report: dict) -> str:
     n = waiting(report)
     # on a cell of several people the report names whom each item waits for (standup): "you"
     # would be whoever reads the shared place
-    team = any("for" in d for p in report["projects"] for d in p["needs_you"] if isinstance(d, dict))
+    team = bool(report.get("team")) or any(
+        "for" in d for p in report["projects"] for d in p["needs_you"] if isinstance(d, dict))
     if n == 0:
         return "Nothing is waiting on anyone." if team else "Nothing is waiting for you."
     if team:

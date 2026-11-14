@@ -318,14 +318,18 @@ async def main():
         ck("the summary has a sentence for none, one and many", [th.summary([{}] * n) for n in (0, 1, 4)]
            == ["Nothing waits for you.", "1 thing waits for you.", "4 things wait for you."])
         h = await home("root")
-        # the cell's own credential is no person: it sees what waits on the whole cell, as the key
-        # of a cell of one does (factory_owners.mine)
-        everyone = set()
+        # the cell's own credential works as the unclaimed `local`: its list is what it may act on,
+        # what is addressed to `local` and what nobody a person knows has; never a person's items
+        # (factory_owners.mine), so nothing it is shown refuses it when pressed
+        theirs = set()
         for who in ("alex", "kim", "lee"):
-            everyone |= {i["id"] for i in (await home(who))["waiting_for_you"]}
-        ck("the cell's own key sees everything that waits for anyone on the cell",
-           everyone <= {i["id"] for i in h["waiting_for_you"]}
-           and h["summary"] == th.summary(h["waiting_for_you"]), (everyone, [i["id"] for i in h["waiting_for_you"]]))
+            theirs |= {i["id"] for i in (await home(who))["waiting_for_you"]}
+        rid = {i["id"] for i in h["waiting_for_you"]}
+        ck("the cell's own key is shown none of a person's items",
+           not (theirs & rid) and h["summary"] == th.summary(h["waiting_for_you"]), (theirs & rid))
+        ck("... and every desk item it is shown, it may answer",
+           all(i.get("for_people") in ([], ["local"]) for i in h["waiting_for_you"] if i["kind"] == "desk"),
+           [(i["id"], i.get("for_people")) for i in h["waiting_for_you"]])
         print("== two keys of one name, two people ==")
         for who in ("alex", "lee"):
             r = await call("root", "POST", "/api/keys", {"name": "shared-name", "scopes": ["admin"],

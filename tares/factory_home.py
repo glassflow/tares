@@ -471,15 +471,17 @@ def _cut(fx, name: str, request, rows, *more):
 
 
 def _caller(store, fx, request) -> dict:
-    """Who "you" is for factory_owners.mine: {me, everything, admin}. A cell of one person, the
-    system credential and a call with no request see every item as theirs; a key with no person
-    on a cell of several people has nothing addressed to it."""
+    """Who "you" is for factory_owners.mine: {me, everything, admin}. A cell of one person and a
+    call with no request see every item as theirs; the root credential is `local` with the admin
+    scope; a key with no person on a cell of several people has nothing addressed to it."""
     if request is None or fx is None or store.only_local_person():
-        return {"me": "local", "everything": True, "admin": True}
+        return {"me": "local", "everything": True, "admin": True, "orphans": True}
     if getattr(fx, "is_system", lambda r: False)(request):
-        return {"me": None, "everything": True, "admin": True}
+        # the root credential works as `local` with the admin scope: what it may act on
+        return {"me": "local", "everything": False, "admin": True, "orphans": True}
     me = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id")
-    return {"me": me, "everything": False, "admin": bool(getattr(fx, "is_admin", lambda r: False)(request))}
+    return {"me": me, "everything": False, "admin": bool(getattr(fx, "is_admin", lambda r: False)(request)),
+            "orphans": False}
 
 
 def caller_waiting(store, fx, now, request, hidden, team: dict | None = None) -> list[dict]:
@@ -515,7 +517,9 @@ def caller_owns(store, fx, request, project: dict, owners=None) -> bool:
     who = _caller(store, fx, request)
     if who["everything"]:
         return True
-    return bool(who["me"]) and who["me"] in (owners or owners_mod.Owners(store)).project(project)
+    o = owners or owners_mod.Owners(store)
+    ids = o.project(project)
+    return bool(who["me"]) and (who["me"] in ids or (who["orphans"] and o.orphan(ids)))
 
 
 def split_waiting(store, items: list[dict], caller: dict, now) -> tuple[list[dict], list[dict]]:

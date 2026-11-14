@@ -338,9 +338,8 @@ def register(app, store, h, ctx):
         # whom the project's checks wait for, by the one rule (factory_owners): its lead, else the
         # admins; the caller answers them only when they are among them
         owners = fh.owners_mod.Owners(store)
-        who = fh._caller(store, fh.for_caller(ctx.fx, request), request)
         check_for = owners.who(owners.project(p))
-        yours = who["everything"] or who["me"] in {w["id"] for w in check_for}
+        yours = fh.caller_owns(store, fh.for_caller(ctx.fx, request), request, p, owners)
         out_ms = []
         results = store.milestone_check_results([m["id"] for m in milestones])
         crew_with_it = fw.crew_has(store, p)

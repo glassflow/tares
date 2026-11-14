@@ -73,7 +73,17 @@ class Owners:
     def project(self, project: dict | None) -> tuple[str, ...]:
         if self.single:
             return ("local",)
-        return self.here((project or {}).get("lead_person_id")) or self.fallback
+        lead = self.here((project or {}).get("lead_person_id"))
+        if lead:
+            return lead
+        # the admins who can open it: on a private project, only those on it
+        return tuple(i for i in self.fallback
+                     if (i == "local" and self.unclaimed_local) or self._sees(i, project))
+
+    def orphan(self, ids) -> bool:
+        """Nobody a person knows by name has it: no one, or only the unclaimed `local`. It is on
+        no person's list; the root credential has it, and any admin key may act on it."""
+        return not [i for i in ids if not (i == "local" and self.unclaimed_local)]
 
     def ticket(self, ticket: dict, project: dict | None) -> tuple[str, ...]:
         if self.single:
@@ -97,16 +107,19 @@ class Owners:
 # ── the split every screen makes ──────────────────────────────────────────────
 
 def mine(items: list[dict], me: str | None, *, everything: bool = False,
-         admin: bool = False) -> list[dict]:
-    """The items that wait for person `me`. `everything` is for a caller that sees the whole cell
-    as theirs (a cell of one person, the system credential); `admin` is a credential with the admin
-    scope, which also gets a grant that waits for any admin. A caller with no person gets none."""
+         admin: bool = False, orphans: bool = False) -> list[dict]:
+    """The items that wait for `me`. `everything` is a cell of one person. `admin` is a credential
+    with the admin scope: it also has a grant that waits for any admin (`for_admin`). `orphans`
+    is the root credential: it works as `local` and also has what nobody a person knows has (no
+    lead, no admin), so its list is what it may act on (desk_can_act). A caller with no person
+    gets none."""
     if everything:
         return list(items)
     if not me:
         return []
     return [i for i in items if me in (i.get("for_people") or ())
-            or (admin and i.get("for_admin"))]
+            or (admin and i.get("for_admin"))
+            or (orphans and not [p for p in (i.get("for_people") or ()) if p != "local"])]
 
 
 def _and(names: list[str]) -> str:

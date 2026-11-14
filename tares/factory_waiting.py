@@ -212,6 +212,7 @@ def prs_to_review(store, fx, now) -> list[dict]:
     o = owners_mod.Owners(store)
     rows_in = waits_for_person(store, fx)
     owners = pr_owners(store, rows_in, o)
+    projects = {p["id"]: p for p in store.list_projects()}
     # a pull request waits for the owner of its ticket: one item per project and set of owners
     by: dict[tuple, list[dict]] = {}
     for q in rows_in:
@@ -243,7 +244,8 @@ def prs_to_review(store, fx, now) -> list[dict]:
             actions=[{"label": "Review", "primary": True, "href": f"/reviews?project={pid}"}],
             blocking=True,
             # whose merge waits for the person: not in the crew's hands (project_state)
-            tickets=[r["ticket"] for r in rows]), o, ids))
+            tickets=[r["ticket"] for r in rows]), o, ids,
+            projects.get(pid) if ids == o.project(projects.get(pid)) else None))
     return out
 
 
@@ -296,21 +298,31 @@ def call_lines(calls: list[dict]) -> list[str]:
 
 
 def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
-    """Per project, its open assumptions. A desk item that batches the same assumptions stays on
-    the desk and makes no second item here (desk_items leaves it out). `skip` holds (project,
-    label) pairs a team home already shows on the person's desk."""
+    """Per project and owner, its open assumptions: a call a desk batch holds waits for whoever the
+    batch is for, the rest for the project's owner (factory_owners). `skip` holds (project, label)
+    pairs a team home already shows as a batch on someone's desk."""
     rows = [a for a in store.open_assumptions() if (a["project"], a["label"]) not in (skip or ())]
     if not rows:
         return []
     open_ps = {p["id"]: p for p in _open_projects(store)}
     names = {pid: p["name"] for pid, p in open_ps.items()}
     o = owners_mod.Owners(store)
-    by: dict[str, list[dict]] = {}
+    # a call in a batch on the desk waits for whoever the batch is for (its addressee, else the
+    # project's owner); any other call, for the project's owner. One item per project and owners.
+    batched: dict[tuple[str, str], tuple[str, ...]] = {}
+    for d in store.list_desk("open", None):
+        for x in d.get("assumptions") or ():
+            batched[(d["project"], x)] = o.desk(d, open_ps.get(d["project"]))
+    by: dict[tuple, list[dict]] = {}
     for a in rows:
         if a["project"] in names:
-            by.setdefault(a["project"], []).append(a)
+            ids = batched.get((a["project"], a["label"])) or o.project(open_ps[a["project"]])
+            by.setdefault((a["project"], ids), []).append(a)
+    groups: dict[str, int] = {}
+    for pid, _ in by:
+        groups[pid] = groups.get(pid, 0) + 1
     out = []
-    for pid, items in by.items():
+    for (pid, ids), items in by.items():
         n = len(items)
         shown = call_lines(items)
         keep = "both" if n == 2 else "it" if n == 1 else "them"
@@ -320,11 +332,13 @@ def calls_to_confirm(store, fx, now, skip: set | None = None) -> list[dict]:
             "calls_to_confirm", label="1 call to confirm" if n == 1 else f"{n} calls to confirm",
             title=names[pid], detail="The crew decided without you:", lines=shown,
             meta="Made by " + _and(roles), since=since, now=now,
-            project={"id": pid, "name": names[pid]}, id=f"calls_to_confirm:{pid}",
+            project={"id": pid, "name": names[pid]},
+            id=f"calls_to_confirm:{pid}" + (f":{'+'.join(ids)}" if groups[pid] > 1 else ""),
             actions=[{"label": "Read them", "primary": False, "href": f"/projects/{pid}/calls"},
                      {"label": {"both": "Keep both", "it": "Keep it", "them": "Keep all"}[keep],
                       "primary": True, "do": "keep_assumptions", "project": pid,
-                      "refs": [a["label"] for a in items]}]), o, o.project(open_ps[pid]), open_ps[pid]))
+                      "refs": [a["label"] for a in items]}]), o, ids,
+            open_ps[pid] if ids == o.project(open_ps[pid]) else None))
     return out
 
 

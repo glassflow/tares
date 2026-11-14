@@ -1131,10 +1131,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
         # right to act on one addressed to someone else
         o = owners_mod.Owners(store)
         p = store.get_project(d["project"]) if d.get("project") else None
-        if o.single or me in o.desk(d, p):
+        ids = o.desk(d, p)
+        if o.single or me in ids:
             return True
-        # an item for nobody who is here: an admin key may act on it too
-        return not o.here(d.get("to_person_id")) and h.is_admin(request)
+        # addressed to nobody who is here (TR-898), or an orphan: an admin key and the cell's own
+        # credential may act on it too. A right, not a list: the lists show it to its owner.
+        unaddressed = o.here(d.get("to_person_id")) is None or o.orphan(ids)
+        return unaddressed and (h.is_admin(request) or h.is_system(request))
 
     def leads(p: dict | None, me: str, o=None) -> bool:
         """The person owns the project's work: its lead, else (no lead, or the lead left) an admin
@@ -3117,11 +3120,13 @@ def register(app, store, h: Host) -> SimpleNamespace:
         deny(request, "finish")
         p = h.project_or_404(uid)
         # a person closes a project whose work is theirs (factory_owners: its lead, else the
-        # admins), or with an admin key; a crew station finishes what its desk was told to
+        # admins; an orphan, any admin key); a crew station finishes what its desk was told to
         me = h.current_person(request)
-        if (me and not caller(request)["station"] and not h.is_system(request)
-                and not h.is_admin(request) and not leads(p, me["id"])):
-            h.err(PermissionError(f"{p['name']} is led by someone else: its lead closes it"), 403)
+        if me and not caller(request)["station"] and not h.is_system(request):
+            o = owners_mod.Owners(store)
+            ids = o.project(p)
+            if not (me["id"] in ids or (o.orphan(ids) and h.is_admin(request))):
+                h.err(PermissionError(f"{p['name']} is led by someone else: its lead closes it"), 403)
         ho = store.get_handover(uid)
         if not ho and caller(request)["station"]:
             h.err(ValueError(f"{p['name']} was never handed to the crew; there is nothing to finish"))

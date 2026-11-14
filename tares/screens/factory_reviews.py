@@ -127,9 +127,11 @@ def register(app, store, h, ctx):
         key = lambda q: (fh._dt(q.get("waiting_since")) or now, q["project_name"], q["ticket"])
         milestones = {pid: store.list_milestones(pid)
                       for pid in sorted({q["project"] for q in rows if q.get("blocks_milestone")})}
-        crew = ((fx.settings() or {}).get("autonomy") if fx else None)
-        level = (fw.effective_autonomy(store, fx, shown["id"], crew) if shown
-                 else crew or fw.DEFAULT_AUTONOMY)
+        # for one project the sentence follows the level its list is split by (the merge queue's);
+        # for every project, the viewer's own crew's how-far (what the projects they hand over get)
+        from ..merge_queue import autonomy_of
+        level = (autonomy_of(store, shown["id"]) if shown
+                 else (fx.settings() or {}).get("autonomy") if fx else None) or fw.DEFAULT_AUTONOMY
         return {"waiting_for_you": [_row(q, now, milestones) for q in sorted(mine, key=key)],
                 "waiting_for_others": [{**_row(q, now, milestones), "for_people": o.who(q["for_people"])}
                                        for q in sorted(others, key=key)],

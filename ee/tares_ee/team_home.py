@@ -66,10 +66,11 @@ class HomeRead:
         return {"id": pid, "name": self.people().get(pid) or pid} if pid else None
 
     def caller(self) -> dict:
-        """Who "you" is when the items are split (factory_owners.mine): the system credential
-        sees every item as its own; an admin key also has a grant that waits for any admin."""
-        return {"me": self.me["id"], "everything": bool(self.c.h.is_system(self.request)),
-                "admin": bool(self.c.h.is_admin(self.request))}
+        """Who "you" is when the items are split (factory_owners.mine): the person of the key (the
+        root credential is `local`); an admin key also has what waits for any admin."""
+        system = bool(self.c.h.is_system(self.request))
+        return {"me": self.me["id"], "everything": False, "orphans": system,
+                "admin": bool(system or self.c.h.is_admin(self.request))}
 
 
 def _for_team(c, request) -> bool:
@@ -303,7 +304,7 @@ def waiting_on(t: HomeRead) -> list[dict]:
     else holds a project back: a project with nothing open is ready to start, and one kept for
     later is left out."""
     handed = set(t.store.handed_over_projects())
-    everything = t.caller()["everything"]   # the cell's own credential waits on every project
+    everything = bool(t.c.h.is_system(t.request))   # the cell's own credential waits on every project
     out = []
     for p in t.store.list_projects():
         if (p.get("kind") != "software_factory" or p["status"] in ("done", "later")
