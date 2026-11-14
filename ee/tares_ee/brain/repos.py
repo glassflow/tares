@@ -16,8 +16,10 @@ no brain settings, `GET /api/brain` says `configured: false` and every other rou
 A new row is `queued`, and connecting it asks the control plane for an index Job (`index.py`, TR-1198);
 a background task there follows the Job: `queued` (with its `place`), `cloning`, `indexing`
 (`files_done` of `files_total`), `ready` or `failed`. Removing a repo (TR-1199) cancels its index at the
-control plane, deletes it in lore (asking again for up to two minutes while lore's run on it is live) and
-then deletes the row.
+control plane, deletes it in lore (asking again for up to four minutes while lore's run on it is live) and
+then deletes the row. That can outlast the proxy in front of a cell (60 s), so the work runs in the
+background: the route answers 200 when it finished within INLINE_WAIT, else 202 `{removing: true}`, and the
+row says `removing` (and `remove_error` when a run gave up) until it is gone.
 """
 from __future__ import annotations
 
@@ -26,6 +28,7 @@ import threading
 import time
 
 from fastapi import Body, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from tares import github_credentials
 from tares import licence
@@ -45,6 +48,8 @@ REMOVE_WAIT = 240.0        # seconds removing a repo waits for lore's run on it 
                            # after its last write, and a cancelled Job's pod runs on through its grace period)
 REMOVE_STEP = 3.0          # seconds before the second ask; each wait is half as long again as the last
 REMOVE_STEP_MAX = 20.0     # ... up to this
+INLINE_WAIT = 45.0         # seconds the remove route waits for the work before it answers 202 (the proxy in front of a
+                           # cell cuts a request at 60 s)
 CP_WAIT = 60.0             # seconds removing a repo asks again while the control plane answers 502 (a cluster error)
 
 
@@ -78,14 +83,16 @@ def lore_name(repo: str) -> str:
     return repo.replace("/", "_", 1)
 
 
-def row_view(r: dict) -> dict:
-    """What the routes return for one row: the table's columns, and the name of who added it.
-    `repo_source_id` stays inside the cell."""
+def row_view(r: dict, removing: bool = False, remove_error: str | None = None) -> dict:
+    """What the routes return for one row: the table's columns, the name of who added it, `removing`
+    (a removal is running in the background) and `remove_error` (why the last removal gave up, None
+    otherwise). `repo_source_id` stays inside the cell."""
     return {"repo": r["repo"], "state": r["state"], "files_done": r["files_done"],
             "files_total": r["files_total"], "indexed_commit": r["indexed_commit"],
             "last_synced": r["last_synced"], "error": r["error"], "place": r["place"],
             "added_by": r["added_by"],
-            "added_by_name": r["added_by_name"], "added_at": r["added_at"]}
+            "added_by_name": r["added_by_name"], "added_at": r["added_at"],
+            "removing": removing, "remove_error": None if removing else remove_error}
 
 
 def register_routes(app, host) -> None:
@@ -93,6 +100,11 @@ def register_routes(app, host) -> None:
     lock = threading.Lock()
     indexer = indexing.Indexer(store, lambda: lore_client())   # looked up per call: a test swaps lore_client
     indexer.attach(app)
+    removals: dict[str, asyncio.Task] = {}   # repo -> its running removal (also keeps the task referenced)
+    remove_errors: dict[str, str] = {}       # repo -> why its last removal gave up; kept in memory only
+
+    def view(r: dict) -> dict:
+        return row_view(r, r["repo"] in removals, remove_errors.get(r["repo"]))
 
     def need_licence():
         if not licence.ee_allowed():
@@ -112,13 +124,14 @@ def register_routes(app, host) -> None:
     @app.get("/api/brain")
     def brain_state():
         """{configured, repos: [{repo, state, files_done, files_total, indexed_commit,
-        last_synced, error, place, added_by, added_by_name, added_at}]}, oldest first. `state` is
-        queued (`place` says where in the control plane's queue, when it does), cloning, indexing,
-        ready or failed (`error` says why, in plain words)."""
+        last_synced, error, place, added_by, added_by_name, added_at, removing, remove_error}]}, oldest
+        first. `state` is queued (`place` says where in the control plane's queue, when it does), cloning,
+        indexing, ready or failed (`error` says why, in plain words). `removing` is true while a removal runs
+        in the background; `remove_error` says why the last one gave up."""
         need_licence()
         if not LoreClient.configured():
             return {"configured": False, "repos": []}
-        return {"configured": True, "repos": [row_view(r) for r in store.list_brain_repos()]}
+        return {"configured": True, "repos": [view(r) for r in store.list_brain_repos()]}
 
     @app.get("/api/brain/repos/available")
     async def available_repos():
@@ -201,7 +214,7 @@ def register_routes(app, host) -> None:
             host.err(ValueError(f"Could not connect {current}: {e}{kept}"), 502)
         finally:
             await asyncio.gather(*(indexer.start(r) for r in done))   # never raises: a failure is the row's error
-        return {"repos": [row_view(store.get_brain_repo(r)) for r in done]}
+        return {"repos": [view(store.get_brain_repo(r)) for r in done]}
 
     @app.delete("/api/brain/repos/{owner}/{name}")
     async def remove_repo(owner: str, name: str, request: Request):
@@ -210,25 +223,50 @@ def register_routes(app, host) -> None:
         route is 502 here with the row and lore untouched), lore deletes the repo and everything it indexed
         from it (source, chunks, mirror, checkout, documents), then the row goes. While lore still runs the
         index it answers 409 (for 90 s after its last write, and a cancelled Job's pod may write until its
-        grace period ends): the delete is asked again with a growing wait for up to four minutes, then this
-        answers 409 "Still indexing. Try again in a minute." and the row stays, so removing again finishes it."""
+        grace period ends): the delete is asked again with a growing wait for up to four minutes.
+
+        The work runs in the background, so a closed connection or the proxy's 60 s cut does not stop it.
+        This answers 200 `{ok, removed}` when it finished within INLINE_WAIT, the error (502, or 409 "Still
+        indexing. Try again in a minute.") when it gave up in that time, and else 202 `{ok, removing}`:
+        the row then says `removing`, and `remove_error` when the run gives up later. Asking again while a
+        removal runs joins it; asking again after it gave up starts a new one."""
         need_brain()
         host.require_admin(request)
         repo = repo_from(owner, name)
-        row = store.get_brain_repo(repo)
-        if row is None:
-            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
-        if indexer.is_removing(repo):
-            host.err(ValueError(f"{repo} is being removed already"), 409)
-        async with indexer.removing(repo):
-            row = store.get_brain_repo(repo)
-            if row is None:   # a second remove finished first
+        task = removals.get(repo)
+        if task is None or task.done():
+            if store.get_brain_repo(repo) is None:
                 host.err(KeyError(f"{repo} is not connected to the brain"), 404)
-            await cancel_job(repo, row)
-            if row["repo_source_id"]:
-                await forget_in_lore(repo, row["repo_source_id"])
-            store.delete_brain_repo(repo)
+            remove_errors.pop(repo, None)
+            task = removals[repo] = asyncio.ensure_future(run_remove(repo))
+        done, _ = await asyncio.wait({task}, timeout=INLINE_WAIT)
+        if not done:
+            return JSONResponse({"ok": True, "removing": True}, status_code=202)
+        failure = task.result()
+        if failure:
+            host.err(ValueError(failure[1]), failure[0])
         return {"ok": True, "removed": True}
+
+    async def run_remove(repo: str) -> tuple[int, str] | None:
+        """The removal itself. Returns None when the row is gone, else (status, words) for why it is not;
+        the words are also kept in `remove_errors` for the row. Never raises."""
+        try:
+            async with indexer.removing(repo):
+                row = store.get_brain_repo(repo)
+                if row is not None:   # None: a removal finished first
+                    await cancel_job(repo, row)
+                    if row["repo_source_id"]:
+                        await forget_in_lore(repo, row["repo_source_id"])
+                    store.delete_brain_repo(repo)
+            remove_errors.pop(repo, None)
+            return None
+        except Exception as e:   # host.err raises an HTTPException; anything else is a bug we still report
+            status = getattr(e, "status_code", 502)
+            words = str(getattr(e, "detail", None) or e)
+            remove_errors[repo] = words
+            return status, words
+        finally:
+            removals.pop(repo, None)
 
     async def cancel_job(repo: str, row: dict) -> None:
         """Cancel the repo's Job at the control plane. A 502 is a cluster error that a second call
@@ -283,4 +321,4 @@ def register_routes(app, host) -> None:
             now = (store.get_brain_repo(repo) or row)["state"]
             host.err(ValueError(f"{repo} is {now}: only a repo whose index failed can be retried"), 409)
         await indexer.start(repo)
-        return row_view(store.get_brain_repo(repo))
+        return view(store.get_brain_repo(repo))

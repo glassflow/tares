@@ -12,8 +12,10 @@ where there is nothing to forget); lore answering 409 and then letting go; lore 
 plane that did not say the Job is gone (wrong token 401, no brain index 503, no cancel route 405 or 501, any other
 failure: 502 from the cell, the row stays, lore is not asked, removing again finishes it); a cluster error (502) asked
 again and then ok, or all through the wait (502 from the cell, nothing touched); a cell with no control plane
-settings (the removal goes on); the poll leaving a repo that is being removed alone; a second remove or a retry while one is
-running (409); a non-admin (403); no licence (404); the repo can be connected again afterwards.
+settings (the removal goes on); the poll leaving a repo that is being removed alone; a removal that outlasts INLINE_WAIT (the proxy in front of a cell
+cuts a request at 60 s): 202 {removing: true}, the work goes on in the background, the row says `removing`, and when it
+gives up (lore 409 all through the wait, a control plane that keeps answering 502) the row keeps `remove_error` and
+removing again finishes it; a second remove while one runs joins it (202) and a retry answers 409; a non-admin (403); no licence (404); the repo can be connected again afterwards.
 
 The request the cell sends the control plane (for TR-1349 to match): DELETE
 /internal/cells/{slug}/brain/index/{repo_source_id}, the cell's bearer token, no body; 200 {"state": "gone"} once the
@@ -83,13 +85,14 @@ async def main():
     repos_mod.REMOVE_STEP = 0.05
     repos_mod.REMOVE_STEP_MAX = 0.2
     repos_mod.CP_WAIT = 0.4
+    repos_mod.INLINE_WAIT = 30.0   # the cases that finish inline; the sections about 202 lower it
     lore, cp = fake_lore.FakeLore(), fake_cp.FakeCp()
     repos_mod.lore_client = lore.client
     index_mod.cp_client = cp.client
     os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
     os.environ["TARES_BRAIN_KEY"] = BRAIN_KEY
     names = ("run", "ready", "failed", "nolore", "retry", "stuck", "gone", "c405", "c501", "c502", "c502b", "c503", "c401", "cgone", "c500", "nocp", "poll", "twice",
-             "admin", "again", "lic", "bare")
+             "admin", "again", "lic", "bare", "slow", "slowcp")
     readable = [{"full_name": f"acme/{n}"} for n in names]
 
     async def readable_repos(cred, query=""):
@@ -281,28 +284,86 @@ async def main():
 
         print("== while a removal waits ==")
         s = await connect("acme/poll")
+        r = await cx.get("/api/brain")
+        mine = [x for x in r.json()["repos"] if x["repo"] == "acme/poll"]
+        ck("before it is removed the row says removing false and no remove_error", mine and mine[0]["removing"] is False
+           and mine[0]["remove_error"] is None, str(mine))
         for _ in range(40):
             lore.fail("delete_repo", 409, "indexing")
         repos_mod.REMOVE_WAIT = 1.5
-        task = asyncio.create_task(remove("acme/poll"))
+        repos_mod.INLINE_WAIT = 0.15
+        r = await remove("acme/poll")
+        ck("the removal outlasts INLINE_WAIT: 202 {ok, removing}, not a 504-sized wait", r.status_code == 202
+           and r.json() == {"ok": True, "removing": True}, f"{r.status_code} {r.text[:200]}")
         await until(lambda: len(forgets(s)) >= 2)
-        ck("it is being removed", indexer.is_removing("acme/poll"))
+        ck("it is being removed, in the background", indexer.is_removing("acme/poll"))
+        r = await cx.get("/api/brain")
+        mine = [x for x in r.json()["repos"] if x["repo"] == "acme/poll"]
+        ck("the row says removing true and no remove_error", mine and mine[0]["removing"] is True and mine[0]["remove_error"] is None, str(mine))
         starts = len(cp.calls("POST", "start_index"))
         cp.jobs[s] = {"state": "failed", "place": None, "error": "fatal: out of memory", "remote_url": "https://github.com/acme/poll.git"}
         await asyncio.sleep(0.4)
         ck("the poll leaves it alone: still running, not failed, no new Job", row("acme/poll")["state"] in index_mod.RUNNING
            and row("acme/poll")["error"] is None and len(cp.calls("POST", "start_index")) == starts,
            f"{row('acme/poll')['state']} {row('acme/poll')['error']}")
+        cancelled = len(cancels(s))
         r = await remove("acme/poll")
-        ck("a second remove of it answers 409 and says so", r.status_code == 409 and "being removed already" in r.text, f"{r.status_code} {r.text[:200]}")
+        ck("a second remove of it joins the first: 202 again, no second removal", r.status_code == 202 and r.json() == {"ok": True, "removing": True}
+           and len(cancels(s)) == cancelled, f"{r.status_code} {r.text[:200]} {len(cancels(s))} {cancelled}")
         r = await cx.post("/api/brain/repos/acme/poll/retry")
         ck("a retry of it answers 409 and leaves the row", r.status_code == 409 and "being removed" in r.text and row("acme/poll"), f"{r.status_code} {r.text[:200]}")
         lore._fail.clear()
-        r = await task
-        ck("the first remove finishes", r.status_code == 200 and store.get_brain_repo("acme/poll") is None and s not in lore.repos,
-           f"{r.status_code} {r.text[:200]}")
+        ck("the removal finishes in the background: the row and lore's source go", await until(lambda: store.get_brain_repo("acme/poll") is None)
+           and s not in lore.repos, f"{row('acme/poll')}")
+        ck("... and nothing is left marked as being removed", await until(lambda: not indexer.is_removing("acme/poll")))
         repos_mod.REMOVE_WAIT = 0.4
+        repos_mod.INLINE_WAIT = 30.0
         ck("a repo that is not connected is 404", (await remove("acme/poll")).status_code == 404)
+
+        print("== a removal that outlasts INLINE_WAIT and then gives up ==")
+        s = await connect("acme/slow")
+        for _ in range(40):
+            lore.fail("delete_repo", 409, "indexing")
+        repos_mod.INLINE_WAIT = 0.1
+        repos_mod.REMOVE_WAIT = 0.6
+        r = await remove("acme/slow")
+        ck("202 while lore still answers 409", r.status_code == 202 and r.json() == {"ok": True, "removing": True}, f"{r.status_code} {r.text[:200]}")
+        ck("the background run gives up: the row stops saying removing", await until(lambda: not indexer.is_removing("acme/slow")))
+        await asyncio.sleep(0.1)
+        r = await cx.get("/api/brain")
+        mine = [x for x in r.json()["repos"] if x["repo"] == "acme/slow"]
+        ck("... the row stays and says why in plain words (remove_error), removing false", mine and mine[0]["removing"] is False
+           and mine[0]["remove_error"] and "Still indexing. Try again in a minute." in mine[0]["remove_error"]
+           and "—" not in mine[0]["remove_error"], str(mine))
+        ck("... lore's source is untouched, so removing again can finish", s in lore.repos and src("acme/slow") == s)
+        lore._fail.clear()
+        r = await remove("acme/slow")
+        ck("removing again, with lore let go, answers 200 and clears it", r.status_code == 200 and r.json() == {"ok": True, "removed": True}
+           and s not in lore.repos and store.get_brain_repo("acme/slow") is None, f"{r.status_code} {r.text[:200]}")
+        r = await cx.get("/api/brain")
+        ck("... the row is gone from the list", "acme/slow" not in {x["repo"] for x in r.json()["repos"]})
+
+        s = await connect("acme/slowcp")
+        for _ in range(60):
+            cp.fail("cancel_index", 502, "could not reach the cluster")
+        n = len(lore.calls("DELETE", "delete_repo"))
+        repos_mod.CP_WAIT = 0.5
+        r = await remove("acme/slowcp")
+        ck("a control plane that keeps answering 502 outlasts INLINE_WAIT too: 202", r.status_code == 202, f"{r.status_code} {r.text[:200]}")
+        ck("... it gives up", await until(lambda: not indexer.is_removing("acme/slowcp")) and await until(lambda: len(cancels(s)) > 2))
+        await asyncio.sleep(0.2)
+        r = await cx.get("/api/brain")
+        mine = [x for x in r.json()["repos"] if x["repo"] == "acme/slowcp"]
+        ck("... remove_error names the control plane, lore was not asked, the row stays", mine and mine[0]["removing"] is False
+           and "Could not stop the index of acme/slowcp" in (mine[0]["remove_error"] or "") and len(lore.calls("DELETE", "delete_repo")) == n
+           and s in lore.repos, str(mine))
+        cp._fail.clear()
+        repos_mod.CP_WAIT = 0.4
+        repos_mod.REMOVE_WAIT = 0.4
+        repos_mod.INLINE_WAIT = 30.0
+        r = await remove("acme/slowcp")
+        ck("... removing again, with the cluster back, finishes it", r.status_code == 200 and store.get_brain_repo("acme/slowcp") is None
+           and s not in lore.repos, f"{r.status_code} {r.text[:200]}")
         r = await remove("acme/bad%20name")
         ck("a name that is not a repo name is 400", r.status_code == 400, f"{r.status_code} {r.text[:200]}")
 
