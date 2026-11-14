@@ -51,7 +51,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(FACTORY_DIR))
 
 import fake_claude  # noqa: E402
-from tares.crew import cc_update as CU, claude, state, views, watch  # noqa: E402
+from tares.crew import cc_update as CU, claude, jsonrun, state, views, watch  # noqa: E402
 from tares.crew import launch as L  # noqa: E402
 from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
@@ -1391,12 +1391,42 @@ with patched(time, "sleep", lambda s: halt_on_sleep(s) if s == 7.0 else real_sle
 ck("a halt while it waits ends the run", rc == 1 and said[-1] == "the crew was halted; nothing more was restarted "
    "(tares factory crew resume, then crew update again)", str(said))
 world(BUSY, BUSY_ROWS)
-with patched(claude, "attached", lambda s, paths=None: s == "shop-build-m1"):
-    del sleeps[:]
-    with patched(time, "time", short_clock()), patched(time, "sleep", lambda s: sleeps.append(s) if s == 7.0 else real_sleep(s)):
-        rc, said, _ = cu("--wait", "1")
-ck("a station someone has open is waited for with that reason", "waiting for shop-build-m1 to be idle (someone has it open)" in said
-   or "gave up waiting for shop-build-m1 to be idle" in said, str(said))
+del sleeps[:]
+jsonrun._extra.clear()
+with patched(claude, "attached", lambda s, paths=None: s == "shop-build-m1"),         patched(time, "sleep", lambda s: sleeps.append(s) if s == 7.0 else real_sleep(s)):
+    rc, said, _ = cu("--wait", "600")
+ck("a station someone has open is not waited for: said, left to the watch, not a failure", rc == 0 and sleeps == []
+   and "shop-build-m1 is open in a terminal; the watch moves it when it is free" in said
+   and not any(x.startswith("waiting for") or x.startswith("gave up") for x in said)
+   and [x["station"] for x in launched] == ["shop-build-m2"], str((rc, sleeps, said, launched)))
+ck("...the last line names it, and the result document gets the key", said[-1] == (
+    f"every station not open in a terminal runs Claude Code {NEW}; left to the watch: shop-build-m1")
+   and jsonrun._extra == {"left_to_watch": ["shop-build-m1"]}, str((said[-1:], jsonrun._extra)))
+jsonrun._extra.clear()
+
+
+def open_m1(*args, word="update", settings=None):
+    """m1 has a person attached; the clock jumps so --wait 1 is over at once."""
+    with patched(claude, "attached", lambda s, paths=None: s == "shop-build-m1"), \
+            patched(time, "time", short_clock()), \
+            patched(time, "sleep", lambda s: sleeps.append(s) if s == 7.0 else real_sleep(s)):
+        return cu(*args, word=word, settings=settings)
+
+
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+rc, said, _ = open_m1("--wait", "1", settings={"claude_update": False})
+ck("attached, and the watch will not move it (claude_update off): it is waited for, not skipped", rc == 1
+   and "shop-build-m1 is open in a terminal; the watch moves it when it is free" not in said
+   and "gave up waiting for shop-build-m1 to be idle" in said and jsonrun._extra == {}, str((rc, said, jsonrun._extra)))
+world(TREE, [row("idle", "aaaa0001", "crew-orchestrator", NEW), row("idle", "aaaa0002", "shop-build-m1", NEW),
+             row("idle", "aaaa0003", "shop-build-m2", NEW)])
+del sleeps[:]
+rc, said, _ = open_m1("--wait", "1", word="restart")
+ck("crew restart of an attached station already current: waited for, since the watch never moves it", rc == 1
+   and "shop-build-m1 is open in a terminal; the watch moves it when it is free" not in said
+   and "gave up waiting for shop-build-m1 to be idle" in said and jsonrun._extra == {}, str((rc, said, jsonrun._extra)))
+jsonrun._extra.clear()
 os.environ.pop("FACTORY_UPDATE_POLL")
 
 print("crew update: the station running it, and two sessions")

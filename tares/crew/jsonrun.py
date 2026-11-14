@@ -27,6 +27,14 @@ from .paths import ME
 
 FLAG = "--json"
 
+_extra: dict = {}   # optional keys a command adds to its result document (add_result), cleared when a run starts
+
+
+def add_result(key: str, value) -> None:
+    """A command names an optional key for the result document it prints with --json (`crew update` lists the
+    stations it left to the watch). Without --json it is not used."""
+    _extra[key] = value
+
 
 class _Tee(io.TextIOBase):
     """Python's stderr under --json (TR-1344): every complete line goes into buf, for the document's notes, and,
@@ -119,6 +127,7 @@ def run(argv: list, command: str, body: Callable[[list], int], *, text_fail: Cal
             text_fail(e)
             return 1
     args = [a for a in argv if a != FLAG]
+    _extra.clear()
     buf = io.StringIO()
     error = None
     code = 0
@@ -132,5 +141,5 @@ def run(argv: list, command: str, body: Callable[[list], int], *, text_fail: Cal
     if error is not None:
         contract.refuse(error, [FLAG], notes=_notes(buf.getvalue()))
         return contract.EXIT_USAGE if error.code == "usage" else contract.EXIT_FAILED
-    contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue())}, "result")
+    contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue()), **_extra}, "result")
     return 0
