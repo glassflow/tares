@@ -3094,7 +3094,7 @@ scenario(Scenario(
     suite="crew",
     about="down stops the watch, retires every active station and withdraws the moot desk questions; a second down finds nothing to stop",
     setup=_setup_life,
-    tares={"GET /api/desk?state=open": (200, _DESK),
+    tares={"GET /api/desk?state=open": (200, _DESK), "GET /api/desk?state=open&mine=1": (200, _DESK),
            **_ended("crew-orchestrator", 200), **_ended("crew-reviewer", 200), **_ended("shop-build-m1", 200),
            **_ended("shop-build-m2", 200),
            "POST /api/desk/d1/withdraw": (200, {"ok": True}), "POST /api/desk/d2/withdraw": (200, {"ok": True}),

@@ -547,6 +547,7 @@ class TaresClient:
             try:
                 raw = self.tares_http("GET", path + "&mine=1" if mine else path)
             except TaresHTTPError as e:
+                # defensive: a Tares that ignores the parameter answers 200 and needs no retry
                 if not mine or e.status not in (400, 422):
                     raise
                 raw = self.tares_http("GET", path)
