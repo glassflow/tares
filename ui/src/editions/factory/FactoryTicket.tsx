@@ -33,7 +33,10 @@ const NOTES_CAP_LINES = 60;
 
 const NONE = "text-[13px] text-muted-foreground";
 const LINK = "text-foreground! underline!";
-const KIND = "m-0! font-mono text-[11px]! font-medium uppercase tracking-[0.06em] text-muted-foreground";
+// A fact's label is a mono operational label; a heading is Inter (.impeccable.md, Type). The facts are a
+// list of label and value, so they are a dl, not a run of headings.
+const KIND = "m-0 font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground";
+const SUB = "m-0! text-[14px]!";
 const TAG = "whitespace-nowrap border border-border bg-muted px-1.5 py-px text-[11.5px] font-semibold";
 const TAG_BAD = "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]";
 const MORE = "h-8 self-start text-[13px]!";
@@ -179,13 +182,13 @@ function Calls({ d }: { d: FactoryTicketData }) {
         <>
           {d.calls.length > 0 && (
             <>
-              <h3 className={KIND}>Calls the builder made</h3>
+              <h3 className={SUB}>Calls the builder made</h3>
               {d.calls.map((c) => <CallRow key={c.ref} c={c} />)}
             </>
           )}
           {d.decisions.length > 0 && (
             <>
-              <h3 className={KIND}>Your decisions</h3>
+              <h3 className={SUB}>Your decisions</h3>
               {d.decisions.map((x, i) => (
                 <div key={i} className="flex min-w-0 flex-col gap-[3px]" data-testid="decision-row">
                   <span className="text-[13.5px] font-semibold [overflow-wrap:anywhere]" data-user-text>{x.question}</span>
@@ -270,8 +273,8 @@ function Notes({ text }: { text: string }) {
 function Fact({ title, children, testid }: { title: string; children: React.ReactNode; testid: string }) {
   return (
     <div className="flex min-w-0 flex-col gap-1" data-testid={testid}>
-      <h3 className={KIND}>{title}</h3>
-      {children}
+      <dt className={KIND}>{title}</dt>
+      <dd className="m-0 flex min-w-0 flex-col gap-1">{children}</dd>
     </div>
   );
 }
@@ -323,7 +326,7 @@ function Facts({ d }: { d: FactoryTicketData }) {
   const closed = d.state === "merged" || d.state === "canceled";
   return (
     <aside aria-label="Facts" className="min-w-0 border-t border-border max-xl:order-first" data-testid="ticket-facts">
-      <div className="flex min-w-0 flex-col gap-3.5 pt-3">
+      <dl className="m-0 flex min-w-0 flex-col gap-3.5 pt-3">
         <Fact title="Who works on it" testid="fact-who">
           {d.who ? <div className="text-sm [overflow-wrap:anywhere]">{d.who}</div>
             : <span className={NONE}>{closed ? "Nobody, it is finished" : "Not picked up yet"}</span>}
@@ -350,7 +353,7 @@ function Facts({ d }: { d: FactoryTicketData }) {
             ))}
           </Fact>
         )}
-      </div>
+      </dl>
     </aside>
   );
 }

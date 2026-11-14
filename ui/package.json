@@ -47,6 +47,7 @@
     "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
+    "@fontsource-variable/doto": "^5.3.0",
     "@fontsource-variable/inter": "^5.3.0",
     "@fontsource/geist-mono": "^5.3.0",
     "@radix-ui/react-checkbox": "^1.4.1",

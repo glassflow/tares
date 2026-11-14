@@ -11,6 +11,6 @@ themselves remain under the OFL:
 - **JetBrains Mono** — Copyright JetBrains s.r.o. (https://github.com/JetBrains/JetBrainsMono).
   Bundled via `@fontsource/jetbrains-mono`; license text at
   `ui/public/fonts/JetBrainsMono-OFL.txt` (shipped alongside the built console).
-- **Departure Mono** — Copyright 2022–2024 Helena Zhang (https://departuremono.com).
-  Bundled at `ui/public/fonts/DepartureMono-Regular.woff2`; license text at
-  `ui/public/fonts/DepartureMono-LICENSE.txt`.
+- **Doto** — Copyright The Doto Project Authors (https://github.com/oliverlalan/Doto).
+  Bundled via `@fontsource-variable/doto`; license text at `ui/public/fonts/Doto-OFL.txt`
+  (shipped alongside the built console).
