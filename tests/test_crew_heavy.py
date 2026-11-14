@@ -231,6 +231,35 @@ try:
     ck("... and with no 'what' it says 'another heavy command'", "another heavy command" in err, repr(err))
 
     t = fresh()
+    os.mkdir(lockpath(t))   # TR-1369: only `what` was left, from a release that stopped halfway
+    open(os.path.join(lockpath(t), "what"), "w").write("amnesia make test-integration (station x)\n")
+    code, out, err = in_process(t, 30, *pycmd("pass"))
+    ck("a lock with only a fresh `what` is still waited for", code == 75, f"{code} {err!r}")
+    old = time.time() - heavy.NO_PID_GRACE - 30
+    os.utime(lockpath(t), (old, old))
+    code, out, err = in_process(t, 30, *pycmd("print('ran')"))
+    ck("a lock with no pid file for longer than the grace is taken over", code == 0 and "ran" not in err and not os.path.exists(lockpath(t)), f"{code} {err!r}")
+
+    t = fresh()
+    os.mkdir(lockpath(t))
+    old = time.time() - heavy.NO_PID_GRACE - 30
+    os.utime(lockpath(t), (old, old))
+    code, out, err = in_process(t, 30, *pycmd("pass"))
+    ck("an old empty lock folder is taken over too", code == 0, f"{code} {err!r}")
+
+    t = fresh()
+    os.mkdir(lockpath(t))
+    for name in ("what", "pid"):
+        open(os.path.join(lockpath(t), name), "w").write("x\n")
+    removed, real_remove = [], os.remove
+    os.remove = lambda path, *a, **k: (removed.append(os.path.basename(path)), real_remove(path, *a, **k))[1]
+    try:
+        heavy._release(lockpath(t))
+    finally:
+        os.remove = real_remove
+    ck("_release takes the pid file out last", removed == ["what", "pid"] and not os.path.exists(lockpath(t)), repr(removed))
+
+    t = fresh()
     code, out, err = in_process(t, 0, *pycmd("pass"))
     ck("in process: an idle lock is taken and freed", code == 0 and not os.path.exists(lockpath(t)), f"{code} {err!r}")
     code, out, err = in_process(os.path.join(t, "no", "such", "dir"), 5, *pycmd("pass"))
