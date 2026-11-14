@@ -124,10 +124,25 @@ class CpClient:
                 return None
             raise
 
+    async def cancel_index(self, repo_source_id: str) -> bool:
+        """`DELETE .../brain/index/{source_id}` (TR-1199, the control plane's side is TR-1349): stop the
+        repo's queued entry or running Job. The control plane answers 200 `{state: "gone"}` whenever the
+        token is right, also when there was nothing to stop, so this is True for any 2xx; a 404 (an older
+        control plane) is False. A control plane without the route answers 405 or 501, 503 when it has no
+        brain index, 502 for a cluster error: each raises `CpError` with that status."""
+        path = f"/internal/cells/{self._slug()}/brain/index/{quote(str(repo_source_id), safe='')}"
+        try:
+            await self._call("DELETE", path, empty_ok=True)
+        except CpError as e:
+            if e.status == 404:
+                return False
+            raise
+        return True
+
     def _slug(self) -> str:
         return quote(self.slug, safe="")
 
-    async def _call(self, method: str, path: str, *, json: Any = None, secrets=()) -> dict:
+    async def _call(self, method: str, path: str, *, json: Any = None, secrets=(), empty_ok: bool = False) -> dict:
         secrets = [self._token, *secrets]
         try:
             res = await self._http.request(method, path, json=json, timeout=self.timeout, headers={
@@ -141,6 +156,8 @@ class CpClient:
             raise self._fail("The call to the control plane failed.", None, method, path, secrets) from None
         if res.status_code >= 300:
             raise self._fail(_status_words(res), res.status_code, method, path, secrets)
+        if empty_ok and not res.content:
+            return {}
         try:
             data = res.json()
         except ValueError:

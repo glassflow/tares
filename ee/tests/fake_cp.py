@@ -47,6 +47,7 @@ SLUG = "cell-a"
 _ROUTES = [
     ("POST", r"/internal/cells/(?P<slug>[^/]+)/brain/index", "start_index"),
     ("GET", r"/internal/cells/(?P<slug>[^/]+)/brain/index/(?P<source>[^/]+)", "index_status"),
+    ("DELETE", r"/internal/cells/(?P<slug>[^/]+)/brain/index/(?P<source>[^/]+)", "cancel_index"),
 ]
 
 
@@ -160,6 +161,13 @@ class FakeCp:
         if job["error"] is not None:
             out["error"] = job["error"]
         return httpx.Response(200, json=out)
+
+    def _cancel_index(self, rec, args):
+        """The request the cell's removal makes (TR-1199); the real route is TR-1349 (tares-cloud#179):
+        200 `{state: "gone"}` whenever the token is right, for a queued entry, a running or a finished
+        Job and when there is nothing; the same again on a second call. Never 404 or 204."""
+        self.jobs.pop(args["source"], None)
+        return httpx.Response(200, json={"state": "gone"})
 
 
 def _err(status: int, detail: str) -> httpx.Response:

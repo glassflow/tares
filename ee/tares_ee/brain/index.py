@@ -123,6 +123,7 @@ class Indexer:
         self._cp = cp_client_fn or (lambda: cp_client())
         self._locks: dict[str, asyncio.Lock] = {}
         self._misses: dict[str, int] = {}
+        self._removing: set[str] = set()
         self._wake = asyncio.Event()
         self.task: asyncio.Task | None = None
         self.ticks = 0   # polls that did work, for tests
@@ -132,6 +133,40 @@ class Indexer:
     def lock(self, repo: str) -> asyncio.Lock:
         return self._locks.setdefault(repo, asyncio.Lock())
 
+    def is_removing(self, repo: str) -> bool:
+        return repo in self._removing
+
+    @contextlib.asynccontextmanager
+    async def removing(self, repo: str):
+        """While a repo is being removed (TR-1199) the poll and a start leave it alone, so nothing asks for
+        its Job again or writes its row. Takes effect once a step already in flight has finished."""
+        async with self.lock(repo):
+            self._removing.add(repo)
+        try:
+            yield
+        finally:
+            self._removing.discard(repo)
+            self._misses.pop(repo, None)
+
+    async def cancel(self, row: dict) -> None:
+        """Stop the control plane's queued entry or running Job for `row` before its source goes.
+        Only a repo that is still running and was asked for can have one. Raises CpError when the
+        control plane could not be asked. Not an error: a control plane that has no cancel route yet (405,
+        501), has no brain index (503) or could not reach its cluster (502, lore still refuses to forget a repo
+        while a run on it is live), or one that is not set up here."""
+        if row["state"] not in RUNNING or not row["job_started_at"] or not row["repo_source_id"]:
+            return
+        try:
+            async with self._cp() as cp:
+                await cp.cancel_index(row["repo_source_id"])
+        except CpNotConfigured:
+            return
+        except CpError as e:
+            if e.status in (405, 501, 502, 503):
+                log.info("brain: the control plane did not cancel %s's index (status %s)", row["repo"], e.status)
+                return
+            raise
+
     # -- starting ---------------------------------------------------------------------------
 
     async def start(self, repo: str) -> None:
@@ -139,7 +174,7 @@ class Indexer:
         not asked for yet. Never raises; a failure is the row's `error`."""
         async with self.lock(repo):
             row = self.store.get_brain_repo(repo)
-            if row and row["state"] == "queued" and not row["job_started_at"]:
+            if row and row["state"] == "queued" and not row["job_started_at"] and repo not in self._removing:
                 await self._start(row)
         self.wake()
 
@@ -217,7 +252,7 @@ class Indexer:
             if not self.active():   # the licence or the brain settings went while this waited for the lock
                 return
             row = self.store.get_brain_repo(repo)   # read again: a retry or a delete may have come first
-            if row is None or row["state"] not in RUNNING:
+            if row is None or row["state"] not in RUNNING or repo in self._removing:
                 return
             if row["state"] == "queued" and not row["job_started_at"]:
                 return await self._start(row)

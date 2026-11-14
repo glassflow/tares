@@ -15,12 +15,15 @@ change while the daemon runs, so the check is per request, not at mount time). W
 no brain settings, `GET /api/brain` says `configured: false` and every other route answers 404.
 A new row is `queued`, and connecting it asks the control plane for an index Job (`index.py`, TR-1198);
 a background task there follows the Job: `queued` (with its `place`), `cloning`, `indexing`
-(`files_done` of `files_total`), `ready` or `failed`. Removing a repo from lore is TR-1199.
+(`files_done` of `files_total`), `ready` or `failed`. Removing a repo (TR-1199) cancels its index at the
+control plane, deletes it in lore (asking again for up to two minutes while lore's run on it is live) and
+then deletes the row.
 """
 from __future__ import annotations
 
 import asyncio
 import threading
+import time
 
 from fastapi import Body, HTTPException, Request
 
@@ -30,6 +33,7 @@ from tares.envelope import now_utc
 from tares.factory import norm_repo
 
 from . import index as indexing
+from .cp import CpError
 from .lore import _REPO_NAME, LoreClient, LoreError
 
 __all__ = ["MAX_CONNECT", "STATES", "lore_client", "register_routes"]
@@ -37,6 +41,8 @@ __all__ = ["MAX_CONNECT", "STATES", "lore_client", "register_routes"]
 STATES = indexing.STATES   # queued, cloning, indexing, ready, failed
 MAX_CONNECT = 50           # repos in one POST
 GITHUB_TIMEOUT = 60        # seconds the available list waits for GitHub
+REMOVE_WAIT = 120.0        # seconds removing a repo waits for lore's run on it to stop (lore answers 409)
+REMOVE_STEP = 3.0          # seconds between asks while it waits
 
 
 def lore_client() -> LoreClient:
@@ -195,14 +201,50 @@ def register_routes(app, host) -> None:
         return {"repos": [row_view(store.get_brain_repo(r)) for r in done]}
 
     @app.delete("/api/brain/repos/{owner}/{name}")
-    def remove_repo(owner: str, name: str, request: Request):
-        """Admin only. Take the repo off this cell's list. What lore indexed stays in lore."""
+    async def remove_repo(owner: str, name: str, request: Request):
+        """Admin only. Remove the repo: its queued or running index is cancelled at the control
+        plane, lore deletes the repo and everything it indexed from it (source, chunks, mirror,
+        checkout, documents), then the row goes. While lore still runs the index it answers 409:
+        the delete is asked again for up to two minutes, then this answers 409 "Still indexing. Try
+        again in a minute." and the row stays, so removing again finishes it."""
         need_brain()
         host.require_admin(request)
         repo = repo_from(owner, name)
-        if not store.delete_brain_repo(repo):
+        row = store.get_brain_repo(repo)
+        if row is None:
             host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        if indexer.is_removing(repo):
+            host.err(ValueError(f"{repo} is being removed already"), 409)
+        async with indexer.removing(repo):
+            row = store.get_brain_repo(repo)
+            if row is None:   # a second remove finished first
+                host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+            try:
+                await indexer.cancel(row)
+            except CpError as e:
+                again = "" if "Try again" in str(e) else " Try again in a minute."
+                host.err(ValueError(f"Could not stop the index of {repo}: {e}{again}"), 502)
+            if row["repo_source_id"]:
+                await forget_in_lore(repo, row["repo_source_id"])
+            store.delete_brain_repo(repo)
         return {"ok": True, "removed": True}
+
+    async def forget_in_lore(repo: str, source: str) -> None:
+        """Delete the repo's source in lore, asking again while its index run is live (409)."""
+        deadline = time.monotonic() + REMOVE_WAIT
+        while True:
+            try:
+                async with lore_client() as lore:
+                    await lore.delete_repo(source)
+                return
+            except LoreError as e:
+                if e.status == 404:   # lore does not have it any more
+                    return
+                if e.status != 409:
+                    host.err(ValueError(f"Could not remove {repo} from the brain: {e}"), 502)
+            if time.monotonic() + REMOVE_STEP > deadline:
+                host.err(ValueError("Still indexing. Try again in a minute."), 409)
+            await asyncio.sleep(REMOVE_STEP)
 
     @app.post("/api/brain/repos/{owner}/{name}/retry")
     async def retry_repo(owner: str, name: str, request: Request):
@@ -214,6 +256,8 @@ def register_routes(app, host) -> None:
         row = store.get_brain_repo(repo)
         if row is None:
             host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        if indexer.is_removing(repo):
+            host.err(ValueError(f"{repo} is being removed"), 409)
         async with indexer.lock(repo):
             requeued = store.requeue_brain_repo(repo, "failed")
         if not requeued:
