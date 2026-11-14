@@ -94,6 +94,30 @@ async function checkNumerals(page, theme) {
   ck(`${theme}: no Departure Mono face is left`, got.departure === 0, JSON.stringify(got));
 }
 
+// The kit V2 ladder (TR-1271, argus-ui theme.css --agency-dark-*). Light keeps the values it had.
+const LADDER = {
+  light: { canvas: "rgb(240, 239, 226)", panel: "rgb(250, 249, 236)", popover: "rgb(250, 249, 236)", focus: "rgb(240, 239, 226)" },
+  dark: { canvas: "rgb(43, 22, 0)", panel: "rgb(73, 36, 0)", popover: "rgb(120, 62, 6)", focus: "rgb(88, 47, 6)" },
+};
+async function checkLadder(page, theme) {
+  await page.getByTestId("input").focus();
+  await page.waitForTimeout(400);   // the fill transitions
+  const got = await page.evaluate(() => {
+    const bg = (e) => e && getComputedStyle(e).backgroundColor;
+    const probe = document.createElement("div");
+    probe.className = "bg-popover";
+    document.body.append(probe);
+    const out = { canvas: bg(document.body), panel: bg(document.querySelector("[data-testid=panel]")), popover: bg(probe),
+                  focus: bg(document.activeElement) };
+    probe.remove();
+    return out;
+  });
+  await page.getByTestId("input").blur();
+  for (const k of Object.keys(LADDER[theme])) {
+    ck(`${theme}: the ${k === "focus" ? "focused field" : k} is ${LADDER[theme][k]}`, got[k] === LADDER[theme][k], JSON.stringify(got));
+  }
+}
+
 const ck = (label, cond, detail = "") => {
   cond ? pass++ : fail++;
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
@@ -248,6 +272,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     await checkStatuses(page, "light");
     await checkStates(page);
     await checkNumerals(page, "light");
+    await checkLadder(page, "light");
     await checkType(page, ck, "light");
     await page.getByTestId("theme-light").click();
     await shot("gallery-light.png");
@@ -259,6 +284,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     await shot("gallery-dark.png");
     await checkStatuses(page, "dark");
     await checkNumerals(page, "dark");
+    await checkLadder(page, "dark");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await open();
