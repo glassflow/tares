@@ -299,12 +299,18 @@ try:
         class LateParent(real_process):
             def create_time(self):
                 return late if self.pid == lp.pid else super().create_time()
-        watch.psutil.Process = LateParent
+
+        class LatePsutil:   # the watch module's own view of psutil, so the shared psutil module is left alone
+            Process = LateParent
+
+            def __getattr__(self, name):
+                return getattr(psutil, name)
+        watch.psutil = LatePsutil()
         try:
             ck("a `crew watch` parent younger than the watch is not its launcher",
                not any(watch._under(e, str(lfolder)) for e in watch._watch_executables(cp)), watch._watch_executables(cp))
         finally:
-            watch.psutil.Process = real_process
+            watch.psutil = psutil
     finally:
         for q in pair:
             for c in psutil.Process(q.pid).children(recursive=True) if q.poll() is None else []:

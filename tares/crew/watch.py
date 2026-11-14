@@ -453,7 +453,8 @@ def _program_paths(proc) -> list:
 
 def _watch_executables(pid: int) -> list:
     """The program paths of the watch: its process's own executable, then the first word of its command line
-    (a venv's python is a link to the base one on macOS and Linux, so the resolved path alone would miss it), then
+    when that is an absolute path (a relative one is dropped, not resolved; a venv's python is a link to the base one on
+    macOS and Linux, so the resolved path alone would miss it), then
     the same two of its parent when that is a `crew watch` launcher. A Windows venv's python.exe is a launcher
     that runs the base interpreter as the loop (a uv venv on 3.12 does), so the loop alone never names the venv."""
     out: list = []

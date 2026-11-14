@@ -111,6 +111,13 @@ ck("a plain interactive claude is ignored", scan([P_(5, 1, "bash"), P_(6, 5, "cl
 ck("a -n of the person's own, no --bg, is ignored",
    scan([P_(5, 1, "bash"), P_(6, 5, "claude -n my-notes")])["claude"] == [])
 
+ck("a --bg-pty-host with no -n is a stray the crew did not start",
+   [(s.proc.pid, s.why) for s in scan([P_(5, 1, "bash"), P_(61, 5, "claude --bg-pty-host x")])["claude"]]
+   == [(61, "background session the crew did not start")])
+ck("a --bg session with a name that is not the crew's is a stray",
+   [(s.proc.pid, s.why) for s in scan([P_(5, 1, "bash"), P_(62, 5, "claude --bg -n mine")])["claude"]]
+   == [(62, "background session mine is not the crew's")])
+
 print("3 a second service")
 r = scan(healthy() + [P_(50, 1, "claude daemon run", started=OLD + 100)])
 ck("the later service is the stray", [(s.proc.pid, s.why) for s in r["claude"]] == [(50, "second service")],
@@ -120,6 +127,8 @@ print("4 the service's session (Windows)")
 real_win, real_session = strays._windows, strays.session_of
 strays._windows = lambda: True
 strays.session_of = lambda pid: 1
+real_running = watch.running_pid
+watch.running_pid = lambda paths: 999   # a watch runs, in session 1
 try:
     def with_service(session):
         procs = healthy()
@@ -129,6 +138,14 @@ try:
     ck("another session than the watch's gives it", with_service(2) == strays.SESSION_FIX)
     ck("the watch's session is fine", with_service(1) == "")
     ck("an unreadable session says nothing", with_service(None) == "")
+    ck("session 0 is the problem even when the watch's session is unknown or 0 too",
+       strays.service_session_problem([P_(10, 1, "claude daemon run", session=0)], None) == strays.SESSION_FIX
+       and strays.service_session_problem([P_(10, 1, "claude daemon run", session=0)], 0) == strays.SESSION_FIX)
+    watch.running_pid = lambda paths: None
+    ck("with no watch running, the caller's own session is not held against the service (doctor over SSH)",
+       with_service(2) == "" and with_service(1) == "")
+    ck("with no watch running, session 0 still is", with_service(0) == strays.SESSION_FIX)
+    watch.running_pid = lambda paths: 999
     ck("the text is the agreed one", strays.SESSION_FIX == "Claude's background service was started from an SSH "
        "login (session 0); stations there can't use your GitHub login. Stop it from that SSH login "
        "(`claude daemon stop --any`) and start the crew again from the desktop.")
@@ -138,6 +155,7 @@ try:
     ck("off Windows nothing is said", with_service(0) == "")
 finally:
     strays._windows, strays.session_of = real_win, real_session
+    watch.running_pid = real_running
 
 print("5 orphans and their age")
 root = SCRATCH / "wt"
@@ -159,6 +177,10 @@ ck("a reused parent pid (parent younger than the child) is gone",
 ck("a protected pid is skipped", [s.proc.pid for s in strays.orphans(
     [P_(75, 999, "node " + inside)], ROOTS, "crew", {75}, NOW)] == [])
 
+ck("a parent that is a reaper (systemd) is gone even though it exists",
+   orph([P_(76, 1, "systemd", started=OLD), P_(77, 76, "node " + inside, started=OLD)]) == [77])
+ck("a parent that is a plain process is not", orph([P_(78, 1, "bash"), P_(79, 78, "node " + inside)]) == [])
+
 print("6 the marker and the roots")
 outside = str(SCRATCH / "elsewhere" / "tool")
 ck("the marker beats the path: outside the roots, marked", orph([P_(80, 999, "node " + outside, crew="crew")]) == [80])
@@ -170,6 +192,18 @@ seen = []
 ck("fill() is asked only for an old candidate whose parent is gone",
    orph(base + [P_(85, 999, "node " + inside, started=NOW - 5), P_(86, 70, "node")], fill=lambda p: seen.append(p.pid))
    == [] and seen == [70])
+
+print("6b the watch's Windows launcher is not an orphan")
+launcher = P_(90, 999, "pythonw -m tares.crew crew watch", crew="crew")
+loop = P_(91, 90, "python -m tares.crew crew watch", started=OLD + 5, crew="crew")
+watch.running_pid = lambda paths: 91
+try:
+    ck("the launcher of the watch is protected", scan([P_(5, 1, "bash"), launcher, loop])["orphan"] == [],
+       [s.line() for s in scan([P_(5, 1, "bash"), launcher, loop])["orphan"]])
+    ck("a crew-made process that is not the watch's parent still is reported",
+       [s.proc.pid for s in scan([P_(5, 1, "bash"), loop, P_(92, 999, "pythonw -m other", crew="crew")])["orphan"]] == [92])
+finally:
+    watch.running_pid = real_running
 
 print("7 doctor and status over a ps-table.json")
 table = []

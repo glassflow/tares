@@ -309,7 +309,7 @@ def _watch_session(paths: CrewPaths):
         pid = watch.running_pid(paths)
     except Exception:
         pid = None
-    return session_of(pid) if pid else session_of(os.getpid())
+    return session_of(pid) if pid else None   # no watch: the caller's session says nothing (doctor over SSH)
 
 
 # ---------- orphans ----------
@@ -406,6 +406,12 @@ def scan(paths: CrewPaths, env=None, now=None, procs=None) -> dict:
     protect = set(owned) | {s.proc.pid for s in strays}
     if watch_pid:
         protect.add(watch_pid)
+        me = next((p for p in procs if p.pid == watch_pid), None)
+        parent = next((p for p in procs if me and p.pid == me.ppid), None)
+        # the Windows venv launcher that runs the watch
+        if (parent and parent.pid != watch_pid and "crew watch" in " ".join(parent.cmdline)
+                and parent.started <= me.started):
+            protect.add(parent.pid)
         protect |= _descendants(procs, {watch_pid})
     protect |= _descendants(procs, set(owned))
     try:
