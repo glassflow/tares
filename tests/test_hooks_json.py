@@ -103,7 +103,11 @@ print("an install older than 1.56.0 (no `tares hook`)")
 fallback = next(h["command"] for _, _, h in entries if "session-start" in h["command"])
 ck("the session start entry falls back to an upgrade line naming min_tares.txt's version",
    "echo" in fallback and f"tares {min_tares} or newer" in fallback and "uv tool upgrade tares" in fallback, fallback)
-ck("the fallback has no em dash", "\u2014" not in fallback)
+WIN_LINE = ("On Windows, stop the crew and any other running tares command first: "
+            "an upgrade while one is running can leave the install broken.")
+ck("the fallback has the Windows line, behind a check for OS=Windows_NT (TR-1304)",
+   WIN_LINE in fallback and "Windows_NT" in fallback, fallback)
+ck("the fallback has no em dash", "\u2014" not in fallback and "\u2014" not in WIN_LINE)
 ck("every other entry swallows exit 2 (an old tares) with `|| [ $? -ne 2 ]`",
    all(h["command"].endswith("|| [ $? -ne 2 ]") for _, _, h in entries if "session-start" not in h["command"]),
    [h["command"] for _, _, h in entries if not h["command"].endswith("|| [ $? -ne 2 ]")])
@@ -118,9 +122,11 @@ def stub(name, body):
     return d
 
 
-def run_cmd(command, d):
-    return subprocess.run(["sh", "-c", command], capture_output=True, text=True, cwd=HOME,
-                          env=dict(ENV, PATH=f"{d}{os.pathsep}{ENV['PATH']}"))
+def run_cmd(command, d, extra=None):
+    env = dict(ENV, PATH=f"{d}{os.pathsep}{ENV['PATH']}")
+    env.pop("OS", None)
+    env.update(extra or {})
+    return subprocess.run(["sh", "-c", command], capture_output=True, text=True, cwd=HOME, env=env)
 
 
 # An old tares answers `tares hook` with an argparse usage error (exit 2) and no hook output.
@@ -131,6 +137,10 @@ else:
     r = run_cmd(fallback, old_dir)
     ck("with an old tares on PATH the session start prints the upgrade line on stdout (Claude Code shows it as context)",
        r.returncode == 0 and f"tares {min_tares} or newer" in r.stdout, (r.returncode, r.stdout, r.stderr[-200:]))
+    ck("...and, off Windows, nothing more than that line (TR-1304)", WIN_LINE not in r.stdout and r.stdout.count("\n") == 1, r.stdout)
+    r = run_cmd(fallback, old_dir, {"OS": "Windows_NT"})
+    ck("with OS=Windows_NT the same run prints the upgrade line, then the Windows line (TR-1304)",
+       r.returncode == 0 and f"tares {min_tares} or newer" in r.stdout and r.stdout.rstrip("\n").endswith(WIN_LINE), (r.returncode, r.stdout))
     for _, _, h in entries:
         if "session-start" in h["command"]:
             continue

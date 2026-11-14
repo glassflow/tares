@@ -228,9 +228,14 @@ with mock.patch.object(doctor.version, "on_windows", lambda: True):
     d, *_ = make("path-none-win", env={"PATH": str(fresh("empty-win"))})
     d.check_tares_path()
     r = one(d, "tares_path")
-    ck("...and so does the install advice when no tares is on PATH, keeping its own ending",
-       r and r.fix.startswith("stop the crew first (tares factory crew down), then uv tool install tares")
-       and "then open a new terminal. " + NOTE in r.fix, r)
+    ck("...but the install advice when no tares is on PATH does not say to stop a crew that cannot run yet (TR-1304), and keeps the note",
+       r and r.fix.startswith("uv tool install tares") and "tares factory crew down" not in r.fix
+       and "then open a new terminal. " + NOTE in r.fix and r.fix.endswith("run the same command again."), r)
+    plug = fresh("plug-compat-win")
+    (plug / "min_tares.txt").write_text("999.0.0\n", encoding="utf-8")
+    msg = doctor.version.check_plugin_compat(plug)
+    ck("the plugin's own compat line on Windows says to stop the crew first (TR-1304)",
+       msg.startswith("This Tares plugin needs tares 999.0.0 or newer") and "Stop the crew first" in msg, msg)
     sentence = doctor.version.upgrade_advice("Upgrade it with `x`.", sentence=True)
     ck("a full sentence starts with a capital and keeps one full stop before the note",
        sentence.startswith("Stop the crew first (tares factory crew down), then upgrade it with `x`. On Windows"), sentence)
