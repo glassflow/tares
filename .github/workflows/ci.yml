@@ -46,6 +46,8 @@ jobs:
         run: |
           npm ci
           npx tsc --noEmit
+          npm run lint
+          npm run token-contract
           node tests/words.selftest.cjs
           node tests/words.check.cjs
           npm run design-contract

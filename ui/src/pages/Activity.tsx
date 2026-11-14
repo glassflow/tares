@@ -4,7 +4,6 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, auth } from "../api";
 import { Search } from "../components/icons";
 import { Picker, TimeAgo, usePolling } from "../components/bits";
-import type { DispatchLogEntry } from "../types";
 import { copyText } from "../editions/copyText";
 
 // Two pages share this module: Connect (how an agent hooks up — one tab per integration mode)
@@ -56,22 +55,6 @@ export default function AgentActivity() {
       <p className="subtitle">Every read agents made over MCP or the API, newest first.</p>
       <Queries />
     </>
-  );
-}
-
-/** Shared filter toolbar: a search box + a live "N of M" count. */
-function Toolbar({ q, setQ, placeholder, shown, total }: {
-  q: string; setQ: (s: string) => void; placeholder: string; shown: number; total: number;
-}) {
-  return (
-    <div className="toolbar">
-      <div className="search-box">
-        <Search />
-        <input type="text" className="search" placeholder={placeholder} value={q} onChange={(e) => setQ(e.target.value)} />
-      </div>
-      <span className="grow" />
-      <span className="count">{shown} of {total}</span>
-    </div>
   );
 }
 
@@ -630,7 +613,7 @@ export function Dispatches() {
                     : names.map((a) => (
                         <span key={a.name} className="chip mono"
                               title={partial ? (d.error ?? "not every delivery succeeded") : "delivered"}
-                              style={{ marginRight: 4, color: partial ? "var(--err)" : "var(--ok, #2e7d43)" }}>
+                              style={{ marginRight: 4, color: partial ? "var(--err)" : "var(--ok)" }}>
                           {a.kind === "slack" ? channelLabel(a.name) : a.name}
                         </span>
                       ))}

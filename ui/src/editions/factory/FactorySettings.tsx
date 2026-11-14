@@ -39,7 +39,6 @@ const SAVE_FAILED = "That change was not saved. Try again in a moment.";
 const ROW_TEXT = "min-w-0 flex-[1_1_320px]";
 const HEAD = "flex items-center justify-between gap-3 border-b border-border bg-muted px-4 py-3";
 const CHOICE = "flex! w-full items-start gap-3 border-0! border-b! border-border! bg-transparent! px-4! py-3.5! text-left font-normal! text-foreground! cursor-pointer disabled:cursor-not-allowed hover:bg-[var(--row-hover)]! last:border-b-0!";
-const LINK_BTN = "border-0! bg-transparent! p-0! text-[13px]! font-normal! text-foreground! underline! cursor-pointer";
 
 function Card({ dim, className, ...props }: { dim?: boolean } & React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("border border-border bg-card", dim && "opacity-50", className)} {...props} />;

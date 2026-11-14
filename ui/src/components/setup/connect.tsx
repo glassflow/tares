@@ -4,7 +4,6 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import IngestSetup from "../IngestSetup";
 import { ServerForm } from "../../pages/McpServers";
-import { TimeAgo } from "../bits";
 import type { McpServer, Plan, SetupChecks, SetupConnect } from "../../types";
 import { CopyLine, errText } from "./common";
 

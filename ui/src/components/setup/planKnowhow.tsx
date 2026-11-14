@@ -1,9 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
-import { api } from "../../api";
 import { InternalName, Picker } from "../bits";
 import { SkillEditor } from "../SkillsPanel";
-import type { Plan, PlanTool, SkillSummary } from "../../types";
+import type { Plan, PlanTool } from "../../types";
 import { Switch, errText, parseSkillMd } from "./common";
 import { EditorFrame, ItemActions, Problems } from "./planBits";
 import { newKey, toolGroups, toolTitle } from "./planEdit";

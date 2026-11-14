@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { licenceWordsOn, useCloud } from "../../cloud";
+import { licenceWordsOn } from "../../cloud";
 import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -16,7 +16,7 @@ import {
   type CreatedKey, type Field, type FieldGroup, type FieldGroupName, type FieldValue, type KeyRow, type Option,
   type SreSettings, type ToolRow,
 } from "./Settings.api";
-import { isSettingsSample, sampleLoad, sampleSettings, SAMPLE_PARTIAL, type SampleName } from "./sample/settings";
+import { isSettingsSample, sampleLoad, SAMPLE_PARTIAL, type SampleName } from "./sample/settings";
 
 // AI SRE Settings: seven groups on one page, from one read (GET /api/sre/settings). Watching,
 // Investigating and Where notes go each save on their own (PUT /api/sre/settings/{group}) and a save
@@ -183,7 +183,7 @@ interface GroupProps {
   children?: React.ReactNode;
 }
 
-function RuleRow({ g, rule, text, editable, value, set }: {
+function RuleRow({ rule, text, editable, value, set }: {
   g: FieldGroup; rule: Field; text?: Field; editable: boolean; value: string[]; set: (v: string[]) => void;
 }) {
   const [adding, setAdding] = React.useState(false);
@@ -378,7 +378,6 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
   onCreate: (name: string, scope: string) => Promise<boolean>; onRevoke: (k: KeyRow) => void; onDismiss: () => void;
   notice?: string; working: string | null;
 }) {
-  const cloud = useCloud();
   const [form, setForm] = React.useState(false);
   const [name, setName] = React.useState("");
   const [scope, setScope] = React.useState("read");
