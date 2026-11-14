@@ -52,7 +52,7 @@ const SPARK_TEXT: Record<Tone, string> = {
 
 // One grid for the heading and every row, so the columns line up.
 const COLS = "md:grid md:grid-cols-[minmax(0,1.3fr)_minmax(80px,0.7fr)_minmax(0,1.2fr)_minmax(0,1fr)] md:gap-x-6";
-const HEAD = "hidden border-b border-border px-[18px] py-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground";
+const HEAD = "hidden border-b border-border px-[var(--row-x,18px)] py-2.5 font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground";
 
 /** The rows of a services list: a dot, the name and what it is called, a one-day line, the state
  *  and what it sends, and its activity. Under 768px each row stacks. Put it in a ListSection or a
@@ -72,7 +72,7 @@ export function ServiceRows({ rows, sparkHeading = "Last day", className, ...pro
             <Link
               to={r.to}
               className={cn(
-                "grid min-w-0 gap-y-2 px-[18px] py-4 [overflow-wrap:anywhere] no-underline! hover:bg-[var(--row-hover)]",
+                "grid min-w-0 gap-y-2 px-[var(--row-x,18px)] py-4 [overflow-wrap:anywhere] no-underline! hover:bg-[var(--row-hover)]",
                 "text-foreground! focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--accent)]",
                 COLS,
                 "md:items-start",

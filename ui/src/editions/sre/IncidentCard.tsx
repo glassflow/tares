@@ -21,12 +21,15 @@ export function IncidentCard({ incident: i, busy, canAct = true, onPickUp, onRes
   const pickedUp = i.state === "on_it";
   const points = i.chart?.points ?? [];
   return (
-    <section className="min-w-0 border border-foreground bg-card [overflow-wrap:anywhere]" data-testid="incident-card" data-incident={i.id}>
-      <div className="border-b border-border bg-[var(--err-soft)] px-[18px] py-3">
+    // On the paper (TR-1274): an ink rule, heavier than a section's, opens it, and the word Incident in
+    // red says what it is. No box and no tinted band.
+    <section className="min-w-0 border-t border-foreground [overflow-wrap:anywhere]" data-testid="incident-card" data-incident={i.id}>
+      <div className="pb-1 pt-3">
+        <div className="mb-1 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--err)]" data-testid="incident-kind">Incident</div>
         <h2 className="m-0! mb-0.5! text-[15px]!" data-user-text data-testid="incident-title">{i.title}</h2>
         <div className="text-[13px] text-muted-foreground" data-testid="incident-age">{i.age_words} · {i.who_words}</div>
       </div>
-      <div className="grid gap-5 p-[18px]">
+      <div className="grid gap-5 pt-4">
         <div className="grid gap-x-6 gap-y-4 md:grid-cols-3">
           <div className={COL} data-testid="incident-failing">
             <div className={K}>What is failing</div>

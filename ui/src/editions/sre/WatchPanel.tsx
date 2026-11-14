@@ -15,11 +15,11 @@ export function WatchPanel({ watch, busy, canAct = true, onWayOut }: {
   const title = watch.reason_words ? `The watcher is off: ${watch.reason_words}` : "The watcher is off";
   const k = "font-mono text-[11px] uppercase tracking-[0.08em] text-muted-foreground";
   return (
-    <section className="min-w-0 border border-foreground bg-card [overflow-wrap:anywhere]" data-testid="watch-off">
-      <div className="border-b border-border px-[18px] py-3">
+    <section className="min-w-0 border-t border-foreground [overflow-wrap:anywhere]" data-testid="watch-off">
+      <div className="pb-1 pt-3">
         <h2 className="m-0! text-[15px]!" data-testid="watch-off-title">{title}</h2>
       </div>
-      <div className="grid gap-5 p-[18px]">
+      <div className="grid gap-5 pt-4">
         <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
           {watch.off_for_words && (
             <div className="grid content-start gap-1" data-testid="watch-off-for">

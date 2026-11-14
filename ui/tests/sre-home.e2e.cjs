@@ -27,6 +27,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords, expectOneCall } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8861);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -110,6 +111,8 @@ function cleanEnv(home, dist) {
     await checkWords(page, ck, `${state} ${width}`);
     ck(`${state} ${width}: does not scroll sideways`, (await overflow(page)) <= 0, String(await overflow(page)));
     ck(`${state} ${width}: lists have no bullets or indent`, await bare(page));
+    const paper = await checkPaper(page, ck, `${state} ${width}`);
+    if (!/error|loading/.test(state)) ck(`${state} ${width}: the paper check saw sections`, paper.heads.length > 0, String(paper.heads.length));
   }
 
   const sections = async (page) => ({

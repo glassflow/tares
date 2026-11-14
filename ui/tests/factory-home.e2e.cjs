@@ -122,7 +122,7 @@ function cleanEnv(extra) {
           return [...document.querySelectorAll("main *")].every((e) => e.getBoundingClientRect().right <= w + 1);
         }));
         // TR-1274: Home sits on the paper. The start checklist is shared with SRE Home and moves with that page.
-        const paper = await checkPaper(page, ck, tag(sample), { skip: "[data-testid^=start-checklist]" });
+        const paper = await checkPaper(page, ck, tag(sample));
         if (sample !== "error") ck(`${tag(sample)}: the paper check saw the section headings`, paper.heads.length > 0);
         const hello = (await page.locator("h1").first().innerText()).trim();
         ck(`${tag(sample)}: a greeting by the time of day`, /^Good (morning|afternoon|evening)$/.test(hello), hello);

@@ -21,12 +21,12 @@ const costLine = (w: HomeOnWatch) =>
  *  and where the notes go. */
 export function OnWatch({ items, notesGoTo }: { items: HomeOnWatch[]; notesGoTo: { label: string } | null }) {
   return (
-    <ListSection title="Who is on watch" data-testid="on-watch">
+    <ListSection paper title="Who is on watch" data-testid="on-watch">
       <ul className="m-0! list-none! p-0!">
         {items.map((w) => {
           const s = stateOf(w);
           return (
-            <li key={`${w.role}-${w.name}`} className="grid gap-0.5 border-t border-border px-[18px] py-3 first:border-t-0" data-testid="on-watch-item" data-role={w.role}>
+            <li key={`${w.role}-${w.name}`} className="grid gap-0.5 border-t border-border px-[var(--row-x,18px)] py-3 first:border-t-0" data-testid="on-watch-item" data-role={w.role}>
               <div className="flex flex-wrap items-center gap-x-2.5">
                 <b>{w.name}</b>
                 <span className="flex items-center gap-1.5 text-[13px]" data-testid="on-watch-state"><StatusDot tone={s.tone} />{s.words}</span>
@@ -38,7 +38,7 @@ export function OnWatch({ items, notesGoTo }: { items: HomeOnWatch[]; notesGoTo:
         })}
       </ul>
       {notesGoTo && (
-        <p className="m-0! border-t border-border px-[18px] py-3 text-[13px] text-muted-foreground" data-testid="notes-go">
+        <p className="m-0! border-t border-border px-[var(--row-x,18px)] py-3 text-[13px] text-muted-foreground" data-testid="notes-go">
           Notes go to <Link to="/settings#tools" className="text-foreground underline underline-offset-2" data-user-text>{notesGoTo.label}</Link>
         </p>
       )}
