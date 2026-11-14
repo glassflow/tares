@@ -46,16 +46,12 @@ export default function FactoryDecisions() {
         <p className={cn(MUTED, "m-0! mt-1!")}>Your answers to the crew on <span data-user-text>{data.name}</span>, newest first.</p>
       </div>
       {items.length === 0 ? (
-        <div className="border border-border bg-card px-4 py-5 text-muted-foreground" data-testid="decisions-empty">
+        <div className="border-t border-border py-4 text-muted-foreground" data-testid="decisions-empty">
           No decisions yet. When you answer the crew, it is kept here.
         </div>
       ) : (
-        <div className="grid gap-3" data-testid="decisions-list">
-          {items.map((x, i) => (
-            <div key={i} className="border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]">
-              <DecisionRow x={x} wide />
-            </div>
-          ))}
+        <div className="border-t border-border" data-testid="decisions-list">
+          {items.map((x, i) => <DecisionRow key={i} x={x} wide />)}
         </div>
       )}
     </div>

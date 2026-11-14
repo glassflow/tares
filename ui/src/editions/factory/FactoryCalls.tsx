@@ -15,11 +15,13 @@ import { InlineIcon } from "./ProjectIcon";
 const POLL_MS = 15000;
 const MUTED = "text-xs text-muted-foreground";
 const LINK = "text-foreground! underline!";
-const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
+// On the paper (TR-1266): a 1px rule over each section's head, rules between the calls, no cards.
+const HEAD = "mb-2.5 border-t border-border pt-3";
+const ROW = "border-b border-border py-3 last:border-b-0";
 
 function PastRow({ c }: { c: PastCall }) {
   return (
-    <div className={cn(CARD, "px-5 py-4")} data-testid="call-past" data-ref={c.ref}>
+    <div className={ROW} data-testid="call-past" data-ref={c.ref}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
         <div className="flex min-w-0 items-baseline gap-2.5">
           <span className="font-mono text-xs font-medium">{c.ref}</span>
@@ -80,16 +82,16 @@ export default function FactoryCalls() {
           <p className={cn(MUTED, "m-0! mt-1!")}>What the crew decided on <span data-user-text>{data.name}</span> without you, so the work did not stop.</p>
         </div>
       </div>
-      <section className="grid gap-3" aria-label="To confirm" data-testid="calls-open">
-        <h2 className="m-0! text-base! font-semibold!">To confirm</h2>
+      <section className="min-w-0" aria-label="To confirm" data-testid="calls-open">
+        <div className={HEAD}><h2 className="m-0! text-base! font-semibold!">To confirm</h2></div>
         {open.length === 0 ? (
-          <div className={cn(CARD, "px-5 py-4 text-muted-foreground")} data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</div>
-        ) : open.map((c) => <div key={c.ref} className={CARD}><CallRow c={c} onDecide={decide} /></div>)}
+          <div className="py-2 text-muted-foreground" data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</div>
+        ) : <div>{open.map((c) => <CallRow key={c.ref} c={c} onDecide={decide} />)}</div>}
       </section>
       {past.length > 0 && (
-        <section className="grid gap-3" aria-label="Already confirmed" data-testid="calls-past">
-          <h2 className="m-0! text-base! font-semibold!">Kept or changed</h2>
-          {past.map((c) => <PastRow key={c.ref} c={c} />)}
+        <section className="min-w-0" aria-label="Already confirmed" data-testid="calls-past">
+          <div className={HEAD}><h2 className="m-0! text-base! font-semibold!">Kept or changed</h2></div>
+          <div>{past.map((c) => <PastRow key={c.ref} c={c} />)}</div>
         </section>
       )}
       <Toaster />

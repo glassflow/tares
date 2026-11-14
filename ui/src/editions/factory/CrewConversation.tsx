@@ -17,7 +17,7 @@ import { changeOf, DiffText, JsonText, looksLikeDiff } from "./codeColours";
 const GROUP_AT = 3;
 const NEAR_BOTTOM = 48;
 const MUTED = "text-xs text-muted-foreground";
-const DARK = "bg-[#1e0f00] text-[#efeddb]";
+const DARK = "bg-[var(--code-dark-bg)] text-[color:var(--code-dark-ink)]";
 
 type Row =
   | { kind: "item"; item: ConvoItem; key: string }

@@ -8,10 +8,11 @@ import type { HomeItem } from "@/editions/factory/home.types";
 // initial in a colour. The team home draws it: waiting rows, the members on a project row.
 
 // People other than the crew wear one of these, chosen by name so a person keeps their colour.
+// The colours are tokens in styles.css (--person-*); the first follows the theme's ink.
 const PEOPLE: { bg: string; fg: string }[] = [
-  { bg: "#1e0f00", fg: "#faf9ec" },
-  { bg: "#2f5d8a", fg: "#ffffff" },
-  { bg: "#6b4f8a", fg: "#ffffff" },
+  { bg: "var(--person-1)", fg: "var(--on-person-1)" },
+  { bg: "var(--person-2)", fg: "var(--on-person)" },
+  { bg: "var(--person-3)", fg: "var(--on-person)" },
 ];
 const CREW_COLOUR = { bg: "var(--accent)", fg: "var(--on-accent)" };
 

@@ -35,12 +35,9 @@ import tseslint from 'typescript-eslint'
 // --- repoint on copy ---------------------------------------------------------
 const SRC = 'src/**/*.{ts,tsx}'
 const PAPER_PROFILE = true
-// Card shadows with a raw colour. TR-1266 replaces them with 1px rules and empties this.
-const SHADOW_REGISTER = [
-  'src/editions/factory/FactoryCalls.tsx',
-  'src/editions/factory/FactoryDecisions.tsx',
-  'src/editions/factory/FactoryProjectGitHub.tsx',
-]
+// Empty since TR-1266 put the factory's Calls, Decisions and GitHub cards on the paper. Keep it
+// empty: a new entry needs a reason and a ticket, like every register.
+const SHADOW_REGISTER = []
 // A 2px neutral rail that nests child runs and rule firings under their parent on the legacy
 // project activity page: a tree guide in --line, not an accent callout. The legacy pages move
 // onto the edition kit or freeze (TR-1250, TR-1267); the rail goes with that.

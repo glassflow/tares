@@ -22,6 +22,7 @@ const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const { checkWords } = require("./words.cjs");
+const { checkPaper } = require("./paper.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8370);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -118,6 +119,7 @@ async function waitFor(url, tries = 100) {
       ck("no read failed, so no banner", (await page.getByTestId("github-error").count()) === 0);
       ck("no sideways scroll", (await overflow(page)) <= 0);
       await checkWords(page, ck, `GitHub page ${width}`);
+      await checkPaper(page, ck, `GitHub page ${width}`);
       await shot(page, `github-${width}.png`);
       await api.nth(0).getByTestId("pr-ticket").click();
       await page.waitForURL(`**/projects/${g}/tickets/T4`);
