@@ -2,6 +2,7 @@
 # Tests CI runs for the enterprise code, one per line, in sorted order (ee/tests/<name>.py).
 test_areas
 test_areas_licence
+test_brain_index
 test_brain_lore_client
 test_brain_repos
 test_console_answers

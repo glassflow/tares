@@ -1,8 +1,10 @@
 # Tares enterprise licence, see ee/LICENSE
 """The repos a cell connects to the brain (TR-1197): the brain_repos table and the routes under
 /api/brain. A licensed cell with the brain settings connects, lists, retries and removes repos
-(against the shared fake lore, never a real one); a licensed cell without the settings says
-configured:false and 404s the rest; an unlicensed cell 404s every route as if it were not mounted.
+(against the shared fake lore and the fake control plane, never a real one; the background poll that
+follows an index is switched off here and has its own test, test_brain_index); a licensed cell without
+the settings says configured:false and 404s the rest; an unlicensed cell 404s every route as if it
+were not mounted.
 
 In process, no ports. With CI's Postgres run (TARES_TEST_PG and tests/pg_harness on PYTHONPATH) the
 same script keeps its state in Postgres.
@@ -27,8 +29,10 @@ if not AUTH_OFF:
 import httpx
 from fastapi import FastAPI
 
+import fake_cp
 import fake_lore
 from tares import github_credentials
+from tares_ee.brain import index as index_mod
 from tares_ee.brain import repos as repos_mod
 from tares_ee.brain.lore import LoreClient
 
@@ -48,7 +52,7 @@ def H(tok):
 
 BRAIN_KEY = "brain-" + "key-test-1"   # gitleaks:allow
 SHAPE = {"repo", "state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
-         "added_by", "added_by_name", "added_at"}
+         "place", "added_by", "added_by_name", "added_at"}
 NOT_FOUND = {"detail": "Not Found"}
 ALL = (("GET", "/api/brain/repos/available", None),
        ("POST", "/api/brain/repos", {"repos": ["acme/web"]}),
@@ -74,9 +78,14 @@ def unit():
     ck("a queued repo is not requeued", not s.requeue_brain_repo("acme/web"))
     s.sc.execute("UPDATE brain_repos SET state = 'failed', error = 'boom', files_done = 3 WHERE repo = ?",
                  ["acme/web"])
+    s.sc.execute("UPDATE brain_repos SET place = 4, job_started_at = '2026-01-02T00:00:00Z' WHERE repo = ?", ["acme/web"])
     ck("a failed repo is requeued", s.requeue_brain_repo("acme/web"))
     r = s.get_brain_repo("acme/web")
-    ck("... the error is cleared, the counts stay", (r["state"], r["error"], r["files_done"]) == ("queued", None, 3), str(r))
+    ck("... the error, the counts, the place and the job mark are cleared", (r["state"], r["error"], r["files_done"],
+       r["files_total"], r["place"], r["job_started_at"]) == ("queued", None, 0, 0, None, None), str(r))
+    ck("a new row has no place and no job yet", s.add_brain_repo("acme/new", "src-9", None, "2026-01-01T00:00:00Z")
+       and (s.get_brain_repo("acme/new")["place"], s.get_brain_repo("acme/new")["job_started_at"]) == (None, None))
+    s.delete_brain_repo("acme/new")
     ck("requeue of a repo that is not there is False", not s.requeue_brain_repo("acme/none"))
     ck("delete removes it", s.delete_brain_repo("acme/web") and s.list_brain_repos() == [])
     ck("delete of a repo that is not there is False", not s.delete_brain_repo("acme/web"))
@@ -102,11 +111,26 @@ def unit():
 async def main():
     from tares.daemon import make_app
     lore = fake_lore.FakeLore()
-    repos_mod.lore_client = lore.client      # every route talks to the fake
+    cp = fake_cp.FakeCp()
+    cp.start_as = ("queued", 2)              # a job that waits: the row stays queued
+    repos_mod.lore_client = lore.client      # every route talks to the fakes
+    index_mod.cp_client = cp.client
+    os.environ["TARES_BRAIN_CP_URL"] = fake_cp.BASE_URL   # (unused by the fake, set for a cell that has it)
+
+    async def never(self):                   # no background poll here: test_brain_index follows the index
+        await asyncio.Event().wait()
+    index_mod.Indexer.run = never
+    readable = [{"full_name": f"acme/{n}"} for n in ("web", "api", "docs", "p1", "p2", "p3", "p4", "p5", "p9", "one",
+                                                     "mine", "rootset", "bare", "new", "fresh", "good")]
+
+    async def readable_repos(cred, query=""):
+        return readable
+    github_credentials.list_repos_for = readable_repos
     app = make_app()
     async with app.router.lifespan_context(app):
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t", headers=H(ROOT))
         store = app.state.store
+        store.upsert_github_credential("setup", "s" * 10 + "tok")   # a connection the brain reads repos with
 
         async def licence(text):
             r = await cx.put("/api/licence", json={"key": text})
@@ -122,8 +146,8 @@ async def main():
             for method, path, body in ALL:
                 r = await cx.request(method, path, json=body)
                 ck(f"{why}: {method} {path} is 404", is_404(r), f"{r.status_code} {r.text[:100]}")
-            ck(f"{why}: nothing stored, lore never called", store.list_brain_repos() == [] and not lore.requests,
-               str(store.list_brain_repos()))
+            ck(f"{why}: nothing stored, lore and the control plane never called", store.list_brain_repos() == []
+               and not lore.requests and not cp.requests, str(store.list_brain_repos()))
 
         print("== no licence ==")
         os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
@@ -159,15 +183,19 @@ async def main():
         ck("connect answers 201 with the new row", r.status_code == 201 and len(body.get("repos", [])) == 1
            and set(body["repos"][0]) == SHAPE, f"{r.status_code} {r.text[:300]}")
         row = body["repos"][0] if body.get("repos") else {}
-        ck("the repo is lowercase, queued, nothing indexed", (row.get("repo"), row.get("state"), row.get("files_done"),
+        ck("the repo is lowercase, queued, nothing indexed, no error", (row.get("repo"), row.get("state"), row.get("files_done"),
            row.get("files_total"), row.get("indexed_commit"), row.get("last_synced"), row.get("error"))
            == ("acme/web", "queued", 0, 0, None, None, None), str(row))
         ck("added_at is set", bool(row.get("added_at")), str(row))
         made = lore.calls("POST", "create_repo")
         ck("one lore repo source was created, named for owner and name, with the https remote",
-           len(made) == 1 and made[0].json == {"name": "acme_web", "remote_url": "https://github.com/acme/web.git"},
+           len(made) == 1 and made[0].json == {"name": "acme_web", "remote_url": "https://github.com/acme/web.git",
+                                               "web_url_template": "https://github.com/acme/web/blob/{commit}/{path}#L{start}-L{end}"},
            str([m.json for m in made]))
-        ck("nothing was indexed: no sync call", not lore.calls("POST", "sync_repo"))
+        ck("nothing was indexed by the cell: no sync call", not lore.calls("POST", "sync_repo"))
+        ck("the control plane was asked for one index job, with the lore repo id", len(cp.calls("POST", "start_index")) == 1
+           and cp.calls("POST", "start_index")[0].json["repo_source_id"] == next(iter(lore.repos))
+           and cp.calls("POST", "start_index")[0].json["remote_url"] == "https://github.com/acme/web.git", str([c.json for c in cp.requests]))
         stored = store.get_brain_repo("acme/web") or {}
         ck("the row keeps lore's repo id", stored.get("repo_source_id") == next(iter(lore.repos)), str(stored))
         r = await cx.get("/api/brain")
@@ -181,6 +209,8 @@ async def main():
            == ["acme/web", "acme/api", "acme/docs"])
         ck("every lore call carried the cell's brain key (lore answered none with 401)", all(m.status == 200 for m in lore.requests),
            str([m.status for m in lore.requests]))
+        ck("every control plane call carried the cell's token", all(m.status == 202 for m in cp.requests), str([m.status for m in cp.requests]))
+        ck("three repos, three jobs", len(cp.calls("POST", "start_index")) == 3 and len(cp.jobs) == 3)
 
         print("== refused input ==")
         before = (len(store.list_brain_repos()), len(lore.requests))
@@ -261,17 +291,19 @@ async def main():
         r = await cx.post("/api/brain/repos/acme/web/retry")
         ck("a queued repo is refused (409) in plain words", r.status_code == 409 and "acme/web is queued" in r.text
            and "only a repo whose index failed" in r.text, f"{r.status_code} {r.text[:200]}")
-        for st in ("indexing", "indexed"):
+        for st in ("cloning", "indexing", "ready"):
             set_state("acme/web", st)
             r = await cx.post("/api/brain/repos/acme/web/retry")
             ck(f"a repo that is {st} is refused", r.status_code == 409 and f"acme/web is {st}" in r.text, f"{r.status_code} {r.text[:200]}")
             ck("  ... and left as it was", store.get_brain_repo("acme/web")["state"] == st)
         set_state("acme/web", "failed", "lore ran out of memory")
+        asked = len(cp.calls("POST", "start_index"))
         r = await cx.post("/api/brain/repos/Acme/WEB/retry")
         ck("a failed repo goes back to queued, error cleared (any case in the path)", r.status_code == 200
            and r.json()["state"] == "queued" and r.json()["error"] is None and set(r.json()) == SHAPE, f"{r.status_code} {r.text[:300]}")
-        ck("... in the table too, and no index was started", store.get_brain_repo("acme/web")["state"] == "queued"
-           and store.get_brain_repo("acme/web")["error"] is None and not lore.calls("POST", "sync_repo"))
+        ck("... in the table too, and the control plane was asked again for its job", store.get_brain_repo("acme/web")["state"] == "queued"
+           and store.get_brain_repo("acme/web")["error"] is None and len(cp.calls("POST", "start_index")) == asked + 1
+           and not lore.calls("POST", "sync_repo"), f"{store.get_brain_repo('acme/web')} {asked} {len(cp.calls('POST', 'start_index'))}")
         r = await cx.post("/api/brain/repos/acme/ghost/retry")
         ck("a repo that is not connected is 404", r.status_code == 404 and "not connected" in r.text, f"{r.status_code} {r.text[:200]}")
         r = await cx.post("/api/brain/repos/acme/bad%20name/retry")
@@ -292,6 +324,7 @@ async def main():
 
         print("== available ==")
         listed = []
+        store.delete_github_credential("setup")
 
         async def fake_list(cred, query=""):
             if cred["name"] == "broken":
@@ -327,6 +360,7 @@ async def main():
             store.delete_github_credential("broken")
         finally:
             github_credentials.list_repos_for = real_list
+        store.upsert_github_credential("setup", "s" * 10 + "tok")
 
         print("== who may change it ==")
         async def key(scopes, person=None):
@@ -407,9 +441,21 @@ async def auth_off():
     os.environ["TARES_LICENSE"] = licensed.test_licence()
     from tares.daemon import make_app
     lore = fake_lore.FakeLore()
+    cp = fake_cp.FakeCp()
+    cp.start_as = ("queued", 1)
     repos_mod.lore_client = lore.client
+    index_mod.cp_client = cp.client
+
+    async def never(self):
+        await asyncio.Event().wait()
+    index_mod.Indexer.run = never
+
+    async def readable_repos(cred, query=""):
+        return [{"full_name": "acme/web"}]
+    github_credentials.list_repos_for = readable_repos
     app = make_app()
     async with app.router.lifespan_context(app):
+        app.state.store.upsert_github_credential("setup", "s" * 10 + "tok")
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
         print("== auth off ==")
         r = await cx.post("/api/brain/repos", json={"repos": ["acme/web"]})
