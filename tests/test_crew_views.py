@@ -52,18 +52,29 @@ def case(fn):
 
 # ---------- a stub Tares ----------
 
-WORLD = {"desk": [], "projects": [], "settings": {"autonomy": "L4-ship"}}
+WORLD = {"desk": [], "projects": [], "settings": {"autonomy": "L4-ship"}, "me": "kiran", "mine_status": 200}
+SEEN = []  # the desk URLs the stub was asked for
 
 
 class Stub(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def do_GET(self):  # noqa: N802
-        path = self.path.split("?")[0]
+        path, _, query = self.path.partition("?")
+        desk = WORLD["desk"]
+        if path == "/api/desk":
+            SEEN.append(self.path)
+            if "mine=1" in query:
+                if WORLD["mine_status"] != 200:  # a cell that refuses the parameter
+                    self.send_response(WORLD["mine_status"])
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                desk = [d for d in desk if d.get("owner", WORLD["me"]) == WORLD["me"]]
         body = {"/health": {"status": "ok"},
                 "/api/crew/settings": {"settings": WORLD["settings"]},
                 "/api/crew/projects": {"projects": WORLD["projects"]},
-                "/api/desk": {"desk": WORLD["desk"]}}.get(path)
+                "/api/desk": {"desk": desk}}.get(path)
         raw = json.dumps(body if body is not None else {}).encode()
         self.send_response(200 if body is not None else 404)
         self.send_header("Content-Type", "application/json")
@@ -327,6 +338,30 @@ def desk_cases():
 
 
 # ---------- attach and logs ----------
+
+
+@case
+def desk_holds_only_the_persons_own_items():
+    WORLD["desk"] = [
+        {"id": "d1", "label": "D1", "question": "theirs one?", "owner": "ann"},
+        {"id": "d2", "label": "D2", "question": "mine one?", "owner": "kiran"},
+        {"id": "d3", "label": "D3", "question": "theirs two?", "owner": "ann"}]
+    pn = check("status, two people's items on the desk", ["status"], lambda: world(crew_of(), sessions()),
+               want="desk: 1 waiting for you")
+    ck("status: shows my item only", "mine one?" in pn[1] and "theirs" not in pn[1], pn[1])
+    pn = check("desk, two people's items", ["desk"], lambda: world(crew_of(), sessions()), expect_rc=0)
+    ck("desk: my item only", "mine one?" in pn[1] and "theirs" not in pn[1], pn[1])
+    pn = check("desk --json, two people's items", ["desk", "--json"], lambda: world(crew_of(), sessions()), expect_rc=0)
+    ck("desk --json: my item only", '"D2"' in pn[1] and "D1" not in pn[1] and "D3" not in pn[1], pn[1])
+    ck("the desk was asked for mine=1", SEEN and all("mine=1" in u for u in SEEN), SEEN)
+    # a cell that rejects the parameter is asked again without it: today's behaviour
+    WORLD["mine_status"] = 422
+    del SEEN[:]
+    pn = check("status, a cell that rejects mine", ["status"], lambda: world(crew_of(), sessions()),
+               want="desk: 3 waiting for you")
+    ck("then asked again without it", any("mine=1" in u for u in SEEN) and any("mine=1" not in u for u in SEEN), SEEN)
+    WORLD["mine_status"] = 200
+    WORLD["desk"] = []
 
 
 @case
