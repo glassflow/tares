@@ -212,6 +212,10 @@ try:
        lone(P_(90, 999, "pythonw -m tares.crew crew watch", started=OLD + 50, crew="crew"), loop) == [90])
     ck("a watch whose start time cannot be read leaves its launcher protected",
        lone(launcher, P_(91, 90, "python -m tares.crew crew watch", started=0.0, crew="crew")) == [])
+    ck("a launcher whose start time cannot be read stays protected",
+       lone(P_(90, 999, "pythonw -m tares.crew crew watch", started=0.0, crew="crew"), loop) == [])
+    ck("a launcher and a watch with equal start times: the launcher stays protected",
+       lone(P_(90, 999, "pythonw -m tares.crew crew watch", started=OLD + 5, crew="crew"), loop) == [])
 finally:
     watch.running_pid = real_running
 

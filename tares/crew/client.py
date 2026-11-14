@@ -49,6 +49,9 @@ class _Answer:
         return self.content.decode("utf-8", "replace")
 
 
+NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."   # the server's text (factory_api.py)
+
+
 class TaresHTTPError(CrewError):
     """A call to Tares that did not give a 2xx/3xx answer. The text is what curl prints with `-sS -f`
     ("curl: (22) The requested URL returned error: 404"), because bash callers read it: grants_read looks
@@ -61,6 +64,12 @@ class TaresHTTPError(CrewError):
         super().__init__(text)
         self.status = status
         self.detail = detail
+
+
+class NoPersonError(TaresHTTPError):
+    """`mine=1` on a key that is bound to no person (403)."""
+
+    code = "no_person"
 
 
 def _detail(body: bytes) -> str:
@@ -537,22 +546,23 @@ class TaresClient:
 
     # -- the desk --
 
-    def desk_json(self, mine: bool = False) -> list:
+    def desk_json(self, mine: bool = False, strict: bool = False) -> list:
         """The open desk items from Tares; an empty list when Tares can't say. With `mine`, only the items
         addressed to the caller's person (`mine=1`, the filter `desk_list(mine=true)` uses): on a shared cell
-        the plain list holds other people's items too. A Tares that rejects the parameter (400 or 422) is asked
-        again without it; one that ignores it (before 1.56) answers the whole list, as before."""
+        the plain list holds other people's items too. A Tares before 1.56 ignores the parameter and answers
+        the whole list, as before. A key with no person gets 403 for `mine`: that is said (an empty desk would
+        read as "nothing waits"), and the list is empty, or with `strict` NoPersonError is raised."""
         path = "/api/desk?state=open"
         try:
-            try:
-                raw = self.tares_http("GET", path + "&mine=1" if mine else path)
-            except TaresHTTPError as e:
-                # defensive: a Tares that ignores the parameter answers 200 and needs no retry
-                if not mine or e.status not in (400, 422):
-                    raise
-                raw = self.tares_http("GET", path)
-            doc = state.loads_json(raw)
-        except (TaresHTTPError, ValueError):
+            doc = state.loads_json(self.tares_http("GET", path + "&mine=1" if mine else path))
+        except TaresHTTPError as e:
+            if mine and e.status == 403:
+                text = e.detail or NO_PERSON
+                if strict:
+                    raise NoPersonError(text, status=403, detail=text) from None
+                self.say(f"the desk cannot be read: {text}")
+            return []
+        except ValueError:
             return []
         found = doc.get("desk") if isinstance(doc, dict) else None
         return [] if found is None or found is False else found

@@ -1159,10 +1159,15 @@ print("crew update and crew restart")
 USAGE = "usage: tares factory crew update [--force] [--wait <seconds>]"
 
 
+LAST_EXTRA: dict = {}
+
+
 def cu(*args, word="update", settings=None):
     """`crew update` / `crew restart` through its command: (exit code, what it said, the fake Tares)."""
-    with FakeTares(settings) as ft:
+    with FakeTares(settings) as ft, jsonrun.scope() as extra:
         res, said = round_says(lambda: CU_RUN[word](["crew", word, *args], dict(os.environ)))
+    LAST_EXTRA.clear()
+    LAST_EXTRA.update(extra)   # the keys the run added to its --json document
     return res, said, ft
 
 
@@ -1392,7 +1397,6 @@ ck("a halt while it waits ends the run", rc == 1 and said[-1] == "the crew was h
    "(tares factory crew resume, then crew update again)", str(said))
 world(BUSY, BUSY_ROWS)
 del sleeps[:]
-jsonrun._extra.clear()
 with patched(claude, "attached", lambda s, paths=None: s == "shop-build-m1"),         patched(time, "sleep", lambda s: sleeps.append(s) if s == 7.0 else real_sleep(s)):
     rc, said, _ = cu("--wait", "600")
 ck("a station someone has open is not waited for: said, left to the watch, not a failure", rc == 0 and sleeps == []
@@ -1401,8 +1405,7 @@ ck("a station someone has open is not waited for: said, left to the watch, not a
    and [x["station"] for x in launched] == ["shop-build-m2"], str((rc, sleeps, said, launched)))
 ck("...the last line names it, and the result document gets the key", said[-1] == (
     f"every station not open in a terminal runs Claude Code {NEW}; left to the watch: shop-build-m1")
-   and jsonrun._extra == {"left_to_watch": ["shop-build-m1"]}, str((said[-1:], jsonrun._extra)))
-jsonrun._extra.clear()
+   and LAST_EXTRA == {"left_to_watch": ["shop-build-m1"]}, str((said[-1:], LAST_EXTRA)))
 
 
 def open_m1(*args, word="update", settings=None):
@@ -1418,15 +1421,28 @@ del sleeps[:]
 rc, said, _ = open_m1("--wait", "1", settings={"claude_update": False})
 ck("attached, and the watch will not move it (claude_update off): it is waited for, not skipped", rc == 1
    and "shop-build-m1 is open in a terminal; the watch moves it when it is free" not in said
-   and "gave up waiting for shop-build-m1 to be idle" in said and jsonrun._extra == {}, str((rc, said, jsonrun._extra)))
+   and "gave up waiting for shop-build-m1 to be idle" in said and LAST_EXTRA == {}, str((rc, said, LAST_EXTRA)))
 world(TREE, [row("idle", "aaaa0001", "crew-orchestrator", NEW), row("idle", "aaaa0002", "shop-build-m1", NEW),
              row("idle", "aaaa0003", "shop-build-m2", NEW)])
 del sleeps[:]
 rc, said, _ = open_m1("--wait", "1", word="restart")
 ck("crew restart of an attached station already current: waited for, since the watch never moves it", rc == 1
    and "shop-build-m1 is open in a terminal; the watch moves it when it is free" not in said
-   and "gave up waiting for shop-build-m1 to be idle" in said and jsonrun._extra == {}, str((rc, said, jsonrun._extra)))
-jsonrun._extra.clear()
+   and "gave up waiting for shop-build-m1 to be idle" in said and LAST_EXTRA == {}, str((rc, said, LAST_EXTRA)))
+world(BUSY, BUSY_ROWS)
+del sleeps[:]
+rc, said, _ = open_m1("--wait", "1", settings={"kit": {"frozen": {"at": "2026-01-01", "by": "me"}}})
+ck("attached, and the crew is frozen (the watch will not move it): it is waited for, not skipped", rc == 1
+   and "shop-build-m1 is open in a terminal; the watch moves it when it is free" not in said
+   and "gave up waiting for shop-build-m1 to be idle" in said and LAST_EXTRA == {}, str((rc, said, LAST_EXTRA)))
+world(TREE, [row("idle", "aaaa0001", "crew-orchestrator", NEW), row("idle", "aaaa0002", "shop-build-m1", OLD),
+             row("idle", "aaaa0003", "shop-build-m2", NEW)])
+del sleeps[:]
+del launched[:]
+rc, said, _ = open_m1("--wait", "1", settings={"claude_update": False})
+ck("attached and quiet, the watch will not move it: still not restarted under the person's terminal", rc == 1
+   and "shop-build-m1" not in [x["station"] for x in launched]
+   and "gave up waiting for shop-build-m1 to be idle" in said, str((rc, said, launched)))
 os.environ.pop("FACTORY_UPDATE_POLL")
 
 print("crew update: the station running it, and two sessions")

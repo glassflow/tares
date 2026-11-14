@@ -11,6 +11,11 @@
       "type": "array",
       "items": {"type": "string"}
     },
+    "left_to_watch": {
+      "description": "`crew update` only, and only when it left stations out and another station failed: the same list as in result.json, so a caller still sees which stations were skipped.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "error": {
       "type": "object",
       "required": ["code", "message"],

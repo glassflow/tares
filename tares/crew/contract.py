@@ -72,10 +72,12 @@ def emit(obj: dict, schema: str = "") -> None:
     _write(line(document(obj)) + "\n")
 
 
-def error_document(code: str, message: str, notes=None) -> dict:
+def error_document(code: str, message: str, notes=None, extra=None) -> dict:
     obj = {"error": {"code": code, "message": message}}
     if notes:
         obj["notes"] = list(notes)
+    if extra:
+        obj.update(extra)
     return document(obj)
 
 
@@ -85,10 +87,10 @@ def fail(code: str, message: str, exit_code: int = EXIT_FAILED):
     raise SystemExit(exit_code)
 
 
-def refuse(e: CrewError, argv, *, notes=None) -> bool:
+def refuse(e: CrewError, argv, *, notes=None, extra=None) -> bool:
     """Print a CrewError as the error shape when the caller asked for JSON. True when it did, False when
     argv has no `--json` and the caller prints the text line itself."""
     if not wants_json(argv):
         return False
-    _write_quiet(line(error_document(getattr(e, "code", "error"), e.message, notes)) + "\n")
+    _write_quiet(line(error_document(getattr(e, "code", "error"), e.message, notes, extra)) + "\n")
     return True
