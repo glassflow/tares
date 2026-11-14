@@ -21,8 +21,8 @@ const LINK = "text-foreground! underline!";
 function Item({ d, open, to }: { d: ProjectDocLink; open: boolean; to: string }) {
   return (
     <Link to={to} data-testid="project-doc-link" aria-current={open ? "page" : undefined}
-          className={cn("flex min-w-0 items-baseline gap-2 border-l-[3px] border-transparent px-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-[var(--row-hover)]",
-                        open && "border-[color:var(--accent)] bg-muted font-semibold")}>
+          className={cn("flex min-w-0 items-baseline gap-2 pl-[17px] pr-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-[var(--row-hover)]",
+                        open && "shadow-[inset_3px_0_0_var(--accent)] bg-muted font-semibold")}>
       {d.ticket && <span className="shrink-0 font-mono text-xs font-medium">{d.ticket}</span>}
       <span className="min-w-0 truncate" title={d.title} data-user-text>{d.title}</span>
     </Link>
