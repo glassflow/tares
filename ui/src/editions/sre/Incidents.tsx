@@ -236,7 +236,7 @@ export default function Incidents() {
 
 const GROUP_TAG: Record<GroupState, { label: string; cls: string }> = {
   open: { label: "Open", cls: "border-[color:var(--danger-border)] bg-[var(--err-soft)] text-[color:var(--err)]" },
-  on_it: { label: "Someone on it", cls: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]" },
+  on_it: { label: "Someone on it", cls: "border-[color:var(--warn-border)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]" },
   resolved: { label: "Resolved", cls: "border-[color:var(--ok)] bg-[var(--ok-soft)] text-[color:var(--ok)]" },
   raised: { label: "Raised", cls: "border-border bg-transparent text-foreground" },
 };

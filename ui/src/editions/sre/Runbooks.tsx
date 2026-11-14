@@ -76,7 +76,7 @@ function ServicePicker({ services, current, pick }: { services: RunbookService[]
         >
           {services.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
         </select>
-        <span aria-hidden className="text-[11px] leading-none text-foreground">&#9662;</span>
+        <span aria-hidden className="text-[11px] leading-none text-foreground">{"▾"}</span>
       </span>
     </label>
   );

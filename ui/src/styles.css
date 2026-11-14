@@ -107,6 +107,8 @@
   --red-300: oklch(0.69 0.19 26);
   --blue-500: oklch(0.56 0.12 250);
   --blue-300: oklch(0.72 0.11 245);
+  --blue-700: oklch(0.467 0.089 250);   /* a person's mark (Sender) */
+  --violet-600: oklch(0.482 0.097 305); /* a person's mark (Sender) */
   --white: var(--kit-overlay);
 }
 
@@ -138,6 +140,7 @@
   --danger-border: color-mix(in srgb, var(--red-500) 30%, var(--kit-surface));
   --warn: var(--sand-700);
   --warn-soft: color-mix(in srgb, var(--kit-accent) 16%, var(--kit-surface));
+  --warn-border: color-mix(in srgb, var(--kit-accent) 45%, var(--kit-surface));
 
   /* structural neutrals — kit surface tiers */
   --hover: var(--kit-surface-secondary);
@@ -150,6 +153,15 @@
   --wash-2: color-mix(in srgb, var(--kit-foreground) 10%, transparent);
   --track: color-mix(in srgb, var(--ink-faint) 40%, transparent);   /* the unfilled part of a ring or meter: reads on any surface, quieter than its fills */
   --code-bg: var(--kit-surface-secondary);
+  /* a tool call's input and output on the Crew page: dark in both themes, coloured by codeColours.tsx */
+  --code-dark-bg: var(--brown-950);
+  --code-dark-ink: var(--bone-300);
+  /* a person's mark (initial in a square), chosen by name; the first follows the theme's ink */
+  --person-1: var(--ink);
+  --on-person-1: var(--panel);
+  --person-2: var(--blue-700);
+  --person-3: var(--violet-600);
+  --on-person: var(--white);
   --slate: var(--blue-500); /* structural tags (push mode, kind) */
   --slate-soft: color-mix(in srgb, var(--blue-500) 10%, var(--kit-surface));
 
@@ -193,6 +205,7 @@
   --danger-border: color-mix(in srgb, var(--red-300) 32%, var(--kit-dark-background));
   --warn: var(--sand-300);
   --warn-soft: color-mix(in srgb, var(--sand-300) 12%, var(--kit-dark-background));
+  --warn-border: color-mix(in srgb, var(--sand-300) 30%, var(--kit-dark-background));
 
   /* the kit's dark neutrals beyond these are zinc leftovers (held); warm-brown ramp stays */
   --hover: var(--kit-dark-default);

@@ -173,6 +173,8 @@ async function waitFor(url, tries = 100) {
     ck("the Calls link opens the calls page", (await T("calls-link").getAttribute("href")) === `/projects/${y}/calls`);
     await page.goto(`${BASE}/projects/${y}/calls`, { waitUntil: "load" });
     await page.getByTestId("calls-page").waitFor();
+    await checkPaper(page, ck, "calls page");
+    await shot(page, "calls-1440.png");
     ck("the calls page: crumb back to the project, To confirm first",
        (await T("crumb").getByRole("link", { name: "project-y" }).getAttribute("href")) === `/projects/${y}` && (await T("calls-open").count()) === 1);
     const calls = page.getByTestId("call-row");
@@ -219,6 +221,8 @@ async function waitFor(url, tries = 100) {
     ck("All 5 decisions opens the decisions page", (await T("decisions-all").getAttribute("href")) === `/projects/${y}/decisions`);
     await page.goto(`${BASE}/projects/${y}/decisions`, { waitUntil: "load" });
     await page.getByTestId("decisions-page").waitFor();
+    await checkPaper(page, ck, "decisions page");
+    await shot(page, "decisions-1440.png");
     ck("the decisions page lists all five, and says they are your answers, newest first",
        (await T("decision-row").count()) === 5 && /Your answers to the crew on project-y, newest first\./.test(await txt(T("decisions-page"))));
     await checkWords(page, ck, "project-y decisions page");

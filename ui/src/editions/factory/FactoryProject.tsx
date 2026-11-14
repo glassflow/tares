@@ -50,7 +50,7 @@ const ROW = "border-b border-border py-3 last:border-b-0";
 
 const CHIP: Record<ProjectPageState, string> = {
   waiting_on_you: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
-  building: "border-[#e3c777] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
+  building: "border-[color:var(--warn-border)] bg-[var(--warn-soft)] text-[color:var(--accent-deep)]",
   not_started: "border-border bg-muted text-muted-foreground",
   ready_to_close: "border-[color:var(--ok-border)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
   later: "border-border bg-muted text-muted-foreground",
@@ -670,9 +670,9 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
 /** One decision: the question, the answer chosen, the person's own words when they add something. */
 export function DecisionRow({ x, wide }: { x: FactoryProjectData["decisions"][number]; wide?: boolean }) {
   if (wide) {
-    // its own page: the question and when it was decided on one line, the answer below
+    // its own page: the question and when it was decided on one line, the answer below; rules between
     return (
-      <div className="px-5 py-4" data-testid="decision-row">
+      <div className="border-b border-border py-4 last:border-b-0" data-testid="decision-row">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
           <div className="min-w-0 text-[13px] text-muted-foreground [overflow-wrap:anywhere]" data-user-text>{x.question}</div>
           <div className={cn(MUTED, "whitespace-nowrap")}>{x.when}</div>

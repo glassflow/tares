@@ -15,7 +15,8 @@ import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type Proj
 const POLL_MS = 30000;
 const MUTED = "text-xs text-muted-foreground";
 const LINK = "text-foreground! underline!";
-const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
+// On the paper (TR-1266): a 1px rule over each repo, rules between its pull requests, no cards.
+const ROW = "border-b border-border py-4 last:border-b-0";
 
 
 /** "3 open, 12 merged, 1 closed without merging", leaving out what is none. */
@@ -32,7 +33,7 @@ function PrRow({ p }: { p: ProjectPr }) {
   if (p.review) facts.push(<span key="r">review {p.review}</span>);
   if (p.size) facts.push(<PrSize key="s" s={p.size} />);
   return (
-    <div className={cn(CARD, "px-5 py-4")} data-testid="pr-row" data-state={p.state} data-number={p.number ?? ""}>
+    <div className={ROW} data-testid="pr-row" data-state={p.state} data-number={p.number ?? ""}>
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5">
         <div className="flex min-w-0 flex-[1_1_320px] items-baseline gap-2.5">
           <span className="flex-none font-mono text-xs font-medium">{p.number ? `#${p.number}` : "PR"}</span>
@@ -61,7 +62,7 @@ function Repo({ r }: { r: ProjectRepoPrs }) {
   const changed = r.added || r.removed;
   return (
     <section aria-label={r.name ?? "Pull requests"} className="min-w-0" data-testid="pr-repo">
-      <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
         <h2 className="m-0! text-base! font-mono!">
           {r.url ? <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-foreground! no-underline! hover:underline!">{r.name} <span aria-hidden className="text-muted-foreground">{"↗"}</span></a>
             : (r.name ?? "Repo unknown")}
@@ -71,7 +72,7 @@ function Repo({ r }: { r: ProjectRepoPrs }) {
           {changed ? <>, merged <span className="text-[color:var(--ok)]">+{n(r.added)}</span> <span className="text-[color:var(--err)]">{"−"}{n(r.removed)}</span></> : null}
         </span>
       </div>
-      <div className="grid gap-3">{r.prs.map((p) => <PrRow key={p.url ?? `${p.ticket}`} p={p} />)}</div>
+      <div>{r.prs.map((p) => <PrRow key={p.url ?? `${p.ticket}`} p={p} />)}</div>
     </section>
   );
 }
@@ -116,7 +117,7 @@ export default function FactoryProjectGitHub() {
         )}
       </div>
       {data.repos.length === 0 ? (
-        <div className={cn(CARD, "px-5 py-4 text-muted-foreground")} data-testid="github-empty">
+        <div className="border-t border-border py-4 text-muted-foreground" data-testid="github-empty">
           No pull requests yet. Each one the crew opens for a ticket shows here.
         </div>
       ) : data.repos.map((r) => <Repo key={r.name ?? ""} r={r} />)}
