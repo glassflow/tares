@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { licenceWordsOn } from "../../cloud";
+import { licenceWordsOn, useCloud } from "../../cloud";
 import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
@@ -378,6 +378,9 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
   onCreate: (name: string, scope: string) => Promise<boolean>; onRevoke: (k: KeyRow) => void; onDismiss: () => void;
   notice?: string; working: string | null;
 }) {
+  // Not read: the call subscribes this section to /health, so the licence link below appears once a
+  // self-hosted cell answers (licenceWordsOn() alone is a snapshot; see cloud.ts).
+  useCloud();
   const [form, setForm] = React.useState(false);
   const [name, setName] = React.useState("");
   const [scope, setScope] = React.useState("read");
