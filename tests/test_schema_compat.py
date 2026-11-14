@@ -157,7 +157,11 @@ def main():
         ok += 1
     print(f"baseline {tag}: {ok} schema files compared, schema_version {old_version} -> {new_version}")
     if ok == 0 and not unreadable:
-        print(f"FAIL no schema files compared: {tag} lists none under {SCHEMAS}/ (was the folder moved?)")
+        for f, p, what in findings:   # what was found stays visible: a folder moved in the working tree says why
+            print(f"FAIL {f} {p}: {what}")
+        what = (f"lists {len(names)} under {SCHEMAS}/, none of them is in the working tree" if names
+                else f"lists none under {SCHEMAS}/")
+        print(f"FAIL no schema files compared: {tag} {what} (was the folder moved?)")
         return 1
     if not findings:
         if unreadable:

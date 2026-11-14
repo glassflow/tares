@@ -531,7 +531,11 @@ def sweep_case():
     c = quiet_one("res-order")
     seen = []
     real_handled = store.set_run_handled
-    store.set_run_handled = lambda *a, **k: (seen.append(state(c)), real_handled(*a, **k))[1]
+
+    def marking(*a, **k):
+        seen.append(state(c))
+        return real_handled(*a, **k)
+    store.set_run_handled = marking
     try:
         incidents.resolve(store, c, "u1", "Kim")
     finally:

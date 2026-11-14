@@ -86,6 +86,7 @@ class Fake(BaseHTTPRequestHandler):
         self._json(404, {})
 
     def do_POST(self):  # noqa: N802
+        WORLD["requests"].append(self.path)
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
         if self.path == "/exchange":
             if WORLD["exchange_status"] != 200:
@@ -101,6 +102,7 @@ class Fake(BaseHTTPRequestHandler):
         self._json(404, {})
 
     def do_DELETE(self):  # noqa: N802
+        WORLD["requests"].append(self.path)
         WORLD["calls"].append(("delete", (self.headers.get("Authorization") or "").removeprefix("Bearer ")))
         self._json(WORLD["delete_status"], {})
 
@@ -416,6 +418,38 @@ ck("os.dup(1) worked and os.dup2(2, 1) raised: the copy of fd 1 is closed", len(
 for fd in leaked:
     os.close(fd)
 
+print("a browser that is pointed at stderr and back leaks no descriptor either")
+dups, calls = [], []
+
+
+def dup2_ok(src, dst, *a, **k):
+    calls.append((src, dst))        # recorded, not done: the test's own stdout stays where it is
+
+
+os.dup, os.dup2, L.webbrowser.open = dup_spy, dup2_ok, lambda url, *a, **k: True
+try:
+    L._open_browser("http://127.0.0.1:1/", True)
+finally:
+    os.dup, os.dup2, L.webbrowser.open = real_dup, real_dup2, real_open_fn
+leaked = []
+for fd in dups:
+    try:
+        os.fstat(fd)
+        leaked.append(fd)
+    except OSError:
+        pass
+ck("success: fd 1 is pointed at stderr, then back, and the copy of it is closed",
+   len(dups) == 1 and calls == [(2, 1), (dups[0], 1)] and not leaked, (dups, calls, leaked))
+for fd in leaked:
+    os.close(fd)
+
+print("a bad address on the cell login")
+L._http = bad_url
+rc, out, err = guarded(L.connect_cell, BASE, "nvf_m3_key", json_out=True)
+L._http = real_http
+ck("InvalidURL while connecting to a cell: cell_unreachable, exit 1, no traceback", rc == 1
+   and err_code(out) == "cell_unreachable" and "Traceback" not in err, (rc, out, err))
+
 print("the crew key file notice goes to stderr with --json")
 crew = Path(HOME) / "crew-home"
 (crew / ".tares-token").mkdir(parents=True)      # a directory where the file goes: the write fails
@@ -462,6 +496,9 @@ try:
     ck("a cell login to another address: the new key is in the keychain and the old entry is gone", rc == 0
        and Mem.store.get((L.KEYRING_SERVICE, other)) == "nvf_m2_second"
        and (L.KEYRING_SERVICE, BASE) not in Mem.store, (rc, out, Mem.store))
+    rc, out, err = run(L.connect_cell, other, "nvf_m2_second", json_out=True)
+    ck("a cell login again to the same address keeps the key it just saved", rc == 0
+       and Mem.store.get((L.KEYRING_SERVICE, other)) == "nvf_m2_second", (rc, out, Mem.store))
     run(L.logout, json_out=True)
     os.environ["TARES_KEYRING"] = "off"
 except ImportError:

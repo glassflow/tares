@@ -239,7 +239,10 @@ async function waitFor(url, tries = 150) {
     // the order is the cell's own times, oldest first; sorting the shown HH:MM strings fails when the steps straddle midnight UTC (TR-1338)
     const inTimeOrder = async (rows) => {
       const want = [...(await api(incApi("open-a"))).evidence].sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
-      return rows.length === want.length && want.every((w, i) => rows[i].includes(w.text.slice(0, 20)));
+      // each row is tied to its own step by the shown time as well as the text: two steps that open alike (TR-1338)
+      const hhmm = (at) => new Date(Date.parse(at)).toISOString().slice(11, 16);   // the page's clock(), the context is UTC
+      return rows.length === want.length
+        && want.every((w, i) => rows[i].trim().startsWith(hhmm(w.at)) && rows[i].includes(w.text.slice(0, 20)));
     };
     ck("What it read lists 3 steps in time order", ev.length === 3 && (await inTimeOrder(ev)), JSON.stringify(evTimes));
     ck("the Slack section names the place and links nowhere without a link from Slack", /The note was posted in Slack\./.test(await txt(page.getByTestId("slack"))) && (await page.getByTestId("slack-link").count()) === 0, await txt(page.getByTestId("slack")));
