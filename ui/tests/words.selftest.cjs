@@ -126,10 +126,12 @@ ck("WORDS.md names the limits of the check",
 ck("WORDS.md says the static check reads .ts and .tsx files only",
   /static check[^]*reads[^]*`\.ts` and `\.tsx` files only/.test(fs.readFileSync(WORDS_MD, "utf8").replace(/\s+/g, " ")));
 
-// checkWords reads the page text; a stand-in page returns what a person would read.
-async function viaCheckWords(text) {
+// checkWords reads the page text; a stand-in page returns what a person would read. The type check
+// (type.cjs) is the evaluate that passes an argument; the stand-in answers it with `mono`, the
+// buttons, headings and sentences it found in mono or Doto.
+async function viaCheckWords(text, mono = []) {
   const results = [];
-  await checkWords({ evaluate: async () => text }, (l, c, d) => results.push([l, c, d]), "state");
+  await checkWords({ evaluate: async (fn, arg) => (arg ? mono : text) }, (l, c, d) => results.push([l, c, d]), "state");
   return results;
 }
 
@@ -174,11 +176,13 @@ async function viaExpectOneCall(requests, route = "/api/home") {
 
 (async () => {
   let r = await viaCheckWords("Your crew is idle.");
-  ck("checkWords: clean page passes both checks", r.length === 2 && r.every((x) => x[1]));
+  ck("checkWords: clean page passes all three checks", r.length === 3 && r.every((x) => x[1]));
   r = await viaCheckWords("3 runs today");
   ck("checkWords: an internal name fails the first check", r[0][1] === false && /runs/.test(r[0][2]));
   r = await viaCheckWords("a\u2014b");
   ck("checkWords: an em dash fails the second check", r[0][1] === true && r[1][1] === false);
+  r = await viaCheckWords("Your crew is idle.", ['button in mono: "Approve"']);
+  ck("checkWords: a mono button fails the type check", r[0][1] && r[1][1] && r[2][1] === false && /Approve/.test(r[2][2]), JSON.stringify(r[2]));
 
   let c = await viaExpectOneCall([req("GET", "/api/whoami"), req("GET", "/api/home?x=1")]);
   ck("expectOneCall: one read, whoami not counted, query ignored", same(c, [true, true]), JSON.stringify(c));

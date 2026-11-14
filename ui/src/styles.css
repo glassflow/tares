@@ -1,8 +1,9 @@
 /* Tares console — the GlassFlow design system, sourced from the HeroUI Kit V3
    Figma variables (TR-140): cream ground, eclipse ink, one Space Sand accent,
-   square corners, 1px hairlines, no shadows. Inter for sentences, Geist Mono
-   for labels, badges, table headers and code (the kit's mono role), Departure
-   Mono (the pixel voice) reserved for headline KPI numerals. All
+   square corners, 1px hairlines, no shadows. Inter for sentences, buttons and
+   headings; Geist Mono only for operational labels, table heads, state words,
+   ids and code; Doto (dot-matrix, the face Rius uses) only for headline
+   numerals (.impeccable.md, Type; TR-1251, TR-1270). All
    colors flow through semantic tokens, so [data-theme="dark"] re-skins the app
    onto the kit's dark anchors without touching component rules; the user's
    theme toggle survives. */
@@ -11,18 +12,12 @@
 @import "@fontsource/geist-mono";
 @import "@fontsource/geist-mono/500.css";
 @import "@fontsource/geist-mono/600.css";
-
-@font-face {
-  font-family: "Departure Mono";
-  src: url("/fonts/DepartureMono-Regular.woff2") format("woff2");
-  font-weight: 400;
-  font-display: swap;
-}
+@import "@fontsource-variable/doto";
 
 @theme {
   --font-sans: "Inter Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono-jb: "Geist Mono", ui-monospace, SFMono-Regular, monospace;
-  --font-pixel: "Departure Mono", ui-monospace, monospace;
+  --font-pixel: "Doto Variable", ui-monospace, monospace;
 }
 
 /* ── HeroUI Kit V3 (GlassFlow) variables — the single source of truth (TR-140) ──
@@ -825,7 +820,7 @@ button:focus-visible, .btn:focus-visible, .navlink:focus-visible, .navbtn:focus-
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin-bottom: 18px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 0; padding: 12px 16px; }
 .card .k { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; font-variant-ligatures: none; color: var(--ink-faint); font-weight: 400; }
-.card .v { font-family: var(--pixel); font-variant-ligatures: none; font-variant-numeric: tabular-nums; font-size: 22px; margin-top: 4px; }
+.card .v { font-family: var(--pixel); font-weight: 900; font-variant-ligatures: none; font-variant-numeric: tabular-nums; font-size: 22px; margin-top: 4px; }
 .card .v small { font-size: 11px; font-family: var(--mono); color: var(--ink-faint); }
 
 .alert { padding: 10px 14px; border-radius: 0; margin-bottom: 14px; font-size: 13px; background: var(--th-bg); color: var(--ink-soft); border: 1px solid var(--line); }

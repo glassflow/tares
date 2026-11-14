@@ -15,6 +15,7 @@ const path = require("path");
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
+const { checkType } = require("./type.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8831);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -75,6 +76,22 @@ async function checkStates(page) {
   ck("an empty state with a title is a block with a heading", got.block && got.block.kind === "block" && got.block.heading, JSON.stringify(got.block));
   ck("an empty state without a title is one line in the voice, no heading", got.line && got.line.kind === "line" && !got.line.heading && /yet\./.test(got.line.words),
      JSON.stringify(got.line));
+}
+
+// TR-1270: a headline numeral is Doto, the face Rius uses, in both themes; its label is Geist Mono. Departure
+// Mono is gone: no font face of that name is left for the page to load.
+async function checkNumerals(page, theme) {
+  const got = await page.evaluate(async () => {
+    const stat = document.querySelector("[data-testid=stat]");
+    const [label, value] = stat ? [...stat.children] : [];
+    const loaded = await document.fonts.load('900 26px "Doto Variable"', "0123456789");
+    return { value: value && getComputedStyle(value).fontFamily, weight: value && getComputedStyle(value).fontWeight,
+             label: label && getComputedStyle(label).fontFamily, doto: loaded.length,
+             departure: [...document.fonts].filter((f) => /departure/i.test(f.family)).length };
+  });
+  ck(`${theme}: a Stat value is set in Doto, black, and the face loads`, /^"?Doto Variable/.test(got.value || "") && got.weight === "900" && got.doto > 0, JSON.stringify(got));
+  ck(`${theme}: a Stat label is Geist Mono`, /^"?Geist Mono/.test(got.label || ""), JSON.stringify(got));
+  ck(`${theme}: no Departure Mono face is left`, got.departure === 0, JSON.stringify(got));
 }
 
 const ck = (label, cond, detail = "") => {
@@ -230,6 +247,8 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     ck("no horizontal scroll at 1440px", (await wide()) <= 0, `${await wide()}px`);
     await checkStatuses(page, "light");
     await checkStates(page);
+    await checkNumerals(page, "light");
+    await checkType(page, ck, "light");
     await page.getByTestId("theme-light").click();
     await shot("gallery-light.png");
 
@@ -239,6 +258,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
     ck("the page background changes with the theme", (await page.evaluate(() => getComputedStyle(document.body).backgroundColor)) !== "rgb(255, 255, 255)");
     await shot("gallery-dark.png");
     await checkStatuses(page, "dark");
+    await checkNumerals(page, "dark");
 
     await page.setViewportSize({ width: 390, height: 844 });
     await open();
