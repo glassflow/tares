@@ -43,9 +43,10 @@ const STEPS = ["Spec", "Build", "Review", "Done"];
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
 const LINK = "text-foreground! underline!";
-const CARD = "border border-border bg-card";
+/** A section's body sits on the paper (TR-1274): the rule over its head and the rules between rows carry it. */
+const CARD = "min-w-0";
 const SECTION_H = "m-0! text-base!";
-const ROW = "border-b border-border px-4 py-3 last:border-b-0";
+const ROW = "border-b border-border py-3 last:border-b-0";
 
 const CHIP: Record<ProjectPageState, string> = {
   waiting_on_you: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
@@ -85,7 +86,7 @@ function readyRow(d: FactoryProjectData): HomeItem {
 
 function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode }) {
   return (
-    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+    <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-border pt-3">
       <h2 className={SECTION_H}>{title}</h2>
       {aside}
     </div>
@@ -93,7 +94,7 @@ function SectionHead({ title, aside }: { title: string; aside?: React.ReactNode 
 }
 
 const Empty = ({ children, testid }: { children: React.ReactNode; testid: string }) => (
-  <div className={cn(CARD, "px-4 py-5 text-muted-foreground")} data-testid={testid}>{children}</div>
+  <div className={cn(CARD, "py-2 text-muted-foreground")} data-testid={testid}>{children}</div>
 );
 
 // ── the header ────────────────────────────────────────────────────────────────
@@ -243,18 +244,18 @@ function Waiting({ items, onClose, onKeep, onAllow }: {
         <>
           {arrows && <div className={cn(MUTED, "-mt-1 mb-2")}>Buttons with an arrow open Home, where they are done.</div>}
           <div className={CARD}>
-            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" />}
+            {g.now.length > 0 && <GroupHead title="The crew is waiting on you" testid="waiting-now" flush />}
             {g.now.map(row)}
-            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" />}
+            {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}
             {more > 0 && (
-              <div className="border-t border-border px-4 py-2.5">
+              <div className="border-t border-border py-2.5">
                 <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => setAll(true)} data-testid="waiting-more">
                   Show {more} more
                 </Button>
               </div>
             )}
-            <OlderFold items={g.older}>{(older) => older.map(row)}</OlderFold>
+            <OlderFold items={g.older} className="px-0">{(older) => older.map(row)}</OlderFold>
           </div>
         </>
       )}
@@ -268,7 +269,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
   const sub = [t.who, t.review].filter(Boolean).join(" · ");
   return (
     <Link to={t.href} data-testid="moving-row" data-ref={t.ref}
-          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border px-3.5 py-3 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px] md:px-4">
+          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
       <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{t.ref}</span>
       <span className="min-w-0">
         <span className="line-clamp-2 block font-semibold [overflow-wrap:anywhere]" data-user-text>{t.title}</span>
@@ -343,10 +344,10 @@ function Moving({ d }: { d: FactoryProjectData }) {
   );
   let body: React.ReactNode;
   if (total === 0) {
-    body = <div className="px-4 py-5 text-muted-foreground" data-testid="moving-empty">No tickets yet. They show here once the crew has planned the build.</div>;
+    body = <div className="py-2 text-muted-foreground" data-testid="moving-empty">No tickets yet. They show here once the crew has planned the build.</div>;
   } else if (d.moving.length === 0) {
     body = (
-      <div className="px-4 py-5 text-muted-foreground" data-testid="moving-empty">
+      <div className="py-2 text-muted-foreground" data-testid="moving-empty">
         {merged === live ? `Nothing is moving. All ${live} tickets are merged.` : "Nothing is moving right now."}
       </div>
     );
@@ -355,7 +356,7 @@ function Moving({ d }: { d: FactoryProjectData }) {
       <>
         {d.moving.map((t) => <TicketRow key={t.ref} t={t} />)}
         {rest > 0 && (
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border px-4 py-2.5 text-[13px]" data-testid="moving-more">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-border py-2.5 text-[13px]" data-testid="moving-more">
             <span>{rest} more {rest === 1 ? "ticket is" : "tickets are"} moving.</span>
             <Link to={d.tickets_href} className={LINK} data-testid="all-tickets-more">All {total} tickets {"›"}</Link>
           </div>
@@ -375,9 +376,9 @@ function Moving({ d }: { d: FactoryProjectData }) {
         {body}
         {d.next && (
           <>
-            <div className="border-y border-border bg-muted px-4 py-2 text-xs font-semibold text-muted-foreground">Next up</div>
+            <div className="border-t border-border pb-1 pt-4 text-xs font-semibold text-muted-foreground">Next up</div>
             <Link to={`/projects/${encodeURIComponent(d.id)}/tickets/${encodeURIComponent(d.next.ticket)}`} data-testid="next-up"
-                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 px-3.5 py-3 text-foreground! no-underline! hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_14px] md:px-4">
+                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 py-3 text-foreground! no-underline! hover:bg-[var(--row-hover)] md:grid-cols-[48px_minmax(0,1fr)_14px]">
               <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{d.next.ticket}</span>
               <span className="min-w-0">
                 <span className="block font-semibold [overflow-wrap:anywhere]" data-user-text>{d.next.title}</span>
@@ -589,7 +590,7 @@ function People({ people, onLead, onAdd }: {
   return (
     <section id="people" aria-label="People" className="min-w-0 scroll-mt-4" data-testid="project-people">
       <SectionHead title="People" />
-      <div className={cn(CARD, "px-4 py-3")}>
+      <div className={CARD}>
         <div className={cn(MUTED, "mb-0.5")}>Lead</div>
         {lead ? (
           <PersonLine p={lead}>
@@ -723,7 +724,7 @@ function Docs({ id, items, total }: { id: string; items: FactoryProjectData["doc
         <div className={CARD}>
           {items.map((x) => (
             <Link key={x.id} to={x.href} data-testid="doc-row"
-                  className="flex flex-col gap-px border-b border-border px-4 py-2.5 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)]">
+                  className="flex flex-col gap-px border-b border-border py-2.5 text-foreground! no-underline! last:border-b-0 hover:bg-[var(--row-hover)]">
               <span className="font-semibold">{x.kind_label}</span>
               <span className={MUTED}>Updated {x.updated}</span>
             </Link>
@@ -766,7 +767,7 @@ function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
       {!first ? (
         <Empty testid="terminal-empty">No builder is working on this project now. The command that opens its session shows here when one is.</Empty>
       ) : (
-        <div className={cn(CARD, "p-4")}>
+        <div className={CARD}>
           <Command label={first.label} command={first.command} />
           {rest.length > 0 && (
             <details className="mt-2.5 border-t border-border pt-2" data-testid="terminal-more">
@@ -795,9 +796,9 @@ export function Crumb({ name }: { name?: string }) {
 
 function Loading() {
   const block = (n: number) => (
-    <div className="grid gap-2.5">
+    <div className="grid gap-2.5 border-t border-border pt-3">
       <Skeleton width={180} height={16} />
-      <div className={cn(CARD, "grid gap-2.5 p-4")}>
+      <div className={cn(CARD, "grid gap-2.5")}>
         {Array.from({ length: n }, (_, i) => <Skeleton key={i} width={`${[90, 70, 80, 60][i % 4]}%`} />)}
       </div>
     </div>

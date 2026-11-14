@@ -22,7 +22,6 @@ export interface SecretsDoc { enabled: boolean; off: string; secrets: SecretRow[
 
 const NAME_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const MUTED = "text-xs text-muted-foreground";
-const CARD = "border border-border bg-card";
 
 function ago(at: string | null): string {
   if (!at) return "";
@@ -95,8 +94,10 @@ export function ProjectSecrets({ project, initial }: { project: string; initial:
 
   return (
     <section id="secrets" aria-label="Secrets" className="min-w-0 scroll-mt-4" data-testid="project-secrets">
-      <h2 className="m-0! mb-2 text-base!">Secrets</h2>
-      <div className={cn(CARD, "px-4 py-3")}>
+      <div className="mb-2 border-t border-border pt-3">
+        <h2 className="m-0! text-base!">Secrets</h2>
+      </div>
+      <div className="min-w-0">
         {!doc.enabled && <div className="text-[13px]" data-testid="secrets-off">{doc.off}</div>}
         {doc.enabled && (
           <>

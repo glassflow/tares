@@ -9,9 +9,14 @@
 async function checkPaper(page, ck, label, { skip = "", root = "main" } = {}) {
   const r = await page.evaluate(({ skip, root }) => {
     const out = (e) => skip && e.closest(skip);
+    // The rule sits on the heading's row or on its own section, whichever wraps it first. The walk
+    // stops at the section, so a rule further out (on main, say) never counts for a heading.
+    const ruled = (e) => { const cs = getComputedStyle(e); return cs.borderTopWidth === "1px" && cs.borderTopStyle === "solid"; };
     const heads = [...document.querySelectorAll(`${root} h2`)].filter((h) => !out(h)).map((h) => {
-      const cs = getComputedStyle(h.parentElement);
-      return { t: h.textContent.trim(), ok: cs.borderTopWidth === "1px" && cs.borderTopStyle === "solid" };
+      const stop = h.closest("section");
+      let ok = false;
+      for (let e = h.parentElement; e && !ok; e = e === stop ? null : e.parentElement) { ok = ruled(e); if (!stop) break; }
+      return { t: h.textContent.trim(), ok };
     });
     const exempt = "button, a, input, textarea, pre, code, kbd, [role=dialog], [role=progressbar], [role=alert], [role=status]";
     const boxes = [...document.querySelectorAll(`${root} *`)].filter((e) => {
