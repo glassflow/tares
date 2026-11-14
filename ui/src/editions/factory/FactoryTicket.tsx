@@ -4,7 +4,9 @@ import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { ApiError } from "../../api";
-import { Banner, Button, Skeleton, StatusDot, StatusLabel, STATUS_TONES, toneOf, type Tone } from "../../components/edition";
+import {
+  Banner, Button, EmptyState, Loading, Skeleton, STATUS_TONES, StatusDot, StatusLabel, toneOf, type Tone,
+} from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
@@ -106,7 +108,7 @@ function Reviews({ items }: { items: TicketReview[] }) {
   const hidden = sorted.length - shown.length;
   return (
     <Section id="reviews" title="Reviews" aside={items.length > 0 ? plural(items.length, "round", "rounds") : undefined}>
-      {items.length === 0 ? <span className={NONE} data-testid="reviews-empty">No review yet</span> : (
+      {items.length === 0 ? <EmptyState className="py-0" data-testid="reviews-empty">No review yet</EmptyState> : (
         <>
           {shown.map((r, i) => <Round key={r.round} r={r} startOpen={i === 0 || sorted.length <= SHOW_ROUNDS} />)}
           {hidden > 0 && (
@@ -137,7 +139,7 @@ function Checks({ items }: { items: FactoryTicketData["checks"] }) {
   const hidden = items.length - shown.length;
   return (
     <Section id="checks" title="Checks" aside={items.length > 0 ? `${items.length} ran` : undefined}>
-      {items.length === 0 ? <span className={NONE} data-testid="checks-empty">No checks yet</span> : (
+      {items.length === 0 ? <EmptyState className="py-0" data-testid="checks-empty">No checks yet</EmptyState> : (
         <>
           <div className="flex flex-col">
             {shown.map((c, i) => (
@@ -173,7 +175,7 @@ function Calls({ d }: { d: FactoryTicketData }) {
   const none = d.calls.length === 0 && d.decisions.length === 0;
   return (
     <Section id="calls" title="Calls and decisions">
-      {none ? <span className={NONE} data-testid="calls-empty">No calls or decisions on this ticket</span> : (
+      {none ? <EmptyState className="py-0" data-testid="calls-empty">No calls or decisions on this ticket</EmptyState> : (
         <>
           {d.calls.length > 0 && (
             <>
@@ -206,7 +208,7 @@ function History({ items }: { items: FactoryTicketData["history"] }) {
   const hidden = items.length - shown.length;
   return (
     <Section id="history" title="History" aside={items.length > 0 ? plural(items.length, "line", "lines") : undefined}>
-      {items.length === 0 ? <span className={NONE} data-testid="history-empty">Nothing has happened yet</span> : (
+      {items.length === 0 ? <EmptyState className="py-0" data-testid="history-empty">Nothing has happened yet</EmptyState> : (
         <>
           <div className="flex flex-col">
             {shown.map((h, i) => (
@@ -244,7 +246,7 @@ function Notes({ text }: { text: string }) {
   const open = whole || !long;
   return (
     <Section id="notes" title="Working notes" aside={lines > 0 ? `${lines.toLocaleString("en-US")} ${lines === 1 ? "line" : "lines"}` : undefined}>
-      {!text ? <span className={NONE} data-testid="notes-empty">Nothing noted yet</span> : (
+      {!text ? <EmptyState className="py-0" data-testid="notes-empty">Nothing noted yet</EmptyState> : (
         <>
           <div className="min-w-0 text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>
             <div className={cn("md [&_:is(h1,h2,h3,h4)]:mt-3.5! [&_:is(h1,h2,h3,h4)]:mb-1! [&_:is(h1,h2,h3,h4)]:text-[14px]! [&_:is(h1,h2,h3,h4):first-child]:mt-0!", !open && "max-h-[460px] overflow-auto")} data-words-exempt data-testid="notes-text">
@@ -363,10 +365,10 @@ function Back({ href, name, icon }: { href: string; name?: string; icon?: string
   );
 }
 
-function Loading({ href }: { href: string }) {
+function TicketSkeleton({ href }: { href: string }) {
   const bars = (n: number) => Array.from({ length: n }, (_, i) => <Skeleton key={i} width={`${[90, 70, 80][i % 3]}%`} className="mb-2" />);
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" data-testid="ticket-loading" className="grid min-w-0 gap-4">
+    <Loading data-testid="ticket-loading" className="grid min-w-0 gap-4">
       <Back href={href} />
       <div className="grid gap-2.5">
         <div className="flex gap-2.5"><Skeleton width={60} height={22} /><Skeleton width={110} height={22} /></div>
@@ -384,7 +386,7 @@ function Loading({ href }: { href: string }) {
         </div>
         <div className="border-t border-border pt-3 max-xl:order-first">{bars(5)}</div>
       </div>
-    </div>
+    </Loading>
   );
 }
 
@@ -421,7 +423,7 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
         </div>
       );
     }
-    return <Loading href={projectHref} />;
+    return <TicketSkeleton href={projectHref} />;
   }
 
   const ms = d.milestone;

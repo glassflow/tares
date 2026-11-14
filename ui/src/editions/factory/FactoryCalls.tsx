@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { Banner, Button, Skeleton, Toaster, useToast } from "../../components/edition";
+import { Banner, Button, EmptyState, Skeleton, Toaster, useToast } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { decideCall, factoryProject, type FactoryProjectData, type PastCall, type ProjectCall } from "./FactoryProject.api";
@@ -85,7 +85,7 @@ export default function FactoryCalls() {
       <section className="min-w-0" aria-label="To confirm" data-testid="calls-open">
         <div className={HEAD}><h2 className="m-0! text-base! font-semibold!">To confirm</h2></div>
         {open.length === 0 ? (
-          <div className="py-2 text-muted-foreground" data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</div>
+          <EmptyState data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</EmptyState>
         ) : <div>{open.map((c) => <CallRow key={c.ref} c={c} onDecide={decide} />)}</div>}
       </section>
       {past.length > 0 && (

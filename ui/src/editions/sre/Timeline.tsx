@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, EmptyState, Input, Skeleton } from "../../components/edition";
+import { Banner, Button, EmptyState, Input, Loading, Skeleton } from "../../components/edition";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -234,15 +234,15 @@ function Row({ item, first, lines, onOpen, onMore, onHide }: {
   );
 }
 
-function Loading() {
+function TimelineSkeleton() {
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card" data-testid="timeline-loading">
+    <Loading className="border border-border bg-card" data-testid="timeline-loading">
       {[0, 1, 2, 3, 4, 5].map((i) => (
         <div key={i} className={cn("grid gap-2 px-3.5 py-[11px] md:px-[18px]", i > 0 && "border-t border-border")}>
           <Skeleton width="40%" height={14} /><Skeleton width="40%" height={14} /><Skeleton width="70%" height={14} />
         </div>
       ))}
-    </div>
+    </Loading>
   );
 }
 
@@ -483,7 +483,7 @@ export default function Timeline() {
         </Banner>
       )}
 
-      {!fresh && !showError && <Loading />}
+      {!fresh && !showError && <TimelineSkeleton />}
 
       {fresh && items.length === 0 && (
         <EmptyState title={narrowed ? "Nothing to show" : "Nothing arrived"} data-testid="timeline-empty"

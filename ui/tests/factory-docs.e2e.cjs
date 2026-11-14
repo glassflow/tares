@@ -325,7 +325,7 @@ async function waitFor(url, tries = 100) {
         if (name === "load") ck(`${tag}: it is the loading state, no document`, (await p.getByTestId("doc-pane").count()) === 0 && (await p.getByTestId("docs-loading").isVisible()));
         if (name === "err") ck(`${tag}: it says the documents did not load and offers Retry`, /Documents did not load\./.test(text)
            && (await p.getByRole("button", { name: "Retry" }).count()) === 1 && (await p.getByTestId("doc-pane").count()) === 0, text);
-        if (name === "empty") ck(`${tag}: it says nothing is written yet`, /Nothing written yet\./.test(text) && (await p.getByTestId("doc-pane").count()) === 0, text);
+        if (name === "empty") ck(`${tag}: it says nothing is written yet`, /Nothing written yet\n/.test(text) && (await p.getByTestId("doc-pane").count()) === 0, text);
         if (name === "busy") ck(`${tag}: the shared rules, with their lines`, (await p.getByTestId("doc-title").innerText()) === "Rules for every project" && (await p.getByTestId("doc-row").count()) >= 5);
         if (name === "plan") ck(`${tag}: a plan, read only`, (await p.getByTestId("doc-title").innerText()) === "Plan: project-x" && (await p.getByTestId("doc-add").count()) === 0);
         if (name === "pmem" || name === "long") ck(`${tag}: a project memory with who and when`, /^the Builder, 3 days ago$/m.test((await p.getByTestId("doc-row-by").allInnerTexts()).join("\n")), "");

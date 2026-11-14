@@ -2,7 +2,7 @@ import * as React from "react";
 
 import { api, ApiError } from "../../api";
 import LicenceNeeded from "../../components/LicenceNeeded";
-import { Banner, Button, Initials, Input, ListRow, ListSection, Skeleton, StatusDot } from "../../components/edition";
+import { Banner, Button, Initials, Input, ListRow, ListSection, LoadingBlocks, StatusDot } from "../../components/edition";
 import { EE_FAILED_WORDS, LICENCE_NO_ANSWER_WORDS, Slot, useEeFailed, useEePending, useLicenceNoAnswer } from "../../eeSlots";
 import { cn } from "../../lib/utils";
 import { useEdition } from "../edition";
@@ -79,13 +79,6 @@ function Row({ p, canSetPicture, onChanged }: { p: PersonRow; canSetPicture: boo
   );
 }
 
-function Loading() {
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card p-4" data-testid="people-loading">
-      {[0, 1, 2].map((i) => <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="40%" /><Skeleton width="25%" /></div>)}
-    </div>
-  );
-}
 
 export function FactoryPeopleView({ data, onAdded, note, onPeopleChanged = () => {} }: {
   data: FactoryPeopleData; onAdded: (words: string) => void; note: string;
@@ -126,7 +119,7 @@ export default function FactoryPeople() {
       <b>People did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );
-  if (!data) return <PeopleHead>{banner || <Loading />}</PeopleHead>;
+  if (!data) return <PeopleHead>{banner || <LoadingBlocks data-testid="people-loading" widths={["40%", "25%"]} />}</PeopleHead>;
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}

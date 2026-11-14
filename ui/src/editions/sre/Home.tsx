@@ -5,7 +5,7 @@ import { ApiError } from "../../api";
 import { useEdition } from "../edition";
 
 import {
-  Banner, Button, EmptyState, ListSection, ServiceRows, Skeleton, type ServiceRowItem,
+  Banner, Button, EmptyState, ListSection, Loading, ServiceRows, Skeleton, SkeletonLines, type ServiceRowItem,
 } from "../../components/edition";
 import { StartChecklist, StartChecklistHidden, StartChecklistLoading } from "../StartChecklist";
 import { useSample } from "../sample";
@@ -82,21 +82,21 @@ function Head({ title, sub }: { title: React.ReactNode; sub?: string }) {
   );
 }
 
-function Loading() {
+function HomeSkeleton() {
   // What loads: a rule and rows, as the sections are (TR-1274).
   const box = (rows: number, key: string) => (
     <div key={key} className="border-t border-border pt-3">
       {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="28%" /><Skeleton width="60%" /><Skeleton width="42%" /></div>
+        <SkeletonLines key={i} widths={["28%", "60%", "42%"]} className="pb-4 pt-1" />
       ))}
     </div>
   );
   return (
-    <div className="grid gap-6 md:gap-8" role="status" aria-busy="true" aria-label="Loading" data-testid="home-loading">
+    <Loading className="grid gap-6 md:gap-8" data-testid="home-loading">
       <StartChecklistLoading title={START_TITLE} />
       <div className="grid gap-2"><Skeleton width="40%" height={28} /><Skeleton width="60%" height={14} /></div>
       <Columns main={[box(3, "a"), box(3, "b")]} aside={[box(2, "c"), box(1, "d")]} />
-    </div>
+    </Loading>
   );
 }
 
@@ -218,7 +218,7 @@ export default function Home() {
     </Banner>
   );
 
-  if (!home) return banner ? <div className="grid gap-6" data-testid="sre-home">{banner}</div> : <div data-testid="sre-home"><Loading /></div>;
+  if (!home) return banner ? <div className="grid gap-6" data-testid="sre-home">{banner}</div> : <div data-testid="sre-home"><HomeSkeleton /></div>;
 
   const canAct = home.can_act !== false;
   const isNew = home.headline.tone === "new";

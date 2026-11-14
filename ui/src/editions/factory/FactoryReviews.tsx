@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
-import { Banner, Button, ListRow, ListSection, Skeleton, StatusDot, STATUS_TONES } from "../../components/edition";
+import { Banner, Button, ListRow, ListSection, LoadingBlocks, STATUS_TONES, StatusDot } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { useSample } from "../sample";
@@ -62,15 +62,6 @@ function Row({ r }: { r: ReviewRow }) {
   );
 }
 
-function Loading() {
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card p-4" data-testid="reviews-loading">
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="55%" /><Skeleton width="35%" /><Skeleton width="70%" /></div>
-      ))}
-    </div>
-  );
-}
 
 /** The lists for one read of the cell. `unknown` is a project in the address the cell does not know. */
 export function FactoryReviewsView({ data, unknown = false }: { data: FactoryReviewsData; unknown?: boolean }) {
@@ -134,7 +125,7 @@ function Reviews({ project }: { project: string }) {
       <b>Reviews did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );
-  if (!data) return <ReviewsHead>{banner || <Loading />}</ReviewsHead>;
+  if (!data) return <ReviewsHead>{banner || <LoadingBlocks data-testid="reviews-loading" widths={["55%", "35%", "70%"]} />}</ReviewsHead>;
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}

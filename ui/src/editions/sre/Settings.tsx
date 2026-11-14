@@ -3,7 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 
 import { ApiError } from "../../api";
 import { licenceWordsOn, useCloud } from "../../cloud";
-import { Banner, Button, Dialog, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
+import { Banner, Button, Dialog, EmptyState, Loading, Skeleton, StatusLabel, Toaster, useToast, type Tone } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { cn } from "../../lib/utils";
@@ -324,10 +324,9 @@ function ToolsSection({ tools, can }: { tools: SreSettings["tools"]; can: boolea
   return (
     <Sec id="tools" title={tools.title} sub={SUBTITLE.tools}>
       {empty ? (
-        <div className="border-b border-border px-4 py-6 text-center md:px-[18px]" data-testid="tools-empty">
-          <b className="block text-[15px]">Nothing connected yet</b>
-          <span className="text-sm text-muted-foreground">Add what the watcher should look at: logs, metrics, alerts, deploys.</span>
-        </div>
+        <EmptyState title="Nothing connected yet" className="border-b border-border py-6" data-testid="tools-empty">
+          Add what the watcher should look at: logs, metrics, alerts, deploys.
+        </EmptyState>
       ) : (
         <div className="max-h-[330px] overflow-y-auto" data-testid="tools-scroll">
           {tools.rows.map((r) => (
@@ -411,7 +410,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
       )}
       {notice && <div className="border-b border-border px-4 py-2.5 text-[13px] text-[color:var(--err)] md:px-[18px]" role="alert" data-testid="people-notice">{notice}</div>}
       {people.keys.length === 0 ? (
-        <p className="m-0 border-b border-border px-4 py-3.5 text-sm text-muted-foreground md:px-[18px]" data-testid="keys-empty">{people.empty_words}</p>
+        <EmptyState className="border-b border-border px-4 py-3.5 md:px-[18px]" data-testid="keys-empty">{people.empty_words}</EmptyState>
       ) : (
         <div className="max-h-[330px] overflow-y-auto" data-testid="keys-scroll">
           {people.keys.map((k) => <KeyLine key={k.id ?? k.name} k={k} can={editable} busy={working === k.id} onRevoke={onRevoke} />)}
@@ -499,9 +498,9 @@ function Head({ sub }: { sub?: boolean }) {
   );
 }
 
-function Loading() {
+function SettingsSkeleton() {
   return (
-    <div className="grid gap-6" data-testid="settings-loading" role="status" aria-busy="true" aria-label="Loading">
+    <Loading className="grid gap-6" data-testid="settings-loading">
       {[0, 1, 2].map((i) => (
         <div key={i} className="border border-border bg-card">
           <div className="border-b border-border px-4 py-3.5"><Skeleton width="30%" height={14} /></div>
@@ -512,7 +511,7 @@ function Loading() {
           ))}
         </div>
       ))}
-    </div>
+    </Loading>
   );
 }
 
@@ -696,7 +695,7 @@ function Settings() {
     return (
       <div className="grid gap-6" data-testid="sre-settings">
         <Head />
-        {banner || <Loading />}
+        {banner || <SettingsSkeleton />}
       </div>
     );
   }

@@ -279,7 +279,7 @@ const today = () => {
           if (name === "busy") {
             ck("busy: Open lists four, with the link to four finished", (await at.count()) === 4 && (await p.getByTestId("show-finished").innerText()).trim() === "Show 4 finished");
           } else if (name === "empty") {
-            ck("empty: one sentence and New project", (await p.getByTestId("projects-empty").innerText()).replace(/\s+/g, " ").trim() === "No projects yet. Start one and hand it to the crew. New project"
+            ck("empty: a title, one sentence and New project", (await p.getByTestId("projects-empty").innerText()).replace(/\s+/g, " ").trim() === "No projects yet Start one and hand it to the crew. New project"
                && (await p.getByTestId("projects-search").count()) === 0 && (await p.getByRole("tab").count()) === 0);
           } else if (name === "many") {
             ck("many: 60 projects, 50 of them open", (await at.count()) === 50 && (await counts2(p))[7] === "60", String(await at.count()));

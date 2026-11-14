@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, ProgressBar, Skeleton, StatusLabel, STATUS_TONES } from "../../components/edition";
+import { Banner, Button, Dialog, EmptyState, LoadingBlocks, ProgressBar, STATUS_TONES, StatusLabel } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { cn } from "../../lib/utils";
@@ -80,15 +80,6 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
   );
 }
 
-function Loading() {
-  return (
-    <div role="status" aria-busy="true" aria-label="Loading" className="border border-border bg-card p-4" data-testid="projects-loading">
-      {[0, 1, 2].map((i) => (
-        <div key={i} className="grid gap-2 pb-4 pt-1"><Skeleton width="30%" /><Skeleton width="75%" /><Skeleton width="50%" /></div>
-      ))}
-    </div>
-  );
-}
 
 const NewProject = ({ amber = true }: { amber?: boolean }) => (
   <Button asChild variant={amber ? "primary" : "secondary"}>
@@ -146,10 +137,9 @@ export function FactoryProjectsView({ data, onClose, start }: {
   return (
     <ProjectsHead>
       {empty ? (
-        <div className="border border-border bg-card px-4 py-7 text-muted-foreground" data-testid="projects-empty">
-          No projects yet. Start one and hand it to the crew.
-          <div className="mt-3"><NewProject /></div>
-        </div>
+        <EmptyState title="No projects yet" action={<NewProject />} className="border border-border bg-card" data-testid="projects-empty">
+          Start one and hand it to the crew.
+        </EmptyState>
       ) : (
         <div className="grid gap-4">
           <Input aria-label="Search projects" placeholder="Search by name or goal" value={query} data-testid="projects-search"
@@ -221,7 +211,7 @@ export default function FactoryProjects() {
       <b>Projects did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
     </Banner>
   );
-  if (!shown) return <ProjectsHead>{banner || <Loading />}</ProjectsHead>;
+  if (!shown) return <ProjectsHead>{banner || <LoadingBlocks data-testid="projects-loading" />}</ProjectsHead>;
   return (
     <>
       {banner && <div className="mb-6">{banner}</div>}

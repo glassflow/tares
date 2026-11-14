@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Banner, Button, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
+import { Banner, Button, LoadingBlocks, ProgressBar, Skeleton, StatusDot, toneOf } from "../../components/edition";
 import { ApiError } from "../../api";
 import { cn } from "@/lib/utils";
 import { usePagePolling } from "../usePagePolling";
@@ -393,15 +393,6 @@ function Plan({ plan }: { plan: CrewPage["plan"] }) {
   );
 }
 
-function Loading() {
-  return (
-    <div className={cn(CARD, "grid gap-4 p-4")} role="status" aria-busy="true" aria-label="Loading" data-testid="crew-loading">
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} className="grid gap-2"><Skeleton width="60%" /><Skeleton width="40%" /><Skeleton width="75%" /></div>
-      ))}
-    </div>
-  );
-}
 
 export function FactoryCrewView({ data, error, reload, actions }: {
   data: CrewPage | undefined; error: string | undefined; reload: () => void; actions: CrewActions;
@@ -419,7 +410,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
           <b>The crew did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
         </Banner>
       )}
-      {!data && !error && <Loading />}
+      {!data && !error && <LoadingBlocks data-testid="crew-loading" count={4} widths={["60%", "40%", "75%"]} />}
       {data && (
         <div className="grid gap-5">
           {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0! text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}

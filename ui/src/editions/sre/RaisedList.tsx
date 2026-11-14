@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 
-import { Button, ListSection } from "../../components/edition";
+import { Button, EmptyState, ListSection } from "../../components/edition";
 import type { HomeRaised } from "./Home.api";
 
 /** "Last things raised": what the watcher raised, how it came out, and the person's answer to
@@ -22,7 +22,7 @@ export function RaisedList({ items, note, busy, canAct = true, onAnswer }: {
       data-testid="raised"
     >
       {items.length === 0 ? (
-        <p className="m-0! px-[var(--row-x,18px)] py-4 text-[13px] text-muted-foreground" data-testid="raised-empty">Nothing has been raised yet.</p>
+        <EmptyState className="px-[var(--row-x,18px)] py-4" data-testid="raised-empty">Nothing has been raised yet.</EmptyState>
       ) : (
         <ul className="m-0! list-none! p-0!">
           {items.map((r) => {

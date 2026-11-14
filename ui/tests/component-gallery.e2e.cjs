@@ -51,6 +51,32 @@ async function checkStatuses(page, theme) {
   ck(`${theme}: a done status is plain`, done.length > 0 && done.every((l) => !l.line.includes("underline")), done.map((l) => `${l.key} ${l.line}`).join(", "));
 }
 
+// TR-1264: one Loading and one EmptyState. Loading tells a screen reader the area is busy and holds only
+// Skeleton bars; EmptyState is a titled block for a page with nothing in it, or a line for an empty section.
+async function checkStates(page) {
+  const got = await page.evaluate(() => {
+    const busy = (id) => {
+      const e = document.querySelector(`[data-testid=${id}]`);
+      if (!e) return null;
+      const bars = [...e.querySelectorAll("[aria-hidden=true]")];
+      return { role: e.getAttribute("role"), busy: e.getAttribute("aria-busy"), label: e.getAttribute("aria-label"),
+               bars: bars.length, pulse: bars.every((b) => getComputedStyle(b).animationName !== "none"), words: e.textContent.trim() };
+    };
+    const empty = (id) => {
+      const e = document.querySelector(`[data-testid=${id}]`);
+      return e && { kind: e.dataset.empty, heading: !!e.querySelector("h3"), words: e.textContent.trim() };
+    };
+    return { loading: busy("loading"), blocks: busy("loading-blocks"), block: empty("empty-state"), line: empty("empty-line") };
+  });
+  for (const [name, l] of [["Loading", got.loading], ["LoadingBlocks", got.blocks]]) {
+    ck(`${name} is one busy status for a screen reader`, l && l.role === "status" && l.busy === "true" && l.label === "Loading", JSON.stringify(l));
+    ck(`${name} holds pulsing bars and no words`, l && l.bars >= 3 && l.pulse && l.words === "", JSON.stringify(l));
+  }
+  ck("an empty state with a title is a block with a heading", got.block && got.block.kind === "block" && got.block.heading, JSON.stringify(got.block));
+  ck("an empty state without a title is one line in the voice, no heading", got.line && got.line.kind === "line" && !got.line.heading && /yet\./.test(got.line.words),
+     JSON.stringify(got.line));
+}
+
 const ck = (label, cond, detail = "") => {
   cond ? pass++ : fail++;
   console.log((cond ? "  ok   " : "  FAIL ") + label + (cond ? "" : `   ${detail}`));
@@ -65,8 +91,8 @@ async function waitFor(url, tries = 100) {
   return false;
 }
 
-const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "stat",
-  "progress", "initials", "status-label", "skeleton", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
+const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "panel", "tabs", "dialog-open", "empty-state", "empty-line", "stat",
+  "progress", "initials", "status-label", "skeleton", "loading", "loading-blocks", "input", "textarea", "select", "switch", "checkbox", "banner", "toast-open",
   "sparkline", "line-chart", "probe-input", "probe-textarea", "probe-select", "probe-switch", "probe-checkbox", "inert-link", "live-link"];
 
 (async () => {
@@ -203,6 +229,7 @@ const TESTIDS = ["btn-primary", "btn-secondary", "btn-quiet", "list-section", "p
 
     ck("no horizontal scroll at 1440px", (await wide()) <= 0, `${await wide()}px`);
     await checkStatuses(page, "light");
+    await checkStates(page);
     await page.getByTestId("theme-light").click();
     await shot("gallery-light.png");
 

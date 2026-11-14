@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
 import {
-  Banner, Button, Dialog, Initials, Input, ProgressBar, Skeleton, StatusDot, StatusLabel, STATUS_TONES, Textarea, Toaster, toneOf, useToast,
+  Banner, Button, Dialog, EmptyState, Initials, Input, Loading, ProgressBar, Skeleton, STATUS_TONES, StatusDot, StatusLabel,
+  Textarea, Toaster, toneOf, useToast,
 } from "../../components/edition";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Pencil } from "../../components/icons";
@@ -327,12 +328,12 @@ function Moving({ d }: { d: FactoryProjectData }) {
   );
   let body: React.ReactNode;
   if (total === 0) {
-    body = <div className="py-2 text-muted-foreground" data-testid="moving-empty">No tickets yet. They show here once the crew has planned the build.</div>;
+    body = <EmptyState data-testid="moving-empty">No tickets yet. They show here once the crew has planned the build.</EmptyState>;
   } else if (d.moving.length === 0) {
     body = (
-      <div className="py-2 text-muted-foreground" data-testid="moving-empty">
+      <EmptyState data-testid="moving-empty">
         {merged === live ? `Nothing is moving. All ${live} tickets are merged.` : "Nothing is moving right now."}
-      </div>
+      </EmptyState>
     );
   } else {
     body = (
@@ -777,7 +778,7 @@ export function Crumb({ name }: { name?: string }) {
   );
 }
 
-function Loading() {
+function ProjectSkeleton() {
   const block = (n: number) => (
     <div className="grid gap-2.5 border-t border-border pt-3">
       <Skeleton width={180} height={16} />
@@ -787,7 +788,7 @@ function Loading() {
     </div>
   );
   return (
-    <div role="status" aria-busy="true" aria-label="Loading" data-testid="project-loading" className="grid gap-5">
+    <Loading data-testid="project-loading" className="grid gap-5">
       <Skeleton width={120} />
       <Skeleton width={280} height={30} />
       <Skeleton width="80%" />
@@ -796,7 +797,7 @@ function Loading() {
         <div className="grid min-w-0 content-start gap-6">{block(3)}{block(5)}{block(4)}</div>
         <div className="grid min-w-0 content-start gap-6">{block(4)}{block(4)}</div>
       </div>
-    </div>
+    </Loading>
   );
 }
 
@@ -1080,7 +1081,7 @@ export default function FactoryProject({ onOther }: { onOther?: () => void } = {
               <b>We could not load this project.</b> <span className="text-foreground">Check your connection, then try again.</span>
             </Banner>
           </div>
-        ) : <Loading />}
+        ) : <ProjectSkeleton />}
       </div>
     );
   }

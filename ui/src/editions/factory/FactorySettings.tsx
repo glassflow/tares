@@ -12,7 +12,7 @@ import {
   SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings, TracingPanel, useAccessData,
 } from "../../pages/Security";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
-import { Banner, Button, Dialog, ListRow, Skeleton, StatusDot, Textarea } from "../../components/edition";
+import { Banner, Button, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
 import { SettingsRefused, useSettingsRefused } from "../AdminOnly";
@@ -283,7 +283,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
           </Heading>
           <Card dim={dim} data-testid="grants">
             {crew.grants.length === 0 ? (
-              <div className="p-4 text-muted-foreground" data-testid="grants-empty">Nothing allowed yet. The crew asks when it needs something.</div>
+              <EmptyState className="p-4" data-testid="grants-empty">Nothing allowed yet. The crew asks when it needs something.</EmptyState>
             ) : crew.grants.map((g) => <GrantRow key={g.id} g={g} />)}
             {crew.grants_total > crew.grants.length && (
               <div className="border-t border-border px-4 py-2.5 text-xs text-muted-foreground">Showing the newest {crew.grants.length} of {crew.grants_total}.</div>
@@ -447,15 +447,6 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
   );
 }
 
-function Loading() {
-  return (
-    <Card role="status" aria-busy="true" aria-label="Loading" className="grid gap-2 p-4" data-testid="settings-loading">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="grid gap-2 pb-4"><Skeleton width="35%" /><Skeleton width="60%" /><Skeleton width="80%" /></div>
-      ))}
-    </Card>
-  );
-}
 
 function SettingsPage() {
   const named = useSample();
@@ -571,7 +562,7 @@ function SettingsPage() {
             <b>Settings did not load.</b> <span className="text-foreground">The cell did not answer. Try again in a moment.</span>
           </Banner>
         )}
-        {(!page || waiting) && !error && <Loading />}
+        {(!page || waiting) && !error && <LoadingBlocks data-testid="settings-loading" count={5} widths={["35%", "60%", "80%"]} />}
         {page && !waiting && (
           <TerseSettings.Provider value={true}>
             <FactorySettingsView page={page} tab={tab} agent={new URLSearchParams(loc.search).get("agent") ?? undefined}

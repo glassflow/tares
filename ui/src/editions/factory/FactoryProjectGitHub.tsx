@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { Banner, Button, Skeleton, StatusLabel, STATUS_TONES } from "../../components/edition";
+import { Banner, Button, EmptyState, Skeleton, STATUS_TONES, StatusLabel } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
 import { PrSize, n } from "./prParts";
@@ -116,9 +116,9 @@ export default function FactoryProjectGitHub() {
         )}
       </div>
       {data.repos.length === 0 ? (
-        <div className="border-t border-border py-4 text-muted-foreground" data-testid="github-empty">
+        <EmptyState className="border-t border-border py-4" data-testid="github-empty">
           No pull requests yet. Each one the crew opens for a ticket shows here.
-        </div>
+        </EmptyState>
       ) : data.repos.map((r) => <Repo key={r.name ?? ""} r={r} />)}
     </div>
   );

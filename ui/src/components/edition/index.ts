@@ -12,7 +12,7 @@ export { Panel, type PanelProps } from "./Panel";
 export { ProgressBar, type ProgressBarProps } from "./ProgressBar";
 export { ServiceRows, type ServiceRowItem, type ServiceRowsProps } from "./ServiceRows";
 export { Select, type SelectOption, type SelectProps } from "./Select";
-export { Skeleton, SkeletonRows, type SkeletonProps } from "./Skeleton";
+export { Loading, LoadingBlocks, Skeleton, SkeletonLines, SkeletonRows, type LoadingBlocksProps, type LoadingProps, type SkeletonLinesProps, type SkeletonProps } from "./Skeleton";
 export { Sparkline, type SparklineProps } from "./Sparkline";
 export { StatusDot, StatusLabel, type StatusDotProps, type StatusLabelProps, type Tone } from "./StatusLabel";
 export { STATUS_TONES, toneOf, type SourceHealthState, type StatusDomain } from "./statusTones";

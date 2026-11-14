@@ -11,10 +11,13 @@ import {
   LineChart,
   ListRow,
   ListSection,
+  Loading,
+  LoadingBlocks,
   Panel,
   ProgressBar,
   Select,
   Skeleton,
+  SkeletonLines,
   SkeletonRows,
   Sparkline,
   Stat,
@@ -368,6 +371,10 @@ export default function Components() {
         <Panel>
           <EmptyState title="No incidents">service-a has had none in the last 30 days.</EmptyState>
         </Panel>
+        <Caption>Without a title: a line, for a section that has nothing yet</Caption>
+        <ListSection title="Pull requests">
+          <EmptyState className="px-4" data-testid="empty-line">No pull requests yet. Each one the crew opens for a ticket shows here.</EmptyState>
+        </ListSection>
       </Section>
 
       <Section title="Stat">
@@ -443,6 +450,21 @@ export default function Components() {
         <Panel>
           <SkeletonRows count={2} />
         </Panel>
+        <Caption>Lines: a title and a sentence or two</Caption>
+        <SkeletonLines widths={["30%", "75%", "50%"]} />
+      </Section>
+
+      <Section title="Loading">
+        <Caption>A list page that is loading</Caption>
+        <LoadingBlocks count={2} data-testid="loading-blocks" />
+        <Caption>A page-shaped one: Skeletons inside Loading, arranged as the page will be</Caption>
+        <Loading className="grid gap-4 md:grid-cols-[200px_1fr]" data-testid="loading">
+          <SkeletonLines widths={["70%", "50%", "60%"]} className="border border-border bg-card p-3" />
+          <div className="grid gap-3 border border-border bg-card p-4">
+            <Skeleton width="40%" height={20} />
+            <SkeletonLines widths={["90%", "80%", "55%"]} />
+          </div>
+        </Loading>
       </Section>
 
       <Section title="Form controls">
