@@ -381,7 +381,7 @@ try:
         ck(f"{fn} with Tares down: a line says the launch is the kept one", "kept from its last start" in err, err)
         ck(f"{fn} with Tares down: the plan is the one made with Tares up", down.get("plan") == up.get("plan"),
            str(down.get("plan"))[:300])
-        ck(f"{fn} with Tares down: the repositories are still named in the plan", str(repo) in json.dumps(down.get("plan")))
+        ck(f"{fn} with Tares down: the repositories are still named in the plan", str(repo).replace("\\", "/") in json.dumps(down.get("plan")))
         ck(f"{fn} with Tares down: the prompt says idle_wake could not be read",
            "idle_wake" in down.get("prompt", "") and "could not be read" in down.get("prompt", ""), down.get("prompt", ""))
     # a copy made for another model gets the one asked for

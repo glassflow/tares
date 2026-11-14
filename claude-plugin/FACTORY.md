@@ -18,7 +18,7 @@ The crew:
 
 - Claude Code, signed in, on a plan that allows background sessions.
 - `gh`, signed in (`gh auth login`), with write access to the repos the crew works in.
-- `git`, `jq` and `curl`.
+- `git`.
 - Tares: `pip install tares`, or from a checkout `scripts/factory-dev.sh install`, then
   `source .venv/bin/activate`.
 - Optional: the Codex CLI, if you want builders to run the Codex challenger on every commit.
