@@ -77,7 +77,7 @@ import time
 
 import psutil
 
-from . import claude, launch, lifecycle, locks, state, watch_revive
+from . import claude, jsonrun, launch, lifecycle, locks, state, watch_revive
 from .client import TaresClient, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -671,6 +671,7 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
     others: list = []
     orch: list = []
     failed: list = []
+    skipped: list = []   # open in a terminal: left to the watch
     for s in _active(paths):
         if mine and s == mine:   # the station running this command can't wait for itself
             v = station_cc(paths, s, agents)
@@ -701,7 +702,11 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
                                 "update again)")
             still: list = []
             for s in left:
-                if not claude.quiet(s, claude=claude_bin, paths=paths) or claude.attached(s, paths):
+                if claude.attached(s, paths):   # a person has it open: not waited for, the watch moves it when free
+                    client.say(f"{s} is open in a terminal; the watch moves it when it is free")
+                    skipped.append(s)
+                    continue
+                if not claude.quiet(s, claude=claude_bin, paths=paths):
                     still.append(s)
                     continue
                 client.say(f"restarting {s} on Claude Code {target}, in the same conversation")
@@ -744,8 +749,7 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
                 break
             for s in left:
                 if s not in told:
-                    why = "someone has it open" if claude.attached(s, paths) else "it is working"
-                    client.say(f"waiting for {s} to be idle ({why})")
+                    client.say(f"waiting for {s} to be idle (it is working)")
                     told.append(s)
             time.sleep(_poll(env))
     try:
@@ -764,11 +768,16 @@ def crew_update(client: TaresClient, paths: CrewPaths, args: list, claude_bin=No
             and claude_auto(client) and not upgrades_frozen(paths, client)):
         selfnote = (f"{self_station}, which ran this command, moves when {ME} crew watch finds it idle, or run "
                     f"{ME} restart {self_station} from another session")
+    if skipped:
+        jsonrun.add_result("left_to_watch", skipped)
     if failed:
         if self_station:
             client.say(selfnote)
         raise CrewError(f"not every station runs Claude Code {target}:" + "".join(" " + f for f in failed))
-    if self_station:
+    if skipped:
+        client.say(f"every station not open in a terminal runs Claude Code {target}; left to the watch:"
+                   + "".join(" " + s for s in skipped) + (f"; {selfnote}" if self_station else ""))
+    elif self_station:
         client.say(f"every other station runs Claude Code {target}, one session each; {selfnote}")
     else:
         client.say(f"every station runs Claude Code {target}, one session each")

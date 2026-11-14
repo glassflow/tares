@@ -180,6 +180,25 @@ code, out, err = crew(["crew", "unfreeze"], TARESD_URL="http://127.0.0.1:9")
 ck("unfreeze without --json against no Tares: text on stderr, nothing on stdout, exit 1",
    code == 1 and out == "" and err.startswith("tares factory: "), (code, out, err[-200:]))
 
+# ---------- 5b. an optional key (TR-1345) ----------
+print("== result key left_to_watch")
+from tares.crew import jsonrun  # noqa: E402
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+
+def json_run(command, body):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        jsonrun.run(["--json"], command, body, text_fail=lambda e: None)
+    return json.loads(buf.getvalue())
+
+
+_d = json_run("crew update", lambda a: jsonrun.add_result("left_to_watch", ["shop-build-m1"]))
+ck("a command's added key is in the result document, which still validates", _d.get("left_to_watch") == ["shop-build-m1"]
+   and RESULT.is_valid(_d), _d)
+ck("...and the next run does not carry it over", "left_to_watch" not in json_run("crew halt", lambda a: 0))
+
 # ---------- 6. update, restart ----------
 print("== update and restart")
 reset()

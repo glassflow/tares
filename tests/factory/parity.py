@@ -10071,14 +10071,15 @@ _cc("cc_update_busy", "crew update waits for a busy station and then moves it, t
      "crew restart restarts every station anyway, the orchestrator last"],
     setup=_cb_fake_ps(_cc_setup(have="1.2.0", installed="1.3.0")))
 
-# Someone has a station open: crew update does not interrupt, and gives up at --wait.
-_cc("cc_update_attached", "a station someone has open is not restarted: crew update gives up at --wait, says who it waited for, and moves the others",
+# Someone has a station open: crew update does not wait for it (TR-1345): it says so, leaves it to the watch, and moves the others.
+_cc("cc_update_attached", "a station someone has open is not waited for: crew update says it is left to the watch and moves the others",
     [Step(["crew", "update", "--wait", "3"], env=CB_ENV, before=_cc_attach(_R), after=_cc_after(reap=True))],
-    [("an attached station is not restarted; crew update says who it waited for",
-      lambda r: r.code(0) != 0 and _stn(r, _R) == "bbbb0002" and "gave up waiting for crew-reviewer" in r.out(0)
-      and "someone has it open" in r.out(0)),
+    [("an attached station is not restarted; crew update says it is left to the watch",
+      lambda r: r.code(0) == 0 and _stn(r, _R) == "bbbb0002"
+      and "crew-reviewer is open in a terminal; the watch moves it when it is free" in r.out(0)
+      and "waiting for" not in r.out(0) and "gave up" not in r.out(0)),
      ("the others were done", lambda r: _runs(r, _L) == "1.4.0" and _runs(r, _O) == "1.4.0")],
-    ["an attached station is not restarted; crew update says who it waited for", "the others were done"],
+    ["an attached station is not restarted; crew update says it is left to the watch", "the others were done"],
     setup=_cc_setup(have="1.3.0", installed="1.4.0"), not_windows=_WIN_NO_EXEC_A)
 
 # crew update run from a station (the orchestrator) leaves that station out instead of waiting on itself, and says its way out.
