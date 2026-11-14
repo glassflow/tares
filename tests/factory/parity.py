@@ -203,7 +203,18 @@ scenario(Scenario(
 # settings and the grant are read from what the stand-in kept; the milestone runs of crew_test.sh itself use
 # a real daemon.
 
-TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")   # only for lines a scenario seeds; a line the stand-in stamps carries its own day
+
+
+def grant_day(r, words):
+    """The day on the grant line holding `words`, as the stand-in kept it. A grant the crew saves is stamped when the
+    stand-in receives it, so the date of the import (TODAY) differs from it when the run crosses midnight UTC (TR-1338)."""
+    lines = list(r.stand_in.grants) + [x for v in r.stand_in.project_grants.values() for x in v]
+    for line in lines:
+        m = re.search(r"\((\d{4}-\d{2}-\d{2})\)$", line)
+        if words in line and m:
+            return m.group(1)
+    return TODAY
 GRANT = "the releaser may restart the staging database"
 KIT = os.path.realpath(ROOT / "claude-plugin")
 PROD = "(^|[-_.])(prod|production)([-_.]|$)"
@@ -356,7 +367,7 @@ scenario(Scenario(
         ("settings saved on Tares", lambda r: [r.stand_in.settings.get(k) for k in
                                                ("autonomy", "releaser", "release_profile", "challenger", "builders_max")]
          == ["L3-review", True, "kind", False, 3]),
-        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, TODAY)]),
+        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, grant_day(r, GRANT))]),
         ("crew up points at the Crew page", lambda r: "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
         ("three stations started, a releaser among them",
          lambda r: r.launches() == 3 and r.station("crew-releaser", "status") == "active"),
@@ -5929,7 +5940,7 @@ WIN_PATH_TAIL = re.compile(r"(<(?:TMP|REPO|TARES-BIN)>)([^\s\"'<>|,;)=]*)")
 def today_re():
     """Today's date (UTC, and the local one): a grant says "granted on <date>" and the authorization "at" it, so what a run
     prints holds the day it ran on."""
-    days = {time.strftime("%Y-%m-%d", time.gmtime()), time.strftime("%Y-%m-%d")}
+    days = {time.strftime("%Y-%m-%d", time.gmtime()), time.strftime("%Y-%m-%d"), TODAY}   # TODAY: the day this suite was imported, which a run across midnight UTC leaves behind (TR-1338)
     return re.compile(r"(?<![\d-])(?:" + "|".join(sorted(days)) + r")(?![\d-]|T\d)")
 
 
@@ -9147,7 +9158,7 @@ scenario(Scenario(
         ("stations reach the same Tares", lambda r: env_of(r, "crew-reviewer", "TARES_FACTORY_URL") == r.stand_in.url),
         ("grant from Tares quoted with its date",
          lambda r: allow_has(r, "crew-reviewer", 'granted this on %s for all projects, in their own words: "%s". Acting'
-                             % (TODAY, TARES_WORDS))),
+                             % (grant_day(r, TARES_WORDS), TARES_WORDS))),
         ("no undated or doubly quoted grants",
          lambda r: not any("undated" in x or '""' in x for x in allow_of(r, "crew-reviewer"))),
         ("no MCP server with auth on: the command carries a token placeholder, never the token",

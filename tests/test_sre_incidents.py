@@ -150,7 +150,9 @@ async def cell():
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers=H())
         store, runtime = app.state.store, app.state.runtime
-        base = datetime.now(timezone.utc).replace(microsecond=0)
+        # a fixed time inside a UTC day: the quiet runs are 4 and 5 minutes back, and the overview counts them since UTC midnight,
+        # so a base in the first minutes after 00:00Z put them on yesterday and the count was 0 (TR-1338)
+        base = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
         clock = [base]
         incidents.clock = lambda: clock[0]
 
