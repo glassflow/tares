@@ -202,6 +202,16 @@ try:
        [s.line() for s in scan([P_(5, 1, "bash"), launcher, loop])["orphan"]])
     ck("a crew-made process that is not the watch's parent still is reported",
        [s.proc.pid for s in scan([P_(5, 1, "bash"), loop, P_(92, 999, "pythonw -m other", crew="crew")])["orphan"]] == [92])
+
+    def lone(parent, child):
+        return [s.proc.pid for s in scan([P_(5, 1, "bash"), parent, child])["orphan"]]
+
+    ck("a parent that is bash, not the watch, is not protected",
+       lone(P_(90, 999, "bash -c crew", crew="crew"), loop) == [90])
+    ck("a parent started after the watch (a reused pid) is not protected",
+       lone(P_(90, 999, "pythonw -m tares.crew crew watch", started=OLD + 50, crew="crew"), loop) == [90])
+    ck("a watch whose start time cannot be read leaves its launcher protected",
+       lone(launcher, P_(91, 90, "python -m tares.crew crew watch", started=0.0, crew="crew")) == [])
 finally:
     watch.running_pid = real_running
 
