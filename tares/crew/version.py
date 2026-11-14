@@ -106,12 +106,15 @@ def on_windows() -> bool:
     return os.name == "nt"
 
 
-def upgrade_advice(text: str, sentence: bool = False) -> str:
+def upgrade_advice(text: str, sentence: bool = False, stop_crew: bool = True) -> str:
     """The advice to upgrade or install tares. On Windows it first says to stop the crew, because an upgrade
     while any tares command runs can leave the install broken (TR-1281); elsewhere `text` comes back as given.
-    `sentence` is for a full sentence, which starts with a capital."""
+    `sentence` is for a full sentence, which starts with a capital. `stop_crew=False` leaves out the stop-the-crew
+    lead, for a place with no crew to stop yet (no tares is installed, TR-1304)."""
     if not on_windows():
         return text
+    if not stop_crew:
+        return f"{text.rstrip('.')}. {WINDOWS_UPGRADE_NOTE}"
     lead = "stop the crew first (tares factory crew down), then "
     body = text.rstrip(".")
     if sentence:
