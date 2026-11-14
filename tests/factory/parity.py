@@ -367,7 +367,7 @@ scenario(Scenario(
         ("settings saved on Tares", lambda r: [r.stand_in.settings.get(k) for k in
                                                ("autonomy", "releaser", "release_profile", "challenger", "builders_max")]
          == ["L3-review", True, "kind", False, 3]),
-        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, TODAY)]),
+        ("grant saved on Tares as the person said it", lambda r: r.stand_in.grants == ['- "%s" (%s)' % (GRANT, grant_day(r, GRANT))]),
         ("crew up points at the Crew page", lambda r: "<TARES>/crew" in r.out(0).replace(r.stand_in.url, "<TARES>")),
         ("three stations started, a releaser among them",
          lambda r: r.launches() == 3 and r.station("crew-releaser", "status") == "active"),
