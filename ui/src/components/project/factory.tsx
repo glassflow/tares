@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { CrewState, Desk, attachCmd, onCrewSide } from "../../pages/Crew";
 import { CopyButton, TimeAgo, usePolling } from "../bits";
+import { StatusLabel, STATUS_TONES } from "../edition";
 import { ProgressRing, ticketBucket, ticketProgress } from "../ProgressRing";
 import { FACTORY_POLL_MS, VLink, type Ctx } from "./common";
 import { Slot } from "../../eeSlots";
@@ -479,20 +480,21 @@ function quiet(s: ProjectSession, now?: string): number {
 
 type Shown = "finished" | "idle" | null;
 
+/** A session's state word and why, in the tone STATUS_TONES.crew gives it. A working session that has
+ *  sent nothing for SILENT_MIN reads quiet. */
 function StateBadge({ s, now, shown }: { s: ProjectSession; now?: string; shown?: Shown }) {
-  if (shown === "finished") return <span className="fo-st fo-st-done" title="it finished the last ticket">finished</span>;
-  if (shown === "idle") return <span className="fo-st" title={`waiting at its prompt; nothing is in progress${s.state_reason ? ` (${s.state_reason})` : ""}`}>idle</span>;
-  if (s.state === "idle") return <span className="fo-st" title="between turns; it resumes on its own (a Monitor, a peer's reply)">idle</span>;
-  if (s.state === "waiting") return <span className="fo-st fo-st-wait" title={s.state_reason ?? undefined}>waiting</span>;
-  if (s.state === "ended") return <span className="fo-st">ended</span>;
-  if (s.state === "quiet") return <span className="fo-st fo-st-quiet" title="nothing heard from it for a long while; it has most likely ended">quiet</span>;
-  if (s.state === "replaced") return <span className="fo-st" title={s.state_reason ?? undefined}>replaced</span>;
-  if (s.state === "working") {
-    return quiet(s, now) >= SILENT_MIN
-      ? <span className="fo-st fo-st-quiet" title="nothing sent for a while">quiet</span>
-      : <span className="fo-st fo-st-in_progress">working</span>;
-  }
-  return null;
+  const [word, title]: [string, string | undefined] | [null, undefined] =
+    shown === "finished" ? ["finished", "it finished the last ticket"]
+    : shown === "idle" ? ["idle", `waiting at its prompt; nothing is in progress${s.state_reason ? ` (${s.state_reason})` : ""}`]
+    : s.state === "idle" ? ["idle", "between turns; it resumes on its own (a Monitor, a peer's reply)"]
+    : s.state === "waiting" || s.state === "replaced" ? [s.state, s.state_reason ?? undefined]
+    : s.state === "ended" ? ["ended", undefined]
+    : s.state === "quiet" ? ["quiet", "nothing heard from it for a long while; it has most likely ended"]
+    : s.state === "working" ? (quiet(s, now) >= SILENT_MIN ? ["quiet", "nothing sent for a while"] : ["working", undefined])
+    : [null, undefined];
+  if (!word) return null;
+  const tone = word === "finished" ? "done" : STATUS_TONES.crew[word as keyof typeof STATUS_TONES.crew];
+  return <StatusLabel tone={tone} title={title}>{word}</StatusLabel>;
 }
 
 /** A build that has stopped: the session on the ticket waits for the person or has gone silent,

@@ -1,10 +1,10 @@
 import * as React from "react";
 import { Link, useParams } from "react-router-dom";
 
-import { Banner, Button, Skeleton } from "../../components/edition";
+import { Banner, Button, Skeleton, StatusLabel, STATUS_TONES } from "../../components/edition";
 import { cn } from "../../lib/utils";
 import { usePagePolling } from "../usePagePolling";
-import { PR_CHIP, PrSize, n } from "./prParts";
+import { PrSize, n } from "./prParts";
 import { InlineIcon } from "./ProjectIcon";
 import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type ProjectRepoPrs } from "./FactoryProject.api";
 
@@ -44,10 +44,9 @@ function PrRow({ p }: { p: ProjectPr }) {
             </a>
           ) : <span className="font-semibold [overflow-wrap:anywhere]" data-user-text>{p.title}</span>}
         </div>
-        <span data-testid="pr-state"
-              className={cn("flex-none border px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-[0.06em]", PR_CHIP[p.state])}>
+        <StatusLabel data-testid="pr-state" tone={STATUS_TONES.pr[p.state]} className="flex-none">
           {p.state_label}
-        </span>
+        </StatusLabel>
       </div>
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[13px] text-muted-foreground" data-testid="pr-facts">
         <Link to={p.ticket_href} className={LINK} data-testid="pr-ticket">{p.ticket}</Link>

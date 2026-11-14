@@ -3,7 +3,8 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { Search, Settings as SettingsIco } from "../components/icons";
-import { InternalName, Picker, StatusBadge, TimeAgo, sourceTitle, usePolling } from "../components/bits";
+import { InternalName, Picker, TimeAgo, sourceTitle, usePolling } from "../components/bits";
+import { StatusLabel, toneOf } from "../components/edition";
 import { ProjectLink } from "../components/ProjectBadge";
 
 // Gear dropdown next to "Add source" — catalog import/export, each on its own page.
@@ -163,7 +164,7 @@ export default function Sources() {
                       : <span className="dim">none</span>}
                   </td>
                   <td>{s.connector}</td>
-                  <td><StatusBadge status={s.health?.status} /></td>
+                  <td><StatusLabel tone={toneOf("source", s.health?.status ?? "starting")}>{s.health?.status ?? "starting"}</StatusLabel></td>
                   <td className="mono">{s.health?.status === "push" ? <span className="dim">push</span> : s.poll}</td>
                   <td className="num">{(s.health?.events_total ?? 0).toLocaleString()}</td>
                   <td><TimeAgo ts={s.health?.last_ingest} /></td>

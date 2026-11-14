@@ -6,6 +6,7 @@ import { ApiError, api } from "../../api";
 import { attachCmd } from "../../pages/Crew";
 import ConfirmDialog from "../ConfirmDialog";
 import { Combo, CopyButton, ErrorState, Picker, TimeAgo, formatBytes, usePolling } from "../bits";
+import { StatusLabel, STATUS_TONES } from "../edition";
 import { FACTORY_POLL_MS, Facts, NotHere, VLink, ViewHead, type Ctx } from "./common";
 import { GitHubMark, LinearMark, prBrief } from "./factory";
 import type { Doc, DocKind, PersonalDoc as PersonalDocData, GitHubLink, Ticket, TicketStatus } from "../../types";
@@ -35,11 +36,6 @@ const STATUS_LABEL: Record<TicketStatus, string> = {
 };
 const STATUSES: TicketStatus[] = ["todo", "in_progress", "done", "canceled"];
 const MAX_DOC = 256 * 1024;
-
-function StatusBadge({ s }: { s: TicketStatus }) {
-  const cls = s === "done" ? "ok" : s === "in_progress" ? "running" : s === "canceled" ? "paused" : "";
-  return <span className={`badge ${cls}`}>{STATUS_LABEL[s]}</span>;
-}
 
 function By({ d }: { d: { updated_by: string | null; updated_at: string } }) {
   return <>changed <TimeAgo ts={d.updated_at} />{d.updated_by && <> by {d.updated_by}</>}</>;
@@ -523,7 +519,7 @@ export function TicketsView({ ctx }: { ctx: Ctx }) {
                   {t.owner === "tares"
                     ? <Picker value={t.status} options={STATUSES} labels={STATUS_LABEL}
                               onChange={(v) => setStatus(t, v as TicketStatus)} ariaLabel="status" />
-                    : <StatusBadge s={t.status} />}
+                    : <StatusLabel tone={STATUS_TONES.docTicket[t.status]}>{STATUS_LABEL[t.status]}</StatusLabel>}
                 </td>
                 <td>{t.working_doc_title ?? <span className="dim">none yet</span>}</td>
               </tr>
@@ -692,7 +688,7 @@ export function TicketView({ ctx, name }: { ctx: Ctx; name: string }) {
               {data.url ? <a href={data.url} target="_blank" rel="noreferrer">{data.label} in GitHub ↗</a> : <>{data.label} in GitHub</>}
               <span className="dim">· change its title and status there</span></span>
           : data.label],
-        ["status", <StatusBadge s={data.status} />],
+        ["status", <StatusLabel tone={STATUS_TONES.docTicket[data.status]}>{STATUS_LABEL[data.status]}</StatusLabel>],
         ["milestone", data.milestone_name ?? <span className="dim">none</span>],
         ["depends on", data.depends_on.length ? data.depends_on.join(", ") : <span className="dim">nothing</span>],
         ["ready", data.status === "todo"

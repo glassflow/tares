@@ -1,15 +1,7 @@
-import type { Tone } from "../../components/edition";
-import type { SreServiceState } from "./Services.api";
+import { STATUS_TONES } from "../../components/edition";
 
-/** The colour of a service's state. The words say the state; the colour only repeats it. */
-export const STATE_TONE: Record<SreServiceState, Tone> = {
-  incident: "bad",
-  unusual: "waiting",
-  silent: "waiting",
-  not_watched: "quiet",
-  no_own_signal: "quiet",
-  normal: "ready",
-};
+/** The tone of a service's state, from the one status table. The words say the state; the tone only repeats it. */
+export const STATE_TONE = STATUS_TONES.service;
 
 export const up = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 

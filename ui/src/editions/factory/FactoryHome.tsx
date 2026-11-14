@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 
 import {
   Banner, Button, Dialog, EmptyState, ListRow, ProgressBar, Skeleton, SkeletonRows, StatusDot, Textarea,
-  Toaster, useToast, type Tone,
+  Toaster, toneOf, useToast,
 } from "../../components/edition";
 import { cn } from "@/lib/utils";
 import { ApiError, isLicenceRequired } from "../../api";
@@ -20,7 +20,7 @@ import {
   type AllowedGrant,
 } from "./FactoryHome.api";
 import type {
-  HomeAction, HomeCrewMember, HomeCrewState, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
+  HomeAction, HomeCrewMember, HomeData, HomeItem, HomeSample, HomeVerb, TeamHomeHandler,
 } from "./home.types";
 import { HOME_SAMPLES } from "./homeSamples";
 import { Detail, DetailLines } from "./HomeDetail";
@@ -195,10 +195,6 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
   );
 }
 
-const MEMBER_TONE: Record<HomeCrewState, Tone> = {
-  working: "working", idle: "ready", waiting: "waiting", "not heard": "quiet", ended: "quiet",
-};
-
 function stateLine(m: HomeCrewMember): string {
   if (m.state === "not heard") return m.since ? `Not heard from in ${m.since.replace(/ ago$/, "")}` : "Not heard from";
   const word = m.state[0].toUpperCase() + m.state.slice(1);
@@ -209,8 +205,8 @@ function Member({ m }: { m: HomeCrewMember }) {
   const high = m.memory_pct !== null && m.memory_pct >= WARN_AT;
   return (
     <div data-testid="crew-member" className="grid grid-cols-[8px_1fr] gap-x-2.5 border-t border-border py-2.5 first:border-t-0 first:pt-0">
-      <StatusDot tone={MEMBER_TONE[m.state]} label={m.state}
-                 className={cn("mt-[5px]", m.state === "working" && "bg-[var(--accent)]")} />
+      <StatusDot tone={toneOf("crew", m.state)} label={m.state}
+                 className="mt-[5px]" />
       <div className="min-w-0">
         <div className="font-semibold" data-user-text>{m.name}</div>
         <div className={MUTED}>{stateLine(m)}</div>

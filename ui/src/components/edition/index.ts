@@ -15,6 +15,7 @@ export { Select, type SelectOption, type SelectProps } from "./Select";
 export { Skeleton, SkeletonRows, type SkeletonProps } from "./Skeleton";
 export { Sparkline, type SparklineProps } from "./Sparkline";
 export { StatusDot, StatusLabel, type StatusDotProps, type StatusLabelProps, type Tone } from "./StatusLabel";
+export { STATUS_TONES, toneOf, type SourceHealthState, type StatusDomain } from "./statusTones";
 export { Stat, type StatProps } from "./Stat";
 export { Switch, type SwitchProps } from "./Switch";
 export { Tabs, type TabItem, type TabsProps } from "./Tabs";

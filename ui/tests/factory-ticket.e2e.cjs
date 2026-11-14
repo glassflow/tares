@@ -94,7 +94,7 @@ async function waitFor(url, tries = 100) {
     await open(page, "T2");
     await one(ck, "T2");
     ck("only a blocked ticket shows a reason", (await T("ticket-blocked-reason").count()) === 0);
-    ck("the reference, the state and the title", (await txt(T("ticket-ref"))) === "T2" && (await txt(T("ticket-state"))) === "Changes asked"
+    ck("the reference, the state and the title", (await txt(T("ticket-ref"))) === "T2" && (await raw(T("ticket-state"))) === "Changes asked"
        && (await txt(T("ticket-title"))) === "Add the footer");
     ck("the milestone is named, and there is no link out for a ticket kept in Tares",
        (await txt(T("ticket-milestone"))) === "Milestone M1: The first articles" && (await T("ticket-lives-in").count()) === 0);
@@ -134,7 +134,7 @@ async function waitFor(url, tries = 100) {
     ck("opening round 1 shows its two findings", (await round1.getAttribute("data-open")) === "true" && (await round1.getByTestId("finding").count()) === 2);
     const fixed = round1.locator("[data-testid=finding][data-state=fixed]"), openF = round1.locator("[data-testid=finding][data-state=open]");
     ck("one is fixed in round 3, the other is open",
-       (await fixed.count()) === 1 && (await txt(fixed)).includes("Fixed in round 3") && (await openF.count()) === 1 && (await txt(openF)).includes("A colour could be a token"));
+       (await fixed.count()) === 1 && (await raw(fixed)).includes("Fixed in round 3") && (await openF.count()) === 1 && (await txt(openF)).includes("A colour could be a token"));
     ck("a finding has its file and line, and says if it must be fixed",
        (await txt(fixed)).includes("src/footer.ts:12") && (await txt(fixed)).includes("Must fix") && (await txt(openF)).includes("Suggestion"));
     ck("a round says who looked, what was checked and what was not",
@@ -161,8 +161,8 @@ async function waitFor(url, tries = 100) {
 
     // calls and decisions
     ck("three calls, in words", (await T("call-row").count()) === 3
-       && (await txt(T("call-row").nth(0))).includes("Waiting for you") && (await txt(T("call-row").nth(1))).includes("Confirmed")
-       && (await txt(T("call-row").nth(2))).includes("You changed it") && (await txt(T("call-row").nth(2))).includes("Use the brand font"));
+       && (await raw(T("call-row").nth(0))).includes("Waiting for you") && (await raw(T("call-row").nth(1))).includes("Confirmed")
+       && (await raw(T("call-row").nth(2))).includes("You changed it") && (await txt(T("call-row").nth(2))).includes("Use the brand font"));
     ck("one decision of yours, read as the answer chosen", (await T("decision-row").count()) === 1
        && (await txt(T("decision-row").getByTestId("decision-answer"))) === "tabs"
        && (await T("decision-row").getByTestId("decision-said").count()) === 0, await txt(T("decision-row")));
@@ -216,7 +216,7 @@ async function waitFor(url, tries = 100) {
     await page.waitForFunction(() => document.querySelector('[data-testid=factory-ticket]')?.getAttribute("data-ref") === "T1", null, { timeout: 15000 }).catch(() => {});
     ck("a dependency link opens that ticket's page", new URL(page.url()).pathname === `/projects/${y}/tickets/T1` && (await T("ticket-ref").innerText()).trim() === "T1", page.url());
     ck("T1 is merged: the builder who finished it, no terminal, one passing round open",
-       (await txt(T("ticket-state"))) === "Merged" && (await txt(T("fact-who"))).includes("Builder for M1") && (await T("fact-terminal").count()) === 0
+       (await raw(T("ticket-state"))) === "Merged" && (await txt(T("fact-who"))).includes("Builder for M1") && (await T("fact-terminal").count()) === 0
        && (await T("round").count()) === 1 && (await T("round").getAttribute("data-open")) === "true" && (await txt(T("round"))).toLowerCase().includes("passed")
        && (await txt(T("fact-pr"))).includes("PR #11, merged"));
     ck("T1 has short notes, shown whole", (await T("notes-box").getAttribute("data-open")) === "true" && (await T("notes-toggle").count()) === 0);
@@ -240,7 +240,7 @@ async function waitFor(url, tries = 100) {
 
     await open(page, "T3");
     ck("T3 is blocked, held by the lead, with no terminal and a blocking review",
-       (await txt(T("ticket-state"))) === "Blocked" && (await T("fact-terminal").count()) === 0 && (await txt(T("round"))).toLowerCase().includes("blocked"));
+       (await raw(T("ticket-state"))) === "Blocked" && (await T("fact-terminal").count()) === 0 && (await txt(T("round"))).toLowerCase().includes("blocked"));
     ck("T3 says what it waits for, as the API words it",
        (await txt(T("ticket-blocked-reason"))).startsWith("Waiting for T2, "));
     await checkWords(page, ck, "T3");
@@ -357,9 +357,9 @@ async function waitFor(url, tries = 100) {
                && (await txt(q("ticket-lives-in"))) === "Lives in Linear" && (await txt(q("fact-who"))).includes("Nobody, it is finished"));
           } else if (name === "changes") {
             ck("changes: the builder's command, an open call, a pull request that passes",
-               (await q("command-text").count()) === 1 && (await txt(q("call-row"))).includes("Waiting for you") && (await txt(q("fact-pr"))).includes("open, CI green"));
+               (await q("command-text").count()) === 1 && (await raw(q("call-row"))).includes("Waiting for you") && (await txt(q("fact-pr"))).includes("open, CI green"));
           } else if (name === "blocked") {
-            ck("blocked: the Blocked state, no review, no pull request", (await txt(q("ticket-state"))) === "Blocked" && (await q("reviews-empty").count()) === 1
+            ck("blocked: the Blocked state, no review, no pull request", (await raw(q("ticket-state"))) === "Blocked" && (await q("reviews-empty").count()) === 1
                && (await txt(q("fact-pr"))).includes("No pull request yet"));
           } else if (name === "empty") {
             ck("empty: a sentence for every section", (await q("reviews-empty").count()) === 1 && (await q("checks-empty").count()) === 1

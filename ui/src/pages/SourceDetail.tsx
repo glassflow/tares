@@ -7,7 +7,8 @@ import Dependents from "../components/Dependents";
 import { ProjectLink } from "../components/ProjectBadge";
 import IngestEndpoint from "../components/IngestEndpoint";
 import SourceForm from "../components/SourceForm";
-import { ErrorState, InternalName, StatusBadge, TimeAgo, ruleSummary, sourceTitle, usePolling } from "../components/bits";
+import { ErrorState, InternalName, TimeAgo, ruleSummary, sourceTitle, usePolling } from "../components/bits";
+import { StatusLabel, toneOf } from "../components/edition";
 import type { ConnectorSpec, Source } from "../types";
 
 export default function SourceDetail() {
@@ -75,7 +76,7 @@ export default function SourceDetail() {
       {spec?.mode === "push" && <IngestEndpoint source={source} />}
 
       <div className="cards">
-        <div className="card"><div className="k">status</div><div className="v"><StatusBadge status={h?.status} /></div></div>
+        <div className="card"><div className="k">status</div><div className="v"><StatusLabel tone={toneOf("source", h?.status ?? "starting")}>{h?.status ?? "starting"}</StatusLabel></div></div>
         <div className="card"><div className="k">events stored</div><div className="v">{(h?.events_total ?? 0).toLocaleString()}</div></div>
         <div className="card"><div className="k">since Tares restarted</div><div className="v">{h?.events_since_start ?? 0} <small>events from {h?.polls ?? 0} {h?.polls === 1 ? "check" : "checks"}</small></div></div>
         <div className="card"><div className="k">last ingest</div><div className="v" style={{ fontSize: 15 }}><TimeAgo ts={h?.last_ingest} /></div></div>

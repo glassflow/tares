@@ -2,7 +2,7 @@ import * as React from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { api, ApiError } from "../../api";
-import { Banner, Button, Dialog, ProgressBar, Skeleton } from "../../components/edition";
+import { Banner, Button, Dialog, ProgressBar, Skeleton, StatusLabel, STATUS_TONES } from "../../components/edition";
 import { Input } from "../../components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { cn } from "../../lib/utils";
@@ -35,15 +35,6 @@ const TABS: { key: Filter; label: string }[] = [
 ];
 const isFilter = (v: string | null): v is Filter => TABS.some((t) => t.key === v);
 
-const CHIP: Record<ProjectState, string> = {
-  waiting_on_you: "border-dashed border-[color:var(--ink-soft)] bg-transparent text-foreground",
-  building: "border-border bg-[var(--wash)] text-foreground",
-  not_started: "border-border bg-transparent text-foreground",
-  ready_to_close: "border-[color:var(--ok)] bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  later: "border-border bg-muted text-muted-foreground",
-  done: "border-border bg-transparent text-[color:var(--ink-soft)]",
-};
-
 const pct = (n: number, of: number) => (of > 0 ? Math.round((n / of) * 100) : 0);
 
 function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onClose: (p: FactoryProjectRow) => void }) {
@@ -58,10 +49,9 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
                 className="font-bold [overflow-wrap:anywhere] text-foreground! underline! decoration-border! underline-offset-[3px]">
             {p.name}
           </Link>
-          <span data-testid="project-state"
-                className={cn("ml-2 inline-block border px-1.5 py-0.5 align-[2px] font-mono text-[10.5px] font-medium uppercase tracking-[0.06em]", CHIP[p.state])}>
+          <StatusLabel data-testid="project-state" tone={STATUS_TONES.project[p.state]} className="ml-2 align-[1px]">
             {p.state_label}
-          </span>
+          </StatusLabel>
         </div>
         {p.can_close && (
           <Button variant="secondary" data-testid="project-close" onClick={() => onClose(p)}
