@@ -84,6 +84,10 @@ tares factory: one crew of connected Claude Code sessions for all your projects,
                                             watch does it every 10 minutes
   tares factory doctor                      check everything the crew needs
   tares factory settings <station> [role]   print the settings a station launches with
+  tares factory launch-plan <station> <role> <parent> <project> <repo>
+                                            print what a station would start with (the claude
+                                            arguments, environment and settings) as JSON; starts
+                                            nothing ("" or - for no parent, project or repo)
 
   used by the orchestrator, inside its session:
   tares factory roster                      stations, roles, projects, states, Claude Code version (tab separated)

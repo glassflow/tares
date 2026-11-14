@@ -64,6 +64,7 @@ A note from the factory that the plan's limit is nearly full and builders hold m
 
 - An unknown you decide yourself: `assume(question, choice, why, tickets=[ref], affects="<who>")`, then tell the orchestrator `A<n>` in one line (protocol rule 5).
 - Something you learned about this project that the next builder needs (a command that works, a trap in the code): `remember_for_project(line)`.
+- Before you read the code base from scratch, call `recall(question)`: it answers with the lines the project's memory and the shared memory already hold about it, each marked [project] or [shared]. A line `remember_for_project` kept earlier shows up there.
 - A rule worth keeping for every project: send the orchestrator an `FYI` with the evidence; it decides and records it. Never write shared docs yourself.
 
 ## Secrets

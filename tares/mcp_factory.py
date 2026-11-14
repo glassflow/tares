@@ -291,7 +291,24 @@ async def remember_for_project(line: str, project: str = "") -> str:
         if uid is None:
             return why
         r = await cx.post(f"{TARESD}/api/projects/{uid}/memory/lines", json={"text": line})
-    return _out(r, ("id", "added"))
+    return _out(r, ("id", "added", "pending"))
+
+
+@mcp.tool()
+async def recall(question: str, project: str = "") -> str:
+    """Ask the project's memory what it holds about a question, before you read the code base
+    from scratch. It answers with the lines of this project's memory and the shared memory that
+    share words with `question`, best first, each starting [project] or [shared]. Ask in plain
+    words ("how do tests start the dev database"); a line `remember_for_project` kept earlier is
+    found here. `note` says so when the cell's memory service did not answer and the Tares docs did."""
+    if not (question or "").strip():
+        return "say what you want to recall"
+    async with _cx(15) as cx:
+        uid, why = await _project_id(cx, project)
+        if uid is None:
+            return why
+        r = await cx.get(f"{TARESD}/api/projects/{uid}/recall", params={"q": question})
+    return _out(r, ("lines", "integration", "note"))
 
 
 # ── review and merge (TR-441..445) ────────────────────────────────────────────

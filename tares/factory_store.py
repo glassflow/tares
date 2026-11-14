@@ -318,6 +318,18 @@ FACTORY_SCHEMA = [
       created_at  TIMESTAMPTZ,
       created_by  TEXT
     )""",
+    # A memory line the Tares doc took but a non-Tares memory integration did not (TR-865): kept
+    # until the integration takes it. scope is a project uid or `factory`; `line` is the line as it
+    # was sent, with its date and name. The background sync retries each row on every round.
+    """CREATE TABLE IF NOT EXISTS pending_memory (
+      id         TEXT PRIMARY KEY,
+      scope      TEXT,
+      line       TEXT,
+      attempts   INTEGER DEFAULT 0,
+      last_error TEXT,
+      created_at TIMESTAMPTZ,
+      tried_at   TIMESTAMPTZ
+    )""",
     # a project grant from someone who is neither the project's lead nor an admin also waits
     # for the lead (for an admin when the project has none)
     "ALTER TABLE grants ADD COLUMN IF NOT EXISTS needs_lead BOOLEAN DEFAULT FALSE",
@@ -479,6 +491,8 @@ FACTORY_SCHEMA = [
 
 # The slots a project may choose for itself; the others are the factory's alone (TR-839).
 PROJECT_SLOTS = ("tickets", "review", "ci")
+# the monitoring integrations kept in the tracing settings (TR-866)
+MONITORING_NAMES = ("off", "rius", "otlp")
 
 # Words that say "a session" and not a station: shown without parentheses next to a person's name.
 GENERIC_BY = ("", "a session", "claude code session", "github")
@@ -613,6 +627,7 @@ class FactoryStore:
         self.sc.execute("DELETE FROM grants WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM guardrail_rules WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM guardrail_pairs WHERE project_uid = ?", [uid])
+        self.sc.execute("DELETE FROM pending_memory WHERE scope = ?", [uid])
         self.sc.execute("DELETE FROM decisions WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handovers WHERE project = ?", [uid])
         self.sc.execute("DELETE FROM handover_overrides WHERE project = ?", [uid])
@@ -2137,6 +2152,46 @@ class FactoryStore:
                                    [str(pid or "").strip().upper()]).fetchone()
         return gone is not None
 
+    # ── memory lines waiting for a non-Tares memory integration (TR-865) ──────
+    _PENDING_COLS = "id, scope, line, attempts, last_error, created_at, tried_at"
+
+    @staticmethod
+    def _pending_view(r) -> dict:
+        return dict(zip(("id", "scope", "line", "attempts", "last_error", "created_at", "tried_at"), r))
+
+    def add_pending_memory(self, scope: str, line: str, error: str = "") -> str:
+        """Keep a line the integration did not take; returns the row's id. attempts starts at 1:
+        the write that just failed."""
+        pid = "pm_" + uuid.uuid4().hex[:10]
+        at = now_utc()
+        with self._swrite:
+            self.sc.execute(
+                f"INSERT INTO pending_memory ({self._PENDING_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [pid, str(scope), str(line), 1, str(error or "")[:500], at, at])
+        return pid
+
+    def list_pending_memory(self, scope: str | None = None) -> list[dict]:
+        """The waiting lines, oldest first; one scope's when `scope` is given."""
+        sql, args = f"SELECT {self._PENDING_COLS} FROM pending_memory", []
+        if scope is not None:
+            sql, args = sql + " WHERE scope = ?", [str(scope)]
+        with self._sread:
+            rows = self.sc.execute(sql + " ORDER BY created_at, id", args).fetchall()
+        return [self._pending_view(r) for r in rows]
+
+    def retried_pending_memory(self, pid: str, error: str) -> None:
+        """A retry failed again: count it and keep the reason."""
+        with self._swrite:
+            self.sc.execute("UPDATE pending_memory SET attempts = attempts + 1, last_error = ?, "
+                            "tried_at = ? WHERE id = ?", [str(error or "")[:500], now_utc(), pid])
+
+    def delete_pending_memory(self, pid: str) -> bool:
+        """True when a row was removed (the integration took the line, or it is no longer needed)."""
+        with self._swrite:
+            gone = self.sc.execute("DELETE FROM pending_memory WHERE id = ? RETURNING id",
+                                   [pid]).fetchone()
+        return gone is not None
+
     # ── integration choices and their settings (TR-839) ───────────────────────
     # Secrets are stored as they come, in the state database, exactly as connector secrets are
     # (tares/connectors: redact_config, restore_secrets); there is no new encryption. Every read
@@ -2231,6 +2286,8 @@ class FactoryStore:
         if not name:
             raise ValueError("an integration name is required")
         secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
+        if slot == "monitoring" and name in MONITORING_NAMES:
+            return self._set_monitoring(name, settings, secret, by)
         with self._swrite:
             cur = self.sc.execute("SELECT name, settings FROM integration_choices WHERE slot = ?",
                                   [slot]).fetchone()
@@ -2243,6 +2300,18 @@ class FactoryStore:
                 "settings = excluded.settings, updated_at = excluded.updated_at, "
                 "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
         return self._integration_view(slot, name, merged, at, by)
+
+    def _set_monitoring(self, name: str, settings: dict | None, secret: set | None, by: str) -> dict:
+        """Monitoring off, Rius and OTLP live in the tracing settings, the one storage the old
+        /api/settings/tracing route also writes (TR-866). A secret left blank keeps the stored one
+        while the provider stays the same; another provider starts from nothing. Any choice row an
+        earlier version kept for the slot is dropped, so the two never disagree."""
+        from .integrations.builtin import monitoring_tares as mon
+        merged = self._merge_integration_settings(secret, settings, mon.stored(self, name))
+        mon.save(self, name, merged)
+        with self._swrite:
+            self.sc.execute("DELETE FROM integration_choices WHERE slot = ?", ["monitoring"])
+        return self._integration_view("monitoring", name, merged, now_utc(), by)
 
     # ── a project's secrets (TR-775): sealed values; tares/project_secrets.py seals and opens them ──
     _SECRET_COLS = "project, name, value, set_by, set_at, used_by, used_at"
@@ -2505,6 +2574,9 @@ class FactoryStore:
         connection test over what is saved; never return it from a route."""
         if uid is None:
             self._integration_slot(slot)
+            if slot == "monitoring" and name in MONITORING_NAMES:
+                from .integrations.builtin import monitoring_tares as mon
+                return mon.stored(self, name)
             sql, args = ("SELECT name, settings FROM integration_choices WHERE slot = ?", [slot])
         else:
             self._integration_slot(slot, PROJECT_SLOTS)

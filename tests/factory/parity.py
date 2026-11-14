@@ -55,6 +55,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -1404,6 +1405,7 @@ scenario(Scenario(
 sys.path.insert(0, str(HERE))
 import fake_tares  # noqa: E402
 import fake_rules  # noqa: E402
+import fake_launch  # noqa: E402
 
 NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows|Claude processes|Claude's background service|orphaned crew processes)\b",)
 DOCTOR_DROP = NEW_CHECKS
@@ -2370,7 +2372,7 @@ class FakeTares:
     def __init__(self, routes: dict):
         import http.server
         import threading
-        self.routes = {"GET /health": (200, {"ok": True, "capabilities": ["guardrail_rules"]}),
+        self.routes = {"GET /health": (200, {"ok": True, "capabilities": ["guardrail_rules", fake_launch.CAPABILITY]}),
                        "GET /api/crew/settings": (200, {"settings": {}})}
         self.routes.update(routes)
         self.requests: list = []
@@ -2390,6 +2392,10 @@ class FakeTares:
                 status, doc = fake.routes.get(key) or fake.routes.get(key.split("?", 1)[0], (404, {"detail": "not found"}))
                 if status == 404 and key.split("?", 1)[0] == "GET " + fake_rules.RULES_PATH:
                     status, doc = 200, fake.rules_for(key)   # the rules Tares renders from the grants the scenario names (TR-864)
+                if status == 404:
+                    hit = fake.launch_for(self.path, self.headers, f"http://{self.headers.get('Host')}")   # the launch a station starts from (TR-870)
+                    if hit:
+                        status, doc = hit
                 if callable(doc):   # a stateful answer: doc(request body, the fake)
                     doc = doc(body, fake)
                 data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")
@@ -2418,6 +2424,25 @@ class FakeTares:
         mine = mine if isinstance(mine, dict) else {}
         return fake_rules.rules_answer((q.get("station") or [""])[0], (q.get("role") or [""])[0], ref,
                                        team.get("all", ""), mine.get("project", ""))
+
+    def launch_for(self, path: str, headers, base: str):
+        """The launch route's answer (built by the real runtime, fake_launch.py) from the projects and grants this
+        fake's routes name, or None for another route."""
+        projects = (self.routes.get("GET /api/crew/projects") or (200, {}))[1]
+        projects = projects.get("projects", []) if isinstance(projects, dict) else []
+        settings = (self.routes.get("GET /api/crew/settings") or (200, {}))[1]
+        settings = settings if isinstance(settings, dict) else {}
+        found = settings.get("settings")
+        settings = settings if found is None or found is False else found   # flat or nested, as the client reads it
+        team = (self.routes.get("GET /api/grants") or (200, {}))[1]
+        team = team if isinstance(team, dict) else {}
+
+        def rules(name, role):
+            found = [p for p in projects if name in (p.get("id"), p.get("name"))] if name else []
+            mine = (self.routes.get(f"GET /api/grants?project={found[0]['id']}") or (200, {}))[1] if found else {}
+            mine = mine if isinstance(mine, dict) else {}
+            return fake_rules.rules_answer("", role, name, team.get("all", ""), mine.get("project", ""))
+        return fake_launch.launch_answer(path, headers, projects, rules, settings.get("autonomy") or "L4-ship", base)
 
     def stop(self) -> None:
         self.server.shutdown()
@@ -3863,10 +3888,10 @@ def _touch_done(station: str):
 
 
 def _forget_kept(station: str):
-    """The station kept nothing of its last start: no grants text, and (TR-864) no copy of its rules."""
+    """The station kept nothing of its last start: no grants text, and (TR-864, TR-870) no copy of its launch spec."""
     def run(tmp: Path) -> None:
         (tmp / "crew" / "stations" / f"{station}.grants").unlink()
-        (tmp / "crew" / "rules" / f"{station}.json").unlink(missing_ok=True)
+        (tmp / "crew" / "launch" / f"{station}.json").unlink(missing_ok=True)
     return run
 
 
@@ -3919,6 +3944,9 @@ def _sessions_and(station: str):
 
 
 def wstep(world: dict, before=None, env: dict | None = None, after=None) -> Step:
+    named = list((world.get("grants") or {}).get("projects") or {})   # the cell knows the projects it holds grants for (TR-870)
+    world = {**world, "projects": [*world.get("projects", []),
+                                   *[{"id": n, "name": n} for n in named if not any(n in (p.get("id"), p.get("name")) for p in world.get("projects", []))]]}
     s = lstep("watch_regrant", world=world, env=env)
     s.before = before
     s.after = after or _sessions_started   # the sessions started so far, as this step left them
@@ -3926,6 +3954,8 @@ def wstep(world: dict, before=None, env: dict | None = None, after=None) -> Step
 
 
 def _launch(station: str, role: str, world: dict, parent: str = "", project: str = "") -> Step:
+    if project and not any(project in (p.get("id"), p.get("name")) for p in world.get("projects", [])):
+        world = {**world, "projects": [*world.get("projects", []), {"id": project, "name": project}]}   # the cell knows it (TR-870)
     return lstep("launch", station, role, parent, project, "", "{TMP}/crew", "sonnet", "high", f"Boot as the {role} station", world=world)
 
 
@@ -6325,7 +6355,10 @@ def _run_side(sc: Scenario) -> Side:
             for q in fake.requests:
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
                     continue
-                line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
+                route = q["route"]
+                if "/launch?" in route:   # the query holds the cell's port and a folder, percent-encoded: decode so they normalise
+                    route = norm_text(unquote(route), tmp)
+                line = f"{route} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
                 if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
                     asked.append(line)
             blocks.append("== asked of Tares ==\n" + "\n".join(asked))
@@ -6726,7 +6759,7 @@ scenario(Scenario(
 # --- no MCP server at the endpoint -----------------------------------------------------------------------------
 
 G1_NOMCP = "http://127.0.0.1:9/mcp"
-G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules"]})}
+G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"]})}
 
 scenario(Scenario(
     name="crew_g1_no_mcp",
@@ -6757,7 +6790,8 @@ scenario(Scenario(
 
 G2_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L3-review", "releaser": True, "release_profile": "kind",
                                                            "challenger": False, "builders_max": 3}}),
-            "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+            "GET /api/crew/projects": (200, {"projects": [{"id": "uc_links", "name": "Links App"}, {"id": "shop", "name": "shop"}]}),
+            "GET /api/grants": (200, {"all": ""})}   # the cell knows the projects its builders work on (TR-870)
 G2_QUIET = ("GET ",)                           # reads of Tares are made in a different number and order
 G2_CALLS = (("agents",), ("--version",))       # so are the reads of the session list and the version
 G2_SETUP = _cc_setup(have="1.0.0", installed="1.0.0")
@@ -7649,7 +7683,7 @@ def g4_up_after(tmp: Path) -> dict:
     return {"pid": pid, "alive": g4_alive(pid), "log": banner}
 
 
-G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules"]}),
+G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"]}),
                "GET /api/crew/settings": (200, {**SAVED, "releaser": False}),
                "GET /api/people": (200, {"people": [{"id": "local", "name": "Local"}]}),
                "GET /api/grants": (200, {"all": ""}),
@@ -7974,7 +8008,9 @@ scenario(Scenario(
         ("a role word names this crew's station", lambda r: r.code(1) == 0 and _printed(r, 1)["env"]["FACTORY_STATION"] == "crew-orchestrator"),
         ("a second word is the role", lambda r: r.code(2) == 0 and _printed(r, 2)["env"]["FACTORY_ROLE"] == "releaser"),
         ("a station with no record takes its role from its name", lambda r: r.code(3) == 0 and _printed(r, 3)["env"]["FACTORY_ROLE"] == "releaser"),
-        ("a recorded station takes the role stations.json holds", lambda r: r.code(4) == 0 and _printed(r, 4)["env"]["FACTORY_ROLE"] == "helper"),
+        # TR-870: a helper's rules are its parent's, and the cell will not give them for a helper whose parent is not recorded
+        ("a recorded helper with no parent on record is refused, saying so",
+         lambda r: r.code(4) == 1 and "old-helper is a helper" in r.out(4)),
     ],
     covers=[],
 ))

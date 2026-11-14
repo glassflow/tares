@@ -37,7 +37,7 @@ DEFAULTS: dict[str, str] = {
     "memory": "tares",
     "monitoring": "off",
     "guardrails": "tares",
-    "runtime": "claude-code",
+    "runtime": "claude_code",
 }
 
 NOT_INSTALLED = "not installed"
