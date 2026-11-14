@@ -341,7 +341,8 @@ class Doctor:
         found = shutil.which("tares", path=self.env.get("PATH"))
         if not found:
             self.no("tares_path", "tares on PATH: no tares resolves on PATH, and the plugin's hooks call it",
-                    version.upgrade_advice("uv tool install tares (or pip install tares), then open a new terminal"), True)
+                    version.upgrade_advice("uv tool install tares (or pip install tares), then open a new terminal",
+                                           stop_crew=False), True)
             return
         r = self.run([found, "--version"], timeout=30)
         ver = (r.stdout.strip().splitlines() or [""])[0] if r is not None and r.returncode == 0 else ""
