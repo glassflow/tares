@@ -537,10 +537,20 @@ class TaresClient:
 
     # -- the desk --
 
-    def desk_json(self) -> list:
-        """The open desk items from Tares; an empty list when Tares can't say."""
+    def desk_json(self, mine: bool = False) -> list:
+        """The open desk items from Tares; an empty list when Tares can't say. With `mine`, only the items
+        addressed to the caller's person (`mine=1`, the filter `desk_list(mine=true)` uses): on a shared cell
+        the plain list holds other people's items too. A Tares that rejects the parameter (400 or 422) is asked
+        again without it; one that ignores it (before 1.56) answers the whole list, as before."""
+        path = "/api/desk?state=open"
         try:
-            doc = state.loads_json(self.tares_http("GET", "/api/desk?state=open"))
+            try:
+                raw = self.tares_http("GET", path + "&mine=1" if mine else path)
+            except TaresHTTPError as e:
+                if not mine or e.status not in (400, 422):
+                    raise
+                raw = self.tares_http("GET", path)
+            doc = state.loads_json(raw)
         except (TaresHTTPError, ValueError):
             return []
         found = doc.get("desk") if isinstance(doc, dict) else None

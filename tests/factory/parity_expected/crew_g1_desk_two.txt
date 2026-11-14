@@ -9,7 +9,7 @@ shop-build-m2                  builder      opus/high      gone     -
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 claude code: 1 station(s) run an older Claude Code than 2.1.310; tares factory crew watch moves each onto it when it's idle (tares factory crew update does it now; tares factory roster shows each version)
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
-desk: 2 waiting for you; the next one (tares factory crew desk shows all; answer in the orchestrator's session):
+desk: 2 waiting for you; the next one (tares factory crew desk lists yours; answer in the orchestrator's session):
   D1 (blocks work) · Links App: Keep the old endpoint?
     A) keep it until v2 ships
     B) drop it now
@@ -191,11 +191,11 @@ Answer in the orchestrator's session, one at a time: tares factory crew attach o
 GET /health key=no 
 GET /api/crew/settings key=no 
 GET /api/crew/pace key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 

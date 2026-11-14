@@ -6,6 +6,7 @@ the project follows [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Changed
+- `crew status` and `crew desk` (and their `--json`) list only the open desk items addressed to you: they ask Tares for `mine=1`, so on a shared cell they no longer count other people's items. A Tares that rejects the parameter is asked again without it. `crew down` and the Docker cleanup still read every open item (TR-1355).
 - On Windows, `tares factory doctor` and the plugin version check now tell a person to stop the crew before they upgrade or install `tares` by hand, because an upgrade while any tares command runs can leave the install broken. macOS and Linux text is unchanged (TR-1281).
 
 ### Added
