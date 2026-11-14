@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "../api";
 import { Search, Settings as SettingsIco } from "../components/icons";
-import { ErrorState, InternalName, Picker, StatusBadge, TimeAgo, formatBytes, sourceTitle, usePolling } from "../components/bits";
+import { InternalName, Picker, StatusBadge, TimeAgo, sourceTitle, usePolling } from "../components/bits";
 import { ProjectLink } from "../components/ProjectBadge";
 
 // Gear dropdown next to "Add source" — catalog import/export, each on its own page.

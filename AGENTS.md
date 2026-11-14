@@ -67,7 +67,8 @@ predate the kit.
   tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
   `bg-primary`, `text-ok`, `text-warn`, `text-err`. No hex, no `rgb()`, no Tailwind palette colours
   (`text-red-500`), and no `--kit-*` outside the token block. Reach for `var(--…)` only when no
-  utility exists.
+  utility exists. `npm run token-contract` (`ui/eslint-token-contract.config.mjs`) fails on a hex,
+  `rgb()` or palette colour in any string in `ui/src`; CSS holds the definitions and is exempt.
 - **Shape and type.** No `rounded-*` other than `rounded-full` (dots, switches). No drop shadow on
   anything in the page: a panel is a 1px `border-border`, not a card. Floating layers (sheets, menus,
   popovers) cast `var(--sheet-shadow)`, and the selected-item bar is an inset shadow in the accent
@@ -75,11 +76,12 @@ predate the kit.
   `font-mono` for labels, badges and code, the pixel font for headline numerals only.
 - **Words.** Edition screens use the words in `ui/src/editions/WORDS.md`, and no em dash anywhere.
 - **Before you push** a console change:
-  `cd ui && npx tsc --noEmit && npm run test:words && npm run design-contract && npm run build`,
+  `cd ui && npx tsc --noEmit && npm run lint && npm run token-contract && npm run test:words &&
+  npm run design-contract && npm run build`,
   and the gallery suite when you touched `components/edition`. `design-contract`
   (`ui/eslint-design-contract.config.mjs`) fails on a rounded corner, a page shadow, a side stripe and
-  an em dash in copy; an exception goes in its register with a reason and a ticket, never in an
-  `eslint-disable` comment (inline config is off).
+  an em dash in copy. In both contracts an exception goes in the register with a reason and a
+  ticket, never in an `eslint-disable` comment (inline config is off).
 - A change to one of these conventions changes this section in the same PR, and the check that
   enforces it when there is one.
 

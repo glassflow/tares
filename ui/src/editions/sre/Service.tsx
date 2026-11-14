@@ -12,7 +12,7 @@ import {
   saveServiceSettings, sreService, type SreService, type SreServiceSettingsBody, type SreWindow,
 } from "./Services.api";
 import { isServiceSample, sampleSave, sampleService } from "./sample/services";
-import { count, serviceHref, STATE_TONE, up } from "./serviceWords";
+import { serviceHref, STATE_TONE, up } from "./serviceWords";
 
 // One service: what state it is in, a chart of its errors and traffic with its deploys, its
 // incidents, what the watcher raised, its blind spots, the repos its deploys come from, and its

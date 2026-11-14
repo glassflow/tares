@@ -473,7 +473,6 @@ function IncidentView({ id }: { id: string }) {
   const at = now(sample);
   const opened = Date.parse(d.opened_at);
   const tag = GROUP_TAG[d.state];
-  const mine = !!d.who && !!me && d.who.name === me;
   const can = (a: IncidentAction) => d.actions.includes(a);
   const slackUrl = d.slack?.url && /^https?:\/\//i.test(d.slack.url) ? d.slack.url : null;
   const worth = d.worth;

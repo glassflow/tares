@@ -19,7 +19,7 @@ const rules = (words.forbidden as Entry[]).map((e) => ({
 
 /** The forbidden words in a text (whole words, any case, minus the allowed phrases), plus "em dash". */
 export function forbiddenIn(text: string): string[] {
-  let t = text.replace(/\s+/g, " ");
+  const t = text.replace(/\s+/g, " ");
   const found: { at: number; name: string }[] = [];
   if (t.includes(EM_DASH)) found.push({ at: t.indexOf(EM_DASH), name: "em dash" });
   for (const r of rules) {

@@ -42,6 +42,8 @@
     "test:choose-edition": "vite build && node tests/choose-edition.e2e.cjs",
     "test:words": "node tests/words.selftest.cjs && node tests/words.check.cjs",
     "test:settings-people": "vite build && node tests/settings-people.e2e.cjs",
+    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "token-contract": "eslint --quiet --config eslint-token-contract.config.mjs \"src/**/*.{ts,tsx}\"",
     "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
@@ -71,6 +73,7 @@
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
     "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "playwright": "^1.60.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.5.3",

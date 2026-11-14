@@ -23,7 +23,6 @@ export const isSample = (n: string | null): n is SampleName => !!n && (SAMPLE_NA
 /** The moment the samples are read at. */
 export const SAMPLE_NOW = "2026-11-02T15:16:00+00:00";
 
-const pad = (n: number) => String(n).padStart(2, "0");
 /** An ISO time in the sample's day: `back` days before the 2nd, at h:m:s UTC. */
 const iso = (back: number, h: number, m: number, s = 0) =>
   new Date(Date.UTC(2026, 10, 2 - back, h, m, s)).toISOString().replace(".000Z", "+00:00");
