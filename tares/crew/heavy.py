@@ -75,6 +75,28 @@ def _holder_gone(lock: str) -> bool:
         return True
 
 
+def _clear_stale(lock: str) -> bool:
+    """Take a stale lock out of the way; True when it no longer blocks the mkdir.
+
+    The rename is atomic, so of two waiters that judged one lock stale only one moves it. A waiter that
+    was slow moves whatever is at the path by then, so it looks at what it moved and puts a live lock back."""
+    moved = f"{lock}.stale-{os.getpid()}-{time.monotonic_ns()}"
+    try:
+        os.rename(lock, moved)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False   # Windows: a handle is open on the folder; try again on the next poll
+    if _holder_gone(moved):
+        shutil.rmtree(moved, ignore_errors=True)
+        return True
+    try:
+        os.rename(moved, lock)
+    except OSError:
+        pass
+    return False
+
+
 def _write(path: str, text: str) -> None:
     with open(path, "wb") as f:
         f.write(text.encode("utf-8"))
@@ -96,8 +118,7 @@ def _acquire(lock: str, what: str) -> int | None:
         except OSError as e:
             print(f"factory-heavy: cannot make {lock}: {e}", file=sys.stderr)
             return 1
-        if _holder_gone(lock):
-            shutil.rmtree(lock, ignore_errors=True)
+        if _holder_gone(lock) and _clear_stale(lock):
             continue
         waited = time.monotonic() - start
         if waited >= WAIT_LIMIT:

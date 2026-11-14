@@ -237,8 +237,10 @@ try:
     ck("a lock with only a fresh `what` is still waited for", code == 75, f"{code} {err!r}")
     old = time.time() - heavy.NO_PID_GRACE - 30
     os.utime(lockpath(t), (old, old))
-    code, out, err = in_process(t, 30, *pycmd("print('ran')"))
-    ck("a lock with no pid file for longer than the grace is taken over", code == 0 and "ran" not in err and not os.path.exists(lockpath(t)), f"{code} {err!r}")
+    marker = os.path.join(t, "ran")
+    code, out, err = in_process(t, 30, *pycmd(f"open({marker!r}, 'w').close()"))
+    ck("a lock with no pid file for longer than the grace is taken over, and the command runs",
+       code == 0 and os.path.exists(marker) and not os.path.exists(lockpath(t)), f"{code} {err!r}")
 
     t = fresh()
     os.mkdir(lockpath(t))
@@ -258,6 +260,37 @@ try:
     finally:
         os.remove = real_remove
     ck("_release takes the pid file out last", removed == ["what", "pid"] and not os.path.exists(lockpath(t)), repr(removed))
+
+    # TR-1370: two waiters judge one stale lock; the other gets there first and holds a live lock by the time this one clears
+    t = fresh()
+    os.mkdir(lockpath(t))
+    open(os.path.join(lockpath(t), "pid"), "w").write("99999999\n")
+    real_gone, judged = heavy._holder_gone, []
+
+    def other_waiter_wins(lock):
+        judged.append(real_gone(lock))
+        if len(judged) == 1:
+            shutil.rmtree(lock)
+            os.mkdir(lock)
+            open(os.path.join(lock, "pid"), "w").write(f"{os.getpid()}\n")
+        return judged[-1]
+
+    heavy._holder_gone = other_waiter_wins
+    try:
+        slow_judged_stale = heavy._holder_gone(lockpath(t))
+        cleared = heavy._clear_stale(lockpath(t))
+    finally:
+        heavy._holder_gone = real_gone
+    ck("two waiters, one stale lock: the slow one does not remove the live lock the other made",
+       slow_judged_stale and not cleared and open(os.path.join(lockpath(t), "pid")).read().strip() == str(os.getpid()),
+       f"{slow_judged_stale} {cleared} {os.listdir(t)}")
+    ck("... and nothing is left beside it", os.listdir(t) == [os.path.basename(lockpath(t))], repr(os.listdir(t)))
+
+    t = fresh()
+    os.mkdir(lockpath(t))
+    open(os.path.join(lockpath(t), "pid"), "w").write("99999999\n")
+    ck("a stale lock is cleared by the first waiter", heavy._clear_stale(lockpath(t)) and os.listdir(t) == [])
+    ck("... and a second waiter finding it gone is not in the way", heavy._clear_stale(lockpath(t)))
 
     t = fresh()
     code, out, err = in_process(t, 0, *pycmd("pass"))
