@@ -622,8 +622,8 @@ class FactoryStore:
           2. a project's own row keeps its non-secret, non-address fields. The secrets and
              addresses it held move to the factory connection of the same integration, only when
              that integration has none yet; the project's copy goes either way. The integration
-             always ends up with a connection (empty if the row held nothing to move), so the
-             project's pick stays connected. An integration that is not installed has no schema,
+             always ends up with a connection (empty if no row held anything to move, made after
+             all the rows that did), so the project's pick stays connected. An integration that is not installed has no schema,
              so every key counts as a secret.
           3. a guardrail pair's integration settings move the same way, and the pair keeps none.
              Pairs of one scope and project that are then the same (hook, integration, on_fail)
@@ -647,6 +647,7 @@ class FactoryStore:
                             "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, json.dumps(settings), at, by])
 
         at = now_utc()
+        bare: list = []
         for slot, name, raw, up_at, up_by in self.sc.execute(
                 "SELECT slot, name, settings, updated_at, updated_by FROM integration_choices "
                 "WHERE slot != 'monitoring' ORDER BY slot").fetchall():
@@ -658,10 +659,12 @@ class FactoryStore:
                 "ORDER BY project_uid, slot").fetchall():
             have = self._load_settings(raw)
             gone = {k: v for k, v in have.items() if moves(slot, name, k)}
-            # the project's pick needs a connection to stand on, even when it held no secret
-            connect(slot, name, gone, at, "upgrade")
             if not gone:
+                # the pick needs a connection to stand on, made below once every row that holds
+                # something to move has had its turn: an empty one made now would win over it
+                bare.append((slot, name))
                 continue
+            connect(slot, name, gone, at, "upgrade")
             self.sc.execute("UPDATE project_integrations SET settings = ? WHERE project_uid = ? AND slot = ?",
                             [json.dumps({k: v for k, v in have.items() if k not in gone}), uid, slot])
         seen: set = set()
@@ -677,6 +680,8 @@ class FactoryStore:
             if key in seen:
                 self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ?", [pid])
             seen.add(key)
+        for slot, name in bare:
+            connect(slot, name, {}, at, "upgrade")
 
     def _next_ticket_number(self, project: str) -> int:
         """The project's next ticket number, never one given out before. Lock held."""

@@ -292,6 +292,8 @@ def upgrade():
 
 # tickets: the factory's choice held its settings; a project held a token, an address and a plain field
 old_choice("tickets", "tixa", {"url": "https://a.example/api", "token": SECRETS[3], "project": "FAC"})
+# a plain-only row for that same integration that sorts BEFORE p1: it must not make the connection empty first
+old_project("p00", "tickets", "tixb", {"project": "ZERO"})
 old_project("p1", "tickets", "tixb", {"url": "https://own.example/api", "token": SECRETS[6], "project": "OWN"})
 # a project row for an integration the factory already has a connection for: its secret is not copied
 old_choice("review", "reva", {"token": SECRETS[2]})
@@ -325,6 +327,8 @@ ck("the project's secret and address moved to the factory connection of the same
    conns.get(("tickets", "tixb")) == {"url": "https://own.example/api", "token": SECRETS[6]}, list(conns))
 pj = {(r[0], r[1]): json.loads(r[2]) for r in table("SELECT project_uid, slot, settings FROM project_integrations")}
 ck("the project kept its plain field only", pj[("p1", "tickets")] == {"project": "OWN"}, pj)
+ck("a plain-only row sorting first keeps its field and does not take the credential with it",
+   pj[("p00", "tickets")] == {"project": "ZERO"}, pj)
 ck("a connection that already existed is not overwritten by a project's copy",
    conns.get(("review", "reva")) == {"token": SECRETS[2]} and pj[("p1", "review")] == {}, (conns.get(("review", "reva")), pj))
 ck("an integration that is not installed has every key treated as a secret: both leave the project",
