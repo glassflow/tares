@@ -199,16 +199,9 @@ ck("the settings are the answers", [c2.tares.settings.get(k) for k in ("autonomy
    == ["L3-review", True, "kind", False, 3] and "prod_pattern" in c2.tares.settings)
 ck("same grant on Tares", c1.tares.grants == c2.tares.grants and len(c2.tares.grants) == 1 and GRANT in c2.tares.grants[0],
    (c1.tares.grants, c2.tares.grants))
-def no_report(rows):
-    """The requests without the machine report `crew up` sends first (TR-1312), which `--answers` does not."""
-    return [w for w in rows if w["path"] != "/api/crew/machine"]
-
-
-ck("the same requests, in the same order", no_report(c1.tares.written()) == c2.tares.written(), (c1.tares.written(), c2.tares.written()))
-ck("crew up tells Tares its machine and version first, once (TR-1312), and the report has no key",
-   [w["path"] for w in c1.tares.written()][:1] == ["/api/crew/machine"]
-   and sum(w["path"] == "/api/crew/machine" for w in c1.tares.written()) == 1
-   and set(c1.tares.written()[0]["body"]) == {"machine", "version"}, c1.tares.written())
+ck("the same requests, in the same order", c1.tares.written() == c2.tares.written(), (c1.tares.written(), c2.tares.written()))
+ck("crew up tells Tares its machine and version once (TR-1312), and the report has no key",
+   len(c1.tares.machine) == 1 and set(c1.tares.machine[0]) == {"machine", "version"} and c2.tares.machine == [], c1.tares.machine)
 ck("the terminal path asked the questions the contract lists",
    all(q in t.stdout + t.stderr for q in ("Who approves merging pull requests?", "How many builders may work at the same time?")))
 ck("a second --questions after --answers: nothing outstanding", questions(c2)[1] == [])
@@ -319,7 +312,7 @@ r = c.run(["crew", "up", "--yes"], env=env_watch)
 out = r.stdout + r.stderr
 ck("asks nothing: no prompt, no question in the output", "Choice [" not in out and "recommended:" not in out and "> " not in out.replace("-> ", ""), out[-300:])
 ck("writes nothing to Tares but the machine report: every answer was saved already (TR-1312)",
-   [w["path"] for w in c.tares.written()] == ["/api/crew/machine"], c.tares.written())
+   c.tares.written() == [] and len(c.tares.machine) == 1, (c.tares.written(), c.tares.machine))
 ck("says it started the watch", "started the watch, which revives any station that stops" in out, out[-400:])
 ck("starts the Python watch: the pid file names it and the log is there",
    (c.crew / "watch.pid").exists() and (c.crew / "watch.log").exists() and watch.running_pid(CrewPaths(str(c.crew))) is not None,

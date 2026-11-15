@@ -49,6 +49,7 @@ class FakeTares:
         self.settings = dict(settings or {})
         self.people = list(people if people is not None else [{"id": "local", "name": "Local"}])
         self.grants = list(grants or [])
+        self.machine: list = []      # POST /api/crew/machine bodies, not part of writes.jsonl
         # what /health lists: crew up wants "integrations" and "merge_queue" (need_capability); capabilities=[] is an old Tares
         self.capabilities = list(["integrations", "merge_queue", "guardrail_rules", "launch_spec"] if capabilities is None else capabilities)
         self.health = health                # None: the short /health body; a dict: that whole body (an old cell, or the real daemon's)
@@ -164,6 +165,9 @@ class FakeTares:
                         "serverInfo": {"name": "fake-tares", "version": "0"}}})
                 if self._refused(path):
                     return
+                if path == "/api/crew/machine":   # the machine's name and version: kept apart, it differs on every machine
+                    outer.machine.append(body)
+                    return self._send(200, {"ok": True})
                 with outer.lock:
                     outer._log("POST", path, body)
                     if path == "/api/grants" and isinstance(body, dict) and body.get("words"):
