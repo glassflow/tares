@@ -153,6 +153,8 @@ async def main():
             await cx.post("/ingest/claude_code", content="\n".join(json.dumps(x) for x in lines) + "\n")
 
         store.update_ticket(t_vault, holder="atlas-build-m1")
+        # Vault picks an integration; the setup page names the projects that pick one (TR-871)
+        store.set_project_choice(vault, "tickets", "tares", {}, "Lee")
         # a grant given on Vault, in the project's own grants document
         store.create_doc(vault, "grants", "Grants", '# Grants\n\n- "Zephyrvault may read the status of a '
                          'commit" (2026-11-01)\n')
@@ -164,7 +166,8 @@ async def main():
                          f'commit" (2026-11-01)\n- "{d_label}" (2026-11-02)\n')
 
         lists = ["/api/factory/projects", "/api/factory/tickets", "/api/factory/reviews",
-                 "/api/factory/docs", "/api/factory/crew", "/api/factory/settings", "/api/home"]
+                 "/api/factory/docs", "/api/factory/crew", "/api/factory/settings", "/api/factory/setup",
+                 "/api/home"]
         singles = [f"/api/factory/projects/{vault}", f"/api/factory/projects/{vault}/tickets/{t_vault}",
                    f"/api/factory/projects/{vault}/tickets/T1"]
 
