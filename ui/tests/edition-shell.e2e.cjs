@@ -195,7 +195,8 @@ async function waitFor(url, tries = 150) {
       await shot(page, "factory-1440-no-brain.png");
       await ctx.close();
     }
-    for (const [what, status, json] of [["the brain is not set up", 200, { configured: false, repos: [] }], ["the read fails", 500, { detail: "boom" }]]) {
+    for (const [what, status, json] of [["the brain is not set up", 200, { configured: false, repos: [] }], ["the read fails", 500, { detail: "boom" }],
+                                         ["the reply has no configured flag", 200, { repos: [] }], ["configured is not a boolean", 200, { configured: "no", repos: [] }]]) {
       const { page, ctx } = await open("factory", 1440);
       await brainReply(page, status, json);
       await visit(page, "factory", "/projects");
@@ -223,6 +224,11 @@ async function waitFor(url, tries = 150) {
       ck(`${tag}: Settings is the last row`, order[order.length - 1] === "menu-settings");
       const g = nav.getByTestId("menu-group-second-brain");
       const gs = await g.evaluate((el) => { const c = getComputedStyle(el); return { size: c.fontSize, weight: c.fontWeight, tag: el.tagName }; });
+      const grouped = await nav.evaluate((n) => [...n.querySelectorAll('[role="group"]')].map((g) => {
+        const l = document.getElementById(g.getAttribute("aria-labelledby") || "");
+        return l ? l.textContent.trim() : "";
+      }));
+      ck(`${tag}: each group is a role=group named by its heading`, grouped.join("|") === "Factory|Second Brain", grouped.join("|"));
       ck(`${tag}: the group name is small and bold, not a link`, gs.size === "12px" && Number(gs.weight) >= 600 && gs.tag === "DIV", JSON.stringify(gs));
       const hrefs = await nav.locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href")));
       ck(`${tag}: the rows lead to /brain, /brain/decisions and /brain/ask`, ["/brain", "/brain/decisions", "/brain/ask"].every((h) => hrefs.includes(h)), hrefs.join(","));

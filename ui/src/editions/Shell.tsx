@@ -43,22 +43,32 @@ const linkClass = (soft: boolean, narrow: boolean) => ({ isActive }: { isActive:
       : soft ? "text-muted-foreground!" : "text-foreground!"].join(" ");
 const ROW = "flex! w-full items-center justify-between gap-3 border-0! bg-transparent! px-3.5! py-2.5! text-left text-sm! font-normal! text-foreground! no-underline! hover:bg-muted! hover:text-foreground!";
 
+const groupSlug = (g: string) => g.toLowerCase().replace(/\s+/g, "-");
+
 function MenuLinks({ entries, narrow }: { entries: MenuEntry[]; narrow: boolean }) {
+  const link = (e: MenuEntry) => (
+    <NavLink key={e.key} to={e.to} end={e.to === "/" || e.to === "/brain"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}>
+      {e.label}
+    </NavLink>
+  );
+  // Entries of one group sit in a role="group" named by the group's heading, in the menu and in the drawer.
+  const blocks: { group?: string; items: MenuEntry[] }[] = [];
+  for (const e of entries) {
+    const last = blocks[blocks.length - 1];
+    if (last && last.group === e.group) last.items.push(e);
+    else blocks.push({ group: e.group, items: [e] });
+  }
   return (
     <>
-      {entries.map((e, i) => (
-        <Fragment key={e.key}>
-          {e.group && e.group !== entries[i - 1]?.group && (
-            <div data-testid={`menu-group-${e.group.toLowerCase().replace(/\s+/g, "-")}`}
-                 className={`px-3 pb-1.5 pt-1 text-xs font-semibold text-muted-foreground ${i > 0 ? "mt-[18px]" : ""}`}>
-              {e.group}
-            </div>
-          )}
-          <NavLink to={e.to} end={e.to === "/" || e.to === "/brain"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}>
-            {e.label}
-          </NavLink>
-        </Fragment>
-      ))}
+      {blocks.map((b, i) => b.group ? (
+        <div key={b.group} role="group" aria-labelledby={`menu-group-label-${groupSlug(b.group)}`}>
+          <div id={`menu-group-label-${groupSlug(b.group)}`} data-testid={`menu-group-${groupSlug(b.group)}`}
+               className={`px-3 pb-1.5 pt-1 text-xs font-semibold text-muted-foreground ${i > 0 ? "mt-[18px]" : ""}`}>
+            {b.group}
+          </div>
+          {b.items.map(link)}
+        </div>
+      ) : <Fragment key={`b${i}`}>{b.items.map(link)}</Fragment>)}
       <div className="min-h-6 flex-1" />
       <NavLink to={SETTINGS_ENTRY.to} data-testid={`menu-${SETTINGS_ENTRY.key}`} className={linkClass(true, narrow)}>
         {SETTINGS_ENTRY.label}
