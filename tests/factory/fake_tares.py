@@ -21,6 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_launch import launch_answer  # noqa: E402
 from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 
 SETTINGS = {"autonomy": "L4-ship", "releaser": False, "challenger": False, "builders_max": 2,
@@ -35,7 +36,7 @@ class World:
         self.mcp = True
         self.keep = True                    # False: a PUT of the settings is answered but not kept
         self.broken = False                 # True: a Tares that is up but cannot answer, every GET but /health is a 500
-        self.capabilities = ["guardrail_rules"]   # what /health lists: a station start asks for the rules route (TR-864)
+        self.capabilities = ["guardrail_rules", "launch_spec"]   # what /health lists: a station start asks for the launch route (TR-870)
         self.routes = {}                    # more GETs: path -> answer (200); /api/grants is one the watch asks
         self.log = []
 
@@ -78,6 +79,13 @@ def _handler(world: World):
                 return self._json(200, {"projects": world.projects})
             if self.command == "GET" and path in world.routes:
                 return self._json(200, world.routes[path])
+            if self.command == "GET" and "/launch" in path:
+                grants = (world.routes.get("/api/grants") or {}).get("all", "")
+                hit = launch_answer(self.path, self.headers, world.projects,
+                                    lambda name, role: rules_answer("", role, name, grants, ""),
+                                    world.settings.get("autonomy", "L4-ship"), f"http://{self.headers.get('Host')}")
+                if hit:
+                    return self._json(*hit)
             if self.command == "GET" and path == RULES_PATH:
                 if not self.headers.get("X-Tares-Station"):   # the real route: a key alone, without a station, is refused
                     return self._json(403, {"detail": "this needs an admin or a crew station"})

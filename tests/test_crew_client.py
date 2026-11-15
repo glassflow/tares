@@ -117,11 +117,8 @@ class Fake(BaseHTTPRequestHandler):
                 return self._json(200, {"all": GRANTS["all"], "project": GRANTS["projects"][q["project"][0]]})
             return self._json(200, {"all": GRANTS["all"]})
         if u.path == "/api/desk":
-            if "mine=1" in u.query:
-                # the caller's own (factory_owners); MINE_STATUS plays an older Tares that refuses it
-                if MINE_STATUS[0] != 200:
-                    return self._json(MINE_STATUS[0], {"detail": "no"})
-                return self._json(200, {"desk": [{"id": "d2", "question": "mine?"}]})
+            if "mine" in parse_qs(u.query) and WORLD.get("mine_status", 200) != 200:   # a key with no person: 403
+                return self._json(WORLD["mine_status"], {"detail": "This key has no person. An admin binds it in Settings, Keys."})
             return self._json(200, {"desk": [{"id": "d1", "question": "ship?"}]})
         self._json(404, {})
 
@@ -146,9 +143,6 @@ def free_port():
 
 DEAD = f"http://127.0.0.1:{free_port()}"
 HOMEN = [0]
-
-
-MINE_STATUS = [200]
 
 
 def machine(env=None, **extra):
@@ -510,13 +504,19 @@ print("the desk")
 c, _ = machine()
 ck("desk_json: open items", c.desk_json() == [{"id": "d1", "question": "ship?"}] and seen()[-1]["path"] == "/api/desk?state=open")
 ck("and [] when Tares can't say", bad.desk_json() == [] and down.desk_json() == [])
-ck("my_desk_json: the person's own, asked with mine=1", c.my_desk_json() == [{"id": "d2", "question": "mine?"}]
-   and seen()[-1]["path"] == "/api/desk?state=open&mine=1", seen()[-1])
-MINE_STATUS[0] = 403
-ck("a Tares that will not narrow it: the whole open desk, as before",
-   c.my_desk_json() == [{"id": "d1", "question": "ship?"}] and seen()[-1]["path"] == "/api/desk?state=open")
-MINE_STATUS[0] = 200
-ck("no answer at all: an empty desk, without asking twice", down.my_desk_json() == [])
+ck("mine asks for mine=1", c.desk_json(mine=True) == [{"id": "d1", "question": "ship?"}]
+   and seen()[-1]["path"] == "/api/desk?state=open&mine=1")
+WORLD["mine_status"] = 403
+said = []
+c.say = said.append
+ck("a key with no person: [] and it is said, not a silent empty desk", c.desk_json(mine=True) == []
+   and said == ["the desk cannot be read: This key has no person. An admin binds it in Settings, Keys."], said)
+ck("...the plain read of the desk is unaffected", c.desk_json() == [{"id": "d1", "question": "ship?"}])
+ck("...strict raises NoPersonError instead", isinstance(err_of(c.desk_json, True, True), C.NoPersonError))
+WORLD["mine_status"] = 422
+n = len(seen())
+ck("any other refusal is [] with no second request", c.desk_json(mine=True) == [] and len(seen()) == n + 1, seen()[n:])
+del WORLD["mine_status"]
 
 print("prime: Tares, key, settings, once")
 pc, phome = machine()

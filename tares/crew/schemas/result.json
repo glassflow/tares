@@ -12,6 +12,11 @@
       "description": "The lines the text mode prints on stderr, without the `tares factory: ` prefix. For a person, not for parsing.",
       "type": "array",
       "items": {"type": "string"}
+    },
+    "left_to_watch": {
+      "description": "`crew update` only, and only when it left stations out: the stations a person had open in a terminal. It did not wait for them; the watch moves them when they are free.",
+      "type": "array",
+      "items": {"type": "string"}
     }
   }
 }

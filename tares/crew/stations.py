@@ -7,6 +7,7 @@ Standard library only, plus the crew modules (no duckdb, fastapi or daemon).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -254,6 +255,44 @@ def cmd_settings(argv: list, env: dict) -> int:
         try:
             client.prime()
             text = settings(client, paths, list(argv[1:]))
+        finally:
+            client.close()
+    except CrewError as e:
+        sys.stdout.flush()
+        print(e.line, file=sys.stderr)
+        return 1
+    sys.stdout.write(text)
+    return 0
+
+
+LAUNCH_PLAN_USAGE = 'usage: launch-plan <station> <role> <parent> <project> <repo>  ("" or - for no parent, project or repo)'
+
+
+def launch_plan(client: TaresClient, paths: CrewPaths, argv: list) -> str:
+    """The text `tares factory launch-plan` prints: what a station would start with, as JSON
+    ({args, env, settings}), the cell's launch spec with this machine's placeholders filled
+    (launch.launch_plan). Nothing is started and no settings file is written; the copy of the spec is
+    kept. Five words are needed, so a wrong count is refused with the usage line."""
+    state.require_crew(paths)
+    if len(argv) != 5 or not argv[0] or not argv[1]:
+        raise CrewError(LAUNCH_PLAN_USAGE)
+    station = station_name(argv[0], paths)
+    parent, project, repo = ("" if a == "-" else a for a in argv[2:5])
+    if parent:
+        parent = station_name(parent, paths)
+    plan = launch.launch_plan(client, station, argv[1], parent, project, repo)
+    return json.dumps(plan, indent=2, ensure_ascii=False) + "\n"
+
+
+def cmd_launch_plan(argv: list, env: dict) -> int:
+    """`tares factory launch-plan <station> <role> <parent> <project> <repo>`: print the launch plan."""
+    paths = CrewPaths.from_env()
+    try:
+        state.crew_name(paths)
+        client = TaresClient(paths, env)
+        try:
+            client.prime(offline_ok=True)  # with Tares down, the launch kept from the station's last start
+            text = launch_plan(client, paths, list(argv[1:]))
         finally:
             client.close()
     except CrewError as e:

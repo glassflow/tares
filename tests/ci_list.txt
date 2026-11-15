@@ -51,6 +51,7 @@ test_crew_idle_wake
 test_crew_import_without_tty
 test_crew_kit
 test_crew_launch
+test_crew_launch_spec
 test_crew_lifecycle
 test_crew_lifecycle_json
 test_crew_mcp_headers
@@ -163,12 +164,14 @@ test_mcp_ee_tools
 test_mcp_remote
 test_mcp_setup
 test_mcp_station_headers
+test_memory_integration
 test_merge_queue
 test_merge_ready
 test_metrics
 test_milestone_checks
 test_model_provider
 test_model_providers
+test_monitoring_integration
 test_morning_status
 test_no_console
 test_normalize
@@ -207,6 +210,7 @@ test_review_gate
 test_review_post
 test_rius_rca
 test_run_results
+test_runtime_launch
 test_schedule_trigger
 test_schema_compat
 test_schema_compat_guards

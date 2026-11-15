@@ -49,17 +49,36 @@ class _Answer:
         return self.content.decode("utf-8", "replace")
 
 
+NO_PERSON = "This key has no person. An admin binds it in Settings, Keys."   # the server's text (factory_api.py)
+
+
 class TaresHTTPError(CrewError):
     """A call to Tares that did not give a 2xx/3xx answer. The text is what curl prints with `-sS -f`
     ("curl: (22) The requested URL returned error: 404"), because bash callers read it: grants_read looks
     for `error: 404`, and crew_projects shows the last line. `status` is the HTTP status, None when no
-    answer came at all."""
+    answer came at all. `detail` is the `detail` text of a JSON error body ("" when there is none)."""
 
     code = "tares_error"
 
-    def __init__(self, text: str, status=None):
+    def __init__(self, text: str, status=None, detail: str = ""):
         super().__init__(text)
         self.status = status
+        self.detail = detail
+
+
+class NoPersonError(TaresHTTPError):
+    """`mine=1` on a key that is bound to no person (403)."""
+
+    code = "no_person"
+
+
+def _detail(body: bytes) -> str:
+    """The `detail` of a JSON error body as text, "" when the body has none."""
+    try:
+        got = json.loads(body.decode("utf-8", "replace")).get("detail")
+    except (ValueError, AttributeError):
+        return ""
+    return got.strip() if isinstance(got, str) else ""
 
 
 def _say(msg: str) -> None:
@@ -374,7 +393,8 @@ class TaresClient:
                 body if isinstance(body, str) else state.dumps_compact(body)).encode("utf-8")
         r = self._request(method, f"{self.tares}{path}", headers, content, 15)
         if r.status_code >= 400:
-            raise TaresHTTPError(f"curl: (22) The requested URL returned error: {r.status_code}", r.status_code)
+            raise TaresHTTPError(f"curl: (22) The requested URL returned error: {r.status_code}", r.status_code,
+                                 _detail(r.content))
         return r.content.decode("utf-8", "replace")
 
     def key_ok(self, key: str) -> bool:
@@ -526,36 +546,36 @@ class TaresClient:
 
     # -- the desk --
 
-    def desk_json(self) -> list:
-        """The open desk items from Tares; an empty list when Tares can't say."""
+    def desk_json(self, mine: bool = False, strict: bool = False) -> list:
+        """The open desk items from Tares; an empty list when Tares can't say. With `mine`, only the items
+        addressed to the caller's person (`mine=1`, the filter `desk_list(mine=true)` uses): on a shared cell
+        the plain list holds other people's items too. A Tares before 1.56 ignores the parameter and answers
+        the whole list, as before. A key with no person gets 403 for `mine`: that is said (an empty desk would
+        read as "nothing waits"), and the list is empty, or with `strict` NoPersonError is raised."""
+        path = "/api/desk?state=open"
         try:
-            doc = state.loads_json(self.tares_http("GET", "/api/desk?state=open"))
-        except (TaresHTTPError, ValueError):
+            doc = state.loads_json(self.tares_http("GET", path + "&mine=1" if mine else path))
+        except TaresHTTPError as e:
+            if mine and e.status == 403:
+                text = e.detail or NO_PERSON
+                if strict:
+                    raise NoPersonError(text, status=403, detail=text) from None
+                self.say(f"the desk cannot be read: {text}")
+            return []
+        except ValueError:
             return []
         found = doc.get("desk") if isinstance(doc, dict) else None
         return [] if found is None or found is False else found
 
-    def my_desk_json(self) -> list:
-        """The open desk items that wait for the crew's person: the console's "Waiting for you", by
-        the cell's one rule (factory_owners: addressed to them, else the owner of the project). On a
-        cell of one person that is the whole desk. The whole open desk when Tares can't narrow it
-        (an older Tares, a key with no person). The crew's own housekeeping reads desk_json."""
-        try:
-            doc = state.loads_json(self.tares_http("GET", "/api/desk?state=open&mine=1"))
-        except TaresHTTPError as e:
-            # Tares answered but would not narrow it (an older Tares, a key with no person): the
-            # whole desk, as before; no answer at all is an empty desk, without a second wait
-            return self.desk_json() if e.status is not None else []
-        except ValueError:
-            return []
-        found = doc.get("desk") if isinstance(doc, dict) else None
-        return self.desk_json() if found is None or found is False else found
-
     # -- once per command --
 
-    def prime(self) -> None:
-        """Decide once where Tares is and what the crew settings are, so later calls reuse the answer."""
+    def prime(self, offline_ok: bool = False) -> None:
+        """Decide once where Tares is and what the crew settings are, so later calls reuse the answer. With
+        Tares down it stops with the "no Tares answers" message, unless `offline_ok`: then it only merges the
+        crew.json defaults, for a command that can go on from what an earlier start kept."""
         state.merge_crew_defaults(self.paths)
+        if offline_ok and not self.tares_on():
+            return
         self.require_tares()
         self.keep_token()
         if self.paths.crew_cfg.is_file():

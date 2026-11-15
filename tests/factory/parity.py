@@ -55,6 +55,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -1404,6 +1405,7 @@ scenario(Scenario(
 sys.path.insert(0, str(HERE))
 import fake_tares  # noqa: E402
 import fake_rules  # noqa: E402
+import fake_launch  # noqa: E402
 
 NEW_CHECKS = (r"^  (ok|warn|FIX)\s+(engine|tares on PATH|tares version|login key|crew key file|git|Git for Windows|Claude processes|Claude's background service|orphaned crew processes)\b",)
 DOCTOR_DROP = NEW_CHECKS
@@ -1883,7 +1885,7 @@ def _freeze_state(tmp: Path) -> dict:
     frozen = _frozen_of(tmp) or {}
     snap = tmp / "crew" / "frozen-kit"
     return {"frozen": bool(frozen), "keys": sorted(frozen), "at": frozen.get("at"), "by": frozen.get("by"),
-            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "mcp-headers").exists(),
+            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "hooks" / "guard.sh").exists(),
             "extra": (tmp / "crew" / "frozen-kit.new").exists() or (tmp / "crew" / "freezing").exists()}
 
 
@@ -2022,7 +2024,7 @@ def _fz_marks(tmp: Path) -> dict:
             "plugin": {s: v.get("plugin") for s, v in rows.items()}, "kit": {s: v.get("kit") for s, v in rows.items()},
             "line": {s: line(s) for s in rows},
             "plugin_arg": {s: plugin_dir(s) for s in rows}, "resume_arg": {s: resumed(s) for s in rows},
-            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "mcp-headers", os.X_OK),
+            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "hooks" / "guard.sh", os.X_OK),
             "same": _same_tree(snap, kit), "kept": (snap / ".kept").exists(), "marker": (crew / "freezing").exists(),
             "checkout_file": (crew / "kit-checkout").exists()}
 
@@ -2370,7 +2372,7 @@ class FakeTares:
     def __init__(self, routes: dict):
         import http.server
         import threading
-        self.routes = {"GET /health": (200, {"ok": True, "capabilities": ["guardrail_rules"]}),
+        self.routes = {"GET /health": (200, {"ok": True, "capabilities": ["guardrail_rules", fake_launch.CAPABILITY]}),
                        "GET /api/crew/settings": (200, {"settings": {}})}
         self.routes.update(routes)
         self.requests: list = []
@@ -2390,6 +2392,10 @@ class FakeTares:
                 status, doc = fake.routes.get(key) or fake.routes.get(key.split("?", 1)[0], (404, {"detail": "not found"}))
                 if status == 404 and key.split("?", 1)[0] == "GET " + fake_rules.RULES_PATH:
                     status, doc = 200, fake.rules_for(key)   # the rules Tares renders from the grants the scenario names (TR-864)
+                if status == 404:
+                    hit = fake.launch_for(self.path, self.headers, f"http://{self.headers.get('Host')}")   # the launch a station starts from (TR-870)
+                    if hit:
+                        status, doc = hit
                 if callable(doc):   # a stateful answer: doc(request body, the fake)
                     doc = doc(body, fake)
                 data = (doc if isinstance(doc, str) else json.dumps(doc)).encode("utf-8")
@@ -2418,6 +2424,25 @@ class FakeTares:
         mine = mine if isinstance(mine, dict) else {}
         return fake_rules.rules_answer((q.get("station") or [""])[0], (q.get("role") or [""])[0], ref,
                                        team.get("all", ""), mine.get("project", ""))
+
+    def launch_for(self, path: str, headers, base: str):
+        """The launch route's answer (built by the real runtime, fake_launch.py) from the projects and grants this
+        fake's routes name, or None for another route."""
+        projects = (self.routes.get("GET /api/crew/projects") or (200, {}))[1]
+        projects = projects.get("projects", []) if isinstance(projects, dict) else []
+        settings = (self.routes.get("GET /api/crew/settings") or (200, {}))[1]
+        settings = settings if isinstance(settings, dict) else {}
+        found = settings.get("settings")
+        settings = settings if found is None or found is False else found   # flat or nested, as the client reads it
+        team = (self.routes.get("GET /api/grants") or (200, {}))[1]
+        team = team if isinstance(team, dict) else {}
+
+        def rules(name, role):
+            found = [p for p in projects if name in (p.get("id"), p.get("name"))] if name else []
+            mine = (self.routes.get(f"GET /api/grants?project={found[0]['id']}") or (200, {}))[1] if found else {}
+            mine = mine if isinstance(mine, dict) else {}
+            return fake_rules.rules_answer("", role, name, team.get("all", ""), mine.get("project", ""))
+        return fake_launch.launch_answer(path, headers, projects, rules, settings.get("autonomy") or "L4-ship", base)
 
     def stop(self) -> None:
         self.server.shutdown()
@@ -3069,7 +3094,7 @@ scenario(Scenario(
     suite="crew",
     about="down stops the watch, retires every active station and withdraws the moot desk questions; a second down finds nothing to stop",
     setup=_setup_life,
-    tares={"GET /api/desk?state=open": (200, _DESK),
+    tares={"GET /api/desk?state=open": (200, _DESK), "GET /api/desk?state=open&mine=1": (200, _DESK),
            **_ended("crew-orchestrator", 200), **_ended("crew-reviewer", 200), **_ended("shop-build-m1", 200),
            **_ended("shop-build-m2", 200),
            "POST /api/desk/d1/withdraw": (200, {"ok": True}), "POST /api/desk/d2/withdraw": (200, {"ok": True}),
@@ -3863,10 +3888,10 @@ def _touch_done(station: str):
 
 
 def _forget_kept(station: str):
-    """The station kept nothing of its last start: no grants text, and (TR-864) no copy of its rules."""
+    """The station kept nothing of its last start: no grants text, and (TR-864, TR-870) no copy of its launch spec."""
     def run(tmp: Path) -> None:
         (tmp / "crew" / "stations" / f"{station}.grants").unlink()
-        (tmp / "crew" / "rules" / f"{station}.json").unlink(missing_ok=True)
+        (tmp / "crew" / "launch" / f"{station}.json").unlink(missing_ok=True)
     return run
 
 
@@ -3919,6 +3944,9 @@ def _sessions_and(station: str):
 
 
 def wstep(world: dict, before=None, env: dict | None = None, after=None) -> Step:
+    named = list((world.get("grants") or {}).get("projects") or {})   # the cell knows the projects it holds grants for (TR-870)
+    world = {**world, "projects": [*world.get("projects", []),
+                                   *[{"id": n, "name": n} for n in named if not any(n in (p.get("id"), p.get("name")) for p in world.get("projects", []))]]}
     s = lstep("watch_regrant", world=world, env=env)
     s.before = before
     s.after = after or _sessions_started   # the sessions started so far, as this step left them
@@ -3926,6 +3954,8 @@ def wstep(world: dict, before=None, env: dict | None = None, after=None) -> Step
 
 
 def _launch(station: str, role: str, world: dict, parent: str = "", project: str = "") -> Step:
+    if project and not any(project in (p.get("id"), p.get("name")) for p in world.get("projects", [])):
+        world = {**world, "projects": [*world.get("projects", []), {"id": project, "name": project}]}   # the cell knows it (TR-870)
     return lstep("launch", station, role, parent, project, "", "{TMP}/crew", "sonnet", "high", f"Boot as the {role} station", world=world)
 
 
@@ -4646,7 +4676,7 @@ scenario(Scenario(
     suite="pace",
     about="status says nothing about the pace while it is off, and one line (the state, until when, the percents) while it is on",
     setup=_setup_pace,
-    tares={"GET /api/desk?state=open": (200, {"desk": []})},
+    tares={"GET /api/desk?state=open&mine=1": (200, {"desk": []})},
     steps=[_pcs(99, 99, on=False), _pcs(84, 89), _pcs(85, 89), _pcs(95, 90), _pcs(100, 10), _pcs(0, 0, known=False)],
     checks=[
         ("off: status says nothing about the pace", lambda r: r.code(0) == 0 and "pace" not in "\n".join(_pc_status(r, 0)).lower()),
@@ -6325,7 +6355,10 @@ def _run_side(sc: Scenario) -> Side:
             for q in fake.requests:
                 if any(q["route"] == x or (x.endswith(" ") and q["route"].startswith(x)) for x in sc.ignore_asked):
                     continue
-                line = f"{q['route']} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
+                route = q["route"]
+                if "/launch?" in route:   # the query holds the cell's port and a folder, percent-encoded: decode so they normalise
+                    route = norm_text(unquote(route), tmp)
+                line = f"{route} key={'yes' if q['auth'] else 'no'} {norm_output(q['body'], tmp)}"
                 if not (asked and asked[-1] == line and q["route"].startswith("GET ")):
                     asked.append(line)
             blocks.append("== asked of Tares ==\n" + "\n".join(asked))
@@ -6544,7 +6577,7 @@ scenario(Scenario(
     name="crew_g1_desk_empty",
     suite="crew",
     about="an empty desk: crew desk and status both say nothing waits",
-    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": []})},
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open&mine=1": (200, {"desk": []})},
     setup=_setup_views,
     steps=[Step(["crew", "desk"]), Step(["crew", "status"])],
     checks=[
@@ -6558,7 +6591,7 @@ scenario(Scenario(
     name="crew_g1_desk_two",
     suite="crew",
     about="two questions: status shows the blocking one first with its options, crew desk shows both, desk is short for it",
-    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": [G1_D1, G1_D2]})},
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open&mine=1": (200, {"desk": [G1_D1, G1_D2]})},
     setup=_setup_views,
     steps=[Step(["crew", "status"]), Step(["crew", "desk"]), Step(["desk"])],
     checks=[
@@ -6592,12 +6625,13 @@ G1_F3 = {"id": "d3", "label": "D3", "question": "Nothing left to build. Stop the
 G1_F4 = {"id": "d4", "label": "D4", "question": "Keep nightly dependency bumps?", "recommendation": "yes", "why": "cheap"}
 G1_F5 = {"id": "d5", "label": "D5", "question": "Stop the crew now?", "recommendation": "yes", "why": "late",
          "project": "p9", "project_name": "finishing", "project_finished": True, "blocking": True}
-G1_DESK = "GET /api/desk?state=open"
+G1_DESK = "GET /api/desk?state=open&mine=1"
+G1_DESK_ALL = "GET /api/desk?state=open"  # crew down reads every question, not only the person's
 
 
 def g1_later_desk(r: Run) -> None:
     """The desk after crew down: the stop questions are withdrawn, and a new one of the finished project is asked."""
-    r.tares.routes[G1_DESK] = (200, {"desk": [G1_F4, G1_F5]})
+    r.tares.routes[G1_DESK] = r.tares.routes[G1_DESK_ALL] = (200, {"desk": [G1_F4, G1_F5]})
 
 
 def g1_withdrawn(r: Run, qid: str, reason: str = "") -> bool:
@@ -6611,6 +6645,7 @@ scenario(Scenario(
     about="a running crew sees a finished project's question, crew down retires all and withdraws the stop questions, "
           "and a stopped crew's status leaves the finished project's question out",
     tares={**G1_NO_PROJECTS, G1_DESK: (200, {"desk": [G1_F1, G1_F2, G1_F3, G1_F4]}),
+           G1_DESK_ALL: (200, {"desk": [G1_F1, G1_F2, G1_F3, G1_F4]}),
            **{f"POST /api/desk/d{n}/withdraw": (200, {"ok": True}) for n in (1, 2, 3, 4)}},
     setup=_setup_views,
     steps=[Step(["crew", "desk"]), Step(["crew", "down"]), Step(["crew", "status"], run_before=g1_later_desk)],
@@ -6726,7 +6761,7 @@ scenario(Scenario(
 # --- no MCP server at the endpoint -----------------------------------------------------------------------------
 
 G1_NOMCP = "http://127.0.0.1:9/mcp"
-G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules"]})}
+G1_HEALTH = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"]})}
 
 scenario(Scenario(
     name="crew_g1_no_mcp",
@@ -6757,7 +6792,8 @@ scenario(Scenario(
 
 G2_TARES = {"GET /api/crew/settings": (200, {"settings": {"autonomy": "L3-review", "releaser": True, "release_profile": "kind",
                                                            "challenger": False, "builders_max": 3}}),
-            "GET /api/crew/projects": (200, {"projects": []}), "GET /api/grants": (200, {"all": ""})}
+            "GET /api/crew/projects": (200, {"projects": [{"id": "uc_links", "name": "Links App"}, {"id": "shop", "name": "shop"}]}),
+            "GET /api/grants": (200, {"all": ""})}   # the cell knows the projects its builders work on (TR-870)
 G2_QUIET = ("GET ",)                           # reads of Tares are made in a different number and order
 G2_CALLS = (("agents",), ("--version",))       # so are the reads of the session list and the version
 G2_SETUP = _cc_setup(have="1.0.0", installed="1.0.0")
@@ -7649,7 +7685,7 @@ def g4_up_after(tmp: Path) -> dict:
     return {"pid": pid, "alive": g4_alive(pid), "log": banner}
 
 
-G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules"]}),
+G4_UP_TARES = {"GET /health": (200, {"status": "ok", "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"]}),
                "GET /api/crew/settings": (200, {**SAVED, "releaser": False}),
                "GET /api/people": (200, {"people": [{"id": "local", "name": "Local"}]}),
                "GET /api/grants": (200, {"all": ""}),
@@ -7844,7 +7880,7 @@ scenario(Scenario(
 # and `crew status` says a station has new permissions waiting, or waits for the person to leave its session.
 G4_ITEM = {"label": "D1", "blocking": False, "project_name": "shop", "station": "shop-build-m1", "command": "gh pr merge 12 --squash",
            "question": "shop-build-m1 was refused a command. Allow it?", "recommendation": G4_MERGE, "why": "it merges its own pull request"}
-G4_VIEWS_TARES = {"GET /api/desk?state=open": (200, {"desk": [G4_ITEM]}),
+G4_VIEWS_TARES = {"GET /api/desk?state=open&mine=1": (200, {"desk": [G4_ITEM]}),
                   "GET /api/grants?project=shop": (200, {"all": "", "project": G4_PROJECT}),
                   "GET /api/grants": (200, {"all": ""}),
                   "GET /api/crew/projects": (200, {"projects": []})}
@@ -7974,7 +8010,9 @@ scenario(Scenario(
         ("a role word names this crew's station", lambda r: r.code(1) == 0 and _printed(r, 1)["env"]["FACTORY_STATION"] == "crew-orchestrator"),
         ("a second word is the role", lambda r: r.code(2) == 0 and _printed(r, 2)["env"]["FACTORY_ROLE"] == "releaser"),
         ("a station with no record takes its role from its name", lambda r: r.code(3) == 0 and _printed(r, 3)["env"]["FACTORY_ROLE"] == "releaser"),
-        ("a recorded station takes the role stations.json holds", lambda r: r.code(4) == 0 and _printed(r, 4)["env"]["FACTORY_ROLE"] == "helper"),
+        # TR-870: a helper's rules are its parent's, and the cell will not give them for a helper whose parent is not recorded
+        ("a recorded helper with no parent on record is refused, saying so",
+         lambda r: r.code(4) == 1 and "old-helper is a helper" in r.out(4)),
     ],
     covers=[],
 ))
@@ -10035,14 +10073,15 @@ _cc("cc_update_busy", "crew update waits for a busy station and then moves it, t
      "crew restart restarts every station anyway, the orchestrator last"],
     setup=_cb_fake_ps(_cc_setup(have="1.2.0", installed="1.3.0")))
 
-# Someone has a station open: crew update does not interrupt, and gives up at --wait.
-_cc("cc_update_attached", "a station someone has open is not restarted: crew update gives up at --wait, says who it waited for, and moves the others",
+# Someone has a station open: crew update does not wait for it (TR-1345): it says so, leaves it to the watch, and moves the others.
+_cc("cc_update_attached", "a station someone has open is not waited for: crew update says it is left to the watch and moves the others",
     [Step(["crew", "update", "--wait", "3"], env=CB_ENV, before=_cc_attach(_R), after=_cc_after(reap=True))],
-    [("an attached station is not restarted; crew update says who it waited for",
-      lambda r: r.code(0) != 0 and _stn(r, _R) == "bbbb0002" and "gave up waiting for crew-reviewer" in r.out(0)
-      and "someone has it open" in r.out(0)),
+    [("an attached station is not restarted; crew update says it is left to the watch",
+      lambda r: r.code(0) == 0 and _stn(r, _R) == "bbbb0002"
+      and "crew-reviewer is open in a terminal; the watch moves it when it is free" in r.out(0)
+      and "waiting for" not in r.out(0) and "gave up" not in r.out(0)),
      ("the others were done", lambda r: _runs(r, _L) == "1.4.0" and _runs(r, _O) == "1.4.0")],
-    ["an attached station is not restarted; crew update says who it waited for", "the others were done"],
+    ["an attached station is not restarted; crew update says it is left to the watch", "the others were done"],
     setup=_cc_setup(have="1.3.0", installed="1.4.0"), not_windows=_WIN_NO_EXEC_A)
 
 # crew update run from a station (the orchestrator) leaves that station out instead of waiting on itself, and says its way out.

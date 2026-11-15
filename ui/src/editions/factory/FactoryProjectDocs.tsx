@@ -153,8 +153,8 @@ function ProjectDocs({ id }: { id: string }) {
         <>
           <DocPicker groups={data.groups} openId={openId}
                      onPick={(id) => setParams((q) => { const n = new URLSearchParams(q); n.set("doc", id); return n; })} />
-          {/* the document has the page's width, as a reading column of at most 880px centred in its card */}
-          <div className="grid min-w-0 gap-2 [&_[data-testid=doc-pane]>*]:px-[max(20px,calc((100%-880px)/2))]!">
+          {/* the document fills its card, with a little more room at the sides on a wide screen */}
+          <div className="grid min-w-0 gap-2 lg:[&_[data-testid=doc-pane]>*]:px-8!">
             {open?.ticket_href && (
               <div className="text-[13px]" data-testid="project-doc-ticket">
                 <Link to={open.ticket_href} className={LINK}>Open ticket {open.ticket}</Link>

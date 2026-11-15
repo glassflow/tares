@@ -1,17 +1,16 @@
-"""The rules a station starts under (TR-864): the sentences Tares renders for it, a copy kept for a start while
-Tares is down, and the defaults the plugin ships as the last resort.
+"""Helpers for a station's rules (TR-864), now that the cell builds a station's launch (TR-870).
 
-`for_station` is what `launch.write_settings` calls. In order:
-  1. Tares answers: `GET /api/factory/guardrails/rules?station=&project=&role=` (the cell must list the
-     `guardrail_rules` capability, else the start stops with the upgrade message). The answer is saved to
-     `<crew home>/rules/<station>.json` as it came, placeholders and all.
-  2. Tares does not answer or cannot give them: the saved copy of this station.
-  3. No usable copy: the defaults in `claude-plugin/templates/default-rules.json`, for the station's role.
-     They carry no grants and none of the cell's own deny rules.
-Rules that come out empty stop the start with a message; a station never runs on no rules.
+A start asks the cell for the whole launch spec (`launch.launch_plan`), rules included, so this module no
+longer decides where a station's rules come from. What it keeps:
+  `fetch`: ask Tares for the rendered rules of a station (`GET /api/factory/guardrails/rules`), which
+     `crew regrant` uses to tell what a grant added since the last start.
+  `saved`: the rules the station last started with (read from its saved launch spec), `usable`: is an answer a
+     set of rules, `added`: the sentences new since then.
+  `shipped`: the defaults the plugin ships in `claude-plugin/templates/default-rules.json`, rendered for a role
+     (the file the cell's own defaults are checked against).
+  `fill`: puts a machine's `{name}` values into a sentence.
 
-The sentences keep a `{name}` for what only this machine knows (the person, the crew folder, the repositories);
-`fill` puts them in at the start, so a copy is current when it is used.
+The sentences keep a `{name}` for what only this machine knows (the person, the crew folder, the repositories).
 
 Standard library plus the crew modules.
 """
@@ -20,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import state
-from .client import TaresClient, TaresHTTPError, uri
+from .client import TaresClient, uri
 from .errors import CrewError
 from .paths import CrewPaths
 
@@ -68,12 +67,26 @@ def shipped(kit: str, role: str) -> dict:
     return {"allow": allow, "soft_deny": soft_deny, "rules": rules}
 
 
-def saved(paths: CrewPaths, station: str):
-    """The copy of the rules Tares last gave this station, or None when there is none, or it holds none."""
+def saved(paths: CrewPaths, station: str, placeholders: dict | None = None, tares: str = ""):
+    """The rule sentences this station last started with: {allow, soft_deny}, read from the launch spec the cell
+    gave it (<crew home>/launch/<station>.json) with this machine's `placeholders` filled in, so they read as
+    `fill` writes a new sentence. A sentence that names the address of Tares as it was then (the spec's
+    TARESD_URL) names `tares` instead, so a moved Tares does not make every such sentence new. None when there
+    is no spec, or it holds no rules."""
+    from ..integrations.runtime import fill_placeholders   # here: the runtime imports the crew modules
     try:
-        doc = state.read_json(paths.rules_file(station), None)
+        spec = state.read_json(paths.launch_file(station), None)
     except (OSError, ValueError):
         return None
+    if not isinstance(spec, dict):
+        return None
+    auto = (spec.get("settings") or {}).get("autoMode") or {}
+    then = ((spec.get("env") or {}).get("TARESD_URL") or "").strip()
+    doc = {}
+    for key in ("allow", "soft_deny"):
+        doc[key] = [fill_placeholders(s, placeholders or {}) for s in _sentences(auto, key) if s != "$defaults"]
+        if then and tares and then != tares:
+            doc[key] = [s.replace(then, tares) for s in doc[key]]
     return doc if usable(doc) else None
 
 
@@ -97,52 +110,16 @@ def fetch(client: TaresClient, station: str, project: str, role: str) -> dict:
     return doc
 
 
-def for_station(client: TaresClient, station: str, project: str, role: str, kit: str, values: dict) -> dict:
-    """The rendered rules for a station, placeholders filled: {allow, soft_deny, rules, source}, where
-    source is `tares`, `copy` or `shipped`. Saves what Tares gave. CrewError when nothing gives any rule."""
-    paths = client.paths
-    doc, source = None, ""
-    if client.tares_on():
-        try:
-            doc, source = fetch(client, station, project, role), "tares"
-        except TaresHTTPError as e:
-            if e.status in (401, 403):
-                raise CrewError(f"Tares refused to give the rules for {station} (HTTP {e.status}). A station never "
-                                "starts without its rules; check the crew's key on Tares, then run this again.")
-            client.say(f"could not read the rules for {station} from Tares ({e}); using the copy kept from its "
-                       "last start, else the ones shipped with the plugin")
-        except ValueError as e:
-            client.say(f"could not read the rules for {station} from Tares ({e}); using the copy kept from its "
-                       "last start, else the ones shipped with the plugin")
-        if doc is not None and not usable(doc):
-            raise CrewError(f"Tares gave no rules for {station}. A station never starts without rules; check the "
-                            "guardrails on the cell, then run this again.")
-    if doc is None:
-        doc, source = saved(paths, station), "copy"
-    if doc is None:
-        doc, source = shipped(kit, role), "shipped"
-    elif source == "tares":
-        paths.rules_dir.mkdir(parents=True, exist_ok=True)
-        state.write_json(paths.rules_file(station), doc)
-    rules = [{**r, "text": fill(r.get("text", ""), values)} for r in doc.get("rules") or [] if isinstance(r, dict)]
-    out = {"allow": [fill(s, values) for s in _sentences(doc, "allow")],
-           "soft_deny": [fill(s, values) for s in _sentences(doc, "soft_deny")],
-           "rules": rules, "source": source}
-    if not out["allow"] and not out["soft_deny"]:
-        raise CrewError(f"no rules for {station}: Tares gave none, and there is no copy or shipped default. "
-                        "A station never starts without rules.")
-    return out
-
-
-def added(old, new: dict) -> list:
-    """The sentences of `new` (what Tares renders now) that are not in `old` (a saved copy, or None), both as Tares
-    gave them, before `fill`. Without a copy, only the ones that come from a grant."""
-    have = {r.get("text") for r in (old or {}).get("rules") or [] if isinstance(r, dict)}
+def added(old, new: dict, values: dict) -> list:
+    """The sentences of `new` (what Tares renders now, with their `{name}`s) that are not in `old` (what `saved` read,
+    or None), each filled with `values`. Without a copy, only the ones that come from a grant."""
+    have = set((old or {}).get("allow") or []) | set((old or {}).get("soft_deny") or [])
     out = []
     for r in new.get("rules") or []:
-        if not isinstance(r, dict) or r.get("text") in have:
+        if not isinstance(r, dict) or not r.get("text"):
             continue
-        if old is None and r.get("source") != "grant":
+        text = fill(r["text"], values)
+        if text in have or (old is None and r.get("source") != "grant"):
             continue
-        out.append(r.get("text", ""))
-    return [t for t in out if t]
+        out.append(text)
+    return out

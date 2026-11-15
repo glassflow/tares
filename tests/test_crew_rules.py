@@ -1,10 +1,11 @@
-"""The rules a station starts under come from Tares and are never empty (TR-864, tares/crew/rules.py).
+"""What is left of the crew's rules helpers (TR-864, tares/crew/rules.py) now that a start takes its whole launch,
+rules included, from the cell (TR-870; tests/test_crew_launch_spec.py covers that).
 
-Tares up: the settings file holds the sentences Tares renders, and a copy of the answer is kept in
-<crew home>/rules/<station>.json. Tares down (or answering with an error): the copy; with no usable copy, the
-defaults shipped in claude-plugin/templates/default-rules.json. A Tares that answers with no rules, and a cell
-too old to have the route, stop the start with a message. The watch's regrant prompt quotes the rules that are
-new since the station's last start.
+Covered: `fetch` asks Tares for a station's rules and names the station and its role (a person's key alone is
+refused), a cell too old to have the route is refused with the upgrade message; `saved` and `usable` read the
+rules a station last started with from its saved launch spec and treat a spec that is junk, or holds no rules,
+or lost its deny side as none; `shipped` renders the defaults the plugin ships and is an error when the file is
+missing or empty; `added` and the watch's regrant prompt quote the rules that are new since that start.
 
 A fake Tares of tests/factory/launch_support.py answers; nothing of the person's is read or written.
 
@@ -31,7 +32,7 @@ sys.path.insert(0, str(HERE / "factory"))
 
 from tares.crew import launch as L  # noqa: E402
 from tares.crew import regrant, rules  # noqa: E402
-from tares.crew.client import TaresClient, TaresHTTPError  # noqa: E402
+from tares.crew.client import TaresClient  # noqa: E402
 from tares.crew.errors import CrewError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 import launch_support as LS  # noqa: E402
@@ -39,8 +40,6 @@ import launch_support as LS  # noqa: E402
 P = F = 0
 KIT = str(ROOT / "claude-plugin")
 GRANT = '- "the releaser may restart the staging database" (2026-01-02)\n'
-VALUES = {"human": "Pat", "home": "/h", "tares": "http://t", "stations_file": "/h/stations.json", "repos": "the repos",
-          "where": "the repo", "wt_repos": "the repos", "cluster": "kind", "prod_pattern": "prod"}
 
 
 def ck(label, cond, detail=""):
@@ -65,22 +64,6 @@ def crew_with(world):
     return tares, TaresClient(CrewPaths.at(tmp / "crew"), env=dict(os.environ))
 
 
-def start(world, station="crew-reviewer", role="reviewer", before=None):
-    """for_station against a fake Tares; returns (result or None, the CrewError text or "", the client, the lines said)."""
-    tares, c = crew_with(world)
-    said = []
-    c.say = said.append
-    try:
-        if before:
-            before(c)
-        try:
-            return rules.for_station(c, station, "", role, KIT, VALUES), "", c, said
-        except CrewError as e:
-            return None, str(e), c, said
-    finally:
-        tares.__exit__(None, None, None)
-
-
 def raises(fn):
     try:
         fn()
@@ -89,69 +72,47 @@ def raises(fn):
     return None
 
 
-print("Tares answers")
-got, err, c, said = start({"grants": {"all": GRANT, "projects": {}}})
-ck("the rules are Tares's, the grant among them, {human} filled in",
-   got and got["source"] == "tares" and any("Pat granted this on 2026-01-02" in s and "staging database" in s for s in got["allow"]), str(got))
-ck("the cell's own deny rule is in soft_deny, {prod_pattern} filled by Tares", got and any("pattern" in s and "prod" in s for s in got["soft_deny"]))
-ck("the sentences carry no {human} or {home} left over", got and not any("{human}" in s or "{home}" in s for s in got["allow"] + got["soft_deny"]))
-copy = c.paths.rules_file("crew-reviewer")
-ck("a copy of the answer is kept at rules/<station>.json", copy.is_file())
-kept = json.loads(copy.read_text(encoding="utf-8")) if copy.is_file() else {}
-ck("...as Tares gave it, placeholders and all", any("{human}" in s for s in kept.get("allow", [])))
+print("the rules a station last started with")
+
+
+def spec_with(allow, soft_deny, station="crew-reviewer"):
+    """A crew home whose saved launch spec for `station` has these rule sentences; returns its paths."""
+    tares, c = crew_with({})
+    tares.__exit__(None, None, None)
+    c.paths.launch_dir.mkdir(parents=True, exist_ok=True)
+    spec = {"command": [], "env": {}, "settings": {"autoMode": {"environment": ["$defaults", "env line"],
+            "allow": ["$defaults", *allow], "soft_deny": ["$defaults", *soft_deny]}}}
+    c.paths.launch_file(station).write_text(json.dumps(spec), encoding="utf-8")
+    return c.paths
+
+
+got = rules.saved(spec_with(["Kept for {CREW_HOME}."], ["Kept deny."]), "crew-reviewer", {"CREW_HOME": "/crew"})
+ck("saved reads the sentences of the saved spec, $defaults left out and the machine's placeholders filled",
+   got == {"allow": ["Kept for /crew."], "soft_deny": ["Kept deny."]}, str(got))
+moved = spec_with(["Reads Tares at http://old:1."], ["Kept deny."])
+spec_doc = json.loads(moved.launch_file("crew-reviewer").read_text(encoding="utf-8"))
+spec_doc["env"] = {"TARESD_URL": "http://old:1"}
+moved.launch_file("crew-reviewer").write_text(json.dumps(spec_doc), encoding="utf-8")
+got_moved = rules.saved(moved, "crew-reviewer", {}, "http://new:2")
+ck("a Tares that moved is named as it is now, so its sentence is not mistaken for a new one",
+   got_moved == {"allow": ["Reads Tares at http://new:2."], "soft_deny": ["Kept deny."]}, str(got_moved))
+ck("a station with no saved spec has none", rules.saved(spec_with(["a"], ["b"]), "crew-releaser") is None)
+junk = spec_with(["a"], ["b"])
+junk.launch_file("crew-reviewer").write_text("not json {", encoding="utf-8")
+ck("a spec that is not JSON counts as none", rules.saved(junk, "crew-reviewer") is None)
+ck("a spec with no rules in it counts as none too", rules.saved(spec_with([], []), "crew-reviewer") is None)
+ck("a spec with allow sentences but no deny side is none (the production guard is part of the rules)",
+   rules.saved(spec_with(["Do a thing."], []), "crew-reviewer") is None)
+ck("usable: both kinds of sentence, and nothing else is", rules.usable(got) and not rules.usable(None)
+   and not rules.usable({"allow": ["a"]}) and not rules.usable({"allow": [" "], "soft_deny": ["b"]}))
+ck("fill puts in the names it has and leaves the others", rules.fill("{human} on {other}", {"human": "Pat"}) == "Pat on {other}")
+
+print("the shipped defaults")
+rev = rules.shipped(KIT, "reviewer")
 ck("a reviewer is given the reviewer's rule and not the releaser's",
-   got and any("factory/review" in s for s in got["allow"]) and not any("kind cluster" in s for s in got["allow"]))
-rel, err, c2, _ = start({}, "crew-releaser", "releaser")
-ck("a releaser is given the releaser's rule", rel and any("kind" in s and "cluster" in s for s in rel["allow"]), err)
-
-print("Tares does not answer")
-copy_doc = {"allow": ["Kept sentence for {human}."], "soft_deny": ["Kept deny."], "rules": [
-    {"id": "x", "kind": "allow", "source": "default", "text": "Kept sentence for {human}."}]}
-
-
-def put_copy(client):
-    client.paths.rules_dir.mkdir(parents=True, exist_ok=True)
-    client.paths.rules_file("crew-reviewer").write_text(json.dumps(copy_doc), encoding="utf-8")
-
-
-got, err, c, said = start({"health": False}, before=put_copy)
-ck("Tares down with a copy: the copy, filled in", got and got["source"] == "copy" and got["allow"] == ["Kept sentence for Pat."], str(got) + err)
-got, err, c, said = start({"rules_status": 500}, before=put_copy)
-ck("Tares answering with an error and a copy: the copy, and it says so",
-   got and got["source"] == "copy" and any("could not read the rules" in s for s in said), str(got) + err + str(said))
-got, err, c, said = start({"health": False})
-ck("Tares down, no copy: the defaults the plugin ships, for the role",
-   got and got["source"] == "shipped" and got["allow"] and got["soft_deny"] and any("factory/review" in s for s in got["allow"]), str(got) + err)
-ck("...with no grant in them", got and not any("granted this" in s for s in got["allow"]))
-ck("...and no copy is written from them", not c.paths.rules_file("crew-reviewer").exists())
-
-
-def put_junk(client):
-    client.paths.rules_dir.mkdir(parents=True, exist_ok=True)
-    client.paths.rules_file("crew-reviewer").write_text("not json {", encoding="utf-8")
-
-
-got, err, c, said = start({"health": False}, before=put_junk)
-ck("a copy that is not JSON counts as no copy: the shipped defaults", got and got["source"] == "shipped", str(got) + err)
-
-
-def put_empty(client):
-    client.paths.rules_dir.mkdir(parents=True, exist_ok=True)
-    client.paths.rules_file("crew-reviewer").write_text(json.dumps({"allow": [], "soft_deny": [], "rules": []}), encoding="utf-8")
-
-
-got, err, c, said = start({"health": False}, before=put_empty)
-ck("a copy with no rules in it counts as no copy too", got and got["source"] == "shipped", str(got) + err)
+   any("factory/review" in s for s in rev["allow"]) and not any("kind cluster" in s for s in rev["allow"]))
+ck("...with no grant in them", rev["soft_deny"] and not any("granted this" in s for s in rev["allow"]))
 ck("an unknown role still gets the rules for every station", rules.shipped(KIT, "")["allow"] != [])
-
-print("never no rules")
-got, err, c, said = start({"rules": {"station": "s", "allow": [], "soft_deny": [], "rules": []}}, before=put_copy)
-ck("Tares answering with no rules stops the start, even with a copy", got is None and "never starts without rules" in err, err)
-ck("...and does not overwrite the copy with nothing", json.loads(c.paths.rules_file("crew-reviewer").read_text(encoding="utf-8")) == copy_doc)
-got, err, c, said = start({"rules": {"station": "s", "allow": ["Do a thing."], "soft_deny": [], "rules": [{"kind": "allow", "text": "Do a thing."}]}}, before=put_copy)
-ck("an answer with allow sentences but no deny side stops the start (the production guard is part of the rules)", got is None and "never starts without rules" in err, err)
-got, err, c, said = start({"rules": ["not", "a", "doc"]}, before=put_copy)
-ck("an answer that is not rules is read as no answer: the copy", got and got["source"] == "copy", str(got) + err)
 bare = SCRATCH / "bare-kit"
 bare.mkdir()
 msg = raises(lambda: rules.shipped(str(bare), "builder"))
@@ -175,61 +136,38 @@ finally:
     tares.__exit__(None, None, None)
 
 
-def refuse_with(code):
-    def before(c):
-        def deny(*a, **k):
-            raise TaresHTTPError(f"curl: (22) The requested URL returned error: {code}", code)
-        c.tares_http = deny
-    return before
-
-
-for code in (401, 403):
-    got, err, c, said = start({"grants": {"all": GRANT, "projects": {}}}, before=lambda c, code=code: (put_copy(c), refuse_with(code)(c)))
-    ck(f"Tares refusing the rules ({code}) stops the start, copy or not, and does not fall back quietly",
-       got is None and str(code) in err and "never starts without its rules" in err, err)
-got, err, c, said = start({"grants": {"all": GRANT, "projects": {}}}, before=lambda c: (put_copy(c), refuse_with(500)(c)))
-ck("Tares erroring (500) still falls back to the copy", got and got["source"] == "copy", str(got) + err)
-
-print("an older Tares")
-got, err, c, said = start({"capabilities": ["integrations", "merge_queue"]}, before=put_copy)
-ck("a cell without guardrail_rules stops the start with the upgrade message, copy or not",
-   got is None and "missing guardrail_rules" in err and "Upgrade Tares" in err, err)
-
-print("settings of a start")
 tares, c = crew_with({"grants": {"all": GRANT, "projects": {}}})
 try:
-    c.prime()
-    path = L.write_settings(c, "crew-reviewer", "reviewer", "", "", "")
-    doc = json.loads(Path(path).read_text(encoding="utf-8"))
-    auto = doc.get("autoMode", {})
-    ck("write_settings puts Tares's sentences in autoMode", any("staging database" in s for s in auto.get("allow", [])), str(auto)[:200])
-    ck("...with the person's name in place of {human}", any("Pat granted" in s for s in auto.get("allow", [])))
-    ck("...and the deny sentence in soft_deny", bool(auto.get("soft_deny")))
-    ck("...and the copy kept", c.paths.rules_file("crew-reviewer").is_file())
-    tares.world["capabilities"] = ["integrations"]
+    got = rules.fetch(c, "crew-reviewer", "", "reviewer")
+    ck("the rules are Tares's, the grant among them, with the {human} still in", any("{human} granted this on 2026-01-02" in s and "staging database" in s for s in got["allow"]), str(got)[:200])
+    tares.world["capabilities"] = ["integrations", "merge_queue"]
+    c._caps = None
+    msg = raises(lambda: rules.fetch(c, "crew-reviewer", "", "reviewer"))
+    ck("a cell without guardrail_rules is refused with the upgrade message", msg and "missing guardrail_rules" in msg and "Upgrade Tares" in msg, str(msg))
 finally:
     c.close()
     tares.__exit__(None, None, None)
 
 print("what a regrant quotes")
-old = {"rules": [{"text": "a", "source": "default"}, {"text": "b {human}", "source": "grant"}]}
+old = {"allow": ["a"], "soft_deny": ["b Pat"]}
 new = {"rules": [{"text": "a", "source": "default"}, {"text": "b {human}", "source": "grant"}, {"text": "c {human}", "source": "grant"},
                  {"text": "d", "source": "own"}]}
-ck("added: what is in the new rules and not in the copy", rules.added(old, new) == ["c {human}", "d"], str(rules.added(old, new)))
-ck("added: without a copy, only the grants", rules.added(None, new) == ["b {human}", "c {human}"], str(rules.added(None, new)))
-ck("added: nothing new is nothing", rules.added(new, new) == [])
-ck("added: an empty answer adds nothing", rules.added(old, {}) == [])
+V = {"human": "Pat"}
+ck("added: what is in the new rules and not in the last start, filled", rules.added(old, new, V) == ["c Pat", "d"], str(rules.added(old, new, V)))
+ck("added: without a last start, only the grants", rules.added(None, new, V) == ["b Pat", "c Pat"], str(rules.added(None, new, V)))
+ck("added: nothing new is nothing", rules.added({"allow": ["a", "b Pat", "c Pat", "d"], "soft_deny": []}, new, V) == [])
+ck("added: an empty answer adds nothing", rules.added(old, {}, V) == [])
 
 tares, c = crew_with({"grants": {"all": GRANT, "projects": {}}})
 try:
     c.prime()
-    c.paths.rules_dir.mkdir(parents=True, exist_ok=True)
-    c.paths.rules_file("crew-reviewer").write_text(json.dumps({"allow": ["x"], "soft_deny": [], "rules": [
-        {"text": "x", "source": "default"}]}), encoding="utf-8")
+    c.paths.launch_dir.mkdir(parents=True, exist_ok=True)
+    c.paths.launch_file("crew-reviewer").write_text(json.dumps({"command": [], "env": {}, "settings": {"autoMode": {
+        "allow": ["$defaults", "x"], "soft_deny": ["$defaults", "y"]}}}), encoding="utf-8")
     L.state.stations_put("crew-reviewer", {"role": "reviewer"}, paths=c.paths)
     quoted = regrant._new_rules(c, c.paths, "crew-reviewer", "")
-    ck("_new_rules: the sentences added since the copy, with the person's name", any("Pat granted this on 2026-01-02" in s for s in quoted), str(quoted)[:200])
-    ck("...and none of the defaults that were already in the copy's place are mistaken for new ones", len(quoted) >= 1)
+    ck("_new_rules: the sentences added since the last start, with the person's name", any("Pat granted this on 2026-01-02" in s for s in quoted), str(quoted)[:200])
+    ck("...and none of the defaults of the last start are mistaken for new ones", len(quoted) >= 1)
     tares.world["capabilities"] = ["integrations"]
     c._caps = None
     ck("_new_rules: a Tares that cannot give the rules gives none (the prompt then says the change without quoting)",

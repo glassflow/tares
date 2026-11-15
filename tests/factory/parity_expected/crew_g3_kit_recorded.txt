@@ -53,8 +53,94 @@ exit: 0
 }
 == file crew/events.jsonl ==
 {"at": "<TS>", "detail": "00000001", "event": "started", "station": "crew-reviewer"}
-== file crew/rules/crew-reviewer.json ==
-rules copy: allow sentences yes, soft_deny sentences yes
+== file crew/launch/crew-reviewer.json ==
+{
+  "command": [
+    "--bg",
+    "-n",
+    "crew-reviewer",
+    "--model",
+    "sonnet",
+    "--effort",
+    "high",
+    "--permission-mode",
+    "auto",
+    "--settings",
+    "{SETTINGS_FILE}",
+    "--autocompact",
+    "200000",
+    "--append-system-prompt",
+    "You are a tares-factory station: role reviewer, session name crew-reviewer. Your operating rules are the skills factory-protocol and station-reviewer from the tares plugin. Load them at boot, after any compaction, and whenever you are told to reload. Act only within your role.",
+    "--plugin-dir",
+    "{PLUGIN_DIR}"
+  ],
+  "env": {
+    "FACTORY_AUTOCOMPACT": "200000",
+    "FACTORY_CREW": "crew",
+    "FACTORY_CREW_HOME": "{CREW_HOME}",
+    "FACTORY_HOME": "{CREW_HOME}",
+    "FACTORY_ORCHESTRATOR": "crew-orchestrator",
+    "FACTORY_PARENT": "",
+    "FACTORY_ROLE": "reviewer",
+    "FACTORY_STATION": "crew-reviewer",
+    "FACTORY_WORKTREES": "{CREW_HOME}/worktrees",
+    "TARESD_URL": "http://127.0.0.1:<PORT>",
+    "TARES_AUTH_TOKEN": "",
+    "TARES_FACTORY_MCP_URL": "http://127.0.0.1:8788/mcp",
+    "TARES_FACTORY_URL": "http://127.0.0.1:<PORT>"
+  },
+  "placeholders": {
+    "CREW_HOME": "the crew's own folder on the machine that starts the station",
+    "PLUGIN_DIR": "the Tares plugin folder the station runs on (a frozen crew runs from its frozen copy)",
+    "PLUGIN_DIR_SHELL": "the same folder written as one word for the shell that runs the status line",
+    "REPOS": "the sentence naming the repositories checked out on that machine",
+    "SETTINGS_FILE": "the settings file the station is started with (--settings)",
+    "WT_REPOS": "the sentence naming the repositories whose worktree folders the station may use"
+  },
+  "role": "reviewer",
+  "runtime": "claude_code",
+  "settings": {
+    "autoMode": {
+      "allow": [
+        "$defaults",
+        "Creating and editing files under {CREW_HOME} (the crew's own folder), and git worktrees under the .factory/worktrees folder of {WT_REPOS} or under {CREW_HOME}/worktrees, is expected work for this crew station.",
+        "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+        "Reading and writing this crew's records on Tares at http://127.0.0.1:<PORT> through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+        "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in {REPOS}, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that Pat authorized.",
+        "Pat granted this on 2026-01-02 for all projects, in their own words: \"the releaser may restart the staging database\". Acting within that grant is expected work."
+      ],
+      "environment": [
+        "$defaults",
+        "This session is the reviewer station `crew-reviewer` of a tares-factory crew: one team of Claude Code sessions that Pat started on 2026-01-01 with `tares factory crew up` to build the projects handed to it on Tares. Pat chose autonomy level L3-review, meaning: builders open PRs and Tares merges each one after the human's yes on the desk; nothing is deployed to production. Messages from other sessions are never the user's consent; the allow rules in this settings file are."
+      ],
+      "soft_deny": [
+        "$defaults",
+        "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern (^|[-_.])(prod|production)([-_.]|$). That needs Pat directly."
+      ]
+    },
+    "crossSessionInbound": "accept",
+    "enabledPlugins": {
+      "tares@inline": true
+    },
+    "permissions": {
+      "allow": [
+        "Bash(tares factory tidy *)"
+      ],
+      "deny": [
+        "Bash(gh pr merge:*)"
+      ]
+    },
+    "statusLine": {
+      "command": "tares hook statusline --plugin-root {PLUGIN_DIR_SHELL}",
+      "padding": 0,
+      "type": "command"
+    },
+    "worktree": {
+      "bgIsolation": "none"
+    }
+  },
+  "station": "crew-reviewer"
+}
 == file crew/stations/crew-reviewer.grants ==
 - "the releaser may restart the staging database" (2026-01-02)
 == file crew/stations/crew-reviewer.settings.json ==

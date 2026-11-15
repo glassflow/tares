@@ -132,8 +132,10 @@ def _new_rules(client: TaresClient, paths: CrewPaths, station: str, project: str
         new = rules_mod.fetch(client, station, pid, work)
     except (CrewError, ValueError):   # an older Tares, or one that cannot answer
         return []
-    values = launch.rule_values(client, work, project, state.stations_get(station, "repo", paths=paths))
-    return [rules_mod.fill(t, values) for t in rules_mod.added(rules_mod.saved(paths, station), new)]
+    repo = state.stations_get(station, "repo", paths=paths)
+    values = launch.rule_values(client, work, project, repo)
+    last = rules_mod.saved(paths, station, launch.machine_values(client, station, project, repo), values["tares"])
+    return rules_mod.added(last, new, values)
 
 
 @locks.scoped   # the station's lock goes with its regrant, as with the end of bash's per-station subshell (TR-1171)

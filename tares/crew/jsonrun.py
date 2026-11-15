@@ -2,7 +2,8 @@
 
 The lifecycle commands (up, down, halt, resume, freeze, unfreeze, update, restart, and a station's restart,
 revive and retire) print what they do as lines on stderr and leave stdout empty. With `--json` this module runs the
-same command with everything it prints collected, and prints one document on stdout when it is done:
+same command with everything it prints collected (the lines on stderr also go live to the real stderr, one line
+each, so a caller can show progress; stdout holds only the document), and prints one document on stdout when done:
 
     {"schema_version": 1, "ok": true, "command": "crew halt", "notes": ["crew halted: ..."]}
 
@@ -15,6 +16,7 @@ Standard library plus contract.py.
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import io
 import os
 import sys
@@ -26,24 +28,96 @@ from .paths import ME
 
 FLAG = "--json"
 
+# optional keys a command adds to its result document (add_result); one dict per --json run, held for that run only
+_extra: contextvars.ContextVar = contextvars.ContextVar("tares_crew_json_extra", default=None)
+
+
+@contextlib.contextmanager
+def scope():
+    """Collect the keys add_result gets inside the block; yields the dict. run() opens one for every --json run."""
+    d: dict = {}
+    token = _extra.set(d)
+    try:
+        yield d
+    finally:
+        _extra.reset(token)
+
+
+def add_result(key: str, value) -> None:
+    """A command names an optional key for the result document it prints with --json (`crew update` lists the
+    stations it left to the watch). The document carries it on success and on a failure. Without --json it is not
+    used."""
+    d = _extra.get()
+    if d is not None:
+        d[key] = value
+
+
+class _Tee(io.TextIOBase):
+    """Python's stderr under --json (TR-1344): every complete line goes into buf, for the document's notes, and,
+    as it happens, to the real stderr as "tares factory: <msg>", flushed, so a program that runs the command can
+    show what it is doing. They are the same text as the notes."""
+
+    def __init__(self, buf: io.StringIO, real):
+        self.buf = buf
+        self.real = real
+        self.pending = ""
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self.buf.write(text)
+        self.pending += text
+        while "\n" in self.pending:
+            line, self.pending = self.pending.split("\n", 1)
+            self._live(line)
+        return len(text)
+
+    def _live(self, raw: str) -> None:
+        line = raw.strip()
+        if not line:
+            return
+        if not line.startswith(f"{ME}: "):
+            line = f"{ME}: {line}"
+        try:
+            self.real.write(line + "\n")
+            self.real.flush()
+        except (OSError, ValueError, AttributeError):   # a closed, broken or missing (pythonw) stderr must not fail the command
+            pass
+
+    def flush(self) -> None:
+        if self.pending:
+            line, self.pending = self.pending, ""
+            self._live(line)
+
 
 @contextlib.contextmanager
 def _collect(buf: io.StringIO):
-    """Python's stdout and stderr go to buf, and file descriptor 1 goes to stderr, so a child process that
-    inherits it cannot write into the document. Everything is put back on exit, before the caller prints."""
+    """Python's stdout goes to buf, stderr to buf and live to the real stderr (_Tee), and file descriptor 1 goes
+    to stderr, so a child process that inherits it cannot write into the document. Everything is put back on exit,
+    before the caller prints."""
     saved = None
     try:
         sys.stdout.flush()
     except (OSError, ValueError):
         pass
     try:
-        saved = os.dup(1)
-        os.dup2(2, 1)
+        dup = os.dup(1)
     except OSError:   # no descriptor 1 (closed): nothing to guard
-        saved = None
+        dup = None
+    if dup is not None:
+        try:
+            os.dup2(2, 1)
+            saved = dup
+        except OSError:   # no descriptor 2 (pythonw): nothing to point 1 at; do not leak the copy
+            os.close(dup)
     try:
-        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            yield
+        tee = _Tee(buf, sys.stderr)
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(tee):
+            try:
+                yield
+            finally:
+                tee.flush()
     finally:
         if saved is not None:
             try:
@@ -77,15 +151,16 @@ def run(argv: list, command: str, body: Callable[[list], int], *, text_fail: Cal
     buf = io.StringIO()
     error = None
     code = 0
-    try:
-        with _collect(buf):
-            code = body(args) or 0
-    except CrewError as e:
-        error = e
+    with scope() as extra:
+        try:
+            with _collect(buf):
+                code = body(args) or 0
+        except CrewError as e:
+            error = e
     if error is None and code:
         error = CrewError(f"{command} failed (exit {code})")
     if error is not None:
-        contract.refuse(error, [FLAG], notes=_notes(buf.getvalue()))
+        contract.refuse(error, [FLAG], notes=_notes(buf.getvalue()), extra=extra)
         return contract.EXIT_USAGE if error.code == "usage" else contract.EXIT_FAILED
-    contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue())}, "result")
+    contract.emit({"ok": True, "command": command, "notes": _notes(buf.getvalue()), **extra}, "result")
     return 0
