@@ -51,7 +51,10 @@ def save_machine(store, machine, version, now: datetime | None = None, key: str 
     return out
 
 
-def machine_report(store, key: str = MACHINE_SETTING) -> dict | None:
+def machine_report(store, key: str | None = MACHINE_SETTING) -> dict | None:
+    """The report kept under `key`; None for no key (a credential with no person has no report)."""
+    if not key:
+        return None
     raw = store.get_setting(key)
     try:
         out = json.loads(raw) if raw else None
@@ -159,7 +162,7 @@ def crew_view(stations: list[dict], settings: dict, machine: str) -> dict:
 
 
 def payload(store, stations: list[dict], settings: dict, linear: bool, issues: bool,
-            key: str = MACHINE_SETTING, person_id: str | None = None) -> dict:
+            key: str | None = MACHINE_SETTING, person_id: str | None = None) -> dict:
     """The `onboarding` block of the home, for the caller: `key` is where their machine report is
     kept (machine_key) and `person_id` is whose crew may name the machine when no report came (a
     crew that ran before the report existed). Another person's crew never does."""

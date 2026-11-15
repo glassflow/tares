@@ -525,7 +525,7 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     mk = getattr(fx, "machine_key", None)
     who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
     onboarding = crew_onboarding.payload(store, mine, settings, linear, bool(store.github_projects()),
-                                         (mk(request) if mk else None) or crew_onboarding.machine_key(), who)
+                                         mk(request) if mk else crew_onboarding.machine_key(), who)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
             "waiting_for_you": waiting, "waiting_total": len(waiting), "projects": rows,

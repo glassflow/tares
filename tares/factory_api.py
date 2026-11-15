@@ -161,6 +161,16 @@ def merged_fields(t: dict, pr: dict) -> dict:
     return {"stage": "merged"}
 
 
+def cell_wide(system: bool, person: dict | None, is_admin, admin_only: bool = True) -> bool:
+    """Does this caller speak for the whole cell? The system credential does, and the person
+    `local` (auth off, or a key nobody bound on a one-person cell). Anyone else speaks for
+    themselves. `admin_only` also asks the admin scope of `local`, through `is_admin` (a function,
+    asked only for `local`): the crew's settings (`writes_default`) need it, because a cell default
+    is a privilege. The machine report (`machine_key`) does not: a name and a version, which the
+    ingest-only key `tares login` makes on a one-person cell may send, as `local`."""
+    return system or ((person or {}).get("id") == "local" and (not admin_only or bool(is_admin())))
+
+
 def stored_crew_setting(store, key: str) -> dict:
     """The crew settings saved under `key` (the cell's default or a person's own), with the
     defaults under what was never set."""
@@ -587,9 +597,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """Does this caller's write change the cell-wide default? The system credential does, and
         the person `local`, and auth off (a single-user cell stays as it was). Anyone else
         changes their own."""
-        person = h.current_person(request)
-        return h.is_system(request) or (
-            (person or {}).get("id") == "local" and h.is_admin(request))
+        return cell_wide(h.is_system(request), h.current_person(request), lambda: h.is_admin(request))
 
     def settings(request: Request | None = None) -> dict:
         """The cell's default, with the caller's own settings over it where they set one."""
@@ -656,12 +664,12 @@ def register(app, store, h: Host) -> SimpleNamespace:
 
     def machine_key(request: Request | None) -> str | None:
         """Where the caller's machine report is kept, as `writes_default` and `personal_key` decide
-        for the crew's settings: the cell's own for the system credential and the person `local`,
-        a person's own for anyone else, None for a key with no person."""
+        for the crew's settings (one rule, `cell_wide`): the cell's own for the system credential
+        and the person `local`, a person's own for anyone else, None for a key with no person."""
         if request is None:
             return crew_onboarding.machine_key()
         person = h.current_person(request)
-        if h.is_system(request) or (person or {}).get("id") == "local":
+        if cell_wide(h.is_system(request), person, lambda: h.is_admin(request), admin_only=False):
             return crew_onboarding.machine_key()
         return crew_onboarding.machine_key(person["id"]) if person else None
 
