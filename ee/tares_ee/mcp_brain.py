@@ -14,6 +14,7 @@ team while it is still loading, so a top-level import here would be circular.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 _VIA = {"X-Tares-Via": "mcp"}
 _DEEP_WAIT = 150   # seconds: lore's deep ask waits up to 120, and the cell adds its own work
@@ -63,7 +64,7 @@ async def get_brain_doc(id: str) -> str:
     citation. Gives its title, address and text."""
     from tares import mcp_server as srv
     async with srv._cx(30) as cx:
-        r = await cx.get(f"{srv.TARESD}/api/brain/docs/{id}", headers=_VIA)
+        r = await cx.get(f"{srv.TARESD}/api/brain/docs/{quote(id, safe='')}", headers=_VIA)
     if r.status_code >= 400:
         return srv._out(r)
     return _say(r.json(), ("kind", "title", "uri", "metadata", "text"))

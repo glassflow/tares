@@ -43,7 +43,7 @@ ASK_DAILY = 200
 DEEP_DAILY = 20
 ENV_ASK_DAILY = "TARES_BRAIN_ASK_DAILY"
 ENV_DEEP_DAILY = "TARES_BRAIN_DEEP_DAILY"
-MAX_QUESTION = 4000      # characters
+MAX_QUESTION = 2000      # characters: lore refuses a question or a search over 2,000 (MAX_QUERY_CHARS)
 MAX_HITS = 50
 KEPT_QUESTION = 1000     # characters of the question kept in brain_calls
 
@@ -149,7 +149,7 @@ def register_routes(app, host) -> None:
         return call["id"]
 
     def lore_error(e: LoreError):
-        status = 404 if e.status == 404 else 429 if e.status == 429 else 502
+        status = 400 if e.status == 400 else 404 if e.status == 404 else 429 if e.status == 429 else 502
         host.err(ValueError(str(e)), status)
 
     async def forward(call_id: str, started: float, coro, usage=None):
@@ -213,6 +213,8 @@ def register_routes(app, host) -> None:
         need_brain()
         if not q.strip():
             host.err(ValueError("q: what to search for, as text"))
+        if len(q.strip()) > MAX_QUESTION:
+            host.err(ValueError(f"q: at most {MAX_QUESTION:,} characters"))
         ready, notes, rest = split()
         source = None
         if repo.strip():

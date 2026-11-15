@@ -1922,7 +1922,8 @@ class FactoryStore:
     def reserve_brain_call(self, call: dict, cap: int | None = None, since=None) -> bool:
         """Keep a call that is about to start. With `cap`, only while fewer than `cap` calls of the
         same tool and depth have started since `since`; False when the cap is reached (nothing is
-        kept). The count and the insert are one step, so two calls cannot both take the last place."""
+        kept). The count and the insert are one step under this process's write lock, so two calls in
+        this process cannot both take the last place; the cap is not shared between daemons."""
         with self._swrite:
             if cap is not None:
                 n = self.sc.execute(

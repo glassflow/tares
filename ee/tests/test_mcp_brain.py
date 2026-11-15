@@ -185,7 +185,7 @@ async def main():
         await refuse("no question", {}, "question: what to ask")
         await refuse("a blank question", {"question": "   "}, "question: what to ask")
         await refuse("a question that is not text", {"question": 5}, "question: what to ask")
-        await refuse("a question that is too long", {"question": "q" * 4001}, "at most 4,000 characters")
+        await refuse("a question over lore's 2,000 characters", {"question": "q" * 2001}, "at most 2,000 characters")
         await refuse("deep that is not true or false", {"question": "q", "deep": "yes"}, "deep: true or false")
         await refuse("an unknown field", {"question": "q", "mode": "deep"}, "unknown field 'mode'")
         r = await cx.post("/api/brain/ask", json=["q"])
@@ -253,6 +253,13 @@ async def main():
             r = await cx.get("/api/brain/search", params=params)
             ck(f"{label} is {code} and lore is not called", r.status_code == code and len(lore.requests) == before, f"{r.status_code} {r.text[:100]}")
         lore.hits = None
+        before = (len(lore.requests), len(calls()))
+        r = await cx.get("/api/brain/search", params={"q": "q" * 2001})
+        ck("a search over 2,000 characters is 400 in words, lore not called, nothing recorded",
+           r.status_code == 400 and "at most 2,000 characters" in r.text and (len(lore.requests), len(calls())) == before,
+           f"{r.status_code} {r.text[:120]}")
+        r = await cx.get("/api/brain/search", params={"q": "q" * 2000})
+        ck("... and 2,000 exactly goes through", r.status_code == 200, f"{r.status_code} {r.text[:120]}")
 
         print("== documents ==")
         clear()
@@ -271,6 +278,10 @@ async def main():
         print("== lore fails ==")
         clear()
         put_repo("acme/web")
+        lore.fail("ask", 400, "question too long")
+        r = await asked()
+        ck("a 400 from lore stays a 400 (the caller's input), not a 502 to retry", r.status_code == 400, f"{r.status_code} {r.text[:200]}")
+        ck("... kept as failed", calls()[0]["ok"] is False, str(calls()[0]))
         lore.fail("ask", 500, "model is down")
         r = await asked()
         ck("a lore failure is 502 in plain words, key not shown", r.status_code == 502 and "The brain had a problem" in r.text
@@ -378,6 +389,8 @@ async def main():
         lore.hits = None
         out = json.loads(await mcp_brain.get_brain_doc(did))
         ck("get_brain_doc: the document", out["title"] == "Design" and out["text"] == "the design", str(out))
+        out = await mcp_brain.get_brain_doc("nope?x=1#top")
+        ck("a document id with ? and # reaches the cell whole, not cut at the ?", calls()[0]["question"] == "nope?x=1#top", str(calls()[0]))
         out = await mcp_brain.get_brain_doc("nope")
         ck("a refusal comes back as words, not a crash", out.startswith("error 404:") and "no such repo or document" in out, out)
         store.sc.execute("DELETE FROM brain_repos")
