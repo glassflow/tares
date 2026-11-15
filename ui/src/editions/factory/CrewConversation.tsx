@@ -183,7 +183,7 @@ function Mark({ ok, children }: { ok: boolean; children: React.ReactNode }) {
 
 /** Formatted or Raw: the view built for the tool, or the call's input and output as they came. */
 function Switch({ raw, setRaw }: { raw: boolean; setRaw: (raw: boolean) => void }) {
-  const btn = (on: boolean) => cn("h-auto! min-h-0! border-0! px-2! py-0.5! font-mono text-[11px]! leading-tight!",
+  const btn = (on: boolean) => cn("h-auto! min-h-0! border-0! px-2! py-0.5! text-[11px]! leading-tight!",
     on ? "bg-foreground! text-background!" : "bg-card! text-muted-foreground!");
   return (
     <span className="inline-flex border border-border" role="group" aria-label="How to show the call" data-testid="tool-switch">

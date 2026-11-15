@@ -7,6 +7,12 @@
    colors flow through semantic tokens, so [data-theme="dark"] re-skins the app
    onto the kit's dark anchors without touching component rules; the user's
    theme toggle survives. */
+/* Cascade order (TR-1262). `legacy` holds the global rules the platform pages were built on. It sits
+   above Tailwind's preflight (`base`) and below `utilities`, so a utility on a kit component wins
+   without an important modifier. It is declared before the Tailwind import because a layer's place
+   is fixed where it is first named, and that import names the other four. */
+@layer theme, base, legacy, components, utilities;
+
 @import "tailwindcss";
 @import "@fontsource-variable/inter";
 @import "@fontsource/geist-mono";
@@ -226,6 +232,10 @@
   --overlay: oklch(0 0 0 / 0.55);
   --sheet-shadow: oklch(0 0 0 / 0.5);
 }
+
+/* Legacy global rules: element selectors and the classes the platform pages use. Everything up to
+   the shadcn bridge sits in this layer; no rule here may move out of it (TR-1262). */
+@layer legacy {
 
 * { box-sizing: border-box; }
 
@@ -2356,6 +2366,8 @@ button.fo-copy-sm { padding: 2px 8px; font-size: 12px; }
   .pj-badge, .pj-sort .help { display: none; }
   .pj-bar .seg button { padding-left: 10px; padding-right: 10px; }
 }
+
+} /* @layer legacy */
 
 /* ── shadcn/ui bridge (TR-725) ──
    The component library in src/components/ui reads shadcn's token names; they map onto the
