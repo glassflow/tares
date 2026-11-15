@@ -104,9 +104,9 @@ async def main():
         e = await refused(lore.sync_repo("nope"))
         ck("an unknown repo is a plain not-found", e is not None and e.status == 404 and "no such repo" in str(e), str(e))
 
-        fake.progress[repo["id"]] = {"state": "indexing", "files_done": 3, "files_total": 10}
+        fake.progress[repo["id"]] = {"stage": "indexing", "files_done": 3, "files_total": 10}
         prog = await lore.repo_progress(repo["id"])
-        ck("repo_progress returns lore's json as it is", prog == {"state": "indexing", "files_done": 3, "files_total": 10}
+        ck("repo_progress returns lore's json as it is", prog == {"stage": "indexing", "files_done": 3, "files_total": 10}
            and fake.calls(route="repo_progress")[-1].path == f"/v1/repos/{repo['id']}/progress")
         e = await refused(lore.repo_progress("nope"))
         ck("progress of an unknown repo is a 404", e is not None and e.status == 404)

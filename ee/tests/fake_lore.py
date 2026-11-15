@@ -162,13 +162,13 @@ class FakeLore:
         if repo is None:
             return _err(404, "not found")
         repo["indexed_commit"] = "0" * 40
-        self.progress.setdefault(repo["id"], {"state": "queued"})
+        self.progress.setdefault(repo["id"], {"stage": "queued"})
         return _ok(self.sync_report | {"indexed_commit": repo["indexed_commit"]})
 
     def _repo_progress(self, rec, args):
         if args["id"] not in self.repos:
             return _err(404, "not found")
-        return _ok(self.progress.get(args["id"], {"state": "queued"}))
+        return _ok(self.progress.get(args["id"], {"stage": "queued"}))
 
     def _delete_repo(self, rec, args):
         if self.repos.pop(args["id"], None) is None:

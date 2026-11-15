@@ -379,6 +379,10 @@ FACTORY_SCHEMA = [
       added_by       TEXT,
       added_at       TIMESTAMPTZ
     )""",
+    # Where a repo's index job stands (TR-1198): the place in the control plane's queue while it
+    # waits, and when the cell asked for the job (NULL until it did, so a repo is asked for once).
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS place INTEGER",
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS job_started_at TIMESTAMPTZ",
     # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
     # since the hand-over stopped waiting for sign-offs; the rows are kept.
     """CREATE TABLE IF NOT EXISTS signoffs (
@@ -1820,12 +1824,13 @@ class FactoryStore:
 
     # ── the repos connected to the brain (TR-1197) ────────────────────────────
     _BR_COLS = ("repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
-                "error, added_by, added_at")
+                "error, added_by, added_at, place, job_started_at")
 
     def _br_rows(self, rows) -> list[dict]:
         out = [{"repo": r[0], "repo_source_id": r[1], "state": r[2], "files_done": r[3] or 0,
                 "files_total": r[4] or 0, "indexed_commit": r[5], "last_synced": r[6],
-                "error": r[7], "added_by": r[8], "added_at": r[9]} for r in rows]
+                "error": r[7], "added_by": r[8], "added_at": r[9], "place": r[10],
+                "job_started_at": r[11]} for r in rows]
         refs = self._person_refs(r["added_by"] for r in out)
         for r in out:
             r["added_by_name"] = (refs.get(r["added_by"]) or {}).get("name")
@@ -1849,7 +1854,7 @@ class FactoryStore:
         with self._swrite:
             hit = self.sc.execute(
                 f"INSERT INTO brain_repos ({self._BR_COLS}) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, "
-                "?, ?) ON CONFLICT DO NOTHING RETURNING repo",
+                "?, ?, NULL, NULL) ON CONFLICT DO NOTHING RETURNING repo",
                 [repo, repo_source_id or None, state, added_by or None, at]).fetchone()
         return hit is not None
 
@@ -1860,12 +1865,35 @@ class FactoryStore:
         return hit is not None
 
     def requeue_brain_repo(self, repo: str, from_state: str = "failed") -> bool:
-        """Put a repo that is in `from_state` back to queued with its error cleared; False when it
-        is not in that state (or not there), and then the row is left as it was."""
+        """Put a repo that is in `from_state` back to queued for a new index job: the error, the
+        place, the counts and the job's start are cleared. False when it is not in that state (or
+        not there), and then the row is left as it was."""
         with self._swrite:
             hit = self.sc.execute(
-                "UPDATE brain_repos SET state = 'queued', error = NULL WHERE repo = ? AND state = ? "
-                "RETURNING repo", [repo, from_state]).fetchone()
+                "UPDATE brain_repos SET state = 'queued', error = NULL, place = NULL, "
+                "files_done = 0, files_total = 0, job_started_at = NULL "
+                "WHERE repo = ? AND state = ? RETURNING repo", [repo, from_state]).fetchone()
+        return hit is not None
+
+    _BR_SETTABLE = ("state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
+                    "place", "job_started_at")
+
+    def update_brain_repo(self, repo: str, fields: dict, only_in: tuple[str, ...] | None = None) -> bool:
+        """Set some of a repo's columns (state, files_done, files_total, indexed_commit,
+        last_synced, error, place, job_started_at). With `only_in`, only while the repo is in one
+        of those states. False when no row was changed."""
+        bad = sorted(set(fields) - set(self._BR_SETTABLE))
+        if bad or not fields:
+            raise ValueError(f"cannot set {bad or 'nothing'} on a brain repo")
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        args = [*fields.values(), repo]
+        where = "repo = ?"
+        if only_in:
+            where += f" AND state IN ({', '.join('?' for _ in only_in)})"
+            args += list(only_in)
+        with self._swrite:
+            hit = self.sc.execute(f"UPDATE brain_repos SET {sets} WHERE {where} RETURNING repo",
+                                  args).fetchone()
         return hit is not None
 
     def decline_waiting_grant(self, gid: str, consents: list[dict]) -> bool:
