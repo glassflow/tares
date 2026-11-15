@@ -6,13 +6,16 @@
  * environment and a fresh data directory, and stops only it. No sample flag: every state is the cell's own,
  * reached the way a person reaches it, and the page is never reloaded to see a step tick (it reads the cell
  * again every few seconds while the first run shows).
- * States: fresh (six steps, the form on the crew's own defaults, Recommended on L3-review, four commands to copy,
- * the crew panel empty), a save that fails (nothing saved), nothing saved until Save and continue, choices saved,
+ * States: loading (the home before its first read answers), fresh (six steps, the form on L3-review: you approve
+ * each merge, four commands to copy, the crew panel empty), L4-ship asks first (confirm saves it, Keep my approval
+ * goes back to L3-review, a refused confirm saves nothing), a save that fails (also at 390), nothing saved until
+ * Save and continue, choices saved,
  * GitHub not connected and Linear not connected (Save and continue stays off), GitHub connected and tickets
  * placed, Tares installed and signed in (one report from an ingest-only key, which cannot change the choices),
- * the crew coming up (orchestrator running, reviewer starting), the crew up, a planned project (the list goes),
- * and an older cell with no onboarding block (the plain list). At 1440 and 390 wide: the words check in every
- * state, no horizontal scroll. Shots: crew-onboarding-<state>-<width>.png in SHOTS_DIR.
+ * the crew coming up (orchestrator running, reviewer starting), the crew up, many items (six builders, five
+ * connected accounts), long text (an 80 character machine name and a long version), a planned project (the list
+ * goes), and an older cell with no onboarding block (the plain list). At 1440 and 390 wide: the words check in
+ * every state, one read of the home per page load, no horizontal scroll. Shots: crew-onboarding-<state>-<width>.png in SHOTS_DIR.
  * Run:  cd ui && npm run build && TARES_E2E_PORT=<free port> node tests/crew-onboarding.e2e.cjs
  * (tares in ../.venv or on PATH). TARES_E2E_CHROME points Playwright at another Chrome binary.
  */
@@ -25,7 +28,7 @@ const path = require("path");
 const UI_DIR = path.resolve(__dirname, "..");
 const REPO = path.resolve(UI_DIR, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
-const { checkWords } = require("./words.cjs");
+const { checkWords, expectOneCall } = require("./words.cjs");
 
 const PORT = Number(process.env.TARES_E2E_PORT || 8877);
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -156,6 +159,42 @@ const stationLines = (sid, station, role, state) => [
       await ctx.close();
     };
 
+    // a state loaded in a context of its own: one read of the home, the words, no horizontal scroll
+    const stateAt = async (name, width, expectCount, extra) => {
+      const { ctx: c, page: p } = await context(width);
+      const one = expectOneCall(p, "/api/home");
+      await open(p);
+      await one(ck, `${name} @${width}`);
+      await shot(p, name, width);
+      ck(`${name} @${width}: ${expectCount}`, (await count(p)) === expectCount, await count(p));
+      if (extra) await extra(p, width);
+      await checkWords(p, ck, `${name} @${width}`);
+      await noOverflow(p, `${name} @${width}`);
+      await c.close();
+    };
+
+    // ── 0. loading: the home before its first read answers ──
+    for (const width of [1440, 390]) {
+      const { ctx: c, page: p } = await context(width);
+      let release;
+      const gate = new Promise((res) => { release = res; });
+      await p.route("**/api/home", async (r) => { await gate; await r.continue(); });
+      const one = expectOneCall(p, "/api/home");
+      await p.goto(`${BASE}/`, { waitUntil: "commit" });
+      await p.getByTestId("factory-home-loading").waitFor();
+      ck(`loading @${width}: placeholders only, no steps and no form yet`, (await p.getByTestId("start-step").count()) === 0
+         && (await p.getByTestId("choices-form").count()) === 0 && (await p.getByTestId("your-crew").count()) === 0);
+      await shot(p, "loading", width);
+      await checkWords(p, ck, `loading @${width}`);
+      await noOverflow(p, `loading @${width}`);
+      release();
+      await p.getByTestId("start-checklist").waitFor();
+      await one(ck, `loading @${width}`);
+      ck(`loading @${width}: the answer replaces the placeholders`, (await p.getByTestId("factory-home-loading").count()) === 0
+         && (await p.getByTestId("start-step").count()) === 6);
+      await c.close();
+    }
+
     // ── 1. a new cell ──
     const { ctx, page, puts } = await context(1440);
     const oneRead = [];
@@ -176,12 +215,14 @@ const stationLines = (sid, station, role, state) => [
        && (await page.getByText("Then, in your terminal").count()) === 1 && (await page.getByTestId("terminal-panel").count()) === 1);
     ck("fresh: what you need is said once, in the terminal panel", (await page.getByTestId("prerequisites").count()) === 1
        && (await page.getByTestId("prerequisites").innerText()).includes("Claude Code"));
-    ck("fresh: the form starts on the crew's own defaults", (await page.getByTestId("choice-L4-ship").isChecked())
-       && !(await page.getByTestId("choice-L3-review").isChecked())
-       && (await page.getByTestId("builders-count").innerText()).trim() === String(fresh.onboarding.choices.defaults.builders_max)
+    ck("fresh: the form starts on your approval for each merge (L3-review), from the cell", fresh.onboarding.choices.defaults.autonomy === "L3-review"
+       && (await page.getByTestId("choice-L3-review").isChecked()) && !(await page.getByTestId("choice-L4-ship").isChecked())
+       && (await page.getByTestId("merge-confirm-box").count()) === 0
+       && (await page.locator("label", { has: page.getByTestId("choice-L3-review") }).innerText()).includes("You approve each merge"));
+    ck("fresh: builders and releases start on the crew's own defaults",
+       (await page.getByTestId("builders-count").innerText()).trim() === String(fresh.onboarding.choices.defaults.builders_max)
        && (await page.getByTestId("toggle-releases").getAttribute("aria-checked")) === String(fresh.onboarding.choices.defaults.releaser));
-    ck("fresh: L3-review says Recommended for a new crew, and only it", (await page.getByTestId("recommended").count()) === 1
-       && (await page.locator("label", { has: page.getByTestId("choice-L3-review") }).getByTestId("recommended").innerText()).trim() === "Recommended for a new crew");
+    ck("fresh: no Recommended note anywhere", (await page.getByTestId("recommended").count()) === 0 && !/recommended/i.test(await page.getByTestId("choices-form").innerText()));
     ck("fresh: no release profile and no pattern in the first run", !/profile|pattern/i.test(await page.getByTestId("choices-form").innerText()));
     ck("fresh: the cell has saved nothing", fresh.onboarding.choices.chosen === false && fresh.onboarding.tracker === null);
     ck("fresh: four commands to copy, each with a Copy button", (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4
@@ -227,7 +268,39 @@ const stationLines = (sid, station, role, state) => [
     }
 
     // ── 2. choices: nothing is saved until the person confirms ──
-    await page.getByTestId("choice-L3-review").check();
+    // L4-ship, the crew merging on its own, is asked about first. Cancel keeps your approval.
+    await page.getByTestId("choice-L4-ship").check();
+    await page.getByTestId("merge-confirm-box").waitFor();
+    ck("merge: picking L4-ship asks in plain words, and Save and continue waits for the answer", (await page.getByTestId("merge-confirm-box").innerText()).includes("Let the crew merge on its own?")
+       && (await page.getByTestId("merge-confirm-box").innerText()).includes("merges it without asking you")
+       && (await page.getByTestId("merge-confirm").innerText()).trim() === "Yes, merge on its own"
+       && (await page.getByTestId("merge-cancel").innerText()).trim() === "Keep my approval"
+       && (await page.getByTestId("choices-save").count()) === 0 && (await page.getByTestId("choice-L4-ship").isChecked()));
+    await shot(page, "merge-confirm", 1440);
+    await checkWords(page, ck, "merge confirm @1440");
+    await noOverflow(page, "merge confirm @1440");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await shot(page, "merge-confirm", 390);
+    await checkWords(page, ck, "merge confirm @390");
+    await noOverflow(page, "merge confirm @390");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.getByTestId("merge-cancel").click();
+    ck("merge: Keep my approval goes back to L3-review, the question closes and nothing was saved", (await page.getByTestId("choice-L3-review").isChecked())
+       && !(await page.getByTestId("choice-L4-ship").isChecked()) && (await page.getByTestId("merge-confirm-box").count()) === 0
+       && (await page.getByTestId("choices-save").count()) === 1 && puts.settings === 0 && (await home_()).onboarding.choices.chosen === false, String(puts.settings));
+    // a confirm the cell refuses saves nothing and keeps the question open
+    await page.getByTestId("choice-L4-ship").check();
+    await page.route("**/api/crew/settings", (r) => r.request().method() === "PUT"
+      ? r.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ detail: "down" }) }) : r.continue());
+    await page.getByTestId("merge-confirm").click();
+    await page.getByTestId("step-error").waitFor();
+    ck("merge: a refused confirm says so, keeps the question, and the cell has nothing", (await page.getByTestId("step-error").innerText()).trim() === "That was not saved. Try again in a moment."
+       && (await page.getByTestId("merge-confirm-box").count()) === 1 && (await count(page)) === "0 of 6 done" && (await home_()).onboarding.choices.chosen === false);
+    await page.unroute("**/api/crew/settings");
+    await page.getByTestId("merge-cancel").click();
+    puts.settings = 0;      // the refused confirm was a request that did not stick
+    ck("merge: after the refusal, Keep my approval is L3-review again with no error", (await page.getByTestId("choice-L3-review").isChecked())
+       && (await page.getByTestId("step-error").count()) === 0 && (await page.getByTestId("merge-confirm-box").count()) === 0);
     await page.getByTestId("builders-more").click();
     ck("choices: the form follows the clicks", (await page.getByTestId("choice-L3-review").isChecked())
        && (await page.getByTestId("builders-count").innerText()).trim() === String(fresh.onboarding.choices.defaults.builders_max + 1));
@@ -247,6 +320,13 @@ const stationLines = (sid, station, role, state) => [
     ck("failed save: the cell still has nothing", (await home_()).onboarding.choices.chosen === false);
     await shot(page, "save-failed", 1440);
     await checkWords(page, ck, "save failed @1440");
+    await page.setViewportSize({ width: 390, height: 844 });
+    ck("save failed @390: the line, the form and the count are still there", (await page.getByTestId("step-error").isVisible())
+       && (await page.getByTestId("choices-form").count()) === 1 && (await count(page)) === "0 of 6 done");
+    await shot(page, "save-failed", 390);
+    await checkWords(page, ck, "save failed @390");
+    await noOverflow(page, "save failed @390");
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.unroute("**/api/crew/settings");
 
     // a save that works: the step ticks at once, without a reload
@@ -275,6 +355,28 @@ const stationLines = (sid, station, role, state) => [
     await page.getByTestId("choices-save").click();
     await page.getByTestId("choices-form").waitFor({ state: "detached" });
     ck("change: saving again closes it and the count stays", (await count(page)) === "1 of 6 done");
+    // Change to L4-ship: asked first, and the confirm saves it
+    await row(page, "choices").getByTestId("step-change").click();
+    await page.getByTestId("choice-L4-ship").check();
+    await page.getByTestId("merge-confirm-box").waitFor();
+    const putsBefore = puts.settings;
+    ck("change: L4-ship asks again, and nothing is saved before the answer", puts.settings === putsBefore
+       && (await api("GET", "/api/home", ROOT)).body.onboarding.choices.autonomy === "L3-review");
+    await page.getByTestId("merge-confirm").click();
+    await page.getByTestId("choices-form").waitFor({ state: "detached" });
+    await page.waitForFunction(() => /The crew merges on its own/.test(document.querySelector("[data-testid=start-step][data-key=choices] [data-testid=step-detail]")?.textContent || ""), null, { timeout: WAIT });
+    ck("change: Yes, merge on its own saves L4-ship, in place", (await row(page, "choices").getByTestId("step-detail").innerText()).includes("The crew merges on its own")
+       && (await home_()).onboarding.choices.autonomy === "L4-ship" && puts.settings === putsBefore + 1 && (await samePage(page)));
+    // and back: your approval needs no question
+    await row(page, "choices").getByTestId("step-change").click();
+    ck("change: the form reopens on L4-ship, with no question open", (await page.getByTestId("choice-L4-ship").isChecked()) && (await page.getByTestId("merge-confirm-box").count()) === 0);
+    await page.getByTestId("choice-L3-review").check();
+    ck("change: choosing L3-review asks nothing", (await page.getByTestId("merge-confirm-box").count()) === 0 && (await page.getByTestId("choices-save").count()) === 1);
+    await page.getByTestId("choices-save").click();
+    await page.getByTestId("choices-form").waitFor({ state: "detached" });
+    await page.waitForFunction(() => /You approve each merge/.test(document.querySelector("[data-testid=start-step][data-key=choices] [data-testid=step-detail]")?.textContent || ""), null, { timeout: WAIT });
+    ck("change: saved back to L3-review", (await row(page, "choices").getByTestId("step-detail").innerText()).includes("You approve each merge")
+       && (await home_()).onboarding.choices.autonomy === "L3-review" && (await count(page)) === "1 of 6 done");
 
     // ── 3. GitHub and the tickets' place ──
     ck("connections: GitHub is not connected, said so, and Save and continue is off",
@@ -367,6 +469,48 @@ const stationLines = (sid, station, role, state) => [
     await checkWords(page, ck, "crew up @1440");
     await noOverflow(page, "crew up @1440");
     await phone("crew-up", "5 of 6 done");
+
+    // ── 5b. many items: six builders at work and five connected accounts ──
+    for (let i = 1; i <= 6; i++) {
+      await ingest(stationLines(`b${i}`, `crew-builder-${i}`, "builder", "working"));
+    }
+    for (let i = 1; i <= 5; i++) {
+      const made = await api("POST", "/api/integrations/github", ROOT, { name: `team-${i}`, kind: "app_broker", token_url: "http://127.0.0.1:9/token",
+        broker_secret: "example", installation_id: 100 + i, webhook_secret: "example", account: `example-org-${i}`, repositories: [] });
+      ck(`many items: account ${i} connected through the cell`, made.status === 200 || made.status === 201, JSON.stringify(made.body).slice(0, 160));
+    }
+    await page.waitForFunction(() => (document.querySelector("[data-testid=crew-builders-state]")?.textContent || "").trim() === "6 working", null, { timeout: WAIT });
+    ck("many items: the crew card counts six builders, in place", (await page.getByTestId("crew-builders-state").innerText()).trim() === "6 working" && (await samePage(page)));
+    await new Promise((r) => setTimeout(r, 6000));      // the cell keeps its answer for five seconds
+    const manyText = (await home_()).onboarding.github.text;
+    ck("many items: the cell names three accounts and counts the rest", /connected as .+ and 2 more$/.test(manyText), manyText);
+    const manyChecks = async (p, width) => {
+      ck(`many items @${width}: six builders at work`, (await p.getByTestId("crew-builders-state").innerText()).trim() === "6 working");
+      ck(`many items @${width}: the connections step names the accounts and the rest`, /and 2 more/.test(await row(p, "connections").getByTestId("step-detail").innerText()));
+    };
+    await stateAt("many-items", 1440, "5 of 6 done", manyChecks);
+    await stateAt("many-items", 390, "5 of 6 done", manyChecks);
+
+    // ── 5c. long text: an 80 character machine name and a long version ──
+    const longName = ("build-machine-" + "long-name-".repeat(9)).slice(0, 80);
+    const longVersion = "1.60.0-rc.12+build.20261115.longlabel".padEnd(40, "x").slice(0, 40);
+    ck("long text: the machine name is 80 characters", longName.length === 80);
+    const longReport = await api("POST", "/api/crew/machine", seed.login_key, { machine: longName, version: longVersion });
+    ck("long text: the cell keeps the report as sent", longReport.status === 200 && longReport.body.machine === longName && longReport.body.version === longVersion, JSON.stringify(longReport.body));
+    await new Promise((r) => setTimeout(r, 6000));
+    const longChecks = async (p, width) => {
+      ck(`long text @${width}: Your crew names the machine in full`, (await p.getByTestId("crew-machine-state").innerText()).trim() === longName);
+      ck(`long text @${width}: the install step names the version`, (await row(p, "install").getByTestId("step-detail").innerText()).includes(longVersion));
+      ck(`long text @${width}: the machine name stays inside its card`, await p.evaluate(() => {
+        const e = document.querySelector("[data-testid=crew-machine-state]");
+        const box = document.querySelector("[data-testid=your-crew]");
+        if (!e || !box) return false;
+        const a = e.getBoundingClientRect(), b = box.getBoundingClientRect();
+        return a.right <= b.right + 1 && a.left >= b.left - 1;
+      }));
+    };
+    await stateAt("long-text", 1440, "5 of 6 done", longChecks);
+    await stateAt("long-text", 390, "5 of 6 done", longChecks);
 
     // ── 6. a planned project: every step is done and the list goes ──
     const made = await api("POST", "/api/projects", ROOT, { template: "custom", name: "parts-shop", objects: [], kind: "software_factory",
