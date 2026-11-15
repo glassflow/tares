@@ -360,7 +360,8 @@ def register(app, store, h):
         _, name, merged, _, schema = checked(slot, body, p["id"])
         required_ok(refuse, schema, merged)
         try:
-            store.set_project_choice(p["id"], slot, name, body.get("settings"), h.by(request, body))
+            store.set_project_choice(p["id"], slot, name, body.get("settings"), h.by(request, body),
+                                    require_connected=True)
         except ValueError as e:
             refuse(422, str(e))
         return entry(slot, p["id"])
