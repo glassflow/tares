@@ -2179,13 +2179,19 @@ class FactoryStore:
 
     def save_guardrail_pair(self, scope: str, project_uid: str | None, hook: str, integration: str,
                             on_fail: str, by: str | None = None,
-                            pair_id: str | None = None) -> tuple[dict, str]:
+                            pair_id: str | None = None, require_connected: bool = False) -> tuple[dict, str]:
         """Add a pair, or with `pair_id` change one of the same scope and project. Returns
         (the pair as a read shows it, "added" | "updated" | "twin"). A pair holds no integration
         settings (TR-1380): it uses the integration's connection at the factory. An exact twin
         (same scope, project, hook, integration and on_fail) adds nothing. A `pair_id` that names no
-        pair of this scope and project raises LookupError. Nothing else is checked here."""
+        pair of this scope and project raises LookupError. With `require_connected` a guardrail that
+        is not connected raises ValueError, checked in the same step as the write, within this
+        process (the route asks for it). Nothing else is checked here."""
+        takes = self._takes_settings("guardrails", integration)   # before the write lock: it loads the registry
         with self._swrite:
+            if require_connected and not self._connected("guardrails", integration, takes):
+                raise ValueError(f"{integration} is not connected: connect it in the factory's "
+                                 "integrations first")
             rows = self._pair_rows()
             if pair_id:
                 cur = next((p for p in rows if p["id"] == str(pair_id).strip().upper()

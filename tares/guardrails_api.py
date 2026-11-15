@@ -379,7 +379,8 @@ def register(app, store, h):
         hook, name, on_fail = checked_pair(body, existing)
         try:
             pair, how = store.save_guardrail_pair(scope, uid, hook, name, on_fail,
-                                                  h.by(request, body), pair_id=pid or None)
+                                                  h.by(request, body), pair_id=pid or None,
+                                                  require_connected=True)
         except LookupError:
             refuse(404, f"there is no pair {pid}")
         except ValueError as e:

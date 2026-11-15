@@ -282,6 +282,10 @@ ck("set_default refuses a connection that is gone even when an earlier check sai
 r = raises(s.set_project_choice, "p4", "tickets", "tixb", {}, "ann", require_connected=True)
 ck("so does the project's pick, and it leaves no row", r is not None and "not connected" in r
    and "factory's integrations" in r and s.get_project_choice("p4", "tickets") is None, r)
+r = raises(s.save_guardrail_pair, "factory", None, "pre_build", "rail_b", "block", "ann", require_connected=True)
+ck("a guardrail pair refuses a connection that is gone too, and adds no pair",
+   r is not None and "not connected" in r and "factory's integrations" in r
+   and not [p for p in s.list_guardrail_pairs("factory") if p["integration"] == "rail_b"], r)
 s.is_connected = _real_is_connected
 ck("the pick of a connected integration passes the same check",
    s.set_project_choice("p4", "tickets", "tixa", {}, "ann", require_connected=True)["name"] == "tixa")
@@ -289,6 +293,9 @@ ck("an integration with no integration settings needs no connection for a pick e
    s.set_project_choice("p4", "ci", "ciplain", {}, "ann", require_connected=True)["name"] == "ciplain")
 s.clear_project_choice("p4", "tickets")
 s.clear_project_choice("p4", "ci")
+pair, how = s.save_guardrail_pair("factory", None, "pre_build", "rail_a", "block", "ann", require_connected=True)
+ck("a pair of a connected guardrail passes the same check", how == "added", how)
+s.delete_guardrail_pair(pair["id"])
 
 
 # ── the migration ──────────────────────────────────────────────────────────────

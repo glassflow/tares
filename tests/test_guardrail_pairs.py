@@ -370,6 +370,18 @@ async def main():
             r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_off"}))
             ck("an integration that is not connected is refused and the pair stays", r.status_code == 422
                and "not connected" in r.text and store.guardrail_pair_stored(fid)["integration"] == "gr_b", r.text)
+            # the route's early check can be stale (the connection deleted in between): the write
+            # must refuse on its own, so make the early check say yes while it is not connected
+            n_pairs = len(store.list_guardrail_pairs())
+            _early = store.is_connected
+            store.is_connected = lambda slot, name: True
+            r = ru(await root.post(PAIRS, json={"id": fid, "hook": "pre_merge", "integration": "gr_off"}))
+            r2 = ru(await root.post(PAIRS, json={"hook": "pre_merge", "integration": "gr_off"}))
+            store.is_connected = _early
+            ck("the write refuses a connection that is gone even when the early check said yes",
+               r.status_code == 422 and r2.status_code == 422 and "gr_off is not connected" in r.text
+               and "factory's integrations" in r.text and store.guardrail_pair_stored(fid)["integration"] == "gr_b"
+               and len(store.list_guardrail_pairs()) == n_pairs, (r.text, r2.text))
             r = ru(await root.post(PAIRS, json={"id": fid, "settings": {"token": SECRETS[6]}}))
             ck("settings on an update are refused too", r.status_code == 422 and "integration settings" in r.text
                and store.guardrail_pair_stored(fid)["settings"] == {}, r.text)
