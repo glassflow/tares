@@ -47,10 +47,10 @@ const TAG: Record<TimelineItem["kind"], string> = {
   window: "Logs", quiet: "Logs", deploy: "Deploy", alert: "Alert", check: "Check", incident: "Incident", metric: "Metric",
 };
 const TONE: Record<TimelineTone, string> = {
-  bad: "bg-[var(--err-soft)] text-[color:var(--err)]",
-  warn: "border-b border-dashed border-[color:var(--ink-soft)] bg-[var(--wash-2)] text-foreground",
-  ok: "bg-[var(--ok-soft)] text-[color:var(--ok)]",
-  info: "bg-[var(--wash-2)] text-foreground",
+  bad: "bg-err-soft text-err",
+  warn: "border-b border-dashed border-muted-foreground bg-wash-strong text-foreground",
+  ok: "bg-ok-soft text-ok",
+  info: "bg-wash-strong text-foreground",
 };
 /** The text of these kinds is a person's or an agent's own words (a commit, a title, an alert). */
 const WRITTEN = new Set<TimelineItem["kind"]>(["deploy", "incident", "alert"]);
@@ -130,8 +130,8 @@ const fieldsLine = (f: Record<string, unknown>) =>
 const utc = (v: string) => (/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v) ? `${v}:00Z` : v);
 
 // ── small parts
-const btnBase = "inline-flex! items-center! rounded-none! border! border-border! bg-[var(--white)]! dark:bg-background! text-[13px]! font-normal! text-muted-foreground! hover:border-border! hover:text-foreground!";
-const btnOn = "font-semibold! text-foreground! bg-[var(--row-hover)]! dark:bg-[var(--row-hover)]! shadow-[inset_0_-2px_0_var(--accent)]";
+const btnBase = "inline-flex! items-center! rounded-none! border! border-border! bg-field! dark:bg-background! text-[13px]! font-normal! text-muted-foreground! hover:border-border! hover:text-foreground!";
+const btnOn = "font-semibold! text-foreground! bg-row-hover! dark:bg-row-hover! shadow-[inset_0_-2px_0_var(--accent)]";
 
 function Tag({ item }: { item: TimelineItem }) {
   const tone = item.tone;
@@ -154,7 +154,7 @@ function RawLines({ lines, onMore, onHide, onRetry }: {
 }) {
   const waiting = lines.status === "loading";
   return (
-    <div className="mt-2 min-w-0 border border-border bg-[var(--white)] dark:bg-background" data-testid="timeline-raw" aria-busy={waiting || undefined}>
+    <div className="mt-2 min-w-0 border border-border bg-field dark:bg-background" data-testid="timeline-raw" aria-busy={waiting || undefined}>
       {waiting && lines.rows.length === 0 && (
         <div role="status" aria-label="Loading the lines" className="grid gap-2 px-3 py-2.5" data-testid="timeline-raw-loading">
           <Skeleton width="30%" /><Skeleton width="80%" /><Skeleton width="55%" />
@@ -427,7 +427,7 @@ export default function Timeline() {
       <div className="flex flex-wrap items-center gap-2.5">
         <Select value={service || ALL} onValueChange={(v) => pickService(v === ALL ? "" : v)}>
           <SelectTrigger aria-label="Service" data-testid="timeline-service"
-                         className="h-9 w-auto! max-w-full min-w-0 justify-start! gap-2! bg-[var(--white)]! dark:bg-background!">
+                         className="h-9 w-auto! max-w-full min-w-0 justify-start! gap-2! bg-field! dark:bg-background!">
             <span className="text-muted-foreground">Service</span>
             <span data-user-text className="truncate"><SelectValue /></span>
           </SelectTrigger>
@@ -436,7 +436,7 @@ export default function Timeline() {
             {serviceOptions.map((s) => <SelectItem key={s} value={s}><span data-user-text>{s}</span></SelectItem>)}
           </SelectContent>
         </Select>
-        <div role="group" aria-label="Range" className="inline-flex w-full border border-border bg-[var(--white)] dark:bg-background md:w-auto" data-testid="timeline-range">
+        <div role="group" aria-label="Range" className="inline-flex w-full border border-border bg-field dark:bg-background md:w-auto" data-testid="timeline-range">
           {RANGES.map((r) => (
             <button key={r.key} type="button" aria-pressed={range === r.key} data-testid={`timeline-range-${r.key}`} onClick={() => pickRange(r.key)}
                     className={cn("flex-1 cursor-pointer rounded-none! border-y-0! border-r-0! border-l! border-border! bg-transparent! px-2! py-1.5! text-sm! font-normal! text-muted-foreground! first:border-l-0! hover:border-border! hover:text-foreground! md:flex-none md:px-3!",
@@ -450,9 +450,9 @@ export default function Timeline() {
       {range === "custom" && (
         <div className="flex flex-wrap items-end gap-2.5" data-testid="timeline-custom">
           <Input label="From (UTC)" type="datetime-local" value={draft.from} data-testid="timeline-custom-from"
-                 onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))} className="h-9 bg-[var(--white)]! dark:bg-background!" />
+                 onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))} className="h-9 bg-field! dark:bg-background!" />
           <Input label="To (UTC)" type="datetime-local" value={draft.to} data-testid="timeline-custom-to"
-                 onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} className="h-9 bg-[var(--white)]! dark:bg-background!" />
+                 onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} className="h-9 bg-field! dark:bg-background!" />
           <Button variant="secondary" disabled={!draftOk} data-testid="timeline-custom-apply" className="h-9"
                   onClick={() => put({ from: [draft.from, ""], to: [draft.to, ""] })}>
             Apply
@@ -487,7 +487,7 @@ export default function Timeline() {
 
       {fresh && items.length === 0 && (
         <EmptyState title={narrowed ? "Nothing to show" : "Nothing arrived"} data-testid="timeline-empty"
-                    className="border border-dashed border-[color:var(--border-strong)]">
+                    className="border border-dashed border-rule-strong">
           <span data-user-text>{fresh.emptyWords ?? "Nothing to show."}</span>{" "}
           {service ? "Try a longer range or all services." : "Try a longer range."}
         </EmptyState>
@@ -498,7 +498,7 @@ export default function Timeline() {
           {groups.map((g, gi) => (
             <React.Fragment key={g.hour ?? "unknown"}>
               <div role="heading" aria-level={2} data-testid="timeline-hour"
-                   className={cn("border-y border-border bg-[var(--row-hover)] px-3.5 py-2 text-[13px] font-semibold text-muted-foreground md:px-[18px]", gi === 0 && "border-t-0")}>
+                   className={cn("border-y border-border bg-row-hover px-3.5 py-2 text-[13px] font-semibold text-muted-foreground md:px-[18px]", gi === 0 && "border-t-0")}>
                 {hourWords(g.hour, now)}
               </div>
               {g.items.map((it, i) => (

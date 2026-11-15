@@ -50,7 +50,7 @@ export default function FactoryNewProject() {
           <div className="grid gap-1.5">
             <div className="text-[13px] font-semibold">In a terminal, in the repo the project builds on</div>
             <div className="flex min-w-0 flex-col gap-2 md:flex-row md:items-center">
-              <code className="min-w-0 flex-1 border border-border bg-[var(--input-bg)] px-3 py-2 font-mono text-[13px] [overflow-wrap:anywhere]"
+              <code className="min-w-0 flex-1 border border-border bg-field px-3 py-2 font-mono text-[13px] [overflow-wrap:anywhere]"
                     data-testid="new-project-command">{command}</code>
               <Button type="button" onClick={copy} data-testid="new-project-copy">Copy the command</Button>
             </div>

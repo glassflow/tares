@@ -29,7 +29,7 @@ function PrRow({ p }: { p: ProjectPr }) {
   const facts: React.ReactNode[] = [];
   if (p.branch) facts.push(<span key="b" className="font-mono">{p.branch}{p.base ? ` → ${p.base}` : ""}</span>);
   if (p.when) facts.push(<span key="w">{p.when}</span>);
-  if (p.ci) facts.push(<span key="c" className={p.ci === "CI failing" ? "text-[color:var(--err)]" : undefined}>{p.ci}</span>);
+  if (p.ci) facts.push(<span key="c" className={p.ci === "CI failing" ? "text-err" : undefined}>{p.ci}</span>);
   if (p.review) facts.push(<span key="r">review {p.review}</span>);
   if (p.size) facts.push(<PrSize key="s" s={p.size} />);
   return (
@@ -52,7 +52,7 @@ function PrRow({ p }: { p: ProjectPr }) {
         <Link to={p.ticket_href} className={LINK} data-testid="pr-ticket">{p.ticket}</Link>
         {facts.map((f, i) => <React.Fragment key={i}><span aria-hidden>{"·"}</span>{f}</React.Fragment>)}
       </div>
-      {p.error && <div className="mt-1 text-[13px] text-[color:var(--err)]" data-testid="pr-error">Not read from GitHub: {p.error}</div>}
+      {p.error && <div className="mt-1 text-[13px] text-err" data-testid="pr-error">Not read from GitHub: {p.error}</div>}
     </div>
   );
 }
@@ -68,7 +68,7 @@ function Repo({ r }: { r: ProjectRepoPrs }) {
         </h2>
         <span className="text-[13px] text-muted-foreground" data-testid="pr-repo-counts">
           {countsText(r.counts)}
-          {changed ? <>, merged <span className="text-[color:var(--ok)]">+{n(r.added)}</span> <span className="text-[color:var(--err)]">{"−"}{n(r.removed)}</span></> : null}
+          {changed ? <>, merged <span className="text-ok">+{n(r.added)}</span> <span className="text-err">{"−"}{n(r.removed)}</span></> : null}
         </span>
       </div>
       <div>{r.prs.map((p) => <PrRow key={p.url ?? `${p.ticket}`} p={p} />)}</div>

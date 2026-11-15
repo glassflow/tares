@@ -41,7 +41,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
   const { merged, blocked, total } = p.tickets;
   const repos = p.repo_names.join(", ");
   return (
-    <div className="border-b border-border px-4 py-3.5 last:border-b-0 hover:bg-[var(--row-hover)]" data-testid="project-row" data-state={p.state} data-project={p.id}>
+    <div className="border-b border-border px-4 py-3.5 last:border-b-0 hover:bg-row-hover" data-testid="project-row" data-state={p.state} data-project={p.id}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <InlineIcon icon={p.icon} />
@@ -55,7 +55,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
         </div>
         {p.can_close && (
           <Button variant="secondary" data-testid="project-close" onClick={() => onClose(p)}
-                  className="h-[30px] shrink-0 border-foreground! bg-[var(--input-bg)]!">
+                  className="h-[30px] shrink-0 border-foreground! bg-field!">
             Close
           </Button>
         )}
@@ -69,13 +69,13 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
         </div>
       )}
       <ProgressBar value={pct(merged, total)} blocked={pct(blocked, total)} aria-label={`${merged} of ${total} tickets merged`}
-                   className={cn("my-2 [&>div:first-child]:bg-foreground", p.state === "done" && "[&>div:first-child]:bg-[color:var(--ink-faint)]!")} />
+                   className={cn("my-2 [&>div:first-child]:bg-foreground", p.state === "done" && "[&>div:first-child]:bg-faint!")} />
       <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground" data-testid="project-tickets">
         <span>{merged} of {total} tickets merged</span>
-        {blocked > 0 && <span className="text-[color:var(--err)]">{blocked} blocked</span>}
+        {blocked > 0 && <span className="text-err">{blocked} blocked</span>}
       </div>
       {p.milestone && <div data-user-text data-testid="project-milestone" className="mt-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">{p.milestone}</div>}
-      {error && <div role="alert" data-user-text data-testid="project-error" className="mt-2 text-[13px] text-[color:var(--err)] [overflow-wrap:anywhere]">{error}</div>}
+      {error && <div role="alert" data-user-text data-testid="project-error" className="mt-2 text-[13px] text-err [overflow-wrap:anywhere]">{error}</div>}
     </div>
   );
 }
@@ -143,12 +143,12 @@ export function FactoryProjectsView({ data, onClose, start }: {
       ) : (
         <div className="grid gap-4">
           <Input aria-label="Search projects" placeholder="Search by name or goal" value={query} data-testid="projects-search"
-                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-[var(--input-bg)]!" />
+                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-field!" />
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList aria-label="Projects by state" className="h-auto flex-wrap">
               {TABS.map((t) => (
                 <TabsTrigger key={t.key} value={t.key} data-testid={`tab-${t.key}`}
-                             className="data-[state=active]:border-b-[color:var(--accent)]! data-[state=active]:hover:border-b-[color:var(--accent)]!">
+                             className="data-[state=active]:border-b-brand! data-[state=active]:hover:border-b-brand!">
                   {t.label}
                   <b className="ml-1 font-mono text-xs font-medium" data-testid="tab-count">{count(t.key)}</b>
                 </TabsTrigger>

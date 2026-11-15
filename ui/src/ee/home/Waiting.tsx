@@ -46,7 +46,7 @@ function Row({ item, renderAction, error, panel }: {
       )}
       {panel}
       {error && (
-        <div role="alert" data-testid="row-error" className="basis-full pl-10 text-[13px] text-[color:var(--err)]" data-words-exempt>
+        <div role="alert" data-testid="row-error" className="basis-full pl-10 text-[13px] text-err" data-words-exempt>
           {error}
         </div>
       )}

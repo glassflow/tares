@@ -155,19 +155,19 @@ function ToolCard({ t, open, onToggle, loadFull }: {
   const change = React.useMemo(() => (open ? changeOf(t.name, t.input) : null), [open, t.name, t.input]);
   const meta = [took(t.ms), hm(t.at)].filter(Boolean).join(" · ");
   return (
-    <div className={cn("border bg-card", t.failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-card"
+    <div className={cn("border bg-card", t.failed ? "border-err" : "border-border")} data-testid="tool-card"
          data-failed={t.failed ? "true" : "false"}>
       <button type="button" className="block w-full min-w-0 px-2.5 py-2 text-left" aria-expanded={open}
               onClick={onToggle} data-testid="tool-head">
         <span className="flex w-full min-w-0 items-center gap-2">
         <span className={cn("inline-flex size-6 shrink-0 items-center justify-center border",
-          t.failed ? "border-[var(--err)] text-[color:var(--err)]" : "border-border text-muted-foreground")}>
+          t.failed ? "border-err text-err" : "border-border text-muted-foreground")}>
           <ToolIcon name={t.name} />
         </span>
         <span className="shrink-0 font-mono text-[13px] font-semibold" data-words-exempt>{toolName(t.name)}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" data-words-exempt>{t.summary}</span>
         {t.failed && (
-          <span className="shrink-0 border border-[var(--err)] px-1.5 font-mono text-[10px] uppercase text-[color:var(--err)]"
+          <span className="shrink-0 border border-err px-1.5 font-mono text-[10px] uppercase text-err"
                 data-testid="tool-failed">Failed</span>
         )}
         {t.output === null && <span className={cn(MUTED, "shrink-0")}>no answer yet</span>}
@@ -186,7 +186,7 @@ function ToolCard({ t, open, onToggle, loadFull }: {
             <>
               <Block label={loading ? "Output (loading the rest...)" : "Output"} text={output ?? ""} testid="tool-output"
                      look={looksLikeDiff(output ?? "") ? "diff" : "plain"} />
-              {missed && <p className="m-0 px-3 pb-3 text-xs text-[color:var(--err)]" data-testid="tool-output-missed">The rest of the output did not load.</p>}
+              {missed && <p className="m-0 px-3 pb-3 text-xs text-err" data-testid="tool-output-missed">The rest of the output did not load.</p>}
             </>
           ) : (
             <p className="m-0 px-3 pb-3 text-xs text-muted-foreground" data-testid="tool-no-result">No result yet.</p>
@@ -207,7 +207,7 @@ function Group({ tools, openAll, opened, toggle, loadFull }: {
   // a card the reader opened keeps its group open when a refresh folds it into one
   const shown = open || openAll || tools.some((t) => opened.has(t.id));
   return (
-    <div className={cn("border bg-card", failed ? "border-[var(--err)]" : "border-border")} data-testid="tool-group">
+    <div className={cn("border bg-card", failed ? "border-err" : "border-border")} data-testid="tool-group">
       <button type="button" className="block w-full min-w-0 px-2.5 py-2 text-left" aria-expanded={shown}
               onClick={() => setOpen(!open)} data-testid="group-head">
         <span className="flex w-full min-w-0 items-center gap-2">
@@ -216,7 +216,7 @@ function Group({ tools, openAll, opened, toggle, loadFull }: {
         </span>
         <span className="shrink-0 font-mono text-[13px] font-semibold">Ran {tools.length} tools</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground" data-words-exempt>{names.join(", ")}</span>
-        {failed > 0 && <span className="shrink-0 border border-[var(--err)] px-1.5 font-mono text-[10px] uppercase text-[color:var(--err)]">{failed} failed</span>}
+        {failed > 0 && <span className="shrink-0 border border-err px-1.5 font-mono text-[10px] uppercase text-err">{failed} failed</span>}
         {span.length > 0 && <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground sm:inline">{[...new Set(span)].join("-")}</span>}
         {shown ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
         </span>
@@ -320,7 +320,7 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
               <div key={r.key} className="ml-auto flex max-w-[88%] justify-end" data-testid="bubble-asked">
                 <div className="min-w-0 text-right">
                   <div className="mb-1 font-mono text-[11px] text-muted-foreground"><span data-user-text>{it.from}</span>{hm(it.at) ? ` · ${hm(it.at)}` : ""}</div>
-                  <div className="inline-block max-w-full border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-left text-sm text-foreground dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]" data-user-text><Prose text={it.text} /></div>
+                  <div className="inline-block max-w-full border border-[color-mix(in_srgb,var(--accent)_45%,transparent)] bg-brand-soft px-3 py-2 text-left text-sm text-foreground dark:bg-[color-mix(in_srgb,var(--accent)_20%,transparent)]" data-user-text><Prose text={it.text} /></div>
                 </div>
               </div>
             );
@@ -330,7 +330,7 @@ export function Conversation({ items, who, earlier, onEarlier, loadFull }: {
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-1.5">
         {follow ? (
           <span className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground" data-testid="conversation-following">
-            <span aria-hidden className="inline-block size-1.5 bg-[var(--ok)]" /> Following live, newest at the bottom
+            <span aria-hidden className="inline-block size-1.5 bg-ok" /> Following live, newest at the bottom
           </span>
         ) : (
           <button type="button" className="linklike text-[12px]" onClick={() => { setFollow(true); const el = box.current; if (el) el.scrollTop = el.scrollHeight; }}

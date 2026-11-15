@@ -92,15 +92,15 @@ function AddLine({ doc, sample, reload }: { doc: DocView; sample: string | null;
   };
 
   return (
-    <form onSubmit={submit} className="border-t border-border bg-[var(--wash)] px-5 py-3.5" data-testid="doc-add">
+    <form onSubmit={submit} className="border-t border-border bg-wash px-5 py-3.5" data-testid="doc-add">
       <label htmlFor={inputId} className="mb-1.5 block text-xs text-muted-foreground">{add.hint}</label>
       <div className="flex gap-2">
-        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-[var(--input-bg)]!"
+        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-field!"
                aria-invalid={error ? true : undefined} aria-describedby={error ? `${inputId}-error` : undefined}
                onChange={(e) => { setText(e.target.value); if (error) setError(""); }} />
         <Button type="submit" busy={busy}>Add line</Button>
       </div>
-      {error && <p id={`${inputId}-error`} role="alert" data-testid="doc-add-error" className="m-0! mt-1.5! text-[13px] text-[color:var(--err)]">{error}</p>}
+      {error && <p id={`${inputId}-error`} role="alert" data-testid="doc-add-error" className="m-0! mt-1.5! text-[13px] text-err">{error}</p>}
     </form>
   );
 }
@@ -189,7 +189,7 @@ function ProjectPicker({ page, chosen, onPick }: { page: DocsPage; chosen: PickI
             <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={key} placeholder="Search projects"
                    role="combobox" aria-expanded aria-controls={listId} aria-label="Search projects" aria-autocomplete="list"
                    aria-activedescendant={shown[at] ? `${listId}-${shown[at].id}` : undefined}
-                   className="h-8 bg-[var(--input-bg)]!" data-testid="doc-picker-search" />
+                   className="h-8 bg-field!" data-testid="doc-picker-search" />
           </div>
           <ul id={listId} role="listbox" aria-label="Projects" className="m-0! max-h-72 list-none! overflow-y-auto p-1!">
             {shown.length === 0 && <li className="px-2.5 py-2 text-[13px] text-muted-foreground" data-testid="doc-picker-none">No project matches.</li>}
@@ -201,7 +201,7 @@ function ProjectPicker({ page, chosen, onPick }: { page: DocsPage; chosen: PickI
                 <li id={`${listId}-${p.id}`} role="option" aria-selected={chosen?.id === p.id} data-testid="doc-picker-option" data-project={p.id}
                     onMouseDown={(e) => e.preventDefault()} onClick={() => choose(p.id)} onMouseEnter={() => setAt(i)}
                     className={cn("flex cursor-pointer items-center justify-between gap-2 px-2.5 py-1.5 text-sm",
-                                  i === at && "bg-[var(--row-hover)]", chosen?.id === p.id && "font-semibold")}>
+                                  i === at && "bg-row-hover", chosen?.id === p.id && "font-semibold")}>
                   <span data-user-text className="min-w-0 [overflow-wrap:anywhere]">{p.name}</span>
                   {chosen?.id === p.id && <Check aria-hidden className="size-4 shrink-0" />}
                 </li>
@@ -220,7 +220,7 @@ function DocList({ page, openId, project, to, onPick }: {
 }) {
   const item = (id: string, label: string) => (
     <Link key={id} to={to(id)} data-testid="doc-link" aria-current={id === openId ? "page" : undefined}
-          className={cn("flex items-center gap-2 pl-[17px] pr-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-[var(--row-hover)]",
+          className={cn("flex items-center gap-2 pl-[17px] pr-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-row-hover",
                         id === openId && "shadow-[inset_3px_0_0_var(--accent)] bg-muted font-semibold")}>
       {label}
     </Link>

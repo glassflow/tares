@@ -8,10 +8,15 @@
 //   hex       #e3c777, #fff, #1e0f00cc
 //   rgb       rgb(…), rgba(…) with a number inside
 //   palette   a stock Tailwind palette utility: bg-amber-200, text-slate-500, ring-red-600/40
+//   utility   an arbitrary value naming a token that has a utility: text-[color:var(--err)] is
+//             text-err, bg-[var(--row-hover)] is bg-row-hover (TR-1263). The list of such tokens
+//             is read from `@theme inline` in src/styles.css, so a role added there is guarded
+//             the moment it exists. Tokens with no utility (the code palette) still pass.
 //
 // CSS is exempt: src/styles.css holds the definitions, and it is outside a TSX gate anyway.
 // Raw palette variables (`var(--green-300)`) are tokens and pass; choosing a semantic one
-// over a raw one is a review call, not a lint.
+// over a raw one is a review call, not a lint. A `var()` in an inline style passes too: only the
+// Tailwind arbitrary-value form has a utility to use instead.
 //
 // The allow-list is an exception REGISTER, not an escape hatch: each entry carries a reason
 // and the ticket that empties it. Inline config is off, so a disable comment exempts nothing.
@@ -20,6 +25,7 @@
 // file, so every selector lives in the one SELECTORS map and a register re-declares the rule
 // with the subset that still applies to it (same as eslint-design-contract.config.mjs).
 
+import { readFileSync } from 'node:fs'
 import tseslint from 'typescript-eslint'
 
 // --- repoint on copy ---------------------------------------------------------
@@ -48,6 +54,15 @@ const PALETTE =
   '(?<![\\w-])(?:[\\w-]+:)*!?(?:bg|text|border(?:-[trblxyse])?|ring|ring-offset|outline|divide|fill|stroke|from|via|to|accent|caret|decoration|shadow)-' +
   '(?:red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|gray|grey|zinc|neutral|stone|slate)-\\d{2,3}\\b'
 
+// The tokens `@theme inline` maps to a utility (`--color-err: var(--err)` makes `--err` one).
+// `--ink-soft` is listed by hand: it is the same role as muted-foreground and has no other name.
+const CSS = readFileSync(new URL('./src/styles.css', import.meta.url), 'utf8')
+const THEMED = [...CSS.slice(CSS.indexOf('@theme inline')).matchAll(/--color-[a-z0-9-]+:\s*var\(--([a-z0-9-]+)\)/g)]
+  .map((m) => m[1])
+  .concat('ink-soft')
+if (THEMED.length < 20) throw new Error('token-contract: could not read @theme inline from src/styles.css')
+const UTILITY = `-\\[(?:color:)?var\\(--(?:${[...new Set(THEMED)].join('|')})\\)\\]`
+
 const strings = (re) => `Literal[value=/${re}/], TemplateElement[value.raw=/${re}/]`
 
 const SELECTORS = {
@@ -56,6 +71,10 @@ const SELECTORS = {
   palette: {
     selector: strings(PALETTE),
     message: `A stock Tailwind palette colour. The console's colours are its own tokens. ${DOC} (token-contract: palette)`,
+  },
+  utility: {
+    selector: strings(UTILITY),
+    message: `An arbitrary value for a token that has a utility: write text-err, not text-[color:var(--err)]. The roles and their names are in @theme inline in src/styles.css and in .impeccable.md. (token-contract: utility)`,
   },
 }
 

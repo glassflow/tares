@@ -25,7 +25,7 @@ export function IncidentCard({ incident: i, busy, canAct = true, onPickUp, onRes
     // red says what it is. No box and no tinted band.
     <section className="min-w-0 border-t border-foreground [overflow-wrap:anywhere]" data-testid="incident-card" data-incident={i.id}>
       <div className="pb-1 pt-3">
-        <div className="mb-1 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-[color:var(--err)]" data-testid="incident-kind">Incident</div>
+        <div className="mb-1 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-err" data-testid="incident-kind">Incident</div>
         <h2 className="m-0! mb-0.5! text-[15px]!" data-user-text data-testid="incident-title">{i.title}</h2>
         <div className="text-[13px] text-muted-foreground" data-testid="incident-age">{i.age_words} · {i.who_words}</div>
       </div>

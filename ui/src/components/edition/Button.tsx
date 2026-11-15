@@ -11,7 +11,7 @@ export type ButtonSize = "md" | "lg";
 const VARIANTS = {
   primary: { base: "default", extra: "border-foreground! font-semibold! hover:border-foreground!" },
   secondary: { base: "outline", extra: "border-border! bg-transparent! hover:border-border! hover:bg-muted!" },
-  quiet: { base: "ghost", extra: "text-[color:var(--ink-soft)]! hover:text-foreground!" },
+  quiet: { base: "ghost", extra: "text-muted-foreground! hover:text-foreground!" },
 } as const;
 
 export interface ButtonProps extends Omit<React.ComponentProps<typeof BaseButton>, "variant" | "size"> {

@@ -53,7 +53,7 @@ export function Sparkline({ points, marks = [], height = 32, className, ...props
       {marks
         .filter((m) => Number.isInteger(m) && m >= 0 && m < n)
         .map((m) => (
-          <line key={m} x1={x(m)} x2={x(m)} y1={0} y2={height} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-[color:var(--ink-faint)]" />
+          <line key={m} x1={x(m)} x2={x(m)} y1={0} y2={height} strokeWidth={1} vectorEffect="non-scaling-stroke" className="stroke-faint" />
         ))}
       {kept.length > 0 && <polyline points={line} fill="none" stroke="currentColor" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
     </svg>

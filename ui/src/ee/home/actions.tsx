@@ -31,7 +31,7 @@ export function DeclineDialog({ item, busy, error, onClose, onConfirm }: {
         <p className="m-0 text-sm [overflow-wrap:anywhere]" data-user-text>{item.title}</p>
         <Textarea label="Why (optional)" rows={3} value={text} disabled={busy} maxLength={REASON_MAX} data-testid="decline-reason"
           onChange={(e) => setText(e.target.value)} />
-        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-[color:var(--err)]" data-words-exempt>{error}</p>}
+        {error && <p role="alert" data-testid="dialog-error" className="m-0 text-[13px] text-err" data-words-exempt>{error}</p>}
       </div>
     </Dialog>
   );

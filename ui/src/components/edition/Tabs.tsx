@@ -29,7 +29,7 @@ export function Tabs({ items, className, defaultValue, value, "aria-label": labe
             key={t.value}
             value={t.value}
             disabled={t.disabled}
-            className="data-[state=active]:border-b-[color:var(--accent)]! data-[state=active]:hover:border-b-[color:var(--accent)]!"
+            className="data-[state=active]:border-b-brand! data-[state=active]:hover:border-b-brand!"
           >
             {t.label}
           </TabsTrigger>

@@ -104,7 +104,7 @@ async function waitFor(url, tries = 100) {
        && /Heard \d+ seconds? ago/.test(await lead.innerText()) && /Memory 82% full/.test(await lead.innerText()), await lead.innerText());
     ck("the reviewer is idle", /Reviewer · Idle for 1 minute/.test(await member(page, "Reviewer").first().innerText()), await member(page, "Reviewer").first().innerText());
     ck("the releaser is idle for two hours", /Releaser · Idle for 2 hours/.test(await member(page, "Releaser").first().innerText()));
-    const groups = await page.getByTestId("crew-builders").evaluate((s) => [...s.querySelectorAll("[data-user-text]")].filter((e) => e.parentElement.className.includes("wash-2"))
+    const groups = await page.getByTestId("crew-builders").evaluate((s) => [...s.querySelectorAll("[data-user-text]")].filter((e) => e.parentElement.className.includes("bg-wash-strong"))
       .map((e) => [e.textContent, e.nextElementSibling.textContent]));
     ck("builders sit in their projects, each with running and total; the finished project's builder is left out",
        JSON.stringify(groups) === JSON.stringify([["project-x", "2 running · 3"], ["project-y", "1 running · 1"]]), JSON.stringify(groups));
@@ -430,7 +430,7 @@ async function waitFor(url, tries = 100) {
              && (await p.getByTestId("crew-of-person").nth(1).getByTestId("crew-of-person-body").count()) === 1);
           await p.evaluate(() => { try { localStorage.removeItem("taresCrewFolds"); } catch (e) { /* none */ } });
         }
-        if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("wash-2")).length)) === 4);
+        if (name === "many") ck(`${tag}: four projects`, (await p.getByTestId("crew-builders").locator("[data-user-text]").evaluateAll((e) => e.filter((x) => x.parentElement.className.includes("bg-wash-strong")).length)) === 4);
         if (name === "long") ck(`${tag}: long names and texts wrap inside the page`, (await overflow(p)) <= 0);
         ck(`${tag}: no sideways scroll`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
         await checkWords(p, ck, tag);

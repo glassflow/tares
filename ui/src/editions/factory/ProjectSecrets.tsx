@@ -114,7 +114,7 @@ export function ProjectSecrets({ project, initial }: { project: string; initial:
                     <span data-user-text>{s.set_by ? `Set by ${s.set_by}` : "Set"}</span> {ago(s.set_at)}
                     {s.used_at ? <> · <span data-user-text>last used{s.used_by ? ` by ${s.used_by}` : ""}</span> {ago(s.used_at)}</> : " · not used yet"}
                   </div>
-                  {!s.readable && <div className="text-xs text-[color:var(--err)]">This value can't be read any more. Replace it.</div>}
+                  {!s.readable && <div className="text-xs text-err">This value can't be read any more. Replace it.</div>}
                 </div>
                 <div className="flex gap-2">
                   <Button variant="secondary" onClick={() => setEditing({ name: s.name })} data-testid="secret-replace">Replace</Button>
@@ -130,7 +130,7 @@ export function ProjectSecrets({ project, initial }: { project: string; initial:
                   data-words-exempt>tares factory with-secrets -- &lt;command&gt;</code>
           </>
         )}
-        {error && <div role="alert" className="mt-2 text-[13px] text-[color:var(--err)]">{error}</div>}
+        {error && <div role="alert" className="mt-2 text-[13px] text-err">{error}</div>}
       </div>
       {editing && (
         <SecretDialog project={project} name={editing.name} onClose={() => setEditing(null)}

@@ -25,7 +25,7 @@ const LEAD = "Pick what you want to use it for. You can change this later in Set
 // The console's own `button` rules are unlayered and beat plain utilities, so what they also set is
 // marked important.
 const CARD = "flex! w-full cursor-pointer flex-col items-start gap-1 border-border! bg-card! px-4! py-4! text-left text-foreground! font-normal! disabled:cursor-default disabled:opacity-60";
-const CARD_ON = "border-2! border-foreground! bg-[var(--accent-soft)]! px-[15px]! py-[15px]!";
+const CARD_ON = "border-2! border-foreground! bg-brand-soft! px-[15px]! py-[15px]!";
 
 function Frame({ lead, children }: { lead: string; children?: React.ReactNode }) {
   return (

@@ -65,10 +65,14 @@ predate the kit.
   `<textarea>`, and no `style={{}}` except for a value computed at run time (a bar's width).
 - **Colour from the semantic utilities**, which `@theme inline` in `styles.css` maps from the
   tokens: `bg-background`, `bg-card`, `text-foreground`, `text-muted-foreground`, `border-border`,
-  `bg-primary`, `text-ok`, `text-warn`, `text-err`. No hex, no `rgb()`, no Tailwind palette colours
-  (`text-red-500`), and no `--kit-*` outside the token block. Reach for `var(--…)` only when no
-  utility exists. `npm run token-contract` (`ui/eslint-token-contract.config.mjs`) fails on a hex,
-  `rgb()` or palette colour in any string in `ui/src`; CSS holds the definitions and is exempt.
+  `bg-primary`, `text-ok`, `text-warn`, `text-err`, and the rest of the roles listed under Colour
+  budget in `.impeccable.md` (`bg-field`, `bg-row-hover`, `bg-wash`, `text-faint`, `border-brand`,
+  `bg-err-soft`, …). No hex, no `rgb()`, no Tailwind palette colours (`text-red-500`), and no
+  `--kit-*` outside the token block. An arbitrary value (`text-[color:var(--…)]`) only for a token
+  with no utility, which today means the code palette. `npm run token-contract`
+  (`ui/eslint-token-contract.config.mjs`) fails on a hex, `rgb()` or palette colour in any string
+  in `ui/src`, and on an arbitrary value naming a token that has a utility (the list is read from
+  `@theme inline`); CSS holds the definitions and is exempt.
 - **Shape and type.** No `rounded-*` other than `rounded-full` (dots, switches). No drop shadow on
   anything in the page: a panel is a 1px `border-border`, not a card. Floating layers (sheets, menus,
   popovers) cast `var(--sheet-shadow)`, and the selected-item bar is an inset shadow in the accent

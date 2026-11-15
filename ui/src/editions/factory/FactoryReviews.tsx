@@ -99,7 +99,7 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
         <div data-testid="reviews-crew">
           <button type="button" aria-expanded={open} aria-controls="reviews-crew-list" data-testid="crew-fold"
                   onClick={() => setFolded(open)}
-                  className="flex! w-full cursor-pointer items-center justify-between! gap-3 border border-border bg-card px-4 py-3 text-left font-semibold hover:bg-[var(--row-hover)]">
+                  className="flex! w-full cursor-pointer items-center justify-between! gap-3 border border-border bg-card px-4 py-3 text-left font-semibold hover:bg-row-hover">
             <span>With the crew</span>
             <span className="font-mono font-normal" data-testid="crew-count">{theirs.length} {open ? "−" : "+"}</span>
           </button>
