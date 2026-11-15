@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "../api";
@@ -46,10 +46,18 @@ const ROW = "flex! w-full items-center justify-between gap-3 border-0! bg-transp
 function MenuLinks({ entries, narrow }: { entries: MenuEntry[]; narrow: boolean }) {
   return (
     <>
-      {entries.map((e) => (
-        <NavLink key={e.key} to={e.to} end={e.to === "/"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}>
-          {e.label}
-        </NavLink>
+      {entries.map((e, i) => (
+        <Fragment key={e.key}>
+          {e.group && e.group !== entries[i - 1]?.group && (
+            <div data-testid={`menu-group-${e.group.toLowerCase().replace(/\s+/g, "-")}`}
+                 className={`px-3 pb-1.5 pt-1 text-xs font-semibold text-muted-foreground ${i > 0 ? "mt-[18px]" : ""}`}>
+              {e.group}
+            </div>
+          )}
+          <NavLink to={e.to} end={e.to === "/" || e.to === "/brain"} data-testid={`menu-${e.key}`} className={linkClass(false, narrow)}>
+            {e.label}
+          </NavLink>
+        </Fragment>
       ))}
       <div className="min-h-6 flex-1" />
       <NavLink to={SETTINGS_ENTRY.to} data-testid={`menu-${SETTINGS_ENTRY.key}`} className={linkClass(true, narrow)}>
@@ -157,7 +165,16 @@ export default function EditionShell() {
   const [frame, setFrame] = useState(false);
   const noMenu = edition === "factory" && (isSettingsPath(here) || frame);
   useEffect(() => { rememberPlace(here, search); }, [here, search]);
-  const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to));
+  // The Second Brain group shows once the cell says it has a brain. A cell without a licence has no
+  // such route (404), and any failed read means no brain too: the group stays out, with no error.
+  const [brain, setBrain] = useState(false);
+  useEffect(() => {
+    if (edition !== "factory") { setBrain(false); return; }
+    let live = true;
+    api.brain().then((b) => { if (live) setBrain(b?.configured === true); }).catch(() => { if (live) setBrain(false); });
+    return () => { live = false; };
+  }, [edition]);
+  const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to), brain);
 
   // Same sources as the platform sidebar: the cloud's workspace link, the control plane's sign-out
   // address and who is signed in there.
