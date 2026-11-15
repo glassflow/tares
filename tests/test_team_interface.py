@@ -47,7 +47,7 @@ METHODS = [
     "assignee_join", "assignee_resolve",
     "grant_waiting_for", "grants_waiting_for_me", "settle_grant",
     "handover_blockers", "open_questions_for", "resolve_crew",
-    "team_home", "own_stations", "own_desk", "own_tickets", "team_projects",
+    "team_home", "project_waiting", "own_stations", "own_desk", "own_tickets", "team_projects",
     "register_routes", "mcp_tools",
 ]
 
@@ -86,6 +86,7 @@ class FakeEeTeam(SingleTeam):
     def open_questions_for(self, c, person_id, hidden, want): return [{"id": "q"}]
     def resolve_crew(self, name, person_id, machine): return (f"{name}@{machine}", machine or "")
     def team_home(self, c, request, now): return {"team": True}
+    def project_waiting(self, c, request, now, project): return {"mine": [], "others": []}
     def own_stations(self, c, request, rows): return rows[:1]
     def own_desk(self, c, request, rows): return rows[:1]
     def own_tickets(self, c, request, tickets, projects): return {}
@@ -183,13 +184,13 @@ def defaults(store):
              h=NS(current_person=lambda r: {"id": "local"}, is_system=lambda r: False),
              work_person=lambda r: {"id": "local"})
     ck("team home: {} and the own_* hooks pass their rows on unchanged on a one-person cell",
-       t.team_home(one, None, None) == {} and t.own_stations(one, None, rows) is rows
+       t.team_home(one, None, None) == {} and t.project_waiting(one, None, None, "p") is None and t.own_stations(one, None, rows) is rows
        and t.own_desk(one, None, rows) is rows and t.own_tickets(one, None, tickets, []) is tickets
        and t.team_projects(one, None, [], [], [], "all", None, []) == {})
-    many = NS(store=NS(only_local_person=lambda: False),
+    many = NS(store=NS(only_local_person=lambda: False, list_people=lambda: []),
               h=NS(current_person=lambda r: {"id": "ann"}, is_system=lambda r: False),
               work_person=lambda r: {"id": "ann"},
-              desk_is_mine=lambda d, me: d["to"] == me, is_mine=lambda tk, me, p: tk["who"] == me)
+              desk_is_mine=lambda d, me, o=None: d["to"] == me, is_mine=lambda tk, me, p, o=None: tk["who"] == me)
     stations = [{"person": {"id": "ann"}}, {"person": {"id": "bob"}}, {"person": None}]
     desk = [{"to": "ann"}, {"to": "bob"}]
     tks = {"p": [{"who": "ann"}, {"who": "bob"}]}
