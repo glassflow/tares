@@ -1885,7 +1885,7 @@ def _freeze_state(tmp: Path) -> dict:
     frozen = _frozen_of(tmp) or {}
     snap = tmp / "crew" / "frozen-kit"
     return {"frozen": bool(frozen), "keys": sorted(frozen), "at": frozen.get("at"), "by": frozen.get("by"),
-            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "bin" / "mcp-headers").exists(),
+            "copy": snap.exists(), "same": _same_tree(snap, _KIT), "binary": (snap / "hooks" / "guard.sh").exists(),
             "extra": (tmp / "crew" / "frozen-kit.new").exists() or (tmp / "crew" / "freezing").exists()}
 
 
@@ -2024,7 +2024,7 @@ def _fz_marks(tmp: Path) -> dict:
             "plugin": {s: v.get("plugin") for s, v in rows.items()}, "kit": {s: v.get("kit") for s, v in rows.items()},
             "line": {s: line(s) for s in rows},
             "plugin_arg": {s: plugin_dir(s) for s in rows}, "resume_arg": {s: resumed(s) for s in rows},
-            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "bin" / "mcp-headers", os.X_OK),
+            "events": events, "frozen": _frozen_of(tmp), "copy": snap.is_dir(), "copy_bin": os.access(snap / "hooks" / "guard.sh", os.X_OK),
             "same": _same_tree(snap, kit), "kept": (snap / ".kept").exists(), "marker": (crew / "freezing").exists(),
             "checkout_file": (crew / "kit-checkout").exists()}
 
@@ -3094,7 +3094,7 @@ scenario(Scenario(
     suite="crew",
     about="down stops the watch, retires every active station and withdraws the moot desk questions; a second down finds nothing to stop",
     setup=_setup_life,
-    tares={"GET /api/desk?state=open": (200, _DESK),
+    tares={"GET /api/desk?state=open": (200, _DESK), "GET /api/desk?state=open&mine=1": (200, _DESK),
            **_ended("crew-orchestrator", 200), **_ended("crew-reviewer", 200), **_ended("shop-build-m1", 200),
            **_ended("shop-build-m2", 200),
            "POST /api/desk/d1/withdraw": (200, {"ok": True}), "POST /api/desk/d2/withdraw": (200, {"ok": True}),
@@ -4676,7 +4676,7 @@ scenario(Scenario(
     suite="pace",
     about="status says nothing about the pace while it is off, and one line (the state, until when, the percents) while it is on",
     setup=_setup_pace,
-    tares={"GET /api/desk?state=open": (200, {"desk": []})},
+    tares={"GET /api/desk?state=open&mine=1": (200, {"desk": []})},
     steps=[_pcs(99, 99, on=False), _pcs(84, 89), _pcs(85, 89), _pcs(95, 90), _pcs(100, 10), _pcs(0, 0, known=False)],
     checks=[
         ("off: status says nothing about the pace", lambda r: r.code(0) == 0 and "pace" not in "\n".join(_pc_status(r, 0)).lower()),
@@ -6577,7 +6577,7 @@ scenario(Scenario(
     name="crew_g1_desk_empty",
     suite="crew",
     about="an empty desk: crew desk and status both say nothing waits",
-    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": []})},
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open&mine=1": (200, {"desk": []})},
     setup=_setup_views,
     steps=[Step(["crew", "desk"]), Step(["crew", "status"])],
     checks=[
@@ -6591,7 +6591,7 @@ scenario(Scenario(
     name="crew_g1_desk_two",
     suite="crew",
     about="two questions: status shows the blocking one first with its options, crew desk shows both, desk is short for it",
-    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open": (200, {"desk": [G1_D1, G1_D2]})},
+    tares={**G1_NO_PROJECTS, "GET /api/desk?state=open&mine=1": (200, {"desk": [G1_D1, G1_D2]})},
     setup=_setup_views,
     steps=[Step(["crew", "status"]), Step(["crew", "desk"]), Step(["desk"])],
     checks=[
@@ -6625,12 +6625,13 @@ G1_F3 = {"id": "d3", "label": "D3", "question": "Nothing left to build. Stop the
 G1_F4 = {"id": "d4", "label": "D4", "question": "Keep nightly dependency bumps?", "recommendation": "yes", "why": "cheap"}
 G1_F5 = {"id": "d5", "label": "D5", "question": "Stop the crew now?", "recommendation": "yes", "why": "late",
          "project": "p9", "project_name": "finishing", "project_finished": True, "blocking": True}
-G1_DESK = "GET /api/desk?state=open"
+G1_DESK = "GET /api/desk?state=open&mine=1"
+G1_DESK_ALL = "GET /api/desk?state=open"  # crew down reads every question, not only the person's
 
 
 def g1_later_desk(r: Run) -> None:
     """The desk after crew down: the stop questions are withdrawn, and a new one of the finished project is asked."""
-    r.tares.routes[G1_DESK] = (200, {"desk": [G1_F4, G1_F5]})
+    r.tares.routes[G1_DESK] = r.tares.routes[G1_DESK_ALL] = (200, {"desk": [G1_F4, G1_F5]})
 
 
 def g1_withdrawn(r: Run, qid: str, reason: str = "") -> bool:
@@ -6644,6 +6645,7 @@ scenario(Scenario(
     about="a running crew sees a finished project's question, crew down retires all and withdraws the stop questions, "
           "and a stopped crew's status leaves the finished project's question out",
     tares={**G1_NO_PROJECTS, G1_DESK: (200, {"desk": [G1_F1, G1_F2, G1_F3, G1_F4]}),
+           G1_DESK_ALL: (200, {"desk": [G1_F1, G1_F2, G1_F3, G1_F4]}),
            **{f"POST /api/desk/d{n}/withdraw": (200, {"ok": True}) for n in (1, 2, 3, 4)}},
     setup=_setup_views,
     steps=[Step(["crew", "desk"]), Step(["crew", "down"]), Step(["crew", "status"], run_before=g1_later_desk)],
@@ -7878,7 +7880,7 @@ scenario(Scenario(
 # and `crew status` says a station has new permissions waiting, or waits for the person to leave its session.
 G4_ITEM = {"label": "D1", "blocking": False, "project_name": "shop", "station": "shop-build-m1", "command": "gh pr merge 12 --squash",
            "question": "shop-build-m1 was refused a command. Allow it?", "recommendation": G4_MERGE, "why": "it merges its own pull request"}
-G4_VIEWS_TARES = {"GET /api/desk?state=open": (200, {"desk": [G4_ITEM]}),
+G4_VIEWS_TARES = {"GET /api/desk?state=open&mine=1": (200, {"desk": [G4_ITEM]}),
                   "GET /api/grants?project=shop": (200, {"all": "", "project": G4_PROJECT}),
                   "GET /api/grants": (200, {"all": ""}),
                   "GET /api/crew/projects": (200, {"projects": []})}
@@ -10071,14 +10073,15 @@ _cc("cc_update_busy", "crew update waits for a busy station and then moves it, t
      "crew restart restarts every station anyway, the orchestrator last"],
     setup=_cb_fake_ps(_cc_setup(have="1.2.0", installed="1.3.0")))
 
-# Someone has a station open: crew update does not interrupt, and gives up at --wait.
-_cc("cc_update_attached", "a station someone has open is not restarted: crew update gives up at --wait, says who it waited for, and moves the others",
+# Someone has a station open: crew update does not wait for it (TR-1345): it says so, leaves it to the watch, and moves the others.
+_cc("cc_update_attached", "a station someone has open is not waited for: crew update says it is left to the watch and moves the others",
     [Step(["crew", "update", "--wait", "3"], env=CB_ENV, before=_cc_attach(_R), after=_cc_after(reap=True))],
-    [("an attached station is not restarted; crew update says who it waited for",
-      lambda r: r.code(0) != 0 and _stn(r, _R) == "bbbb0002" and "gave up waiting for crew-reviewer" in r.out(0)
-      and "someone has it open" in r.out(0)),
+    [("an attached station is not restarted; crew update says it is left to the watch",
+      lambda r: r.code(0) == 0 and _stn(r, _R) == "bbbb0002"
+      and "crew-reviewer is open in a terminal; the watch moves it when it is free" in r.out(0)
+      and "waiting for" not in r.out(0) and "gave up" not in r.out(0)),
      ("the others were done", lambda r: _runs(r, _L) == "1.4.0" and _runs(r, _O) == "1.4.0")],
-    ["an attached station is not restarted; crew update says who it waited for", "the others were done"],
+    ["an attached station is not restarted; crew update says it is left to the watch", "the others were done"],
     setup=_cc_setup(have="1.3.0", installed="1.4.0"), not_windows=_WIN_NO_EXEC_A)
 
 # crew update run from a station (the orchestrator) leaves that station out instead of waiting on itself, and says its way out.

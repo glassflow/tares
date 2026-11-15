@@ -327,7 +327,7 @@ reset({"shop-build-m1": station(), "shop-build-m2": station(id="aaaa0002", statu
        "crew-reviewer": station(role="reviewer", id="cccc0001")},
       [fake_claude.agent_row("working", "aaaa0001", "shop-build-m1", str(work)),
        fake_claude.agent_row("working", "cccc0001", "crew-reviewer", str(work))])
-routes = {"GET /api/desk?state=open": (200, DESK)}
+routes = {"GET /api/desk?state=open": (200, DESK), "GET /api/desk?state=open&mine=1": (200, DESK)}
 code, out, err, t = run("crew down", [], routes)
 ck("down retires each active station, in file order",
    code == 0 and [e["station"] for e in events() if e["event"] == "retired"] == ["shop-build-m1", "crew-reviewer"], str(events()))
@@ -341,6 +341,16 @@ ck("'crew down' (case-sensitive) and 'stop the crew' (any case) are withdrawn as
    w.get("POST /api/desk/d2/withdraw") == "the person stopped the crew" and w.get("POST /api/desk/d3/withdraw") == "the person stopped the crew", str(w))
 ck("other questions stay, and so does 'Crew Down' in another case", not {"d4", "d5", "d6"} & {k.split("/")[3] for k in w}, str(w))
 ck("the retired stations were told to Tares", len(t.asked("POST /api/crew/shop-build-m1/end?crew=crew")) == 1)
+# on a shared cell the whole desk holds another person's question too: only the person's own is withdrawn
+EVERY = {"desk": [{"id": "d1", "question": "Ship it?", "project_finished": True},
+                  {"id": "x2", "question": "Stop the crew now?"},
+                  {"id": "d3", "question": "Stop the crew now?"}]}
+reset({"shop-build-m1": station()}, [fake_claude.agent_row("working", "aaaa0001", "shop-build-m1", str(work))])
+code, out, err, t = run("crew down", [], {"GET /api/desk?state=open": (200, EVERY),
+                                           "GET /api/desk?state=open&mine=1": (200, {"desk": [EVERY["desk"][2]]})})
+w = sorted(r["route"] for r in t.requests if r["route"].startswith("POST /api/desk/"))
+ck("down withdraws the person's own question, not another person's",
+   w == ["POST /api/desk/d1/withdraw", "POST /api/desk/d3/withdraw"], str(w))
 reset({"shop-build-m1": station()}, [fake_claude.agent_row("working", "aaaa0001", "shop-build-m1", str(work))])
 (CREW / "stations.json").unlink()
 code, out, err, t = run("down", [], routes)

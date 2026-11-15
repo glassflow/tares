@@ -6,7 +6,7 @@ Code Bash timeout does not kill the process.
 
 The lock is the folder the bash script made, `<TMPDIR or /tmp>/tares-factory-heavy.lock`, with
 a `pid` file and a `what` file. A holder
-whose process is gone is cleared. A waiter says who it waits for at once and every minute, and gives
+whose process is gone, or a lock with no pid file for longer than a few seconds, is cleared. A waiter says who it waits for at once and every minute, and gives
 up after an hour (exit 75).
 
 Exit codes: the command's own; 2 for bad usage; 75 after an hour of waiting; 142 when the timeout
@@ -36,6 +36,7 @@ SAY_EVERY = 60.0        # seconds between "waiting for ..." lines
 POLL = 0.25             # seconds between tries at the lock
 TIMED_OUT = 142         # 128 + SIGALRM, what the bash script exited with
 GRACE = 3.0             # seconds a killed tree gets to stop before it is killed hard
+NO_PID_GRACE = 5.0      # seconds a lock may have no pid file (its holder is between mkdir and the write)
 
 
 def lock_dir(env: dict) -> str:
@@ -55,16 +56,45 @@ def _read(path: str) -> str:
         return ""
 
 
+def _older_than(path: str, seconds: float) -> bool:
+    try:
+        return time.time() - os.stat(path).st_mtime > seconds
+    except OSError:
+        return False
+
+
 def _holder_gone(lock: str) -> bool:
-    """True when the lock names a process that no longer runs. An empty pid file (the holder is between
-    mkdir and writing its pid) is not stale."""
+    """True when the lock names a process that no longer runs, or names none for longer than NO_PID_GRACE
+    (a holder between mkdir and writing its pid file is not stale)."""
     holder = _read(os.path.join(lock, "pid"))
     if not holder:
-        return False
+        return _older_than(lock, NO_PID_GRACE)
     try:
         return not pid_alive(int(holder))
     except ValueError:
         return True
+
+
+def _clear_stale(lock: str) -> bool:
+    """Take a stale lock out of the way; True when it no longer blocks the mkdir.
+
+    The rename is atomic, so of two waiters that judged one lock stale only one moves it. A waiter that
+    was slow moves whatever is at the path by then, so it looks at what it moved and puts a live lock back."""
+    moved = f"{lock}.stale-{os.getpid()}-{time.monotonic_ns()}"
+    try:
+        os.rename(lock, moved)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False   # Windows: a handle is open on the folder; try again on the next poll
+    if _holder_gone(moved):
+        shutil.rmtree(moved, ignore_errors=True)
+        return True
+    try:
+        os.rename(moved, lock)
+    except OSError:
+        pass
+    return False
 
 
 def _write(path: str, text: str) -> None:
@@ -80,7 +110,6 @@ def _acquire(lock: str, what: str) -> int | None:
     while True:
         try:
             os.mkdir(lock)
-            break
         except FileExistsError:
             pass
         except PermissionError:
@@ -88,8 +117,14 @@ def _acquire(lock: str, what: str) -> int | None:
         except OSError as e:
             print(f"factory-heavy: cannot make {lock}: {e}", file=sys.stderr)
             return 1
-        if _holder_gone(lock):
-            shutil.rmtree(lock, ignore_errors=True)
+        else:
+            try:
+                _write(os.path.join(lock, "pid"), f"{os.getpid()}\n")
+                _write(os.path.join(lock, "what"), what + "\n")
+                return None
+            except FileNotFoundError:
+                continue   # a slow waiter has this new lock renamed aside: make it again
+        if _holder_gone(lock) and _clear_stale(lock):
             continue
         waited = time.monotonic() - start
         if waited >= WAIT_LIMIT:
@@ -101,13 +136,16 @@ def _acquire(lock: str, what: str) -> int | None:
             print(f"factory-heavy: waiting for "
                   f"{_read(os.path.join(lock, 'what')) or 'another heavy command'} to finish", file=sys.stderr)
         time.sleep(POLL)
-    _write(os.path.join(lock, "pid"), f"{os.getpid()}\n")
-    _write(os.path.join(lock, "what"), what + "\n")
-    return None
 
 
 def _release(lock: str) -> None:
+    """Remove the lock, the pid file last: a folder left half removed still names a dead holder."""
     for _ in range(5):
+        for name in ("what", "pid"):
+            try:
+                os.remove(os.path.join(lock, name))
+            except OSError:
+                pass
         shutil.rmtree(lock, ignore_errors=True)
         if not os.path.isdir(lock):
             return

@@ -249,7 +249,8 @@ def down(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) 
     # crew?", asked with or without a project: it names this command (TR-599)
     for item_id in _finished_questions(client.desk_json()):
         _withdraw(client, item_id, "the crew stopped and the project is finished")
-    for item_id in _stop_questions(client.desk_json()):
+    # the person's own questions only: on a shared cell another person's are not ours to withdraw (TR-1355)
+    for item_id in _stop_questions(client.desk_json(mine=True)):
         _withdraw(client, item_id, "the person stopped the crew")
     client.say(f"all stations stopped. Tares keeps the projects, tickets and the desk; {ME} crew up starts fresh sessions.")
 

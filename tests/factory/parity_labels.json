@@ -53,7 +53,7 @@
   "orchestrator last",
   "already current: nothing restarted",
   "crew restart restarts every station anyway, the orchestrator last",
-  "an attached station is not restarted; crew update says who it waited for",
+  "an attached station is not restarted; crew update says it is left to the watch",
   "the others were done",
   "two sessions under one name: reported, the update fails",
   "the watch reports it after a move too",

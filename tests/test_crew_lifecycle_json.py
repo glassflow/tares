@@ -181,6 +181,25 @@ code, out, err = crew(["crew", "unfreeze"], TARESD_URL="http://127.0.0.1:9")
 ck("unfreeze without --json against no Tares: text on stderr, nothing on stdout, exit 1",
    code == 1 and out == "" and err.startswith("tares factory: "), (code, out, err[-200:]))
 
+# ---------- 5b. an optional key (TR-1345) ----------
+print("== result key left_to_watch")
+from tares.crew import jsonrun  # noqa: E402
+import contextlib  # noqa: E402
+import io  # noqa: E402
+
+
+def json_run(command, body):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        jsonrun.run(["--json"], command, body, text_fail=lambda e: None)
+    return json.loads(buf.getvalue())
+
+
+_d = json_run("crew update", lambda a: jsonrun.add_result("left_to_watch", ["shop-build-m1"]))
+ck("a command's added key is in the result document, which still validates", _d.get("left_to_watch") == ["shop-build-m1"]
+   and RESULT.is_valid(_d), _d)
+ck("...and the next run does not carry it over", "left_to_watch" not in json_run("crew halt", lambda a: 0))
+
 # ---------- 6. update, restart ----------
 print("== update and restart")
 reset()
@@ -269,6 +288,79 @@ d = doc_of("live probe", proc.returncode, out3.replace("\r\n", "\n"), rest, 0, "
 ck("stdout holds only the document, whose notes hold the same lines", d.get("notes") == [
     "restarting crew-builder", "a bare note", "stdout text", "done"], d)
 ck("the rest of stderr is the last live line", rest == "tares factory: done\n", rest)
+
+print("== the live tee, in process")
+import io  # noqa: E402
+from tares.crew import jsonrun as _jr  # noqa: E402
+from tares.crew.errors import CrewError  # noqa: E402
+
+
+class _Real:
+    def __init__(self):
+        self.out, self.flushes = [], 0
+
+    def write(self, t):
+        self.out.append(t)
+
+    def flush(self):
+        self.flushes += 1
+
+
+def tee_of(real, *chunks):
+    buf = io.StringIO()
+    t = _jr._Tee(buf, real)
+    for c in chunks:
+        t.write(c)
+    return t, buf
+
+
+real = _Real()
+t, buf = tee_of(real, "tares factory: a\r\n", "\n", "   \n", "b")
+ck("a CRLF line is stripped, blank lines are skipped, a partial line waits", real.out == ["tares factory: a\n"], real.out)
+t.flush()
+ck("flush sends the last partial line, with the prefix", real.out[-1] == "tares factory: b\n", real.out)
+ck("every live line is flushed", real.flushes == 2, real.flushes)
+ck("the buffer keeps all the text for the notes", buf.getvalue() == "tares factory: a\r\n\n   \nb", buf.getvalue())
+t, buf = tee_of(None, "tares factory: x\n")
+t.flush()
+ck("no stderr at all (pythonw): nothing fails, the notes are kept", buf.getvalue() == "tares factory: x\n")
+real = _Real()
+tee_of(real, "   tares factory: lead\n")
+ck("leading spaces are stripped as well", real.out == ["tares factory: lead\n"], real.out)
+
+print("== _collect when descriptor 2 cannot be copied onto 1")
+_closed, _dups = [], []
+_real = (os.dup, os.dup2, os.close)
+os.dup = lambda fd: (_dups.append(fd) or 987)
+os.dup2 = lambda a, b: (_ for _ in ()).throw(OSError("bad descriptor"))
+os.close = lambda fd: _closed.append(fd)
+try:
+    with _jr._collect(io.StringIO()):
+        pass
+finally:
+    os.dup, os.dup2, os.close = _real
+ck("the copy of descriptor 1 is closed, not leaked", _dups == [1] and _closed == [987], (_dups, _closed))
+
+print("== add_result outside a --json run")
+_jr.add_result("k", 1)   # plain text mode: no scope, nothing to collect, nothing raised
+with _jr.scope() as _later:
+    pass
+ck("add_result with no scope neither raises nor leaks into the next run's keys", _later == {}, _later)
+
+print("== a failing run keeps the optional key")
+
+
+def _fail_body(a):
+    _jr.add_result("left_to_watch", ["shop-build-m1"])
+    raise CrewError("not every station runs it: shop-build-m2")
+
+
+_buf = io.StringIO()
+with contextlib.redirect_stdout(_buf):
+    _rc = jsonrun.run(["--json"], "crew update", _fail_body, text_fail=lambda e: None)
+_d = json.loads(_buf.getvalue())
+ck("the error document lists the stations left to the watch, and validates", _rc == 1
+   and _d.get("left_to_watch") == ["shop-build-m1"] and ERROR.is_valid(_d), (_rc, _d))
 
 # ---------- 7. up ----------
 print("== up")

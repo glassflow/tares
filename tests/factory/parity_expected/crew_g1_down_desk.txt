@@ -31,7 +31,7 @@ exit: 0
 -- stdout --
 no stations running; tares factory crew up starts them
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
-desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer in the orchestrator's session):
+desk: 1 waiting for you; the next one (tares factory crew desk lists yours; answer in the orchestrator's session):
   D4: Keep nightly dependency bumps?
     recommended: yes, since cheap
 Crew page: http://127.0.0.1:<PORT>/crew
@@ -160,7 +160,7 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /health key=no 
 POST /api/crew/crew-orchestrator/end?crew=crew key=no {
   "reason": "retired"
@@ -178,7 +178,7 @@ GET /api/desk?state=open key=no
 POST /api/desk/d1/withdraw key=no {
   "reason": "the crew stopped and the project is finished"
 }
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 POST /api/desk/d1/withdraw key=no {
   "reason": "the person stopped the crew"
 }
@@ -191,5 +191,5 @@ POST /api/desk/d3/withdraw key=no {
 GET /health key=no 
 GET /api/crew/settings key=no 
 GET /api/crew/pace key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /api/crew/projects?crew=crew key=no 

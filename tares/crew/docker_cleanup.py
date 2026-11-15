@@ -39,7 +39,7 @@ import time
 from datetime import datetime, timezone
 
 from . import heavy, state
-from .client import TaresClient
+from .client import NoPersonError, TaresClient
 from .errors import CrewError
 from .paths import ME, CrewPaths, default_home
 
@@ -265,7 +265,11 @@ def free_bytes(paths: CrewPaths) -> int | None:
 def _ask_person(client: TaresClient, free: int) -> None:
     """One open desk item about the disk, however many times it is found low."""
     try:
-        if any(d.get("question") == LOW_QUESTION for d in client.desk_json()):
+        try:
+            items = client.desk_json(mine=True, strict=True)   # this crew's own item, not another person's
+        except NoPersonError:
+            items = client.desk_json()   # a key with no person: the whole desk, or it would refile every tick
+        if any(d.get("question") == LOW_QUESTION for d in items):
             return
         client.tares_http("POST", "/api/desk", {
             "question": LOW_QUESTION,

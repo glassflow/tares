@@ -150,10 +150,10 @@ def desk_block(item: dict) -> str:
 
 
 def cmd_desk(argv: list, env: dict) -> int:
-    """`desk` and `crew desk`: the questions waiting for the person, in full."""
+    """`desk` and `crew desk`: the questions waiting for the person (their own, not other people's), in full."""
     paths, client = _start(env, local_only=False)
     state.require_crew(paths)
-    items = client.desk_json()
+    items = client.desk_json(mine=True)
     if contract.wants_json(argv):
         contract.emit({"items": items}, "desk")
         return 0
@@ -421,13 +421,13 @@ def cmd_status(argv: list, env: dict) -> int:
                   f"you allowed in Tares; log in {paths.shown('watch.log')}\n")
     else:
         out.write(f"watch: not running; {ME} crew up starts it (or run {ME} crew watch yourself)\n")
-    items = client.desk_json()
+    items = client.desk_json(mine=True)
     # a finished project's questions only matter to a crew that is still running (TR-559)
     if running <= 0:
         items = [i for i in items if not _truthy(i.get("project_finished"))]
     doc["desk"] = {"waiting": len(items), "next": items[0] if items else None}
     if items:
-        out.write(f"desk: {len(items)} waiting for you; the next one ({ME} crew desk shows all; answer in the "
+        out.write(f"desk: {len(items)} waiting for you; the next one ({ME} crew desk lists yours; answer in the "
                   "orchestrator's session):\n")
         out.write("".join("  " + ln + "\n" for ln in desk_block(items[0]).split("\n")))
     else:

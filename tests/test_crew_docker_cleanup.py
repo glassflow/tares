@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from tares import factory  # noqa: E402
 from tares.crew import docker_cleanup as dc, heavy, watch  # noqa: E402
+from tares.crew.client import NoPersonError  # noqa: E402
 from tares.crew.paths import CrewPaths  # noqa: E402
 from tares.docs import DocError  # noqa: E402
 
@@ -101,6 +102,8 @@ class Client:
         self.on = on
         self.desk = []
         self.posted = []
+        self.desk_calls = []
+        self.no_person = False
 
     def tares_on(self):
         return self.on
@@ -108,7 +111,10 @@ class Client:
     def settings_raw(self):
         return self.raw
 
-    def desk_json(self):
+    def desk_json(self, mine=False, strict=False):
+        self.desk_calls.append((mine, strict))
+        if mine and strict and self.no_person:
+            raise NoPersonError("This key has no person.", status=403)
         return self.desk
 
     def tares_http(self, method, path, body=None):
@@ -231,6 +237,14 @@ check("still low after the cleanup: one item on the person's desk",
       len(client.posted) == 1 and client.posted[0][2]["question"] == dc.LOW_QUESTION)
 run_step(paths, fake, client, env, NOW + DAY + 1, free=2 * 1024 ** 3)
 check("only one, however often it is found low", len(client.posted) == 1)
+check("...the dedupe reads this person's desk (mine), not everyone's",
+      client.desk_calls and all(c == (True, True) for c in client.desk_calls), client.desk_calls)
+paths, fake, client, env = setup()
+client.no_person = True
+run_step(paths, fake, client, env, free=2 * 1024 ** 3)
+run_step(paths, fake, client, env, NOW + DAY + 1, free=2 * 1024 ** 3)
+check("a key with no person: the whole desk is read, so the item is filed once, not on every tick",
+      len(client.posted) == 1 and (False, False) in client.desk_calls, (client.posted, client.desk_calls))
 
 
 def run_heavy(paths, fake, client, env, free):

@@ -417,7 +417,7 @@ class Smoke:
 
     def desk(self) -> list:
         try:
-            return rows(http("GET", self.url + "/api/desk"), "items")
+            return rows(http("GET", self.url + "/api/desk"), "desk")
         except Failed:
             return []
 

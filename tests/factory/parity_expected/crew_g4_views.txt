@@ -19,7 +19,7 @@ shop-build-m1                  builder      opus/high      done     -        NEW
 shop-build-m2                  builder      opus/high      done     -        NEW PERMISSIONS: restarted with them once you leave its session
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
-desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer in the orchestrator's session):
+desk: 1 waiting for you; the next one (tares factory crew desk lists yours; answer in the orchestrator's session):
   D1 · shop: shop-build-m1 was refused a command. Allow it?
     recommended: shop-build-m1 may run gh pr merge 12 --squash in shop, since it merges its own pull request
     shop-build-m1 was refused: gh pr merge 12 --squash
@@ -37,7 +37,7 @@ shop-build-m1                  builder      opus/high      done     -        NEW
 shop-build-m2                  builder      opus/high      done     -        NEW PERMISSIONS: the watch restarts it with them between turns
 plugin: 4 station(s) run an older version; tares factory crew watch moves each onto this one when it's idle
 watch: not running; tares factory crew up starts it (or run tares factory crew watch yourself)
-desk: 1 waiting for you; the next one (tares factory crew desk shows all; answer in the orchestrator's session):
+desk: 1 waiting for you; the next one (tares factory crew desk lists yours; answer in the orchestrator's session):
   D1 · shop: shop-build-m1 was refused a command. Allow it?
     recommended: shop-build-m1 may run gh pr merge 12 --squash in shop, since it merges its own pull request
     shop-build-m1 was refused: gh pr merge 12 --squash
@@ -200,16 +200,16 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
 GET /api/grants?project=shop key=no 
 GET /api/crew/pace key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /api/crew/projects?crew=crew key=no 
 GET /health key=no 
 GET /api/crew/settings key=no 
 GET /api/grants?project=shop key=no 
 GET /api/crew/pace key=no 
-GET /api/desk?state=open key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /api/crew/projects?crew=crew key=no 

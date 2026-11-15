@@ -1,17 +1,16 @@
 == step: crew update --wait 3 ==
-exit: 1
+exit: 0
 -- stdout --
 
 -- stderr --
+tares factory: crew-reviewer is open in a terminal; the watch moves it when it is free
 tares factory: restarting crew-releaser on Claude Code 1.4.0, in the same conversation
   ✓ started crew-releaser (opus, high)
 tares factory: crew-releaser runs Claude Code 1.4.0
-tares factory: waiting for crew-reviewer to be idle (someone has it open)
-tares factory: gave up waiting for crew-reviewer to be idle
 tares factory: restarting crew-orchestrator on Claude Code 1.4.0, in the same conversation
   ✓ started crew-orchestrator (opus, high)
 tares factory: crew-orchestrator runs Claude Code 1.4.0
-tares factory: not every station runs Claude Code 1.4.0: crew-reviewer
+tares factory: every station not open in a terminal runs Claude Code 1.4.0; left to the watch: crew-reviewer
 -- after --
 {
   "alive": {
