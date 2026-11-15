@@ -233,6 +233,12 @@ async def main():
            and not any((w.get("project") or {}).get("id") == desktop and w["kind"] == "milestone_to_check"
                        for w in rh["waiting_for_you"]), [w["label"] for w in rh["waiting_for_you"]])
 
+        print("== tares crew desk and status: the crew's person's own desk (mine=1) ==")
+        mine_desk = lambda who: get(who, "/api/desk?state=open&mine=1")
+        ck("Ashish's crew desk leaves Kiran's question out",
+           not any("tray today" in d["question"] for d in (await mine_desk("ashish"))["desk"]))
+        ck("Kiran's has it", any("tray today" in d["question"] for d in (await mine_desk("kiran"))["desk"]))
+
         print("== a desk item of a project kept for later stays on its page ==")
         later = project("kept-later", pid["kiran"])
         store.update_project(later, status="later")

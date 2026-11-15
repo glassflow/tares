@@ -535,6 +535,22 @@ class TaresClient:
         found = doc.get("desk") if isinstance(doc, dict) else None
         return [] if found is None or found is False else found
 
+    def my_desk_json(self) -> list:
+        """The open desk items that wait for the crew's person: the console's "Waiting for you", by
+        the cell's one rule (factory_owners: addressed to them, else the owner of the project). On a
+        cell of one person that is the whole desk. The whole open desk when Tares can't narrow it
+        (an older Tares, a key with no person). The crew's own housekeeping reads desk_json."""
+        try:
+            doc = state.loads_json(self.tares_http("GET", "/api/desk?state=open&mine=1"))
+        except TaresHTTPError as e:
+            # Tares answered but would not narrow it (an older Tares, a key with no person): the
+            # whole desk, as before; no answer at all is an empty desk, without a second wait
+            return self.desk_json() if e.status is not None else []
+        except ValueError:
+            return []
+        found = doc.get("desk") if isinstance(doc, dict) else None
+        return self.desk_json() if found is None or found is False else found
+
     # -- once per command --
 
     def prime(self) -> None:

@@ -153,7 +153,7 @@ def cmd_desk(argv: list, env: dict) -> int:
     """`desk` and `crew desk`: the questions waiting for the person, in full."""
     paths, client = _start(env, local_only=False)
     state.require_crew(paths)
-    items = client.desk_json()
+    items = client.my_desk_json()   # the person's own, as the console's Waiting for you
     if contract.wants_json(argv):
         contract.emit({"items": items}, "desk")
         return 0
@@ -421,7 +421,7 @@ def cmd_status(argv: list, env: dict) -> int:
                   f"you allowed in Tares; log in {paths.shown('watch.log')}\n")
     else:
         out.write(f"watch: not running; {ME} crew up starts it (or run {ME} crew watch yourself)\n")
-    items = client.desk_json()
+    items = client.my_desk_json()   # what waits for the person, not every question on the cell
     # a finished project's questions only matter to a crew that is still running (TR-559)
     if running <= 0:
         items = [i for i in items if not _truthy(i.get("project_finished"))]

@@ -117,6 +117,11 @@ class Fake(BaseHTTPRequestHandler):
                 return self._json(200, {"all": GRANTS["all"], "project": GRANTS["projects"][q["project"][0]]})
             return self._json(200, {"all": GRANTS["all"]})
         if u.path == "/api/desk":
+            if "mine=1" in u.query:
+                # the caller's own (factory_owners); MINE_STATUS plays an older Tares that refuses it
+                if MINE_STATUS[0] != 200:
+                    return self._json(MINE_STATUS[0], {"detail": "no"})
+                return self._json(200, {"desk": [{"id": "d2", "question": "mine?"}]})
             return self._json(200, {"desk": [{"id": "d1", "question": "ship?"}]})
         self._json(404, {})
 
@@ -141,6 +146,9 @@ def free_port():
 
 DEAD = f"http://127.0.0.1:{free_port()}"
 HOMEN = [0]
+
+
+MINE_STATUS = [200]
 
 
 def machine(env=None, **extra):
@@ -502,6 +510,13 @@ print("the desk")
 c, _ = machine()
 ck("desk_json: open items", c.desk_json() == [{"id": "d1", "question": "ship?"}] and seen()[-1]["path"] == "/api/desk?state=open")
 ck("and [] when Tares can't say", bad.desk_json() == [] and down.desk_json() == [])
+ck("my_desk_json: the person's own, asked with mine=1", c.my_desk_json() == [{"id": "d2", "question": "mine?"}]
+   and seen()[-1]["path"] == "/api/desk?state=open&mine=1", seen()[-1])
+MINE_STATUS[0] = 403
+ck("a Tares that will not narrow it: the whole open desk, as before",
+   c.my_desk_json() == [{"id": "d1", "question": "ship?"}] and seen()[-1]["path"] == "/api/desk?state=open")
+MINE_STATUS[0] = 200
+ck("no answer at all: an empty desk, without asking twice", down.my_desk_json() == [])
 
 print("prime: Tares, key, settings, once")
 pc, phome = machine()

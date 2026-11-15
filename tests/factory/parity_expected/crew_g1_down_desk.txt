@@ -160,6 +160,7 @@ Crew page: http://127.0.0.1:<PORT>/crew
 == asked of Tares ==
 GET /health key=no 
 GET /api/crew/settings key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /api/desk?state=open key=no 
 GET /health key=no 
 POST /api/crew/crew-orchestrator/end?crew=crew key=no {
@@ -191,5 +192,6 @@ POST /api/desk/d3/withdraw key=no {
 GET /health key=no 
 GET /api/crew/settings key=no 
 GET /api/crew/pace key=no 
+GET /api/desk?state=open&mine=1 key=no 
 GET /api/desk?state=open key=no 
 GET /api/crew/projects?crew=crew key=no 
