@@ -80,10 +80,19 @@ function Loading() {
   );
 }
 
+/** "Kiran", "Kiran and Adam", "Kiran, Adam and Lee"; "no one" for nobody. */
+function names(people: { name: string }[]): string {
+  const n = people.map((p) => p.name);
+  if (n.length === 0) return "no one";
+  return n.length === 1 ? n[0] : `${n.slice(0, -1).join(", ")} and ${n[n.length - 1]}`;
+}
+
 /** The lists for one read of the cell. `unknown` is a project in the address the cell does not know. */
 export function FactoryReviewsView({ data, unknown = false }: { data: FactoryReviewsData; unknown?: boolean }) {
   const { waiting_for_you: mine, with_the_crew: theirs } = data;
   const nobody = data.nobody_on_it ?? [];
+  // what waits for someone else's merge, named for them: shown, nothing for you to do
+  const others = (data.waiting_for_others ?? []).map((r) => ({ ...r, why: `Waits for ${names(r.for_people)} to merge` }));
   // the crew's list is folded away while something waits for you, and open when nothing does
   const [folded, setFolded] = React.useState<boolean | null>(null);
   const open = folded === null ? mine.length === 0 : !folded;
@@ -107,6 +116,11 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
           ? <div className="px-4 py-7 text-muted-foreground" data-testid="reviews-waiting-none">Nothing waits for your review.</div>
           : mine.map((r) => <Row key={`${r.project.id}/${r.ticket.ref}`} r={r} />)}
       </ListSection>
+      {others.length > 0 && (
+        <ListSection title="Waiting for others" aside={<span className="font-mono" data-testid="others-count">{others.length}</span>} data-testid="reviews-others">
+          {others.map((r) => <Row key={`${r.project.id}/${r.ticket.ref}`} r={r} />)}
+        </ListSection>
+      )}
       {nobody.length > 0 && (
         <ListSection title="Nobody is on it" aside={<span className="font-mono" data-testid="nobody-count">{nobody.length}</span>} data-testid="reviews-nobody">
           {nobody.map((r) => <Row key={`${r.project.id}/${r.ticket.ref}`} r={r} />)}
