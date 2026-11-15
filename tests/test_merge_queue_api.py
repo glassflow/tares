@@ -133,7 +133,8 @@ async def main():
         def project(name, level="L4-ship", handed=True, kind="software_factory", status=None):
             counter["n"] += 1
             uid = f"uc_mq{counter['n']}"
-            store.create_project(uid, "custom", name, {}, goal="A project for the test")
+            store.create_project(uid, "custom", name, {}, goal="A project for the test",
+                                 status=status or "active")
             store.set_project_kind(uid, kind)
             if handed:
                 store.set_handover(uid, [{"path": "/w/a", "name": name}], level, None, now_utc(),
@@ -280,12 +281,12 @@ async def main():
                   ci="Pending, checks restarted on the new commit"),
                 X(r2, None, 2, "ORD-43", "Add currency to the order export", 219, API,
                   "ord-43-export-currency", MARCUS_B, {"key": "next", "text": "Next"},
-                  S("Next to merge."), review="Approved by Dana Whitfield")],
+                  S("Next in this project."), review="Approved by Dana Whitfield")],
               merged=mg),
             G(WEB, "main", [
                 X(r3, None, 1, "ORD-52", "Show the shipping estimate in the cart", 88, WEB,
                   "ord-52-shipping-estimate", DANA_B, {"key": "next", "text": "Next"},
-                  S("Next to merge."))])],
+                  S("Next in this project."))])],
             aside="3 in line", line=3, note="3 pull requests are in the merge queue.")
         expect("waiting for CI: two groups, a pending check, the next to merge, three merged",
                await page(uid), want)
@@ -380,6 +381,21 @@ async def main():
         ck("a key with no person cannot answer anything",
            all(r["answer"] is None or r["answer"]["can_answer"] is False
                for g in bot["groups"] for r in g["rows"]))
+
+        # a key with no person and a question nobody is addressed: no lead either, so the key's
+        # no one must not match the project's no lead
+        uid = project("Nobody is addressed", level="L3-review")
+        t1, r1 = pull(uid, API, 270, "ORD-70", "Unaddressed", "ord-70", state="waiting_approval",
+                      base=BASE, short="3a3a3a3")
+        d1 = ask(r1, question(uid, t1, None, 2))
+        ck("the project has no lead and the question no addressee (the setup of the next check)",
+           store.get_project(uid).get("lead_person_id") is None and d1.get("to_person_id") is None)
+        bot = await page(uid, "bot")
+        a = bot["groups"][0]["rows"][0]["answer"]
+        ck("a key with no person cannot answer an unaddressed question of a project with no lead",
+           a["can_answer"] is False and bot["groups"][0]["rows"][0]["needs_you"] is False, repr(a))
+        ck("the system credential still can answer it",
+           (await page(uid))["groups"][0]["rows"][0]["answer"]["can_answer"] is True)
 
         # ── 5. the commit changed since the question ────────────────────────────────────────────
         print("== the commit changed ==")
@@ -500,7 +516,7 @@ async def main():
                   review="Approved by Dana Whitfield", needs=True),
                 X(r2, None, 2, "ORD-56", "Return a clear error for an unknown currency", 430, API,
                   "ord-56-currency-error", MARCUS_B, {"key": "next", "text": "Next"},
-                  S("Next to merge."))],
+                  S("Next in this project."))],
               blocked=1, extra=["1 blocked"]),
             G("northwind/orders-docs", "main", [
                 X(r5, None, 1, "ORD-70", "Fix a link", 12, "northwind/orders-docs", "ord-70-link",
@@ -569,7 +585,7 @@ async def main():
         want = doc(uid, "Sent back", [
             G(API, "main", [
                 X(r1, None, 1, "ORD-59", "Use one rounding rule for every price", 235, API,
-                  "ord-59-one-rule", MARCUS_B, {"key": "next", "text": "Next"}, S("Next to merge.")),
+                  "ord-59-one-rule", MARCUS_B, {"key": "next", "text": "Next"}, S("Next in this project.")),
                 sb(r2, "ORD-57", "Move the price rules into one file", 229, API, "ord-57-price-rules",
                    LEE_B, "conflicts with PR 218 in app/pricing.py", 2, L1),
                 sb(r3, "ORD-61", "Show the tax rate on invoices", 236, API, "ord-61-tax-line",
@@ -600,6 +616,13 @@ async def main():
         ck("where: the same words by Slack are still Slack",
            w({"via": "slack", "words": merge_queue.APPROVE_WORDS,
               "choice": merge_queue.APPROVE_CHOICE})["key"] == "slack")
+
+        # each half of the test is needed: the same words with another choice, or the same choice
+        # with other words, is any other console answer
+        ck("where: the approval words with another choice are a plain console answer",
+           w({"via": "console", "words": merge_queue.APPROVE_WORDS, "choice": "No, hold"})["key"] == "console")
+        ck("where: the approval choice with other words is a plain console answer",
+           w({"via": "console", "words": "Yes", "choice": merge_queue.APPROVE_CHOICE})["key"] == "console")
 
         # the real approval route writes exactly the words the page reads back
         uid = project("Approved on the page", level="L3-review")
@@ -635,6 +658,36 @@ async def main():
            kinds == ["withdrawn", "unrecorded", "missing"], kinds)
         BODIES.append(got)
 
+        # an answer from a session records no person: nobody is named, and the person the question
+        # was for is not credited with it; empty words are held without a dangling colon
+        uid = project("Session answers", level="L3-review")
+        t1, r1 = pull(uid, API, 314, "ORD-84", "Session yes", "ord-84", state="waiting_approval",
+                      base=BASE, short="b000001")
+        d1 = ask(r1, question(uid, t1, lee["id"], 30))
+        answer(d1, t1, uid, "Yes, merge", "Yes, merge", None, None, 20)
+        t2, r2 = pull(uid, API, 315, "ORD-85", "Empty words", "ord-85", state="waiting_approval",
+                      base=BASE, short="b000002")
+        d2 = ask(r2, question(uid, t2, lee["id"], 30))
+        answer(d2, t2, uid, "", "", "console", None, 10)
+        t3, r3 = pull(uid, API, 316, "ORD-86", "Named and empty", "ord-86", state="waiting_approval",
+                      base=BASE, short="b000003")
+        d3 = ask(r3, question(uid, t3, lee["id"], 30))
+        answer(d3, t3, uid, "Yes, merge", "Yes, merge", "console", dana["id"], 5)
+        got = await page(uid, "lee")
+        a1, a2, a3 = [r["answer"] for r in got["groups"][0]["rows"]]
+        ck("a session answer names no one: by is none and the text has no 'Answered by'",
+           a1["kind"] == "done" and a1["by"] is None and "Answered by" not in a1["text"]
+           and a1["text"].startswith("Yes, merge. Answered in a Claude session, 20 minutes ago, for commit b000001."),
+           repr(a1))
+        ck("an answer with no person is not credited to the person the question was for",
+           "Lee" not in a1["text"] and "Lee" not in a2["text"] and "someone" not in a1["text"], repr((a1, a2)))
+        ck("a person's answer still names them", a3["by"] == "Dana Whitfield"
+           and "Answered by Dana Whitfield in the console" in a3["text"], repr(a3))
+        ck("empty words read as held, with no 'Held: .'",
+           a2["decision"] == "no" and a2["lead"] == "Held." and "Held: ." not in a2["text"]
+           and a2["text"].startswith("Held. Answered in the console, 10 minutes ago"), repr(a2))
+        BODIES.append(got)
+
         # ── who may read it ─────────────────────────────────────────────────────────────────────
         print("== who may read it ==")
         uid = project("Private one")
@@ -654,6 +707,12 @@ async def main():
         hidden = await read(uid, "sam")
         ck("a private project answers the same words as a missing one",
            hidden.status_code == 404 and "unknown project" in hidden.text and uid in hidden.text, hidden.text)
+        drafted = project("A draft", status="draft")
+        t1, r1 = pull(drafted, API, 321, "ORD-89", "Draft work", "ord-89")
+        ck("a draft project is 404 though it has rows and is a software factory",
+           (await read(drafted)).status_code == 404)
+        store.update_project(drafted, status="active")
+        ck("the same project is read once it is no longer a draft", (await read(drafted)).status_code == 200)
         other = project("Not a factory", kind="custom")
         ck("a project that is not a software factory is 404", (await read(other)).status_code == 404)
         ck("a team project is open to a person with no part in it",
@@ -680,11 +739,11 @@ async def main():
         got = await page(uid)
         order = [r["pr"]["number"] for r in got["groups"][0]["rows"]]
         ck("the line is in milestone then ticket order", order == [341, 340, 342], order)
-        ck("positions run 1, 2, 3 and the first queued is Next, the others say who they follow",
+        ck("positions run 1, 2, 3 and the first queued is Next, the others say their place in this project",
            [r["position"] for r in got["groups"][0]["rows"]] == [1, 2, 3]
-           and got["groups"][0]["rows"][0]["status"]["text"] == "Next to merge."
-           and got["groups"][0]["rows"][1]["status"]["text"] == "In line behind #341."
-           and got["groups"][0]["rows"][2]["status"]["text"] == "In line behind #340.",
+           and got["groups"][0]["rows"][0]["status"]["text"] == "Next in this project."
+           and got["groups"][0]["rows"][1]["status"]["text"] == "2nd in this project."
+           and got["groups"][0]["rows"][2]["status"]["text"] == "3rd in this project.",
            repr([r["status"]["text"] for r in got["groups"][0]["rows"]]))
 
         # ── a gate that is an outside tool names itself while nothing has reviewed ──────────────
