@@ -92,7 +92,7 @@ async def main():
     os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
     os.environ["TARES_BRAIN_KEY"] = BRAIN_KEY
     names = ("run", "ready", "failed", "nolore", "retry", "stuck", "gone", "c405", "c501", "c502", "c502b", "c503", "c401", "cgone", "c500", "nocp", "poll", "twice",
-             "admin", "again", "lic", "bare", "slow", "slowcp")
+             "admin", "again", "lic", "bare", "slow", "slowcp", "miss", "boom", "c404", "c204", "early")
     readable = [{"full_name": f"acme/{n}"} for n in names]
 
     async def readable_repos(cred, query=""):
@@ -157,14 +157,38 @@ async def main():
            and store.get_brain_repo("acme/run") is None, f"{len(cp.calls('POST', 'start_index'))} {asked}")
         ck("nothing is left marked as being removed", not indexer.is_removing("acme/run") and "acme/run" not in indexer._misses)
 
-        print("== a repo that is not running has no Job to cancel ==")
-        for repo, state in (("acme/ready", "ready"), ("acme/failed", "failed")):
-            s = await connect(repo)
-            store.update_brain_repo(repo, {"state": state})
-            r = await remove(repo)
-            ck(f"{state}: removed, lore asked, the control plane not called", r.status_code == 200 and len(forgets(s)) == 1
-               and s not in lore.repos and store.get_brain_repo(repo) is None and not cancels(s),
-               f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+        print("== a repo that is ready has no Job to cancel; one that failed may still have one ==")
+        s = await connect("acme/ready")
+        store.update_brain_repo("acme/ready", {"state": "ready"})
+        r = await remove("acme/ready")
+        ck("ready: removed, lore asked, the control plane not called", r.status_code == 200 and len(forgets(s)) == 1
+           and s not in lore.repos and store.get_brain_repo("acme/ready") is None and not cancels(s),
+           f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+        s = await connect("acme/failed")
+        store.update_brain_repo("acme/failed", {"state": "failed", "error": "The index job is gone."})
+        r = await remove("acme/failed")
+        ck("failed after its Job was asked for: the Job is cancelled once, then lore forgets it and the row goes",
+           r.status_code == 200 and len(cancels(s)) == 1 and len(forgets(s)) == 1 and s not in cp.jobs
+           and s not in lore.repos and store.get_brain_repo("acme/failed") is None,
+           f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+        s = await connect("acme/miss")
+        index_mod.MAX_MISSES = 2
+        for _ in range(6):
+            cp.fail("index_status", 502, "kube is down")
+        ok = await until(lambda: row("acme/miss").get("state") == "failed")
+        index_mod.MAX_MISSES = 30
+        ck("the poll gave up on a repo after too many misses: failed, its Job is still at the control plane",
+           ok and "could not be followed any longer" in (row("acme/miss").get("error") or "") and s in cp.jobs, str(row("acme/miss")))
+        cp._fail.clear()
+        r = await remove("acme/miss")
+        ck("removing it cancels that Job too, so nothing is left running after the repo is gone", r.status_code == 200
+           and len(cancels(s)) == 1 and s not in cp.jobs and s not in lore.repos and store.get_brain_repo("acme/miss") is None,
+           f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+        s = await connect("acme/early", started=False)
+        store.update_brain_repo("acme/early", {"state": "failed", "error": "No GitHub connection can read it.", "job_started_at": None})
+        r = await remove("acme/early")
+        ck("failed before any Job was asked for: nothing to cancel", r.status_code == 200 and not cancels(s)
+           and store.get_brain_repo("acme/early") is None, f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
         store.add_brain_repo("acme/bare", None, None, "2026-01-01T00:00:00Z")
         n, m = len(cp.calls("DELETE")), len(lore.calls("DELETE"))
         r = await remove("acme/bare")
@@ -217,6 +241,24 @@ async def main():
         r = await remove("acme/c500")
         ck("... removing again works", r.status_code == 200 and store.get_brain_repo("acme/c500") is None, f"{r.status_code} {r.text[:200]}")
 
+        s = await connect("acme/boom")
+        real_lore = repos_mod.lore_client
+
+        def broken_lore():
+            raise RuntimeError("it broke with " + GH)
+        repos_mod.lore_client = broken_lore
+        r = await remove("acme/boom")
+        repos_mod.lore_client = real_lore
+        ck("an error nobody planned for is 502 in plain words and its text, which may hold a token, never goes out",
+           r.status_code == 502 and "Could not remove acme/boom" in r.text and GH not in r.text and "it broke" not in r.text,
+           f"{r.status_code} {r.text[:200]}")
+        r = await cx.get("/api/brain")
+        mine = [x for x in r.json()["repos"] if x["repo"] == "acme/boom"]
+        ck("... nor does it reach the row's remove_error", mine and GH not in str(mine[0]["remove_error"]) and "it broke" not in str(mine[0]["remove_error"])
+           and "Could not remove acme/boom" in str(mine[0]["remove_error"]), str(mine))
+        r = await remove("acme/boom")
+        ck("... removing again works", r.status_code == 200 and store.get_brain_repo("acme/boom") is None, f"{r.status_code} {r.text[:200]}")
+
         print("== the control plane ==")
         for repo, status in (("acme/c405", 405), ("acme/c501", 501), ("acme/c503", 503), ("acme/c401", 401)):
             s = await connect(repo)
@@ -255,6 +297,18 @@ async def main():
         r = await remove("acme/c502b")
         ck("... removing again, with the cluster back, finishes it", r.status_code == 200 and s not in lore.repos
            and store.get_brain_repo("acme/c502b") is None, f"{r.status_code} {r.text[:200]}")
+        s = await connect("acme/c404")
+        cp.fail("cancel_index", 404, "Not Found")
+        r = await remove("acme/c404")
+        ck("an older control plane answers 404 to the cancel: nothing to cancel there, lore deletes, the row goes", r.status_code == 200
+           and len(cancels(s)) == 1 and len(forgets(s)) == 1 and s not in lore.repos and store.get_brain_repo("acme/c404") is None,
+           f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
+        s = await connect("acme/c204")
+        cp.empty_next("cancel_index")
+        r = await remove("acme/c204")
+        ck("a cancel answered 204 with no body is a cancel: lore deletes, the row goes", r.status_code == 200 and len(cancels(s)) == 1
+           and cancels(s)[0].status == 204 and s not in cp.jobs and s not in lore.repos and store.get_brain_repo("acme/c204") is None,
+           f"{r.status_code} {r.text[:200]} {len(cancels(s))}")
         s = await connect("acme/cgone")
         cp.jobs.pop(s, None)
         r = await remove("acme/cgone")
@@ -306,6 +360,10 @@ async def main():
         ck("the poll leaves it alone: still running, not failed, no new Job", row("acme/poll")["state"] in index_mod.RUNNING
            and row("acme/poll")["error"] is None and len(cp.calls("POST", "start_index")) == starts,
            f"{row('acme/poll')['state']} {row('acme/poll')['error']}")
+        store.update_brain_repo("acme/poll", {"state": "queued", "job_started_at": None})
+        await indexer.start("acme/poll")
+        ck("a start leaves a repo that is being removed alone: no new Job asked for", len(cp.calls("POST", "start_index")) == starts
+           and row("acme/poll")["job_started_at"] is None, f"{len(cp.calls('POST', 'start_index'))} {starts}")
         cancelled = len(cancels(s))
         r = await remove("acme/poll")
         ck("a second remove of it joins the first: 202 again, no second removal", r.status_code == 202 and r.json() == {"ok": True, "removing": True}
@@ -336,6 +394,15 @@ async def main():
            and mine[0]["remove_error"] and "Still indexing. Try again in a minute." in mine[0]["remove_error"]
            and "—" not in mine[0]["remove_error"], str(mine))
         ck("... lore's source is untouched, so removing again can finish", s in lore.repos and src("acme/slow") == s)
+        ck("the poll finds the Job gone (the removal stopped it) and says so, not that the brain lost it",
+           await until(lambda: row("acme/slow").get("state") == "failed")
+           and "was stopped when its removal began" in (row("acme/slow").get("error") or "")
+           and "is gone and the brain did not finish it" not in (row("acme/slow").get("error") or ""), str(row("acme/slow")))
+        r = await cx.post("/api/brain/repos/acme/slow/retry")
+        r2 = await cx.get("/api/brain")
+        mine = [x for x in r2.json()["repos"] if x["repo"] == "acme/slow"]
+        ck("a retry then starts a new Job and the row forgets why the removal gave up", r.status_code == 200 and r.json()["remove_error"] is None
+           and mine and mine[0]["remove_error"] is None and s in cp.jobs, f"{r.status_code} {r.text[:200]} {mine}")
         lore._fail.clear()
         r = await remove("acme/slow")
         ck("removing again, with lore let go, answers 200 and clears it", r.status_code == 200 and r.json() == {"ok": True, "removed": True}
@@ -366,6 +433,23 @@ async def main():
            and s not in lore.repos, f"{r.status_code} {r.text[:200]}")
         r = await remove("acme/bad%20name")
         ck("a name that is not a repo name is 400", r.status_code == 400, f"{r.status_code} {r.text[:200]}")
+
+        print("== a retry while a removal has been asked for but not started ==")
+        s = await connect("acme/early")
+        store.update_brain_repo("acme/early", {"state": "failed", "error": "The index job is gone."})
+        repos_mod.INLINE_WAIT = 0.1
+        async with indexer.lock("acme/early"):   # a step of the poll is in flight: the removal waits behind it
+            r = await remove("acme/early")
+            ck("the removal is asked for, in the background (202)", r.status_code == 202, f"{r.status_code} {r.text[:200]}")
+            ck("... it has not started: the poll's rule is not yet in force", not indexer.is_removing("acme/early"))
+            try:
+                r = await asyncio.wait_for(cx.post("/api/brain/repos/acme/early/retry"), 2)
+                ck("a retry now is refused (409, being removed) without waiting for the lock", r.status_code == 409 and "being removed" in r.text,
+                   f"{r.status_code} {r.text[:200]}")
+            except asyncio.TimeoutError:
+                ck("a retry now is refused (409, being removed) without waiting for the lock", False, "it waited for the lock")
+        ck("then the removal goes through", await until(lambda: store.get_brain_repo("acme/early") is None) and s not in lore.repos)
+        repos_mod.INLINE_WAIT = 30.0
 
         print("== who may remove ==")
         s = await connect("acme/admin")

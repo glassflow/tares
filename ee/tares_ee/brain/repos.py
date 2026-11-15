@@ -24,6 +24,7 @@ row says `removing` (and `remove_error` when a run gave up) until it is gone.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import time
 
@@ -38,6 +39,8 @@ from tares.factory import norm_repo
 from . import index as indexing
 from .cp import CpError
 from .lore import _REPO_NAME, LoreClient, LoreError
+
+log = logging.getLogger("tares.brain")
 
 __all__ = ["MAX_CONNECT", "STATES", "lore_client", "register_routes"]
 
@@ -261,8 +264,11 @@ def register_routes(app, host) -> None:
             remove_errors.pop(repo, None)
             return None
         except Exception as e:   # host.err raises an HTTPException; anything else is a bug we still report
-            status = getattr(e, "status_code", 502)
-            words = str(getattr(e, "detail", None) or e)
+            if hasattr(e, "status_code"):   # ours: the words are plain and carry no secret
+                status, words = e.status_code, str(getattr(e, "detail", None) or e)
+            else:   # unknown: its text may hold a token, so say it plainly and log only the type
+                log.warning("removal of %s failed: %s", repo, type(e).__name__)
+                status, words = 502, f"Could not remove {repo}. Try again in a minute."
             remove_errors[repo] = words
             return status, words
         finally:
@@ -313,12 +319,16 @@ def register_routes(app, host) -> None:
         row = store.get_brain_repo(repo)
         if row is None:
             host.err(KeyError(f"{repo} is not connected to the brain"), 404)
-        if indexer.is_removing(repo):
+        if indexer.is_removing(repo) or repo in removals:
             host.err(ValueError(f"{repo} is being removed"), 409)
         async with indexer.lock(repo):
             requeued = store.requeue_brain_repo(repo, "failed")
         if not requeued:
             now = (store.get_brain_repo(repo) or row)["state"]
             host.err(ValueError(f"{repo} is {now}: only a repo whose index failed can be retried"), 409)
+        remove_errors.pop(repo, None)
         await indexer.start(repo)
-        return view(store.get_brain_repo(repo))
+        fresh = store.get_brain_repo(repo)
+        if fresh is None:   # a removal finished while the start ran
+            host.err(KeyError(f"{repo} is not connected to the brain"), 404)
+        return view(fresh)

@@ -124,6 +124,7 @@ class Indexer:
         self._locks: dict[str, asyncio.Lock] = {}
         self._misses: dict[str, int] = {}
         self._removing: set[str] = set()
+        self._cancelled: set[str] = set()   # repos whose Job a removal stopped: a later "no Job" is not a mystery
         self._wake = asyncio.Event()
         self.task: asyncio.Task | None = None
         self.ticks = 0   # polls that did work, for tests
@@ -150,18 +151,20 @@ class Indexer:
 
     async def cancel(self, row: dict) -> None:
         """Stop the control plane's queued entry or running Job for `row` before its source goes.
-        Only a repo that is still running and was asked for can have one. Raises CpError when the
+        Any repo that was asked for and is not Ready can still have one: a row the poll failed after
+        too many misses leaves its Job behind, so a `failed` row is cancelled too. Raises CpError when the
         control plane did not say the Job is gone: a wrong token (401), no brain index (503), no cancel
         route yet (405, 501), a cluster error (502, the caller asks again) or any other failure. That is
         "not cancelled", never "gone": the caller must not delete anything in lore then. A control plane
         that has no Job for it (404) or one that is not set up here has nothing to cancel."""
-        if row["state"] not in RUNNING or not row["job_started_at"] or not row["repo_source_id"]:
+        if row["state"] == "ready" or not row["job_started_at"] or not row["repo_source_id"]:
             return
         try:
             async with self._cp() as cp:
                 await cp.cancel_index(row["repo_source_id"])
         except CpNotConfigured:
             return
+        self._cancelled.add(row["repo"])
 
     # -- starting ---------------------------------------------------------------------------
 
@@ -176,6 +179,7 @@ class Indexer:
 
     async def _start(self, row: dict) -> None:
         repo, source = row["repo"], row["repo_source_id"]
+        self._cancelled.discard(repo)
         if not source:
             return self._fail(repo, f"The brain has no repo source for {repo}. Remove it and connect it again.")
         token = ""
@@ -301,6 +305,9 @@ class Indexer:
             p = {}
         if p.get("stage") == "done" and not _older_than_job(p.get("finished_at"), row.get("job_started_at")):
             return await self._adopt(row)
+        if repo in self._cancelled:   # a removal stopped it, then gave up before the repo went
+            return self._fail(repo, f"The index of {repo} was stopped when its removal began. "
+                                    "Retry to start it again, or remove the repo.")
         self._fail(repo, f"The index job for {repo} is gone and the brain did not finish it. "
                          "Retry to start it again.")
 
