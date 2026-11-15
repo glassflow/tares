@@ -37,6 +37,8 @@ SCREENS = [
     "factory_people",          # TR-1011
 
     "factory_merge_queue",   # TR-1094
+
+    "factory_setup",           # TR-871
 ]
 
 
