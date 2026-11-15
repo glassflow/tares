@@ -102,6 +102,12 @@ class CiPlain(CISource):
     settings_schema = []
 
 
+class CiBranch(CISource):
+    name = "cibranch"
+    title = "Branch CI"
+    settings_schema = [Field("branch", "Branch", "text")]
+
+
 def rail(name, schema):
     class Rail(Guardrail):
         async def check(self, stage, payload):
@@ -119,6 +125,7 @@ for cls in (TixA, TixB, TixC):
     registry._loaded[("tickets", cls.name)] = cls
 registry._loaded[("review", "reva")] = RevA
 registry._loaded[("ci", "ciplain")] = CiPlain
+registry._loaded[("ci", "cibranch")] = CiBranch
 for n in ("rail_a", "rail_b", "rail_c"):
     registry._loaded[("guardrails", n)] = rail(n, RSCHEMA)
 
@@ -293,6 +300,8 @@ old_project("p1", "review", "reva", {"token": SECRETS[7]})
 old_project("p3", "ci", "gone_ci", {"url": "https://gone.example", "branch": "main"})
 # a project row with only plain fields: nothing moves
 old_project("p4", "tickets", "tixa", {"project": "P4"})
+# a project row with only plain fields for an integration the factory never connected: it still needs a connection
+old_project("p5", "ci", "cibranch", {"branch": "release"})
 # guardrail pairs: two the same with settings, one for another hook, one with no settings
 old_pair("GP1", "factory", None, "pre_build", "rail_a", {"url": "https://g.example/", "token": SECRETS[4]})
 old_pair("GP2", "factory", None, "pre_build", "rail_a", {"url": "https://g.example/", "token": SECRETS[4]})
@@ -321,8 +330,14 @@ ck("a connection that already existed is not overwritten by a project's copy",
 ck("an integration that is not installed has every key treated as a secret: both leave the project",
    pj[("p3", "ci")] == {} and conns.get(("ci", "gone_ci")) == {"url": "https://gone.example", "branch": "main"},
    (pj, conns.get(("ci", "gone_ci"))))
-ck("a project row with only plain fields is untouched and makes no connection",
-   pj[("p4", "tickets")] == {"project": "P4"})
+ck("a project row with only plain fields keeps them",
+   pj[("p4", "tickets")] == {"project": "P4"} and pj[("p5", "ci")] == {"branch": "release"}, pj)
+ck("a project row with only plain fields still gets an (empty) connection to stand on",
+   conns.get(("ci", "cibranch")) == {} and m.is_connected("ci", "cibranch"), conns.get(("ci", "cibranch")))
+from tares.integrations import resolve as _resolve
+_e = _resolve.effective("ci", "p5", store=m)
+ck("so the project keeps its pick instead of falling back as not connected",
+   _e.integration == "cibranch" and _e.source == "project" and _e.reason != "not connected", _e)
 ck("the guardrail's pair settings became its connection", conns.get(("guardrails", "rail_a"))
    == {"url": "https://g.example/", "token": SECRETS[4]})
 pairs = table("SELECT id, hook, integration, on_fail, settings FROM guardrail_pairs ORDER BY id")

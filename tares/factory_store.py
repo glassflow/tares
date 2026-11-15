@@ -621,8 +621,10 @@ class FactoryStore:
              pointer. Monitoring has none: it lives in the tracing settings.
           2. a project's own row keeps its non-secret, non-address fields. The secrets and
              addresses it held move to the factory connection of the same integration, only when
-             that integration has none yet; the project's copy goes either way. An integration
-             that is not installed has no schema, so every key counts as a secret.
+             that integration has none yet; the project's copy goes either way. The integration
+             always ends up with a connection (empty if the row held nothing to move), so the
+             project's pick stays connected. An integration that is not installed has no schema,
+             so every key counts as a secret.
           3. a guardrail pair's integration settings move the same way, and the pair keeps none.
              Pairs of one scope and project that are then the same (hook, integration, on_fail)
              are one: the oldest stays.
@@ -656,9 +658,10 @@ class FactoryStore:
                 "ORDER BY project_uid, slot").fetchall():
             have = self._load_settings(raw)
             gone = {k: v for k, v in have.items() if moves(slot, name, k)}
+            # the project's pick needs a connection to stand on, even when it held no secret
+            connect(slot, name, gone, at, "upgrade")
             if not gone:
                 continue
-            connect(slot, name, gone, at, "upgrade")
             self.sc.execute("UPDATE project_integrations SET settings = ? WHERE project_uid = ? AND slot = ?",
                             [json.dumps({k: v for k, v in have.items() if k not in gone}), uid, slot])
         seen: set = set()
