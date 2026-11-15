@@ -2,6 +2,7 @@
 capped-runs
 choose-edition
 component-gallery
+crew-onboarding
 crew-people
 edition-routes
 edition-shell
