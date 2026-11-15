@@ -202,7 +202,7 @@ export interface HomeOnboarding {
     releaser: boolean | null;
     builders_max: number | null;
     /** What the form starts on; the cell's own defaults, saved only when the person confirms. */
-    defaults: { autonomy: "L3-review" | "L4-ship"; releaser: boolean; builders_max: number; recommended: string };
+    defaults: { autonomy: "L3-review" | "L4-ship"; releaser: boolean; builders_max: number };
   };
   tracker: OnboardingTracker | null;
   github: { connected: boolean; text: string };

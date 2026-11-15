@@ -48,10 +48,12 @@ export interface CrewOnboardingProps {
   onChanged: () => void;
   hide?: () => Promise<unknown>;
   onHidden?: () => void;
+  /** The panel that fills in as the machine reports. A team home draws its own crew card instead. */
+  crewPanel?: boolean;
 }
 
-function Choice({ checked, name, value, title, text, note, onChange, disabled }: {
-  checked: boolean; name: string; value: string; title: string; text: string; note?: string;
+function Choice({ checked, name, value, title, text, onChange, disabled }: {
+  checked: boolean; name: string; value: string; title: string; text: string;
   onChange: () => void; disabled?: boolean;
 }) {
   return (
@@ -62,7 +64,6 @@ function Choice({ checked, name, value, title, text, note, onChange, disabled }:
       <span className="grid gap-0.5">
         <span className="font-semibold">{title}</span>
         <span className={MUTED}>{text}</span>
-        {note && <span className="text-xs font-semibold text-[color:var(--accent-deep)]" data-testid="recommended">{note}</span>}
       </span>
     </label>
   );
@@ -112,14 +113,25 @@ function ChoicesForm({ o, save, done, onSaved }: {
   const [releases, setReleases] = React.useState<boolean>(c.releaser ?? c.defaults.releaser);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(false);
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
+  // Letting the crew merge on its own is a bigger step than the default: it is asked about, in
+  // plain words, before it can be saved. Cancel goes back to the person's own approval.
+  const [asking, setAsking] = React.useState(false);
+  const pick = (v: string) => {
+    setAutonomy(v);
+    setError(false);
+    setAsking(v === "L4-ship" && c.autonomy !== "L4-ship");
+  };
+  const go = () => {
     setBusy(true);
     setError(false);
     save({ autonomy, builders_max: builders, releaser: releases }).then(
-      () => { setBusy(false); done(); onSaved(); },
+      () => { setBusy(false); setAsking(false); done(); onSaved(); },
       () => { setBusy(false); setError(true); },
     );
+  };
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!asking) go();
   };
   return (
     <form onSubmit={submit} className="grid gap-4" data-testid="choices-form">
@@ -127,8 +139,7 @@ function ChoicesForm({ o, save, done, onSaved }: {
         <legend className="mb-2 p-0 text-sm font-semibold">Who merges a finished pull request</legend>
         {MERGES.map((m) => (
           <Choice key={m.value} name="merge" value={m.value} title={m.title} text={m.text} checked={autonomy === m.value}
-                  note={m.value === c.defaults.recommended ? "Recommended for a new crew" : undefined}
-                  onChange={() => setAutonomy(m.value)} />
+                  onChange={() => pick(m.value)} />
         ))}
       </fieldset>
       <div className="flex flex-wrap gap-4">
@@ -156,9 +167,28 @@ function ChoicesForm({ o, save, done, onSaved }: {
         </div>
       </div>
       {error && <div role="alert" data-testid="step-error" className="text-[13px] text-[color:var(--err)]">{SAVE_FAILED}</div>}
-      <div>
-        <Button type="submit" busy={busy} data-testid="choices-save">Save and continue</Button>
-      </div>
+      {asking ? (
+        <div role="group" aria-labelledby="onb-merge-ask" data-testid="merge-confirm-box"
+             className="grid gap-3 border border-foreground bg-[var(--input-bg)] px-4 py-3.5">
+          <div className="grid gap-0.5">
+            <span id="onb-merge-ask" className="font-semibold">Let the crew merge on its own?</span>
+            <span className={MUTED}>
+              Once the reviewer passes a pull request and CI is green, the crew merges it without asking you.
+              You can change this here at any time.
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" busy={busy} onClick={go} data-testid="merge-confirm">Yes, merge on its own</Button>
+            <Button type="button" variant="quiet" disabled={busy} onClick={() => pick("L3-review")} data-testid="merge-cancel">
+              Keep my approval
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div>
+          <Button type="submit" busy={busy} data-testid="choices-save">Save and continue</Button>
+        </div>
+      )}
     </form>
   );
 }
@@ -274,7 +304,7 @@ function YourCrew({ o }: { o: HomeOnboarding }) {
   );
 }
 
-export function CrewOnboarding({ block, onboarding: o, api, onChanged, hide = hideStart, onHidden }: CrewOnboardingProps) {
+export function CrewOnboarding({ block, onboarding: o, api, onChanged, hide = hideStart, onHidden, crewPanel = true }: CrewOnboardingProps) {
   const [hidden, setHidden] = React.useState(false);
   const [hideError, setHideError] = React.useState(false);
   const [editing, setEditing] = React.useState<string | null>(null);
@@ -359,7 +389,7 @@ export function CrewOnboarding({ block, onboarding: o, api, onChanged, hide = hi
             <ol start={workspace.length + 1} className="m-0! grid list-none! gap-3 p-0!">{terminal.map(renderTerminal)}</ol>
           </section>
         </div>
-        <YourCrew o={o} />
+        {crewPanel && <YourCrew o={o} />}
       </div>
     </section>
   );

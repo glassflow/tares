@@ -235,7 +235,7 @@ const NO_MEMBER: OnboardingMember = { state: "none", last_at: null };
 const RUNNING_MEMBER: OnboardingMember = { state: "running", last_at: "2026-11-02T09:40:00Z" };
 const FRESH: HomeOnboarding = {
   choices: { chosen: false, autonomy: null, releaser: null, builders_max: null,
-             defaults: { autonomy: "L4-ship", releaser: false, builders_max: 2, recommended: "L3-review" } },
+             defaults: { autonomy: "L3-review", releaser: false, builders_max: 2 } },
   tracker: null,
   github: { connected: false, text: "" },
   linear: { connected: false },
