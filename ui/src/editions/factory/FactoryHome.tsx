@@ -164,6 +164,11 @@ function WaitingPending() {
 /** A cell with more than one person sends these keys; a cell of one never does. */
 const isTeam = (d: HomeData): boolean => d.summary !== undefined;
 
+// The first-run panel has its own crew panel, for a cell that is new: nothing waiting and no project yet.
+// A team, or a cell already in use, keeps its standing crew card (members, autonomy, the crew limit).
+const crewStands = (d: HomeData): boolean =>
+  isTeam(d) || !(d.start?.show && d.onboarding) || d.waiting_total > 0 || d.projects.length > 0;
+
 function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAction; rows?: Record<string, RowState> }) {
   const [all, setAll] = React.useState(false);
   const g = groupWaiting(items);
@@ -436,6 +441,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
       {notice}
       {data.start?.show && data.onboarding && (
         <CrewOnboarding block={data.start} onboarding={data.onboarding} api={onboardingApi ?? ONBOARDING_API}
+                        crewPanel={!crewStands(data)}
                         onChanged={onOnboardingChanged ?? (() => undefined)} hide={hideStart} onHidden={onStartHidden} />
       )}
       <div className={COLS}>
@@ -461,7 +467,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
           <Projects projects={data.projects.filter(isProject)} stubs={data.projects.filter(isStub)} finished={data.finished_count} later={data.later_count} team={team} />
         </div>
         <aside className={RIGHT}>
-          {!(data.start?.show && data.onboarding) && <CrewCard data={data} />}
+          {crewStands(data) && <CrewCard data={data} />}
           {isTeam(data) && <Slot name="home.teamCrews" crews={data.crews ?? []} quiet={data.crews_quiet ?? []} />}
           {isTeam(data) && <Slot name="home.reposYouOwn" areas={data.areas ?? []} />}
           <PlanCard data={data} />
