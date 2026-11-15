@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { api } from "../../api";
 import type { Plan, SetupProblem } from "../../types";
 import { errText } from "./common";
 import { AgentsCard } from "./planAgents";
 import { Problems } from "./planBits";
-import { focusSoon, mergeDerived, problemsBy, useCellData, type CellData } from "./planEdit";
+import { mergeDerived, problemsBy, useCellData, type CellData } from "./planEdit";
 import { KnowHowCard, ToolsSection } from "./planKnowhow";
 import { WakesCard } from "./planWakes";
 import { WatchesCard } from "./planWatches";
@@ -140,12 +140,21 @@ export function PlanStep({ projectId, plan, setPlan, base, setBase, onBack, onAd
     return () => window.clearTimeout(t);
   }, [rev]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // closing an editor hands focus back to the button that opened it, right after the commit that
+  // draws it and before the browser paints, so focus is never on nothing
+  const focusAfter = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!focusAfter.current) return;
+    document.getElementById(focusAfter.current)?.focus();
+    focusAfter.current = null;
+  });
+
   const probs = problemsBy(problems);
   const stale = checkedRev !== rev;
   const ctx: CardCtx = {
     plan, edit, probs, open, busy, cell, base,
     openEditor: (id) => setOpen(id),
-    closeEditor: (focusId) => { setOpen(undefined); focusSoon(focusId); },
+    closeEditor: (focusId) => { setOpen(undefined); focusAfter.current = focusId; },
   };
 
   const adjust = async () => {

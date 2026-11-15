@@ -62,6 +62,13 @@
     },
     "idle_wake": {"type": "boolean"},
     "pace": {"description": "The pace line the text view prints; null when pacing is off or Tares cannot say.", "type": ["string", "null"]},
+    "strays": {
+      "description": "Claude processes and other processes the crew does not own (tares factory doctor lists them); never stopped.",
+      "type": "object",
+      "required": ["claude", "other"],
+      "properties": {"claude": {"type": "integer", "minimum": 0}, "other": {"type": "integer", "minimum": 0}},
+      "additionalProperties": false
+    },
     "watch": {
       "type": "object",
       "required": ["running", "pid"],

@@ -150,10 +150,10 @@ def desk_block(item: dict) -> str:
 
 
 def cmd_desk(argv: list, env: dict) -> int:
-    """`desk` and `crew desk`: the questions waiting for the person, in full."""
+    """`desk` and `crew desk`: the questions waiting for the person (their own, not other people's), in full."""
     paths, client = _start(env, local_only=False)
     state.require_crew(paths)
-    items = client.desk_json()
+    items = client.desk_json(mine=True)
     if contract.wants_json(argv):
         contract.emit({"items": items}, "desk")
         return 0
@@ -248,8 +248,8 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
         sid = _tsv(row.get("id"))
         if not sid:
             continue
-        # The folder as Claude Code writes it, not as jq @tsv prints it: bash compares two @tsv-escaped texts, so a
-        # backslash path (Windows) matches there; here the repo path from Tares is raw, so cwd must be raw too (TR-1167).
+        # The folder as Claude Code writes it, not as jq @tsv prints it (TR-1167). Compared with the recorded one
+        # through claude.same_dir, so `C:\x\shop` and `C:/x/shop` are one folder on Windows (TR-1308).
         session, cwd = _tsv(row.get("sessionId")), _text(row.get("cwd")) if row.get("cwd") is not None else ""
         # A second live session under a recorded live station is a duplicate for status to show, not a replacement.
         recorded = state.stations_get(name, "id", paths=paths)
@@ -258,7 +258,7 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
         project = repo = ""
         if name in (f"{crew}-orchestrator", f"{crew}-reviewer", f"{crew}-releaser"):
             role = name[len(crew) + 1:]
-            if cwd != paths.raw:
+            if not claude.same_dir(cwd, paths.raw):
                 continue
         elif "-build-" in name:
             role, repo = "builder", cwd
@@ -266,7 +266,8 @@ def adopt_unrecorded(paths: CrewPaths, client: TaresClient, binary: str) -> list
             if rows is None:
                 rows = client.project_repo_rows()
             for pname, prepo in rows:
-                if prepo == cwd and name.startswith(state.builder_name(state.slugify(_text(pname)), "", paths)):
+                mine = state.builder_name(state.slugify(_text(pname)), "", paths)
+                if claude.same_dir(prepo, cwd) and name.startswith(mine):
                     project = _text(pname)
                     break
             if not project:
@@ -405,6 +406,14 @@ def cmd_status(argv: list, env: dict) -> int:
     doc["pace"] = line or None
     if line:
         out.write(line + "\n")
+    from . import strays
+    try:
+        n_claude, n_other = strays.counts(strays.scan(paths, env))
+    except Exception:   # a process that cannot be read must not end status
+        n_claude = n_other = 0
+    doc["strays"] = {"claude": n_claude, "other": n_other}
+    if n_claude or n_other:
+        out.write(f"strays: {n_claude} claude, {n_other} other ({ME} doctor)\n")
     pid = watch_pid(paths)
     doc["watch"] = {"running": bool(pid), "pid": int(pid) if str(pid).isdigit() else None}
     if pid:
@@ -412,13 +421,13 @@ def cmd_status(argv: list, env: dict) -> int:
                   f"you allowed in Tares; log in {paths.shown('watch.log')}\n")
     else:
         out.write(f"watch: not running; {ME} crew up starts it (or run {ME} crew watch yourself)\n")
-    items = client.desk_json()
+    items = client.desk_json(mine=True)
     # a finished project's questions only matter to a crew that is still running (TR-559)
     if running <= 0:
         items = [i for i in items if not _truthy(i.get("project_finished"))]
     doc["desk"] = {"waiting": len(items), "next": items[0] if items else None}
     if items:
-        out.write(f"desk: {len(items)} waiting for you; the next one ({ME} crew desk shows all; answer in the "
+        out.write(f"desk: {len(items)} waiting for you; the next one ({ME} crew desk lists yours; answer in the "
                   "orchestrator's session):\n")
         out.write("".join("  " + ln + "\n" for ln in desk_block(items[0]).split("\n")))
     else:

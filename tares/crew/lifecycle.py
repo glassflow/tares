@@ -24,7 +24,7 @@ import subprocess
 import sys
 import time
 
-from . import claude, launch, locks, pace, stations, state, watch
+from . import claude, jsonrun, launch, locks, pace, stations, state, watch
 from .client import TaresClient, TaresHTTPError, uri
 from .errors import CrewError, SessionListUnreadableError
 from .paths import ME, CrewPaths
@@ -58,6 +58,9 @@ def rearm_text(client: TaresClient) -> str:
     reading = pace.last(client.paths) if had else pace.read(client)
     if not had:
         pace.unremember(client.paths)
+    if not client.tares_on():   # idle_wake is Tares's to say: a station revived while it is down cannot be told
+        return ("re-arm your schedule if you have one, unless the factory tells you idle_wake is on (Tares did "
+                "not answer when you were started, so it could not be read)")
     if launch.idle_wake_on(client):
         return ("arm no tick of your own (idle_wake is on: the factory wakes you when there is work and holds "
                 "your tick; if you hold one, delete it with CronList and CronDelete)")
@@ -246,7 +249,8 @@ def down(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str) 
     # crew?", asked with or without a project: it names this command (TR-599)
     for item_id in _finished_questions(client.desk_json()):
         _withdraw(client, item_id, "the crew stopped and the project is finished")
-    for item_id in _stop_questions(client.desk_json()):
+    # the person's own questions only: on a shared cell another person's are not ours to withdraw (TR-1355)
+    for item_id in _stop_questions(client.desk_json(mine=True)):
         _withdraw(client, item_id, "the person stopped the crew")
     client.say(f"all stations stopped. Tares keeps the projects, tickets and the desk; {ME} crew up starts fresh sessions.")
 
@@ -312,40 +316,44 @@ def resume(client: TaresClient, paths: CrewPaths, args: list, *, claude_bin: str
 # ---------- the commands ----------
 
 
-def _command(fn, *, local_only: bool):
+def _command(fn, *, local_only: bool, name: str = "", offline_ok: bool = False):
     """cmd_x(argv, env) for fn(client, paths, args, claude_bin=...). argv is everything after `tares factory`:
     the command word, or `crew` and its subcommand, then the arguments. A refusal prints its line to stderr
-    and exits 1, as bash's die does."""
-    def run(argv: list, env: dict) -> int:
+    and exits 1, as bash's die does. With --json (TR-1283) it runs the same and prints one result document
+    named `name` on stdout (jsonrun.py). `offline_ok`: the command goes on with Tares down, from what an earlier
+    start kept (a revive or restart starts from the station's launch copy)."""
+    def body(argv: list, env: dict) -> int:
         words = 2 if argv[:1] == ["crew"] else 1
         paths = CrewPaths.from_env()
+        binary = claude.claude_bin(env)   # bash looks for claude before it does anything else
+        state.crew_name(paths)
+        client = TaresClient(paths, env)
         try:
-            binary = claude.claude_bin(env)   # bash looks for claude before it does anything else
-            state.crew_name(paths)
-            client = TaresClient(paths, env)
-            try:
-                if local_only:   # these work while Tares is down: stopping the crew never waits for it
-                    state.merge_crew_defaults(paths)
-                    client.tares_on()
-                    client.keep_token()
-                else:
-                    client.prime()
-                fn(client, paths, list(argv[words:]), claude_bin=binary)
-            finally:
-                client.close()
-        except CrewError as e:
-            sys.stdout.flush()
-            print(e.line, file=sys.stderr)
-            return 1
+            if local_only:   # these work while Tares is down: stopping the crew never waits for it
+                state.merge_crew_defaults(paths)
+                client.tares_on()
+                client.keep_token()
+            else:
+                client.prime(offline_ok=offline_ok)
+            fn(client, paths, list(argv[words:]), claude_bin=binary)
+        finally:
+            client.close()
         return 0
+
+    def text_fail(e: CrewError) -> None:
+        sys.stdout.flush()
+        print(e.line, file=sys.stderr)
+
+    def run(argv: list, env: dict) -> int:
+        return jsonrun.run(argv, name or fn.__name__, lambda a: body(a, env), text_fail=text_fail)
     run.__name__ = f"cmd_{fn.__name__}"
     run.__doc__ = fn.__doc__
     return run
 
 
-cmd_revive = _command(revive, local_only=False)
-cmd_restart = _command(restart, local_only=False)
-cmd_retire = _command(retire, local_only=True)
-cmd_down = _command(down, local_only=True)
-cmd_halt = _command(halt, local_only=True)
-cmd_resume = _command(resume, local_only=True)
+cmd_revive = _command(revive, local_only=False, name="revive", offline_ok=True)
+cmd_restart = _command(restart, local_only=False, name="restart", offline_ok=True)
+cmd_retire = _command(retire, local_only=True, name="retire")
+cmd_down = _command(down, local_only=True, name="crew down")
+cmd_halt = _command(halt, local_only=True, name="crew halt")
+cmd_resume = _command(resume, local_only=True, name="crew resume")

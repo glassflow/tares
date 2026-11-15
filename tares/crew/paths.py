@@ -101,6 +101,14 @@ class CrewPaths:
     def worktrees_dir(self) -> Path:
         return self.home / "worktrees"
 
+    @property
+    def launch_dir(self) -> Path:
+        """launch/, the launch spec the cell gave each station, kept for a start while Tares is down (TR-870)."""
+        return self.home / "launch"
+
+    def launch_file(self, station: str) -> Path:
+        return self.launch_dir / f"{station}.json"
+
     def station_file(self, station: str, suffix: str) -> Path:
         return self.stations_dir / f"{station}.{suffix}"
 

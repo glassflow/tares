@@ -139,6 +139,8 @@ class ClaudeCodeConnector(Connector):
         out = []
         projects: dict[str, str | None] = {}
         for o in items:
+            if isinstance(o, dict) and str(o.get("type") or "").startswith(self.REQUEST_PREFIX):
+                continue   # Claude Code's record of an API request, a copy of lines already sent
             if isinstance(o, dict) and o.get("type") in self.METER_TYPES:
                 self._record_meter(o)   # a meter reading, not something the session said
                 continue
@@ -203,6 +205,11 @@ class ClaudeCodeConnector(Connector):
         self.store.upsert_project_object(p["id"], "source", f"+source:{self.cfg.name}",
                                          self.cfg.name)
         return True
+
+    # Claude Code (2.1.3xx) records each API request in the transcript: api-request,
+    # api-request-shape, and api-request-blob, which holds a copy of the previous assistant message
+    # (every tool call in it) with no timestamp. An older plugin still sends them; they are dropped.
+    REQUEST_PREFIX = "api-request"
 
     # Lines that read a meter rather than say something: the status line's report on the session
     # (claude-plugin/scripts/statusline.py), a /context reading of it and the plan's limits from

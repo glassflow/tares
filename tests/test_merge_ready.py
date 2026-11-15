@@ -132,7 +132,7 @@ class SpyLocal(CISource):
         return CIState(state="success", head=pr.head)
 
 
-async def fake_run(stage, project, payload):
+async def fake_run(stage, project, payload, ticket=""):
     a = RAILS["answer"]
     RAILS.setdefault("seen", []).append((stage, project, payload))
     if isinstance(a, Exception):

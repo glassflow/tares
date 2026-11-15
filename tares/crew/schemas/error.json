@@ -6,6 +6,16 @@
   "required": ["schema_version", "error"],
   "properties": {
     "schema_version": {"const": 1},
+    "notes": {
+      "description": "Only from the commands of result.json: the lines the command printed before it failed, without the `tares factory: ` prefix. What had already happened. For a person, not for parsing. Absent when nothing was printed.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "left_to_watch": {
+      "description": "`crew update` only, and only when it left stations out and another station failed: the same list as in result.json, so a caller still sees which stations were skipped.",
+      "type": "array",
+      "items": {"type": "string"}
+    },
     "error": {
       "type": "object",
       "required": ["code", "message"],

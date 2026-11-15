@@ -62,7 +62,9 @@ from . import licence
 from . import team as team_mod
 from . import docs as docs_mod
 from . import factory as factory_mod
-from . import claude_usage, factory_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
+from . import memory_route
+from .integrations.builtin import memory_tares
+from . import claude_usage, factory_api, guardrails_api, integrations_api, project_secrets, morning_status as morning_mod, outbound, standup as standup_mod
 from . import edition as edition_mod
 from . import factory_home, sre_home, screens, start_steps
 from . import sre as sre_mod
@@ -70,7 +72,7 @@ from . import watch as watch_mod
 from . import feedback as feedback_mod
 from . import incidents as incidents_mod
 from . import linear as _linear
-from .integrations import registry as integrations_registry, tickets as _tickets_integ
+from .integrations import hooks as integrations_hooks, registry as integrations_registry, tickets as _tickets_integ
 from . import github_tickets as _gh_tickets
 from . import skills as skills_mod
 from . import providers as providers_mod
@@ -247,7 +249,7 @@ UI_DIST = _ui_dist()
 # What this cell can do, listed on /health so the crew CLI and the plugin can refuse clearly when the
 # cell is too old for a command. Later tickets append their names (merge_queue, guardrail_rules,
 # launch_spec, recall). A daemon that could not start lists none.
-CAPABILITIES = ["integrations", "merge_queue"]
+CAPABILITIES = ["integrations", "merge_queue", "guardrail_rules", "hook_points", "guardrail_pairs", "recall", "launch_spec"]
 
 # /health reports `degraded` at or above this share of the storage limit. On the 0-100 scale of
 # /api/usage's pct_used, so 90 means 90% — not 0.9. Unknown (no limit and no volume) is never degraded.
@@ -755,6 +757,7 @@ def make_app() -> FastAPI:
     # the interactive API reference lives under /api so /docs is the console's Docs and memory page
     app = FastAPI(title="taresd", lifespan=lifespan, docs_url="/api/reference", redoc_url=None)
     app.state.store = store   # for in-process tests; DuckDB is single-writer, so no second Store
+    integrations_hooks.bind(store)   # the guardrail hooks resolve a project's guardrails from it
     app.state.runtime = runtime
     app.state.agents = dispatcher.agents   # the Tares agent runner, for in-process tests
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
@@ -792,7 +795,7 @@ def make_app() -> FastAPI:
     _GRANT_WRITE = re.compile(r"^/api/grants(/[^/]+/(consent|revoke|decline))?$")
     _REPLY_WRITE = re.compile(r"^/api/desk/[^/]+/reply$")
     _PROJECT_INTEGRATION = re.compile(
-        r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks)$")
+        r"^/api/projects/[^/]+/(integrations/[^/]+(/test)?|required-checks|guardrails/pairs(/[^/]+)?)$")
     _ANSWER_WRITE = re.compile(r"^/api/projects/[^/]+/questions/[^/]+/answer$")
 
     def _required_scope(method: str, path: str) -> str | None:
@@ -823,7 +826,7 @@ def make_app() -> FastAPI:
                               # the handler decides by the credential's person
         if method != "GET" and _PROJECT_INTEGRATION.match(path):
             return "ingest"   # a project's own integration choice and its test (TR-842), and
-                              # its required checks (TR-854): an admin or the project's lead;
+                              # its required checks (TR-854) and its guardrail pairs (TR-863): an admin or the project's lead;
                               # the handler decides, it needs the credential's person. A read
                               # key is refused here
         if method == "PATCH" and path.startswith("/api/people/"):
@@ -5096,21 +5099,9 @@ def make_app() -> FastAPI:
 
     # The cell's global docs (its AGENTS.md and memory): made the first time a project has docs,
     # included in every project that has docs, so every session working on a project reads them.
-    _GLOBAL_SETTING = "global_docs"
-
     def _global_ids(create: bool = False) -> dict[str, str]:
         """{kind: doc id} of the global docs that exist; with `create`, make the missing ones."""
-        try:
-            ids = json.loads(store.get_setting(_GLOBAL_SETTING) or "{}")
-        except ValueError:
-            ids = {}
-        ids = {k: v for k, v in ids.items() if store.get_doc(None, v) is not None}
-        if create and set(docs_mod.GLOBAL_DOCS) - set(ids):
-            for kind, (title, body) in docs_mod.GLOBAL_DOCS.items():
-                if kind not in ids:
-                    ids[kind] = store.create_doc(None, kind, title, body, by="tares")
-            store.set_setting(_GLOBAL_SETTING, json.dumps(ids))
-        return ids
+        return memory_tares.global_ids(store, create)
 
     def _ensure_globals(uid: str) -> dict[str, str]:
         """A project with docs includes the global docs (made now if this is the first one)."""
@@ -5196,9 +5187,11 @@ def make_app() -> FastAPI:
         return {**store.personal_doc(person["id"], kind), "added": added}
 
     @app.post("/api/docs/global/{kind}/lines")
-    def add_global_line(kind: str, request: Request, body: dict = Body(...)):
+    async def add_global_line(kind: str, request: Request, body: dict = Body(...)):
         """{text}: add one line to the global AGENTS.md (`agents`) or memory (`memory`). A line
-        already there is not added twice (`added`: false)."""
+        already there is not added twice (`added`: false). A memory line goes to the Tares doc
+        first, then to the memory integration the cell uses; `pending` is true when that one
+        did not take it and it waits for a retry."""
         if kind == "grants":
             _err(ValueError("a grant quotes the person and carries its date: add it with "
                             "add_grant (POST /api/grants)"))
@@ -5208,14 +5201,23 @@ def make_app() -> FastAPI:
         why = factory_mod.may(factory_api.caller(request), "global_docs")
         if why:
             _err(PermissionError(why), 403)
+        person = _current_person(request)
+        # the name sits in a shared doc: one line, so a name cannot add a bullet of its own
+        who = " ".join(str((person or {}).get("name") or "").split())[:60].strip()
+        note = (f" (added by {who}, {datetime.now(timezone.utc).date().isoformat()})"
+                if who else "")
+        if kind == "memory":
+            try:
+                res = await memory_route.write(store, memory_tares.FACTORY, body.get("text"), note,
+                                               _by(request, body))
+            except docs_mod.DocError as e:
+                _err(e)
+            ids = _global_ids()
+            return {**_marked(store.get_doc(None, res["doc_id"]), ids), "added": res["added"],
+                    "pending": res["pending"]}
         ids = _global_ids(create=True)
         cur = store.get_doc(None, ids[kind])
         try:
-            person = _current_person(request)
-            # the name sits in a shared doc: one line, so a name cannot add a bullet of its own
-            who = " ".join(str((person or {}).get("name") or "").split())[:60].strip()
-            note = (f" (added by {who}, {datetime.now(timezone.utc).date().isoformat()})"
-                    if who else "")
             text, added = docs_mod.append_line(cur["body"], body.get("text"), note)
         except docs_mod.DocError as e:
             _err(e)
@@ -6220,6 +6222,7 @@ def make_app() -> FastAPI:
     # the edition screens (tares/screens/__init__.py lists them)
     screens.register_all(app, store, h, SimpleNamespace(fx=fx, runtime=runtime, morning=_morning))
     integrations_api.register(app, store, h)
+    guardrails_api.register(app, store, h)
     project_secrets.register(app, store, h)   # TR-775
 
     @app.get("/api/home")

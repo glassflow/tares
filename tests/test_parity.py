@@ -114,6 +114,9 @@ ck("...elsewhere case still matters", "<TMP>" not in nc, nc)
 with mock.patch.object(parity, "is_windows", lambda: True):
     q1 = parity.norm_text('tares hook statusline --plugin-root "<TMP>/kit"')
     q2 = parity.norm_text('tares hook statusline --plugin-root "<TMP>\\kit" and <TMP>\\bin\\claude.cmd (2.1.0)')
+with mock.patch.object(parity, "is_windows", lambda: True):
+    qx = parity.norm_text('<TMP>\\bin\\claude.exe (2.1.0) and <TMP>/bin/claude.exe')
+ck("on Windows claude.exe reads as bash printed it too (TR-1183)", qx == "<TMP>/bin/claude (2.1.0) and <TMP>/bin/claude", qx)
 ck("on Windows a quoted kit path and claude.cmd read as bash printed them",
    q1 == "tares hook statusline --plugin-root <TMP>/kit" and q2 == "tares hook statusline --plugin-root <TMP>/kit and <TMP>/bin/claude (2.1.0)", (q1, q2))
 with mock.patch.object(parity, "is_windows", lambda: False):
@@ -185,7 +188,7 @@ ck("...keeps the rest and points HOME at the scenario and pins the Python engine
 
 # TR-1066: the fake Claude Code is a launcher named `claude`, first on PATH and also CLAUDE_BIN.
 launcher = Path(env_b["CLAUDE_BIN"])
-ck("the fake Claude Code is named claude (claude.cmd on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
+ck("the fake Claude Code is named claude (claude.exe on Windows) and is CLAUDE_BIN", launcher.stem == "claude" and launcher.is_file(), str(launcher))
 ck("...in the first folder of PATH", env_b["PATH"].split(os.pathsep)[0] == str(launcher.parent), env_b["PATH"][:200])
 found_claude = shutil.which("claude", path=env_b["PATH"])
 ck("...so `claude` by name finds it, not a real one", found_claude is not None and Path(found_claude).resolve() == launcher.resolve(), str(found_claude))
@@ -460,6 +463,32 @@ if parity.fcntl is not None:
     parity._ATTACHED["x"] = stray
     parity.end_visible_processes()
     ck("end_visible_processes stops a process a scenario left", stray.poll() is not None and not parity._ATTACHED)
+
+# `crew update` scenarios read the fake process list, not the machine's: a harmless dummy `--bg-spare` process of an older version
+# (an `exec -a` sleep, never a real Claude Code) stays alone with TARES_FAKE_PS_DIR in CU_ENV, and is stopped without it.
+def dummy_spare_survives(fake_dir: bool) -> bool:
+    argv0 = (f"claude bg-pty-host --bg-pty-host {work}/dummy.pty.sock 200 50 -- /x/versions/2.1.100 "
+             f"--bg-spare {work}/dummy.claim.sock")
+    (work / "dummy.claim.sock").write_text("", encoding="utf-8")   # unclaimed
+    dummy = subprocess.Popen(["bash", "-c", f"exec -a '{argv0}' sleep 60"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(0.5)
+    env = dict(parity.CU_ENV)
+    if not fake_dir:
+        env.pop("TARES_FAKE_PS_DIR")
+    try:
+        with mock.patch.dict(parity.CU_ENV, env, clear=True):
+            ok = parity.evaluate_python(parity.SCENARIOS["cc_retry_marks"], out=lambda _line: None)[1]
+        time.sleep(0.5)
+        return ok and dummy.poll() is None
+    finally:
+        dummy.kill()
+        dummy.wait()
+
+
+if parity.fcntl is not None and sys.platform != "win32":
+    ck("CU_ENV points the process list at the fake folder", parity.CU_ENV.get("TARES_FAKE_PS_DIR") == "{tmp}/claude")
+    ck("with the fake process list a real --bg-spare process is left alone", dummy_spare_survives(True))
+    ck("without it the machine's --bg-spare process is read and stopped (the break test)", not dummy_spare_survives(False))
 
 shutil.rmtree(work, ignore_errors=True)
 print(f"{P} passed, {F} failed")

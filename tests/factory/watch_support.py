@@ -38,7 +38,7 @@ def main(argv: list) -> int:
         return 2
     tmp = Path(os.environ["FACTORY_CREW_HOME"]).parent
     kit = make_kit(tmp)
-    with FakeTares({}) as tares:
+    with FakeTares({"projects": [{"id": "shop", "name": "shop"}]}) as tares:   # the cell knows the builders' project (TR-870)
         os.environ.update(TARESD_URL=tares.url, TARES_PLUGIN_DIR=str(kit), FACTORY_STOP_WAIT="3")
         sys.path.insert(0, str(ROOT))
         return run_python(dict(os.environ))

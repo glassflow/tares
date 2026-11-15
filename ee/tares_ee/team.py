@@ -9,7 +9,7 @@ person it already has and refuses only adding one. The team home and the team's 
 assignees are `ticket_assignee.py`; a project's lead, privacy and members are `access.py` (routes) and
 `mcp_access.py` (MCP tool); grants that wait for someone's consent are `grants.py` (routes) and
 `mcp_grants.py` (MCP tool); the questions a spec asks a repo's owner are `questions.py` (routes) and
-`mcp_questions.py` (MCP tools); crews kept apart by machine are `crews.py`; the other methods stay single-person until their own tickets
+`mcp_questions.py` (MCP tools); crews kept apart by machine are `crews.py`; the repos connected to the brain are `brain/repos.py` (routes); the other methods stay single-person until their own tickets
 move them here.
 """
 from __future__ import annotations
@@ -20,6 +20,7 @@ from tares.team import SingleTeam
 from . import access, areas, crews, mcp_access, mcp_areas, mcp_grants, mcp_questions
 from . import grants as consent
 from . import questions
+from .brain import repos as brain_repos
 from . import ticket_assignee as assignees
 from . import team_home as home
 
@@ -88,6 +89,7 @@ class Team(SingleTeam):
         access.register_routes(app, host)
         consent.register_routes(app, host)
         questions.register_routes(app, host)
+        brain_repos.register_routes(app, host)
 
     def mcp_tools(self):
         return [*mcp_areas.TOOLS, *mcp_access.TOOLS, *mcp_grants.TOOLS, *mcp_questions.TOOLS]

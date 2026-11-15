@@ -46,7 +46,8 @@ from .paths import ME, CrewPaths
 USAGE = f"usage: {ME} doctor [--json]"
 LABELS = {"ok": "ok   ", "warn": "warn ", "fix": "FIX  "}
 # What the new checks' text starts with (after the level word), for a test that sets them aside.
-NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows")
+NEW_LABELS = ("tares on PATH", "tares version", "login key", "crew key file", "git", "Git for Windows",
+              "Claude processes", "Claude's background service", "orphaned crew processes")
 TEMP_FLAGS = re.compile(r"/var/folders/|/tmp/cmux|cmux-claude-settings")
 RUN_TIMEOUT = 60
 WINDOWS_ALLOWED = ("NT AUTHORITY\\SYSTEM", "BUILTIN\\ADMINISTRATORS", "OWNER RIGHTS", "CREATOR OWNER")
@@ -287,8 +288,8 @@ class Doctor:
         return self._trust
 
     def accepted(self, path: str) -> bool:
-        row = self.trusted_map().get(path)
-        return isinstance(row, dict) and row.get("hasTrustDialogAccepted") is True
+        rows = (self.trusted_map().get(k) for k in state.trust_keys(path))
+        return any(isinstance(row, dict) and row.get("hasTrustDialogAccepted") is True for row in rows)
 
     def trusted(self, path: str) -> bool:
         """bash trusted: Claude Code trusts the path, or a linked worktree's main repo."""
@@ -328,10 +329,10 @@ class Doctor:
         nk, hk = version.parse_version(need), version.parse_version(have)
         if nk is None or hk is None:
             self.warn("min_tares", f"tares version: could not compare the installed {have or 'unknown'} "
-                      f"with the {need} the plugin needs", "uv tool upgrade tares, or pip install -U tares", True)
+                      f"with the {need} the plugin needs", version.upgrade_advice("uv tool upgrade tares, or pip install -U tares"), True)
         elif hk < nk:
             self.no("min_tares", f"tares version: the installed tares {have} is older than the {need} the plugin needs",
-                    "uv tool upgrade tares, or pip install -U tares", True)
+                    version.upgrade_advice("uv tool upgrade tares, or pip install -U tares"), True)
         else:
             self.ok("min_tares", f"tares version: the installed tares {have} meets the {need} the plugin needs", True)
 
@@ -341,7 +342,8 @@ class Doctor:
         found = shutil.which("tares", path=self.env.get("PATH"))
         if not found:
             self.no("tares_path", "tares on PATH: no tares resolves on PATH, and the plugin's hooks call it",
-                    "uv tool install tares (or pip install tares), then open a new terminal", True)
+                    version.upgrade_advice("uv tool install tares (or pip install tares), then open a new terminal",
+                                           stop_crew=False), True)
             return
         r = self.run([found, "--version"], timeout=30)
         ver = (r.stdout.strip().splitlines() or [""])[0] if r is not None and r.returncode == 0 else ""
@@ -351,7 +353,7 @@ class Doctor:
             self.ok("tares_path", f"tares on PATH: {shown}, and it has tares hook", True)
         else:
             self.warn("tares_path", f"tares on PATH: {shown} has no tares hook, which the plugin's hooks will call",
-                      "uv tool upgrade tares, or pip install -U tares", True)
+                      version.upgrade_advice("uv tool upgrade tares, or pip install -U tares"), True)
 
     def check_tares(self, c: TaresClient) -> bool:
         src = self.env.get("TARES_FACTORY_SOURCE") or "environment"
@@ -637,6 +639,7 @@ class Doctor:
                     "winget install Git.Git" if _windows() else "brew install git", True)
         else:
             self.ok("git", f"git: {(r.stdout.strip().splitlines() or [''])[0]}", True)
+            self.check_git_identity()
         if _windows():
             found = self.env.get("CLAUDE_CODE_GIT_BASH_PATH") or shutil.which("bash", path=self.env.get("PATH")) or ""
             for d in (self.env.get("ProgramFiles"), self.env.get("ProgramFiles(x86)"), r"C:\Program Files"):
@@ -648,6 +651,25 @@ class Doctor:
             else:
                 self.no("git_windows", "Git for Windows: not found, and Claude Code on Windows runs its shell commands "
                         "through Git Bash", "winget install Git.Git", True)
+
+    def check_git_identity(self) -> None:
+        """git's global user.name and user.email. Without them a builder's first commit in a repo that sets
+        none of its own stops with "Author identity unknown", and crew up names the person "the user". A
+        fresh Windows machine often has neither. A warn, not a FIX: each repo can set its own. No line when
+        git cannot be asked."""
+        missing = []
+        for key in ("user.name", "user.email"):
+            r = self.run(["git", "config", "--global", "--get", key], timeout=30)
+            if r is None:
+                return
+            if r.returncode != 0 or not r.stdout.strip():
+                missing.append(key)
+        if missing:
+            self.warn("git_identity", f"git identity: no {' or '.join(missing)} in git's global config, so a builder's "
+                      "commit in a repo that sets none fails with \"Author identity unknown\"",
+                      "; ".join(f'git config --global {k} "<your {k.split(".")[1]}>"' for k in missing), True)
+        else:
+            self.ok("git_identity", "git identity: user.name and user.email are set in git's global config", True)
 
     def check_gh(self) -> None:
         gh = shutil.which("gh", path=self.env.get("PATH"))
@@ -700,6 +722,31 @@ class Doctor:
                 self.no(f"job_{job}", f"station job {job} has temp paths in its saved launch flags; it will fail to "
                         f"respawn. {ME} crew down + {ME} crew up", f"{ME} crew down, then {ME} crew up")
 
+    def check_strays(self) -> None:
+        """Claude processes the crew does not own, the background service's session (Windows), and orphaned crew
+        processes (TR-1332). Reported only: nothing is stopped."""
+        from . import strays
+        try:
+            found = strays.scan(self.paths, self.env)
+        except Exception:   # a process that cannot be read must not end the doctor
+            return
+        cl = found["claude"]
+        if cl:
+            self.warn("claude_processes", f"Claude processes the crew does not own ({len(cl)}): {strays.listing(cl)}",
+                      strays.CLAUDE_FIX, True)
+        else:
+            self.ok("claude_processes", "Claude processes: none the crew does not own", True)
+        if found["service"]:
+            self.no("claude_service", "Claude's background service runs in the wrong session", found["service"], True)
+        else:
+            self.ok("claude_service", "Claude's background service: runs where the crew does", True)
+        orph = found["orphan"]
+        if orph:
+            self.warn("orphan_processes", f"orphaned crew processes older than an hour ({len(orph)}): "
+                      f"{strays.listing(orph)}", strays.ORPHAN_FIX, True)
+        else:
+            self.ok("orphan_processes", "orphaned crew processes: none older than an hour", True)
+
     # -- the whole run --
 
     def collect(self) -> list:
@@ -727,6 +774,7 @@ class Doctor:
         self.check_git()
         self.check_gh()
         self.check_stations()
+        self.check_strays()
         return self.checks
 
     def check_crew_offline(self) -> None:

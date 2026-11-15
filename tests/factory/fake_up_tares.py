@@ -3,7 +3,7 @@
 
 It answers what crew up and the station launches ask, from memory, on one free port of 127.0.0.1:
 
-    GET  /health                    ok, with the capabilities list (default: integrations, merge_queue)
+    GET  /health                    ok, with the capabilities list (default: integrations, merge_queue, guardrail_rules, launch_spec)
     GET  /api/crew/settings         the crew settings saved so far (a flat object)
     PUT  /api/crew/settings         merge the body into them
     GET  /api/grants                {"all": "- \\"<words>\\" (<date>)\\n..."}
@@ -28,10 +28,15 @@ the milestone runs still use a real daemon.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fake_launch import launch_answer  # noqa: E402
+from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 
 
 class FakeTares:
@@ -45,7 +50,7 @@ class FakeTares:
         self.people = list(people if people is not None else [{"id": "local", "name": "Local"}])
         self.grants = list(grants or [])
         # what /health lists: crew up wants "integrations" and "merge_queue" (need_capability); capabilities=[] is an old Tares
-        self.capabilities = list(["integrations", "merge_queue"] if capabilities is None else capabilities)
+        self.capabilities = list(["integrations", "merge_queue", "guardrail_rules", "launch_spec"] if capabilities is None else capabilities)
         self.health = health                # None: the short /health body; a dict: that whole body (an old cell, or the real daemon's)
         self.token = token                  # "": no auth
         self.mcp_auth: list = []            # the Authorization header (or None) of each POST /mcp
@@ -106,6 +111,25 @@ class FakeTares:
                             mine = outer.project_grants.get(pid, [])
                             return self._send(200, {"all": allg, "project": "".join(line + "\n" for line in mine).rstrip("\n")})
                         return self._send(200, {"all": allg})
+                    if "/launch" in path:
+                        def rules_for(name, role):
+                            found = [p for p in outer.projects if name in (p.get("id"), p.get("name"))] if name else []
+                            mine = "".join(line + "\n" for line in outer.project_grants.get(found[0]["id"], [])) if found else ""
+                            return rules_answer("", role, name, "".join(line + "\n" for line in outer.grants), mine)
+                        hit = launch_answer(self.path, self.headers, outer.projects, rules_for,
+                                            outer.settings.get("autonomy", "L4-ship"), f"http://{self.headers.get('Host')}")
+                        if hit:
+                            return self._send(*hit)
+                    if path == RULES_PATH:
+                        from urllib.parse import parse_qs, urlparse
+                        q = parse_qs(urlparse(self.path).query)
+                        ref = (q.get("project") or [""])[0]
+                        found = [p for p in outer.projects if ref in (p.get("id"), p.get("name"))]
+                        pid, name = (found[0]["id"], found[0]["name"]) if found else ("", ref)
+                        allg = "".join(line + "\n" for line in outer.grants)
+                        mine = "".join(line + "\n" for line in outer.project_grants.get(pid, []))
+                        return self._send(200, rules_answer((q.get("station") or [""])[0], (q.get("role") or ["builder"])[0],
+                                                            name, allg, mine))
                     if path == "/api/people":
                         return self._send(200, {"people": outer.people})
                     if path == "/api/crew/projects":

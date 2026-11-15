@@ -2,7 +2,7 @@
   "hooks": {
     "SessionStart": [
       { "hooks": [{ "type": "command", "command": "tares hook ship || [ $? -ne 2 ]", "timeout": 10 }] },
-      { "hooks": [{ "type": "command", "command": "tares hook session-start; r=$?; if [ $r -eq 2 ] || [ $r -eq 127 ]; then echo 'This Tares plugin needs tares 1.56.0 or newer on PATH (this one has no `tares hook`). Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.'; fi", "timeout": 5 }] }
+      { "hooks": [{ "type": "command", "command": "tares hook session-start; r=$?; if [ $r -eq 2 ] || [ $r -eq 127 ]; then echo 'This Tares plugin needs tares 1.56.0 or newer on PATH (this one has no `tares hook`). Upgrade it with `uv tool upgrade tares` or `pip install -U tares`.'; case ${OS:-} in Windows_NT) echo 'On Windows, stop the crew and any other running tares command first: an upgrade while one is running can leave the install broken.';; esac; fi", "timeout": 5 }] }
     ],
     "PreToolUse": [
       { "matcher": "Bash|mcp__.*", "hooks": [{ "type": "command", "command": "tares hook guard || [ $? -ne 2 ]", "timeout": 5 }] },

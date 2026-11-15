@@ -1,0 +1,60 @@
+{
+  "defaults": [
+    {
+      "id": "default-crew-files",
+      "kind": "allow",
+      "role": "all",
+      "text": "Creating and editing files under {home} (the crew's own folder), and git worktrees under the .factory/worktrees folder of {wt_repos} or under {home}/worktrees, is expected work for this crew station.",
+      "reason": "A station keeps its reports, settings and worktrees in the crew's own folders."
+    },
+    {
+      "id": "default-crew-tidy",
+      "kind": "allow",
+      "role": "all",
+      "text": "Removing git worktrees and scratch folders with `tares factory tidy <path>`, which deletes only inside the crew's own folders, is expected work for this crew station.",
+      "reason": "Tidy refuses anything outside the crew's folders, so a station can clean up after itself."
+    },
+    {
+      "id": "default-crew-records",
+      "kind": "allow",
+      "role": "all",
+      "text": "Reading and writing this crew's records on Tares at {tares} through the Tares MCP tools (tickets, stages, checks, reviews, assumptions, the desk) is expected work for this crew station, within what Tares allows its role.",
+      "reason": "The plan, the tickets and the desk live on Tares, and Tares limits each role on its own."
+    },
+    {
+      "id": "default-orchestrator-sessions",
+      "kind": "allow",
+      "role": "orchestrator",
+      "text": "Starting background Claude Code sessions for this crew with `tares factory spawn` (builders named `<project>-build-<slug>` inside a project's repo, helpers named `<station>-<slug>`), and stopping, removing or resuming the sessions recorded in {stations_file} with `tares factory retire`, `tares factory revive`, `tares factory restart`, `claude stop`, `claude rm` or `claude --bg --resume`, is expected work that {human} authorized by running `tares factory crew up`. Sessions not recorded there are out of scope.",
+      "reason": "The orchestrator runs the crew's stations; the person agreed to that by starting the crew."
+    },
+    {
+      "id": "default-builder-push",
+      "kind": "allow",
+      "role": "builder",
+      "text": "Pushing `factory/*` branches to {where}, and opening pull requests there, is expected work that {human} authorized.",
+      "reason": "A builder delivers its tickets as pull requests; Tares merges them, never the builder."
+    },
+    {
+      "id": "default-reviewer-verdicts",
+      "kind": "allow",
+      "role": "reviewer",
+      "text": "Posting review-verdict comments with `gh pr comment` on pull requests that this crew opened in {repos}, and setting the `factory/review` commit status on their head commits with `gh api repos/.../statuses/<sha>`, is expected work that {human} authorized.",
+      "reason": "The reviewer's verdict is a comment and a commit status; the merge gate reads them."
+    },
+    {
+      "id": "default-releaser-release",
+      "kind": "allow",
+      "role": "releaser",
+      "text": "Building container images, loading them into the local kind cluster `{cluster}`, applying manifests, rolling out and rolling back in that cluster, creating `v*` git tags and GitHub releases in {repos}, are expected work that {human} authorized.",
+      "reason": "The releaser ships what was merged, in the local cluster only."
+    },
+    {
+      "id": "default-production",
+      "kind": "deny",
+      "role": "all",
+      "text": "Deploying to, or changing, any environment, kube context or namespace whose name matches the pattern {prod_pattern}. That needs {human} directly.",
+      "reason": "Production is the person's call, never a station's."
+    }
+  ]
+}

@@ -58,6 +58,18 @@ export const EDITION_ROUTES: Record<"factory" | "sre" | "any", Record<string, En
     // every document of one project, on its own page
     "/projects/:id/docs": { page: React.lazy(() => import("./factory/FactoryProjectDocs")), fallback: { redirect: "/projects/:id" } },
 
+    // TR-1245: the project's tickets, in its frame
+    "/projects/:id/tickets": { page: React.lazy(() => import("./factory/FactoryProjectTickets")), fallback: { redirect: "/projects/:id" } },
+
+    // TR-1245
+    "/projects/:id/milestones": { page: React.lazy(() => import("./factory/FactoryProjectMilestones")), fallback: { redirect: "/projects/:id" } },
+
+    // TR-1245: people and secrets
+    "/projects/:id/people": { page: React.lazy(() => import("./factory/FactoryProjectPeople")), fallback: { redirect: "/projects/:id" } },
+
+    // TR-1245
+    "/projects/:id/settings": { page: React.lazy(() => import("./factory/FactoryProjectSettings")), fallback: { redirect: "/projects/:id" } },
+
     // TR-806
     "/tickets": { page: React.lazy(() => import("./factory/FactoryTickets")), fallback: { redirect: "/projects" } },
 

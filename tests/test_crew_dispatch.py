@@ -338,7 +338,8 @@ for mode, args, want_code in (("python", ["zz"], 0), ("help", ["help"], 0), ("un
     if mode == "python":
         ck("...and the tares modules loaded are the light ones",
            set(info.get("tares", [])) <= {"tares", "tares.cli", "tares.config", "tares.login", "tares.crew", "tares.crew.dispatch",
-                                          "tares.crew.errors", "tares.crew.paths", "tares.crew.perms", "tares.crew.state", "tares.crew.locks"},
+                                          "tares.crew.errors", "tares.crew.paths", "tares.crew.perms", "tares.crew.state", "tares.crew.locks",
+                                          "tares.crew.contract"},
            short(info.get("tares")))
     else:
         ck(f"...{mode} printed the help", r.stdout == USAGE, short(r.stdout[:80]))

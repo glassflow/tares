@@ -1,0 +1,1 @@
+{"schema_version":1,"ok":true,"command":"crew halt","notes":["crew halted: stations finish their current step and start nothing risky (merges, pushes, deploys, tags, new sessions). tares factory crew resume lifts it.","tell the orchestrator too (tares factory crew attach orchestrator) so it sends HALT to every station"]}

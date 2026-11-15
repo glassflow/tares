@@ -17,3 +17,10 @@ class Monitoring(Integration):
         monitoring, with `labels` (station, project, role) attached. Returns a dict of
         variable names to values. A plain function, not async."""
         raise NotImplementedError
+
+    def station_settings(self) -> dict:
+        """The Claude Code settings fragment a station's sessions need next to `station_env`
+        (for example `otelHeadersHelper`, which fetches the secret headers at run time so they
+        never sit in the environment). Empty when monitoring is off. A plain function, not
+        async."""
+        return {}

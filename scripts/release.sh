@@ -17,11 +17,16 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # a final release is held while RELEASE_BLOCK exists; the same check runs in CI on the tag
 bash "$ROOT/scripts/check_release_block.sh" "v$VERSION"
 
+# collect changelog.d/*.md (and anything under [Unreleased]) into a new CHANGELOG.md section; a bad
+# fragment stops here, before the version bump, any commit or tag. CHANGELOG_SUMMARY is the summary paragraph.
+python3 "$ROOT/scripts/changelog_collect.py" "$VERSION" "$(date +%F)" "${CHANGELOG_SUMMARY:-}" --root "$ROOT"
+
 # package version
 sed -i.bak -E "s/^version = \".*\"/version = \"$VERSION\"/" "$ROOT/pyproject.toml"
 rm -f "$ROOT/pyproject.toml.bak"
 
-git -C "$ROOT" add pyproject.toml
+if [ -d "$ROOT/changelog.d" ]; then git -C "$ROOT" add -A -- changelog.d; fi
+git -C "$ROOT" add -- CHANGELOG.md pyproject.toml
 git -C "$ROOT" commit -m "Release v$VERSION"
 git -C "$ROOT" tag "v$VERSION"
 

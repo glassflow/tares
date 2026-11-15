@@ -7,7 +7,7 @@ that move now (`moving`: changes asked, in review, in progress, blocked, at most
 rows (a number, a bar's worth of counts, the acceptance checks and a link to their tickets, no
 ticket lists), the decisions and the open calls the crew made, the project's documents, the
 command that opens a builder's session, and where the tickets live. The full ticket list is the
-Tickets screen, which `tickets_href` and each milestone's `tickets_href` open. The tickets are
+project's Tickets page, which `tickets_href` and each milestone's `tickets_href` open. The tickets are
 read once.
 
 Every string is worded for people: a builder is "Builder for M1", never the name of its
@@ -174,6 +174,16 @@ def hidden_paths(handover: dict | None) -> dict[str, str]:
             if base:                                  # with or without a trailing slash
                 hidden[base] = name
     return hidden
+
+
+def repo_names(handover: dict | None) -> list[str]:
+    """The names of the repos handed over, each once, in the hand-over's order."""
+    names = []
+    for r in (handover or {}).get("repos") or []:
+        name = r.get("name") or (factory_mod.folder_name(r["path"]) if r.get("path") else None)
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def cleaner(handover: dict | None):
@@ -350,7 +360,7 @@ def register(app, store, h, ctx):
                            "accepted": st["accepted"], "needs_person": st["needs_person"],
                            # accept as it is: the crew never recorded its checks and none is for you
                            "can_accept": st["needs_person"] and not st["person_open"],
-                           "tickets_href": f"/tickets?project={uid}&milestone={m['id']}"})
+                           "tickets_href": f"/projects/{uid}/tickets?milestone={m['id']}"})
 
         # the ticket that goes next: the first ready one that has not started. Moving now lists
         # the tickets being worked on and the ones that wait, so next is never one of those.
@@ -457,9 +467,12 @@ def register(app, store, h, ctx):
                 "stage": stage, "stage_label": STAGE_LABEL[stage],
                 "state": state, "state_label": STATE_LABEL[state],
                 "waiting": waiting, "waiting_others": others, "counts": counts, "moving": moving, "moving_total": len(movers),
-                "tickets_href": f"/tickets?project={uid}", "next": nxt,
-                # how many pull requests the GitHub page lists (the header links it when any)
+                "tickets_href": f"/projects/{uid}/tickets", "next": nxt,
+                # how many pull requests the GitHub page lists, and how many in each state
                 "prs_total": sum(1 for t in tickets if pr_state(t)),
+                "prs_counts": {"open": sum(pr_state(t) in ("open", "draft") for t in tickets),
+                               "merged": sum(pr_state(t) == "merged" for t in tickets),
+                               "closed": sum(pr_state(t) == "closed" for t in tickets)},
                 # the three newest pull requests, as the GitHub page words them
                 "prs_recent": recent_prs(tickets, uid, reviews, now, clean), "milestones": out_ms,
                 "decisions": decisions, "calls": calls, "calls_past": calls_past, "docs": docs, "docs_total": docs_total, "terminal": terminal,
@@ -468,6 +481,8 @@ def register(app, store, h, ctx):
                 "can_close": factory_mod.ready_to_close(p, tickets),
                 "later": later, "can_later": not later and not closed and not with_crew,
                 "people": people,
+                # the repos handed over to the crew, by name only: their folders stay on the crew's machine
+                "repos": repo_names(handover),
                 "secrets": project_secrets.page_listing(store, h, p, request),   # TR-775: None when not a member
                 "now": fh._iso(now)}
 

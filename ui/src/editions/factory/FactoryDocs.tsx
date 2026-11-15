@@ -54,7 +54,8 @@ function Row({ row }: { row: DocRow }) {
   const who = [row.by, row.when].filter(Boolean).join(", ");
   return (
     <div className="grid gap-x-4 gap-y-0.5 border-b border-dotted border-border py-[7px] last:border-b-0 md:grid-cols-[minmax(0,1fr)_190px]" data-testid="doc-row" data-kind={row.kind}>
-      <div className={cn("min-w-0 [overflow-wrap:anywhere]", ROW_TEXT[row.kind])}>
+      {/* a line with no one named for it reads across the whole width */}
+      <div className={cn("min-w-0 [overflow-wrap:anywhere]", ROW_TEXT[row.kind], !who && "md:col-span-2")}>
         {row.kind === "li" && <span aria-hidden className="mr-2.5 inline-block size-[5px] bg-foreground align-middle" />}
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>{row.text}</ReactMarkdown>
       </div>

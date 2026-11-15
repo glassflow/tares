@@ -39,17 +39,17 @@ On every `REVIEW` message and every tick, `review_queue()` lists tickets in stag
    - Name the screenshots you compared in the verdict.
 7. **Second-model challenge.** Give a subagent on a different Claude model from yours (`model: "sonnet"` if you run on Opus, `"opus"` if you run on Sonnet) the diff, the ticket and your draft findings, and ask it to find what you missed and to argue against each finding. Keep what survives. `crew.json` → `review.challenge = false` skips this for trivial PRs.
 8. **Decide.** `pass` (no blocking findings), `changes` (fix and re-review) or `block` (wrong approach, needs the orchestrator). Each finding has a severity (P1, P2, P3) and says whether it blocks. A screen ticket that fails the design check is `changes` (or `block` in the cases step 6 names), even when every test passes.
-9. **Post on GitHub.**
-   - One PR comment with the verdict, what you verified (commands and results), findings (blocking first) and what you didn't cover: `gh pr comment <url> --body-file <file you wrote this turn>`.
+9. **Record on Tares, and let Tares post.** `record_review(ticket, head, verdict, verified, not_verified, findings=[{severity, file, line, blocking, text}], resolved={"F1": "fixed", "F2": "open"}, project)`. Only ids from earlier rounds (in the brief) go in `resolved`; Tares refuses unknown ones, and refuses a `pass` while any blocking finding is still open, so mark the fixed ones first. When the cell holds a GitHub App that can write to the PR's repo, Tares also posts the review there as the App: one comment (the verdict, what you verified, what you did not, the findings with the blocking ones first, and your station name) and the `factory/review` check run on the head. The answer's `github` says what happened: `posted` true means GitHub has the verdict and you post nothing.
+10. **Post with `gh` only what Tares did not.** When `github.posted` is false (no App credential, or it cannot write to that repo), `github.why` says so and you post as before. When only one part went up, post just the other.
+   - The comment: `gh pr comment <url> --body-file <file you wrote this turn>`, with the verdict, what you verified (commands and results), findings (blocking first) and what you didn't cover.
    - The commit status on the head SHA:
      `gh api repos/<owner>/<repo>/statuses/<sha> -f state=<success|failure> -f context=factory/review -f description="<verdict in under 100 chars>"`, with `<owner>/<repo>` taken from the PR URL (`https://github.com/<owner>/<repo>/pull/<n>`). You run in the crew home, where `gh` can't fill `{owner}/{repo}` for you.
-   - Every crew session acts under the same GitHub account, and GitHub refuses self-approval, so never use `gh pr review --approve`. The comment plus the status is the verdict.
-10. **Record on Tares.** `record_review(ticket, head, verdict, verified, not_verified, findings=[{severity, file, line, blocking, text}], resolved={"F1": "fixed", "F2": "open"}, project)`, with the same verdict and findings as the comment. Only ids from earlier rounds (in the brief) go in `resolved`; Tares refuses unknown ones, and refuses a `pass` while any blocking finding is still open, so mark the fixed ones first.
+   - Every crew session acts under the same GitHub account, and GitHub refuses self-approval, so never use the approve form of `gh pr review`. The comment plus the check run or status is the verdict.
 11. **Report and tell the builder.** Append to your report: project, PR, head, verdict, what was verified. Send the builder `VERDICT`; copy the orchestrator only when the verdict is `block`. Remove the worktree with `tares factory tidy --force "$FACTORY_WORKTREES/<project>-pr<n>"` (it's yours, and your checks may have changed files in it).
 
 ## Re-reviews
 
-On a new head after `changes`, review the delta and re-check your earlier findings; in `record_review` mark each earlier finding `fixed` or `open`. A stale `success` must never sit on a new head: if the head moved since your verdict, the status no longer applies and the builder must ask again.
+On a new head after `changes`, review the delta and re-check your earlier findings; in `record_review` mark each earlier finding `fixed` or `open`. A stale `success` (status or check run) must never sit on a new head: if the head moved since your verdict, the status no longer applies and the builder must ask again.
 
 ## Tone
 

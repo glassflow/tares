@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/logout.json",
+  "title": "tares logout --json",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "logout"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "logout": {
+      "type": "object",
+      "required": [
+        "was_signed_in",
+        "key_removed"
+      ],
+      "properties": {
+        "was_signed_in": {
+          "type": "boolean"
+        },
+        "key_removed": {
+          "description": "True when the key was taken off the workspace. When it was not, the command fails with the error shape instead.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

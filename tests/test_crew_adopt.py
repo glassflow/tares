@@ -8,7 +8,10 @@ Run: python tests/test_crew_adopt.py
 """
 from __future__ import annotations
 
+import functools
 import json
+import ntpath
+import posixpath
 import shutil
 import sys
 import tempfile
@@ -39,15 +42,20 @@ class FakeClient:
         return self.rows
 
 
-def adopt(cwd, repo_rows, name="argus-build-m2-charts"):
-    """Run adopt_unrecorded for one live session; return the station as stations.json then holds it."""
+def adopt(cwd, repo_rows, name="argus-build-m2-charts", pathmod=None):
+    """Run adopt_unrecorded for one live session; return the station as stations.json then holds it. `cwd` may be a
+    function of the crew home. `pathmod` (ntpath or posixpath) makes folders compare the
+    way Windows or Linux does on any machine; default the real OS."""
     home = Path(tempfile.mkdtemp(prefix="tares-crew-adopt-"))
     try:
         (home / "crew.json").write_text("{}\n", encoding="utf-8")
         paths = CrewPaths.at(home)
+        cwd = cwd(paths.raw) if callable(cwd) else cwd
         row = {"id": "0000beef", "name": name, "cwd": cwd, "sessionId": "s-beef", "state": "working", "pid": 4242}
         with mock.patch.object(views, "_sessions_or_none", lambda binary: [row]), \
-                mock.patch.object(claude, "job_state", lambda sid: {}):
+                mock.patch.object(claude, "job_state", lambda sid: {}), \
+                mock.patch.object(claude, "same_dir",
+                                  functools.partial(claude.same_dir, pathmod=pathmod) if pathmod else claude.same_dir):
             views.adopt_unrecorded(paths, FakeClient(repo_rows), "claude")
         if not (home / "stations.json").is_file():
             return None
@@ -67,6 +75,28 @@ ck("a plain path is adopted as before", bool(st) and st.get("project") == "argus
 
 st = adopt(WIN, [("argus", "C:\\Users\\other\\argus/charts")])
 ck("a folder no project lists is not adopted", st is None, st)
+
+# TR-1308: the recorded folder and the session's folder are one place in two spellings (Windows: slash direction, case,
+# a trailing separator). These fail on the raw string compare.
+st = adopt("C:\\Users\\me\\argus\\charts", [("argus", "C:/Users/me/argus/charts")], pathmod=ntpath)
+ck("a builder is adopted when Tares lists its folder with forward slashes",
+   bool(st) and st.get("project") == "argus" and st.get("repo") == "C:\\Users\\me\\argus\\charts", st)
+
+st = adopt("c:\\users\\ME\\Argus\\charts\\", [("argus", "C:/Users/me/argus/charts")], pathmod=ntpath)
+ck("...and when only the letter case and a trailing separator differ", bool(st) and st.get("project") == "argus", st)
+
+st = adopt("C:\\Users\\me\\argus\\core", [("argus", "C:/Users/me/argus/charts")], pathmod=ntpath)
+ck("...but another folder is still not adopted", st is None, st)
+
+st = adopt("/srv/argus/Charts", [("argus", "/srv/argus/charts")], pathmod=posixpath)
+ck("on a case-sensitive system a different case is a different folder", st is None, st)
+
+st = adopt(lambda home: home + "/", [], name="crew-orchestrator", pathmod=ntpath)
+ck("the orchestrator is adopted when its folder has a trailing separator",
+   bool(st) and st.get("role") == "orchestrator", st)
+
+st = adopt(lambda home: home + "/other", [], name="crew-orchestrator", pathmod=ntpath)
+ck("...and not when it runs somewhere else", st is None, st)
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

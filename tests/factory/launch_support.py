@@ -8,16 +8,18 @@ The driver runs in a throwaway crew (the environment parity.crew_env gives: the 
 <tmp>/crew, the fake Claude Code is CLAUDE_BIN). It starts a fake Tares on a free port of its own, makes
 <tmp>/kit as a copy of claude-plugin, and then calls the function of tares.crew.launch with a TaresClient on
 the same fake Tares. It prints what the function prints and exits as it does. Functions:
-write_settings, launch, boot_prompt, grant_rules (text on stdin), compact_window, kit_version, parent_role,
+write_settings, launch, boot_prompt, compact_window, kit_version, parent_role,
 level_rank, level_text, check_model, plugin_flags, idle_wake_on, idle_wake_note, pace_round (the pace pass of one
 watch round), pace_down (what the revive step asks of the pace for stations that are down or up), idle_wake_round (the
 idle-wake pass of one watch round), and the whole commands `spawn` (cmd_spawn of tares.crew.stations), `revive`,
-`restart` and `retire` (cmd_revive, cmd_restart and cmd_retire of tares.crew.lifecycle). `watch_regrant` is one
+`restart` and `retire` (cmd_revive, cmd_restart and cmd_retire of tares.crew.lifecycle), and `launch_plan` (cmd_launch_plan of
+tares.crew.stations, TR-867). `watch_regrant` is one
 round of the watch's regrant step (TR-960): regrant.step of tares.crew. The word {TMP} in an argument is the temp
 folder.
 
 Environment: LAUNCH_WORLD is JSON for the fake Tares (settings, projects, grants, token, health,
-grants_status); LAUNCH_SETUP is JSON for the crew home, made on the first call (crew: keys merged into
+grants_status, launch_status, launch_detail, launch; the fake serves the launch route with a spec the real
+runtime builds, tests/factory/fake_launch.py); LAUNCH_SETUP is JSON for the crew home, made on the first call (crew: keys merged into
 crew.json, stations: stations.json, token: the crew's key file; a later call's crew: keys are merged
 into the crew.json again). {TMP} in either is the temp folder.
 
@@ -38,6 +40,9 @@ from urllib.parse import parse_qs, urlparse
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
+sys.path.insert(0, str(HERE))
+from fake_launch import launch_answer  # noqa: E402
+from fake_rules import RULES_PATH, rules_answer  # noqa: E402
 PLUGIN = ROOT / "claude-plugin"
 
 DEFAULT_WORLD = {
@@ -50,6 +55,12 @@ DEFAULT_WORLD = {
     "mcp": True,             # does POST /mcp answer `initialize` like an MCP server (the spawn command wants one)
     "settings_status": 200,  # the status of GET /api/crew/settings
     "grants_status": 200,    # the status of GET /api/grants
+    "capabilities": ["integrations", "merge_queue", "guardrail_rules", "launch_spec"],   # what /health lists
+    "rules_status": 200,     # the status of GET /api/factory/guardrails/rules
+    "rules": None,           # its body; None: Tares renders the defaults and the world's grants (fake_rules.py)
+    "launch_status": 200,    # the status of GET /api/factory/stations/<station>/launch (not 200: that status, {"detail": ...})
+    "launch_detail": "launch",   # the "detail" of that answer
+    "launch": None,          # its body; None: the real runtime builds the spec (fake_launch.py), from the rules above
     "routes": {},            # any other GET: "<path>[?query]" -> [status, body] (the full path with its query wins over the path)
 }
 
@@ -88,7 +99,7 @@ class FakeTares:
                 u = urlparse(self.path)
                 outer.log.append({"path": self.path, "auth": self.headers.get("Authorization")})
                 if u.path == "/health":
-                    return self._send(200 if w["health"] else 503, {"status": "ok"})
+                    return self._send(200 if w["health"] else 503, {"status": "ok", "capabilities": list(w["capabilities"])})
                 if w["token"] and self.headers.get("Authorization") != f"Bearer {w['token']}":
                     return self._send(401, {"detail": "unauthorized"})
                 if u.path == "/api/crew/settings":
@@ -105,6 +116,28 @@ class FakeTares:
                             return self._send(404, {"detail": "unknown project"})
                         return self._send(200, {"all": w["grants"]["all"], "project": mine[q["project"][0]]})
                     return self._send(200, {"all": w["grants"]["all"]})
+                if "/launch" in u.path:
+                    if w["launch_status"] != 200:
+                        return self._send(w["launch_status"], {"detail": w["launch_detail"]})
+                    if w["launch"] is not None:
+                        return self._send(200, w["launch"])
+                    hit = launch_answer(self.path, self.headers, w["projects"], outer.rules_for,
+                                        w["settings"].get("autonomy", "L4-ship"), outer.url)
+                    if hit:
+                        return self._send(*hit)
+                if u.path == RULES_PATH:
+                    if not self.headers.get("X-Tares-Station"):   # the real route: a key alone, with no station, is refused
+                        return self._send(403, {"detail": "this needs an admin or a crew station"})
+                    if w["rules_status"] != 200:
+                        return self._send(w["rules_status"], {"detail": "rules"})
+                    if w["rules"] is not None:
+                        return self._send(200, w["rules"])
+                    q = parse_qs(u.query)
+                    ref = (q.get("project") or [""])[0]
+                    named = [p for p in w["projects"] if ref in (p.get("id"), p.get("name"))]
+                    name = named[0]["name"] if named else ref
+                    return self._send(200, rules_answer((q.get("station") or [""])[0], (q.get("role") or ["builder"])[0], name,
+                                                        w["grants"]["all"], w["grants"]["projects"].get(name, "")))
                 hit = w["routes"].get(self.path) or w["routes"].get(u.path)
                 if hit:
                     return self._send(hit[0], hit[1])
@@ -114,6 +147,13 @@ class FakeTares:
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
         # a short poll interval: shutdown() waits for one, which was half a second per step
         self.thread = threading.Thread(target=lambda: self.server.serve_forever(poll_interval=0.02), daemon=True)
+
+    def rules_for(self, name: str, role: str) -> dict:
+        """The rendered rules the launch route gives a station of `role` under project `name`."""
+        w = self.world
+        if w["rules"] is not None:
+            return w["rules"]
+        return rules_answer("", role, name, w["grants"]["all"], w["grants"]["projects"].get(name, ""))
 
     def __enter__(self):
         self.thread.start()
@@ -188,12 +228,12 @@ def _sub_json(text: str, tmp: Path) -> str:
 # ---------------------------------------------------------------------------------------------
 # The functions
 
-FUNCTIONS = {"write_settings", "launch", "boot_prompt", "grant_rules", "compact_window", "kit_version",
+FUNCTIONS = {"write_settings", "launch", "boot_prompt", "compact_window", "kit_version",
              "parent_role", "level_rank", "level_text", "check_model", "plugin_flags", "idle_wake_on",
              "idle_wake_note", "spawn", "revive", "restart", "retire", "pace_round", "pace_down", "watch_regrant",
-             "idle_wake_round"}
+             "idle_wake_round", "launch_plan"}
 NEEDS_TARES = {"write_settings", "launch", "boot_prompt", "idle_wake_on", "spawn", "revive", "restart", "retire", "pace_round",
-               "pace_down", "idle_wake_round"}
+               "pace_down", "idle_wake_round", "launch_plan"}
 
 
 def run_python(fn: str, args: list) -> int:
@@ -215,9 +255,6 @@ def run_python(fn: str, args: list) -> int:
             L.launch(client, *args)
         elif fn == "boot_prompt":
             print(L.boot_prompt(client, *args))
-        elif fn == "grant_rules":
-            for rule in L.grant_rules(sys.stdin.read(), *args):
-                print(rule)
         elif fn == "compact_window":
             print(L.compact_window(paths, client.say))
         elif fn == "kit_version":
@@ -270,6 +307,9 @@ def run_python(fn: str, args: list) -> int:
         elif fn == "spawn":
             from tares.crew import stations
             return stations.cmd_spawn(["spawn", *args], dict(os.environ))
+        elif fn == "launch_plan":
+            from tares.crew import stations
+            return stations.cmd_launch_plan(["launch-plan", *args], dict(os.environ))
         elif fn in ("revive", "restart", "retire"):
             from tares.crew import lifecycle
             return getattr(lifecycle, f"cmd_{fn}")([fn, *args], dict(os.environ))

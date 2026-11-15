@@ -307,7 +307,11 @@ async def main():
                set(a) == {"id", "name", "icon", "can_edit_icon", "goal", "stage", "stage_label", "state", "state_label", "waiting",
                           "counts", "moving", "moving_total", "tickets_href", "next", "milestones",
                           "decisions", "calls", "calls_past", "docs", "terminal", "linked", "can_close", "now",
-                          "people", "docs_total", "later", "can_later", "prs_total", "prs_recent", "secrets", "waiting_others"}, sorted(a))
+                          "people", "docs_total", "later", "can_later", "prs_total", "prs_recent", "secrets", "waiting_others",
+                          "prs_counts", "repos"}, sorted(a))
+            ck("the repos handed over, by name only", a["repos"] == [REPO], a["repos"])
+            ck("pull requests counted by state", set(a["prs_counts"]) == {"open", "merged", "closed"}
+               and sum(a["prs_counts"].values()) == a["prs_total"], a["prs_counts"])
             ck("no ticket lists under the milestones and no no_milestone", "no_milestone" not in a
                and all("tickets" not in m for m in a["milestones"]), sorted(a))
             ck("identity and stage", a["id"] == px and a["name"] == "project-x"
@@ -331,9 +335,9 @@ async def main():
                ms["M1: pages"]["counts"] == {"total": 3, "merged": 1}
                and ms["M2: search"]["counts"] == {"total": 3, "merged": 0}, [m["counts"] for m in a["milestones"]])
             ck("a milestone links to its tickets", ms["M1: pages"]["tickets_href"]
-               == f"/tickets?project={px}&milestone={m1}" and ms["M2: search"]["tickets_href"]
-               == f"/tickets?project={px}&milestone={m2}", [m["tickets_href"] for m in a["milestones"]])
-            ck("the project links to its tickets", a["tickets_href"] == f"/tickets?project={px}", a["tickets_href"])
+               == f"/projects/{px}/tickets?milestone={m1}" and ms["M2: search"]["tickets_href"]
+               == f"/projects/{px}/tickets?milestone={m2}", [m["tickets_href"] for m in a["milestones"]])
+            ck("the project links to its tickets", a["tickets_href"] == f"/projects/{px}/tickets", a["tickets_href"])
             ck("counts: every ticket by state, canceled in the total", a["counts"] == {
                 "total": 9, "merged": 1, "to_do": 2, "in_progress": 1, "in_review": 1, "changes_asked": 1,
                 "blocked": 2, "canceled": 1}, a["counts"])
@@ -530,7 +534,7 @@ async def main():
                == [("M1", True, {"total": 2, "merged": 2}), ("M2", False, {"total": 0, "merged": 0})],
                c["milestones"])
             ck("tickets_href of the milestones", [m["tickets_href"] for m in c["milestones"]]
-               == [f"/tickets?project={ps}&milestone={ms_a}", f"/tickets?project={ps}&milestone={ms_b}"])
+               == [f"/projects/{ps}/tickets?milestone={ms_a}", f"/projects/{ps}/tickets?milestone={ms_b}"])
 
             print("== the hand-over path with a trailing slash, in every text ==")
             t = (await cx.get(f"/api/factory/projects/{pt}")).json()

@@ -267,7 +267,7 @@ class FakeGithubCI(FakeCI):
     name = "github"
 
 
-async def rails(stage, project, payload):
+async def rails(stage, project, payload, ticket=""):
     return RAILS.get(payload.get("repo"), [])
 
 

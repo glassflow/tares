@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.glassflow.ai/tares/schemas/crew/watch.json",
+  "title": "tares factory crew watch --restart --json: what happened to the background watch",
+  "type": "object",
+  "required": ["schema_version", "watch"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "watch": {
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "description": "`restarted`: the running watch was stopped and a new one started. `started`: none ran, a new one was started. `none_running`: none ran and `--if-running` was given, so nothing was started. `other_install`: the watch runs from a program outside the `--only-under` folder, so it was left alone.",
+          "enum": ["restarted", "started", "none_running", "other_install"]
+        },
+        "pid": {"description": "The new watch's process id. Absent when nothing was started.", "type": "integer", "minimum": 1},
+        "executable": {"description": "The program the running watch was started from. Only with `other_install`.", "type": "string"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

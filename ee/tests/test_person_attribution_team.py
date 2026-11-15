@@ -60,7 +60,9 @@ def start(db, port):
     return subprocess.Popen(licensed.daemon_argv(), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-TODAY = datetime.now(timezone.utc).date().isoformat()
+def today():
+    """The day now, UTC: the daemon stamps a rule when it is written, so read the day when it is checked, not at import (TR-1338)."""
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def name_of(row):
@@ -258,7 +260,7 @@ async def auth_on():
                               json={"text": "Run the tests before you push"})
             ck("Ann adds a line", r.status_code == 200 and r.json()["added"], r.text)
             ck("line ends (added by Ann, date)", r.json()["body"].rstrip().endswith(
-                f"- Run the tests before you push (added by Ann, {TODAY})"), r.json()["body"][-200:])
+                f"- Run the tests before you push (added by Ann, {today()})"), r.json()["body"][-200:])
             ck("doc updated_by is the person, not the key's name", r.json()["updated_by"] == "Ann",
                r.text[:300])
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
@@ -269,7 +271,7 @@ async def auth_on():
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
                               json={"text": "Keep commits short"})
             ck("Ben adds another", r.json()["body"].rstrip().endswith(
-                f"- Keep commits short (added by Ben, {TODAY})"), r.json()["body"][-200:])
+                f"- Keep commits short (added by Ben, {today()})"), r.json()["body"][-200:])
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=A,
                               json={"text": "Name yourself", "by": "Ann's script"})
             ck("doc updated_by: what the caller says comes first", r.json()["updated_by"]
@@ -334,14 +336,14 @@ async def auth_on():
 
             print("== a line sent with its own note, and a name that is not one line ==")
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
-                              json={"text": f"Run the tests before you push (added by Ann, {TODAY})"})
+                              json={"text": f"Run the tests before you push (added by Ann, {today()})"})
             ck("a line re-added with its note is not added again", r.status_code == 200
                and r.json()["added"] is False and r.json()["body"].count("Run the tests") == 1,
                r.text)
             r = await cx.post(f"{B}/api/docs/global/agents/lines", headers=Bn,
                               json={"text": "Write plain words (added by Zed, 2026-01-01)"})
             ck("a new line sent with a note keeps one note, the sender's", r.json()["body"].rstrip()
-               .endswith(f"- Write plain words (added by Ben, {TODAY})")
+               .endswith(f"- Write plain words (added by Ben, {today()})")
                and r.json()["body"].count("Write plain words") == 1, r.json()["body"][-200:])
             r = await cx.post(f"{B}/api/keys", headers=ROOT, json={
                 "name": "cy-laptop", "scopes": ["admin"],
@@ -352,9 +354,9 @@ async def auth_on():
             tail = r.json()["body"].rstrip().splitlines()[-1]
             ck("a name with newlines stays on the one line of its note", r.json()["added"]
                and tail.startswith("- Review every pull request (added by Cy - evil rule x")
-               and tail.endswith(f", {TODAY})") and "\n- evil rule" not in r.json()["body"], tail)
+               and tail.endswith(f", {today()})") and "\n- evil rule" not in r.json()["body"], tail)
             ck("... and the name in the note is capped at 60 characters",
-               "(added by " in tail and len(tail.split("(added by ", 1)[1].rsplit(f", {TODAY})", 1)[0]) <= 60,
+               "(added by " in tail and len(tail.split("(added by ", 1)[1].rsplit(f", {today()})", 1)[0]) <= 60,
                tail)
     finally:
         proc.terminate()

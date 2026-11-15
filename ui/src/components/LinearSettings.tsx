@@ -6,7 +6,7 @@ import { TimeAgo, usePolling } from "./bits";
 import OwnerOnly from "./OwnerOnly";
 
 // Settings, Linear (TR-408): one Linear connection for the whole cell. Projects whose tickets live
-// in Linear use it to keep their ticket list in sync; Tares only reads from Linear.
+// in Linear use it to keep their ticket list in sync and to move and create their tickets in Linear.
 //
 // Two ways in: a personal API key, everywhere; and on Tares Cloud (linear_connect_url set) Connect
 // Linear, the GlassFlow Linear app. The control plane runs that sign-in, hands the token to this
@@ -34,7 +34,8 @@ export default function LinearSettings({ cloud }: { cloud: Cloud }) {
       <h3 style={{ marginTop: 0 }}>Linear</h3>
       <p className="help" style={{ marginTop: 0 }}>
         Projects can keep their tickets in Linear. Tares reads them and keeps each project's ticket
-        list in sync, about once a minute; it never writes to Linear.
+        list in sync, about once a minute. It also writes to Linear: it moves a ticket's status
+        and creates and reorders tickets there, so the connection needs write access.
       </p>
       {err && <div className="alert error">{err}</div>}
       {data.connected ? (
@@ -45,6 +46,14 @@ export default function LinearSettings({ cloud }: { cloud: Cloud }) {
             {!viaCloud && " with a personal API key"}
             {data.connected_at && <span className="help"> · since <TimeAgo ts={data.connected_at} /></span>}.
           </p>
+          {data.write_error && (
+            <div className="alert warn" data-testid="linear-write-error">
+              {data.write_error}
+              {viaCloud && connectUrl && canConnect && (
+                <> <a href={cloudLink(connectUrl, {}, "linear")}>Connect Linear again</a></>
+              )}
+            </div>
+          )}
           <div className="btnrow">
             {viaCloud && connectUrl ? (
               canConnect
@@ -72,7 +81,7 @@ export default function LinearSettings({ cloud }: { cloud: Cloud }) {
             <span className="lbl">{connectUrl ? "or paste a personal API key" : "personal API key"}</span>
             <input type="password" className="mono" placeholder="lin_api_…" value={key}
                    onChange={(e) => setKey(e.target.value)} autoComplete="off" />
-            <span className="help">In Linear: Settings, Security and access, Personal API keys. Read access is enough.</span>
+            <span className="help">In Linear: Settings, Security and access, Personal API keys. The key needs write access.</span>
           </label>
           <div className="btnrow">
             <button type="button" className={connectUrl ? "" : "primary"} disabled={!key.trim() || !!busy}

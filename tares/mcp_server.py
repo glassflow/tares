@@ -811,7 +811,10 @@ async def add_to_global(doc: str, line: str, scope: str = "team") -> str:
     if r.status_code >= 400:
         return _out(r)
     d = r.json()
-    return json.dumps({"doc": d["title"], "id": d["id"], "added": d["added"]})
+    out = {"doc": d["title"], "id": d["id"], "added": d["added"]}
+    if d.get("pending"):    # the cell's memory service did not take it yet; a retry is queued
+        out["pending"] = True
+    return json.dumps(out)
 
 
 def _handover(b: dict) -> str:

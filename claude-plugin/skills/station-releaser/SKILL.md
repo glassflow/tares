@@ -21,8 +21,9 @@ The message names the project, its repo (one per line when the milestone spans s
 
 1. **Confirm what ships.** The refs in the message, re-checked against the default branch (`git fetch`, `git log`). Every ticket the message lists is merged (`list_tickets`); CI on the release commit is green.
 2. **Production check.** If the target is production (marked `production: true`, or its name, context or namespace matches `prod_pattern`), stop: production is always the person's. Ask the orchestrator for a desk item; ship only on the person's words relayed back to you with `RELAY`.
-3. **Rehearse first.** For anything beyond the local dev target, run the same steps on the local kind cluster first. For a long rehearsal, ask the orchestrator for a helper (`tares factory spawn helper $FACTORY_STATION <slug> "<task>"`).
-4. **Run the profile's steps in order**, each heavy one through `tares factory heavy <timeout-seconds> <command...>`. Run `git` and `gh` inside the release worktree (or pass `-R <owner>/<repo>` to `gh`); you run in the crew home, which is not a repo. The project's own steps (its agents doc via `list_docs(kind="agents")` then `get_doc(id)`) override these defaults:
+3. **Ask the guardrails.** Call `release_ready(project, commit, repo, milestone, merged_prs)` with the release commit. When it says `ready: false`, stop: write its `reasons` to your report, send the orchestrator `RELEASE` with `result: blocked` and those reasons, and ship nothing. Pass its `warnings` on in the release notes.
+4. **Rehearse first.** For anything beyond the local dev target, run the same steps on the local kind cluster first. For a long rehearsal, ask the orchestrator for a helper (`tares factory spawn helper $FACTORY_STATION <slug> "<task>"`).
+5. **Run the profile's steps in order**, each heavy one through `tares factory heavy <timeout-seconds> <command...>`. Run `git` and `gh` inside the release worktree (or pass `-R <owner>/<repo>` to `gh`); you run in the crew home, which is not a repo. The project's own steps (its agents doc via `list_docs(kind="agents")` then `get_doc(id)`) override these defaults:
 
    | Step | `kind` profile default | Meaning |
    |---|---|---|
@@ -35,9 +36,9 @@ The message names the project, its repo (one per line when the milestone spans s
    | `rollback` | `kubectl rollout undo` | undo if `verify` fails |
 
    A `custom` profile is entirely the project's own commands.
-5. **Verify for real.** Rollout status, the smoke test output, the milestone's checks (`list_milestones`), and the error rate or logs for a few minutes after deploy if the project has them. A deploy that "applied" is not a deploy that works.
-6. **On failure**, roll back, confirm the previous version is serving, write what failed to your report, and send the orchestrator `RELEASE` with `result: rolled-back` and the evidence.
-7. **On success**, write release notes (merged PRs and tickets, assumptions still open), tag, then `set_stage(ticket, "shipped")` for each ticket of the milestone, and send the orchestrator `RELEASE` with `result: shipped`, version, environment and how you verified it.
+6. **Verify for real.** Rollout status, the smoke test output, the milestone's checks (`list_milestones`), and the error rate or logs for a few minutes after deploy if the project has them. A deploy that "applied" is not a deploy that works.
+7. **On failure**, roll back, confirm the previous version is serving, write what failed to your report, and send the orchestrator `RELEASE` with `result: rolled-back` and the evidence.
+8. **On success**, write release notes (merged PRs and tickets, assumptions still open), tag, then `set_stage(ticket, "shipped")` for each ticket of the milestone, and send the orchestrator `RELEASE` with `result: shipped`, version, environment and how you verified it.
 
 ## Don'ts
 

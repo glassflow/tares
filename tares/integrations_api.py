@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import Body, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from . import licence, outbound
 from .factory_api import caller
@@ -37,6 +38,48 @@ from .integrations.registry import SLOTS
 
 TEST_SECONDS = 10
 MAX_VALUE = 4096
+
+
+def kind_ok(refuse, f, v) -> None:
+    """A posted value fits its field's kind (None clears a secret). `refuse(422, ...)` names the field."""
+    if v is None and f.kind == "secret":
+        return
+    bad = None
+    if f.kind == "bool":
+        bad = None if isinstance(v, bool) else "true or false"
+    elif f.kind == "mapping":
+        if not isinstance(v, dict):
+            bad = "an object"
+        elif f.options and set(v) - set(f.options):
+            bad = f"an object with keys from {', '.join(f.options)}"
+        elif any(not isinstance(x, str) for x in v.values()):
+            bad = "an object of text values"
+    elif f.kind == "select":
+        if not isinstance(v, str) or (f.options and v not in f.options and v != ""):
+            bad = f"one of {', '.join(f.options)}"
+    elif not isinstance(v, str):
+        bad = "text"
+    elif len(v) > MAX_VALUE:
+        bad = f"at most {MAX_VALUE} characters"
+    if bad:
+        refuse(422, f"{f.name} must be {bad}")
+
+
+def required_ok(refuse, schema: dict, merged: dict) -> None:
+    """Every required field of the schema has a value in `merged`, else `refuse(422, ...)`."""
+    for f in schema.values():
+        if f.required and merged.get(f.name) in (None, "", {}):
+            refuse(422, f"{f.name} is required ({f.label})")
+
+
+def may_write_project_of(h, request: Request, p: dict) -> None:
+    """An admin, or the person who leads the project; anyone else is 403."""
+    if h.is_admin(request):
+        return
+    me = h.current_person(request)
+    if me and me["id"] == p.get("lead_person_id"):
+        return
+    raise HTTPException(status_code=403, detail="this needs an admin or the project's lead")
 
 
 def _field(f) -> dict:
@@ -76,12 +119,7 @@ def register(app, store, h):
 
     def may_write_project(request: Request, p: dict) -> None:
         """An admin, or the person who leads the project."""
-        if h.is_admin(request):
-            return
-        me = h.current_person(request)
-        if me and me["id"] == p.get("lead_person_id"):
-            return
-        refuse(403, "this needs an admin or the project's lead")
+        may_write_project_of(h, request, p)
 
     def choice_of(slot: str, uid: str | None):
         """The row that decides the slot for this scope, redacted: the project's own when it has
@@ -90,8 +128,9 @@ def register(app, store, h):
         return row or store.get_choice(slot)
 
     def applying(slot: str, uid: str | None) -> dict:
-        """What applies to the slot. The reason a stored default is "not installed" is left out:
-        nothing ships built in yet, so a cell that picked the default would be told it is missing."""
+        """What applies to the slot. The reason a stored default is "not installed" is left out: a
+        slot whose default is not installed on this cell (the default is a name, not a guarantee that
+        the class is registered) would tell a cell that picked the default that it is missing."""
         row = choice_of(slot, uid)
         eff = resolve.effective(slot, uid, store=store)
         reason = eff.reason
@@ -133,7 +172,7 @@ def register(app, store, h):
             if f is None:
                 refuse(422, f"{name} has no integration setting {k!r}; "
                             f"it takes {', '.join(schema) or 'none'}")
-            _kind_ok(name, f, v)
+            kind_ok(refuse, f, v)
         stored = store.stored_settings(slot, name, uid)
         secret = {f.name for f in cls.settings_schema if f.kind == "secret"}
         moved = [f for f in cls.settings_schema if f.kind == "url"
@@ -151,35 +190,6 @@ def register(app, store, h):
             kept = {k: v for k, v in stored.items() if k in schema and k not in secret}
             merged = {**kept, **merged}
         return cls, name, merged, stored, schema
-
-    def _kind_ok(name: str, f, v) -> None:
-        """A posted value fits its field's kind (None clears a secret). 422 names the field."""
-        if v is None and f.kind == "secret":
-            return
-        bad = None
-        if f.kind == "bool":
-            bad = None if isinstance(v, bool) else "true or false"
-        elif f.kind == "mapping":
-            if not isinstance(v, dict):
-                bad = "an object"
-            elif f.options and set(v) - set(f.options):
-                bad = f"an object with keys from {', '.join(f.options)}"
-            elif any(not isinstance(x, str) for x in v.values()):
-                bad = "an object of text values"
-        elif f.kind == "select":
-            if not isinstance(v, str) or (f.options and v not in f.options and v != ""):
-                bad = f"one of {', '.join(f.options)}"
-        elif not isinstance(v, str):
-            bad = "text"
-        elif len(v) > MAX_VALUE:
-            bad = f"at most {MAX_VALUE} characters"
-        if bad:
-            refuse(422, f"{f.name} must be {bad}")
-
-    def required_ok(schema: dict, merged: dict) -> None:
-        for f in schema.values():
-            if f.required and merged.get(f.name) in (None, "", {}):
-                refuse(422, f"{f.name} is required ({f.label})")
 
     # ── what is installed and chosen ──
     @app.get("/api/factory/integrations")
@@ -203,6 +213,21 @@ def register(app, store, h):
                         "source": a["source"], "reason": a["reason"]})
         return {"project": uid, "slots": out}
 
+    @app.get("/api/factory/monitoring/headers")
+    def monitoring_headers(request: Request):
+        """The headers a crew station's Claude Code sends to the monitoring backend (TR-866), for
+        its `otelHeadersHelper`. A key never rides in a station's environment, so the helper
+        fetches it here at start with the crew's own key. The credential decides, never a header
+        the client sets: this holds the cell's monitoring secret, so it needs the admin scope, like
+        /api/settings/tracing, which the crew's person-bound key carries. `{}` while monitoring is
+        off. Never cached."""
+        h.require_admin(request)
+        eff = resolve.effective("monitoring", None, store=store)
+        cls = registry.get("monitoring", eff.integration)
+        cfg = cls(store).exporter_config() if cls else {}
+        return JSONResponse({"headers": dict((cfg or {}).get("headers") or {})},
+                            headers={"Cache-Control": "no-store"})
+
     @app.put("/api/factory/integrations/{slot}")
     def put_integration(slot: str, request: Request, body: dict = Body(...)):
         no_station(request)
@@ -210,7 +235,7 @@ def register(app, store, h):
         slot_of(slot)
         licence.current(store)
         _, name, merged, _, schema = checked(slot, body, None)
-        required_ok(schema, merged)
+        required_ok(refuse, schema, merged)
         store.set_choice(slot, name, body.get("settings"), h.by(request, body))
         return entry(slot)
 
@@ -218,7 +243,7 @@ def register(app, store, h):
     async def run_test(request: Request, slot: str, body: dict, uid: str | None):
         licence.current(store)
         cls, name, merged, _, schema = checked(slot, body, uid, test=True)
-        required_ok(schema, merged)
+        required_ok(refuse, schema, merged)
         urls = [f for f in cls.settings_schema if f.kind == "url"]
         secrets = [f for f in cls.settings_schema if f.kind == "secret"]
         for f in urls:
@@ -270,7 +295,7 @@ def register(app, store, h):
         p = project_of(uid, request, slot, True)
         licence.current(store)
         _, name, merged, _, schema = checked(slot, body, p["id"])
-        required_ok(schema, merged)
+        required_ok(refuse, schema, merged)
         store.set_project_choice(p["id"], slot, name, body.get("settings"), h.by(request, body))
         return entry(slot, p["id"])
 

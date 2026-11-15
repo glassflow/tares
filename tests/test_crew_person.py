@@ -210,6 +210,46 @@ try:
                 os.environ[k] = v
         fake.stop()
 
+    # --- a person's own session is told its crew: the plugin stamps X-Tares-Crew from FACTORY_CREW (TR-1238)
+    class _Client:
+        def __init__(self, home):
+            self.paths = CrewPaths(str(home))
+            self.tares = "http://127.0.0.1:1"
+
+        def tares_url(self):
+            return self.tares
+
+        def mcp_url(self):
+            return self.tares + "/mcp"
+
+    real_run, real_kit, real_bin = person.subprocess.run, person.kit_dir, person.claude_bin
+    ran = []
+    person.subprocess.run = lambda cmd, **kw: ran.append(kw.get("env", {})) or subprocess.CompletedProcess(cmd, 0)
+    person.kit_dir = lambda client, env: str(ROOT / "claude-plugin")
+    person.claude_bin = lambda env: "claude"
+    saved_name = os.environ.get("FACTORY_CREW_NAME")
+    try:
+        chome = T / "pc-home"
+        chome.mkdir()
+        os.environ["FACTORY_CREW_NAME"] = "alpha"
+        base = {"PATH": os.environ.get("PATH", ""), "HOME": str(T)}
+        person.person_claude(_Client(chome), dict(base), str(T), "s-spec", "spec", "hi")
+        ck("person_claude: a session on a named crew gets FACTORY_CREW", ran[-1].get("FACTORY_CREW") == "alpha",
+           str(ran[-1].get("FACTORY_CREW")))
+        person.person_claude(_Client(chome), {**base, "FACTORY_CREW": "mine"}, str(T), "s-spec", "spec", "hi")
+        ck("person_claude: a FACTORY_CREW already set is kept", ran[-1].get("FACTORY_CREW") == "mine",
+           str(ran[-1].get("FACTORY_CREW")))
+        os.environ["FACTORY_CREW_NAME"] = "bad-build-name"
+        person.person_claude(_Client(chome), dict(base), str(T), "s-spec", "spec", "hi")
+        ck("person_claude: a crew name that cannot be one leaves FACTORY_CREW unset and still starts Claude",
+           len(ran) == 3 and not ran[-1].get("FACTORY_CREW"), str(ran[-1].get("FACTORY_CREW")))
+    finally:
+        person.subprocess.run, person.kit_dir, person.claude_bin = real_run, real_kit, real_bin
+        if saved_name is None:
+            os.environ.pop("FACTORY_CREW_NAME", None)
+        else:
+            os.environ["FACTORY_CREW_NAME"] = saved_name
+
     # --- the dispatcher loads the module only when it is needed
     probe = ("import sys; from tares.crew import dispatch; print('person' in ' '.join(m for m in sys.modules "
              "if m.startswith('tares.crew')))")

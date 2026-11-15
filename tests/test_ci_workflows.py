@@ -1,6 +1,7 @@
-"""The heavy CI checks run once per PR, not on every push (TR-1233): the shape of ci.yml, parity-macos.yml and
-windows-crew.yml, and the two shell scripts in windows-crew.yml run for real (the diff that decides whether a PR needs
-the Windows shards, and the aggregate check that must stay green when they are skipped on purpose)."""
+"""The heavy CI checks run on a release tag, by hand, or on a PR that asks by label; a push to main runs a light Linux
+set only (TR-1233, TR-1235): the shape of ci.yml, parity-macos.yml and windows-crew.yml, and the two shell scripts in
+windows-crew.yml run for real (the label check that decides whether a PR gets the Windows shards, and the aggregate check
+that must stay green when they are skipped on purpose)."""
 import os
 import subprocess
 import tempfile
@@ -26,7 +27,10 @@ def load(name):
 ci, mac, win = load("ci.yml"), load("parity-macos.yml"), load("windows-crew.yml")
 DRAFT = "github.event.pull_request.draft"
 
-# ---- ci.yml: the light set for a draft
+# ---- ci.yml: the light set for a draft, the lighter one for a push to main
+ON_MAIN = "github.ref == 'refs/heads/main'"
+ck("ci.yml: a push to main and a release tag start it, no other branch (no factory-modular/*)",
+   ci["on"]["push"]["branches"] == ["main"] and ci["on"]["push"]["tags"] == ["v*"], str(ci["on"]["push"]))
 ck("ci.yml: marking a PR ready runs the workflow (ready_for_review)", "ready_for_review" in ci["on"]["pull_request"].get("types", []))
 ck("ci.yml: the default PR events are kept", {"opened", "synchronize", "reopened"} <= set(ci["on"]["pull_request"].get("types", [])))
 ck("ci.yml: a label starts nothing (no `labeled` type)", "labeled" not in ci["on"]["pull_request"].get("types", []))
@@ -34,16 +38,21 @@ jobs = ci["jobs"]
 ck("ci.yml: no macOS job (parity-macos.yml has them)",
    not any("macos" in str(j).lower() for j in jobs.values()), ", ".join(n for n, j in jobs.items() if "macos" in str(j).lower()))
 suite = jobs["test"]["strategy"]["matrix"]["suite"]
-ck("ci.yml: the test matrix is duckdb alone on a draft, all three suites otherwise",
-   isinstance(suite, str) and DRAFT in suite and "fromJSON" in suite and '["duckdb"]' in suite and '"postgres"' in suite and '"mit"' in suite, str(suite))
+ck("ci.yml: the test matrix is duckdb alone on a draft and on main, all three suites otherwise",
+   isinstance(suite, str) and DRAFT in suite and ON_MAIN in suite and "fromJSON" in suite and '["duckdb"]' in suite
+   and '"postgres"' in suite and '"mit"' in suite, str(suite))
 for name in ("test-ee", "wheel-clean", "e2e"):
-    ck(f"ci.yml: {name} is skipped on a draft", DRAFT in str(jobs[name].get("if", "")) and "!" in str(jobs[name].get("if", "")), str(jobs[name].get("if")))
-for name in ("console", "test", "parity", "wheel", "secrets"):
-    ck(f"ci.yml: {name} runs on a draft (the light set)", "if" not in jobs[name], str(jobs[name].get("if")))
+    cond = str(jobs[name].get("if", ""))
+    ck(f"ci.yml: {name} is skipped on a draft and on a push to main", DRAFT in cond and "!" in cond and "!= 'refs/heads/main'" in cond, cond)
+ck("ci.yml: the Linux parity shards are skipped on a push to main, not on a draft",
+   "!= 'refs/heads/main'" in str(jobs["parity"].get("if", "")) and DRAFT not in str(jobs["parity"].get("if", "")), str(jobs["parity"].get("if")))
+for name in ("console", "test", "wheel", "secrets"):
+    ck(f"ci.yml: {name} runs on a draft and on main (the light set)", "if" not in jobs[name], str(jobs[name].get("if")))
 ck("ci.yml: the Linux parity shards stay", jobs["parity"]["runs-on"] == "${{ matrix.os }}" and jobs["parity"]["strategy"]["matrix"]["os"] == ["ubuntu-latest"])
 
-# ---- parity-macos.yml: after a merge, or when asked
-ck("parity-macos.yml: runs on a push to main", "main" in mac["on"]["push"]["branches"])
+# ---- parity-macos.yml: on a release tag, by hand, or when a PR asks
+ck("parity-macos.yml: runs on a release tag, never on a branch push (main, factory-modular/*)",
+   mac["on"]["push"] == {"tags": ["v*"]}, str(mac["on"]["push"]))
 ck("parity-macos.yml: a PR event is only a label or a push to a PR (nothing else starts it)", mac["on"]["pull_request"]["types"] == ["labeled", "synchronize"])
 ck("parity-macos.yml: can be run by hand", "workflow_dispatch" in mac["on"])
 job = mac["jobs"]["parity"]
@@ -56,11 +65,17 @@ ck("parity-macos.yml: a PR needs the macos-parity label (on labeling it, or on a
 grp = mac["concurrency"]["group"]
 ck("parity-macos.yml: another label gets its own concurrency group, so it cannot cancel a run",
    "github.event.label.name != 'macos-parity'" in grp and "other-label" in grp, grp)
-ck("parity-macos.yml: a main push is never cancelled", "refs/heads/main" in str(mac["concurrency"]["cancel-in-progress"]))
+ck("parity-macos.yml: only a PR run is cancelled by a newer one (a tag or manual run always finishes)",
+   "github.event_name == 'pull_request'" in str(mac["concurrency"]["cancel-in-progress"]))
 
 # ---- windows-crew.yml
 wj = win["jobs"]
-ck("windows-crew.yml: marking a PR ready runs the workflow", "ready_for_review" in win["on"]["pull_request"].get("types", []))
+ck("windows-crew.yml: runs on a release tag, never on a branch push",
+   win["on"]["push"] == {"tags": ["v*"]}, str(win["on"]["push"]))
+ck("windows-crew.yml: can be run by hand", "workflow_dispatch" in win["on"])
+ck("windows-crew.yml: a PR event is an open, a push, a reopen or a label, and no paths filter hides the check from a docs PR",
+   win["on"]["pull_request"] == {"types": ["opened", "synchronize", "reopened", "labeled"]}, str(win["on"]["pull_request"]))
+ck("windows-crew.yml: only a PR run is cancelled by a newer one", "github.event_name == 'pull_request'" in str(win["concurrency"]["cancel-in-progress"]))
 ck("windows-crew.yml: jobs are changes, shard and windows-crew", list(wj) == ["changes", "shard", "windows-crew"], str(list(wj)))
 ck("windows-crew.yml: the shards wait for `changes` and run only when it says so",
    wj["shard"]["needs"] == "changes" and wj["shard"]["if"] == "needs.changes.outputs.run == 'true'", str(wj["shard"].get("if")))
@@ -97,53 +112,31 @@ for changes, run, shards, want in [
     ck(f"windows-crew aggregate: changes {changes}, run {run!r}, shards {shards} -> {'green' if want else 'red'}",
        (r.returncode == 0) == want, f"exit {r.returncode}: {r.stdout}{r.stderr}")
 
-# the diff: a throwaway repo with a base commit, then a PR commit that touches one path
-diff = step_script("changes", step_id="diff")
+# the label check: which events and labels start the shards
+decide_script = step_script("changes", step_id="decide")
 
 
-def decide(event, draft, path):
+def decide(event, labels):
     with tempfile.TemporaryDirectory() as d:
-        g = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=d, check=True, capture_output=True, text=True)
-        g("init", "-q", "-b", "main")
-        Path(d, "README.md").write_text("x\n")
-        g("add", "-A"); g("commit", "-q", "-m", "base")
-        base = g("rev-parse", "HEAD").stdout.strip()
-        p = Path(d, path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("y\n")
-        g("add", "-A"); g("commit", "-q", "-m", "pr")
-        out = Path(d, "..", "out-%d" % os.getpid()).resolve()
+        out = Path(d, "out")
         out.write_text("")
-        r = sh(diff, {"EVENT": event, "DRAFT": draft, "BASE": base, "GITHUB_OUTPUT": str(out)}, d)
-        got = out.read_text().strip()
-        out.unlink()
-        return got, r
+        r = sh(decide_script, {"EVENT": event, "LABELS": labels, "GITHUB_OUTPUT": str(out)}, d)
+        return out.read_text().strip(), r
 
 
-for event, draft, path, want in [
-    ("push", "", "ui/src/x.ts", "run=true"),                      # a push to main always runs
-    ("workflow_dispatch", "", "ui/src/x.ts", "run=true"),
-    ("pull_request", "false", "tares/crew/state.py", "run=true"),
-    ("pull_request", "false", "claude-plugin/skills/x.md", "run=true"),
-    ("pull_request", "false", "tests/factory/parity.py", "run=true"),
-    ("pull_request", "false", "tests/test_crew_state.py", "run=true"),
-    ("pull_request", "false", "tests/ci_windows.py", "run=true"),
-    ("pull_request", "false", "tests/test_ci_windows.py", "run=true"),
-    ("pull_request", "false", "tares/cli.py", "run=true"),
-    ("pull_request", "false", "tests/_crew_fake.py", "run=true"),    # helpers the crew tests import
-    ("pull_request", "false", "tests/_crew_guard.py", "run=true"),
-    ("pull_request", "false", "tests/_env.py", "run=true"),
-    ("pull_request", "false", "tares/login.py", "run=true"),
-    ("pull_request", "false", "tares/__init__.py", "run=true"),
-    ("pull_request", "false", "pyproject.toml", "run=true"),
-    ("pull_request", "false", ".github/workflows/windows-crew.yml", "run=true"),
-    ("pull_request", "false", "ui/src/x.ts", "run=false"),         # nothing the shards test
-    ("pull_request", "false", "tares/store.py", "run=false"),
-    ("pull_request", "false", ".github/workflows/ci.yml", "run=false"),
-    ("pull_request", "true", "tares/crew/state.py", "run=false"),  # a draft waits for ready_for_review
+for event, labels, want in [
+    ("push", "", "run=true"),                                  # a release tag
+    ("workflow_dispatch", "", "run=true"),                     # by hand, on any ref
+    ("pull_request", "windows-crew", "run=true"),
+    ("pull_request", "macos-parity,windows-crew", "run=true"),
+    ("pull_request", "windows-crew,bug", "run=true"),
+    ("pull_request", "", "run=false"),                         # no label: the check is green and the shards skipped
+    ("pull_request", "macos-parity", "run=false"),
+    ("pull_request", "not-windows-crew", "run=false"),         # the whole name, not a part of one
+    ("pull_request", "windows-crew-later", "run=false"),
 ]:
-    got, r = decide(event, draft, path)
-    ck(f"windows-crew changes: {event} draft={draft or '-'} touching {path} -> {want}", got == want and r.returncode == 0, f"{got!r} {r.stderr}")
+    got, r = decide(event, labels)
+    ck(f"windows-crew changes: {event} labels={labels or '-'} -> {want}", got == want and r.returncode == 0, f"{got!r} {r.stderr}")
 
 print(f"\n{P} passed, {F} failed")
 raise SystemExit(1 if F else 0)

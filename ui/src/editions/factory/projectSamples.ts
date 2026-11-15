@@ -7,7 +7,7 @@ import type { FactoryProjectData, MovingTicket, ProjectCall, ProjectMilestone, T
 
 const NOW = "2026-11-02T10:00:00+00:00";
 const PID = "uc_sample";
-const TICKETS = `/tickets?project=${PID}`;
+const TICKETS = `/projects/${PID}/tickets`;
 
 const COUNT_KEY: Record<TicketState, keyof FactoryProjectData["counts"]> = {
   "to do": "to_do", "in progress": "in_progress", "in review": "in_review", "changes asked": "changes_asked",
@@ -27,7 +27,7 @@ const ms = (n: number, name: string, goal: string, total: number, merged: number
   return {
     id: `ms${n}`, number: `M${n}`, name, goal, done, counts: { total, merged }, checks: full,
     accepted: done && !open, needs_person: done && open, can_accept: false,
-    tickets_href: `${TICKETS}&milestone=ms${n}`,
+    tickets_href: `${TICKETS}?milestone=ms${n}`,
   };
 };
 

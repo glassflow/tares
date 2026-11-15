@@ -115,6 +115,10 @@ export interface FactoryProjectData {
   /** How many documents the project has, working notes and notes too (its docs page lists them). */
   docs_total?: number;
   terminal: { label: string; command: string }[];
+  /** Pull requests by state: open counts drafts too. */
+  prs_counts?: { open: number; merged: number; closed: number };
+  /** The repos handed over to the crew, by name. */
+  repos?: string[];
   linked: { tickets_in: "Linear" | "GitHub" | null; url: string | null };
   can_close: boolean;
   /** Kept for later: off the home until someone starts it. `can_later` when it may be kept for later now. */

@@ -17,6 +17,13 @@ class CrewError(Exception):
         return f"{ME}: {self}"
 
 
+class NotSignedInError(CrewError):
+    """No Tares to talk to and none configured: no saved `tares login`, no address in the environment or
+    crew.json, and nothing answers at the local default."""
+
+    code = "not_signed_in"
+
+
 class StationLockedError(CrewError):
     """Another live factory command holds the station's lock."""
 
@@ -48,3 +55,16 @@ class JobStateUnreadableError(CrewError):
     """A session's state.json exists but is not a JSON object (a half-written file, say)."""
 
     code = "job_state_unreadable"
+
+
+class UsageError(CrewError):
+    """A command line that cannot be run as given (for example `crew up --json` without `--yes`)."""
+
+    code = "usage"
+
+
+class SetupNeededError(CrewError):
+    """`crew up --json --yes` found setup questions that need a person's answer; --yes would take the
+    recommended settings without asking, which a program should not do silently."""
+
+    code = "setup_needed"

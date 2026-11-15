@@ -100,11 +100,18 @@ def _bash():
 
 
 def _run_hook(hook: str, env: dict | None = None) -> None:
-    """Run a one-shot hook command, as the bash fake does with `bash -c`; its output and failure are ignored."""
-    bash = _bash()
-    if not bash:
-        return
+    """Run a one-shot hook command, as the bash fake does with `bash -c`; its output and failure are ignored.
+
+    On Windows the command goes through cmd.exe (subprocess's shell=True), not bash: the hooks the scenarios
+    write there are `"python.exe" "hook.py"`, whose backslashed paths bash would read as escapes, and the
+    machine may have no bash, or the WSL one. A hook written in shell syntax stays a POSIX scenario."""
     try:
+        if sys.platform == "win32":
+            subprocess.run(hook, shell=True, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            return
+        bash = _bash()
+        if not bash:
+            return
         subprocess.run([bash, "-c", hook], env=env, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, check=False)
     except OSError:

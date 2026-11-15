@@ -45,7 +45,9 @@ def start(db, port, auth):
                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-TODAY = datetime.now(timezone.utc).date().isoformat()
+def today():
+    """The day now, UTC: the daemon stamps a rule when it is written, so read the day when it is checked, not at import (TR-1338)."""
+    return datetime.now(timezone.utc).date().isoformat()
 
 
 def name_of(row):
@@ -90,7 +92,7 @@ async def auth_off():
             ck("auth off: handover by You", name_of(ho) == "You", str(ho))
             r = await cx.post(f"{B}/api/docs/global/memory/lines", json={"text": "Tabs are fine"})
             ck("auth off: global line added by You", r.json()["body"].rstrip().endswith(
-                f"- Tabs are fine (added by You, {TODAY})"), r.json()["body"][-200:])
+                f"- Tabs are fine (added by You, {today()})"), r.json()["body"][-200:])
     finally:
         proc.terminate()
         proc.wait(timeout=10)

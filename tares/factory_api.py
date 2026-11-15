@@ -24,8 +24,10 @@ from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
 from . import factory_home
+from . import memory_route
 from . import merge_ready as merge_ready_mod
 from . import team as team_mod
+from .integrations import hooks as integrations_hooks
 from .integrations import registry as integrations_registry
 from .integrations import resolve as integrations_resolve
 from .integrations.review import CREW_REVIEWED_GATES
@@ -140,6 +142,12 @@ async def sync_prs(store, stop: asyncio.Event) -> None:
             raise
         except Exception as e:
             print(f"[tares] merge queue failed: {type(e).__name__}: {e}", flush=True)
+        try:   # memory lines the cell's memory integration did not take yet (TR-865)
+            await memory_route.retry_pending(store)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[tares] memory retry failed: {type(e).__name__}: {e}", flush=True)
 
 
 def merged_fields(t: dict, pr: dict) -> dict:
@@ -1767,41 +1775,87 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"line": lines[0], "lines": lines, "working_doc": doc_id,
                 "checks": store.ticket_checks(t["id"], 10), "project": p["name"]}
 
-    # the project's own memory (TR-436): what builders learned about this project
-    def memory_doc(uid: str, create: bool = False) -> str | None:
-        gid = (h.global_ids(False) or {}).get("memory")
-        d = next((x for x in store.list_docs(uid, "memory") if x["id"] != gid), None)
-        if d or not create:
-            return d["id"] if d else None
-        p = store.get_project(uid)
-        return store.create_doc(uid, "memory", f"Memory: {p['name']}",
-                                f"# Memory for {p['name']}\n\nWhat the builders learned about "
-                                "this project, one line each, newest last.\n\n", by="tares")
-
+    # the project's own memory (TR-436): what builders learned about this project; TR-865 routes
+    # it through the memory integration (memory_route)
     @app.post("/api/projects/{uid}/memory/lines", status_code=201)
-    def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
-        """{text}: one dated line in the project's memory (made with the first line)."""
+    async def remember_for_project(uid: str, request: Request, body: dict = Body(...)):
+        """{text}: one dated line in the project's memory (made with the first line). The Tares
+        doc takes it first; the cell's memory integration, when it is not Tares, takes it next,
+        and `pending` is true when that one did not and the line waits for a retry."""
         h.project_or_404(uid)
-        doc_id = memory_doc(uid, create=True)
         by, _ = who(request, body)
-        cur = store.get_doc(uid, doc_id)["body"]
+        said = str(body.get("text") or "").strip()
         try:
-            text, added = docs_mod.append_line(
-                cur, f"{str(body.get('text') or '').strip()} ({now_utc().date().isoformat()}, {by})"
-                if str(body.get("text") or "").strip() else "")
+            res = await memory_route.write(
+                store, uid, f"{said} ({now_utc().date().isoformat()}, {by})" if said else "",
+                by=by)
         except docs_mod.DocError as e:
             h.err(e)
-        if added:
-            store.update_doc(doc_id, body=text, by=by)
         h.ensure_globals(uid)
-        return {"id": doc_id, "added": added, "body": store.get_doc(uid, doc_id)["body"]}
+        return {"id": res["doc_id"], "added": res["added"], "pending": res["pending"],
+                "body": store.get_doc(uid, res["doc_id"])["body"]}
+
+    @app.get("/api/projects/{uid}/recall")
+    async def recall(uid: str, q: str = "", limit: int = 10):
+        """The lines of the project's memory and the shared memory that share words with `q`,
+        best first, each prefixed [project] or [shared]: {lines, integration, note}."""
+        h.project_or_404(uid)
+        if not q.strip():
+            h.err(ValueError("say what to recall: q is a question or a few words"))
+        return await memory_route.recall(store, uid, q, limit)
 
     # ── review and merge (TR-441..445) ────────────────────────────────────────
     @app.post("/api/projects/{uid}/tickets/{ref}/reviews", status_code=201)
-    def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
+    async def record_review(uid: str, ref: str, request: Request, body: dict = Body(...)):
         """{head, verdict, verified, not_verified?, findings?, resolved?}: one review round, the
         verdict on the commit it was given on. `resolved` marks earlier findings ({F1: fixed}).
-        Only the reviewer (or a person's own session) records one."""
+        Only the reviewer (or a person's own session) records one.
+
+        The answer's `github` says whether Tares also posted the review to the pull request as
+        the cell's GitHub App (the comment and the `factory/review` check run, TR-1244): `posted`,
+        and `why` when it did not, so the reviewer posts with `gh` as before."""
+        rv = await asyncio.to_thread(add_review_round, uid, ref, request, body)
+        t = await asyncio.to_thread(ticket_or_404, uid, ref)
+        rv["github"] = await post_review_to_github(t, rv, request, body)
+        return rv
+
+    async def post_review_to_github(t: dict, rv: dict, request: Request, body: dict) -> dict:
+        pr = t.get("pr") or {}
+        parsed = factory_github.parse_pr(pr.get("url") or "") if pr.get("url") else None
+        repo, number = parsed if parsed else (pr.get("repo"), pr.get("number"))
+        if not repo or not number:
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": "the ticket has no linked pull request"}
+        by, _ = who(request, body)
+        person = h.current_person(request) or {}
+        blocking = sum(1 for f in rv["findings"] if f.get("blocking"))
+        title = factory_github._VERDICT_WORDS.get(rv["verdict"], rv["verdict"])
+        title += f", {blocking} blocking" if blocking else ""
+        this_round = {f["label"] for f in rv["findings"]}
+        try:
+            earlier = [f for f in await asyncio.to_thread(store.open_findings, t["id"])
+                       if f["label"] not in this_round]
+            comment = factory_github.review_comment(
+                rv["verdict"], by, str(person.get("name") or ""), rv.get("verified") or "",
+                rv.get("not_verified") or "", rv["findings"], rv["head"],
+                fixed=rv.get("fixed") or [], earlier_open=earlier)
+            # the check run goes on the full commit when the PR knows it (the reviewer may give a
+            # short one)
+            full = str(pr.get("head") or "").strip()
+            sha = full if factory_mod.same_commit(full, rv["head"]) else rv["head"]
+            return await asyncio.wait_for(
+                factory_github.post_review(store, repo, int(number), sha, rv["verdict"], comment,
+                                           title),
+                factory_github.REVIEW_POST_TIMEOUT)
+        except asyncio.TimeoutError:
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": "GitHub did not answer in time: check the PR, and post with gh "
+                           "what is missing"}
+        except Exception as e:   # the record is kept whatever GitHub does
+            return {"posted": False, "posted_check": False, "posted_comment": False,
+                    "why": f"could not post to GitHub: {type(e).__name__}"}
+
+    def add_review_round(uid: str, ref: str, request: Request, body: dict) -> dict:
         h.project_or_404(uid)
         deny(request, "review")
         t = ticket_or_404(uid, ref)
@@ -1932,6 +1986,26 @@ def register(app, store, h: Host) -> SimpleNamespace:
                 # reply does not say which PRs it tracks
                 return merge_ready_mod.no_ticket(*parsed)
         return await merge_ready_mod.merge_ready(store, pr, source=h.cc_source())
+
+    @app.get("/api/factory/release-ready")
+    async def release_ready(request: Request, project: str = "", repo: str = "", commit: str = "",
+                            milestone: str = "", merged_prs: str = ""):
+        """May this commit be shipped (TR-861)? Asks the project's guardrails at the pre_release hook:
+        {ready, reasons, warnings, guardrails}. `merged_prs` is a comma separated list. `ready` is false for a
+        guardrail that blocks or cannot be reached, and for a missing project or commit. A crew
+        station may read this; nothing is shipped or recorded."""
+        if not project.strip():
+            return {"ready": False, "reasons": ["Name the project to check"], "warnings": [],
+                    "guardrails": []}
+        p = h.project_or_404(h.resolve_project(project.strip()))
+        if not commit.strip():
+            return {"ready": False, "reasons": ["Name the commit to ship"], "warnings": [],
+                    "guardrails": []}
+        gate = await integrations_hooks.gate("pre_release", p["id"], {
+            "repo": repo.strip(), "commit": commit.strip(), "milestone": milestone.strip(),
+            "merged_prs": [x.strip() for x in merged_prs.split(",") if x.strip()]})
+        return {"ready": gate["ok"], "reasons": gate["reasons"], "warnings": gate["warnings"],
+                "guardrails": gate["decisions"]}
 
     # ── the repo map (TR-681): one per GitHub repo, shared by every project that names it ──
     def pr_repo(t: dict) -> str | None:
@@ -2842,7 +2916,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         return {"merge_method": store.get_merge_method(uid)}
 
     @app.post("/api/projects/{uid}/handover")
-    def hand_over(uid: str, request: Request, body: dict = Body(default={})):
+    async def hand_over(uid: str, request: Request, body: dict = Body(default={})):
         """{repos?: [{path, name}], repo?, autonomy?}: the spec session hands
         the project to the crew. Each repo is the folder it is checked out in on the crew's
         machine and its GitHub name (owner/name). A later hand-over adds repos, never replaces
@@ -2851,7 +2925,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
         (L3-review). Recorded with the time, the person and the crew (`crew`, else X-Tares-Crew,
         else `crew`); the orchestrator finds it in /api/crew/projects. A key with no person is
         refused (TR-633). Nobody signs off first: a repo's owner is asked through a question when
-        the spec needs them. A project kept for later starts here."""
+        the spec needs them. A project kept for later starts here. Answers `handover`, and the
+        guardrails' `guardrails` (each decision) and `warnings` (the ones that only warn)."""
         p = h.project_or_404(uid)
         me = work_person(request)
         try:
@@ -2876,6 +2951,15 @@ def register(app, store, h: Host) -> SimpleNamespace:
         old = store.get_handover(uid) or {}
         repos = factory_mod.merge_repos(old.get("repos") or [], new)
         autonomy = autonomy or old.get("autonomy")
+        # the pre_build hook (TR-861): a guardrail that blocks refuses the hand-over before anything is recorded
+        spec = next(iter(store.list_docs(uid, "spec")), None)
+        spec_text = str((store.get_doc(uid, spec["id"]) or {}).get("body") or "") if spec else ""
+        gate = await integrations_hooks.gate("pre_build", uid, {
+            "project": uid, "goal": p.get("goal") or "", "spec_text": spec_text,
+            "repos": [{"path": r.get("path") or "", "name": r.get("name") or ""} for r in repos],
+            "autonomy": autonomy or ""})
+        if not gate["ok"]:
+            h.err(ValueError("The project was not handed to the crew. " + " ".join(gate["reasons"])), 409)
         store.set_handover(uid, repos, autonomy, by_of(request, body), now_utc(),
                            person_of(request), crew)
         # more work on a finished project opens it again; one kept for later starts now
@@ -2883,7 +2967,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
             store.update_project(uid, status="active")
         include_shared_grants(uid)   # a crew-built project shows the grants it is built under
         ho = store.get_handover(uid)
-        return {"handover": {**ho, "repos": factory_mod.own_paths(ho.get("repos") or [], key)}}
+        return {"handover": {**ho, "repos": factory_mod.own_paths(ho.get("repos") or [], key)},
+                "guardrails": gate["decisions"], "warnings": gate["warnings"]}
 
     @app.post("/api/projects/{uid}/later")
     def set_later(uid: str, body: dict = Body(default={})):
