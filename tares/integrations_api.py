@@ -1,27 +1,40 @@
 """HTTP routes for the integration slots (TR-842), registered by the daemon.
 
 The software factory has seven slots (tickets, review, ci, memory, monitoring, guardrails,
-runtime). The factory picks one integration per slot and gives it integration settings; a project
-may pick its own for tickets, review and ci. The choices live in tares/factory_store.py and which
-one applies in tares/integrations/resolve.py; this module is the HTTP face of both.
+runtime). Credentials live only at the factory (TR-1380): the factory connects each integration
+with its integration settings, secrets and addresses included, and marks one connection per slot
+as the default. A project may pick one connected integration for tickets, review and ci and add
+its own plain fields (a branch, a mapping), never a secret or an address. The connections live in
+tares/factory_store.py and which one applies in tares/integrations/resolve.py; this module is the
+HTTP face of both.
 
-  GET    /api/factory/integrations                  every slot: what is installed, the choice, what applies
-  PUT    /api/factory/integrations/{slot}           admin: choose an integration and its integration settings
+  GET    /api/factory/integrations                  every slot: what is installed, the default, its connections, what applies
+  PUT    /api/factory/integrations/{slot}           admin: connect an integration with its integration settings and
+                                                    make it the default (body `default` false keeps the old default)
+  PUT    /api/factory/integrations/{slot}/default   admin: {name}, make a connected integration the default
+  DELETE /api/factory/integrations/{slot}/connections/{name}
+                                                    admin: remove a connection; 422 while it is the default, a project
+                                                    uses it or a guardrail pair uses it, naming what does
   POST   /api/factory/integrations/{slot}/test      admin: try an integration without saving
   GET    /api/factory/integrations/effective        what applies per slot, names only (the get_integrations tool)
   GET    /api/projects/{uid}/integrations/{slot}    admin or the project's lead: its own choice and what applies
-  PUT    /api/projects/{uid}/integrations/{slot}    admin or the project's lead
-  DELETE /api/projects/{uid}/integrations/{slot}    admin or the project's lead: back to the factory's choice
+  PUT    /api/projects/{uid}/integrations/{slot}    admin or the project's lead: a connected integration and its plain fields
+  DELETE /api/projects/{uid}/integrations/{slot}    admin or the project's lead: back to the factory's default
   POST   /api/projects/{uid}/integrations/{slot}/test   admin or the project's lead
   GET    /api/projects/{uid}/required-checks        the commands the local ci integration requires
   PUT    /api/projects/{uid}/required-checks        admin or the project's lead: {commands: [...]}
 
+An integration is connected when it has a connection, takes no integration settings, or is the
+slot's default. memory, monitoring and runtime keep exactly one connection: connecting another
+replaces the old one.
+
 A request that carries X-Tares-Station (a crew station) may use only the `effective` read, which
 never holds integration settings. No response holds a secret value: a read shows each secret as ""
-and says in `secrets` whether one is set. A project's settings are never merged with the
-factory's, in a write or in a test, so a project cannot make use of a factory secret. A save or a
-test that changes the address and leaves a stored secret blank is 422: the old secret never goes
-to a new address. A test fills any field it does not post from the stored row.
+and says in `secrets` whether one is set. A project write that carries a secret or an address is
+422 ("set it where the integration is connected, in the factory's integrations"), and so is one
+that names an integration that is not connected. A save or a test at the factory that changes the
+address and leaves a stored secret blank is 422: the old secret never goes to a new address. A
+test fills any field it does not post from what is saved.
 """
 from __future__ import annotations
 
@@ -141,17 +154,27 @@ def register(app, store, h):
 
     def entry(slot: str, uid: str | None = None) -> dict:
         row = store.get_project_choice(uid, slot) if uid else store.get_choice(slot)
-        return {"slot": slot, "available": _available(slot), "choice": row,
-                "effective": applying(slot, uid)}
+        out = {"slot": slot, "available": _available(slot), "choice": row,
+               "effective": applying(slot, uid)}
+        conns = store.list_connections(slot)
+        if uid:
+            # a project lead sees which integrations it may pick, not their settings
+            out["connections"] = [{"name": c["name"], "default": c["default"]} for c in conns]
+        else:
+            out["connections"] = conns
+        return out
 
     # ── validation of a write or a test ──
     def checked(slot: str, body: dict, uid: str | None, test: bool = False):
         """(class, name, settings, stored, schema) for a request body, or a 422 naming what is
-        wrong. The settings are the posted ones reconciled with this scope's own stored row of the
-        same integration (a blank secret keeps the stored one). A save replaces the non-secret
+        wrong. At the factory the settings are the posted ones reconciled with the integration's
+        stored connection (a blank secret keeps the stored one). A save replaces the non-secret
         fields; a test (`test=True`) takes the stored ones for any field it does not post, so it
         tries what is saved. Either way a changed address with a secret left blank is refused: the
-        old secret never goes to a new address."""
+        old secret never goes to a new address. For a project (`uid`) the integration must be
+        connected and a secret or an address is refused; the settings returned are the connection's
+        overlaid with the posted plain fields, which is what runs and what a required field is
+        checked against."""
         name = str(body.get("name") or "").strip()
         if not name:
             refuse(422, "name is required: the integration to use")
@@ -173,6 +196,16 @@ def register(app, store, h):
                 refuse(422, f"{name} has no integration setting {k!r}; "
                             f"it takes {', '.join(schema) or 'none'}")
             kind_ok(refuse, f, v)
+        if uid:
+            for k in posted:
+                why = FactoryStore.project_field_refusal(slot, name, k)
+                if why:
+                    refuse(422, why)
+            if not store.is_connected(slot, name):
+                refuse(422, f"{name} is not connected: connect it in the factory's integrations first")
+            stored = store.stored_settings(slot, name, uid)
+            base = store.stored_settings(slot, name)
+            return cls, name, {**base, **posted}, stored, schema
         stored = store.stored_settings(slot, name, uid)
         secret = {f.name for f in cls.settings_schema if f.kind == "secret"}
         moved = [f for f in cls.settings_schema if f.kind == "url"
@@ -236,8 +269,38 @@ def register(app, store, h):
         licence.current(store)
         _, name, merged, _, schema = checked(slot, body, None)
         required_ok(refuse, schema, merged)
-        store.set_choice(slot, name, body.get("settings"), h.by(request, body))
+        make_default = body.get("default")
+        if make_default is not None and not isinstance(make_default, bool):
+            refuse(422, "default must be true or false")
+        store.set_choice(slot, name, body.get("settings"), h.by(request, body),
+                         default=make_default is not False)
         return entry(slot)
+
+    @app.put("/api/factory/integrations/{slot}/default")
+    def put_default(slot: str, request: Request, body: dict = Body(...)):
+        no_station(request)
+        h.require_admin(request)
+        slot_of(slot)
+        licence.current(store)
+        try:
+            store.set_default(slot, str(body.get("name") or ""), h.by(request, body))
+        except ValueError as e:
+            refuse(422, str(e))
+        return entry(slot)
+
+    @app.delete("/api/factory/integrations/{slot}/connections/{name}")
+    def delete_connection(slot: str, name: str, request: Request):
+        no_station(request)
+        h.require_admin(request)
+        slot_of(slot)
+        licence.current(store)
+        try:
+            gone = store.delete_connection(slot, name)
+        except ValueError as e:
+            refuse(422, str(e))
+        if not gone:
+            refuse(404, f"{name} is not connected for {slot}")
+        return {**entry(slot), "deleted": True}
 
     # ── the connection test ──
     async def run_test(request: Request, slot: str, body: dict, uid: str | None):
@@ -296,7 +359,10 @@ def register(app, store, h):
         licence.current(store)
         _, name, merged, _, schema = checked(slot, body, p["id"])
         required_ok(refuse, schema, merged)
-        store.set_project_choice(p["id"], slot, name, body.get("settings"), h.by(request, body))
+        try:
+            store.set_project_choice(p["id"], slot, name, body.get("settings"), h.by(request, body))
+        except ValueError as e:
+            refuse(422, str(e))
         return entry(slot, p["id"])
 
     @app.delete("/api/projects/{uid}/integrations/{slot}")

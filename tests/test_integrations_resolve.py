@@ -1,9 +1,11 @@
-"""Which integration a slot uses (TR-840).
+"""Which integration a slot uses (TR-840, TR-1380).
 
 Covered: every source of `effective` (project, factory, carried, default) and the order between
 them; the built-in default of each of the seven slots; a project override only for tickets, review
-and ci; a project override's settings are its own stored row and never hold a factory value, even
-when the project row leaves a field blank; a stored name that is not installed resolves to the
+and ci; a project override names a connected integration and its settings are the factory
+connection's overlaid with the project's own plain fields (redacted); a project choice for an
+integration that is no longer connected is passed over for the factory's default, with reason
+"not connected"; a stored name that is not installed resolves to the
 slot's default with reason "not installed"; an ee integration without a licence resolves to the
 default with reason "needs an enterprise licence" and with one resolves to itself; a bad project
 choice goes straight to the default, not to the factory's; a stored choice never raises; secrets
@@ -41,19 +43,34 @@ from tares.store import Store
 class FakeTickets(TicketBackend):
     name = "faketix"
     title = "Fake tickets"
-    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret")]
+    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret"),
+                       Field("branch", "Branch", "text")]
 
 
 class FakeReview(ReviewGate):
     name = "fakegate"
     title = "Fake review gate"
-    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret")]
+    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret"),
+                       Field("branch", "Branch", "text")]
 
 
 class FakeCI(CISource):
     name = "fakeci"
     title = "Fake CI"
+    settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret"),
+                       Field("branch", "Branch", "text")]
+
+
+class FakeCI2(CISource):
+    name = "fakeci2"
+    title = "Second fake CI"
     settings_schema = [Field("url", "URL", "url"), Field("token", "Token", "secret")]
+
+
+class PlainCI(CISource):
+    name = "plainci"
+    title = "Plain CI"
+    settings_schema = []
 
 
 class PaidTickets(TicketBackend):
@@ -68,6 +85,8 @@ registry._loaded[("tickets", "faketix")] = FakeTickets
 registry._loaded[("tickets", "paidtix")] = PaidTickets
 registry._loaded[("review", "fakegate")] = FakeReview
 registry._loaded[("ci", "fakeci")] = FakeCI
+registry._loaded[("ci", "fakeci2")] = FakeCI2
+registry._loaded[("ci", "plainci")] = PlainCI
 
 licensed = False
 licence.ee_allowed = lambda feature="enterprise": licensed
@@ -100,11 +119,12 @@ ck("a name not installed in a slot with no override: default, not installed",
    eff("memory") == Effective("tares", {}, "default", "not installed"), eff("memory"))
 
 # ── project ────────────────────────────────────────────────────────────────────
-s.set_project_choice("p1", "tickets", "faketix", {"url": "proj-url"}, "a")
+s.set_project_choice("p1", "tickets", "faketix", {"branch": "proj-branch"}, "a")
 e = eff("tickets", "p1")
 ck("project override", e.integration == "faketix" and e.source == "project" and e.reason == "", e)
-ck("a project's settings are only its own row, no factory value",
-   e.settings == {"url": "proj-url"} and "factory-secret" not in repr(e) and "factory-url" not in repr(e), e)
+ck("a project runs with the factory connection plus its own plain field, secret redacted",
+   e.settings == {"url": "factory-url", "token": "", "branch": "proj-branch"}
+   and "factory-secret" not in repr(e), e)
 ck("the factory's view is unchanged", eff("tickets").settings == {"url": "factory-url", "token": ""})
 ck("another project does not see p1's row", eff("tickets", "p2").source == "factory")
 ck("no project given: the factory's choice", eff("tickets", None).source == "factory")
@@ -136,19 +156,40 @@ del registry._loaded[("review", "faketix")]
 for slot, name in (("review", "fakegate"), ("ci", "fakeci")):
     s.set_choice(slot, name, {"url": f"{slot}-factory-url", "token": f"{slot}-factory-secret"}, "a")
     ck(f"{slot}: a project without a row follows the factory", eff(slot, "p5").source == "factory")
-    s.set_project_choice("p5", slot, name, {"url": f"{slot}-proj-url"}, "a")
+    s.set_project_choice("p5", slot, name, {"branch": f"{slot}-proj-branch"}, "a")
     e = eff(slot, "p5")
     ck(f"{slot}: project override", e.integration == name and e.source == "project" and e.reason == "", e)
-    ck(f"{slot}: the settings are only the project's row, no factory value",
-       e.settings == {"url": f"{slot}-proj-url"} and "factory" not in repr(e), e)
+    ck(f"{slot}: the settings are the factory connection plus the project's field, no secret",
+       e.settings == {"url": f"{slot}-factory-url", "token": "", "branch": f"{slot}-proj-branch"}
+       and "factory-secret" not in repr(e), e)
     ck(f"{slot}: another project still follows the factory", eff(slot, "p6").source == "factory")
     s.clear_project_choice("p5", slot)
     e = eff(slot, "p5")
     ck(f"{slot}: after clearing, the factory's choice is back",
        e.source == "factory" and e.settings == {"url": f"{slot}-factory-url", "token": ""}, e)
 
+# ── connected ──────────────────────────────────────────────────────────────────
+s.set_project_choice("p7", "ci", "fakeci2", {}, "a")
+e = eff("ci", "p7")
+ck("a project choice of an integration with no connection: the factory's default, not connected",
+   e == Effective("fakeci", {"url": "ci-factory-url", "token": ""}, "factory", "not connected"), e)
+s.set_choice("ci", "fakeci2", {"url": "ci2-url", "token": "ci2-secret"}, "a", default=False)
+e = eff("ci", "p7")
+ck("once the factory connects it, the project's choice applies and the default is unchanged",
+   e.source == "project" and e.integration == "fakeci2" and e.reason == ""
+   and e.settings == {"url": "ci2-url", "token": ""} and eff("ci").integration == "fakeci", e)
+s.set_project_choice("p7", "ci", "plainci", {}, "a")
+ck("an integration with no integration settings needs no connection",
+   eff("ci", "p7") == Effective("plainci", {}, "project", ""), eff("ci", "p7"))
+s.set_project_choice("p7", "ci", "fakeci2", {}, "a")
+s.set_default("ci", "fakeci2", "a")
+ck("a default counts as connected even for a project row made before", eff("ci", "p7").source == "project")
+s.set_default("ci", "fakeci", "a")
+s.clear_project_choice("p7", "ci")
+
 # ── not installed ──────────────────────────────────────────────────────────────
-s.set_project_choice("p3", "tickets", "gone", {"url": "x", "token": "y"}, "a")
+s.set_choice("tickets", "gone", {"url": "x", "token": "y"}, "a", default=False)
+s.set_project_choice("p3", "tickets", "gone", {}, "a")
 e = eff("tickets", "p3")
 ck("project name not installed: default, not installed, and no stored value leaks",
    e == Effective("tares", {}, "default", "not installed"), e)
@@ -163,7 +204,7 @@ s.set_choice("tickets", "paidtix", {"token": "t"}, "a")
 e = eff("tickets")
 ck("ee without a licence: default, needs an enterprise licence",
    e == Effective("tares", {}, "default", "needs an enterprise licence"), e)
-s.set_project_choice("p4", "tickets", "paidtix", {"token": "t"}, "a")
+s.set_project_choice("p4", "tickets", "paidtix", {}, "a")
 ck("ee project override without a licence: default too",
    eff("tickets", "p4") == Effective("tares", {}, "default", "needs an enterprise licence"), eff("tickets", "p4"))
 licensed = True

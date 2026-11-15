@@ -154,9 +154,9 @@ async def main():
            r.status_code == 400 and "nope" in r.text, r.text)
         ck("the project is untouched after the refusal", (await cx.get(f"/api/projects/{uid}")).status_code == 200)
         st = app.state.store
-        st.set_project_choice(uid, "tickets", "x", {"url": "u"}, "test")
-        st.set_project_choice(uid, "ci", "x", {"url": "u"}, "test")
-        st.set_project_choice("other-project", "tickets", "x", {"url": "u"}, "test")
+        st.set_project_choice(uid, "tickets", "x", {}, "test")
+        st.set_project_choice(uid, "ci", "x", {}, "test")
+        st.set_project_choice("other-project", "tickets", "x", {}, "test")
         r = await cx.delete(f"/api/projects/{uid}")
         ck("project delete removes its integration choices and only its own",
            st.get_project_choice(uid, "tickets") is None and st.get_project_choice(uid, "ci") is None
