@@ -46,6 +46,14 @@ export interface HomeRef {
 
 export interface HomeItem {
   id: string;
+  /** The people it waits for, by person id (the cell's one rule, factory_owners). */
+  for_people?: string[];
+  /** Any admin may act on it (a grant that waits for an admin). */
+  for_admin?: boolean;
+  /** Its project has no lead, so it fell to the admins: the meta says "No lead, set one". */
+  no_lead?: boolean;
+  /** On a project page's "Waiting for others": the first person it waits for. */
+  for_person?: { id: string; name: string } | null;
   kind: HomeItemKind;
   label: string;
   title: string;
