@@ -35,6 +35,8 @@ SCREENS = [
     "sre_settings",          # TR-764
 
     "factory_people",          # TR-1011
+
+    "factory_merge_queue",   # TR-1094
 ]
 
 
