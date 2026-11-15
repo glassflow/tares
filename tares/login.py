@@ -347,14 +347,21 @@ def _installed_version() -> str:
 
 def report_machine(cell_url: str, key: str, machine: str = "") -> bool:
     """Tell the workspace which machine signed in and which tares it runs (TR-1312), so the home's
-    first-run steps tick. A name and a version, never the key's value in any output. Best effort: a
-    workspace too old to know the call, or one that cannot be reached, changes nothing for the person."""
+    first-run steps tick. A name and a version, never the key's value in any output. Best effort: it
+    never stops a sign-in, but a refusal or no answer prints one quiet line on stderr (a workspace too
+    old to know the call, a 404, says nothing)."""
     try:
         status, _ = _http("POST", f"{cell_url.rstrip('/')}/api/crew/machine",
                           {"machine": machine or _machine(), "version": _installed_version()}, key, timeout=8)
-        return 200 <= status < 300
     except Exception:   # noqa: BLE001 (nothing here may stop a sign-in)
-        return False
+        status = None
+    if status is not None and 200 <= status < 300:
+        return True
+    if status != 404:
+        print("tares login: could not tell the workspace which machine this is "
+              f"({'no answer' if status is None else f'HTTP {status}'}), so its first-run steps may not tick.",
+              file=sys.stderr)
+    return False
 
 
 def _revoke(data: dict) -> tuple[bool, str]:

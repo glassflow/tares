@@ -385,13 +385,17 @@ class Up:
 
     def report_machine(self) -> None:
         """Tell Tares which machine runs the crew and which tares it is (TR-1312), so the home's first-run
-        steps tick. Best effort: an older Tares without the call, or a refused key, changes nothing here."""
+        steps tick. Best effort: starting the crew never waits on it, but a refusal or no answer prints one
+        quiet line (an older Tares that does not know the call, a 404, says nothing)."""
         from ..login import _installed_version, _machine
         try:
             self.client.tares_http("POST", "/api/crew/machine", state.dumps_compact(
                 {"machine": _machine(), "version": _installed_version()}))
-        except Exception:   # noqa: BLE001 (starting the crew never waits on this)
-            pass
+        except Exception as e:   # noqa: BLE001 (starting the crew never waits on this)
+            status = getattr(e, "status", None)
+            if status != 404:
+                _err("  could not tell Tares which machine this is "
+                     f"({'no answer' if status is None else f'HTTP {status}'}), so its first-run steps may not tick\n")
 
     def ensure_settings(self) -> None:
         raw = self.client.settings_raw()
