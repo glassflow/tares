@@ -6,6 +6,7 @@ test_brain_index
 test_brain_lore_client
 test_brain_remove
 test_brain_repos
+test_brain_sync
 test_console_answers
 test_crew_page_by_person
 test_crew_split
