@@ -144,6 +144,7 @@ test_incidents
 test_include_payload
 test_ingest_bypass_cooldown
 test_ingest_key
+test_integration_connections
 test_integrations_api
 test_integrations_carry
 test_integrations_registry

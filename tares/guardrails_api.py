@@ -34,9 +34,10 @@ parameters give what only the command line knows, and win over the record:
 A role the runtime cannot run, or a station with no role to find, is 422.
 
 A guardrail pair is a hook point (`pre_build`, `pre_merge`, `pre_release`) paired with a guardrail
-integration and its integration settings; `on_fail` is `block` (the default) or `warn`. The factory
-has pairs for every project, and a project adds its own. The hook runner (tares/integrations/hooks.py)
-runs them.
+integration; `on_fail` is `block` (the default) or `warn`. A pair holds no integration settings
+(a body with any is 422): it runs with the connection of that guardrail in the factory's integrations,
+and the integration must be connected. The factory has pairs for every project, and a project adds its
+own. The hook runner (tares/integrations/hooks.py) runs them.
 
   GET    /api/factory/guardrails/pairs                       admin: every factory pair
   POST   /api/factory/guardrails/pairs                       admin: add one, or change one with `id`
@@ -61,10 +62,9 @@ from fastapi import Body, HTTPException, Request, Response
 from . import factory_setup, licence
 from .crew.state import STATION_NAME_RULE, station_name_ok
 from .factory_api import caller, crew_settings
-from .factory_store import FactoryStore
 from .integrations import hooks, registry, resolve
 from .integrations.builtin import guardrails_tares as rules_mod
-from .integrations_api import kind_ok, may_write_project_of, required_ok
+from .integrations_api import may_write_project_of
 
 MAX_TEXT = 500
 _GRANT_ID = re.compile(r"^G\d+$", re.I)
@@ -331,9 +331,11 @@ def register(app, store, h):
         return p
 
     def checked_pair(body: dict, existing: dict | None):
-        """(hook, integration, on_fail, posted settings) for a request body, or a 422 naming what
-        is wrong. With `existing` (the pair being changed) a field the body leaves out keeps its
-        value; for a new pair `hook` and `integration` are required and `on_fail` is block."""
+        """(hook, integration, on_fail) for a request body, or a 422 naming what is wrong. With
+        `existing` (the pair being changed) a field the body leaves out keeps its value; for a new
+        pair `hook` and `integration` are required and `on_fail` is block. A pair holds no
+        integration settings: it runs with the factory's connection of that guardrail (TR-1380), so
+        a body that carries any is refused."""
         def said(key: str, fallback):
             v = body.get(key)
             if v is None and (existing is not None or key == "on_fail"):
@@ -351,10 +353,11 @@ def register(app, store, h):
         if on_fail not in ("block", "warn"):
             refuse(422, f"on_fail must be block or warn (got {on_fail!r})")
         posted = body.get("settings")
-        if posted is None:
-            posted = {}
-        if not isinstance(posted, dict):
+        if posted is not None and not isinstance(posted, dict):
             refuse(422, "settings must be an object")
+        if posted:
+            refuse(422, "a guardrail pair holds no integration settings: it uses the connection in the "
+                        "factory's integrations, so set them there")
         licence.current(store)
         cls = registry.get("guardrails", name)
         if cls is None:
@@ -362,29 +365,9 @@ def register(app, store, h):
                         f"{', '.join(c.name for c in registry.available('guardrails')) or 'none'}")
         if cls.ee and not licence.ee_allowed():
             h.licence_required(f"{cls.title or name} needs an enterprise licence")
-        schema = {f.name: f for f in cls.settings_schema}
-        for k, v in posted.items():
-            f = schema.get(k)
-            if f is None:
-                refuse(422, f"{name} has no integration setting {k!r}; "
-                            f"it takes {', '.join(schema) or 'none'}")
-            kind_ok(refuse, f, v)
-        stored = existing["settings"] if existing and existing["integration"] == name else {}
-        # the old secret never goes to a new address (the same refusal as the slot's settings)
-        moved = [f for f in cls.settings_schema if f.kind == "url"
-                 and (posted.get(f.name) or "") not in ("", stored.get(f.name))]
-        carried = [f for f in cls.settings_schema if f.kind == "secret"
-                   and posted.get(f.name, "") == "" and stored.get(f.name) not in (None, "")]
-        if stored and moved and carried:
-            refuse(422, f"re-enter the secret when changing the address: {carried[0].name} "
-                        f"is stored for the old {moved[0].name}")
-        try:
-            merged = FactoryStore._merge_integration_settings(
-                {f.name for f in cls.settings_schema if f.kind == "secret"}, posted, stored)
-        except ValueError as e:
-            refuse(422, str(e))
-        required_ok(refuse, schema, merged)
-        return hook, name, on_fail, posted
+        if not store.is_connected("guardrails", name):
+            refuse(422, f"{name} is not connected: connect it in the factory's integrations first")
+        return hook, name, on_fail
 
     def save_pair(request: Request, response: Response, body: dict, scope: str, uid: str | None) -> dict:
         pid = str(body.get("id") or "").strip().upper()
@@ -393,9 +376,9 @@ def register(app, store, h):
             existing = store.guardrail_pair_stored(pid)
             if existing is None or (existing["scope"], existing["project_uid"]) != (scope, uid):
                 refuse(404, f"there is no {'factory' if scope == 'factory' else 'project'} pair {pid}")
-        hook, name, on_fail, posted = checked_pair(body, existing)
+        hook, name, on_fail = checked_pair(body, existing)
         try:
-            pair, how = store.save_guardrail_pair(scope, uid, hook, name, posted, on_fail,
+            pair, how = store.save_guardrail_pair(scope, uid, hook, name, on_fail,
                                                   h.by(request, body), pair_id=pid or None)
         except LookupError:
             refuse(404, f"there is no pair {pid}")

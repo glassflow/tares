@@ -304,9 +304,9 @@ FACTORY_SCHEMA = [
       created_at TIMESTAMPTZ
     )""",
     # Guardrail pairs (TR-863): a hook point paired with a guardrail integration, for every project
-    # (scope factory, project_uid NULL) or one project. `settings` is the integration's own settings
-    # as JSON text, secrets included; on_fail says whether a guardrail that denies, or does not
-    # answer, blocks or only warns.
+    # (scope factory, project_uid NULL) or one project. `settings` is not used any more (it is
+    # '{}', TR-1380): a pair runs with the integration's connection at the factory. on_fail says
+    # whether a guardrail that denies, or does not answer, blocks or only warns.
     """CREATE TABLE IF NOT EXISTS guardrail_pairs (
       id          TEXT PRIMARY KEY,
       scope       TEXT,
@@ -402,8 +402,10 @@ FACTORY_SCHEMA = [
       person_id  TEXT,
       handed_by  TEXT
     )""",
-    # The integration the factory uses for each slot, with its integration settings (TR-839).
-    # One row per slot; no row means the slot's default.
+    # The default integration of each slot (TR-839, TR-1380): one row per slot, a pointer to one of
+    # the slot's connections (below). No row means the slot's built-in default. `settings` is
+    # not used any more (it is '{}'): an earlier version kept the integration settings here, and
+    # the upgrade moves them to a connection.
     """CREATE TABLE IF NOT EXISTS integration_choices (
       slot        TEXT PRIMARY KEY,
       name        TEXT,
@@ -411,8 +413,20 @@ FACTORY_SCHEMA = [
       updated_at  TIMESTAMPTZ,
       updated_by  TEXT
     )""",
-    # A project's own choice for the tickets, review and ci slots; it replaces the factory's
-    # choice for that project, and never holds a value taken from the factory's row.
+    # The integrations the factory has connected (TR-1380): one row per slot and integration, with
+    # its integration settings, secrets included. Credentials live only here. memory, monitoring
+    # and runtime keep one connection each.
+    """CREATE TABLE IF NOT EXISTS integration_connections (
+      slot        TEXT,
+      name        TEXT,
+      settings    JSON,
+      updated_at  TIMESTAMPTZ,
+      updated_by  TEXT,
+      PRIMARY KEY (slot, name)
+    )""",
+    # A project's own choice for the tickets, review and ci slots: the name of a connected
+    # integration plus the project's own fields. It holds no secret and no address (TR-1380);
+    # those come from the factory's connection.
     """CREATE TABLE IF NOT EXISTS project_integrations (
       project_uid TEXT,
       slot        TEXT,
@@ -596,6 +610,70 @@ class FactoryStore:
             self.sc.execute("INSERT INTO ticket_numbers (project, last) VALUES (?, ?) ON "
                              "CONFLICT (project) DO UPDATE SET last = greatest(ticket_numbers.last, "
                              "excluded.last)", [project, top + len(todo)])
+        self._credentials_to_factory()
+
+    def _credentials_to_factory(self) -> None:
+        """Credentials live only at the factory (TR-1380). Each step is idempotent, so a start with
+        nothing to move changes nothing:
+
+          1. an integration_choices row from before holds the integration settings: they become
+             that integration's connection (unless it already has one) and the row keeps only the
+             pointer. Monitoring has none: it lives in the tracing settings.
+          2. a project's own row keeps its non-secret, non-address fields. The secrets and
+             addresses it held move to the factory connection of the same integration, only when
+             that integration has none yet; the project's copy goes either way. An integration
+             that is not installed has no schema, so every key counts as a secret.
+          3. a guardrail pair's integration settings move the same way, and the pair keeps none.
+             Pairs of one scope and project that are then the same (hook, integration, on_fail)
+             are one: the oldest stays.
+
+        Sealed project secrets (TR-775) are not touched. Lock held, or no other thread yet."""
+        from .integrations import registry
+
+        def moves(slot: str, name: str, key: str) -> bool:
+            cls = registry.get(slot, name)
+            if cls is None:
+                return True
+            kinds = {f.name: f.kind for f in cls.settings_schema}
+            return kinds.get(key, "secret") in ("secret", "url")
+
+        def connect(slot: str, name: str, settings: dict, at, by) -> None:
+            if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
+                               [slot, name]).fetchone():
+                return
+            self.sc.execute("INSERT INTO integration_connections (slot, name, settings, updated_at, "
+                            "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, json.dumps(settings), at, by])
+
+        at = now_utc()
+        for slot, name, raw, up_at, up_by in self.sc.execute(
+                "SELECT slot, name, settings, updated_at, updated_by FROM integration_choices "
+                "WHERE slot != 'monitoring' ORDER BY slot").fetchall():
+            connect(slot, name, self._load_settings(raw), up_at or at, up_by or "upgrade")
+            if self._load_settings(raw):
+                self.sc.execute("UPDATE integration_choices SET settings = '{}' WHERE slot = ?", [slot])
+        for uid, slot, name, raw in self.sc.execute(
+                "SELECT project_uid, slot, name, settings FROM project_integrations "
+                "ORDER BY project_uid, slot").fetchall():
+            have = self._load_settings(raw)
+            gone = {k: v for k, v in have.items() if moves(slot, name, k)}
+            if not gone:
+                continue
+            connect(slot, name, gone, at, "upgrade")
+            self.sc.execute("UPDATE project_integrations SET settings = ? WHERE project_uid = ? AND slot = ?",
+                            [json.dumps({k: v for k, v in have.items() if k not in gone}), uid, slot])
+        seen: set = set()
+        for pid, scope, uid, hook, name, raw, on_fail, made in sorted(
+                self.sc.execute("SELECT id, scope, project_uid, hook, integration, settings, on_fail, "
+                                "created_at FROM guardrail_pairs").fetchall(),
+                key=lambda r: int(r[0][2:])):
+            have = self._load_settings(raw)
+            if have:
+                connect("guardrails", name, have, made or at, "upgrade")
+                self.sc.execute("UPDATE guardrail_pairs SET settings = ? WHERE id = ?", ["{}", pid])
+            key = (scope, uid, hook, name, on_fail or "block")
+            if key in seen:
+                self.sc.execute("DELETE FROM guardrail_pairs WHERE id = ?", [pid])
+            seen.add(key)
 
     def _next_ticket_number(self, project: str) -> int:
         """The project's next ticket number, never one given out before. Lock held."""
@@ -2016,31 +2094,32 @@ class FactoryStore:
 
     @staticmethod
     def _pair_raw(r) -> dict:
-        """A pair row with its real settings, secrets included: for the runner and the merge only."""
+        """A pair row. It holds no integration settings (TR-1380): `settings` is always {}, and the
+        runner takes the integration's connection at the factory (`stored_settings`)."""
         return {"id": r[0], "scope": r[1], "project_uid": r[2], "hook": r[3], "integration": r[4],
-                "settings": FactoryStore._load_settings(r[5]), "on_fail": r[6] or "block",
+                "settings": {}, "on_fail": r[6] or "block",
                 "created_at": r[7], "created_by": r[8]}
 
     @classmethod
     def _pair_view(cls, raw: dict) -> dict:
-        """A pair as a read shows it: each secret is "" and `secrets` says whether one is set."""
+        """A pair as a read shows it. `settings` and `secrets` stay in the shape for the console and
+        are empty: a pair uses the integration's connection at the factory."""
         from .integrations import registry
-        values, secrets = cls._redact_integration("guardrails", raw["integration"], raw["settings"])
         found = registry.get("guardrails", raw["integration"])
         return {"id": raw["id"], "scope": raw["scope"], "project_uid": raw["project_uid"],
                 "hook": raw["hook"], "integration": raw["integration"],
                 "title": (found.title or raw["integration"]) if found else raw["integration"],
-                "settings": values, "secrets": secrets, "on_fail": raw["on_fail"],
+                "settings": {}, "secrets": {}, "on_fail": raw["on_fail"],
                 "created_at": raw["created_at"], "created_by": raw["created_by"]}
 
     def _pair_rows(self) -> list[dict]:
-        """Every pair with its real settings, oldest first. Lock held, or a read."""
+        """Every pair, oldest first. Lock held, or a read."""
         rows = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs").fetchall()
         return sorted((self._pair_raw(r) for r in rows), key=lambda p: int(p["id"][2:]))
 
     def list_guardrail_pairs(self, scope: str | None = None, project_uid: str | None = None) -> list[dict]:
-        """The pairs of one scope as a read shows them (secrets redacted), oldest first: every pair
-        when `scope` is None, the factory's for "factory", one project's for "project"."""
+        """The pairs of one scope as a read shows them, oldest first: every pair when `scope` is
+        None, the factory's for "factory", one project's for "project"."""
         with self._sread:
             rows = self._pair_rows()
         return [self._pair_view(p) for p in rows
@@ -2055,16 +2134,15 @@ class FactoryStore:
         return self._pair_view(self._pair_raw(r)) if r else None
 
     def guardrail_pair_stored(self, pid: str) -> dict | None:
-        """One pair with its real settings, secrets included, or None. For merging a form over what
-        is saved; never return it from a route."""
+        """One pair as the store holds it, or None. For the routes to compare an edit with."""
         with self._sread:
             r = self.sc.execute(f"SELECT {self._PAIR_COLS} FROM guardrail_pairs WHERE id = ?",
                                 [str(pid or "").strip().upper()]).fetchone()
         return self._pair_raw(r) if r else None
 
     def guardrail_pairs_for_run(self, hook: str, project_uid: str | None) -> list[dict]:
-        """The pairs to run at `hook`, with their real settings (secrets included; the hook runner
-        only): the factory's first, then the project's own, each oldest first."""
+        """The pairs to run at `hook`: the factory's first, then the project's own, each oldest
+        first. The hook runner reads each one's connection with `stored_settings`."""
         with self._sread:
             rows = self._pair_rows()
         mine = [p for p in rows if p["hook"] == hook]
@@ -2073,16 +2151,13 @@ class FactoryStore:
                    and p["project_uid"] == project_uid])
 
     def save_guardrail_pair(self, scope: str, project_uid: str | None, hook: str, integration: str,
-                            settings: dict | None, on_fail: str, by: str | None = None,
+                            on_fail: str, by: str | None = None,
                             pair_id: str | None = None) -> tuple[dict, str]:
         """Add a pair, or with `pair_id` change one of the same scope and project. Returns
-        (the pair as a read shows it, "added" | "updated" | "twin"). Secrets are reconciled with
-        this pair's own stored row of the same integration only (a blank one keeps the stored value,
-        JSON null clears it); a pair never reads another pair's row, so a project pair can never
-        take a factory secret, and choosing another integration starts from nothing. An exact twin
-        (same scope, project, hook, integration, settings and on_fail) adds nothing. A `pair_id`
-        that names no pair of this scope and project raises LookupError. Nothing else is checked here."""
-        secret = self._secret_fields("guardrails", integration)   # before the write lock: it loads the registry
+        (the pair as a read shows it, "added" | "updated" | "twin"). A pair holds no integration
+        settings (TR-1380): it uses the integration's connection at the factory. An exact twin
+        (same scope, project, hook, integration and on_fail) adds nothing. A `pair_id` that names no
+        pair of this scope and project raises LookupError. Nothing else is checked here."""
         with self._swrite:
             rows = self._pair_rows()
             if pair_id:
@@ -2090,30 +2165,26 @@ class FactoryStore:
                             and p["scope"] == scope and p["project_uid"] == project_uid), None)
                 if cur is None:
                     raise LookupError(f"there is no pair {pair_id}")
-                stored = cur["settings"] if cur["integration"] == integration else {}
-                merged = self._merge_integration_settings(secret, settings, stored)
                 self.sc.execute("UPDATE guardrail_pairs SET hook = ?, integration = ?, settings = ?, "
                                 "on_fail = ? WHERE id = ?",
-                                [hook, integration, json.dumps(merged), on_fail, cur["id"]])
+                                [hook, integration, "{}", on_fail, cur["id"]])
                 raw, how = {**cur, "hook": hook, "integration": integration,
-                            "settings": merged, "on_fail": on_fail}, "updated"
+                            "on_fail": on_fail}, "updated"
             else:
-                merged = self._merge_integration_settings(secret, settings, {})
-                canon = json.dumps(merged, sort_keys=True)
                 twin = next((p for p in rows if (p["scope"], p["project_uid"], p["hook"], p["integration"],
-                                                 p["on_fail"]) == (scope, project_uid, hook, integration, on_fail)
-                             and json.dumps(p["settings"], sort_keys=True) == canon), None)
+                                                 p["on_fail"]) == (scope, project_uid, hook, integration, on_fail)),
+                            None)
                 if twin:
                     raw, how = twin, "twin"
                 else:
                     top = max((int(p["id"][2:]) for p in rows), default=0)
                     raw, how = {"id": f"GP{top + 1}", "scope": scope, "project_uid": project_uid,
-                                "hook": hook, "integration": integration, "settings": merged,
+                                "hook": hook, "integration": integration, "settings": {},
                                 "on_fail": on_fail, "created_at": now_utc(), "created_by": by}, "added"
                     self.sc.execute(
                         f"INSERT INTO guardrail_pairs ({self._PAIR_COLS}) "
                         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        [raw["id"], scope, project_uid, hook, integration, json.dumps(merged), on_fail,
+                        [raw["id"], scope, project_uid, hook, integration, "{}", on_fail,
                          raw["created_at"], by])
         return self._pair_view(raw), how
 
@@ -2164,10 +2235,14 @@ class FactoryStore:
                                    [pid]).fetchone()
         return gone is not None
 
-    # ── integration choices and their settings (TR-839) ───────────────────────
-    # Secrets are stored as they come, in the state database, exactly as connector secrets are
-    # (tares/connectors: redact_config, restore_secrets); there is no new encryption. Every read
-    # hands back "" for a secret value and says only whether one is set.
+    # ── integration connections, defaults and a project's own choice (TR-839, TR-1380) ──
+    # Credentials live only at the factory: each integration the factory connects is one row of
+    # integration_connections with its integration settings, secrets included. A slot has one
+    # default (integration_choices points at it). A project picks one connected integration and
+    # holds only its own non-secret, non-address fields. Secrets are stored as they come, in the
+    # state database, exactly as connector secrets are (tares/connectors: redact_config,
+    # restore_secrets); there is no new encryption. Every read hands back "" for a secret value
+    # and says only whether one is set.
 
     @staticmethod
     def _integration_slot(slot: str, allowed=SLOTS) -> str:
@@ -2240,19 +2315,87 @@ class FactoryStore:
         return {**extra, "slot": slot, "name": name, "settings": values, "secrets": secrets,
                 "updated_at": at, "updated_by": by}
 
+    # the slots that keep exactly one connection: connecting another replaces the old one
+    ONE_CONNECTION = ("memory", "monitoring", "runtime")
+
+    def _default_name(self, slot: str) -> str:
+        """The name of the slot's default integration: the factory's pointer, else the built-in
+        default. Lock held, or a read."""
+        from .integrations import resolve
+        r = self.sc.execute("SELECT name FROM integration_choices WHERE slot = ?", [slot]).fetchone()
+        return r[0] if r else resolve.DEFAULTS[slot]
+
+    def _connection_view(self, slot: str, name: str, raw, at, by, default: bool) -> dict:
+        return {**self._integration_view(slot, name, raw, at, by), "default": default}
+
     def get_choice(self, slot: str) -> dict | None:
-        """The factory's choice for the slot, secrets redacted: {slot, name, settings, secrets,
-        updated_at, updated_by}; None when the slot has none (it uses its default)."""
+        """The factory's default for the slot, secrets redacted: {slot, name, settings, secrets,
+        updated_at, updated_by, default}, the settings those of its connection; None when the slot
+        has none chosen (it uses its built-in default)."""
         self._integration_slot(slot)
         with self._sread:
             r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
                                 "integration_choices WHERE slot = ?", [slot]).fetchone()
-        return self._integration_view(slot, r[0], r[1], r[2], r[3]) if r else None
+            if r is None:
+                return None
+            c = self.sc.execute("SELECT settings, updated_at, updated_by FROM integration_connections "
+                                "WHERE slot = ? AND name = ?", [slot, r[0]]).fetchone()
+        if c:
+            return self._connection_view(slot, r[0], c[0], c[1], c[2], True)
+        return self._connection_view(slot, r[0], {}, r[2], r[3], True)
 
-    def set_choice(self, slot: str, name: str, settings: dict | None, by: str) -> dict:
-        """Save the factory's choice for the slot and return it as get_choice does. Secrets are
-        reconciled with the stored row of the same integration (see _merge_integration_settings);
-        choosing another integration starts from nothing, so no secret travels between them."""
+    def get_connection(self, slot: str, name: str) -> dict | None:
+        """One connection of the factory, secrets redacted: {slot, name, settings, secrets,
+        updated_at, updated_by, default}; None when it is not connected (a row only: an
+        integration with no integration settings has none)."""
+        self._integration_slot(slot)
+        with self._sread:
+            c = self.sc.execute("SELECT settings, updated_at, updated_by FROM integration_connections "
+                                "WHERE slot = ? AND name = ?", [slot, name]).fetchone()
+            default = self._default_name(slot) == name if c else False
+        return self._connection_view(slot, name, c[0], c[1], c[2], default) if c else None
+
+    def list_connections(self, slot: str) -> list[dict]:
+        """The slot's connections, secrets redacted, by name, each with `default` true for the one
+        the slot uses. Monitoring keeps its one in the tracing settings: it is listed when
+        tracing is on."""
+        self._integration_slot(slot)
+        if slot == "monitoring":
+            from . import tracing
+            from .integrations.builtin import monitoring_tares as mon
+            cfg = tracing.resolve(self)
+            if not cfg.active or cfg.provider not in tracing.PROVIDERS:
+                return []
+            return [self._connection_view(slot, cfg.provider, mon.stored(self, cfg.provider),
+                                          None, None, True)]
+        with self._sread:
+            rows = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
+                                   "integration_connections WHERE slot = ? ORDER BY name",
+                                   [slot]).fetchall()
+            default = self._default_name(slot)
+        return [self._connection_view(slot, r[0], r[1], r[2], r[3], r[0] == default) for r in rows]
+
+    def is_connected(self, slot: str, name: str) -> bool:
+        """The integration is connected: it has a connection row, or it takes no integration
+        settings (nothing to connect), or it is the slot's default."""
+        self._integration_slot(slot)
+        from .integrations import registry
+        cls = registry.get(slot, name)       # before the lock: it loads the registry
+        if cls is not None and not cls.settings_schema:
+            return True
+        with self._sread:
+            if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
+                               [slot, name]).fetchone():
+                return True
+            return self._default_name(slot) == name
+
+    def set_choice(self, slot: str, name: str, settings: dict | None, by: str,
+                   default: bool = True) -> dict:
+        """Connect integration `name` for the slot with `settings` and, unless `default` is False,
+        make it the slot's default. Returns its connection as get_connection does. Secrets are
+        reconciled with this connection's own stored values (see _merge_integration_settings), so no
+        secret travels between two integrations. memory, monitoring and runtime keep one connection:
+        connecting another replaces the old one, and it is the default."""
         self._integration_slot(slot)
         name = str(name or "").strip()
         if not name:
@@ -2261,17 +2404,77 @@ class FactoryStore:
         if slot == "monitoring" and name in MONITORING_NAMES:
             return self._set_monitoring(name, settings, secret, by)
         with self._swrite:
-            cur = self.sc.execute("SELECT name, settings FROM integration_choices WHERE slot = ?",
-                                  [slot]).fetchone()
-            stored = self._load_settings(cur[1]) if cur and cur[0] == name else {}
+            cur = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? "
+                                  "AND name = ?", [slot, name]).fetchone()
+            stored = self._load_settings(cur[0]) if cur else {}
             merged = self._merge_integration_settings(secret, settings, stored)
             at = now_utc()
             self.sc.execute(
-                "INSERT INTO integration_choices (slot, name, settings, updated_at, updated_by) "
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (slot) DO UPDATE SET name = excluded.name, "
+                "INSERT INTO integration_connections (slot, name, settings, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (slot, name) DO UPDATE SET "
                 "settings = excluded.settings, updated_at = excluded.updated_at, "
                 "updated_by = excluded.updated_by", [slot, name, json.dumps(merged), at, by])
-        return self._integration_view(slot, name, merged, at, by)
+            one = slot in self.ONE_CONNECTION
+            if one:
+                self.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name != ?",
+                                [slot, name])
+            if default or one:
+                self._point_default(slot, name, at, by)
+            is_default = self._default_name(slot) == name
+        return self._connection_view(slot, name, merged, at, by, is_default)
+
+    def _point_default(self, slot: str, name: str, at, by) -> None:
+        """Make `name` the slot's default. Lock held."""
+        cur = self.sc.execute("SELECT 1 FROM integration_choices WHERE slot = ?", [slot]).fetchone()
+        if cur:
+            self.sc.execute("UPDATE integration_choices SET name = ?, settings = ?, updated_at = ?, "
+                            "updated_by = ? WHERE slot = ?", [name, "{}", at, by, slot])
+        else:
+            self.sc.execute("INSERT INTO integration_choices (slot, name, settings, updated_at, "
+                            "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, "{}", at, by])
+
+    def set_default(self, slot: str, name: str, by: str) -> dict:
+        """Make a connected integration the slot's default. Raises ValueError when it is not
+        connected, and for monitoring, which keeps one connection in the tracing settings."""
+        self._integration_slot(slot)
+        name = str(name or "").strip()
+        if not name:
+            raise ValueError("an integration name is required")
+        if slot == "monitoring":
+            raise ValueError("monitoring keeps one connection: connect another integration to replace it")
+        if not self.is_connected(slot, name):
+            raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
+        with self._swrite:
+            self._point_default(slot, name, now_utc(), by)
+        return self.get_connection(slot, name) or self._connection_view(slot, name, {}, now_utc(), by, True)
+
+    def delete_connection(self, slot: str, name: str) -> bool:
+        """Remove a connection. False when there is none. Raises ValueError, naming what uses it,
+        while it is the slot's default, a project uses it, or a guardrail pair uses it."""
+        self._integration_slot(slot)
+        with self._swrite:
+            if not self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
+                                   [slot, name]).fetchone():
+                return False
+            if self._default_name(slot) == name:
+                raise ValueError(f"{name} is the default for {slot}: make another connection the "
+                                 "default first")
+            if slot in PROJECT_SLOTS:
+                used = [r[0] for r in self.sc.execute(
+                    "SELECT project_uid FROM project_integrations WHERE slot = ? AND name = ? "
+                    "ORDER BY project_uid", [slot, name]).fetchall()]
+                if used:
+                    raise ValueError(f"{name} is used by project {', '.join(used)} for {slot}: "
+                                     "change what the project uses first")
+            if slot == "guardrails":
+                pairs = [r[0] for r in self.sc.execute(
+                    "SELECT id FROM guardrail_pairs WHERE integration = ?", [name]).fetchall()]
+                if pairs:
+                    raise ValueError(f"{name} is used by guardrail pair {', '.join(sorted(pairs))}: "
+                                     "remove the pair first")
+            self.sc.execute("DELETE FROM integration_connections WHERE slot = ? AND name = ?",
+                            [slot, name])
+        return True
 
     def _set_monitoring(self, name: str, settings: dict | None, secret: set | None, by: str) -> dict:
         """Monitoring off, Rius and OTLP live in the tracing settings, the one storage the old
@@ -2283,7 +2486,7 @@ class FactoryStore:
         mon.save(self, name, merged)
         with self._swrite:
             self.sc.execute("DELETE FROM integration_choices WHERE slot = ?", ["monitoring"])
-        return self._integration_view("monitoring", name, merged, now_utc(), by)
+        return self._connection_view("monitoring", name, merged, now_utc(), by, True)
 
     # ── a project's secrets (TR-775): sealed values; tares/project_secrets.py seals and opens them ──
     _SECRET_COLS = "project, name, value, set_by, set_at, used_by, used_at"
@@ -2506,8 +2709,9 @@ class FactoryStore:
         return method
 
     def get_project_choice(self, uid: str, slot: str) -> dict | None:
-        """The project's own choice for the slot, secrets redacted, as get_choice; None when it
-        has none. It never falls back to the factory's choice: that is the caller's rule."""
+        """The project's own choice for the slot, as get_choice; None when it has none. Its settings
+        are the project's own fields only. It never falls back to the factory's default: that is
+        the caller's rule."""
         self._integration_slot(slot, PROJECT_SLOTS)
         with self._sread:
             r = self.sc.execute("SELECT name, settings, updated_at, updated_by FROM "
@@ -2515,48 +2719,79 @@ class FactoryStore:
                                 [uid, slot]).fetchone()
         return self._integration_view(slot, r[0], r[1], r[2], r[3], project_uid=uid) if r else None
 
+    @classmethod
+    def project_field_refusal(cls, slot: str, name: str, key: str) -> str | None:
+        """Why a project may not hold field `key` of integration `name`, or None when it may: a
+        secret or an address is set where the integration is connected, at the factory. An
+        integration that is not installed has no schema, so every key counts as a secret."""
+        from .integrations import registry
+        found = registry.get(slot, name)
+        kind = None
+        if found is not None:
+            kind = next((f.kind for f in found.settings_schema if f.name == key), "secret")
+        if found is None or kind == "secret":
+            return (f"{key} is a secret: set it where the integration is connected, in the "
+                    "factory's integrations")
+        if kind == "url":
+            return (f"{key} is an address: set it where the integration is connected, in the "
+                    "factory's integrations")
+        return None
+
     def set_project_choice(self, uid: str, slot: str, name: str, settings: dict | None,
                            by: str) -> dict:
-        """Save the project's own choice for the slot. A blank secret keeps this project's stored
-        value and nothing else: it never reads the factory's row, so a factory secret is never
-        copied into a project. Only tickets, review and ci take one (ValueError otherwise)."""
+        """Save the project's own choice for the slot: a connected integration's name and the
+        project's own fields. A secret or an address in `settings` raises ValueError: those live at
+        the factory (TR-1380), so a project never holds one. That the integration is connected is
+        the caller's check (`is_connected`). Only tickets, review and ci take one."""
         self._integration_slot(slot, PROJECT_SLOTS)
         name = str(name or "").strip()
         if not name:
             raise ValueError("an integration name is required")
-        secret = self._secret_fields(slot, name)   # before the write lock: it loads the registry
+        if settings is None:
+            settings = {}
+        if not isinstance(settings, dict):
+            raise ValueError("settings must be an object")
+        for k in settings:
+            why = self.project_field_refusal(slot, name, k)   # before the write lock: it loads the registry
+            if why:
+                raise ValueError(why)
         with self._swrite:
-            cur = self.sc.execute("SELECT name, settings FROM project_integrations "
-                                  "WHERE project_uid = ? AND slot = ?", [uid, slot]).fetchone()
-            stored = self._load_settings(cur[1]) if cur and cur[0] == name else {}
-            merged = self._merge_integration_settings(secret, settings, stored)
             at = now_utc()
-            self.sc.execute(
-                "INSERT INTO project_integrations (project_uid, slot, name, settings, updated_at, "
-                "updated_by) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (project_uid, slot) DO UPDATE "
-                "SET name = excluded.name, settings = excluded.settings, "
-                "updated_at = excluded.updated_at, updated_by = excluded.updated_by",
-                [uid, slot, name, json.dumps(merged), at, by])
-        return self._integration_view(slot, name, merged, at, by, project_uid=uid)
+            cur = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? AND slot = ?",
+                                  [uid, slot]).fetchone()
+            if cur:
+                self.sc.execute("UPDATE project_integrations SET name = ?, settings = ?, updated_at = ?, "
+                                "updated_by = ? WHERE project_uid = ? AND slot = ?",
+                                [name, json.dumps(settings), at, by, uid, slot])
+            else:
+                self.sc.execute("INSERT INTO project_integrations (project_uid, slot, name, settings, "
+                                "updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?)",
+                                [uid, slot, name, json.dumps(settings), at, by])
+        return self._integration_view(slot, name, settings, at, by, project_uid=uid)
 
     def stored_settings(self, slot: str, name: str, uid: str | None = None) -> dict:
-        """The settings stored for integration `name` in the slot, secrets included, as they are
-        saved: the project's own row when `uid` is given (never the factory's), else the factory's.
-        {} when the row holds another integration or there is none. For merging a form or a
-        connection test over what is saved; never return it from a route."""
-        if uid is None:
-            self._integration_slot(slot)
-            if slot == "monitoring" and name in MONITORING_NAMES:
-                from .integrations.builtin import monitoring_tares as mon
-                return mon.stored(self, name)
-            sql, args = ("SELECT name, settings FROM integration_choices WHERE slot = ?", [slot])
-        else:
-            self._integration_slot(slot, PROJECT_SLOTS)
-            sql, args = ("SELECT name, settings FROM project_integrations "
-                         "WHERE project_uid = ? AND slot = ?", [uid, slot])
+        """The settings integration `name` runs with in the slot, secrets included, as they are
+        saved: its connection at the factory, overlaid when `uid` is given with the project's own
+        fields if the project chose this integration. {} when it is not connected. For running an
+        integration and for merging a form or a connection test over what is saved; never return
+        it from a route."""
+        self._integration_slot(slot, SLOTS if uid is None else PROJECT_SLOTS)
+        if slot == "monitoring" and name in MONITORING_NAMES:
+            from .integrations.builtin import monitoring_tares as mon
+            return mon.stored(self, name)
+        from .integrations import registry
+        found = registry.get(slot, name)           # before the lock: it loads the registry
+        plain = {f.name for f in found.settings_schema if f.kind not in ("secret", "url")} if found else set()
         with self._sread:
-            r = self.sc.execute(sql, args).fetchone()
-        return self._load_settings(r[1]) if r and r[0] == name else {}
+            c = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? AND name = ?",
+                                [slot, name]).fetchone()
+            own = self.sc.execute("SELECT name, settings FROM project_integrations WHERE project_uid = ? "
+                                  "AND slot = ?", [uid, slot]).fetchone() if uid is not None else None
+        out = self._load_settings(c[0]) if c else {}
+        if own and own[0] == name:
+            # a project's own fields; a secret or an address left in a row from before is not read
+            out.update({k: v for k, v in self._load_settings(own[1]).items() if k in plain})
+        return out
 
     # ── status changes waiting to reach the ticket system (TR-845) ────────────
     _PW_COLS = "ticket, integration, status, attempts, last_error, updated_at"
