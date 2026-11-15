@@ -2,12 +2,12 @@
  * Browser e2e for TR-828: a hidden Start checklist can be shown again.
  *
  * Seeds a scratch factory cell with tests/seed-factory-start.py (GitHub connected, one access key that has been
- * used: 2 of 5 steps done), then starts one daemon on it with a root token, on TARES_E2E_PORT (default 8280), MCP
+ * used: 2 of 6 steps done), then starts one daemon on it with a root token, on TARES_E2E_PORT (default 8280), MCP
  * port +1, in a clean environment and a fresh data directory, and stops only it.
  * Sample (browser flag taresSamples=1): startHidden at 1440 and 390 wide: the quiet line and its button.
- * Live: the list is shown; Hide removes it and the line "The list "Get your factory going" is hidden." with a
+ * Live: the list is shown; Hide removes it and the line "The list "Get your crew running" is hidden." with a
  * Show it again button takes its place; Show it again calls the cell once with DELETE and brings the list back
- * with its five steps; a Show it again that fails keeps the line and says so; the line stays after a reload;
+ * with its six steps; a Show it again that fails keeps the line and says so; the line stays after a reload;
  * another key never sees the line. The words check runs in every state. Shots: factory-start-show-<state>-<width>.png.
  * Run:  node tests/factory-start-show.e2e.cjs     (the daemon serves ui/dist: build first)
  * Set SHOTS_DIR to keep screenshots. TARES_E2E_CHROME points Playwright at another Chrome binary.
@@ -27,7 +27,7 @@ const PORT = Number(process.env.TARES_E2E_PORT || 8280);
 const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
 const ROOT = "root-token-start-show-e2e";
-const LINE = "The list “Get your factory going” is hidden.";
+const LINE = "The list “Get your crew running” is hidden.";
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -164,8 +164,8 @@ function cleanEnv(extra) {
       calls.length = 0;
       await showBtn(page).click();
       await list(page).waitFor();
-      ck("live: Show it again brings the list back with its five steps", (await page.getByTestId("start-step").count()) === 5
-         && (await page.getByTestId("start-count").innerText()).trim() === "2 of 5 done");
+      ck("live: Show it again brings the list back with its six steps", (await page.getByTestId("start-step").count()) === 6
+         && (await page.getByTestId("start-count").innerText()).trim() === "2 of 6 done");
       ck("live: and the line is gone", (await line(page).count()) === 0);
       await page.waitForLoadState("networkidle");
       ck("live: it called the cell once, with DELETE", calls.join() === "DELETE", calls.join());
@@ -180,7 +180,7 @@ function cleanEnv(extra) {
          (await list(page).count()) === 0 && (await showBtn(page).isEnabled()));
       await showBtn(page).click();
       await list(page).waitFor();
-      ck("live: and Show it again works the second time", (await line(page).count()) === 0 && (await page.getByTestId("start-step").count()) === 5);
+      ck("live: and Show it again works the second time", (await line(page).count()) === 0 && (await page.getByTestId("start-step").count()) === 6);
       await ctx.close();
     }
 

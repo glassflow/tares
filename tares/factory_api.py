@@ -20,6 +20,7 @@ from fastapi import Body, HTTPException, Request
 
 from . import claude_usage
 from . import crew_conversation
+from . import crew_onboarding
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
@@ -640,6 +641,42 @@ def register(app, store, h: Host) -> SimpleNamespace:
         store.set_setting(key, json.dumps(out))
         factory_home.clear_cache()   # the home card shows the change on the next read
         return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
+
+    # ── the first run (TR-1312): where tickets live, and the machine the crew runs on ──
+    @app.put("/api/crew/tracker")
+    def put_crew_tracker(body: dict = Body(...)):
+        """Where tickets live, chosen in the first-run panel: `tares`, `linear` or `github_issues`.
+        The cell's own choice, so it takes an admin key (the default for a write)."""
+        try:
+            value = crew_onboarding.save_tracker(store, body.get("tracker"))
+        except ValueError as e:
+            h.err(e, 400)
+        factory_home.clear_cache()
+        return {"tracker": value}
+
+    def machine_key(request: Request | None) -> str | None:
+        """Where the caller's machine report is kept, as `writes_default` and `personal_key` decide
+        for the crew's settings: the cell's own for the system credential and the person `local`,
+        a person's own for anyone else, None for a key with no person."""
+        if request is None:
+            return crew_onboarding.machine_key()
+        person = h.current_person(request)
+        if h.is_system(request) or (person or {}).get("id") == "local":
+            return crew_onboarding.machine_key()
+        return crew_onboarding.machine_key(person["id"]) if person else None
+
+    @app.post("/api/crew/machine")
+    def post_crew_machine(request: Request, body: dict = Body(...)):
+        """The command line says which machine signed in and which version it is (`tares login`
+        and the crew's start do it), so the first-run panel can tick its install and sign-in
+        steps. A name and a version, nothing secret; the last report wins. It is the caller's
+        own, kept the way their crew settings are: a key with no person is refused."""
+        key = machine_key(request)
+        if key is None:
+            h.err(PermissionError("This key has no person"), 403)
+        out = crew_onboarding.save_machine(store, body.get("machine"), body.get("version"), now_utc(), key)
+        factory_home.clear_cache()
+        return {"machine": out["machine"], "version": out["version"]}
 
     # ── grants (TR-419): the person's words, dated; shared, and per project ───
     def shared_grants_id(create: bool = False) -> str | None:
@@ -3173,7 +3210,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                          team_home=team_home, team_projects=team_projects, own_stations=own_stations,
                          own_desk=own_desk, own_tickets=own_tickets,
                          hidden_ids=lambda: h.hidden_ids(),
-                         caller_person=lambda request: h.current_person(request))
+                         caller_person=lambda request: h.current_person(request),
+                         machine_key=machine_key)
 
     def for_request(request):
         """This fx with `settings` and `pace` read for the caller: a person's own over the cell's

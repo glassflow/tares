@@ -336,6 +336,34 @@ def _http(method: str, url: str, body: dict | None = None, token: str = "",
     return r.status_code, data if isinstance(data, dict) else {}
 
 
+def _installed_version() -> str:
+    """The installed tares version; empty from a source checkout (no install to name)."""
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("tares")
+    except PackageNotFoundError:
+        return ""
+
+
+def report_machine(cell_url: str, key: str, machine: str = "") -> bool:
+    """Tell the workspace which machine signed in and which tares it runs (TR-1312), so the home's
+    first-run steps tick. A name and a version, never the key's value in any output. Best effort: it
+    never stops a sign-in, but a refusal or no answer prints one quiet line on stderr (a workspace too
+    old to know the call, a 404, says nothing)."""
+    try:
+        status, _ = _http("POST", f"{cell_url.rstrip('/')}/api/crew/machine",
+                          {"machine": machine or _machine(), "version": _installed_version()}, key, timeout=8)
+    except Exception:   # noqa: BLE001 (nothing here may stop a sign-in)
+        status = None
+    if status is not None and 200 <= status < 300:
+        return True
+    if status != 404:
+        print("tares login: could not tell the workspace which machine this is "
+              f"({'no answer' if status is None else f'HTTP {status}'}), so its first-run steps may not tick.",
+              file=sys.stderr)
+    return False
+
+
 def _revoke(data: dict) -> tuple[bool, str]:
     """Delete a saved login's key: through the control plane, else on the workspace directly
     (an admin key may delete itself). (ok, how)."""
@@ -531,6 +559,7 @@ def _login(cloud: str, open_browser: bool, wait: int, json_out: bool) -> int:
                     + ("The key just made for this machine was removed, and the saved login (if any) is as it was."
                        if removed else f"The saved login (if any) is as it was. {_left_behind(data)}"))
     _crew_follows(data["key"], json_out=json_out)
+    report_machine(data["cell_url"], data["key"], machine)
     if old and old.get("cloud") and old.get("key_id") != data["key_id"]:
         ok, _how = _revoke(old)
         if not ok:
@@ -657,6 +686,7 @@ def _connect_cell(address: str, key: str, json_out: bool) -> int:
         return _err(json_out, "error", f"tares login: could not save the login ({e}). "
                     "The saved login (if any) is as it was.")
     _crew_follows(key, json_out=json_out)
+    report_machine(address, key, machine)
     if old and old.get("cloud"):
         ok, _how = _revoke(old)
         if not ok:

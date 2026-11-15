@@ -200,6 +200,16 @@ ck("the settings are the answers", [c2.tares.settings.get(k) for k in ("autonomy
 ck("same grant on Tares", c1.tares.grants == c2.tares.grants and len(c2.tares.grants) == 1 and GRANT in c2.tares.grants[0],
    (c1.tares.grants, c2.tares.grants))
 ck("the same requests, in the same order", c1.tares.written() == c2.tares.written(), (c1.tares.written(), c2.tares.written()))
+ck("crew up tells Tares its machine and version once (TR-1312), and the report has no key",
+   len(c1.tares.machine) == 1 and set(c1.tares.machine[0]) == {"machine", "version"} and c2.tares.machine == [], c1.tares.machine)
+for status, quiet in ((403, False), (401, True), (404, True)):
+    cm = Case()
+    cm.tares.machine_status = status
+    tm = cm.run(["crew", "up"], stdin=TERMINAL)
+    said_it = tm.stderr.count("could not tell Tares which machine this is")
+    ck(f"a refused machine report ({status}) prints {'nothing' if quiet else 'one quiet line'} and the crew still starts",
+       said_it == (0 if quiet else 1) and cm.tares.settings.get("autonomy") == "L3-review", (tm.returncode, tm.stderr[-400:]))
+    cm.close()
 ck("the terminal path asked the questions the contract lists",
    all(q in t.stdout + t.stderr for q in ("Who approves merging pull requests?", "How many builders may work at the same time?")))
 ck("a second --questions after --answers: nothing outstanding", questions(c2)[1] == [])
@@ -309,7 +319,8 @@ env_watch = {"FACTORY_NO_WATCH": ""}          # the watch asked for: the harness
 r = c.run(["crew", "up", "--yes"], env=env_watch)
 out = r.stdout + r.stderr
 ck("asks nothing: no prompt, no question in the output", "Choice [" not in out and "recommended:" not in out and "> " not in out.replace("-> ", ""), out[-300:])
-ck("writes nothing to Tares: every answer was saved already", c.tares.written() == [], c.tares.written())
+ck("writes nothing to Tares but the machine report: every answer was saved already (TR-1312)",
+   c.tares.written() == [] and len(c.tares.machine) == 1, (c.tares.written(), c.tares.machine))
 ck("says it started the watch", "started the watch, which revives any station that stops" in out, out[-400:])
 ck("starts the Python watch: the pid file names it and the log is there",
    (c.crew / "watch.pid").exists() and (c.crew / "watch.log").exists() and watch.running_pid(CrewPaths(str(c.crew))) is not None,

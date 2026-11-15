@@ -832,6 +832,9 @@ def make_app() -> FastAPI:
         if method == "PATCH" and path.startswith("/api/people/"):
             return "read"   # an admin, or a key bound to that person changing their own name:
                             # the handler decides, it needs the credential's person
+        if method == "POST" and path == "/api/crew/machine":
+            return "ingest"  # the command line's report after `tares login` (TR-1312): a name and a
+                             # version, from a key that can write the crew's settings
         if (method == "PUT" and path == "/api/crew/settings") or (
                 method == "POST" and _PERSONAL_LINES.match(path)):
             return "ingest"  # a person's own crew settings and personal docs (TR-624): the

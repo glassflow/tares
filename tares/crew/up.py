@@ -383,6 +383,21 @@ class Up:
             self.add_grant(words)
             _err("  saved\n")
 
+    def report_machine(self) -> None:
+        """Tell Tares which machine runs the crew and which tares it is (TR-1312), so the home's first-run
+        steps tick. Best effort: starting the crew never waits on it, but a refusal or no answer prints one
+        quiet line (an older Tares that does not know the call, a 404, says nothing, and neither does a 401:
+        crew up already says the key is refused)."""
+        from ..login import _installed_version, _machine
+        try:
+            self.client.tares_http("POST", "/api/crew/machine", state.dumps_compact(
+                {"machine": _machine(), "version": _installed_version()}))
+        except Exception as e:   # noqa: BLE001 (starting the crew never waits on this)
+            status = getattr(e, "status", None)
+            if status not in (401, 404):
+                _err("  could not tell Tares which machine this is "
+                     f"({'no answer' if status is None else f'HTTP {status}'}), so its first-run steps may not tick\n")
+
     def ensure_settings(self) -> None:
         raw = self.client.settings_raw()
         missing = settings_missing(raw)
@@ -681,6 +696,7 @@ def _crew_up(argv: list, env: dict, json_mode: bool = False) -> int:
     up.ensure_home_trusted(claude)
     c.keep_token()
     up.setup_crew_name()
+    up.report_machine()
     up.ensure_settings()
     c.prime()
     up.lsp_offer(claude)
