@@ -60,3 +60,13 @@ export function keepForLater(project: string, later = true): Promise<unknown> {
     body: JSON.stringify({ later }),
   });
 }
+
+/** Step 1 of the first-run panel: the crew's three choices, saved together when the person confirms. */
+export function saveCrewChoices(c: { autonomy: string; builders_max: number; releaser: boolean }): Promise<unknown> {
+  return request("/api/crew/settings", { method: "PUT", body: JSON.stringify(c) });
+}
+
+/** Step 2 of the first-run panel: where tickets live. */
+export function saveTracker(tracker: string): Promise<unknown> {
+  return request("/api/crew/tracker", { method: "PUT", body: JSON.stringify({ tracker }) });
+}

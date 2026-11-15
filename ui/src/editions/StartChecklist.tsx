@@ -17,7 +17,7 @@ const MUTED = "text-xs text-muted-foreground";
 const HIDE_FAILED = "Could not hide the list. Try again in a moment.";
 const SHOW_FAILED = "Could not show the list. Try again in a moment.";
 
-function Tick({ done }: { done: boolean }) {
+export function Tick({ done }: { done: boolean }) {
   return (
     <span role="img" aria-label={done ? "Done" : "Not done"} data-testid="start-tick" data-done={done}
           className={cn("mt-0.5 grid size-5 flex-none place-items-center border-[1.5px] border-foreground",
@@ -32,7 +32,7 @@ function Tick({ done }: { done: boolean }) {
 }
 
 /** A command in a bordered box with its Copy button, which reads Copied for two seconds. */
-function CopyCommand({ command }: { command: string }) {
+export function CopyCommand({ command }: { command: string }) {
   const [copied, setCopied] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout>>();
   React.useEffect(() => () => clearTimeout(timer.current), []);
