@@ -82,9 +82,10 @@ def units():
     print("== the choices ==")
     d = co.defaults()
     want = settings_defaults()
-    ck("the form starts on the crew's own defaults, unchanged",
-       (d["autonomy"], d["releaser"], d["builders_max"]) == (want["autonomy"], want["releaser"], want["builders_max"]), d)
-    ck("and recommends L3-review", d["recommended"] == "L3-review")
+    ck("the form starts on your approval of each merge, with the crew's own releases and builders",
+       (d["autonomy"], d["releaser"], d["builders_max"]) == ("L3-review", want["releaser"], want["builders_max"]), d)
+    ck("the crew's own default is not touched (the terminal's recommendation stays)",
+       want["autonomy"] == "L4-ship" and set(d) == {"autonomy", "releaser", "builders_max"}, (want, d))
     c = co.choices({})
     ck("nothing saved: not chosen, nothing preselected as a saved value",
        c["chosen"] is False and c["autonomy"] is None and c["releaser"] is None and c["builders_max"] is None, c)
@@ -143,9 +144,22 @@ def units():
                                                       "at": NOW.isoformat()} and co.machine_report(s) == r, r)
     r = co.save_machine(s, "", "1.59.0", NOW)
     ck("an empty name keeps the one reported before", r["machine"] == "example-laptop" and r["version"] == "1.59.0", r)
-    r = co.save_machine(s, "exämple\x00-pc\n" + "x" * 200, "1.0", NOW)
-    ck("only printable ASCII, and short", r["machine"].startswith("exmple-pc") and len(r["machine"]) <= 80
-       and "\n" not in r["machine"], r)
+    r = co.save_machine(s, "Ana\u2019s exämple\x00-pc\n" + "x" * 200, "1.0", NOW)
+    ck("printable characters stay (a curly apostrophe, an umlaut), control ones go, and it is short",
+       r["machine"].startswith("Ana\u2019s exämple-pc") and len(r["machine"]) <= 80
+       and "\n" not in r["machine"] and "\x00" not in r["machine"], r)
+    later = datetime(2026, 11, 15, 11, 0, tzinfo=timezone.utc)
+    before = co.machine_report(s)
+    r = co.save_machine(s, "\x00 \n", "", later)
+    ck("a report with both fields empty changes nothing, not even the time",
+       co.machine_report(s) == before and r["at"] == before["at"] and before["at"] != later.isoformat(), (r, before))
+    e = Store()
+    r = co.save_machine(e, "", "", later)
+    ck("and on a cell with no report it saves none", co.machine_report(e) is None and r["at"] is None, r)
+    k = co.machine_key("p1")
+    co.save_machine(s, "second-pc", "2.0", NOW, k)
+    ck("a person's report is kept apart from the cell's", co.machine_key() == "crew_machine" and k == "crew_machine:p1"
+       and co.machine_report(s, k)["machine"] == "second-pc" and co.machine_report(s)["machine"].startswith("Ana"))
     s.set_setting(co.MACHINE_SETTING, "{not json")
     ck("a damaged setting reads as no report", co.machine_report(s) is None)
 
@@ -169,6 +183,13 @@ def units():
                       st("builder", "ended", "b2"), st("builder", "idle", "b3")], {"builders_max": 2}, "m")
     ck("builders counted live, not ended ones", v["builders"] == {"live": 2, "max": 2}, v["builders"])
     ck("last heard from is a time", v["orchestrator"]["last_at"] == NOW.isoformat(), v["orchestrator"])
+
+    print("== a crew that ran before the report existed ==")
+    old = Store()
+    old.list_crews = lambda: [{"machine": "old-box", "person_id": "p1"}]
+    name = lambda pid: co.payload(old, [], {}, False, False, co.machine_key(pid), pid)["machine"]["name"]
+    ck("its person's home names the machine of their own crew", name("p1") == "old-box")
+    ck("another person's home does not take it", name("p2") == "" and name(None) == "")
 
     print("== the words ==")
     texts = [co.choices_text(co.choices(full)), co.github_text(type("S", (), {
@@ -203,31 +224,58 @@ async def main():
            and store.get_setting(co.MACHINE_SETTING) is None)
 
         print("== the machine report call ==")
+        ana = store.create_person("Ana Example", email="ana@example.test", via="admin")
+        ben = store.create_person("Ben Example", email="ben@example.test", via="admin")
+        cy = store.create_person("Cy Example", email="cy@example.test", via="admin")
         async with mk() as cx:
-            ka = (await cx.post("/api/keys", json={"name": "ana", "scopes": ["read", "ingest"]})).json()["secret"]
+            ka = (await cx.post("/api/keys", json={"name": "ana", "scopes": ["read", "ingest"], "person_id": ana["id"]})).json()["secret"]
+            kb = (await cx.post("/api/keys", json={"name": "ben", "scopes": ["read", "ingest"], "person_id": ben["id"]})).json()["secret"]
+            kc = (await cx.post("/api/keys", json={"name": "cy", "scopes": ["read", "ingest"], "person_id": cy["id"]})).json()["secret"]
+            kn = (await cx.post("/api/keys", json={"name": "nobody", "scopes": ["read", "ingest"]})).json()["secret"]
             kr = (await cx.post("/api/keys", json={"name": "rea", "scopes": ["read"]})).json()["secret"]
-            r = await cx.post("/api/crew/machine", json={"machine": "example-laptop", "version": "1.58.0"})
-            ck("the root token reports a machine", r.status_code == 200 and r.json() == {
-                "machine": "example-laptop", "version": "1.58.0"}, r.text)
-        async with mk(ka) as ax, mk(kr) as rx, mk(None) as nx:
+            r = await cx.post("/api/crew/machine", json={"machine": "cell-machine", "version": "1.57.0"})
+            ck("the root token reports the cell's own machine", r.status_code == 200 and r.json() == {
+                "machine": "cell-machine", "version": "1.57.0"}, r.text)
+            ck("kept under the cell's key", json.loads(store.get_setting(co.MACHINE_SETTING))["machine"] == "cell-machine")
+        async with mk(ka) as ax, mk(kb) as bx, mk(kn) as nn, mk(kr) as rx, mk(None) as nx:
             await ax.get("/api/home")      # the home is cached for a few seconds: the report must clear it
-            r = await ax.post("/api/crew/machine", json={"machine": "example-laptop", "version": "1.58.1"})
-            ck("a key that may ingest reports, and the last report wins", r.status_code == 200
-               and r.json()["version"] == "1.58.1", r.text)
+            r = await ax.post("/api/crew/machine", json={"machine": "ana-laptop", "version": "1.58.1"})
+            ck("a key with a person that may ingest reports, and the last report wins", r.status_code == 200
+               and r.json() == {"machine": "ana-laptop", "version": "1.58.1"}, r.text)
+            r = await nn.post("/api/crew/machine", json={"machine": "x", "version": "1"})
+            ck("an ingest key with no person is refused, like the crew's settings", r.status_code == 403
+               and "no person" in r.text, (r.status_code, r.text))
+            ck("and saved nothing", json.loads(store.get_setting(co.MACHINE_SETTING))["machine"] == "cell-machine"
+               and store.get_setting("crew_machine:None") is None)
             ck("a read key is refused", (await rx.post("/api/crew/machine", json={"machine": "x"})).status_code == 403)
             ck("no credential is refused", (await nx.post("/api/crew/machine", json={"machine": "x"})).status_code == 401)
-            ck("the report holds no key", TOKEN not in json.dumps(store.get_setting(co.MACHINE_SETTING))
-               and ka not in json.dumps(store.get_setting(co.MACHINE_SETTING)))
+            r = await bx.post("/api/crew/machine", json={"machine": "ben-desktop", "version": "1.57.2"})
+            ck("a second person reports their own", r.status_code == 200, r.text)
+            mine = lambda pid: json.loads(store.get_setting(co.machine_key(pid)))
+            ck("each person keeps their own machine, and the cell's is untouched",
+               mine(ana["id"])["machine"] == "ana-laptop" and mine(ben["id"])["machine"] == "ben-desktop"
+               and json.loads(store.get_setting(co.MACHINE_SETTING))["machine"] == "cell-machine",
+               [store.get_setting(k) for k in (co.machine_key(ana["id"]), co.machine_key(ben["id"]), co.MACHINE_SETTING)])
+            ha = (await ax.get("/api/home")).json()["onboarding"]["machine"]
+            hb = (await bx.get("/api/home")).json()["onboarding"]["machine"]
+            ck("each home says its own machine and version, never the other's",
+               (ha["name"], ha["version"]) == ("ana-laptop", "1.58.1") and (hb["name"], hb["version"]) == ("ben-desktop", "1.57.2"),
+               (ha, hb))
+            ck("a person who never reported has none (the cell's is not theirs)",
+               (await mk(kc).get("/api/home")).json()["onboarding"]["machine"]["name"] == "")
+            ck("the report holds no key", all(t not in json.dumps([store.get_setting(co.MACHINE_SETTING),
+                                                                    store.get_setting(co.machine_key(ana["id"]))])
+                                              for t in (TOKEN, ka, kb)))
             ck("the home ticks install and sign in within the same call, no cache wait",
                {s["key"]: s["done"] for s in (await ax.get("/api/home")).json()["start"]["steps"]}
                == {"choices": False, "connections": False, "install": True, "login": True, "crew": False,
                    "spec": False})
-            h = (await ax.get("/api/home")).json()
-            ck("and says which machine and version", h["onboarding"]["machine"]["name"] == "example-laptop"
-               and h["onboarding"]["machine"]["version"] == "1.58.1", h["onboarding"]["machine"])
             ck("a body without a name or version saves what is there",
-               (await ax.post("/api/crew/machine", json={})).json() == {"machine": "example-laptop",
+               (await ax.post("/api/crew/machine", json={})).json() == {"machine": "ana-laptop",
                                                                          "version": "1.58.1"})
+            at = mine(ana["id"])["at"]
+            await ax.post("/api/crew/machine", json={"machine": " ", "version": "\u0007"})
+            ck("an empty report does not move the time", mine(ana["id"])["at"] == at, mine(ana["id"]))
 
         print("== where tickets live, over the API ==")
         async with mk() as cx, mk(ka) as ax:
@@ -276,7 +324,7 @@ async def main():
             h = home()
             ck("then the reviewer: the crew is up, with the machine named",
                h["onboarding"]["crew"]["up"] is True and h["start"]["steps"][4]["done"] is True
-               and h["start"]["steps"][4]["detail"] == "Running on example-laptop", h["start"]["steps"][4])
+               and h["start"]["steps"][4]["detail"] == "Running on cell-machine", h["start"]["steps"][4])
 
             print("== the old cell: a crew that was running before this panel existed ==")
             store.set_setting(co.MACHINE_SETTING, None)

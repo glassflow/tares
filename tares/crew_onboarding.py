@@ -14,7 +14,8 @@ import json
 import re
 from datetime import datetime, timezone
 
-MACHINE_SETTING = "crew_machine"     # {"machine", "version", "at"}: the last `tares login` or `crew up`
+MACHINE_SETTING = "crew_machine"     # {"machine", "version", "at"}: the last `tares login` or `crew up`;
+                                     # `crew_machine:<person>` for a person's own (machine_key)
 TRACKER_SETTING = "crew_tracker"     # where tickets live, chosen in step 2
 TRACKERS = ("tares", "linear", "github_issues")
 
@@ -22,29 +23,36 @@ TRACKERS = ("tares", "linear", "github_issues")
 UP = ("working", "idle", "waiting", "quiet")
 RUNNING = ("working", "idle", "waiting")
 AUTONOMY = ("L3-review", "L4-ship")
-RECOMMENDED = "L3-review"
-
-_NAME = re.compile(r"[^\x20-\x7e]")
+DEFAULT_AUTONOMY = "L3-review"      # a new crew starts on your yes for each merge (the crew's own default is L4-ship)
 
 
 def _clean(text, limit: int) -> str:
-    """A short plain-text field: printable ASCII, trimmed. The report is shown as text, never run."""
-    return _NAME.sub("", str(text or "")).strip()[:limit]
+    """A short plain-text field: printable characters (a curly apostrophe stays), no control
+    characters, trimmed. The report is shown as text, never run."""
+    return "".join(c for c in str(text or "") if c.isprintable()).strip()[:limit]
 
 
-def save_machine(store, machine, version, now: datetime | None = None) -> dict:
-    """Keep the machine report. Either field may be empty (`crew up` knows the version, `login` both);
-    an empty one keeps what was reported before."""
-    old = machine_report(store) or {}
-    out = {"machine": _clean(machine, 80) or old.get("machine", ""),
-           "version": _clean(version, 40) or old.get("version", ""),
+def machine_key(person_id: str | None = None) -> str:
+    """Where a machine report is kept: the cell's own, or one person's (a person's crew is theirs)."""
+    return f"{MACHINE_SETTING}:{person_id}" if person_id else MACHINE_SETTING
+
+
+def save_machine(store, machine, version, now: datetime | None = None, key: str = MACHINE_SETTING) -> dict:
+    """Keep the machine report under `key`. Either field may be empty (`crew up` knows the version,
+    `login` both); an empty one keeps what was reported before. A report with both empty changes
+    nothing, not even the time."""
+    old = machine_report(store, key) or {}
+    m, v = _clean(machine, 80), _clean(version, 40)
+    if not m and not v:
+        return {"machine": old.get("machine", ""), "version": old.get("version", ""), "at": old.get("at")}
+    out = {"machine": m or old.get("machine", ""), "version": v or old.get("version", ""),
            "at": (now or datetime.now(timezone.utc)).isoformat()}
-    store.set_setting(MACHINE_SETTING, json.dumps(out))
+    store.set_setting(key, json.dumps(out))
     return out
 
 
-def machine_report(store) -> dict | None:
-    raw = store.get_setting(MACHINE_SETTING)
+def machine_report(store, key: str = MACHINE_SETTING) -> dict | None:
+    raw = store.get_setting(key)
     try:
         out = json.loads(raw) if raw else None
     except ValueError:
@@ -65,12 +73,12 @@ def save_tracker(store, value: str) -> str:
 
 
 def defaults() -> dict:
-    """What the first-run form starts on: the crew's own defaults, unchanged (the code decides, the
-    console only shows them). Saved only when the person confirms."""
+    """What the first-run form starts on. Who merges starts on the person's own yes (L3-review): the
+    crew merging on its own is asked about before it is saved. Releases and builders are the crew's
+    own defaults, unchanged (`settings_defaults()` itself is not touched). Saved only on confirm."""
     from .crew.client import settings_defaults
     d = settings_defaults()
-    return {"autonomy": d["autonomy"], "releaser": d["releaser"], "builders_max": d["builders_max"],
-            "recommended": RECOMMENDED}
+    return {"autonomy": DEFAULT_AUTONOMY, "releaser": d["releaser"], "builders_max": d["builders_max"]}
 
 
 def choices(settings: dict) -> dict:
@@ -150,10 +158,13 @@ def crew_view(stations: list[dict], settings: dict, machine: str) -> dict:
                   and o_row.get("state") in UP and r_row.get("state") in UP}
 
 
-def payload(store, stations: list[dict], settings: dict, linear: bool, issues: bool) -> dict:
-    """The `onboarding` block of the home."""
-    report = machine_report(store) or {}
-    crews = [c for c in store.list_crews() if c.get("machine")]
+def payload(store, stations: list[dict], settings: dict, linear: bool, issues: bool,
+            key: str = MACHINE_SETTING, person_id: str | None = None) -> dict:
+    """The `onboarding` block of the home, for the caller: `key` is where their machine report is
+    kept (machine_key) and `person_id` is whose crew may name the machine when no report came (a
+    crew that ran before the report existed). Another person's crew never does."""
+    report = machine_report(store, key) or {}
+    crews = [c for c in store.list_crews() if c.get("machine") and person_id and c.get("person_id") == person_id]
     machine = report.get("machine") or (crews[0]["machine"] if crews else "")
     c = choices(settings)
     crew = crew_view(stations, settings, machine)
