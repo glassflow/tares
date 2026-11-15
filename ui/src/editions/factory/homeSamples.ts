@@ -1,5 +1,5 @@
 import type { StartBlock, StartStep } from "../StartChecklist.api";
-import type { HomeCrew, HomeCrewMember, HomeData, HomeItem, HomeProject } from "./home.types";
+import type { HomeCrew, HomeCrewMember, HomeData, HomeItem, HomeOnboarding, HomeProject, OnboardingMember } from "./home.types";
 
 // Sample bodies of the factory home, in the shape of GET /api/home. They show only behind the
 // sample flag (src/editions/sample.ts), never on a live cell. Every name here is invented.
@@ -197,26 +197,27 @@ export const longGoals: HomeData = {
   ],
 };
 
-// The Start checklist, as the daemon words it (tares/start_steps.py): five steps, done ones in place
+// The first-run steps, as the daemon words them (tares/start_steps.py): six steps, done ones in place
 // without buttons.
-const STEP_KEYS = ["claude_code", "github", "tickets", "crew", "spec"];
+const STEP_KEYS = ["choices", "connections", "install", "login", "crew", "spec"];
 const STEPS: Record<string, Omit<StartStep, "done">> = {
-  claude_code: { key: "claude_code", title: "Sign in from Claude Code",
-    gets: "Your Claude Code sessions and the crew report here.",
+  choices: { key: "choices", title: "Decide how your crew works", where: "workspace",
+    gets: "The crew reads these when it starts. Change any of them later in Settings, Crew.", actions: [] },
+  connections: { key: "connections", title: "Connect GitHub and choose where tickets live", where: "workspace",
+    gets: "Tares follows every pull request. Tickets stay here, or in Linear or GitHub Issues.",
+    actions: [{ label: "Connect GitHub", to: "/settings#tools" }, { label: "Connect Linear", to: "/settings#tools" }] },
+  install: { key: "install", title: "Install Tares", where: "terminal",
+    gets: "The command that starts and watches the crew.",
+    actions: [{ label: "Copy the command", copy: "uv tool install tares" }] },
+  login: { key: "login", title: "Sign your machine in", where: "terminal",
+    gets: "So the crew on your machine reports here.",
     actions: [{ label: "Copy the command", copy: "tares login" }] },
-  github: { key: "github", title: "Connect GitHub",
-    gets: "The crew opens pull requests and Tares follows their reviews and checks.",
-    actions: [{ label: "Connect GitHub", to: "/settings#tools" }] },
-  tickets: { key: "tickets", title: "Connect Linear or GitHub Issues",
-    gets: "Tickets stay where your team already tracks work.",
-    actions: [{ label: "Connect Linear", to: "/settings#tools" },
-              { label: "Use GitHub Issues", href: "https://docs.glassflow.ai/tares/software-factory/get-started" }] },
-  crew: { key: "crew", title: "Start the crew",
-    gets: "Claude Code sessions that build, review and merge your tickets.",
+  crew: { key: "crew", title: "Start the crew", where: "terminal",
+    gets: "It reads your choices from this workspace and asks only what belongs to your machine.",
     actions: [{ label: "Copy the command", copy: "tares factory crew up" }] },
-  spec: { key: "spec", title: "Write your first spec",
-    gets: "A plan with milestones and tickets the crew can build.",
-    actions: [{ label: "Copy the command", copy: 'tares factory spec "what you want to build"' }] },
+  spec: { key: "spec", title: "Plan the first project", where: "terminal",
+    gets: "Start it in the repo you want built. You talk the project through with Claude Code, and it writes the plan as milestones and tickets.",
+    actions: [{ label: "Copy the command", copy: "tares factory spec" }] },
 };
 
 /** The block with the steps named in `done` ticked, and `details` added to the steps they name. */
@@ -230,28 +231,79 @@ function startBlock(done: string[], details: Record<string, string> = {}, hidden
   return { steps, done: n, total: steps.length, show: pending && !hidden, hidden: pending && hidden };
 }
 
+const NO_MEMBER: OnboardingMember = { state: "none", last_at: null };
+const RUNNING_MEMBER: OnboardingMember = { state: "running", last_at: "2026-11-02T09:40:00Z" };
+const FRESH: HomeOnboarding = {
+  choices: { chosen: false, autonomy: null, releaser: null, builders_max: null,
+             defaults: { autonomy: "L4-ship", releaser: false, builders_max: 2, recommended: "L3-review" } },
+  tracker: null,
+  github: { connected: false, text: "" },
+  linear: { connected: false },
+  machine: { name: "", version: "", at: null },
+  crew: { machine: "", orchestrator: NO_MEMBER, reviewer: NO_MEMBER, builders: { live: 0, max: 2 }, up: false },
+};
+const CHOSEN: HomeOnboarding = {
+  ...FRESH,
+  choices: { ...FRESH.choices, chosen: true, autonomy: "L3-review", releaser: false, builders_max: 2 },
+  tracker: "tares",
+  github: { connected: true, text: "GitHub connected as example-org" },
+};
+const SIGNED_IN: HomeOnboarding = {
+  ...CHOSEN,
+  machine: { name: "example-laptop", version: "1.60.0", at: "2026-11-02T09:30:00Z" },
+  crew: { ...CHOSEN.crew, machine: "example-laptop" },
+};
+const COMING_UP: HomeOnboarding = {
+  ...SIGNED_IN, crew: { ...SIGNED_IN.crew, orchestrator: RUNNING_MEMBER, reviewer: { state: "starting", last_at: null } },
+};
+const CREW_UP: HomeOnboarding = {
+  ...SIGNED_IN, crew: { ...SIGNED_IN.crew, orchestrator: RUNNING_MEMBER, reviewer: RUNNING_MEMBER, up: true },
+};
+
 const LONG_DETAIL =
-  "Connected as example-org. The connection covers example-org/service-a, example-org/edge-proxy, example-org/docs-site "
+  "GitHub connected as example-org. The connection covers example-org/service-a, example-org/edge-proxy, example-org/docs-site "
   + "and 40 more repositories, and was last used 3 minutes ago to read a review on a pull request in example-org/service-a. "
-  + "Open Settings, Connections to change which repositories the crew can reach, or to disconnect it for everyone.";
+  + "Open Settings, GitHub to change which repositories the crew can reach, or to disconnect it for everyone. "
+  + "Nothing changes for a pull request that is already open, and the crew keeps reading its reviews and its checks "
+  + "until the connection is removed.";
 
-/** A new cell: nothing done, so the list shows all five steps. */
-export const startNothing: HomeData = { ...empty, start: startBlock([]) };
+const DONE_TEXT = {
+  choices: "You approve each merge, 2 builders, no releases",
+  connections: "GitHub connected as example-org, tickets in Tares",
+  install: "Installed: tares 1.60.0.",
+  login: "Signed in from example-laptop.",
+};
+const FOUR = ["choices", "connections", "install", "login"];
 
-/** Three of five done: the first three, so the open ones are the crew and the spec. */
-export const startThree: HomeData = { ...empty, start: startBlock(["claude_code", "github", "tickets"]) };
+/** A new cell: nothing done, so the list shows all six steps and the form starts on the defaults. */
+export const startNothing: HomeData = { ...empty, start: startBlock([]), onboarding: FRESH };
+
+/** Choices saved, GitHub connected and tickets placed, Tares installed and signed in: the crew command is next. */
+export const startThree: HomeData = { ...empty, start: startBlock(FOUR, DONE_TEXT), onboarding: SIGNED_IN };
+
+/** The crew command ran: the orchestrator is up and the reviewer is starting. */
+export const startComingUp: HomeData = { ...empty, start: startBlock(FOUR, DONE_TEXT), onboarding: COMING_UP };
+
+/** The crew is up and waits for a plan: the page says so and links to Settings and the Crew page. */
+export const startCrewUp: HomeData = {
+  ...empty,
+  start: startBlock([...FOUR, "crew"], { ...DONE_TEXT, crew: "The orchestrator and the reviewer are running." }),
+  onboarding: CREW_UP,
+};
 
 /** A step with a long detail: it clamps to three lines and the full text is in its title. */
-export const startLong: HomeData = { ...empty, start: startBlock(["github"], { github: LONG_DETAIL }) };
+export const startLong: HomeData = {
+  ...empty, start: startBlock(["choices", "connections"], { connections: LONG_DETAIL }), onboarding: CHOSEN,
+};
 
 /** Everything done: the block says not to show, so the page has no list. */
-export const startDone: HomeData = { ...nothingWaiting, start: startBlock(STEP_KEYS) };
+export const startDone: HomeData = { ...nothingWaiting, start: startBlock(STEP_KEYS), onboarding: CREW_UP };
 
 /** The person hid the list: the page shows one line with Show it again where the list was. */
-export const startHidden: HomeData = { ...empty, start: startBlock(["claude_code", "github"], {}, true) };
+export const startHidden: HomeData = { ...empty, start: startBlock(["choices", "connections"], {}, true), onboarding: CHOSEN };
 
 /** The samples by the name `?sample=` gives them. Loading and error have no data and live in FactoryHome. */
 export const HOME_SAMPLES: Record<string, HomeData> = {
   busy, empty, crewQuiet, nothingWaiting, manyWaiting, longGoals,
-  startNothing, startThree, startLong, startDone, startHidden,
+  startNothing, startThree, startComingUp, startCrewUp, startLong, startDone, startHidden,
 };

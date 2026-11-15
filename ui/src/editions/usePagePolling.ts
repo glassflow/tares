@@ -15,6 +15,7 @@ export function usePagePolling<T>(fn: () => Promise<T>, ms: number): {
   const [tick, setTick] = useState(0);
   const fnRef = useRef(fn);
   fnRef.current = fn;
+  const readFor = useRef(-1);   // the tick the last read answered: a new interval alone does not read again
 
   useEffect(() => {
     let live = true;
@@ -31,7 +32,7 @@ export function usePagePolling<T>(fn: () => Promise<T>, ms: number): {
       load();
       start();
     };
-    load();
+    if (readFor.current !== tick) { readFor.current = tick; load(); }
     if (ms <= 0) return () => { live = false; };
     if (!document.hidden) start();
     document.addEventListener("visibilitychange", onChange);
