@@ -508,6 +508,12 @@ const stationLines = (sid, station, role, state) => [
         const a = e.getBoundingClientRect(), b = box.getBoundingClientRect();
         return a.right <= b.right + 1 && a.left >= b.left - 1;
       }));
+      ck(`long text @${width}: the "Your machine" label stays on one line`, await p.evaluate(() => {
+        const label = document.querySelector("[data-testid=crew-machine] > span");
+        if (!label) return false;
+        const lh = parseFloat(getComputedStyle(label).lineHeight) || 20;
+        return label.getBoundingClientRect().height < lh * 1.5;
+      }));
     };
     await stateAt("long-text", 1440, "5 of 6 done", longChecks);
     await stateAt("long-text", 390, "5 of 6 done", longChecks);

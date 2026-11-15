@@ -256,6 +256,7 @@ async def main():
                mine(ana["id"])["machine"] == "ana-laptop" and mine(ben["id"])["machine"] == "ben-desktop"
                and json.loads(store.get_setting(co.MACHINE_SETTING))["machine"] == "cell-machine",
                [store.get_setting(k) for k in (co.machine_key(ana["id"]), co.machine_key(ben["id"]), co.MACHINE_SETTING)])
+            cell_report = json.loads(store.get_setting(co.MACHINE_SETTING))
             ha = (await ax.get("/api/home")).json()["onboarding"]["machine"]
             hb = (await bx.get("/api/home")).json()["onboarding"]["machine"]
             ck("each home says its own machine and version, never the other's",
@@ -263,6 +264,16 @@ async def main():
                (ha, hb))
             ck("a person who never reported has none (the cell's is not theirs)",
                (await mk(kc).get("/api/home")).json()["onboarding"]["machine"]["name"] == "")
+            nh = (await nn.get("/api/home")).json()["onboarding"]["machine"]
+            ck("a key with no person sees no machine report, not the cell's",
+               nh["name"] == "" and nh["version"] == "" and cell_report["machine"] == "cell-machine", (nh, cell_report))
+            cw = factory_api.cell_wide
+            ck("one rule for who speaks for the cell: the system credential and `local`, `local` needs admin for a write",
+               cw(True, None, lambda: False) and cw(False, {"id": "local"}, lambda: True)
+               and not cw(False, {"id": "local"}, lambda: False)
+               and cw(False, {"id": "local"}, lambda: False, admin_only=False)
+               and not cw(False, {"id": ana["id"]}, lambda: True, admin_only=False)
+               and not cw(False, None, lambda: True, admin_only=False))
             ck("the report holds no key", all(t not in json.dumps([store.get_setting(co.MACHINE_SETTING),
                                                                     store.get_setting(co.machine_key(ana["id"]))])
                                               for t in (TOKEN, ka, kb)))

@@ -278,10 +278,10 @@ function YourCrew({ o }: { o: HomeOnboarding }) {
       </div>
       <ul className="m-0! list-none! p-0!">
         <li className="flex items-center justify-between gap-3 px-[18px] py-3.5" data-testid="crew-machine">
-          <span className="font-semibold">Your machine</span>
-          <span className="flex items-center gap-2 text-muted-foreground">
+          <span className="shrink-0 font-semibold">Your machine</span>
+          <span className="flex min-w-0 items-center gap-2 text-muted-foreground">
             <span aria-hidden className={cn("size-2 flex-none", c.machine ? "bg-[var(--ok)]" : "border-[1.5px] border-muted-foreground")} />
-            <span data-user-text data-testid="crew-machine-state">{c.machine || "Not signed in"}</span>
+            <span data-user-text data-testid="crew-machine-state" className="min-w-0 break-all">{c.machine || "Not signed in"}</span>
           </span>
         </li>
         <MemberLine name="Orchestrator" who="orchestrator" m={c.orchestrator} />
