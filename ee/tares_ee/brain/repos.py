@@ -15,7 +15,8 @@ change while the daemon runs, so the check is per request, not at mount time). W
 no brain settings, `GET /api/brain` says `configured: false` and every other route answers 404.
 A new row is `queued`, and connecting it asks the control plane for an index Job (`index.py`, TR-1198);
 a background task there follows the Job: `queued` (with its `place`), `cloning`, `indexing`
-(`files_done` of `files_total`), `ready` or `failed`. Removing a repo from lore is TR-1199.
+(`files_done` of `files_total`), `ready` or `failed`. A ready repo is kept up to date by `sync.py`
+(TR-1201): a push to its default branch syncs it. Removing a repo from lore is TR-1199.
 """
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ from tares.envelope import now_utc
 from tares.factory import norm_repo
 
 from . import index as indexing
+from . import sync as syncing
 from .lore import _REPO_NAME, LoreClient, LoreError
 
 __all__ = ["MAX_CONNECT", "STATES", "lore_client", "register_routes"]
@@ -75,6 +77,7 @@ def row_view(r: dict) -> dict:
     return {"repo": r["repo"], "state": r["state"], "files_done": r["files_done"],
             "files_total": r["files_total"], "indexed_commit": r["indexed_commit"],
             "last_synced": r["last_synced"], "error": r["error"], "place": r["place"],
+            "sync_failures": r.get("sync_failures") or 0, "sync_error": r.get("sync_error"),
             "added_by": r["added_by"],
             "added_by_name": r["added_by_name"], "added_at": r["added_at"]}
 
@@ -84,6 +87,8 @@ def register_routes(app, host) -> None:
     lock = threading.Lock()
     indexer = indexing.Indexer(store, lambda: lore_client())   # looked up per call: a test swaps lore_client
     indexer.attach(app)
+    syncer = syncing.Syncer(indexer, getattr(host, "runtime", None))   # keeps ready repos current (TR-1201)
+    syncer.attach(app)
 
     def need_licence():
         if not licence.ee_allowed():
@@ -103,9 +108,11 @@ def register_routes(app, host) -> None:
     @app.get("/api/brain")
     def brain_state():
         """{configured, repos: [{repo, state, files_done, files_total, indexed_commit,
-        last_synced, error, place, added_by, added_by_name, added_at}]}, oldest first. `state` is
-        queued (`place` says where in the control plane's queue, when it does), cloning, indexing,
-        ready or failed (`error` says why, in plain words)."""
+        last_synced, error, place, sync_failures, sync_error, added_by, added_by_name, added_at}]},
+        oldest first. `state` is queued (`place` says where in the control plane's queue, when it
+        does), cloning, indexing, ready or failed (`error` says why, in plain words). A ready repo
+        whose last syncs failed stays ready: `sync_failures` counts them in a row, `sync_error` is the
+        last reason, and from the third in a row `error` shows it too."""
         need_licence()
         if not LoreClient.configured():
             return {"configured": False, "repos": []}

@@ -383,6 +383,10 @@ FACTORY_SCHEMA = [
     # waits, and when the cell asked for the job (NULL until it did, so a repo is asked for once).
     "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS place INTEGER",
     "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS job_started_at TIMESTAMPTZ",
+    # How the keep-up sync of a ready repo is doing (TR-1201): the failures in a row and the last
+    # failure's words. A success clears both.
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_failures INTEGER DEFAULT 0",
+    "ALTER TABLE brain_repos ADD COLUMN IF NOT EXISTS sync_error TEXT",
     # The owner of a repo saying the tickets in their repo are right (TR-636). Nothing reads it
     # since the hand-over stopped waiting for sign-offs; the rows are kept.
     """CREATE TABLE IF NOT EXISTS signoffs (
@@ -1824,13 +1828,14 @@ class FactoryStore:
 
     # ── the repos connected to the brain (TR-1197) ────────────────────────────
     _BR_COLS = ("repo, repo_source_id, state, files_done, files_total, indexed_commit, last_synced, "
-                "error, added_by, added_at, place, job_started_at")
+                "error, added_by, added_at, place, job_started_at, sync_failures, sync_error")
 
     def _br_rows(self, rows) -> list[dict]:
         out = [{"repo": r[0], "repo_source_id": r[1], "state": r[2], "files_done": r[3] or 0,
                 "files_total": r[4] or 0, "indexed_commit": r[5], "last_synced": r[6],
                 "error": r[7], "added_by": r[8], "added_at": r[9], "place": r[10],
-                "job_started_at": r[11]} for r in rows]
+                "job_started_at": r[11], "sync_failures": r[12] or 0, "sync_error": r[13]}
+               for r in rows]
         refs = self._person_refs(r["added_by"] for r in out)
         for r in out:
             r["added_by_name"] = (refs.get(r["added_by"]) or {}).get("name")
@@ -1854,7 +1859,7 @@ class FactoryStore:
         with self._swrite:
             hit = self.sc.execute(
                 f"INSERT INTO brain_repos ({self._BR_COLS}) VALUES (?, ?, ?, 0, 0, NULL, NULL, NULL, "
-                "?, ?, NULL, NULL) ON CONFLICT DO NOTHING RETURNING repo",
+                "?, ?, NULL, NULL, 0, NULL) ON CONFLICT DO NOTHING RETURNING repo",
                 [repo, repo_source_id or None, state, added_by or None, at]).fetchone()
         return hit is not None
 
@@ -1871,16 +1876,16 @@ class FactoryStore:
         with self._swrite:
             hit = self.sc.execute(
                 "UPDATE brain_repos SET state = 'queued', error = NULL, place = NULL, "
-                "files_done = 0, files_total = 0, job_started_at = NULL "
-                "WHERE repo = ? AND state = ? RETURNING repo", [repo, from_state]).fetchone()
+                "files_done = 0, files_total = 0, job_started_at = NULL, sync_failures = 0, "
+                "sync_error = NULL WHERE repo = ? AND state = ? RETURNING repo", [repo, from_state]).fetchone()
         return hit is not None
 
     _BR_SETTABLE = ("state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
-                    "place", "job_started_at")
+                    "place", "job_started_at", "sync_failures", "sync_error")
 
     def update_brain_repo(self, repo: str, fields: dict, only_in: tuple[str, ...] | None = None) -> bool:
         """Set some of a repo's columns (state, files_done, files_total, indexed_commit,
-        last_synced, error, place, job_started_at). With `only_in`, only while the repo is in one
+        last_synced, error, place, job_started_at, sync_failures, sync_error). With `only_in`, only while the repo is in one
         of those states. False when no row was changed."""
         bad = sorted(set(fields) - set(self._BR_SETTABLE))
         if bad or not fields:
