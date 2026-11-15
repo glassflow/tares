@@ -17,6 +17,7 @@ script keeps its state in Postgres.
 Run: .venv/bin/python ee/tests/test_brain_index.py
 """
 import asyncio, json, logging, os, sys, tempfile, time
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import licensed   # scrubs the machine's TARES_* settings, puts the repo, ee/ and tests/ on sys.path
@@ -113,6 +114,22 @@ def unit():
     ck("a token in the log line is hidden", T2 not in words("acme/web", f"fatal: bad {T2} here") and "[hidden]" in words("acme/web", f"fatal: bad {T2} here"))
     ck("a long line is cut", len(words("acme/web", "x" * 5000)) < 450)
     ck("a count that is null, negative, text or a bool is 0", [index_mod._count(v) for v in (None, -3, "4", True, 0, 7)] == [0, 0, 0, 0, 0, 7])
+    z = index_mod._when("2026-01-02T03:04:05Z")
+    ck("_when reads a Z string as UTC", z == datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc), str(z))
+    ck("_when reads an offset string", index_mod._when("2026-01-02T03:04:05+00:00") == z)
+    naive = index_mod._when(datetime(2026, 1, 2, 3, 4, 5))
+    ck("_when gives a naive datetime the UTC zone", naive == z and naive.tzinfo is not None, str(naive))
+    ck("_when keeps an aware datetime as it is", index_mod._when(z) == z)
+    ck("_when of garbage, blank or None is None", [index_mod._when(v) for v in ("garbage", "", None, 5, "2026-13-45")] == [None] * 5)
+    t0 = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    ck("a run that ended well before the Job was asked for is older",
+       index_mod._older_than_job((t0 - timedelta(minutes=5)).isoformat(), t0.isoformat()))
+    ck("a run that ended inside the clock slack is not older",
+       not index_mod._older_than_job((t0 - timedelta(seconds=30)).isoformat(), t0.isoformat()))
+    ck("a run that ended after the Job was asked for is not older",
+       not index_mod._older_than_job((t0 + timedelta(minutes=5)).isoformat(), t0.isoformat()))
+    ck("with no finish time, or no ask time, a run is not older",
+       not index_mod._older_than_job(None, t0.isoformat()) and not index_mod._older_than_job(t0.isoformat(), None))
     ck("no control plane settings: all three are named", cp_mod.missing_settings({}) == ["TARES_BRAIN_CP_URL", "TARES_BRAIN_CP_TOKEN", "TARES_CELL_SLUG"])
     ck("the instance name stands in for the cell slug", cp_mod.missing_settings({"TARES_BRAIN_CP_URL": "http://x", "TARES_BRAIN_CP_TOKEN": "t",
        "TARES_INSTANCE_NAME": "cell-a"}) == [])
@@ -148,7 +165,7 @@ async def main():
     index_mod.cp_client = cp.client
     os.environ["TARES_BRAIN_URL"] = fake_lore.BASE_URL
     os.environ["TARES_BRAIN_KEY"] = BRAIN_KEY
-    names = ("one", "two", "three", "c1", "c2", "c3", "c4", "poll", "poll2", "gone", "gone2", "gone3", "adopt", "lic", "nobrain",
+    names = ("one", "two", "three", "c1", "c2", "c3", "c4", "poll", "poll2", "gone", "gone2", "gone3", "gone4", "stale", "stale2", "stale3", "adopt", "lic", "nobrain",
              "race", "old", "inprog", "nulls", "nocp", "nocp2", "odd", "wake", "asked", "mid", "dup", "leak")
     readable = [{"full_name": f"acme/{n}"} for n in names]
 
@@ -438,6 +455,36 @@ async def main():
         await state_is("acme/gone3", "failed")
         ck("a Job that is gone and a done run older than it (an earlier attempt) is not adopted",
            "is gone" in row("acme/gone3")["error"], row("acme/gone3")["error"])
+        await connect("acme/gone4")
+        await state_is("acme/gone4", "cloning")
+        del cp.jobs[src("acme/gone4")]
+        lore.progress[src("acme/gone4")] = {"stage": "done", "finished_at": datetime.now(timezone.utc).isoformat()}
+        await state_is("acme/gone4", "ready")
+        ck("a Job that is gone and a done run that finished after it was asked for is adopted", row("acme/gone4")["error"] is None,
+           str(row("acme/gone4")["error"]))
+
+        print("== a run lore holds from an earlier attempt is not this Job's progress ==")
+        old = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        await connect("acme/stale")
+        await state_is("acme/stale", "cloning")
+        lore.progress[src("acme/stale")] = {"stage": "failed", "files_done": 3, "files_total": 9, "finished_at": old}
+        await asyncio.sleep(0.3)
+        ck("a failed run in lore while the Job runs is not shown as indexing", (row("acme/stale")["state"], row("acme/stale")["files_done"],
+           row("acme/stale")["files_total"]) == ("cloning", 0, 0), str(row("acme/stale")))
+        lore.progress[src("acme/stale")] = {"stage": "indexing", "files_done": 4, "files_total": 9}
+        await state_is("acme/stale", "indexing", files_done=4, files_total=9)
+        await connect("acme/stale2")
+        await state_is("acme/stale2", "cloning")
+        lore.progress[src("acme/stale2")] = {"stage": "done", "files_done": 9, "files_total": 9}
+        await asyncio.sleep(0.3)
+        ck("a done run in lore while the Job still runs is not shown either", (row("acme/stale2")["state"], row("acme/stale2")["files_total"])
+           == ("cloning", 0), str(row("acme/stale2")))
+        await connect("acme/stale3")
+        await state_is("acme/stale3", "cloning")
+        lore.progress[src("acme/stale3")] = {"stage": "indexing", "files_done": 2, "files_total": 8, "finished_at": old}
+        await asyncio.sleep(0.3)
+        ck("a run that ended before the Job was asked for is not shown, whatever its stage", (row("acme/stale3")["state"],
+           row("acme/stale3")["files_total"]) == ("cloning", 0), str(row("acme/stale3")))
         await connect("acme/adopt")
         await state_is("acme/adopt", "cloning")
         lore.fail("repo_progress", 500, "progress is down")

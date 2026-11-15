@@ -251,6 +251,11 @@ class Indexer:
         try:
             async with self._lore() as lore:
                 p = await lore.repo_progress(row["repo_source_id"])
+            # The control plane says the Job runs, so a done or failed run in lore, or one that ended
+            # before this Job was asked for, is an earlier attempt (after a Retry, until the new run's
+            # row exists): its counts are not ours.
+            if p.get("stage") in ("done", "failed") or _older_than_job(p.get("finished_at"), row.get("job_started_at")):
+                p = {}
             done, total = _count(p.get("files_done")), _count(p.get("files_total"))
             if p.get("stage") == "indexing" or total:   # lore's run: queued, cloning, indexing, done, failed
                 phase = "indexing"
