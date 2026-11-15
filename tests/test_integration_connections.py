@@ -438,6 +438,13 @@ ck("a pair's differing settings are logged by integration, pair and key name",
    and [k for k in ("mode", "token", "url") if any(f": {k} from" in x for x in _gp9)] == ["mode", "token", "url"], _gp9)
 ck("and never the value", not any(v in x for x in _gp9 for v in
    [SECRETS[7], SECRETS[4], "https://other.example/", "https://g.example/", "strict"]), _gp9)
+# a stored key or id with a newline must not start a second log line
+_before = len(catch.lines)
+old_pair("GP10", "factory", None, "pre_release", "rail_a", {"to\nken": "x"})
+upgrade()
+_gp10 = catch.lines[_before:]
+ck("a stored key with a newline is written out, so it cannot forge a log line",
+   len(_gp10) == 1 and "\n" not in _gp10[0] and "to\\nken" in _gp10[0], _gp10)
 _up_log.removeHandler(catch)
 ck("a pair's settings never replace an existing connection",
    m.stored_settings("guardrails", "rail_a") == {"url": "https://g.example/", "token": SECRETS[4]}

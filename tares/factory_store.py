@@ -16,6 +16,12 @@ from .integrations import SLOTS
 
 log = logging.getLogger("tares.factory_store")
 
+
+def _loggable(x) -> str:
+    """A stored name or key for a log line: control characters written out, so a newline in a
+    stored row cannot start a forged line."""
+    return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group())[1:-1], str(x))
+
 FACTORY_SCHEMA = [
     # The Codex challenger's reviews and waivers (TR-719), copied from the events as they arrive
     # so the review queue, the ticket detail and the merge gate look a ticket's up by branch
@@ -652,7 +658,8 @@ class FactoryStore:
                 have = self._load_settings(kept[0])
                 for k in sorted(k for k, v in settings.items() if have.get(k) != v):
                     log.warning("integration upgrade: %s %s: %s from %s differs from the connection "
-                                "kept at the factory and is dropped", slot, name, k, origin or "a row")
+                                "kept at the factory and is dropped", slot, _loggable(name), _loggable(k),
+                                _loggable(origin or "a row"))
                 return
             self.sc.execute("INSERT INTO integration_connections (slot, name, settings, updated_at, "
                             "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, json.dumps(settings), at, by])
@@ -2397,7 +2404,7 @@ class FactoryStore:
 
     def _connected(self, slot: str, name: str, takes_settings: bool) -> bool:
         """is_connected with the lock held (a read lock or the write lock), so a write can check
-        it in the same step as the write. `takes_settings` is False for an installed integration
+        it in the same step as the write (within this process). `takes_settings` is False for an installed integration
         whose settings_schema is empty. Read the registry before taking the lock."""
         if not takes_settings:
             return True
@@ -2475,7 +2482,7 @@ class FactoryStore:
             raise ValueError("monitoring keeps one connection: connect another integration to replace it")
         takes = self._takes_settings(slot, name)
         with self._swrite:
-            # checked in the same step as the write: a connection deleted meanwhile cannot slip by
+            # checked in the same step as the write (within this process): a connection deleted meanwhile cannot slip by
             if not self._connected(slot, name, takes):
                 raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
             self._point_default(slot, name, now_utc(), by)
@@ -2775,7 +2782,7 @@ class FactoryStore:
         """Save the project's own choice for the slot: a connected integration's name and the
         project's own fields. A secret or an address in `settings` raises ValueError: those live at
         the factory (TR-1380), so a project never holds one. With `require_connected` an integration
-        that is not connected raises ValueError too, checked in the same step as the write (the
+        that is not connected raises ValueError too, checked in the same step as the write, within this process (the
         route asks for it). Only tickets, review and ci take one."""
         self._integration_slot(slot, PROJECT_SLOTS)
         name = str(name or "").strip()

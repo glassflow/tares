@@ -394,6 +394,15 @@ async def main():
                        and needle in r.text and "factory's integrations" in r.text and SECRETS[2] not in r.text, r.text)
                 r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "slowtix", "settings": {}}))
                 ck("an integration that is not connected is 422", r.status_code == 422 and "slowtix is not connected" in r.text, r.text)
+                # the route's early check can be stale (the connection deleted in between): the write
+                # must refuse on its own, so make the early check say yes while it is not connected
+                _early = store.is_connected
+                store.is_connected = lambda slot, name: True
+                r = ru(await cx.put("/api/projects/p1/integrations/tickets", json={"name": "slowtix", "settings": {}}))
+                store.is_connected = _early
+                ck("the write refuses a connection that is gone even when the early check said yes",
+                   r.status_code == 422 and "slowtix is not connected" in r.text
+                   and "factory's integrations" in r.text and store.get_project_choice("p1", "tickets")["name"] == "faketix", r.text)
                 ck("the refused writes changed nothing", store.get_project_choice("p1", "tickets")["settings"] == {"project": "PRJ"}
                    and store.get_project_choice("p1", "tickets")["name"] == "faketix")
                 r = ru(await cx.put("/api/projects/p2/integrations/tickets", json=pb))
