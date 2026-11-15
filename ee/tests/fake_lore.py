@@ -21,7 +21,8 @@ Where the fake still differs from lore (lore's source is the authority): ids are
 UUIDs (lore's `Path<Uuid>` refuses others with a bare 400); `k` is clamped to at least 1 only (lore
 has its own upper bound); search hits carry empty `chunk_id`, `path`, `start_line`, `end_line` and
 `symbols`, and a document search is a substring match, not lore's ranking; ask answers one fixed
-citation; `sync` answers `sync_report` at once instead of after an index run.
+citation; `sync` answers `sync_report` at once instead of after an index run, with its `indexed_commit` (forty
+zeros when that is blank).
 """
 from __future__ import annotations
 
@@ -161,7 +162,7 @@ class FakeLore:
         repo = self.repos.get(args["id"])
         if repo is None:
             return _err(404, "not found")
-        repo["indexed_commit"] = "0" * 40
+        repo["indexed_commit"] = self.sync_report.get("indexed_commit") or "0" * 40
         self.progress.setdefault(repo["id"], {"stage": "queued"})
         return _ok(self.sync_report | {"indexed_commit": repo["indexed_commit"]})
 
