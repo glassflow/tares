@@ -8,7 +8,10 @@ Covered:
    connected; deleting a connection is refused while it is the default, while a project uses it and
    while a guardrail pair uses it, and the message names what uses it; a free connection deletes;
    a project row holds only plain fields (a secret key or an address key raises ValueError);
-   stored_settings is the factory connection overlaid with the project's own fields;
+   stored_settings is the factory connection overlaid with the project's own fields, and reads only
+   plain fields from a project row (a secret or address left in one is ignored); set_default and the
+   project's pick check "connected" in the same step as the write, so a stale earlier check cannot
+   let a connection that is gone through (TR-1383);
  - the effective read: a project's choice of an integration that is no longer connected falls
    through to the factory's default with the reason "not connected";
  - the migration of a cell from before (`_factory_upgrade`): a choice's settings become a
@@ -16,7 +19,8 @@ Covered:
    factory connection and its plain fields stay; an existing connection is not overwritten; an
    integration that is not installed treats every key as a secret; a guardrail pair's settings move
    the same way and the pair keeps none; pairs that are then twins become one; a second run changes
-   nothing; no secret value is printed;
+   nothing; no secret value is printed; a credential dropped because the factory already has a
+   different one is logged by integration, project or pair and key name, never the value (TR-1383);
  - the API: connect several, `default: false`, the default route, the delete route (422 naming the
    user, 404 for a connection that is not there, the entry back with `deleted`); every entry carries
    `connections` redacted; a project write with a secret key, an address key or an integration that
@@ -29,6 +33,7 @@ With CI's Postgres run: TARES_TEST_PG=<dsn> PYTHONPATH=tests/pg_harness python t
 """
 import asyncio
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -67,7 +72,7 @@ def ck(label, cond, detail=""):
 
 
 SECRETS = ["CSECRET-alpha-1", "CSECRET-beta-2", "CSECRET-gamma-3", "CSECRET-old-4", "CSECRET-pair-5",
-           "CSECRET-gone-6", "CSECRET-proj-7", "CSECRET-pair-8"]
+           "CSECRET-gone-6", "CSECRET-proj-7", "CSECRET-pair-8", "CSECRET-leak-9"]
 
 
 class TixA(TicketBackend):
@@ -217,6 +222,20 @@ ck("without the project it is the connection as saved",
 ck("another integration for that project is not overlaid",
    s.stored_settings("tickets", "tixa", "p1")["project"] == "A")
 
+# a row from before could hold a secret or an address (a restore, an older cell): stored_settings
+# reads only the plain fields from it, so the project's copy never overrides the factory's connection
+with s._swrite:
+    s.sc.execute("INSERT INTO project_integrations (project_uid, slot, name, settings, updated_at, updated_by) "
+                 "VALUES (?, ?, ?, ?, ?, ?)",
+                 ["p9", "tickets", "tixa", json.dumps({"token": SECRETS[8], "url": "https://leak.example/api",
+                                                        "project": "P9"}), "2026-01-01 00:00:00", "old"])
+_own = s.stored_settings("tickets", "tixa", "p9")
+ck("stored_settings ignores a secret and an address left in a project row, and reads its plain field",
+   _own["token"] == SECRETS[0] and _own["url"] == "https://a.example/api" and _own["project"] == "P9"
+   and SECRETS[8] not in json.dumps(_own), _own)
+with s._swrite:
+    s.sc.execute("DELETE FROM project_integrations WHERE project_uid = ?", ["p9"])
+
 print("== deleting a connection ==")
 ck("the default cannot be deleted, and the message names why",
    "default for tickets" in (raises(s.delete_connection, "tickets", "tixa") or ""))
@@ -251,6 +270,25 @@ e = resolve.effective("tickets", "p2", store=s)
 ck("with no connection it falls through to the factory's default, reason not connected",
    e.integration == "tixa" and e.source == "factory" and e.reason == "not connected", e)
 ck("and shows no secret", SECRETS[1] not in repr(e) and SECRETS[0] not in repr(e), e)
+
+print("== connected is checked in the same step as the write ==")
+# a check made before the write can be stale: the connection is deleted in between. Make the early
+# check say yes (as a stale one would) while the connection is gone: the write must still refuse.
+_real_is_connected = s.is_connected
+s.is_connected = lambda slot, name: True
+r = raises(s.set_default, "tickets", "tixb", "ann")
+ck("set_default refuses a connection that is gone even when an earlier check said yes",
+   r is not None and "not connected" in r and default_of(s, "tickets") == ["tixa"], (r, default_of(s, "tickets")))
+r = raises(s.set_project_choice, "p4", "tickets", "tixb", {}, "ann", require_connected=True)
+ck("so does the project's pick, and it leaves no row", r is not None and "not connected" in r
+   and "factory's integrations" in r and s.get_project_choice("p4", "tickets") is None, r)
+s.is_connected = _real_is_connected
+ck("the pick of a connected integration passes the same check",
+   s.set_project_choice("p4", "tickets", "tixa", {}, "ann", require_connected=True)["name"] == "tixa")
+ck("an integration with no integration settings needs no connection for a pick either",
+   s.set_project_choice("p4", "ci", "ciplain", {}, "ann", require_connected=True)["name"] == "ciplain")
+s.clear_project_choice("p4", "tickets")
+s.clear_project_choice("p4", "ci")
 
 
 # ── the migration ──────────────────────────────────────────────────────────────
@@ -313,7 +351,21 @@ old_pair("GP5", "project", "p1", "pre_build", "rail_c", {})
 # monitoring never moves: it lives in the tracing settings
 old_choice("monitoring", "otlp", {"endpoint": "https://m.example"})
 
+class Catch(logging.Handler):
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+catch = Catch()
+_up_log = logging.getLogger("tares.factory_store")
+_up_log.addHandler(catch)
+
 upgrade()
+first_log = list(catch.lines)
 
 conns = {(r[0], r[1]): json.loads(r[2]) for r in table("SELECT slot, name, settings FROM integration_connections")}
 ck("the factory's choice became a connection with its settings",
@@ -363,6 +415,13 @@ after = (sorted(table("SELECT slot, name, settings, updated_by FROM integration_
          sorted(table("SELECT slot, name, settings FROM integration_choices")),
          sorted(table("SELECT id, hook, integration, on_fail, settings FROM guardrail_pairs")))
 ck("a second run changes nothing", before == after)
+ck("the first run logged the one dropped credential that differed: the project's token for review reva",
+   len(first_log) == 1 and "review reva" in first_log[0] and "token" in first_log[0]
+   and "project p1" in first_log[0], first_log)
+ck("pairs with the same settings as the kept connection, and rows that became the connection, log nothing",
+   not any("GP2" in x or "GP3" in x or "tixb" in x or "tixa" in x for x in first_log), first_log)
+ck("the log names no value", not any(sec in x for x in first_log for sec in SECRETS), first_log)
+ck("a second run logs nothing more", catch.lines == first_log, catch.lines)
 ck("what the migration made reads back through the store, redacted",
    m.get_connection("tickets", "tixa")["settings"]["token"] == "" and m.get_connection("tickets", "tixa")["default"] is True
    and SECRETS[3] not in json.dumps(m.list_connections("tickets"), default=str))
@@ -370,8 +429,23 @@ ck("the project still runs with the factory's connection and its own field",
    m.stored_settings("tickets", "tixb", "p1")
    == {"url": "https://own.example/api", "token": SECRETS[6], "project": "OWN"}, m.stored_settings("tickets", "tixb", "p1"))
 # a pair added after the upgrade that carries settings from an old cell: the connection already there wins
-old_pair("GP9", "factory", None, "pre_release", "rail_a", {"url": "https://other.example/", "token": SECRETS[7]})
+old_pair("GP9", "factory", None, "pre_release", "rail_a",
+         {"url": "https://other.example/", "token": SECRETS[7], "mode": "strict"})
 upgrade()
+_gp9 = catch.lines[len(first_log):]
+ck("a pair's differing settings are logged by integration, pair and key name",
+   len(_gp9) == 3 and all("guardrails rail_a" in x and "guardrail pair GP9" in x for x in _gp9)
+   and [k for k in ("mode", "token", "url") if any(f": {k} from" in x for x in _gp9)] == ["mode", "token", "url"], _gp9)
+ck("and never the value", not any(v in x for x in _gp9 for v in
+   [SECRETS[7], SECRETS[4], "https://other.example/", "https://g.example/", "strict"]), _gp9)
+# a stored key or id with a newline must not start a second log line
+_before = len(catch.lines)
+old_pair("GP10", "factory", None, "pre_release", "rail_a", {"to\nken": "x"})
+upgrade()
+_gp10 = catch.lines[_before:]
+ck("a stored key with a newline is written out, so it cannot forge a log line",
+   len(_gp10) == 1 and "\n" not in _gp10[0] and "to\\nken" in _gp10[0], _gp10)
+_up_log.removeHandler(catch)
 ck("a pair's settings never replace an existing connection",
    m.stored_settings("guardrails", "rail_a") == {"url": "https://g.example/", "token": SECRETS[4]}
    and json.loads(table("SELECT settings FROM guardrail_pairs WHERE id = 'GP9'")[0][0]) == {})

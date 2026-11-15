@@ -7,11 +7,20 @@ migrations (FACTORY_SCHEMA), so they can refer to columns those add.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 
 from .envelope import now_utc
 from .integrations import SLOTS
+
+log = logging.getLogger("tares.factory_store")
+
+
+def _loggable(x) -> str:
+    """A stored name or key for a log line: control characters written out, so a newline in a
+    stored row cannot start a forged line."""
+    return re.sub(r"[\x00-\x1f\x7f]", lambda m: repr(m.group())[1:-1], str(x))
 
 FACTORY_SCHEMA = [
     # The Codex challenger's reviews and waivers (TR-719), copied from the events as they arrive
@@ -639,9 +648,18 @@ class FactoryStore:
             kinds = {f.name: f.kind for f in cls.settings_schema}
             return kinds.get(key, "secret") in ("secret", "url")
 
-        def connect(slot: str, name: str, settings: dict, at, by) -> None:
-            if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
-                               [slot, name]).fetchone():
+        def connect(slot: str, name: str, settings: dict, at, by, origin: str = "") -> None:
+            """Make the connection unless there is one. When there is, the settings given are
+            dropped: each key whose value differs from the kept one is logged, by integration,
+            origin and key name only, never the value."""
+            kept = self.sc.execute("SELECT settings FROM integration_connections WHERE slot = ? "
+                                   "AND name = ?", [slot, name]).fetchone()
+            if kept:
+                have = self._load_settings(kept[0])
+                for k in sorted(k for k, v in settings.items() if have.get(k) != v):
+                    log.warning("integration upgrade: %s %s: %s from %s differs from the connection "
+                                "kept at the factory and is dropped", slot, _loggable(name), _loggable(k),
+                                _loggable(origin or "a row"))
                 return
             self.sc.execute("INSERT INTO integration_connections (slot, name, settings, updated_at, "
                             "updated_by) VALUES (?, ?, ?, ?, ?)", [slot, name, json.dumps(settings), at, by])
@@ -651,7 +669,8 @@ class FactoryStore:
         for slot, name, raw, up_at, up_by in self.sc.execute(
                 "SELECT slot, name, settings, updated_at, updated_by FROM integration_choices "
                 "WHERE slot != 'monitoring' ORDER BY slot").fetchall():
-            connect(slot, name, self._load_settings(raw), up_at or at, up_by or "upgrade")
+            connect(slot, name, self._load_settings(raw), up_at or at, up_by or "upgrade",
+                    "the factory's earlier choice")
             if self._load_settings(raw):
                 self.sc.execute("UPDATE integration_choices SET settings = '{}' WHERE slot = ?", [slot])
         for uid, slot, name, raw in self.sc.execute(
@@ -664,7 +683,7 @@ class FactoryStore:
                 # something to move has had its turn: an empty one made now would win over it
                 bare.append((slot, name))
                 continue
-            connect(slot, name, gone, at, "upgrade")
+            connect(slot, name, gone, at, "upgrade", f"project {uid}")
             self.sc.execute("UPDATE project_integrations SET settings = ? WHERE project_uid = ? AND slot = ?",
                             [json.dumps({k: v for k, v in have.items() if k not in gone}), uid, slot])
         seen: set = set()
@@ -674,7 +693,7 @@ class FactoryStore:
                 key=lambda r: int(r[0][2:])):
             have = self._load_settings(raw)
             if have:
-                connect("guardrails", name, have, made or at, "upgrade")
+                connect("guardrails", name, have, made or at, "upgrade", f"guardrail pair {pid}")
                 self.sc.execute("UPDATE guardrail_pairs SET settings = ? WHERE id = ?", ["{}", pid])
             key = (scope, uid, hook, name, on_fail or "block")
             if key in seen:
@@ -2383,19 +2402,30 @@ class FactoryStore:
             default = self._default_name(slot)
         return [self._connection_view(slot, r[0], r[1], r[2], r[3], r[0] == default) for r in rows]
 
+    def _connected(self, slot: str, name: str, takes_settings: bool) -> bool:
+        """is_connected with the lock held (a read lock or the write lock), so a write can check
+        it in the same step as the write (within this process). `takes_settings` is False for an installed integration
+        whose settings_schema is empty. Read the registry before taking the lock."""
+        if not takes_settings:
+            return True
+        if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
+                           [slot, name]).fetchone():
+            return True
+        return self._default_name(slot) == name
+
+    @staticmethod
+    def _takes_settings(slot: str, name: str) -> bool:
+        from .integrations import registry
+        cls = registry.get(slot, name)       # before the lock: it loads the registry
+        return cls is None or bool(cls.settings_schema)
+
     def is_connected(self, slot: str, name: str) -> bool:
         """The integration is connected: it has a connection row, or it takes no integration
         settings (nothing to connect), or it is the slot's default."""
         self._integration_slot(slot)
-        from .integrations import registry
-        cls = registry.get(slot, name)       # before the lock: it loads the registry
-        if cls is not None and not cls.settings_schema:
-            return True
+        takes = self._takes_settings(slot, name)
         with self._sread:
-            if self.sc.execute("SELECT 1 FROM integration_connections WHERE slot = ? AND name = ?",
-                               [slot, name]).fetchone():
-                return True
-            return self._default_name(slot) == name
+            return self._connected(slot, name, takes)
 
     def set_choice(self, slot: str, name: str, settings: dict | None, by: str,
                    default: bool = True) -> dict:
@@ -2450,9 +2480,11 @@ class FactoryStore:
             raise ValueError("an integration name is required")
         if slot == "monitoring":
             raise ValueError("monitoring keeps one connection: connect another integration to replace it")
-        if not self.is_connected(slot, name):
-            raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
+        takes = self._takes_settings(slot, name)
         with self._swrite:
+            # checked in the same step as the write (within this process): a connection deleted meanwhile cannot slip by
+            if not self._connected(slot, name, takes):
+                raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
             self._point_default(slot, name, now_utc(), by)
         return self.get_connection(slot, name) or self._connection_view(slot, name, {}, now_utc(), by, True)
 
@@ -2746,11 +2778,12 @@ class FactoryStore:
         return None
 
     def set_project_choice(self, uid: str, slot: str, name: str, settings: dict | None,
-                           by: str) -> dict:
+                           by: str, require_connected: bool = False) -> dict:
         """Save the project's own choice for the slot: a connected integration's name and the
         project's own fields. A secret or an address in `settings` raises ValueError: those live at
-        the factory (TR-1380), so a project never holds one. That the integration is connected is
-        the caller's check (`is_connected`). Only tickets, review and ci take one."""
+        the factory (TR-1380), so a project never holds one. With `require_connected` an integration
+        that is not connected raises ValueError too, checked in the same step as the write, within this process (the
+        route asks for it). Only tickets, review and ci take one."""
         self._integration_slot(slot, PROJECT_SLOTS)
         name = str(name or "").strip()
         if not name:
@@ -2763,7 +2796,10 @@ class FactoryStore:
             why = self.project_field_refusal(slot, name, k)   # before the write lock: it loads the registry
             if why:
                 raise ValueError(why)
+        takes = self._takes_settings(slot, name)
         with self._swrite:
+            if require_connected and not self._connected(slot, name, takes):
+                raise ValueError(f"{name} is not connected: connect it in the factory's integrations first")
             at = now_utc()
             cur = self.sc.execute("SELECT 1 FROM project_integrations WHERE project_uid = ? AND slot = ?",
                                   [uid, slot]).fetchone()
