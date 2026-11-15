@@ -504,7 +504,7 @@ s.con.close()
             ck(`${tag}: the result line says it went`, /^Last sent \w+ \d\d:\d\d to 1 person\.$/.test(last), last);
             ck(`${tag}: the cell asked the control plane once, with its own token, to the workspace address`,
                asks.length === 1 && asks[0].auth === `Bearer ${TOKEN}` && asks[0].url === "/api/workspaces/demo/status-email" && asks[0].body.recipients.length === 1, JSON.stringify(asks.map((a) => a.url)));
-            ck(`${tag}: the email is plain text with a top line`, /Nothing is waiting for you\./.test(asks[0].body.text) && !asks[0].body.text.includes("**") && asks[0].body.subject.startsWith("Morning status"), asks[0].body.subject);
+            ck(`${tag}: the email is plain text with a top line`, /Nothing is waiting on anyone\./.test(asks[0].body.text) && !asks[0].body.text.includes("**") && asks[0].body.subject.startsWith("Morning status"), asks[0].body.subject);
             ck(`${tag}: saved settings keep the send out of the scheduled date`, (await api2(BASE2, TOKEN, "GET", "/api/factory/settings")).body.morning.enabled === true);
           } else {
             await until(async () => (await p.getByTestId("morning-last-result").count()) > 0);
