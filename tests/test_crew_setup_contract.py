@@ -202,7 +202,7 @@ ck("same grant on Tares", c1.tares.grants == c2.tares.grants and len(c2.tares.gr
 ck("the same requests, in the same order", c1.tares.written() == c2.tares.written(), (c1.tares.written(), c2.tares.written()))
 ck("crew up tells Tares its machine and version once (TR-1312), and the report has no key",
    len(c1.tares.machine) == 1 and set(c1.tares.machine[0]) == {"machine", "version"} and c2.tares.machine == [], c1.tares.machine)
-for status, quiet in ((403, False), (404, True)):
+for status, quiet in ((403, False), (401, True), (404, True)):
     cm = Case()
     cm.tares.machine_status = status
     tm = cm.run(["crew", "up"], stdin=TERMINAL)
