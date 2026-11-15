@@ -505,6 +505,37 @@ async def main():
         sync_mod.SYNC_POLL_SECONDS = 3600.0
         ck("... and ends when cancelled", own.task.done())
 
+        print("== an idle task sleeps: no brain, or a step that fails, never spins ==")
+        sync_mod.TICK_SECONDS = 0.05
+        idle = repos_mod.syncing.Syncer(syncer.indexer, None)
+        looks = []
+        idle.active = lambda: looks.append(1) or False
+        idle.task = asyncio.create_task(idle.run())
+        await asyncio.sleep(0.6)
+        idle.task.cancel()
+        try:
+            await idle.task
+        except asyncio.CancelledError:
+            pass
+        ck("a task with the brain off looks once, not every 50 ms", len(looks) <= 2, str(len(looks)))
+        broken = repos_mod.syncing.Syncer(syncer.indexer, None)
+        steps = []
+
+        def boom():
+            steps.append(1)
+            raise RuntimeError("no")
+        broken.active = lambda: True
+        broken._start_tasks = boom
+        broken.poll = lambda: asyncio.sleep(0)
+        broken.task = asyncio.create_task(broken.run())
+        await asyncio.sleep(0.6)
+        broken.task.cancel()
+        try:
+            await broken.task
+        except asyncio.CancelledError:
+            pass
+        ck("a step that raises is tried once, then after a poll interval", len(steps) <= 2, str(len(steps)))
+
         print("== the licence and the brain settings ==")
         make_repo("acme/lic")
         n = len(syncs())

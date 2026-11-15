@@ -16,7 +16,7 @@ poller and webhook stay off: the cell drives every sync.
   is remembered and synced when the repo reaches `ready`; a repo that is `failed` is left alone
   (Retry starts it again).
 * A failed sync leaves the repo `ready`: the old index still answers. The reason goes to
-  `sync_error` and `sync_failures` counts failures in a row. The next push or poll tries again. From
+  `sync_error` and `sync_failures` counts failures in a row. The next push tries again, and so does the next poll of a token repo; a repo the App covers is not polled (A25). From
   `SHOW_AFTER` in a row the reason is also the row's `error`, which is what the card shows. A
   success clears all three.
 
@@ -215,7 +215,8 @@ class Syncer:
         if files:
             fields["files_done"] = fields["files_total"] = files
         self.store.update_brain_repo(repo, fields, only_in=("ready",))
-        self._synced[repo] = head or commit
+        if head or commit:   # an empty head would make every later poll look like a new commit
+            self._synced[repo] = head or commit
         self.syncs += 1
 
     def _failed(self, repo: str, words: str) -> None:
@@ -296,16 +297,17 @@ class Syncer:
     # -- the task ---------------------------------------------------------------------------
 
     async def run(self) -> None:
-        next_poll = 0.0   # the first look is at once: a push missed while the cell was down is caught
+        next_poll = 0.0   # the first look is at once: a token repo that moved while the cell was down is caught
         while True:
             self._wake.clear()
+            due = time.monotonic() >= next_poll
+            if due:   # whether the brain is on or a step below fails, the next look is a poll away
+                next_poll = time.monotonic() + SYNC_POLL_SECONDS
             try:
                 if self.active():
                     self._start_tasks()
-                    if time.monotonic() >= next_poll:
-                        next_poll = time.monotonic() + SYNC_POLL_SECONDS
-                        if self.poll_task is None or self.poll_task.done():
-                            self.poll_task = asyncio.create_task(self.poll())
+                    if due and (self.poll_task is None or self.poll_task.done()):
+                        self.poll_task = asyncio.create_task(self.poll())
             except Exception as e:   # noqa: BLE001
                 log.warning("brain sync could not read its repos: %s", type(e).__name__)
             delay = TICK_SECONDS if self._outstanding() else max(0.05, next_poll - time.monotonic())
