@@ -24,7 +24,7 @@ export function RaisedList({ items, note, busy, canAct = true, onAnswer }: {
       {items.length === 0 ? (
         <EmptyState className="px-[var(--row-x,18px)] py-4" data-testid="raised-empty">Nothing has been raised yet.</EmptyState>
       ) : (
-        <ul className="m-0! list-none! p-0!">
+        <ul className="m-0 list-none p-0">
           {items.map((r) => {
             const yes = busy === `${r.id}:worth-yes`, no = busy === `${r.id}:worth-no`;
             return (
@@ -40,8 +40,8 @@ export function RaisedList({ items, note, busy, canAct = true, onAnswer }: {
                   ) : r.can_answer && canAct ? (
                     <>
                       <span className="text-muted-foreground">Was this worth raising?</span>
-                      <Button variant="secondary" className="h-8 text-[13px]!" busy={yes} disabled={busy !== null && !yes} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>
-                      <Button variant="secondary" className="h-8 text-[13px]!" busy={no} disabled={busy !== null && !no} onClick={() => onAnswer(r.id, false)} data-testid="worth-no">No</Button>
+                      <Button variant="secondary" className="h-8 text-[13px]" busy={yes} disabled={busy !== null && !yes} onClick={() => onAnswer(r.id, true)} data-testid="worth-yes">Yes</Button>
+                      <Button variant="secondary" className="h-8 text-[13px]" busy={no} disabled={busy !== null && !no} onClick={() => onAnswer(r.id, false)} data-testid="worth-no">No</Button>
                     </>
                   ) : r.incident_id ? (
                     <Link to={`/incidents/${encodeURIComponent(r.incident_id)}`} className="text-foreground underline underline-offset-2" data-testid="read-note">Read the note</Link>
@@ -52,7 +52,7 @@ export function RaisedList({ items, note, busy, canAct = true, onAnswer }: {
           })}
         </ul>
       )}
-      {note && <p className="m-0! border-t border-border px-[var(--row-x,18px)] py-3 text-[13px] text-muted-foreground" data-testid="raised-note">{note}</p>}
+      {note && <p className="m-0 border-t border-border px-[var(--row-x,18px)] py-3 text-[13px] text-muted-foreground" data-testid="raised-note">{note}</p>}
     </ListSection>
   );
 }

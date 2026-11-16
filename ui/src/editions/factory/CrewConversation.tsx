@@ -133,7 +133,7 @@ function Prose({ text }: { text: string }) {
 function Copy({ text }: { text: string }) {
   const [done, setDone] = React.useState(false);
   return (
-    <button type="button" className="h-auto! min-h-0! border border-border bg-card px-1.5! py-0.5! text-[11px]! leading-tight! text-foreground"
+    <button type="button" className="h-auto min-h-0 border border-border bg-card px-1.5 py-0.5 text-[11px] leading-tight text-foreground"
             onClick={() => {
               const w = navigator.clipboard?.writeText(text);
               if (w) w.then(() => { setDone(true); setTimeout(() => setDone(false), 1500); }).catch(() => undefined);
@@ -183,8 +183,8 @@ function Mark({ ok, children }: { ok: boolean; children: React.ReactNode }) {
 
 /** Formatted or Raw: the view built for the tool, or the call's input and output as they came. */
 function Switch({ raw, setRaw }: { raw: boolean; setRaw: (raw: boolean) => void }) {
-  const btn = (on: boolean) => cn("h-auto! min-h-0! border-0! px-2! py-0.5! text-[11px]! leading-tight!",
-    on ? "bg-foreground! text-background!" : "bg-card! text-muted-foreground!");
+  const btn = (on: boolean) => cn("h-auto min-h-0 border-0 px-2 py-0.5 text-[11px] leading-tight",
+    on ? "bg-foreground text-background" : "bg-card text-muted-foreground");
   return (
     <span className="inline-flex border border-border" role="group" aria-label="How to show the call" data-testid="tool-switch">
       <button type="button" className={btn(!raw)} aria-pressed={!raw} onClick={() => setRaw(false)} data-testid="tool-formatted">Formatted</button>
@@ -300,7 +300,7 @@ function PlanView({ t, input, output, loading, missed, toggle }: ViewArgs) {
         <div className="mb-2 h-1 border border-border bg-muted" role="img" aria-label={`${done} of ${plan.length} done`}>
           <i className="block h-full bg-ok" style={{ width: `${Math.round((done / plan.length) * 100)}%` }} />
         </div>
-        <ul className="m-0 grid list-none gap-1.5 p-0 pl-0! text-sm" data-words-exempt>
+        <ul className="m-0 grid list-none gap-1.5 p-0 pl-0 text-sm" data-words-exempt>
           {plan.map((s, i) => {
             const isDone = s.status === "completed";
             const now = s.status === "in_progress";
@@ -466,7 +466,7 @@ function MatchesView({ t, input, output, loading, missed, toggle }: ViewArgs) {
       {m.files.length === 0 ? (
         <p className="m-0 text-sm text-muted-foreground" data-testid="matches-none">No files matched.</p>
       ) : (
-        <ul className="m-0 grid max-h-72 list-none gap-0.5 overflow-auto p-0 pl-0! font-mono text-xs" data-words-exempt>
+        <ul className="m-0 grid max-h-72 list-none gap-0.5 overflow-auto p-0 pl-0 font-mono text-xs" data-words-exempt>
           {m.files.map((f, i) => (
             <li key={i} className="flex min-w-0 justify-between gap-3" data-testid="match-file">
               <span className="min-w-0 truncate" title={f.path}>{strip ? f.path.slice(base.length + 1) : f.path}</span>

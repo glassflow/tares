@@ -24,11 +24,11 @@ const POLL_MS = 10_000;
 const WARN_AT = 80;
 const ASKED_RELOAD_MS = 4_000;
 
-const SECTION_H = "m-0! text-base!";
+const SECTION_H = "m-0 text-base";
 const CARD = "min-w-0 border border-border bg-card [overflow-wrap:anywhere]";
 const MUTED = "text-xs text-muted-foreground";
-const INK_FILL = "[&>div:first-child]:bg-foreground!";
-const LINK = "text-foreground! underline!";
+const INK_FILL = "[&>div:first-child]:bg-foreground";
+const LINK = "text-foreground underline";
 const FOLD_BTN = "linklike text-[13px]";
 const CODE = "mt-0.5 inline-block border border-border bg-muted px-1.5 py-0.5 font-mono";
 
@@ -127,7 +127,7 @@ function Fold({ member, actions }: { member: CrewMember; actions: CrewActions })
                 </div>
               )}
               <div className="mt-2 flex flex-wrap items-center gap-3">
-                <Button variant="secondary" className="h-[30px] text-[13px]!" onClick={ask} disabled={asked === "asked"}>
+                <Button variant="secondary" className="h-[30px] text-[13px]" onClick={ask} disabled={asked === "asked"}>
                   Read memory again
                 </Button>
                 {asked === "asked" && <span className={MUTED} role="status">Asked. It answers in a few seconds.</span>}
@@ -226,7 +226,7 @@ function PersonCrew({ c, actions }: { c: CrewOfPerson; actions: CrewActions }) {
   const builders = live === 0 ? "no builder on it" : live === 1 ? "1 builder on it" : `${live} builders on it`;
   return (
     <section className="min-w-0 border border-border bg-card" data-testid="crew-of-person" aria-label={`${name}'s crew`}>
-      <h2 className="m-0!">
+      <h2 className="m-0">
         <button type="button" className="block w-full px-4 py-3 text-left" aria-expanded={open} onClick={toggle}
                 data-testid="crew-of-person-toggle">
           <span className="flex w-full min-w-0 items-center gap-3">
@@ -287,7 +287,7 @@ function BuilderGroup({ g, actions }: { g: CrewBuilders; actions: CrewActions })
       {finished.length > 0 && (
         <div className="border-b border-border last:border-b-0">
           <button
-            type="button" className={cn(FOLD_BTN, "block! w-full px-4! py-2.5! text-left")}
+            type="button" className={cn(FOLD_BTN, "block w-full px-4 py-2.5 text-left")}
             aria-expanded={open} onClick={() => setOpen(!open)} data-testid="crew-finished-fold"
           >
             {open ? "Hide" : "Show"} {finished.length} finished
@@ -342,8 +342,8 @@ function Proposals({ list, actions, reload }: { list: CrewProposal[]; actions: C
               {failed === p.id && <div className="mt-1 text-xs text-err" role="alert">It could not be saved. Try again.</div>}
             </div>
             <div className="flex gap-2">
-              <Button variant="secondary" className="h-8 border-foreground! text-[13px]!" onClick={() => decide(p.id, "accept")}>Accept</Button>
-              <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => decide(p.id, "reject")}>Reject</Button>
+              <Button variant="secondary" className="h-8 border-foreground text-[13px]" onClick={() => decide(p.id, "accept")}>Accept</Button>
+              <Button variant="secondary" className="h-8 text-[13px]" onClick={() => decide(p.id, "reject")}>Reject</Button>
             </div>
           </div>
         ))}
@@ -401,8 +401,8 @@ export function FactoryCrewView({ data, error, reload, actions }: {
   return (
     <div className="grid gap-6 md:gap-8" data-testid="factory-crew">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Crew</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and the crew's autonomy.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Crew</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Who is working, what each is doing and the crew's autonomy.</p>
       </div>
 
       {error && (
@@ -413,7 +413,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
       {!data && !error && <LoadingBlocks data-testid="crew-loading" count={4} widths={["60%", "40%", "75%"]} />}
       {data && (
         <div className="grid gap-5">
-          {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0! text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
+          {data.summary && (data.crews ?? []).length <= 1 && <p className="m-0 text-sm text-muted-foreground" data-testid="crew-summary">{data.summary}</p>}
           {data.pacing && <Banner tone="warn" data-testid="crew-pacing">{data.pacing}</Banner>}
           <div className="flex flex-wrap items-start gap-8">
             <div className="grid min-w-0 flex-[2_1_560px] gap-7">
@@ -431,7 +431,7 @@ export function FactoryCrewView({ data, error, reload, actions }: {
               {started && (
                 <section data-testid="crew-standup">
                   <SectionHead title="Standup" aside={
-                    <Link to="/settings?tab=morning" className="text-[13px] text-foreground! underline!" data-testid="standup-morning-link">Send it every morning</Link>
+                    <Link to="/settings?tab=morning" className="text-[13px] text-foreground underline" data-testid="standup-morning-link">Send it every morning</Link>
                   } />
                   <div className={CARD}>
                     {data.standup ? (

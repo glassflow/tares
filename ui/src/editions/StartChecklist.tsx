@@ -45,8 +45,8 @@ function CopyCommand({ command }: { command: string }) {
   };
   return (
     <div className="flex h-8 max-w-full min-w-0 items-center border border-border bg-background pl-2.5">
-      <code className="min-w-0 truncate bg-transparent! p-0! font-mono text-[12.5px]" title={command}>{command}</code>
-      <Button variant="secondary" className="ml-2 h-[30px] border-0! border-l! text-[13px]!" onClick={copy}
+      <code className="min-w-0 truncate bg-transparent p-0 font-mono text-[12.5px]" title={command}>{command}</code>
+      <Button variant="secondary" className="ml-2 h-[30px] border-0 border-l text-[13px]" onClick={copy}
               aria-label={copied ? "Copied" : `Copy ${command}`} data-testid="start-copy">
         {copied ? "Copied" : "Copy"}
       </Button>
@@ -62,7 +62,7 @@ interface DoProps {
 }
 
 function ActionButton({ action, primary, onDo, doing }: DoProps & { action: Exclude<StartAction, { copy: string }>; primary: boolean }) {
-  const cls = cn("h-8 text-[13px]!", primary && "border-foreground!");
+  const cls = cn("h-8 text-[13px]", primary && "border-foreground");
   if ("do" in action) {
     const busy = doing === action.do;
     return (
@@ -148,12 +148,12 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo,
     <section aria-label={title} className={PANEL} data-testid="start-checklist">
       <div className={cn(HEAD, "border-b border-border")}>
         <div className="min-w-0">
-          <h2 className="m-0! text-base!">{title}</h2>
+          <h2 className="m-0 text-base">{title}</h2>
           <div className={MUTED} data-testid="start-count">{block.done} of {block.total} done</div>
         </div>
         <div className="flex items-center gap-4">
-          <ProgressBar value={pct} aria-label="Steps done" className="h-1 w-40 [&>div:first-child]:bg-foreground!" />
-          <Button variant="quiet" className="px-1! underline" onClick={onHide}>Hide this list</Button>
+          <ProgressBar value={pct} aria-label="Steps done" className="h-1 w-40 [&>div:first-child]:bg-foreground" />
+          <Button variant="quiet" className="px-1 underline" onClick={onHide}>Hide this list</Button>
         </div>
       </div>
       {error && (
@@ -166,7 +166,7 @@ export function StartChecklist({ block, title, hide = hideStart, onHidden, onDo,
           {notice}
         </div>
       )}
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {block.steps.map((s) => <Step key={s.key} step={s} onDo={onDo} doing={doing} />)}
       </ul>
     </section>
@@ -200,7 +200,7 @@ export function StartChecklistHidden({ block, title, show = showStart, onShown }
   return (
     <div data-testid="start-hidden" className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground">
       <span>The list &ldquo;{title}&rdquo; is hidden.</span>
-      <Button variant="quiet" className="px-1! underline" disabled={busy} onClick={onShow} data-testid="start-show">
+      <Button variant="quiet" className="px-1 underline" disabled={busy} onClick={onShow} data-testid="start-show">
         Show it again
       </Button>
       {error && <span role="alert" data-testid="start-show-error" className="text-err">{SHOW_FAILED}</span>}
@@ -214,11 +214,11 @@ export function StartChecklistLoading({ title, rows = 3 }: { title: string; rows
     <section aria-label={title} aria-busy="true" className={PANEL} data-testid="start-checklist-loading">
       <div className={cn(HEAD, "border-b border-border")}>
         <div className="min-w-0">
-          <h2 className="m-0! text-base!">{title}</h2>
+          <h2 className="m-0 text-base">{title}</h2>
           <div className={MUTED}>Checking</div>
         </div>
       </div>
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {Array.from({ length: rows }, (_, i) => (
           <li key={i} className={cn(ROW_CLASS, "items-start")}>
             <span aria-hidden className="mt-0.5 size-5 flex-none border-[1.5px] border-foreground" />

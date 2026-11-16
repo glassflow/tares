@@ -66,14 +66,14 @@ export function ServiceRows({ rows, sparkHeading = "Last day", className, ...pro
         <span>Status</span>
         <span>Activity</span>
       </div>
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {rows.map((r) => (
           <li key={r.id} className="border-t border-border first:border-t-0" data-testid="service-row" data-name={r.name} data-state-tone={r.tone}>
             <Link
               to={r.to}
               className={cn(
-                "grid min-w-0 gap-y-2 px-[var(--row-x,18px)] py-4 [overflow-wrap:anywhere] no-underline! hover:bg-row-hover",
-                "text-foreground! focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand",
+                "grid min-w-0 gap-y-2 px-[var(--row-x,18px)] py-4 [overflow-wrap:anywhere] no-underline hover:bg-row-hover",
+                "text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-brand",
                 COLS,
                 "md:items-start",
               )}
@@ -93,7 +93,7 @@ export function ServiceRows({ rows, sparkHeading = "Last day", className, ...pro
               </span>
               <span className="min-w-0 text-[13px]">
                 <StatusLabel tone={r.tone} data-testid="service-state"
-                  className={cn("block font-sans text-[13px] font-medium normal-case tracking-normal", CALM.has(r.tone) && "text-foreground!")}>
+                  className={cn("block font-sans text-[13px] font-medium normal-case tracking-normal", CALM.has(r.tone) && "text-foreground")}>
                   {r.stateWords}
                 </StatusLabel>
                 <span className="block text-muted-foreground">

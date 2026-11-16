@@ -17,7 +17,7 @@ import { isSample, sampleLoad } from "./reviewsSamples";
 
 const POLL_MS = 20_000;
 const MUTED = "text-[13px] text-muted-foreground";
-const LINK = "text-foreground! underline! decoration-border! underline-offset-[3px]";
+const LINK = "text-foreground underline decoration-border underline-offset-[3px]";
 
 /** A link only to a web address; anything else is shown as plain text. */
 const webUrl = (u: string | null): u is string => !!u && /^https?:\/\//i.test(u);
@@ -38,7 +38,7 @@ function Row({ r }: { r: ReviewRow }) {
             <>
               {" · "}
               {webUrl(url)
-                ? <a href={url} target="_blank" rel="noreferrer" title={title ?? undefined} data-testid="review-pr" className="text-muted-foreground! underline! decoration-border! underline-offset-[3px]">#{number}</a>
+                ? <a href={url} target="_blank" rel="noreferrer" title={title ?? undefined} data-testid="review-pr" className="text-muted-foreground underline decoration-border underline-offset-[3px]">#{number}</a>
                 : <span data-testid="review-pr">#{number}</span>}
               {repo && <> on <span data-user-text>{repo}</span></>}
             </>
@@ -75,13 +75,13 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
       {data.project && (
         <div className={cn("flex flex-wrap items-center gap-2", MUTED)} data-testid="reviews-filter">
           <span>Showing <b data-user-text>{data.project.name}</b>.</span>
-          <Link to="/reviews" className="text-foreground! underline!">Show all</Link>
+          <Link to="/reviews" className="text-foreground underline">Show all</Link>
         </div>
       )}
       {unknown && (
         <div className={cn("flex flex-wrap items-center gap-2", MUTED)} data-testid="reviews-unknown">
           <span>No project has that address.</span>
-          <Link to="/reviews" className="text-foreground! underline!">Show all</Link>
+          <Link to="/reviews" className="text-foreground underline">Show all</Link>
         </div>
       )}
       <p className="m-0 text-[13px] text-muted-foreground" data-testid="reviews-autonomy">{data.autonomy_text}</p>
@@ -99,7 +99,7 @@ export function FactoryReviewsView({ data, unknown = false }: { data: FactoryRev
         <div data-testid="reviews-crew">
           <button type="button" aria-expanded={open} aria-controls="reviews-crew-list" data-testid="crew-fold"
                   onClick={() => setFolded(open)}
-                  className="flex! w-full cursor-pointer items-center justify-between! gap-3 border border-border bg-card px-4 py-3 text-left font-semibold hover:bg-row-hover">
+                  className="flex w-full cursor-pointer items-center justify-between gap-3 border border-border bg-card px-4 py-3 text-left font-semibold hover:bg-row-hover">
             <span>With the crew</span>
             <span className="font-mono font-normal" data-testid="crew-count">{theirs.length} {open ? "−" : "+"}</span>
           </button>
@@ -146,8 +146,8 @@ function ReviewsHead({ children }: { children?: React.ReactNode }) {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-reviews">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Reviews</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Every pull request, across projects, that waits for a person.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Reviews</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Every pull request, across projects, that waits for a person.</p>
       </div>
       {children}
     </div>

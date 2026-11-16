@@ -26,7 +26,7 @@ export function IncidentCard({ incident: i, busy, canAct = true, onPickUp, onRes
     <section className="min-w-0 border-t border-foreground [overflow-wrap:anywhere]" data-testid="incident-card" data-incident={i.id}>
       <div className="pb-1 pt-3">
         <div className="mb-1 font-mono text-[11px] font-semibold uppercase tracking-[0.08em] text-err" data-testid="incident-kind">Incident</div>
-        <h2 className="m-0! mb-0.5! text-[15px]!" data-user-text data-testid="incident-title">{i.title}</h2>
+        <h2 className="m-0 mb-0.5 text-[15px]" data-user-text data-testid="incident-title">{i.title}</h2>
         <div className="text-[13px] text-muted-foreground" data-testid="incident-age">{i.age_words} · {i.who_words}</div>
       </div>
       <div className="grid gap-5 pt-4">
@@ -56,7 +56,7 @@ export function IncidentCard({ incident: i, busy, canAct = true, onPickUp, onRes
           </div>
         )}
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-t border-border pt-4">
-          <p className="m-0! min-w-0 text-[13px] text-muted-foreground" data-testid="incident-foot">
+          <p className="m-0 min-w-0 text-[13px] text-muted-foreground" data-testid="incident-foot">
             {i.posted
               ? <>Posted to <span data-user-text>{i.posted.where}</span> {atWords(i.posted.at)}{i.based_on ? ` · based on ${i.based_on}` : ""}</>
               : i.based_on ? `Based on ${i.based_on}` : "Not posted anywhere yet."}

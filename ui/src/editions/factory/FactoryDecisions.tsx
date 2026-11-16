@@ -21,7 +21,7 @@ export function DecisionTabs({ d, on }: { d: FactoryProjectData; on: "decisions"
     <nav aria-label="Decisions and calls" className="flex min-w-0 gap-1 border-b border-border" data-testid="decision-tabs">
       {tabs.map((t) => (
         <Link key={t.key} to={t.to} aria-current={on === t.key ? "page" : undefined} data-testid={`tab-${t.key}`}
-              className={cn("-mb-px flex items-center gap-2 border-b-2 border-transparent px-3 py-2 text-[14px] text-foreground! no-underline! hover:bg-row-hover",
+              className={cn("-mb-px flex items-center gap-2 border-b-2 border-transparent px-3 py-2 text-[14px] text-foreground no-underline hover:bg-row-hover",
                             on === t.key && "border-b-brand font-semibold")}>
           {t.label}
           {t.n > 0 && <span className="font-mono text-xs font-normal text-muted-foreground">{t.key === "calls" ? `${t.n} to confirm` : t.n}</span>}
@@ -38,7 +38,7 @@ export default function FactoryDecisions() {
         <div className="grid min-w-0 gap-4" data-testid="decisions-page">
           <PageHead title="Decisions and calls" />
           <DecisionTabs d={d} on="decisions" />
-          <p className="m-0! text-xs text-muted-foreground">Your answers to the crew, newest first.</p>
+          <p className="m-0 text-xs text-muted-foreground">Your answers to the crew, newest first.</p>
           {d.decisions.length === 0 ? (
             <EmptyState className="border-t border-border py-4" data-testid="decisions-empty">
               No decisions yet. When you answer the crew, it is kept here.

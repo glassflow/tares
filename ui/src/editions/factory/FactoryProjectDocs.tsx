@@ -18,7 +18,7 @@ import { projectDocs, type ProjectDocLink, type ProjectDocsPage } from "./Factor
 // on Docs and memory.
 
 const POLL_MS = 60_000;
-const LINK = "text-foreground! underline!";
+const LINK = "text-foreground underline";
 
 /** The open document, and a panel to pick another: a search box over every document of the project,
  *  in its groups (TR-1245). Typing matches a ref or words of the title; arrow keys move, Enter
@@ -58,7 +58,7 @@ function DocPicker({ groups, openId, onPick }: {
     <div ref={box} className="relative w-full max-w-[560px]" data-testid="project-doc-picker">
       <button ref={button} type="button" aria-haspopup="listbox" aria-expanded={open} data-testid="project-doc-picker-button"
               onClick={() => setOpen((o) => !o)}
-              className="flex! h-10 w-full items-center justify-between gap-3 border! border-input! bg-card! px-3! text-left text-sm! font-normal! text-foreground! hover:border-foreground!">
+              className="flex h-10 w-full items-center justify-between gap-3 border border-input bg-card px-3 text-left text-sm font-normal text-foreground hover:border-foreground">
         <span className="flex min-w-0 items-baseline gap-2">
           {chosenGroup && <span className="shrink-0 text-xs text-muted-foreground">{chosenGroup.title}</span>}
           {chosen?.ticket && <span className="shrink-0 font-mono text-xs font-medium">{chosen.ticket}</span>}
@@ -75,9 +75,9 @@ function DocPicker({ groups, openId, onPick }: {
             <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={key} placeholder="Search by ref or title"
                    role="combobox" aria-expanded aria-controls={listId} aria-label="Search documents" aria-autocomplete="list"
                    aria-activedescendant={flat[at] ? `${listId}-${flat[at].id}` : undefined}
-                   className="h-8 bg-field!" data-testid="project-doc-search" />
+                   className="h-8 bg-field" data-testid="project-doc-search" />
           </div>
-          <ul id={listId} role="listbox" aria-label="Documents" className="m-0! max-h-[min(420px,60vh)] list-none! overflow-y-auto p-1!">
+          <ul id={listId} role="listbox" aria-label="Documents" className="m-0 max-h-[min(420px,60vh)] list-none overflow-y-auto p-1">
             {flat.length === 0 && <li className="px-2.5 py-2 text-[13px] text-muted-foreground" data-testid="project-doc-none">No document matches.</li>}
             {shownGroups.map((g) => (
               <React.Fragment key={g.key}>
@@ -154,7 +154,7 @@ function ProjectDocs({ id }: { id: string }) {
           <DocPicker groups={data.groups} openId={openId}
                      onPick={(id) => setParams((q) => { const n = new URLSearchParams(q); n.set("doc", id); return n; })} />
           {/* the document fills its card, with a little more room at the sides on a wide screen */}
-          <div className="grid min-w-0 gap-2 lg:[&_[data-testid=doc-pane]>*]:px-8!">
+          <div className="grid min-w-0 gap-2 lg:[&_[data-testid=doc-pane]>*]:px-8">
             {open?.ticket_href && (
               <div className="text-[13px]" data-testid="project-doc-ticket">
                 <Link to={open.ticket_href} className={LINK}>Open ticket {open.ticket}</Link>

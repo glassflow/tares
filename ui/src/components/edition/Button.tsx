@@ -9,9 +9,9 @@ export type ButtonSize = "md" | "lg";
 // The edition names on top of the primitive's variants. Utilities that must beat the console's
 // unlayered `button` rules carry the important suffix, as in the primitive.
 const VARIANTS = {
-  primary: { base: "default", extra: "border-foreground! font-semibold! hover:border-foreground!" },
-  secondary: { base: "outline", extra: "border-border! bg-transparent! hover:border-border! hover:bg-muted!" },
-  quiet: { base: "ghost", extra: "text-muted-foreground! hover:text-foreground!" },
+  primary: { base: "default", extra: "border-foreground font-semibold hover:border-foreground" },
+  secondary: { base: "outline", extra: "border-border bg-transparent hover:border-border hover:bg-muted" },
+  quiet: { base: "ghost", extra: "text-muted-foreground hover:text-foreground" },
 } as const;
 
 export interface ButtonProps extends Omit<React.ComponentProps<typeof BaseButton>, "variant" | "size"> {

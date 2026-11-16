@@ -75,4 +75,4 @@ export function InlineField({ ids, label, hint, error, children }: { ids: Ids; c
   );
 }
 
-export const ERROR_BORDER = "border-err! hover:border-err! focus:border-err!";
+export const ERROR_BORDER = "border-err hover:border-err focus:border-err";

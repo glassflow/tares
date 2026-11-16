@@ -68,9 +68,9 @@ const stateFromUrl = (s: string): StateKey | "moving" | "" => {
 };
 
 const MUTED = "text-muted-foreground";
-const FIELD = "h-9! w-full! md:w-auto! min-w-0 border! border-border! bg-field! px-2.5! py-0! text-sm! text-foreground! disabled:opacity-60";
-const LINKISH = "cursor-pointer! border-0! bg-transparent! p-0! text-[length:inherit]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]";
-const TILE_LINK = "no-underline! text-foreground! hover:text-foreground! focus-visible:outline-2 focus-visible:outline-brand";
+const FIELD = "h-9 w-full md:w-auto min-w-0 border border-border bg-field px-2.5 py-0 text-sm text-foreground disabled:opacity-60";
+const LINKISH = "cursor-pointer border-0 bg-transparent p-0 text-[length:inherit] font-normal text-foreground underline decoration-border underline-offset-[3px]";
+const TILE_LINK = "no-underline text-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-brand";
 
 // ----------------------------------------------------------------------------------------- small things
 
@@ -175,7 +175,7 @@ function Card({ t, ctx }: { t: TicketRow; ctx: CardCtx }) {
   return (
     <Link to={t.href} data-testid="ticket-card" data-ref={t.ref} data-state={t.state_key}
           className={cn("group flex min-w-0 flex-col gap-[3px] border border-border bg-card px-2.5 py-[9px]",
-            "hover:border-foreground! hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
+            "hover:border-foreground hover:shadow-[inset_3px_0_0_var(--accent)]", TILE_LINK)}>
       <span className="flex min-w-0 justify-between gap-1.5 whitespace-nowrap text-xs text-muted-foreground">
         <span className="font-mono font-medium text-foreground">{t.ref}</span>
         <span className="min-w-0 truncate">{short(t.changed)}</span>
@@ -210,11 +210,11 @@ function Cell({ rows, total, cap, id, ctx, quiet, caps, bump, listHref }: {
         <div className="flex flex-col items-stretch gap-1.5 pt-0.5 text-xs text-muted-foreground">
           <span data-testid="cell-showing">Showing {shown.length} of {total}</span>
           {shown.length < rows.length || !listHref ? (
-            <Button variant="secondary" className="h-8!" data-testid="cell-more" onClick={() => bump(id, cap)}>
+            <Button variant="secondary" className="h-8" data-testid="cell-more" onClick={() => bump(id, cap)}>
               Show {Math.min(cap, rows.length - shown.length || rest)} more
             </Button>
           ) : (
-            <Link to={listHref} data-testid="cell-list" className="text-center text-foreground! underline decoration-border underline-offset-[3px]">
+            <Link to={listHref} data-testid="cell-list" className="text-center text-foreground underline decoration-border underline-offset-[3px]">
               See all {total} in the List
             </Link>
           )}
@@ -279,7 +279,7 @@ function LaneHead({ lane, open, toggle, sub, userText }: { lane: Lane; open: boo
   const Chev = open ? ChevronDown : ChevronRight;
   return (
     <button type="button" aria-expanded={open} onClick={toggle} data-testid="lane-toggle"
-            className={cn("flex! w-full items-center! gap-2.5 border-0! bg-card! px-3! py-2.5! text-left! text-foreground! hover:bg-row-hover!", open && "border-b! border-border!")}>
+            className={cn("flex w-full items-center gap-2.5 border-0 bg-card px-3 py-2.5 text-left text-foreground hover:bg-row-hover", open && "border-b border-border")}>
       <Chev className="size-3.5 shrink-0" aria-hidden />
       <b className="min-w-0 text-[15px] [overflow-wrap:anywhere]" {...(userText ? { "data-user-text": true } : {})}>{lane.label}</b>
       <span className="ml-auto text-right text-[12.5px] font-normal text-muted-foreground" data-testid="lane-sub">{sub}</span>
@@ -314,8 +314,8 @@ function StateTabs({ cols, data, tab, setTab }: { cols: StateKey[]; data: Factor
     <div role="tablist" aria-label="State" className="grid grid-cols-3 gap-1.5" data-testid="state-tabs">
       {cols.map((k) => (
         <button key={k} type="button" role="tab" aria-selected={k === tab} data-testid="state-tab" data-state={k} onClick={() => setTab(k)}
-                className={cn("flex! min-h-[50px] min-w-0 flex-col! items-start! justify-center! gap-0.5 border! border-border! bg-field! px-2! py-1.5! text-left! text-[12.5px]! font-normal! text-foreground!",
-                  k === tab && "border-foreground! bg-wash! font-semibold! shadow-[inset_0_-3px_0_var(--accent)]")}>
+                className={cn("flex min-h-[50px] min-w-0 flex-col items-start justify-center gap-0.5 border border-border bg-field px-2 py-1.5 text-left text-[12.5px] font-normal text-foreground",
+                  k === tab && "border-foreground bg-wash font-semibold shadow-[inset_0_-3px_0_var(--accent)]")}>
           <span className="flex min-w-0 items-center gap-1.5"><Dot k={k} /><span className="truncate">{STATE_LABEL[k]}</span></span>
           <b className="pl-[15px] text-[15px]">{countOf(data, k)}</b>
         </button>
@@ -447,8 +447,8 @@ interface Loaded { key: string; resp: FactoryTicketsData }
 function Head({ sub }: { sub?: string }) {
   return (
     <div>
-      <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Tickets</h1>
-      {sub && <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="tickets-sub">{sub}</p>}
+      <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Tickets</h1>
+      {sub && <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="tickets-sub">{sub}</p>}
     </div>
   );
 }
@@ -761,7 +761,7 @@ function FilterSelect({ label, testid, value, options, onChange, disabled, title
   return (
     <Select value={wrap(value)} disabled={disabled} onValueChange={(v) => onChange(v === ALL ? "" : v)}>
       <SelectTrigger aria-label={label} data-testid={testid} title={title}
-                     className={cn("w-full! md:w-auto! min-w-0 border-border! bg-field! px-2.5! disabled:opacity-60!", className)}>
+                     className={cn("w-full md:w-auto min-w-0 border-border bg-field px-2.5 disabled:opacity-60", className)}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>
@@ -786,8 +786,8 @@ function FilterBar({ layout, filters, qText, group, data, disabled, onLayout, pa
       <div role="group" aria-label="Layout" className="col-span-full flex h-9 w-full flex-none border border-foreground bg-field md:inline-flex md:w-auto">
         {LAYOUTS.map((l) => (
           <button key={l.value} type="button" aria-pressed={layout === l.value} disabled={disabled} data-testid={`layout-${l.value}`} onClick={() => onLayout(l.value)}
-                  className={cn("h-full! flex-1 border-0! border-r! border-border! bg-transparent! px-3.5! py-0! text-[13px]! font-medium! text-foreground! last:border-r-0! hover:bg-row-hover! disabled:opacity-60 max-md:px-1.5!",
-                    layout === l.value && "bg-foreground! text-background! hover:bg-foreground!")}>
+                  className={cn("h-full flex-1 border-0 border-r border-border bg-transparent px-3.5 py-0 text-[13px] font-medium text-foreground last:border-r-0 hover:bg-row-hover disabled:opacity-60 max-md:px-1.5",
+                    layout === l.value && "bg-foreground text-background hover:bg-foreground")}>
             {l.label}
           </button>
         ))}

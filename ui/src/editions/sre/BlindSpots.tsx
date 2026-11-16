@@ -14,7 +14,7 @@ export function BlindSpots({ items, paper }: { items: HomeBlindSpot[]; paper?: b
   const shown = all ? items : items.slice(0, FIRST);
   return (
     <ListSection paper={paper} title="Blind spots" data-testid="blind-spots">
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {shown.map((b, i) => (
           <li key={`${b.kind}-${b.service}-${i}`} className="grid gap-1 border-t border-border px-[var(--row-x,18px)] py-3 first:border-t-0" data-testid="blind-spot">
             <b className="text-[14px]" data-user-text>{b.title}</b>
@@ -25,7 +25,7 @@ export function BlindSpots({ items, paper }: { items: HomeBlindSpot[]; paper?: b
       </ul>
       {items.length > FIRST && (
         <div className="border-t border-border px-[var(--row-x,18px)] py-3">
-          <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => setAll(!all)} data-testid="blind-spots-toggle">
+          <Button variant="secondary" className="h-8 text-[13px]" onClick={() => setAll(!all)} data-testid="blind-spots-toggle">
             {all ? "Show fewer" : `Show ${items.length - FIRST} more`}
           </Button>
         </div>

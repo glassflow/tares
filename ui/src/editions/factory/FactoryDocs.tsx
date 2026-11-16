@@ -35,7 +35,7 @@ const MARKDOWN: Components = {
   a: ({ href, children }) => <a href={href} target="_blank" rel="noreferrer noopener" className="underline!">{children}</a>,
   code: ({ children }) => <code className="bg-muted px-[5px] py-px font-mono text-[12.5px]">{children}</code>,
   pre: ({ children }) => (
-    <pre className="my-1! max-w-full overflow-x-auto border border-border bg-muted p-2.5 text-[12.5px] [&_code]:bg-transparent [&_code]:p-0">{children}</pre>
+    <pre className="my-1 max-w-full overflow-x-auto border border-border bg-muted p-2.5 text-[12.5px] [&_code]:bg-transparent [&_code]:p-0">{children}</pre>
   ),
   table: ({ children }) => <div className="my-1 max-w-full overflow-x-auto"><table className="border-collapse text-[13px]">{children}</table></div>,
   th: ({ children }) => <th className="border border-border px-2 py-1 text-left">{children}</th>,
@@ -96,12 +96,12 @@ function AddLine({ doc, sample, reload }: { doc: DocView; sample: string | null;
     <form onSubmit={submit} className="border-t border-border bg-wash px-5 py-3.5" data-testid="doc-add">
       <label htmlFor={inputId} className="mb-1.5 block text-xs text-muted-foreground">{add.hint}</label>
       <div className="flex gap-2">
-        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-field!"
+        <Input id={inputId} value={text} maxLength={500} placeholder="One short line" className="min-w-0 flex-1 bg-field"
                aria-invalid={error ? true : undefined} aria-describedby={error ? `${inputId}-error` : undefined}
                onChange={(e) => { setText(e.target.value); if (error) setError(""); }} />
         <Button type="submit" busy={busy}>Add line</Button>
       </div>
-      {error && <p id={`${inputId}-error`} role="alert" data-testid="doc-add-error" className="m-0! mt-1.5! text-[13px] text-err">{error}</p>}
+      {error && <p id={`${inputId}-error`} role="alert" data-testid="doc-add-error" className="m-0 mt-1.5 text-[13px] text-err">{error}</p>}
     </form>
   );
 }
@@ -113,7 +113,7 @@ export function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: 
     <section aria-label="Document" aria-busy={stale || undefined} data-testid="doc-pane"
              className={cn("min-w-0 border border-border bg-card", stale && "opacity-60")}>
       <div className="border-b border-border px-5 py-4">
-        <h2 data-user-text className="m-0! text-xl!" data-testid="doc-title">{doc.title}</h2>
+        <h2 data-user-text className="m-0 text-xl" data-testid="doc-title">{doc.title}</h2>
         <div className="mt-1 text-xs text-muted-foreground" data-testid="doc-changed">{doc.changed}</div>
       </div>
       <div data-words-exempt className="px-5 pb-5 pt-2" data-testid="doc-body">
@@ -123,7 +123,7 @@ export function DocPane({ doc, sample, stale, reload }: { doc: DocView; sample: 
           <>
             {cut > 0 && (
               <button type="button" onClick={() => setAll(true)} data-testid="doc-earlier"
-                      className="block! w-full border-0! border-b! border-dotted! border-border! bg-transparent! px-0! py-2.5! text-left text-[13px]! font-normal! text-foreground! underline! cursor-pointer">
+                      className="block w-full border-0 border-b border-dotted border-border bg-transparent px-0 py-2.5 text-left text-[13px] font-normal text-foreground underline cursor-pointer">
                 Show {cut.toLocaleString("en")} earlier lines
               </button>
             )}
@@ -177,7 +177,7 @@ function ProjectPicker({ page, chosen, onPick }: { page: DocsPage; chosen: PickI
     <div ref={box} className="relative" data-testid="doc-picker">
       <button ref={button} type="button" aria-haspopup="listbox" aria-expanded={open} data-testid="doc-picker-button"
               onClick={() => setOpen((o) => !o)}
-              className="flex! h-9 w-full items-center justify-between gap-2 border! border-input! bg-background! px-3! text-left text-sm! font-normal! text-foreground! hover:border-input!">
+              className="flex h-9 w-full items-center justify-between gap-2 border border-input bg-background px-3 text-left text-sm font-normal text-foreground hover:border-input">
         <span className="min-w-0 truncate">
           {chosen ? <span data-user-text>{chosen.name}</span> : "Choose a project"}
           {chosen?.finished && <span className="text-muted-foreground"> (finished)</span>}
@@ -190,9 +190,9 @@ function ProjectPicker({ page, chosen, onPick }: { page: DocsPage; chosen: PickI
             <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={key} placeholder="Search projects"
                    role="combobox" aria-expanded aria-controls={listId} aria-label="Search projects" aria-autocomplete="list"
                    aria-activedescendant={shown[at] ? `${listId}-${shown[at].id}` : undefined}
-                   className="h-8 bg-field!" data-testid="doc-picker-search" />
+                   className="h-8 bg-field" data-testid="doc-picker-search" />
           </div>
-          <ul id={listId} role="listbox" aria-label="Projects" className="m-0! max-h-72 list-none! overflow-y-auto p-1!">
+          <ul id={listId} role="listbox" aria-label="Projects" className="m-0 max-h-72 list-none overflow-y-auto p-1">
             {shown.length === 0 && <li className="px-2.5 py-2 text-[13px] text-muted-foreground" data-testid="doc-picker-none">No project matches.</li>}
             {shown.map((p, i) => (
               <React.Fragment key={p.id}>
@@ -221,7 +221,7 @@ function DocList({ page, openId, project, to, onPick }: {
 }) {
   const item = (id: string, label: string) => (
     <Link key={id} to={to(id)} data-testid="doc-link" aria-current={id === openId ? "page" : undefined}
-          className={cn("flex items-center gap-2 pl-[17px] pr-3.5 py-[7px] text-sm text-foreground! no-underline! hover:bg-row-hover",
+          className={cn("flex items-center gap-2 pl-[17px] pr-3.5 py-[7px] text-sm text-foreground no-underline hover:bg-row-hover",
                         id === openId && "shadow-[inset_3px_0_0_var(--accent)] bg-muted font-semibold")}>
       {label}
     </Link>
@@ -258,7 +258,7 @@ function DocSelect({ page, openId, project, pick, onPick }: {
     <div className="grid gap-2 md:hidden" data-testid="doc-narrow">
       <ProjectPicker page={page} chosen={project} onPick={onPick} />
       <select aria-label="Document" value={openId ?? ""} onChange={(e) => pick(e.target.value)} data-testid="doc-select"
-              className="block h-10 w-full min-w-0 border! border-border! bg-background! px-2.5! text-sm! text-foreground!">
+              className="block h-10 w-full min-w-0 border border-border bg-background px-2.5 text-sm text-foreground">
         <optgroup label="For every project">
           {page.shared.map((d) => <option key={d.id} value={d.id}>{d.title}</option>)}
         </optgroup>
@@ -333,8 +333,8 @@ export default function FactoryDocs() {
   return (
     <div className="grid gap-6 md:gap-8" data-testid="factory-docs">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Docs and memory</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">What the crew follows and remembers.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Docs and memory</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">What the crew follows and remembers.</p>
       </div>
 
       {error && (

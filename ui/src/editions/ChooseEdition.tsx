@@ -24,15 +24,15 @@ const LEAD = "Pick what you want to use it for. You can change this later in Set
 
 // The console's own `button` rules are unlayered and beat plain utilities, so what they also set is
 // marked important.
-const CARD = "flex! w-full cursor-pointer flex-col items-start gap-1 border-border! bg-card! px-4! py-4! text-left text-foreground! font-normal! disabled:cursor-default disabled:opacity-60";
-const CARD_ON = "border-2! border-foreground! bg-brand-soft! px-[15px]! py-[15px]!";
+const CARD = "flex w-full cursor-pointer flex-col items-start gap-1 border-border bg-card px-4 py-4 text-left text-foreground font-normal disabled:cursor-default disabled:opacity-60";
+const CARD_ON = "border-2 border-foreground bg-brand-soft px-[15px] py-[15px]";
 
 function Frame({ lead, children }: { lead: string; children?: React.ReactNode }) {
   return (
     <div className="flex min-w-0 flex-1 justify-center px-4 py-10 md:py-16">
       <main className="w-full max-w-[720px]" data-testid="choose-edition">
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[26px]!">{QUESTION}</h1>
-        <p className="m-0! mb-5! text-muted-foreground" data-testid="choose-lead">{lead}</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[26px]">{QUESTION}</h1>
+        <p className="m-0 mb-5 text-muted-foreground" data-testid="choose-lead">{lead}</p>
         {children}
       </main>
     </div>
@@ -84,7 +84,7 @@ export default function ChooseEdition() {
   if (!admin) {
     return (
       <Frame lead="An admin of this Tares chooses what it is for first.">
-        <p className="m-0! text-[13px] text-muted-foreground" data-testid="choose-wait">
+        <p className="m-0 text-[13px] text-muted-foreground" data-testid="choose-wait">
           Ask an admin to open this Tares and choose. You will see it here once they have.
         </p>
       </Frame>

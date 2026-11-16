@@ -130,8 +130,8 @@ const fieldsLine = (f: Record<string, unknown>) =>
 const utc = (v: string) => (/^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(v) ? `${v}:00Z` : v);
 
 // ── small parts
-const btnBase = "inline-flex! items-center! rounded-none! border! border-border! bg-field! dark:bg-background! text-[13px]! font-normal! text-muted-foreground! hover:border-border! hover:text-foreground!";
-const btnOn = "font-semibold! text-foreground! bg-row-hover! dark:bg-row-hover! shadow-[inset_0_-2px_0_var(--accent)]";
+const btnBase = "inline-flex items-center rounded-none border border-border bg-field dark:bg-background text-[13px] font-normal text-muted-foreground hover:border-border hover:text-foreground";
+const btnOn = "font-semibold text-foreground bg-row-hover dark:bg-row-hover shadow-[inset_0_-2px_0_var(--accent)]";
 
 function Tag({ item }: { item: TimelineItem }) {
   const tone = item.tone;
@@ -145,7 +145,7 @@ function Tag({ item }: { item: TimelineItem }) {
 
 const LinkButton = React.forwardRef<HTMLButtonElement, React.ButtonHTMLAttributes<HTMLButtonElement>>(({ className, ...p }, ref) => (
   <button ref={ref} type="button" {...p}
-          className={cn("linklike text-[13px]! text-foreground! underline! decoration-border! underline-offset-[3px] hover:opacity-100!", className)} />
+          className={cn("linklike text-[13px] text-foreground underline decoration-border underline-offset-[3px] hover:opacity-100", className)} />
 ));
 LinkButton.displayName = "LinkButton";
 
@@ -213,7 +213,7 @@ function Row({ item, first, lines, onOpen, onMore, onHide }: {
           {text}
           {item.link && (
             <small className="block text-[13px] text-muted-foreground">
-              <Link to={item.link} data-testid="timeline-incident-link" className="text-foreground! underline!">Open the incident</Link>
+              <Link to={item.link} data-testid="timeline-incident-link" className="text-foreground underline">Open the incident</Link>
             </small>
           )}
           {item.raw && !lines && (
@@ -418,8 +418,8 @@ export default function Timeline() {
   return (
     <div className="grid gap-[18px]" data-testid="sre-timeline">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Timeline</h1>
-        <p className="m-0! min-h-[1.5em] text-[15px] text-muted-foreground" data-testid="timeline-sub">
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Timeline</h1>
+        <p className="m-0 min-h-[1.5em] text-[15px] text-muted-foreground" data-testid="timeline-sub">
           {fresh && rangeWords ? <>{rangeWords}, {service ? <span data-user-text>{service}</span> : "all services"}.</> : "\u00a0"}
         </p>
       </div>
@@ -427,7 +427,7 @@ export default function Timeline() {
       <div className="flex flex-wrap items-center gap-2.5">
         <Select value={service || ALL} onValueChange={(v) => pickService(v === ALL ? "" : v)}>
           <SelectTrigger aria-label="Service" data-testid="timeline-service"
-                         className="h-9 w-auto! max-w-full min-w-0 justify-start! gap-2! bg-field! dark:bg-background!">
+                         className="h-9 w-auto max-w-full min-w-0 justify-start gap-2 bg-field dark:bg-background">
             <span className="text-muted-foreground">Service</span>
             <span data-user-text className="truncate"><SelectValue /></span>
           </SelectTrigger>
@@ -439,7 +439,7 @@ export default function Timeline() {
         <div role="group" aria-label="Range" className="inline-flex w-full border border-border bg-field dark:bg-background md:w-auto" data-testid="timeline-range">
           {RANGES.map((r) => (
             <button key={r.key} type="button" aria-pressed={range === r.key} data-testid={`timeline-range-${r.key}`} onClick={() => pickRange(r.key)}
-                    className={cn("flex-1 cursor-pointer rounded-none! border-y-0! border-r-0! border-l! border-border! bg-transparent! px-2! py-1.5! text-sm! font-normal! text-muted-foreground! first:border-l-0! hover:border-border! hover:text-foreground! md:flex-none md:px-3!",
+                    className={cn("flex-1 cursor-pointer rounded-none border-y-0 border-r-0 border-l border-border bg-transparent px-2 py-1.5 text-sm font-normal text-muted-foreground first:border-l-0 hover:border-border hover:text-foreground md:flex-none md:px-3",
                                   range === r.key && btnOn)}>
               {r.label}
             </button>
@@ -450,9 +450,9 @@ export default function Timeline() {
       {range === "custom" && (
         <div className="flex flex-wrap items-end gap-2.5" data-testid="timeline-custom">
           <Input label="From (UTC)" type="datetime-local" value={draft.from} data-testid="timeline-custom-from"
-                 onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))} className="h-9 bg-field! dark:bg-background!" />
+                 onChange={(e) => setDraft((d) => ({ ...d, from: e.target.value }))} className="h-9 bg-field dark:bg-background" />
           <Input label="To (UTC)" type="datetime-local" value={draft.to} data-testid="timeline-custom-to"
-                 onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} className="h-9 bg-field! dark:bg-background!" />
+                 onChange={(e) => setDraft((d) => ({ ...d, to: e.target.value }))} className="h-9 bg-field dark:bg-background" />
           <Button variant="secondary" disabled={!draftOk} data-testid="timeline-custom-apply" className="h-9"
                   onClick={() => put({ from: [draft.from, ""], to: [draft.to, ""] })}>
             Apply
@@ -468,7 +468,7 @@ export default function Timeline() {
           return (
             <button key={k} type="button" aria-pressed={on} aria-disabled={last || undefined} data-testid={`timeline-kind-${k}`}
                     title={last ? "At least one kind stays on" : undefined} onClick={() => toggleKind(k)}
-                    className={cn(btnBase, "h-[30px] cursor-pointer gap-1.5! px-2.5! py-0!", on && btnOn, last && "cursor-default")}>
+                    className={cn(btnBase, "h-[30px] cursor-pointer gap-1.5 px-2.5 py-0", on && btnOn, last && "cursor-default")}>
               <b aria-hidden className={cn("inline-block size-2 bg-foreground", !on && "opacity-25")} />
               {KIND_LABEL[k]}
             </button>

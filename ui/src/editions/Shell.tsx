@@ -36,12 +36,12 @@ function useNarrow(): boolean {
 
 // The console's own `a` and `button` rules are unlayered and beat plain utilities, so the
 // properties they also set are marked important.
-const LINK_BASE = "block px-3 py-2 text-sm no-underline! hover:bg-muted";
+const LINK_BASE = "block px-3 py-2 text-sm no-underline hover:bg-muted";
 const linkClass = (soft: boolean, narrow: boolean) => ({ isActive }: { isActive: boolean }) =>
   [LINK_BASE, narrow ? "py-2.5" : "",
-    isActive ? "bg-muted font-semibold text-foreground! shadow-[inset_2px_0_0_var(--accent)]"
-      : soft ? "text-muted-foreground!" : "text-foreground!"].join(" ");
-const ROW = "flex! w-full items-center justify-between gap-3 border-0! bg-transparent! px-3.5! py-2.5! text-left text-sm! font-normal! text-foreground! no-underline! hover:bg-muted! hover:text-foreground!";
+    isActive ? "bg-muted font-semibold text-foreground shadow-[inset_2px_0_0_var(--accent)]"
+      : soft ? "text-muted-foreground" : "text-foreground"].join(" ");
+const ROW = "flex w-full items-center justify-between gap-3 border-0 bg-transparent px-3.5 py-2.5 text-left text-sm font-normal text-foreground no-underline hover:bg-muted hover:text-foreground";
 
 function MenuLinks({ entries, narrow }: { entries: MenuEntry[]; narrow: boolean }) {
   return (
@@ -93,7 +93,7 @@ function AccountMenu({ who, small, workspaceUrl, logoutUrl, picture }: {
   return (
     <div ref={box} className="relative">
       <button ref={button} type="button" data-testid="account-button" aria-label="Account menu" aria-haspopup="menu" aria-expanded={open}
-              onClick={() => setOpen((o) => !o)} className="block! border-0! bg-transparent! p-0! hover:bg-transparent!">
+              onClick={() => setOpen((o) => !o)} className="block border-0 bg-transparent p-0 hover:bg-transparent">
         <Initials name={who} picture={picture} aria-hidden data-testid="account-avatar" />
       </button>
       {open && (
@@ -193,7 +193,7 @@ export default function EditionShell() {
         <div className="flex min-w-0 items-center gap-2.5">
           {narrow && !noMenu && (
             <Button ref={menuButton} variant="secondary" data-testid="menu-button" aria-expanded={drawer} aria-controls="edition-drawer"
-                    className="mr-1.5 px-3!" onClick={() => setDrawer((d) => !d)}>
+                    className="mr-1.5 px-3" onClick={() => setDrawer((d) => !d)}>
               Menu
             </Button>
           )}
@@ -205,7 +205,7 @@ export default function EditionShell() {
           {!narrow && switcher && (
             <>
               <span aria-hidden className="shrink-0 text-base text-faint">/</span>
-              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0! [&_.ws-switch]:py-1.5!">{switcher}</div>
+              <div data-testid="workspace-switcher" className="min-w-0 max-w-[280px] [&_.ws-wrap]:m-0 [&_.ws-switch]:py-1.5">{switcher}</div>
             </>
           )}
           {cellName && (
@@ -218,14 +218,14 @@ export default function EditionShell() {
         <div className="flex shrink-0 items-center gap-2.5">
           {narrow ? (
             <Button variant="secondary" data-testid="edition-search-button" aria-label="Search or ask"
-                    className="w-9 px-0! text-muted-foreground!" onClick={() => ask("")}>
+                    className="w-9 px-0 text-muted-foreground" onClick={() => ask("")}>
               <Search className="size-3.5" />
             </Button>
           ) : (
             <div className="relative w-[280px]">
               <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input data-testid="edition-search" aria-label="Search or ask" placeholder="Search or ask" value={text}
-                     className="pl-9!" onChange={(e) => setText(e.target.value)}
+                     className="pl-9" onChange={(e) => setText(e.target.value)}
                      onKeyDown={(e) => {
                        if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                        e.preventDefault();
@@ -260,7 +260,7 @@ export default function EditionShell() {
           <div data-testid="edition-scrim" className="fixed inset-x-0 bottom-0 top-[57px] z-40 bg-scrim" onClick={() => setDrawer(false)} />
           <nav id="edition-drawer" aria-label="Main" data-testid="edition-menu"
                className="fixed bottom-0 left-0 top-[57px] z-50 flex w-[260px] flex-col gap-0.5 border-r border-foreground bg-card px-3 py-4 shadow-[6px_0_18px_var(--sheet-shadow)]">
-            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0!">{switcher}</div>}
+            {switcher && <div data-testid="workspace-switcher" className="mb-3 [&_.ws-wrap]:m-0">{switcher}</div>}
             <MenuLinks entries={entries} narrow />
           </nav>
         </>

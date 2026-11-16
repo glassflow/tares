@@ -32,14 +32,14 @@ const SHOW_HISTORY = 10;
 const NOTES_CAP_LINES = 60;
 
 const NONE = "text-[13px] text-muted-foreground";
-const LINK = "text-foreground! underline!";
+const LINK = "text-foreground underline";
 // A fact's label is a mono operational label; a heading is Inter (.impeccable.md, Type). The facts are a
 // list of label and value, so they are a dl, not a run of headings.
 const KIND = "m-0 font-mono text-[11px] font-medium uppercase tracking-[0.06em] text-muted-foreground";
-const SUB = "m-0! text-[14px]!";
+const SUB = "m-0 text-[14px]";
 const TAG = "whitespace-nowrap border border-border bg-muted px-1.5 py-px text-[11.5px] font-semibold";
 const TAG_BAD = "border-err-border bg-err-soft text-err";
-const MORE = "h-8 self-start text-[13px]!";
+const MORE = "h-8 self-start text-[13px]";
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -50,7 +50,7 @@ function Section({ id, title, aside, children }: { id: string; title: string; as
   return (
     <section id={id} aria-label={title} className="min-w-0 scroll-mt-4 border-t border-border pt-3" data-testid={`ticket-${id}`}>
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <h2 className="m-0! text-base!">{title}</h2>
+        <h2 className="m-0 text-base">{title}</h2>
         {aside && <span className="text-xs text-muted-foreground">{aside}</span>}
       </div>
       <div className="flex min-w-0 flex-col gap-2.5 pt-2.5">{children}</div>
@@ -83,7 +83,7 @@ function Round({ r, startOpen }: { r: TicketReview; startOpen: boolean }) {
   return (
     <div className="border-b border-border last-of-type:border-b-0" data-testid="round" data-round={r.round} data-open={open}>
       <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="round-toggle"
-              className="flex! w-full! flex-wrap items-center gap-2.5! border-0! bg-transparent! px-0! py-2! text-left! text-sm! font-normal! text-foreground! hover:bg-transparent!">
+              className="flex w-full flex-wrap items-center gap-2.5 border-0 bg-transparent px-0 py-2 text-left text-sm font-normal text-foreground hover:bg-transparent">
         <i aria-hidden className={cn("size-[7px] flex-none border-b-2 border-r-2 border-foreground", open ? "rotate-45" : "-rotate-45")} />
         <b className="text-sm">Round {r.round}</b>
         <StatusLabel tone={toneOf("verdict", r.verdict_text)}>{r.verdict_text}</StatusLabel>
@@ -252,7 +252,7 @@ function Notes({ text }: { text: string }) {
       {!text ? <EmptyState className="py-0" data-testid="notes-empty">Nothing noted yet</EmptyState> : (
         <>
           <div className="min-w-0 text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>
-            <div className={cn("md [&_:is(h1,h2,h3,h4)]:mt-3.5! [&_:is(h1,h2,h3,h4)]:mb-1! [&_:is(h1,h2,h3,h4)]:text-[14px]! [&_:is(h1,h2,h3,h4):first-child]:mt-0!", !open && "max-h-[460px] overflow-auto")} data-words-exempt data-testid="notes-text">
+            <div className={cn("md [&_:is(h1,h2,h3,h4)]:mt-3.5 [&_:is(h1,h2,h3,h4)]:mb-1 [&_:is(h1,h2,h3,h4)]:text-[14px] [&_:is(h1,h2,h3,h4):first-child]:mt-0", !open && "max-h-[460px] overflow-auto")} data-words-exempt data-testid="notes-text">
               <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN}>{text}</ReactMarkdown>
             </div>
             {!open && <div aria-hidden className="pointer-events-none relative -mt-9 h-9 bg-gradient-to-b from-transparent to-background" />}
@@ -282,13 +282,13 @@ function Fact({ title, children, testid }: { title: string; children: React.Reac
 function Links({ items, testid }: { items: TicketLink[]; testid: string }) {
   if (items.length === 0) return <span className={NONE}>Nothing</span>;
   return (
-    <ul className="m-0! flex list-none flex-col gap-1.5 p-0!">
+    <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
       {items.map((t) => {
         return (
           <li key={t.ref} className="flex items-start gap-2 text-[13.5px]" data-testid={testid} data-ref={t.ref}>
             <span className="mt-[5px] flex"><Dot tone={toneOf("ticket", t.state_label)} /></span>
             <span className="min-w-0">
-              <Link to={t.href} className="text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+              <Link to={t.href} className="text-foreground no-underline [overflow-wrap:anywhere] hover:underline">
                 <span className="font-mono text-xs text-muted-foreground">{t.ref}</span> <span data-user-text>{t.title}</span>
               </Link>
               <span className="block text-xs text-muted-foreground">{t.state_label}</span>
@@ -314,8 +314,8 @@ function Command({ command }: { command: string }) {
   };
   return (
     <div className="flex items-center gap-2 bg-muted px-2 py-1.5">
-      <code data-words-exempt data-testid="command-text" className="min-w-0 flex-1 bg-transparent! font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
-      <Button variant="secondary" className="h-8 text-[13px]!" onClick={copy} data-testid="command-copy">
+      <code data-words-exempt data-testid="command-text" className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
+      <Button variant="secondary" className="h-8 text-[13px]" onClick={copy} data-testid="command-copy">
         {copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}
       </Button>
     </div>
@@ -362,7 +362,7 @@ function Facts({ d }: { d: FactoryTicketData }) {
 
 function Back({ href, name, icon }: { href: string; name?: string; icon?: string | null }) {
   return (
-    <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-muted-foreground! no-underline! hover:text-foreground! hover:underline!">
+    <Link to={href} data-testid="ticket-back" className="w-fit text-[13px] text-muted-foreground no-underline hover:text-foreground hover:underline">
       {"←"} {name !== undefined ? <span data-user-text><InlineIcon icon={icon} className="mr-1" />{name}</span> : "Back to the project"}
     </Link>
   );
@@ -382,7 +382,7 @@ function TicketSkeleton({ href }: { href: string }) {
         <div className="grid min-w-0 gap-8">
           {["Reviews", "Checks", "Calls and decisions", "History", "Working notes"].map((n) => (
             <div key={n} className="border-t border-border pt-3">
-              <h2 className="m-0! text-base!">{n}</h2>
+              <h2 className="m-0 text-base">{n}</h2>
               <div className="pt-2.5">{bars(3)}</div>
             </div>
           ))}
@@ -409,7 +409,7 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
       <div className="grid min-w-0 gap-4" data-testid="ticket-notfound">
         <Back href={projectHref} />
         <div className="grid gap-2 border-t border-border pt-3">
-          <h2 className="m-0! text-base!">This ticket was not found</h2>
+          <h2 className="m-0 text-base">This ticket was not found</h2>
           <span className={NONE}>It may have been deleted, or the link may be old.</span>
         </div>
       </div>
@@ -447,7 +447,7 @@ export function FactoryTicketView({ data: d, error, notFound, projectHref, onRet
             <StatusLabel tone={STATUS_TONES.ticket[d.state]}>{d.state_label}</StatusLabel>
           </span>
         </div>
-        <h1 className="m-0! text-[22px]! md:text-[28px]! [overflow-wrap:anywhere]" data-user-text data-testid="ticket-title">{d.title}</h1>
+        <h1 className="m-0 text-[22px] md:text-[28px] [overflow-wrap:anywhere]" data-user-text data-testid="ticket-title">{d.title}</h1>
         <div className="flex flex-wrap gap-x-[18px] gap-y-1.5 text-[13px] text-muted-foreground">
           {ms && <span data-testid="ticket-milestone">Milestone <b className="font-medium text-foreground" data-user-text>{msText}</b></span>}
           {d.blocked_reason && <span data-testid="ticket-blocked-reason" data-user-text>{d.blocked_reason}</span>}

@@ -38,7 +38,7 @@ const SAVE_FAILED = "That change was not saved. Try again in a moment.";
 
 const ROW_TEXT = "min-w-0 flex-[1_1_320px]";
 const HEAD = "flex items-center justify-between gap-3 border-b border-border bg-muted px-4 py-3";
-const CHOICE = "flex! w-full items-start gap-3 border-0! border-b! border-border! bg-transparent! px-4! py-3.5! text-left font-normal! text-foreground! cursor-pointer disabled:cursor-not-allowed hover:bg-row-hover! last:border-b-0!";
+const CHOICE = "flex w-full items-start gap-3 border-0 border-b border-border bg-transparent px-4 py-3.5 text-left font-normal text-foreground cursor-pointer disabled:cursor-not-allowed hover:bg-row-hover last:border-b-0";
 
 function Card({ dim, className, ...props }: { dim?: boolean } & React.HTMLAttributes<HTMLDivElement>) {
   return <div className={cn("border border-border bg-card", dim && "opacity-50", className)} {...props} />;
@@ -48,8 +48,8 @@ function Heading({ title, why, children }: { title: string; why?: string; childr
   return (
     <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
       <div className="min-w-0">
-        <h2 className="m-0! text-xl!">{title}</h2>
-        {why && <p className="m-0! text-[13px] text-muted-foreground">{why}</p>}
+        <h2 className="m-0 text-xl">{title}</h2>
+        {why && <p className="m-0 text-[13px] text-muted-foreground">{why}</p>}
       </div>
       {children}
     </div>
@@ -258,11 +258,11 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
               <div className="flex items-center border border-foreground bg-field">
                 <button type="button" aria-label="One builder fewer" disabled={dim || crew.builders_max <= 1} data-ctl data-testid="builders-less"
                         onClick={() => void onCrew({ builders_max: crew.builders_max - 1 })}
-                        className="size-8 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
+                        className="size-8 border-0 bg-transparent p-0 text-lg text-foreground cursor-pointer disabled:cursor-not-allowed">{"−"}</button>
                 <b className="min-w-9 text-center" data-testid="builders-count" aria-live="polite">{crew.builders_max}</b>
                 <button type="button" aria-label="One builder more" disabled={dim || crew.builders_max >= 20} data-ctl data-testid="builders-more"
                         onClick={() => void onCrew({ builders_max: crew.builders_max + 1 })}
-                        className="size-8 border-0! bg-transparent! p-0! text-lg! text-foreground! cursor-pointer disabled:cursor-not-allowed">+</button>
+                        className="size-8 border-0 bg-transparent p-0 text-lg text-foreground cursor-pointer disabled:cursor-not-allowed">+</button>
               </div>
             </Row>
             <Row title="Second check" data-testid="row-challenger"
@@ -373,12 +373,12 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
 const BACK_ARROW = (
   <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 2L4 6l4 4" /></svg>
 );
-const NAV_ITEM = "flex! w-full min-h-8 items-center justify-between gap-2 border-0! py-1! pr-2.5! pl-[22px]! text-left text-sm! no-underline! cursor-pointer hover:bg-muted!";
+const NAV_ITEM = "flex w-full min-h-8 items-center justify-between gap-2 border-0 py-1 pr-2.5 pl-[22px] text-left text-sm no-underline cursor-pointer hover:bg-muted";
 
 function SettingsBack() {
   return (
     <Link to={placeBeforeSettings()} data-testid="settings-back"
-          className="inline-flex! h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">{BACK_ARROW}Back</Link>
+          className="inline-flex h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground no-underline hover:text-foreground">{BACK_ARROW}Back</Link>
   );
 }
 
@@ -396,7 +396,7 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
     <>
       <div className="md:hidden">
         {back}
-        <h1 className="m-0! mb-3! px-2.5 text-[22px]!">Settings</h1>
+        <h1 className="m-0 mb-3 px-2.5 text-[22px]">Settings</h1>
         <label className="block">
           <span className="sr-only">Settings section</span>
           <select value={tab} data-testid="settings-select" onChange={(e) => go(e.target.value)}>
@@ -410,13 +410,13 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
       </div>
       <nav aria-label="Settings" data-testid="settings-nav" className="hidden w-[216px] flex-none flex-col gap-0.5 md:flex">
         {back}
-        <h1 className="m-0! mb-3.5! px-2.5 text-2xl!">Settings</h1>
+        <h1 className="m-0 mb-3.5 px-2.5 text-2xl">Settings</h1>
         {groups.map((g) => {
           const open = g.items.some((i) => i.id === tab);
           return (
             <div key={g.id} data-testid={`group-${g.id}`} className={g.id === "advanced" ? "mt-2.5 border-t border-border pt-2.5" : ""}>
               <button type="button" aria-expanded={open} data-testid={`group-open-${g.id}`} onClick={() => go(g.items[0].id)}
-                      className="flex! h-9 w-full items-center justify-between border-0! bg-transparent! px-2.5! text-left text-sm! font-semibold! text-foreground! cursor-pointer hover:bg-muted!">
+                      className="flex h-9 w-full items-center justify-between border-0 bg-transparent px-2.5 text-left text-sm font-semibold text-foreground cursor-pointer hover:bg-muted">
                 <span>{g.label}</span>
                 <svg aria-hidden="true" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" className={cn("opacity-70", open && "rotate-90")}><path d="M4 2l4 4-4 4" /></svg>
               </button>
@@ -432,7 +432,7 @@ function SettingsNav({ groups, tab, onPick, tools, grants }: {
                         {i.id === "allowed" && grants ? <span className="font-mono text-xs text-muted-foreground" data-testid="nav-grants">{grants}</span> : null}
                       </>
                     );
-                    const cls = cn(NAV_ITEM, on ? "bg-muted! font-semibold! text-foreground!" : "bg-transparent! font-normal! text-muted-foreground!");
+                    const cls = cn(NAV_ITEM, on ? "bg-muted font-semibold text-foreground" : "bg-transparent font-normal text-muted-foreground");
                     return i.to
                       ? <Link key={i.id} to={i.to} data-testid={`nav-${i.id}`} className={cls}>{inner}</Link>
                       : <button key={i.id} type="button" aria-current={on ? "page" : undefined} data-testid={`nav-${i.id}`} onClick={() => onPick(i.id)} className={cls}>{inner}</button>;

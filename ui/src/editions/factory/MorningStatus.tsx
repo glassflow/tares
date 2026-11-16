@@ -36,7 +36,7 @@ export function missingFor(d: MorningStatus, slackConnected: boolean, emailAvail
 }
 
 const LOWER = (s: string) => s.toLowerCase();
-const TICK = "data-[state=unchecked]:bg-field!";
+const TICK = "data-[state=unchecked]:bg-field";
 
 export function MorningStatusPane({ value, slackConnected, people, dim, onSave, onSendNow }: {
   value: MorningStatus;
@@ -95,8 +95,8 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
   return (
     <div className="grid min-w-0 gap-4" data-testid="morning-status">
       <div className="min-w-0">
-        <h2 className="m-0! text-xl!">Morning status</h2>
-        <p className="m-0! text-[13px] text-muted-foreground">A short report each weekday morning: what got done, what is moving, and what is waiting for you.</p>
+        <h2 className="m-0 text-xl">Morning status</h2>
+        <p className="m-0 text-[13px] text-muted-foreground">A short report each weekday morning: what got done, what is moving, and what is waiting for you.</p>
       </div>
 
       <div className={"border border-border bg-card" + (off ? " opacity-60" : "")}>
@@ -120,7 +120,7 @@ export function MorningStatusPane({ value, slackConnected, people, dim, onSave, 
                         onCheckedChange={(v) => set({ to_slack: v === true })} data-testid="morning-to-slack" />
               {!slackConnected && (
                 <div className="ml-7 text-[13px] text-muted-foreground" data-testid="morning-no-slack">
-                  <b className="text-foreground">Connect Slack first.</b> <Link to="/settings?tab=slack" className="text-foreground! underline!">Connect Slack</Link>
+                  <b className="text-foreground">Connect Slack first.</b> <Link to="/settings?tab=slack" className="text-foreground underline">Connect Slack</Link>
                 </div>
               )}
               {draft.to_slack && slackConnected && (
