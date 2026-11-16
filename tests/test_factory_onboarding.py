@@ -1,7 +1,7 @@
 """The first run of a new factory cell (TR-1312): tares/crew_onboarding.py, the two calls it adds
-(POST /api/crew/machine, PUT /api/crew/tracker), and the `onboarding` block of GET /api/home.
+(POST /api/crew/machine), and the `onboarding` block of GET /api/home that /setup draws.
 
-The panel ticks from what the cell knows: the crew's settings, the GitHub and Linear connections, the
+The steps tick from what the cell knows: the crew's settings, the GitHub connection, the
 machine report the command line posts, and the crew's live sessions. The form starts on the crew's own
 defaults and saves nothing until the person confirms. The report is a name and a version, never a key.
 
@@ -103,29 +103,6 @@ def units():
        and co.choices_text(co.choices({"autonomy": "L4-ship", "releaser": True, "builders_max": 1}))
        == "The crew merges on its own, 1 builder, releases on")
 
-    print("== where tickets live ==")
-    s = Store()
-    ck("nothing known: no place", co.tracker(s, False, False, False) is None)
-    ck("Linear connected", co.tracker(s, True, False, False) == "linear")
-    ck("a project in GitHub Issues", co.tracker(s, False, True, False) == "github_issues")
-    ck("a crew that is up with nothing else: Tares itself", co.tracker(s, False, False, True) == "tares")
-    ck("a saved choice wins over what is connected", co.save_tracker(s, "github_issues") == "github_issues"
-       and co.tracker(s, True, False, True) == "github_issues")
-    bad = False
-    try:
-        co.save_tracker(s, "jira")
-    except ValueError:
-        bad = True
-    ck("a place that is not one of the three is refused and not saved", bad and co.saved_tracker(s) == "github_issues")
-    s.set_setting(co.TRACKER_SETTING, "jira")
-    ck("a saved value that is not one of the three reads as no choice", co.saved_tracker(s) is None)
-    ck("done needs GitHub", co.tracker_done("tares", False, False) is False)
-    ck("done needs a place", co.tracker_done(None, True, False) is False)
-    ck("Tares and GitHub Issues need only GitHub", co.tracker_done("tares", True, False)
-       and co.tracker_done("github_issues", True, False))
-    ck("Linear needs Linear connected", co.tracker_done("linear", True, False) is False
-       and co.tracker_done("linear", True, True) is True)
-
     print("== GitHub, in words ==")
     s = Store()
     ck("none: nothing", co.github_text(s) == "")
@@ -187,7 +164,7 @@ def units():
     print("== a crew that ran before the report existed ==")
     old = Store()
     old.list_crews = lambda: [{"machine": "old-box", "person_id": "p1"}]
-    name = lambda pid: co.payload(old, [], {}, False, False, co.machine_key(pid), pid)["machine"]["name"]
+    name = lambda pid: co.payload(old, [], {}, co.machine_key(pid), pid)["machine"]["name"]
     ck("its person's home names the machine of their own crew", name("p1") == "old-box")
     ck("another person's home does not take it", name("p2") == "" and name(None) == "")
 
@@ -216,12 +193,11 @@ async def main():
         print("== a new cell ==")
         b = home()["onboarding"]
         ck("nothing chosen, nothing connected, no machine, no crew",
-           b["choices"]["chosen"] is False and b["tracker"] is None and b["github"]["connected"] is False
+           b["choices"]["chosen"] is False and "tracker" not in b and b["github"]["connected"] is False
            and b["machine"]["name"] == "" and b["crew"]["up"] is False, b)
         ck("the form is told the defaults and the recommendation", b["choices"]["defaults"] == co.defaults())
         ck("loading the home saved nothing (the form saves only on confirm)",
-           store.get_setting("crew_settings") is None and store.get_setting(co.TRACKER_SETTING) is None
-           and store.get_setting(co.MACHINE_SETTING) is None)
+           store.get_setting("crew_settings") is None and store.get_setting(co.MACHINE_SETTING) is None)
 
         print("== the machine report call ==")
         ana = store.create_person("Ana Example", email="ana@example.test", via="admin")
@@ -279,8 +255,7 @@ async def main():
                                               for t in (TOKEN, ka, kb)))
             ck("the home ticks install and sign in within the same call, no cache wait",
                {s["key"]: s["done"] for s in (await ax.get("/api/home")).json()["start"]["steps"]}
-               == {"choices": False, "connections": False, "install": True, "login": True, "crew": False,
-                   "spec": False})
+               == {"setup": False, "install": True, "login": True, "crew": False, "spec": False})
             ck("a body without a name or version saves what is there",
                (await ax.post("/api/crew/machine", json={})).json() == {"machine": "ana-laptop",
                                                                          "version": "1.58.1"})
@@ -288,28 +263,21 @@ async def main():
             await ax.post("/api/crew/machine", json={"machine": " ", "version": "\u0007"})
             ck("an empty report does not move the time", mine(ana["id"])["at"] == at, mine(ana["id"]))
 
-        print("== where tickets live, over the API ==")
-        async with mk() as cx, mk(ka) as ax:
-            r = await cx.put("/api/crew/tracker", json={"tracker": "jira"})
-            ck("a place that is not one of the three is a 400", r.status_code == 400, r.text)
-            ck("and saved nothing", co.saved_tracker(store) is None)
-            r = await ax.put("/api/crew/tracker", json={"tracker": "tares"})
-            ck("an ingest key may not choose it for the cell", r.status_code == 403, (r.status_code, r.text))
-            await cx.get("/api/home")      # cached for a few seconds: saving must clear it
+        print("== where tickets live is not asked here any more ==")
+        async with mk() as cx:
             r = await cx.put("/api/crew/tracker", json={"tracker": "tares"})
-            ck("the root token saves it", r.status_code == 200 and r.json() == {"tracker": "tares"}, r.text)
-            ck("the home reads it at once", (await cx.get("/api/home")).json()["onboarding"]["tracker"] == "tares")
+            ck("the old route is gone: tickets are chosen on /setup's Tickets step", r.status_code in (404, 405), r.status_code)
 
         print("== the choices, saved on confirm ==")
         async with mk() as cx:
             h = (await cx.get("/api/home")).json()
-            ck("GitHub not connected: step 2 waits", h["start"]["steps"][1]["done"] is False)
+            ck("nothing chosen, no GitHub: setup waits", h["start"]["steps"][0]["done"] is False)
             store.upsert_github_credential("main", "ghp_example", "token", "", "example-org")
-            await cx.put("/api/crew/tracker", json={"tracker": "tares"})
+            fh._cache.clear()      # a credential written straight to the store: the API would clear it
             h = (await cx.get("/api/home")).json()
-            ck("GitHub and a place: step 2 done, with its line", h["start"]["steps"][1]["done"] is True
-               and h["start"]["steps"][1]["detail"] == "GitHub connected as example-org, tickets in Tares",
-               h["start"]["steps"][1])
+            ck("GitHub alone: setup still waits for the choices", h["start"]["steps"][0]["done"] is False
+               and h["onboarding"]["github"] == {"connected": True, "text": "GitHub connected as example-org"},
+               h["onboarding"]["github"])
             ck("the token never reaches the home", "ghp_example" not in json.dumps(h))
             r = await cx.put("/api/crew/settings", json={"autonomy": "L3-review", "builders_max": 3, "releaser": True})
             ck("saving the three choices", r.status_code == 200, r.text)
@@ -317,8 +285,9 @@ async def main():
             c = h["onboarding"]["choices"]
             ck("the home says chosen, with the values", c["chosen"] is True and c["autonomy"] == "L3-review"
                and c["builders_max"] == 3 and c["releaser"] is True, c)
-            ck("step 1 is done with its line", h["start"]["steps"][0]["done"] is True
-               and h["start"]["steps"][0]["detail"] == "You approve each merge, 3 builders, releases on",
+            ck("the choices and GitHub: setup is done with its line", h["start"]["steps"][0]["done"] is True
+               and h["start"]["steps"][0]["detail"]
+               == "You approve each merge, 3 builders, releases on. GitHub connected as example-org",
                h["start"]["steps"][0])
 
         print("== the crew coming up ==")
@@ -330,21 +299,20 @@ async def main():
             ck("the orchestrator first: the reviewer is starting and the crew is not up",
                h["onboarding"]["crew"]["orchestrator"]["state"] == "running"
                and h["onboarding"]["crew"]["reviewer"]["state"] == "starting"
-               and h["start"]["steps"][4]["done"] is False, h["onboarding"]["crew"])
+               and h["start"]["steps"][3]["done"] is False, h["onboarding"]["crew"])
             rows.append(st("reviewer", "idle"))
             h = home()
             ck("then the reviewer: the crew is up, with the machine named",
-               h["onboarding"]["crew"]["up"] is True and h["start"]["steps"][4]["done"] is True
-               and h["start"]["steps"][4]["detail"] == "Running on cell-machine", h["start"]["steps"][4])
+               h["onboarding"]["crew"]["up"] is True and h["start"]["steps"][3]["done"] is True
+               and h["start"]["steps"][3]["detail"] == "Running on cell-machine", h["start"]["steps"][3])
 
             print("== the old cell: a crew that was running before this panel existed ==")
             store.set_setting(co.MACHINE_SETTING, None)
-            store.set_setting(co.TRACKER_SETTING, None)
             h = home()
-            ck("it is up, ticks install and sign in, and tickets default to Tares",
-               h["onboarding"]["crew"]["up"] is True and h["onboarding"]["tracker"] == "tares"
-               and h["start"]["steps"][2]["done"] and h["start"]["steps"][3]["done"], h["start"]["steps"])
-            ck("with no machine name the crew line has none", h["start"]["steps"][4]["detail"] == "Running")
+            ck("it is up and ticks install and sign in",
+               h["onboarding"]["crew"]["up"] is True
+               and h["start"]["steps"][1]["done"] and h["start"]["steps"][2]["done"], h["start"]["steps"])
+            ck("with no machine name the crew line has none", h["start"]["steps"][3]["detail"] == "Running")
         finally:
             fx.stations = real
 

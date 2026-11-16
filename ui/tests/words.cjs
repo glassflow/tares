@@ -56,7 +56,7 @@ async function checkWords(page, ck, label) {
 
 // A screen loads from exactly one read route. Records every /api/ request until the page is idle;
 // the returned check says exactly one GET went to `route` (query string ignored) and no other GET
-// went to /api/. /api/whoami (the shell's edition read), /api/licence (the licence read, every page) and /api/brain (the shell's read for the Second Brain menu, factory only) are not counted unless it is the route asked about (the chooser's one read), and nothing after the check
+// went to /api/. /api/whoami (the shell's edition read), /api/licence (the licence read, every page), /api/brain (the shell's read for the Second Brain menu, factory only) and /api/factory/setup/progress (the menu's Setup card, factory only) are not counted unless it is the route asked about (the chooser's one read), and nothing after the check
 // is (a person's clicks are actions).
 function expectOneCall(page, route) {
   const gets = [];
@@ -64,7 +64,8 @@ function expectOneCall(page, route) {
   const onRequest = (req) => {
     if (!recording || req.method() !== "GET") return;
     const p = new URL(req.url()).pathname;
-    if (p.startsWith("/api/") && p !== "/api/licence" && (p !== "/api/whoami" || route === "/api/whoami") && (p !== "/api/brain" || route === "/api/brain")) gets.push(p);
+    if (p.startsWith("/api/") && p !== "/api/licence" && (p !== "/api/whoami" || route === "/api/whoami") && (p !== "/api/brain" || route === "/api/brain")
+        && (p !== "/api/factory/setup/progress" || route === "/api/factory/setup/progress")) gets.push(p);
   };
   page.on("request", onRequest);
   return async (ck, label) => {

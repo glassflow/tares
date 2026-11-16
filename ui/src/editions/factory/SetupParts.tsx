@@ -1,19 +1,17 @@
 import * as React from "react";
 import { Link } from "react-router-dom";
 
-import { Button, ProgressBar } from "../../components/edition";
+import { Button } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
-import { cloudLinkHere } from "../../cloud";
 import { cn } from "@/lib/utils";
 import { CopyCommand, Tick } from "../StartChecklist";
-import { hideStart, type StartStep } from "../StartChecklist.api";
-import type { StartBlock } from "../StartChecklist.api";
-import type { HomeOnboarding, OnboardingMember, OnboardingTracker } from "./home.types";
+import type { StartStep } from "../StartChecklist.api";
+import type { HomeOnboarding, OnboardingMember } from "./home.types";
 
-// The first run of a new factory cell (TR-1312): two choices made here, four commands in a terminal,
-// and a panel that fills in as the crew reports. It draws the Start block and the onboarding block of
-// GET /api/home; each step ticks from the cell, so the page only has to read again. A choice is saved
-// on the cell when the person confirms it, never before.
+// The pieces of setting a factory up that /setup draws around its integration steps (TR-1312): the crew's
+// choices, the four terminal commands, and the panel that fills in as the crew reports. They draw the
+// onboarding block and the terminal steps GET /api/factory/setup carries; each step ticks from the cell,
+// so the page only has to read again.
 
 const PANEL = "min-w-0 border border-border bg-card [overflow-wrap:anywhere]";
 const MUTED = "text-[13px] text-muted-foreground";
@@ -26,32 +24,9 @@ const MERGES = [
   { value: "L4-ship", title: "The crew merges on its own", text: "Once the reviewer passes it and CI is green." },
 ] as const;
 
-const TRACKERS: { value: OnboardingTracker; title: string; text: string }[] = [
-  { value: "tares", title: "Here in Tares", text: "Nothing more to connect." },
-  { value: "linear", title: "Linear", text: "Tickets stay where your team already tracks work." },
-  { value: "github_issues", title: "GitHub Issues", text: "Uses the GitHub connection above." },
-];
-
 const MEMBER_WORDS: Record<OnboardingMember["state"], string> = {
   running: "running", quiet: "quiet", stopped: "stopped", starting: "starting", none: "not running",
 };
-
-export interface OnboardingApi {
-  saveChoices: (c: { autonomy: string; builders_max: number; releaser: boolean }) => Promise<unknown>;
-  saveTracker: (t: string) => Promise<unknown>;
-}
-
-export interface CrewOnboardingProps {
-  block: StartBlock;
-  onboarding: HomeOnboarding;
-  api: OnboardingApi;
-  /** Called after a save so the page reads again at once. */
-  onChanged: () => void;
-  hide?: () => Promise<unknown>;
-  onHidden?: () => void;
-  /** The panel that fills in as the machine reports. A team home draws its own crew card instead. */
-  crewPanel?: boolean;
-}
 
 function Choice({ checked, name, value, title, text, onChange, disabled }: {
   checked: boolean; name: string; value: string; title: string; text: string;
@@ -105,8 +80,11 @@ function StepShell({ step, n, current, children, onChange }: {
   );
 }
 
-function ChoicesForm({ o, save, done, onSaved }: {
-  o: HomeOnboarding; save: OnboardingApi["saveChoices"]; done: () => void; onSaved: () => void;
+export type SaveChoices = (c: { autonomy: string; builders_max: number; releaser: boolean }) => Promise<unknown>;
+
+/** How the crew works: who merges, builders at once, releases. Saved together when the person confirms. */
+export function ChoicesForm({ o, save, onSaved, saveLabel = "Save and continue" }: {
+  o: HomeOnboarding; save: SaveChoices; onSaved: () => void; saveLabel?: string;
 }) {
   const c = o.choices;
   const [autonomy, setAutonomy] = React.useState<string>(c.autonomy ?? c.defaults.autonomy);
@@ -126,7 +104,7 @@ function ChoicesForm({ o, save, done, onSaved }: {
     setBusy(true);
     setError(false);
     save({ autonomy, builders_max: builders, releaser: releases }).then(
-      () => { setBusy(false); setAsking(false); done(); onSaved(); },
+      () => { setBusy(false); setAsking(false); onSaved(); },
       () => { setBusy(false); setError(true); },
     );
   };
@@ -187,67 +165,9 @@ function ChoicesForm({ o, save, done, onSaved }: {
         </div>
       ) : (
         <div>
-          <Button type="submit" busy={busy} data-testid="choices-save">Save and continue</Button>
+          <Button type="submit" busy={busy} data-testid="choices-save">{saveLabel}</Button>
         </div>
       )}
-    </form>
-  );
-}
-
-function ConnectionsForm({ o, step, save, done, onSaved }: {
-  o: HomeOnboarding; step: StartStep; save: OnboardingApi["saveTracker"]; done: () => void; onSaved: () => void;
-}) {
-  const [tracker, setTracker] = React.useState<OnboardingTracker>(o.tracker ?? "tares");
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState(false);
-  const links = step.actions.filter((a): a is Extract<typeof a, { label: string }> => !("copy" in a) && !("do" in a));
-  const link = (label: string) => links.find((a) => a.label === label);
-  const connect = (label: string) => {
-    const a = link(label);
-    if (!a) return null;
-    return "to" in a
-      ? <Button asChild variant="secondary" className="h-8 text-[13px]!"><Link to={a.to}>{a.label}</Link></Button>
-      : <Button asChild variant="secondary" className="h-8 text-[13px]!"><a href={"href" in a ? cloudLinkHere(a.href) : "#"}>{a.label}</a></Button>;
-  };
-  const needLinear = tracker === "linear" && !o.linear.connected;
-  const ready = o.github.connected && !needLinear;
-  const submit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!ready) return;
-    setBusy(true);
-    setError(false);
-    save(tracker).then(
-      () => { setBusy(false); done(); onSaved(); },
-      () => { setBusy(false); setError(true); },
-    );
-  };
-  return (
-    <form onSubmit={submit} className="grid gap-4" data-testid="connections-form">
-      <div className="flex flex-wrap items-center justify-between gap-3 border border-border bg-[var(--input-bg)] px-4 py-3.5" data-testid="github-row">
-        <span className="grid gap-0.5">
-          <span className="font-semibold">GitHub</span>
-          <span className={MUTED} data-user-text data-testid="github-state">{o.github.connected ? (o.github.text || "Connected") : "Not connected. The crew opens its pull requests there."}</span>
-        </span>
-        {!o.github.connected && connect("Connect GitHub")}
-      </div>
-      <fieldset className="m-0 grid gap-2 border-0 p-0">
-        <legend className="mb-2 p-0 text-sm font-semibold">Where tickets live</legend>
-        {TRACKERS.map((t) => (
-          <Choice key={t.value} name="tracker" value={t.value} title={t.title} text={t.text} checked={tracker === t.value}
-                  onChange={() => setTracker(t.value)} />
-        ))}
-      </fieldset>
-      {needLinear && (
-        <div className="flex flex-wrap items-center gap-3" data-testid="linear-needed">
-          <span className={MUTED}>Linear is not connected yet.</span>
-          {connect("Connect Linear")}
-        </div>
-      )}
-      {error && <div role="alert" data-testid="step-error" className="text-[13px] text-[color:var(--err)]">{SAVE_FAILED}</div>}
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" busy={busy} disabled={!ready} data-testid="connections-save">Save and continue</Button>
-        {!ready && !o.github.connected && <span className={MUTED}>Connect GitHub to continue.</span>}
-      </div>
     </form>
   );
 }
@@ -268,7 +188,7 @@ function MemberLine({ name, who, m }: { name: string; who: string; m: Onboarding
   );
 }
 
-function YourCrew({ o }: { o: HomeOnboarding }) {
+export function YourCrew({ o }: { o: HomeOnboarding }) {
   const c = o.crew;
   const b = c.builders;
   return (
@@ -305,97 +225,50 @@ function YourCrew({ o }: { o: HomeOnboarding }) {
   );
 }
 
-export function CrewOnboarding({ block, onboarding: o, api, onChanged, hide = hideStart, onHidden, crewPanel = true }: CrewOnboardingProps) {
-  const [hidden, setHidden] = React.useState(false);
-  const [hideError, setHideError] = React.useState(false);
-  const [editing, setEditing] = React.useState<string | null>(null);
-  if (!block.show || hidden) return null;
-  const steps = block.steps;
-  const current = steps.find((s) => !s.done)?.key;
-  const workspace = steps.filter((s) => s.where !== "terminal");
-  const terminal = steps.filter((s) => s.where === "terminal");
-  const up = o.crew.up;
-  const pct = block.total > 0 ? (block.done / block.total) * 100 : 0;
-  const onHide = () => {
-    setHidden(true);
-    setHideError(false);
-    hide().then(() => onHidden?.(), () => { setHidden(false); setHideError(true); });
-  };
-  const numberOf = (key: string) => steps.findIndex((s) => s.key === key) + 1;
-
-  const renderWorkspace = (s: StartStep) => {
-    const open = !s.done || editing === s.key;
-    const change = s.done ? () => setEditing(s.key) : undefined;
-    return (
-      <StepShell key={s.key} step={open ? { ...s, done: false } : s} n={numberOf(s.key)} current={s.key === current}
-                 onChange={change}>
-        {open && s.key === "choices" && (
-          <ChoicesForm o={o} save={api.saveChoices} done={() => setEditing(null)} onSaved={onChanged} />
-        )}
-        {open && s.key === "connections" && (
-          <ConnectionsForm o={o} step={s} save={api.saveTracker} done={() => setEditing(null)} onSaved={onChanged} />
-        )}
-      </StepShell>
-    );
-  };
-
-  const renderTerminal = (s: StartStep) => {
-    const copy = s.actions.find((a): a is { label: string; copy: string } => "copy" in a);
-    const coming = s.key === "crew" && !s.done && (o.crew.orchestrator.state !== "none" || o.crew.reviewer.state !== "none");
-    return (
-      <StepShell key={s.key} step={s} n={numberOf(s.key)} current={s.key === current}>
-        {!s.done && copy && <div><CopyCommand command={copy.copy} /></div>}
-        {coming && (
-          <div className="grid gap-1 text-[13px]" data-testid="crew-coming" role="status">
-            <span>Orchestrator is {MEMBER_WORDS[o.crew.orchestrator.state]}</span>
-            <span>Reviewer is {MEMBER_WORDS[o.crew.reviewer.state]}</span>
-          </div>
-        )}
-        {s.key === "crew" && !s.done && (
-          <div className={MUTED} data-testid="crew-doctor">
-            Nothing after a minute? Try <code className="font-mono">tares factory doctor</code>.
-          </div>
-        )}
-      </StepShell>
-    );
-  };
-
+function TerminalStep({ s, n, current, o, showDone }: {
+  s: StartStep; n: number; current: boolean; o: HomeOnboarding; showDone: boolean;
+}) {
+  const command = s.command ?? s.actions.find((a): a is { label: string; copy: string } => "copy" in a)?.copy;
+  const coming = s.key === "crew" && !s.done && (o.crew.orchestrator.state !== "none" || o.crew.reviewer.state !== "none");
   return (
-    <section aria-label="Get your crew running" className="grid min-w-0 gap-6" data-testid="start-checklist">
-      <header className="grid max-w-[700px] gap-2">
-        <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-          <h2 className="m-0! text-2xl!" data-testid="onboarding-title">{up ? "Your crew is up" : "Get your crew running"}</h2>
-          <Button variant="quiet" className="px-1! underline" onClick={onHide} data-testid="start-hide">Hide this list</Button>
+    <StepShell step={s} n={n} current={current}>
+      {(!s.done || showDone) && command && <div><CopyCommand command={command} /></div>}
+      {coming && (
+        <div className="grid gap-1 text-[13px]" data-testid="crew-coming" role="status">
+          <span>Orchestrator is {MEMBER_WORDS[o.crew.orchestrator.state]}</span>
+          <span>Reviewer is {MEMBER_WORDS[o.crew.reviewer.state]}</span>
         </div>
-        <p className="m-0! text-[15px] text-muted-foreground" data-testid="onboarding-sub">
-          {up
-            ? `The orchestrator and the reviewer are running on ${o.crew.machine || "your machine"}. Give them something to build.`
-            : "Your crew is a set of Claude Code sessions on your own machine. This workspace keeps their plan, tickets and reviews. Make two choices here, then four commands in your terminal. Each step ticks itself when it is done."}
-        </p>
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-muted-foreground" data-testid="start-count">{block.done} of {block.total} done</span>
-          <ProgressBar value={pct} aria-label="Steps done" className="h-1 w-40 [&>div:first-child]:bg-foreground!" />
+      )}
+      {s.key === "crew" && !s.done && (
+        <div className={MUTED} data-testid="crew-doctor">
+          Nothing after a minute? Try <code className="font-mono">tares factory doctor</code>.
         </div>
-        <div className="text-[13px] text-muted-foreground" data-testid="onboarding-setup-line">
-          Want tickets, review, CI, memory and monitoring chosen in one place?{" "}
-          <Link to="/setup" className="text-foreground underline underline-offset-2" data-testid="onboarding-setup">Set up your factory</Link>
-        </div>
-        {hideError && <div role="alert" data-testid="start-error" className="text-[13px] text-[color:var(--err)]">Could not hide the list. Try again in a moment.</div>}
-      </header>
-      <div className="flex flex-wrap items-start gap-6">
-        <div className="grid min-w-0 flex-[999_1_520px] gap-3">
-          <h3 className="m-0! text-[13px]! font-semibold text-muted-foreground">Here, in this workspace</h3>
-          <ol className="m-0! grid list-none! gap-3 p-0!">{workspace.map(renderWorkspace)}</ol>
-          <h3 className="m-0! mt-3! text-[13px]! font-semibold text-muted-foreground">Then, in your terminal</h3>
-          <section aria-label="In your terminal" className="grid gap-3" data-testid="terminal-panel">
-            <p className="m-0! text-[13px] text-muted-foreground" data-testid="prerequisites">
-              You need, signed in: Claude Code on a plan with background sessions, and gh with write access to your repos. Also uv, git, jq and curl.
-            </p>
-            <ol start={workspace.length + 1} className="m-0! grid list-none! gap-3 p-0!">{terminal.map(renderTerminal)}</ol>
-          </section>
-        </div>
-        {crewPanel && <YourCrew o={o} />}
-      </div>
+      )}
+    </StepShell>
+  );
+}
+
+/** "Then, in your terminal": what you need, then the four commands, each ticking from the cell. A done
+ *  step keeps its command one click away (`showDone`), so /setup can always show how to run the crew. */
+/** What the terminal steps need on the machine, said once above them. */
+export function Prerequisites() {
+  return (
+    <p className="m-0! text-[13px] text-muted-foreground" data-testid="prerequisites">
+      You need, signed in: Claude Code on a plan with background sessions, and gh with write access to your repos. Also uv, git, jq and curl.
+    </p>
+  );
+}
+
+export function TerminalSteps({ steps, o, start = 1, current, showDone = false }: {
+  steps: StartStep[]; o: HomeOnboarding; start?: number; current?: string; showDone?: boolean;
+}) {
+  return (
+    <section aria-label="In your terminal" className="grid gap-3" data-testid="terminal-panel">
+      <ol start={start} className="m-0! grid list-none! gap-3 p-0!">
+        {steps.map((s, i) => (
+          <TerminalStep key={s.key} s={s} n={start + i} current={s.key === current} o={o} showDone={showDone} />
+        ))}
+      </ol>
     </section>
   );
 }

@@ -5,8 +5,12 @@ screen's copy knows (Jira with a status mapping, CodeRabbit, Qodo, Cognee, a pol
 Covered:
  - admin only: a read key, a person's key, a project key and a station get 403; the route reads
    and writes nothing (the connections, defaults, picks and pairs are the same after every call);
- - a fresh cell without a licence: seven steps in order, the built-in choice connected on each,
-   progress "1 of 7 steps set", what is installed but needs a licence says so in plain words;
+ - a fresh cell without a licence: seven steps in order, the built-in choice connected on each
+   with its Use button, progress "2 of 10 done" (CI and runtime; the crew, GitHub and the terminal
+   are counted too), what is installed but needs a licence says so in plain words;
+ - the steps setup leaves out (HIDDEN_STEPS, HIDE_WITHOUT_CHOICE): the rest of this file shows all
+   seven, so every step stays covered, and one section checks the leaving out;
+ - keeping the default: PUT /api/factory/setup/{slot}/keep sets the step, only for the default;
  - a filled cell: defaults, who picks what, the actions and the question asked before a removal,
    forms with saved values and a secret that is only ever "saved", a Jira status mapping,
    a guardrail that checks use cannot be removed, one connection for monitoring, memory and
@@ -46,12 +50,19 @@ for _k in ("TARES_WORKSPACE_API_URL", "TARES_LINEAR_CONNECT_URL", "TARES_GITHUB_
 import httpx
 
 from tares import licence, linear
+from tares.screens import factory_setup as fs
 from tares.integrations import registry
 from tares.integrations.guardrails import Guardrail
 from tares.integrations.memory import MemoryStore
 from tares.integrations.review import ReviewGate
 from tares.integrations.tickets import TicketBackend
 from tares.integrations.types import Field
+
+# Setup leaves some steps out (monitoring until it is tested, memory and guardrails while they offer
+# no choice). This file checks every step, so it shows all of them; "== steps left out ==" puts the
+# real lists back and checks them.
+HIDDEN, HIDE_WITHOUT = fs.HIDDEN_STEPS, fs.HIDE_WITHOUT_CHOICE
+fs.HIDDEN_STEPS, fs.HIDE_WITHOUT_CHOICE = (), ()
 
 P = F = 0
 
@@ -216,7 +227,8 @@ async def main():
             ck("an admin reads it", r.status_code == 200, r.text[:300])
             body = r.json()
             ck("nothing was written by the read", snapshot(store) == before)
-            ck("the top-level keys", sorted(body) == ["edition", "exit_label", "licence", "progress", "steps", "title"],
+            ck("the top-level keys", sorted(body) == ["edition", "exit_label", "licence", "onboarding", "progress", "steps",
+                                                 "terminal", "title", "tools"],
                sorted(body))
             ck("title and exit label", body["title"] == "Set up your factory" and body["exit_label"] == "Exit setup")
             ck("a self-hosted cell", body["edition"] == {"key": "self_hosted", "name": "Self-hosted", "cloud": False},
@@ -228,11 +240,15 @@ async def main():
                and [s["number"] for s in body["steps"]] == list(range(1, 8)))
             ck("steps are named and say why", [s["name"] for s in body["steps"]] == [
                 "Tickets", "Review", "CI", "Memory", "Monitoring", "Guardrails", "Runtime"]
-               and step(body, "review")["why"] == "Who reviews each pull request before it can merge. "
-                                                  "This is the review gate.")
-            ck("only the runtime counts as set", [s["state"] for s in body["steps"]] == [
-                "not_set"] * 6 + ["set"] and body["progress"] == {"set": 1, "total": 7, "text": "1 of 7 steps set"},
-               body["progress"])
+               and step(body, "review")["why"] == "Who reviews each pull request before it can merge.")
+            ck("only CI and the runtime count as set: nothing to choose there", [s["state"] for s in body["steps"]] == [
+                "not_set", "not_set", "set", "not_set", "not_set", "not_set", "set"]
+               and body["progress"] == {"set": 2, "total": 10, "text": "2 of 10 done"}, body["progress"])
+            ck("the crew, GitHub and the terminal come from the home",
+               body["onboarding"]["choices"]["chosen"] is False and body["onboarding"]["github"]["connected"] is False
+               and [t["key"] for t in body["terminal"]] == ["install", "login", "crew", "spec"]
+               and body["tools"] == {"github": {"connected": False, "detail": "Not connected"},
+                                     "slack": {"connected": False, "detail": "Not connected"}}, body["tools"])
             tix = step(body, "tickets")
             ck("the step line", tix["line"] == "Tares (not set yet)" and step(body, "runtime")["line"] == "Claude Code",
                (tix["line"], step(body, "runtime")["line"]))
@@ -241,12 +257,13 @@ async def main():
                and tix["connected"][0]["default"] and tix["connected"][0]["built_in"]
                and [t["text"] for t in tix["connected"][0]["tags"]] == ["Default", "Built in"]
                and tix["connected"][0]["description"] == "Tickets live in Tares."
-               and tix["connected"][0]["actions"] == [] and tix["connected"][0]["form"] is None
+               and tix["connected"][0]["actions"] == [{"key": "keep", "label": "Use Tares"}]
+               and tix["connected"][0]["form"] is None
                and tix["connected"][0]["confirm"] is None and tix["connected"][0]["last_test"] is None,
                tix["connected"])
             ck("headings", tix["connected_heading"] == "Connected (1)" and tix["available_heading"] == "Connect another")
-            ck("the use line with no project", tix["connected"][0]["use"] == "No project picks it. Every project that "
-                                                                         "picks none (0) follows it.", tix["connected"][0]["use"])
+            ck("the use line with no project", tix["connected"][0]["use"] == "Projects use it unless they pick another.",
+               tix["connected"][0]["use"])
             ck("tickets: what could be connected, in install order, Jira last",
                [a["id"] for a in tix["available"]] == ["linear", "github", "jira"], [a["id"] for a in tix["available"]])
             jira = avail(tix, "jira")
@@ -271,9 +288,7 @@ async def main():
             ck("the form's test hint", lin["form"]["test_hint"] == "Test connection checks the settings above with "
                                                                 "Linear. Nothing is saved by it.")
             ck("tickets: no banner and no note", tix["banner"] is None and tix["note"] is None)
-            ck("tickets: footer", tix["footer"] == {"hint": "Step 1 of 7. Projects pick one of the connected "
-                                                           "integrations; they never hold a key.", "next": "Next: Review"},
-               tix["footer"])
+            ck("tickets: footer", tix["footer"] == {"hint": "", "next": "Next: Review"}, tix["footer"])
             ck("the last step finishes the setup", step(body, "runtime")["footer"]["next"] == "Finish setup")
             gd = step(body, "guardrails")
             ck("guardrails: the note points at the Guardrails page", gd["note"] == (
@@ -283,13 +298,13 @@ async def main():
                and avail(gd, "webhook")["description"] == "Ask your own policy service before an action.")
             mon = step(body, "monitoring")
             ck("monitoring: Nothing is sent is connected, Rius and OTLP can be", [c["id"] for c in mon["connected"]] == ["off"]
-               and mon["connected"][0]["description"] == "Nothing is sent." and mon["connected"][0]["actions"] == []
+               and mon["connected"][0]["description"] == "Nothing is sent."
+               and mon["connected"][0]["actions"] == [{"key": "keep", "label": "Keep it off"}]
                and [a["id"] for a in mon["available"]] == ["rius", "otlp"], (mon["connected"], mon["available"]))
             ck("monitoring: the Rius form leads with how it is replaced",
                avail(mon, "rius")["form"]["lead"].endswith("It replaces Off."), avail(mon, "rius")["form"]["lead"])
-            ck("runtime: nothing left to connect", step(body, "runtime")["available"] == []
-               and step(body, "runtime")["available_empty"] == "Everything installed for this step is connected.")
-            ck("a step with something to connect has no empty line", tix["available_empty"] is None)
+            ck("runtime: nothing left to connect, and no line saying so", step(body, "runtime")["available"] == []
+               and "available_empty" not in step(body, "runtime"))
             ck("a fresh cell has no app block", all(a["app"] is None for a in tix["available"]))
 
             print("== a filled cell ==")
@@ -330,11 +345,12 @@ async def main():
             lin, gh, jira = conn(tix, "linear"), conn(tix, "github"), conn(tix, "jira")
             tl = registry.get("tickets", "github").title
             ck("who picks Linear and who follows it", lin["picked_by"] == [{"uid": "pr1", "name": "orders-api"}]
-               and lin["follows"] == 2 and lin["use"] == "Picked by orders-api. Every project that picks none (2) follows it.",
+               and lin["follows"] == 2 and lin["use"] == "Used by 3 projects; 2 picked another.",
                (lin["picked_by"], lin["follows"], lin["use"]))
             ck("who picks GitHub", [p["name"] for p in gh["picked_by"]] == ["billing-service", "warehouse-sync"]
-               and gh["use"] == "Picked by billing-service, warehouse-sync." and gh["follows"] == 0, gh["use"])
-            ck("a connection no project picks", jira["use"] == "No project picks it." and jira["picked_by"] == [])
+               and gh["use"] == "Used by billing-service and warehouse-sync." and gh["follows"] == 0, gh["use"])
+            ck("a connection no project picks", jira["use"] == "No project uses it yet." and jira["picked_by"] == [],
+               jira["use"])
             ck("the default has no make default and no remove", [a["key"] for a in lin["actions"]] == ["edit"]
                and lin["confirm"] is None, lin["actions"])
             ck("another has edit, make default and remove", [a["label"] for a in gh["actions"]] == [
@@ -384,7 +400,7 @@ async def main():
                avail(rv, "qodo")["form"]["lead"] == "Qodo reviews each pull request. It is added next to Tares reviewer and "
                                                     "CodeRabbit. The default stays CodeRabbit.", avail(rv, "qodo")["form"]["lead"])
             ck("a project that follows the review default is counted", cr["follows"] == 5 and
-               cr["use"] == "No project picks it. Every project that picks none (5) follows it.", cr["use"])
+               cr["use"] == "Used by 5 projects.", cr["use"])
             mem = step(body, "memory")
             ck("memory: one connection, no make default or remove", [c["id"] for c in mem["connected"]] == ["cognee"]
                and [a["key"] for a in mem["connected"][0]["actions"]] == ["edit"]
@@ -405,13 +421,18 @@ async def main():
                and "remove" not in [a["key"] for a in wh["actions"]] and wh["blocked"] == {
                    "key": "remove", "text": "Remove its checks on the Guardrails page first."} and wh["confirm"] is None, wh)
             ck("guardrails: the built-in rules are the default", conn(gd, "tares")["default"] is True)
-            ck("progress counts the steps with a choice", body["progress"]["set"] == 6 and
-               body["progress"]["text"] == "6 of 7 steps set", body["progress"])
+            ck("progress counts the steps with a choice, out of all ten", body["progress"]["set"] == 7 and
+               body["progress"]["text"] == "7 of 10 done", body["progress"])
             ck("every last_test is null", all(c["last_test"] is None for s in body["steps"] for c in s["connected"]))
             ci = step(body, "ci")
-            ck("ci: Tares's own checks are the default and GitHub can be connected", [c["id"] for c in ci["connected"]] == [
-                "local"] and ci["line"] == "Local checks (not set yet)" and [a["id"] for a in ci["available"]] == [
-                "github"], (ci["line"], [c["id"] for c in ci["connected"]]))
+            ck("ci: chosen per project while nothing is chosen at the factory, GitHub Actions can be connected",
+               [c["id"] for c in ci["connected"]] == ["local"] and ci["connected"][0]["title"] == "Automatic"
+               and ci["connected"][0]["use"] == ""
+               and ci["line"] == "GitHub Actions for GitHub repos, local checks otherwise"
+               and [a["id"] for a in ci["available"]] == ["github"] and avail(ci, "github")["form"]["fields"] == []
+               and avail(ci, "github")["form"]["lead"] == "Reads check results from GitHub. It becomes the default "
+                                                         "for every project, also one without a repo on GitHub.",
+               (ci["line"], ci["connected"][0]["title"], avail(ci, "github")["form"]))
 
             print("== the licence ended ==")
             expired = lambda store_, now=None, force=False: {
@@ -536,8 +557,51 @@ async def main():
                 store.set_project_choice(uid, "tickets", "linear", {}, "Dana Whitfield")
             r = await get()
             lin = conn(step(r.json(), "tickets"), "linear")
-            ck("forty projects are all named", r.status_code == 200 and len(lin["picked_by"]) >= 40
-               and lin["use"].startswith("Picked by ") and long_name in lin["use"], len(lin["picked_by"]))
+            ck("forty projects are counted, not listed", r.status_code == 200 and len(lin["picked_by"]) >= 40
+               and lin["use"] == f"Used by {len(lin['picked_by']) + lin['follows']} projects"
+               + (f"; {sum(len(c['picked_by']) for c in step(r.json(), 'tickets')['connected'] if c['id'] != 'linear')} picked another."
+                  if any(c["picked_by"] for c in step(r.json(), "tickets")["connected"] if c["id"] != "linear") else "."),
+               lin["use"])
+
+            print("== keeping the default ==")
+            b = (await get()).json()
+            rev = step(b, "review")
+            dflt = next(c["id"] for c in rev["connected"] if c["default"])
+            other = next((c["id"] for c in rev["connected"] if not c["default"]), "nope")
+            r = await root.put("/api/factory/setup/review/keep", json={"name": other})
+            ck("only the default can be kept", r.status_code == 422, (r.status_code, r.text))
+            async with mk(reader) as rx:
+                r = await rx.put("/api/factory/setup/review/keep", json={"name": dflt})
+                ck("a read key may not keep it", r.status_code == 403, r.status_code)
+            r = await root.put("/api/factory/setup/nope/keep", json={"name": "x"})
+            ck("a step that does not exist is a 404", r.status_code == 404, r.status_code)
+            r = await root.put("/api/factory/setup/review/keep", json={"name": dflt})
+            ck("the admin keeps the default", r.status_code == 200 and r.json() == {"slot": "review", "kept": dflt}, r.text)
+            ck("and it is stored", store.get_setting(fs.KEEP_PREFIX + "review") == dflt)
+            ck("a kept step is set and has no Use button", step((await get()).json(), "review")["set"] is True
+               and not any(a["key"] == "keep" for c in step((await get()).json(), "review")["connected"]
+                           for a in c["actions"]))
+
+            print("== steps left out ==")
+            fs.HIDDEN_STEPS, fs.HIDE_WITHOUT_CHOICE = HIDDEN, HIDE_WITHOUT
+            b = (await get()).json()
+            slots = [x["slot"] for x in b["steps"]]
+            ck("monitoring is left out until it is tested", "monitoring" not in slots and "monitoring" in HIDDEN, slots)
+            ck("memory and guardrails stay while they offer a choice",
+               all(x in slots for x in ("memory", "guardrails")) and set(HIDE_WITHOUT) == {"memory", "guardrails"}, slots)
+            ck("the count is out of the steps shown, and the crew, GitHub and the terminal",
+               b["progress"]["total"] == len(slots) + 3, b["progress"])
+            r = await root.get("/api/factory/setup/progress")
+            ck("the progress call says the same, with the number of factory projects",
+               r.status_code == 200 and {k: v for k, v in r.json().items() if k != "projects"} == b["progress"]
+               and r.json()["projects"] == sum(1 for p in store.list_projects() if p.get("kind") == "software_factory"),
+               r.text)
+            fs.HIDE_WITHOUT_CHOICE = ("runtime",)
+            ck("a step with one connection and nothing to connect is left out",
+               "runtime" not in [x["slot"] for x in (await get()).json()["steps"]])
+            fs.HIDDEN_STEPS, fs.HIDE_WITHOUT_CHOICE = (), ()
+            async with mk(reader) as rx:
+                ck("a read key gets no progress", (await rx.get("/api/factory/setup/progress")).status_code == 403)
 
             print("== what the whole run shows ==")
             texts = "\n".join(ALL)

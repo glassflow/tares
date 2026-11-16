@@ -187,21 +187,12 @@ export interface HomePlan {
   title: string; // "Your Claude plan", "Kim's Claude plan", or "Claude plan" when the cell cannot tell whose it is
 }
 
-export interface HomeTool {
-  key: "github" | "linear" | "slack" | "claude_code";
-  name: string;
-  connected: boolean;
-  /** What it is connected to, after the name on the chip: "glassflow", "last session 5 minutes ago". */
-  short: string | null;
-}
-
 /** One always-on member of the crew as the first-run panel shows it. */
 export interface OnboardingMember {
   state: "running" | "quiet" | "stopped" | "starting" | "none";
   last_at: string | null;
 }
 
-export type OnboardingTracker = "tares" | "linear" | "github_issues";
 
 export interface HomeOnboarding {
   choices: {
@@ -212,9 +203,7 @@ export interface HomeOnboarding {
     /** What the form starts on; the cell's own defaults, saved only when the person confirms. */
     defaults: { autonomy: "L3-review" | "L4-ship"; releaser: boolean; builders_max: number };
   };
-  tracker: OnboardingTracker | null;
   github: { connected: boolean; text: string };
-  linear: { connected: boolean };
   machine: { name: string; version: string; at: string | null };
   crew: {
     machine: string;
@@ -247,7 +236,6 @@ export interface HomeData {
   later_count?: number; // projects kept for later, off the home
   crew: HomeCrew;
   plan: HomePlan;
-  tools: HomeTool[];
   // The Start checklist (tares/start_steps.py); absent in older answers and in samples that skip it.
   start?: StartBlock;
   // What the first-run panel shows beside it (tares/crew_onboarding.py); absent in older answers.

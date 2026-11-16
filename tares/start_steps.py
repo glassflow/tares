@@ -16,22 +16,20 @@ from dataclasses import dataclass, fields
 
 HIDDEN_PREFIX = "start_hidden:"
 SETTINGS_LINK = "/settings#tools"
+SETUP_LINK = "/setup"
 # the page that explains keeping tickets in GitHub Issues
 GITHUB_ISSUES_DOCS = "https://docs.glassflow.ai/tares/software-factory/get-started"
 INSTALL_COMMAND = "uv tool install tares"
+LOGIN_COMMAND = "tares login"
 CREW_COMMAND = "tares factory crew up"
 SPEC_COMMAND = "tares factory spec"     # the name the command line accepts (tares/crew/dispatch.py PORTED)
 
 
 @dataclass
 class StartCtx:
-    cloud: bool = False                 # this cell is a Tares Cloud one
-    github_connect_url: str = ""        # cloud: where Connect GitHub goes
-    linear_connect_url: str = ""        # cloud: where Connect Linear goes
     choices_made: bool = False          # autonomy, releases and builders are saved on the cell
-    choices_text: str = ""              # the one line that says what was chosen
-    connections_done: bool = False      # GitHub is connected and the tickets' place is settled
-    connections_text: str = ""          # "GitHub connected as example-org, tickets in Tares"
+    github_connected: bool = False      # the cell holds a GitHub credential
+    setup_text: str = ""                # "You approve each merge, 2 builders, no releases. GitHub connected as example-org"
     cli_version: str = ""               # the version `tares login` reported
     machine_name: str = ""              # the machine that signed in or runs the crew
     crew_up: bool = False               # the orchestrator and the reviewer have both reported
@@ -66,47 +64,42 @@ def _step(key: str, title: str, gets: str, done: bool, actions: list[dict],
     return out
 
 
-def _where(step: dict, where: str) -> dict:
-    """Which half of the journey a step belongs to: `workspace` (done in the console) or `terminal`."""
+def _where(step: dict, where: str, command: str | None = None) -> dict:
+    """Which half of the journey a step belongs to: `workspace` (done in the console) or `terminal`.
+    A terminal step keeps its `command` once done, so /setup can always show how to run the crew."""
     step["where"] = where
+    if command:
+        step["command"] = command
     return step
 
 
 def factory_steps(ctx) -> list[dict]:
-    """The six steps of the factory home's first run (TR-1312), in order: two choices made in the
-    console, then four commands in a terminal. Each ticks from what the cell knows."""
+    """The five steps of the factory home's first run (TR-1312), in order: Set up your factory, done
+    in the console on /setup (how the crew works, GitHub, and the integrations), then four commands
+    in a terminal. Each ticks from what the cell knows."""
     c = _ctx(ctx)
-    connect_github = ({"label": "Connect GitHub", "href": c.github_connect_url}
-                      if c.cloud and c.github_connect_url
-                      else {"label": "Connect GitHub", "to": SETTINGS_LINK})
-    connect_linear = ({"label": "Connect Linear", "href": c.linear_connect_url}
-                      if c.cloud and c.linear_connect_url
-                      else {"label": "Connect Linear", "to": SETTINGS_LINK})
-    return [  # the console reads the two Connect buttons of step 2 by their labels
-        _where(_step("choices", "Decide how your crew works",
-                     "The crew reads these when it starts. Change any of them later in Settings, Crew.",
-                     c.choices_made, [], c.choices_text), "workspace"),
-        _where(_step("connections", "Connect GitHub and choose where tickets live",
-                     "Tares follows every pull request. Tickets stay here, or in Linear or GitHub Issues.",
-                     c.connections_done, [connect_github, connect_linear], c.connections_text),
-               "workspace"),
+    return [
+        _where(_step("setup", "Set up your factory",
+                     "How your crew works, your GitHub, and where tickets, reviews and checks live.",
+                     c.choices_made and c.github_connected,
+                     [{"label": "Set up your factory", "to": SETUP_LINK}], c.setup_text), "workspace"),
         _where(_step("install", "Install Tares", "The command that starts and watches the crew.",
                      bool(c.cli_version or c.machine_name or c.crew_up),
                      [{"label": "Copy the command", "copy": INSTALL_COMMAND}],
-                     f"Installed: tares {c.cli_version}." if c.cli_version else None), "terminal"),
+                     f"Installed: tares {c.cli_version}." if c.cli_version else None), "terminal", INSTALL_COMMAND),
         _where(_step("login", "Sign your machine in", "So the crew on your machine reports here.",
                      bool(c.machine_name or c.crew_up),
-                     [{"label": "Copy the command", "copy": "tares login"}],
-                     f"Signed in from {c.machine_name}." if c.machine_name else None), "terminal"),
+                     [{"label": "Copy the command", "copy": LOGIN_COMMAND}],
+                     f"Signed in from {c.machine_name}." if c.machine_name else None), "terminal", LOGIN_COMMAND),
         _where(_step("crew", "Start the crew",
                      "It reads your choices from this workspace and asks only what belongs to your machine.",
                      c.crew_up, [{"label": "Copy the command", "copy": CREW_COMMAND}],
-                     c.crew_text), "terminal"),
+                     c.crew_text), "terminal", CREW_COMMAND),
         _where(_step("spec", "Plan the first project",
                      "Start it in the repo you want built. You talk the project through with Claude Code, "
                      "and it writes the plan as milestones and tickets.",
                      c.spec_with_tickets, [{"label": "Copy the command", "copy": SPEC_COMMAND}]),
-               "terminal"),
+               "terminal", SPEC_COMMAND),
     ]
 
 

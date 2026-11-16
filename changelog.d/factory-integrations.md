@@ -1,0 +1,2 @@
+Added
+Integrations in the menu, right under Home: what the crew works with, grouped by what it does (Code, Tickets, Review, CI, Notifications, Runtime), with the same sections as Set up your factory. GitHub, Linear, Slack and Claude Code left Settings for it; their old Settings addresses open the right section. The CI step says what happens when nothing is chosen: GitHub Actions for a project with a repo on GitHub, local checks otherwise, and connecting GitHub Actions no longer asks whether the repository has CI.

@@ -3,6 +3,8 @@
 // routes that already exist (tares/integrations_api.py), one connection at a time.
 
 import { request } from "../../api";
+import type { StartStep } from "../StartChecklist.api";
+import type { HomeOnboarding } from "./home.types";
 
 export type SetupSlot = "tickets" | "review" | "ci" | "memory" | "monitoring" | "guardrails" | "runtime";
 
@@ -65,7 +67,7 @@ export interface SetupTag {
 }
 
 export interface SetupAction {
-  key: "edit" | "make_default" | "remove";
+  key: "edit" | "make_default" | "keep" | "remove";
   label: string;
 }
 
@@ -122,7 +124,6 @@ export interface SetupStep {
   connected: SetupConnected[];
   available_heading: string;
   available: SetupAvailable[];
-  available_empty: string | null;
   footer: { hint: string; next: string };
 }
 
@@ -131,14 +132,25 @@ export interface SetupData {
   exit_label: string;
   edition: { key: string; name: string; cloud: boolean };
   licence: { state: "valid" | "ended" | "none"; ended_on: string | null; text: string };
-  progress: { set: number; total: number; text: string };
+  /** All ten steps: the seven below, the crew's choices, GitHub, and the terminal commands. */
+  progress: SetupProgress;
+  /** The home's onboarding block and its four terminal steps, for the steps around the integrations. */
+  onboarding?: HomeOnboarding;
+  terminal?: StartStep[];
+  /** GitHub and Slack, for the Integrations page's Code and Notifications. */
+  tools?: Partial<Record<"github" | "slack", { connected: boolean; detail: string }>>;
   steps: SetupStep[];
 }
+
+export interface SetupProgress { set: number; total: number; text: string }
 
 /** What a form sends for one field: text, a secret ("" keeps the saved one), a real bool, or a mapping. */
 export type SettingValue = string | boolean | Record<string, string>;
 
 export const setupRead = () => request<SetupData>("/api/factory/setup");
+
+/** The count the Setup menu entry shows. Admins only: any other key gets a refusal, and no entry. */
+export const setupProgress = () => request<SetupProgress & { projects: number }>("/api/factory/setup/progress");
 
 const put = (path: string, body: unknown) => request<unknown>(path, { method: "PUT", body: JSON.stringify(body) });
 const slotPath = (slot: SetupSlot) => `/api/factory/integrations/${encodeURIComponent(slot)}`;
@@ -155,6 +167,10 @@ export const testIntegration = (slot: SetupSlot, name: string, settings: Record<
   request<TestResult>(`${slotPath(slot)}/test`, { method: "POST", body: JSON.stringify({ name, settings }) });
 
 export const makeDefault = (slot: SetupSlot, name: string) => put(`${slotPath(slot)}/default`, { name });
+
+/** Keep the step's default: the step reads as set, and nothing about the integrations changes. */
+export const keepDefault = (slot: SetupSlot, name: string) =>
+  request<unknown>(`/api/factory/setup/${encodeURIComponent(slot)}/keep`, { method: "PUT", body: JSON.stringify({ name }) });
 
 /** Move a project off its own pick of this step, back to the default. */
 export const clearProjectPick = (uid: string, slot: SetupSlot) =>

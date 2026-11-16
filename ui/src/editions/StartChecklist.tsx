@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { Button, ProgressBar, Skeleton } from "../components/edition";
 import { ROW_CLASS } from "../components/edition/ListRow";
+import { Check, CopyIcon } from "../components/icons";
 import { cn } from "@/lib/utils";
 import { copyText } from "./copyText";
 import { hideStart, showStart, type StartAction, type StartBlock, type StartStep } from "./StartChecklist.api";
@@ -43,13 +44,15 @@ export function CopyCommand({ command }: { command: string }) {
       timer.current = setTimeout(() => setCopied(false), COPIED_MS);
     }, () => { /* no clipboard: the command stays visible to select */ });
   };
+  // As wide as the command, never the row: a long one is cut with an ellipsis and keeps its title.
   return (
-    <div className="flex h-8 max-w-full min-w-0 items-center border border-border bg-background pl-2.5">
+    <div className="inline-flex h-8 max-w-full min-w-0 items-center border border-border bg-background pl-2.5">
       <code className="min-w-0 truncate bg-transparent! p-0! font-mono text-[12.5px]" title={command}>{command}</code>
-      <Button variant="secondary" className="ml-2 h-[30px] border-0! border-l! text-[13px]!" onClick={copy}
-              aria-label={copied ? "Copied" : `Copy ${command}`} data-testid="start-copy">
-        {copied ? "Copied" : "Copy"}
-      </Button>
+      <button type="button" onClick={copy} aria-label={copied ? "Copied" : `Copy ${command}`} title={copied ? "Copied" : "Copy"}
+              data-testid="start-copy" data-copied={copied}
+              className="ml-2 grid h-full w-8 flex-none cursor-pointer place-items-center border-0! border-l! border-border! bg-transparent! p-0! text-muted-foreground! hover:text-foreground!">
+        {copied ? <Check className="size-3.5" aria-hidden /> : <CopyIcon className="size-3.5" aria-hidden />}
+      </button>
     </div>
   );
 }

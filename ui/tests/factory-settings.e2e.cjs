@@ -1,7 +1,7 @@
 /*
  * Browser e2e for TR-738: the factory Settings page (/settings).
  *
- * The page has a two-level sidebar (Crew, Tools, Models, Team, Workspace, Advanced) in place of the
+ * The page has a two-level sidebar (Crew, Models, Team, Workspace, Advanced) in place of the
  * main menu, with a Back link, and shows one item at a time. Each change goes through the route that exists and is read back from the cell:
  * builders at once, the second check, pacing, how far the crew may go (merging on its own asks first),
  * a grant, the edition. A grant shows its words and, for "D79 A", the question it answers. A read key
@@ -32,7 +32,8 @@ const BASE = `http://127.0.0.1:${PORT}`;
 const SHOTS = process.env.SHOTS_DIR;
 const TOKEN = "e2e-admin-token-settings";
 const SAMPLES = ["busy", "newc", "ro", "rel", "long", "many", "load", "err", "morning", "morningoff", "morningemail", "morningself", "morningblocked"];
-const GROUPS = ["Crew", "Tools", "Models", "Team", "Workspace", "Advanced"];
+// The tools (GitHub, Linear, Slack, Claude Code) moved to Integrations; their old addresses go there.
+const GROUPS = ["Crew", "Models", "Team", "Workspace", "Advanced"];
 
 let pass = 0, fail = 0;
 const ck = (label, cond, detail = "") => {
@@ -135,18 +136,20 @@ const until = async (fn, tries = 40) => {
     await page.waitForURL((u) => u.pathname === "/tickets");
     ck("Back returns to the page before Settings", new URL(page.url()).pathname === "/tickets" && (await page.locator('nav[aria-label="Main"]').count()) === 1, page.url());
 
-    // 2. tools
-    await go(page, "github");
-    ck("GitHub is connected, as whom", (await text(page, "tool-github")).includes("Connected as example-org"), await text(page, "tool-github"));
-    ck("a connected tool has a lit dot in the sidebar and an unconnected one does not", (await page.getByTestId("nav-dot").evaluateAll((d) => d.map((x) => x.getAttribute("data-on")))).join() === "true,false,false,true");
-    ck("the GitHub page has one heading of that name and lists the accounts", (await page.getByRole("heading", { name: "GitHub", exact: true }).count()) === 1 && (await page.getByRole("heading", { name: "Accounts", exact: true }).count()) === 1);
-    await go(page, "linear");
-    ck("Linear is not connected, and its own form is there", /^Not connected/.test(await text(page, "tool-linear")) && (await page.getByTestId("pane-linear").getByRole("button", { name: "Connect" }).count()) === 1, await text(page, "tool-linear"));
-    await go(page, "slack");
-    ck("Slack is not connected", /^Not connected/.test(await text(page, "tool-slack")), await text(page, "tool-slack"));
-    await go(page, "claude_code");
-    ck("Claude Code is reporting, with how long ago", /^Reporting: last session .+ See how$/.test(await text(page, "tool-claude_code")), await text(page, "tool-claude_code"));
-    ck("Claude Code goes to its source", (await page.getByTestId("tool-claude_code").locator("a").getAttribute("href")) === "/sources/claude-code");
+    // 2. the tools are on Integrations: each old address opens its section there
+    for (const [tab, step, title] of [["github", "github", "Code"], ["linear", "tickets", "Tickets"], ["slack", "notifications", "Notifications"],
+                                      ["claude_code", "runtime", "Runtime"]]) {
+      await page.goto(`${BASE}/settings?tab=${tab}`, { waitUntil: "load" });
+      await page.waitForURL((u) => u.pathname === "/integrations");
+      await page.locator(`[data-testid=step-view][data-slot=${step}]`).waitFor();
+      ck(`/settings?tab=${tab} opens ${title} on Integrations`, new URL(page.url()).searchParams.get("step") === step
+         && (await page.getByTestId("page-title").innerText()) === title, page.url());
+    }
+    ck("the GitHub section lists the accounts", await (async () => {
+      await page.goto(`${BASE}/integrations?step=github`, { waitUntil: "load" });
+      await page.getByRole("heading", { name: "Accounts", exact: true }).waitFor();
+      return (await page.getByText("example-org").count()) > 0;
+    })());
 
     // 3. the crew starts as a new cell has it
     await go(page, "crew");
@@ -268,7 +271,7 @@ const until = async (fn, tries = 40) => {
     }
 
     // 10. the old addresses still land on the right item
-    for (const [address, id] of [["/settings#crew", "crew"], ["/settings#tools", "github"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],
+    for (const [address, id] of [["/settings#crew", "crew"], ["/settings#models", "providers"], ["/settings?tab=anthropic", "providers"],
                                  ["/settings?tab=agents", "budget"], ["/settings?tab=access", "keys"], ["/settings/advanced?tab=observability", "observability"],
                                  ["/settings/advanced", "agent_tools"]]) {
       await page.goto(`${BASE}${address}`, { waitUntil: "load" });
@@ -276,16 +279,21 @@ const until = async (fn, tries = 40) => {
       ck(`${address} lands on ${id}`, new URL(page.url()).pathname === "/settings", page.url());
     }
 
-    // 11. the GitHub App return and the Tares Cloud return
+    // 11. the GitHub App return and the Tares Cloud return now land on Integrations
     {
+      await page.goto(`${BASE}/settings#tools`, { waitUntil: "load" });
+      await page.waitForURL((u) => u.pathname === "/integrations");
+      ck("/settings#tools opens Code on Integrations", new URL(page.url()).searchParams.get("step") === "github", page.url());
       await page.goto(`${BASE}/settings?tab=github&installed=1`, { waitUntil: "load" });
-      await page.getByTestId("pane-github").waitFor();
-      ck("/settings?tab=github keeps the rest of its address", new URL(page.url()).searchParams.get("installed") === "1", page.url());
+      await page.waitForURL((u) => u.pathname === "/integrations");
+      ck("/settings?tab=github keeps the rest of its address on the way", new URL(page.url()).searchParams.get("installed") === "1"
+         && new URL(page.url()).searchParams.get("step") === "github", page.url());
       await page.goto(`${BASE}/settings?cloud=github-connected`, { waitUntil: "load" });
-      await page.getByTestId("pane-github").waitFor();
-      ck("/settings?cloud= lands on GitHub and says what the cloud said", await page.getByText("GitHub is connected.", { exact: false }).first().isVisible());
+      await page.waitForURL((u) => u.pathname === "/integrations");
+      await page.getByTestId("cloud-back").waitFor();
+      ck("/settings?cloud= lands on Code and says what the cloud said", (await page.getByTestId("cloud-back").innerText()).startsWith("GitHub is connected."));
       await page.waitForURL((u) => !u.searchParams.has("cloud"));
-      ck("and the message is said once: the address drops it", new URL(page.url()).searchParams.get("tab") === "github", page.url());
+      ck("and the message is said once: the address drops it", new URL(page.url()).searchParams.get("step") === "github", page.url());
     }
     await ctx.close();
 
@@ -328,7 +336,7 @@ const until = async (fn, tries = 40) => {
     {
       const n = await newPage(1000);
       const p = n.page;
-      for (const tab of ["keys", "github", "providers", "observability"]) {
+      for (const tab of ["keys", "providers", "observability"]) {
         await go(p, tab);
         await p.locator(`[data-testid="pane-${tab}"] .panel`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);

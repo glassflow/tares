@@ -1,7 +1,8 @@
 /*
- * Browser e2e for the factory's Set up your factory screen (TR-872): /setup. Seven steps in a rail on the
- * left (a list under the title at 390 px), and for the chosen step what is connected, what can be
- * connected, and the form of the integration being connected or changed. One generic renderer draws
+ * Browser e2e for the factory's Set up your factory screen (TR-872): /setup. A rail on the left (a list
+ * under the title at 390 px): how the crew works, GitHub, the integration steps the API sends, and the
+ * terminal commands. For an integration step, what is connected, what can be connected, and the form of
+ * the integration being connected or changed. One generic renderer draws
  * every field by its kind (text, secret, url, select, bool, mapping). Every string comes from
  * GET /api/factory/setup, which the screen reads once; saves go through the routes that exist.
  *
@@ -10,7 +11,7 @@
  * ended, a long or a large answer, Tares Cloud's apps) are the console's own samples (?sample=<name>, with
  * the sample flag), drawn by the same code from an answer shaped like the real one. Not built here, by
  * ticket: the Guardrails step's content (TR-1096). Test connection, the not-licensed rows and where the screen
- * opens from (the first-run list, Settings) are here (TR-1095).
+ * opens from (the menu's Setup card) are here (TR-1095).
  * Every state shows only words from words.json and none scrolls sideways at 390 px.
  * Run:  npm run build && node tests/factory-setup.e2e.cjs     (from ui/, tares installed in ../.venv)
  * Set SHOTS_DIR to keep a screenshot of every state at 1440 and 390 px.
@@ -135,15 +136,22 @@ async function waitFor(url, tries = 100) {
         && (await page.getByTestId("setup").getByTestId("setup-title").count()) === 0 && (await page.getByTestId("setup").getByTestId("setup-exit").count()) === 0
         && (await page.getByTestId("setup-exit").evaluate((el) => { const c = getComputedStyle(el); return c.borderTopWidth === "1px" && c.textDecorationLine === "none"; })));
       ck("the main menu is hidden", (await page.locator('nav[aria-label="Main"]').count()) === 0);
-      ck("the rail lists the seven steps in order", (await page.getByTestId("rail").locator('button[data-testid^="step-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(5)))).join() === SLOTS.join());
+      const RAIL = ["crew", "github", ...api.steps.map((x) => x.slot), "terminal"];
+      ck("the rail lists the crew, GitHub, the API's steps and the terminal, in order",
+        (await page.getByTestId("rail").locator('button[data-testid^="step-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(5)))).join() === RAIL.join(), RAIL.join());
+      ck("monitoring is not a step of setup yet", !RAIL.includes("monitoring"));
       ck("on a wide screen the rail shows and the narrow list does not", (await page.getByTestId("rail").isVisible()) && !(await page.getByTestId("rail-narrow").isVisible()));
-      const lines = await page.getByTestId("rail").getByTestId("step-line").allInnerTexts();
-      ck("each step's line is the API's", lines.join("|") === api.steps.map((s) => s.line).join("|"), lines.join("|"));
-      ck("the progress is the API's", (await text(page.getByTestId("progress-text"))) === api.progress.text && api.progress.text === "3 of 7 steps set", await text(page.getByTestId("progress-text")));
+      const lines = [];
+      for (const x of api.steps) lines.push(await text(page.getByTestId("rail").getByTestId(`step-${x.slot}`).getByTestId("step-line")));
+      ck("each integration step's line is the API's", lines.join("|") === api.steps.map((x) => x.line).join("|"), lines.join("|"));
+      ck("the progress is the API's, out of every step", (await text(page.getByTestId("progress-text"))) === api.progress.text && api.progress.total === RAIL.length, await text(page.getByTestId("progress-text")));
       ck("steps with a connection other than the built-in one are marked set", (await page.getByTestId("step-tickets").getAttribute("data-state")) === "set"
          && (await page.getByTestId("step-review").getAttribute("data-state")) === "not_set");
-      ck("the first step is open and current", (await page.getByTestId("step-tickets").getAttribute("aria-current")) === "step"
-         && (await text(page.getByTestId("page-title"))) === "Tickets" && (await text(page.getByTestId("page-sub"))) === stepOf(api, "tickets").why);
+      ck("the first step, how the crew works, is open and current", (await page.getByTestId("step-crew").getAttribute("aria-current")) === "step"
+         && (await text(page.getByTestId("page-title"))) === "How your crew works");
+      await page.getByTestId("step-tickets").click();
+      await page.locator("[data-testid=step-view][data-slot=tickets]").waitFor();
+      ck("Tickets opens from the rail with the API's words", (await text(page.getByTestId("page-title"))) === "Tickets" && (await text(page.getByTestId("page-sub"))) === stepOf(api, "tickets").why);
       const rows = await page.getByTestId("connected").locator('[data-testid^="connected-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(10)));
       ck("Connected lists tares, linear and github", rows.join() === "tares,linear,github", rows.join());
       ck("the heading and the tags are the API's", (await text(page.getByTestId("connected").locator("h2"))).toLowerCase() === stepOf(api, "tickets").connected_heading.toLowerCase()
@@ -155,12 +163,12 @@ async function waitFor(url, tries = 100) {
       const [editLook, makeLook, removeLook] = [await look(page.getByTestId("connected-linear").getByTestId("action-edit")), await look(page.getByTestId("connected-tares").getByTestId("action-make_default")), await look(page.getByTestId("connected-github").getByTestId("action-remove"))];
       ck("Make default is a bordered button, Remove has a red border and red words, Edit settings the dark border", makeLook.width === "1px" && removeLook.width === "1px" && editLook.width === "1px"
         && removeLook.border !== makeLook.border && editLook.border !== makeLook.border && removeLook.color !== makeLook.color, JSON.stringify([editLook, makeLook, removeLook]));
-      ck("who picks a connection is shown", (await text(page.getByTestId("connected-github").getByTestId("row-use"))) === "Picked by project-p.");
+      ck("who picks a connection is shown", (await text(page.getByTestId("connected-github").getByTestId("row-use"))) === "Used by project-p.",
+        await text(page.getByTestId("connected-github").getByTestId("row-use")));
       ck("a connection that is the default cannot be removed", (await page.getByTestId("connected-linear").getByTestId("action-remove").count()) === 0
          && (await page.getByTestId("connected-linear").getByTestId("action-edit").count()) === 1);
-      ck("a step with nothing left to connect says so", (await text(page.getByTestId("available-empty"))) === stepOf(api, "tickets").available_empty);
-      ck("the footer is the API's", (await text(page.getByTestId("step-footer"))).startsWith(stepOf(api, "tickets").footer.hint)
-         && (await text(page.getByTestId("step-next"))) === stepOf(api, "tickets").footer.next);
+      ck("a step with nothing left to connect has no Connect another section", (await page.getByTestId("available").count()) === 0);
+      ck("the footer's button names the next step", (await text(page.getByTestId("step-next"))) === "Next: Review", await text(page.getByTestId("step-next")));
       ck("no sideways scroll", (await overflow(page)) <= 0);
       await checkWords(page, ck, "partly set up cell 1440");
       await shot(page, "filled-live-1440.png");
@@ -169,12 +177,16 @@ async function waitFor(url, tries = 100) {
       // the other steps
       await page.getByTestId("step-review").click();
       ck("a step opens from the rail", (await text(page.getByTestId("page-title"))) === "Review" && (await page.getByTestId("step-review").getAttribute("aria-current")) === "step");
-      ck("a step with nothing to connect shows its own sentence", (await text(page.getByTestId("available-empty"))) === stepOf(api, "review").available_empty);
-      await page.getByTestId("step-guardrails").click();
-      ck("Guardrails shows the API's note as text and offers no form", (await text(page.getByTestId("step-note"))) === stepOf(api, "guardrails").note
-         && (await page.getByTestId("action-edit").count()) === 0 && (await page.getByTestId("action-connect").count()) === 0);
-      await page.getByTestId("step-runtime").click();
-      ck("the last step ends the setup", (await text(page.getByTestId("step-next"))) === "Finish setup" && (await page.getByTestId("step-next").getAttribute("href")) === "/");
+      ck("a step with nothing to connect has no Connect another section", (await page.getByTestId("available").count()) === 0);
+      if (RAIL.includes("guardrails")) {
+        await page.getByTestId("step-guardrails").click();
+        ck("Guardrails shows the API's note as text and offers no form", (await text(page.getByTestId("step-note"))) === stepOf(api, "guardrails").note
+           && (await page.getByTestId("action-edit").count()) === 0 && (await page.getByTestId("action-connect").count()) === 0);
+      }
+      await page.getByTestId("step-terminal").click();
+      ck("the last step, the terminal, ends the setup", (await text(page.getByTestId("page-title"))) === "In your terminal"
+         && (await text(page.getByTestId("step-next"))) === "Finish setup" && (await page.getByTestId("step-next").getAttribute("href")) === "/");
+      ck("the terminal step shows the four commands, done or not", (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4);
       await page.getByTestId("step-tickets").click();
       await page.getByTestId("step-next").click();
       ck("Next goes to the next step", (await text(page.getByTestId("page-title"))) === "Review");
@@ -253,34 +265,33 @@ async function waitFor(url, tries = 100) {
     console.log("== connecting ==");
     {
       const { ctx, page, writes } = await newPage(1440);
-      await open(page, "monitoring");
-      ck("the Connect another list names what can be connected", (await page.getByTestId("available").locator('[data-testid^="available-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(10)))).join() === "off,rius");
-      await page.getByTestId("available-rius").getByTestId("action-connect").click();
+      await open(page, "ci");
+      ck("CI says it is chosen per project while nothing is chosen here", (await text(page.getByTestId("connected-local").getByTestId("row-title"))) === "Automatic");
+      ck("the Connect another list names what can be connected", (await page.getByTestId("available").locator('[data-testid^="available-"]').evaluateAll((b) => b.map((x) => x.dataset.testid.slice(10)))).join() === "github");
+      await page.getByTestId("available-github").getByTestId("action-connect").click();
       await page.getByTestId("setup-form").waitFor();
-      ck("the form says how it connects", (await text(page.getByTestId("page-title"))) === "Connect Rius" && (await page.getByTestId("setup-form").getAttribute("data-mode")) === "connect"
-         && (await text(page.getByTestId("form-save"))) === "Save and connect");
-      ck("a secret that is not saved has no saved note", (await page.getByTestId("field-api_key").getByTestId("field-saved").count()) === 0);
-      ck("a url field is a text input for an address", (await page.getByTestId("field-endpoint").getAttribute("data-kind")) === "url" && (await page.getByTestId("input-endpoint").getAttribute("inputmode")) === "url");
-      ck("help is shown under the field", (await text(page.getByTestId("field-api_key"))).includes("Sent to Rius as a bearer key"));
-      await page.getByTestId("input-api_key").fill("  rius_invented_key  ");
-      await page.getByTestId("input-endpoint").fill("https://rius.example.org");
+      ck("the form says how it connects, and asks nothing: no repo-only setting here", (await text(page.getByTestId("page-title"))) === "Connect GitHub Actions"
+         && (await page.getByTestId("setup-form").getAttribute("data-mode")) === "connect" && (await text(page.getByTestId("form-save"))) === "Save and connect"
+         && (await page.getByTestId("field-no_ci").count()) === 0);
       await shot(page, "form-connect-1440.png");
       await page.getByTestId("form-save").click();
       await flashed(page);
       const put = writes.find((w) => w.method === "PUT");
-      ck("a save sends the trimmed values and the form's default flag", put && put.path === "/api/factory/integrations/monitoring" && put.body.name === "rius"
-         && put.body.settings.api_key === "rius_invented_key" && put.body.settings.endpoint === "https://rius.example.org" && put.body.default === true, JSON.stringify(put));
-      ck("it says it is connected and shows it connected, as the default", (await flashText(page)) === "Rius is connected."
-         && (await page.getByTestId("connected-rius").count()) === 1 && (await page.getByTestId("connected-rius").getByTestId("tag-default").count()) === 1);
-      ck("monitoring holds one connection, so Rius takes the place of OTLP, which can be connected again", (await page.getByTestId("connected").locator('[data-testid^="connected-"]').count()) === 1
-         && (await page.getByTestId("available-otlp").count()) === 1);
-      ck("the rail follows", (await text(page.getByTestId("step-monitoring").getByTestId("step-line"))).startsWith("Rius"));
+      ck("a save sends the name, no settings and the form's default flag", put && put.path === "/api/factory/integrations/ci" && put.body.name === "github"
+         && JSON.stringify(put.body.settings) === "{}" && put.body.default === true, JSON.stringify(put));
+      ck("it says it is connected and shows it connected, as the default", (await flashText(page)) === "GitHub Actions is connected."
+         && (await page.getByTestId("connected-github").getByTestId("tag-default").count()) === 1);
+      ck("the rail follows", (await text(page.getByTestId("step-ci").getByTestId("step-line"))).startsWith("GitHub Actions"));
       await page.getByTestId("flash").getByRole("button", { name: "Dismiss" }).click();
       ck("the note can be dismissed", (await page.getByTestId("flash").count()) === 0);
-
-      // a bool
-      writes.length = 0;
-      await page.getByTestId("step-ci").click();
+      await ctx.close();
+    }
+    {
+      // a bool, from a sample: the live cell has none left to fill at the factory
+      const { ctx, page, writes } = await newPage(1440, { sampleFlag: true });
+      await page.route("**/api/factory/integrations/**", (r) => r.fulfill({ json: {} }));
+      await page.goto(`${BASE}/setup?step=ci&sample=empty`, { waitUntil: "load" });
+      await page.getByTestId("step-view").waitFor();
       await page.getByTestId("available-github").getByTestId("action-connect").click();
       await page.getByTestId("setup-form").waitFor();
       const box = page.getByTestId("input-no_ci");
@@ -343,7 +354,7 @@ async function waitFor(url, tries = 100) {
       await shot(page, `loading-${width}.png`);
       release();
       await page.getByTestId("step-view").waitFor();
-      ck(`then the first step at ${width}`, (await text(page.getByTestId("page-title"))) === "Tickets");
+      ck(`then the first step at ${width}`, (await text(page.getByTestId("page-title"))) === "How your crew works");
       await page.unroute("**/api/factory/setup");
       await ctx.close();
     }
@@ -367,7 +378,7 @@ async function waitFor(url, tries = 100) {
       down = false;
       await page.getByTestId("setup-retry").click();
       await page.getByTestId("step-view").waitFor();
-      ck(`Try again reads it once more and shows the setup at ${width}`, (await text(page.getByTestId("page-title"))) === "Tickets");
+      ck(`Try again reads it once more and shows the setup at ${width}`, (await text(page.getByTestId("page-title"))) === "How your crew works");
       await ctx.close();
     }
 
@@ -377,15 +388,15 @@ async function waitFor(url, tries = 100) {
       const { ctx, page } = await newPage(390);
       await open(page, null);
       ck("the rail is a closed list with the current step", (await page.getByTestId("rail").isVisible()) === false && (await page.getByTestId("rail-narrow").isVisible())
-         && (await text(page.getByTestId("rail-narrow").locator("summary"))).startsWith("Step 1 of 7: Tickets"));
+         && /^Step 1 of \d+: How your crew works/.test(await text(page.getByTestId("rail-narrow").locator("summary"))), await text(page.getByTestId("rail-narrow").locator("summary")));
       await page.getByTestId("rail-narrow").locator("summary").click();
-      await page.getByTestId("nstep-monitoring").click();
+      await page.getByTestId("nstep-tickets").click();
       ck("on a phone the crumb is hidden and Exit setup stays in the header", !(await page.getByTestId("setup-title").isVisible()) && (await page.getByTestId("setup-exit").isVisible()));
-      ck("a step picked in the list opens and closes the list", (await text(page.getByTestId("page-title"))) === "Monitoring" && (await page.getByTestId("rail-narrow").getAttribute("open")) === null);
+      ck("a step picked in the list opens and closes the list", (await text(page.getByTestId("page-title"))) === "Tickets" && (await page.getByTestId("rail-narrow").getAttribute("open")) === null);
       ck("no sideways scroll", (await overflow(page)) <= 0);
       await checkWords(page, ck, "partly set up cell 390");
       await shot(page, "filled-live-390.png");
-      await page.getByTestId("connected-rius").getByTestId("action-edit").click();
+      await page.getByTestId("connected-linear").getByTestId("action-edit").click();
       await page.getByTestId("setup-form").waitFor();
       ck("the form fits the screen", (await overflow(page)) <= 0);
       await shot(page, "form-390.png");
@@ -394,13 +405,13 @@ async function waitFor(url, tries = 100) {
 
     // 7. the states a plain cell cannot be in: the samples, every field kind, long and many
     console.log("== samples ==");
-    await sampleState("empty", "empty", "/setup?sample=empty", async (page, width, name) => {
-      ck(`${name}: a fresh cell has only the runtime step set, and says so`, (await page.getByTestId("progress-text").textContent()).trim() === "1 of 7 steps set", await page.getByTestId("progress-text").textContent());
-      const lines = await page.getByTestId("rail").getByTestId("step-line").allTextContents();
-      ck(`${name}: every other step's line says it is not set yet`, lines.filter((l) => l.endsWith("(not set yet)")).length === 6 && !lines[6].endsWith("(not set yet)"), lines.join("|"));
+    await sampleState("empty", "empty", "/setup?step=tickets&sample=empty", async (page, width, name) => {
+      const lines = [];
+      for (const slot of SLOTS) lines.push((await page.getByTestId("rail").getByTestId(`step-${slot}`).getByTestId("step-line").textContent()).trim());
+      ck(`${name}: every integration step but the runtime says it is not set yet`, lines.filter((l) => l.endsWith("(not set yet)")).length === 6 && !lines[6].endsWith("(not set yet)"), lines.join("|"));
     });
-    await sampleState("filled", "filled", "/setup?sample=filled");
-    await sampleState("long", "long", "/setup?sample=long", async (page, width, name) => {
+    await sampleState("filled", "filled", "/setup?step=tickets&sample=filled");
+    await sampleState("long", "long", "/setup?step=tickets&sample=long", async (page, width, name) => {
       ck(`${name}: the long project names are shown in full and wrap`, (await text(page.getByTestId("connected-linear").getByTestId("row-use"))).includes("orders-api-with-a-very-long-project-name-for-the-checkout-flow")
          && (await overflow(page)) <= 0);
       await page.getByTestId("connected-github").getByTestId("action-edit").click();
@@ -408,11 +419,11 @@ async function waitFor(url, tries = 100) {
       await page.getByTestId("input-repo").scrollIntoViewIfNeeded();
       ck(`${name}: the form's long text stays inside its box`, (await page.getByTestId("setup-form").evaluate((el) => el.scrollWidth <= el.clientWidth + 1)));
     });
-    await sampleState("many", "many", "/setup?sample=many", async (page, width, name) => {
+    await sampleState("many", "many", "/setup?step=tickets&sample=many", async (page, width, name) => {
       ck(`${name}: twelve connections are listed, one picked by twelve projects`, (await page.getByTestId("connected").locator('[data-testid^="connected-"]').count()) === 12, String(await page.getByTestId("connected").locator('[data-testid^="connected-"]').count()));
     });
     await widths("the licence ended", async ({ page }, width, name) => {
-      await page.goto(`${BASE}/setup?sample=expired`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=expired`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       ck(`${name}: the step's banner is the API's text`, (await text(page.getByTestId("step-banner"))).includes("Your licence ended on 3 November."));
       ck(`${name}: the connection says its licence ended`, (await raw(page.getByTestId("connected-linear").getByTestId("tag-licence_ended"))) === "Licence ended");
@@ -421,7 +432,7 @@ async function waitFor(url, tries = 100) {
       await shot(page, `expired-${width}.png`);
     });
     await widths("a fresh cell", async ({ page }, width, name) => {
-      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=empty`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       ck(`${name}: an integration that needs a licence is listed, with its reason, and cannot be connected`,
@@ -437,7 +448,7 @@ async function waitFor(url, tries = 100) {
     {
       const { ctx, page, writes } = await newPage(1440, { sampleFlag: true });
       await page.route("**/api/factory/integrations/**", (r) => r.fulfill({ json: {} }));
-      await page.goto(`${BASE}/setup?sample=filled`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=filled`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       // a mapping, with rows
       await page.getByTestId("connected-jira").getByTestId("action-edit").click();
@@ -487,7 +498,7 @@ async function waitFor(url, tries = 100) {
       const { ctx, page } = await newPage(1440, { sampleFlag: true });
       let opened = 0;
       await page.addInitScript(() => { window.open = (...a) => { (window.__opened = window.__opened || []).push(a); return null; }; });
-      await page.goto(`${BASE}/setup?sample=cloud`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=cloud`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await page.getByTestId("available-linear").getByTestId("action-connect").click();
       await page.getByTestId("app-block").waitFor();
@@ -518,7 +529,7 @@ async function waitFor(url, tries = 100) {
       ck("and so is the app", (await page.getByTestId("app-block").count()) === 1);
       await checkWords(page, ck, "app start");
       await page.getByTestId("form-cancel").click();
-      await page.goto(`${BASE}/setup?sample=ghdone`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=ghdone`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await page.getByTestId("available-github").getByTestId("action-connect").click();
       await page.getByTestId("app-done").waitFor();
@@ -531,7 +542,7 @@ async function waitFor(url, tries = 100) {
       }));
       await shot(page, "app-done-1440.png");
       await checkWords(page, ck, "app done");
-      await page.goto(`${BASE}/setup?sample=approw`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=approw`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       ck("a row connected with the app says so, and is disconnected, not removed", (await page.getByTestId("connected-linear").getByTestId("tag-app").count()) === 1
          && (await text(page.getByTestId("connected-linear").getByTestId("action-remove"))) === "Disconnect" && (await page.getByTestId("connected-linear").getByTestId("action-edit").count()) === 0);
@@ -563,7 +574,7 @@ async function waitFor(url, tries = 100) {
         await r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(d) });
       });
       await page.route("**/api/factory/integrations/tickets/connections/*", async (r) => { connected = false; await r.fulfill({ status: 200, contentType: "application/json", body: "{}" }); });
-      await page.goto(`${BASE}/setup`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       await page.getByTestId(`available-${pick.id}`).getByTestId("action-connect").click();
@@ -593,7 +604,7 @@ async function waitFor(url, tries = 100) {
     const FAILED = { ok: false, message: "Linear said the API key is not valid. Check the key and try again." };
     const PASSED = { ok: true, message: "Connected as Dana Whitfield, workspace Northwind." };
     const testOpen = async (page) => {
-      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=empty`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       await page.getByTestId("available-linear").getByTestId("action-connect").click();
@@ -667,7 +678,7 @@ async function waitFor(url, tries = 100) {
     {
       // the live route: a key the cell cannot use never saves anything, and the answer comes back as the same line
       const { ctx, page, writes } = await newPage(1440);
-      await page.goto(`${BASE}/setup`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       const before = JSON.stringify(await read(page));
@@ -720,7 +731,7 @@ async function waitFor(url, tries = 100) {
     {
       // an app connection has no key to try: no Test connection button while the app is the way in
       const { ctx, page } = await newPage(1440, { sampleFlag: true });
-      await page.goto(`${BASE}/setup?sample=cloud`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=cloud`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       await page.getByTestId("available-linear").getByTestId("action-connect").click();
@@ -755,7 +766,7 @@ async function waitFor(url, tries = 100) {
     // an integration the cell has no licence for
     console.log("== enterprise integration not licensed ==");
     await widths("enterprise integration not licensed", async ({ page }, width, name) => {
-      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=empty`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       const row = page.getByTestId("available-jira");
@@ -785,7 +796,7 @@ async function waitFor(url, tries = 100) {
         const res = await r.fetch();
         await r.fulfill({ response: res, json: { ...(await res.json()), workspace_api_url: "https://workspaces.example.invalid" } });
       });
-      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=empty`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       await settle(page);
       const row = page.getByTestId("available-jira");
@@ -795,48 +806,79 @@ async function waitFor(url, tries = 100) {
       await ctx.close();
     }
 
-    // where /setup opens from: the first-run list and Settings
-    console.log("== entry points ==");
+    // the steps around the integrations: how the crew works (saved on confirm, merging on its own asked
+    // first) and the terminal commands, which tick by themselves as the machine reports
+    console.log("== the crew and the terminal ==");
     {
-      const { ctx, page } = await newPage(1440, { sampleFlag: true });
-      await page.goto(`${BASE}/?sample=startNothing`, { waitUntil: "load" });
-      await page.getByTestId("onboarding-title").waitFor();
-      ck("first run: the list has a Set up your factory link to /setup", (await page.getByTestId("onboarding-setup").getAttribute("href")) === "/setup"
-         && (await text(page.getByTestId("onboarding-setup"))) === "Set up your factory");
-      await shot(page, "entry-first-run-1440.png");
-      await page.getByTestId("onboarding-setup").click();
-      await page.getByTestId("step-view").waitFor();
-      ck("and it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
+      const { ctx, page, writes } = await newPage(1440);
+      await open(page, null);
+      ck("setup opens on how the crew works", (await page.locator("[data-testid=step-view][data-slot=crew]").count()) === 1
+         && (await page.getByTestId("step-crew").getAttribute("data-state")) === "not_set");
+      ck("the form starts on your approval for each merge", await page.getByTestId("choice-L3-review").isChecked());
+      await page.getByTestId("choice-L4-ship").click();
+      ck("the crew merging on its own is asked first, with no Save beside it", (await page.getByTestId("merge-confirm-box").isVisible())
+         && (await page.getByTestId("choices-save").count()) === 0);
+      await shot(page, "crew-ask-1440.png");
+      await page.getByTestId("merge-cancel").click();
+      ck("Keep my approval goes back to it", (await page.getByTestId("merge-confirm-box").count()) === 0 && await page.getByTestId("choice-L3-review").isChecked());
+      const n0 = Number(await page.getByTestId("builders-count").innerText());
+      await page.getByTestId("builders-more").click();
+      ck("builders count up", Number(await page.getByTestId("builders-count").innerText()) === n0 + 1);
+      ck("nothing is saved before the button", writes.length === 0, JSON.stringify(writes));
+      await checkWords(page, ck, "crew step");
+      await page.getByTestId("choices-save").click();
+      await page.locator("[data-testid=step-view][data-slot=github]").waitFor();
+      const put = writes.find((w) => w.method === "PUT" && w.path === "/api/crew/settings");
+      ck("Save and continue saves the three choices and moves on to GitHub", put && put.body.autonomy === "L3-review"
+         && put.body.builders_max === n0 + 1 && typeof put.body.releaser === "boolean", JSON.stringify(put));
+      await page.waitForFunction(() => document.querySelector("[data-testid=step-crew]")?.dataset.state === "set", null, { timeout: 15000 }).catch(() => {});
+      ck("the rail ticks the crew step", (await page.getByTestId("step-crew").getAttribute("data-state")) === "set");
+
+      await page.getByTestId("step-terminal").click();
+      await page.locator("[data-testid=step-view][data-slot=terminal]").waitFor();
+      const steps = page.getByTestId("terminal-panel").getByTestId("start-step");
+      ck("four commands, each with its copy button, and what they need said once above them", (await steps.count()) === 4
+         && (await page.getByTestId("terminal-panel").getByTestId("start-copy").count()) === 4 && (await page.getByTestId("prerequisites").count()) === 1);
+      ck("the crew panel stands beside them", (await page.getByTestId("your-crew").isVisible()));
+      const box = await page.getByTestId("terminal-panel").locator("code").first().evaluate((el) => {
+        const b = el.parentElement.getBoundingClientRect(), row = el.closest("[data-testid=start-step]").getBoundingClientRect();
+        return b.width < row.width / 2;
+      });
+      ck("a command's box is as wide as the command, not the row", box);
+      const r = await page.request.post(`${BASE}/api/crew/machine`, { data: { machine: "example-laptop", version: "1.2.3" } });
+      ck("the command line reports the machine", r.status() < 300, String(r.status()));
+      await page.locator("[data-testid=start-step][data-key=login][data-done=true]").waitFor({ timeout: 20000 }).catch(() => {});
+      ck("install and sign in tick by themselves, with no reload", (await page.locator("[data-testid=start-step][data-key=install]").getAttribute("data-done")) === "true"
+         && (await page.locator("[data-testid=start-step][data-key=login]").getAttribute("data-done")) === "true");
+      ck("a done step keeps its command, to run again on another machine",
+        (await page.locator("[data-testid=start-step][data-key=login]").getByTestId("start-copy").count()) === 1);
+      ck("the crew panel names the machine", (await text(page.getByTestId("crew-machine-state"))) === "example-laptop");
+      ck("no sideways scroll", (await overflow(page)) <= 0);
+      await checkWords(page, ck, "terminal step");
+      await shot(page, "terminal-1440.png");
       await ctx.close();
     }
+
+    // where /setup opens from: the Setup card on top of the menu, while setup is not done
+    console.log("== entry points ==");
     {
-      const { ctx, page } = await newPage(390, { sampleFlag: true });
-      await page.goto(`${BASE}/?sample=startNothing`, { waitUntil: "load" });
-      await page.getByTestId("onboarding-title").waitFor();
-      ck("first run at 390: the link is there and the page does not scroll sideways", (await page.getByTestId("onboarding-setup").isVisible()) && (await overflow(page)) <= 0);
-      await shot(page, "entry-first-run-390.png");
+      const { ctx, page } = await newPage(1440);
+      await page.goto(`${BASE}/projects`, { waitUntil: "load" });
+      await page.getByTestId("menu-setup").waitFor();
+      const p = (await (await page.request.get(`${BASE}/api/factory/setup/progress`)).json());
+      ck("the menu's Setup card links to /setup and says how far it is", (await page.getByTestId("menu-setup").getAttribute("href")) === "/setup"
+         && (await text(page.getByTestId("menu-setup-count"))) === p.text, await text(page.getByTestId("menu-setup")));
+      await shot(page, "entry-menu-1440.png");
+      await page.getByTestId("menu-setup").click();
+      await page.getByTestId("step-view").waitFor();
+      ck("and it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
       await ctx.close();
     }
     {
       const { ctx, page } = await newPage(1440);
       await page.goto(`${BASE}/settings`, { waitUntil: "load" });
       await page.getByTestId("nav-crew").waitFor();
-      ck("Settings: Crew has Set up your factory, linking to /setup", (await page.getByTestId("nav-setup").getAttribute("href")) === "/setup" && (await text(page.getByTestId("nav-setup"))) === "Set up your factory");
-      await page.getByTestId("nav-setup").click();
-      await page.getByTestId("step-view").waitFor();
-      ck("and it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
-      await ctx.close();
-    }
-    {
-      // at 390 the sections are a select, and the entry is one of its options
-      const { ctx, page } = await newPage(390);
-      await page.goto(`${BASE}/settings`, { waitUntil: "load" });
-      await page.getByTestId("settings-select").waitFor();
-      ck("Settings at 390: the select lists Set up your factory under Crew",
-        (await page.getByTestId("settings-select").locator('optgroup[label="Crew"] option[value="setup"]').textContent()) === "Set up your factory");
-      await page.getByTestId("settings-select").selectOption("setup");
-      await page.getByTestId("step-view").waitFor();
-      ck("and choosing it opens the setup screen", new URL(page.url()).pathname === "/setup", page.url());
+      ck("Settings has no setup entry: setup is the menu's", (await page.getByTestId("nav-setup").count()) === 0);
       await ctx.close();
     }
 
@@ -844,7 +886,7 @@ async function waitFor(url, tries = 100) {
     console.log("== samples need the flag ==");
     {
       const { ctx, page } = await newPage(1440);
-      await page.goto(`${BASE}/setup?sample=empty`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=tickets&sample=empty`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
       ck("?sample= without the flag shows the cell's own setup", (await page.getByTestId("progress-text").textContent()).trim() === (await read(page)).progress.text);
       await ctx.close();
@@ -853,9 +895,12 @@ async function waitFor(url, tries = 100) {
     console.log("== the route ==");
     {
       const { ctx, page } = await newPage(1440);
-      await page.goto(`${BASE}/setup?step=memory`, { waitUntil: "load" });
+      await page.goto(`${BASE}/setup?step=review`, { waitUntil: "load" });
       await page.getByTestId("step-view").waitFor();
-      ck("?step= opens that step", (await text(page.getByTestId("page-title"))) === "Memory");
+      ck("?step= opens that step", (await text(page.getByTestId("page-title"))) === "Review");
+      await page.getByTestId("step-ci").click();
+      ck("and moving to another step keeps it in the address, so a connect page can send the person back to it",
+        new URL(page.url()).searchParams.get("step") === "ci", page.url());
       await ctx.close();
     }
   } finally {

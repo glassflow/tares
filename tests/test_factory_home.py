@@ -1,6 +1,6 @@
 """The factory home in one call (TR-729): GET /api/home on a factory cell.
 
-A headline, the open projects, the crew, the Claude plan and the connected tools, worded for
+A headline, the open projects, the crew and the Claude plan, worded for
 people, and the one shape of a "waiting for you" item. The helpers the screens import
 (plain_wait, plain_ago, home_item, project_state, project_row, crew_member) are checked here too.
 
@@ -242,21 +242,18 @@ async def main():
             ck("no projects, nothing waiting, and a headline that says what to do",
                h["projects"] == [] and h["waiting_for_you"] == [] and h["waiting_total"] == 0
                and h["headline"] == "No projects yet. Start one and hand it to the crew.", h)
-            ck("the crew is not running, the plan unknown, no tool connected",
+            ck("the crew is not running, the plan unknown",
                h["crew"]["running"] is False and h["crew"]["summary"] == "Not running"
-               and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None, "title": "Your Claude plan"}
-               and [t["connected"] for t in h["tools"]] == [False, False, False, False], h)
+               and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None, "title": "Your Claude plan"}, h)
             ck("every key of the shape", set(h) == {"edition", "headline", "waiting_for_you", "waiting_total",
-               "projects", "finished_count", "later_count", "crew", "plan", "tools", "start", "onboarding",
+               "projects", "finished_count", "later_count", "crew", "plan", "start", "onboarding",
                "now"}, sorted(h))
 
             r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
                                                     "poll": "10s", "config": {"push": True}})
             ck("the claude_code source is made", r.status_code < 300, r.text)
             h = await get_home(cx)
-            ck("a claude_code source with nothing reported yet is not connected, as Settings says (TR-1013)",
-               h["crew"]["members"] == [] and h["tools"][3] == {"key": "claude_code", "name": "Claude Code",
-                                                                "connected": False, "short": None}, h["tools"])
+            ck("a claude_code source with nothing reported yet shows no crew member", h["crew"]["members"] == [], h["crew"])
 
             # project-x: building. Two merged, one in progress, one to do; two milestones
             px = json.loads(await m.create_project("project-x", "Ship the docs site"))["id"]
@@ -376,13 +373,6 @@ async def main():
                (lim["session"]["text"], lim["weekly_all"]["text"]))
             ck("who used the plan this week, biggest first",
                h["plan"]["share_text"] == "This week: project-x 75%, project-y 25%", h["plan"]["share_text"])
-            ck("the tools: GitHub and Claude Code connected, each with what it is connected to; Linear and Slack not",
-               h["tools"] == [{"key": "github", "name": "GitHub", "connected": True, "short": "cred-a"},
-                              {"key": "linear", "name": "Linear", "connected": False, "short": None},
-                              {"key": "slack", "name": "Slack", "connected": False, "short": None},
-                              {"key": "claude_code", "name": "Claude Code", "connected": True,
-                               "short": "last session just now"}], h["tools"])
-
             ck("no forbidden word or dash anywhere in the body", words.offenders_in(h) == [],
                words.offenders_in(h))
             ck("the page shape is the same on every key", all(set(p) == {"icon", 

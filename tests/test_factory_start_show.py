@@ -45,7 +45,7 @@ def ck(label, cond, detail=""):
     print(("  ok   " if cond else "  FAIL ") + label + ("" if cond else f"  {detail}"))
 
 
-ALL = dict(choices_made=True, connections_done=True, cli_version="1.0.0", machine_name="example-laptop",
+ALL = dict(choices_made=True, github_connected=True, cli_version="1.0.0", machine_name="example-laptop",
            crew_up=True, spec_with_tickets=True)
 
 
@@ -67,19 +67,19 @@ class Store:
 def units():
     print("== the block ==")
     st = Store()
-    some = ss.factory_steps({"choices_made": True})
+    some = ss.factory_steps({"cli_version": "1.0.0"})
     c = ss.checklist(st, some, "ana")
     ck("shown: not hidden", c["show"] is True and c["hidden"] is False, c)
     ss.hide(st, "ana")
     c = ss.checklist(st, some, "ana")
     ck("hidden by the caller with open steps: hidden is true", c["show"] is False and c["hidden"] is True, c)
     ck("the steps and counts stay in the block so Show it again has nothing to fetch",
-       c["total"] == 6 and c["done"] == 1 and len(c["steps"]) == 6)
+       c["total"] == 5 and c["done"] == 1 and len(c["steps"]) == 5)
     c = ss.checklist(st, some, "bo")
     ck("another person did not hide it: shown, not hidden", c["show"] is True and c["hidden"] is False, c)
     c = ss.checklist(st, ss.factory_steps(ALL), "ana")
     ck("everything done: neither shown nor hidden, whatever the setting says",
-       c["show"] is False and c["hidden"] is False and c["done"] == 6, c)
+       c["show"] is False and c["hidden"] is False and c["done"] == 5, c)
     ss.unhide(st, "ana")
     c = ss.checklist(st, some, "ana")
     ck("shown again after unhide", c["show"] is True and c["hidden"] is False, c)

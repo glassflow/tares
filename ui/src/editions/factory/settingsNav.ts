@@ -13,11 +13,7 @@ export interface SettingItem { id: string; label: string; to?: string }
 export interface SettingGroup { id: string; label: string; items: SettingItem[] }
 
 export const SETTING_GROUPS: SettingGroup[] = [
-  { id: "crew", label: "Crew", items: [{ id: "crew", label: "How it works" }, { id: "allowed", label: "What you allowed" }, { id: "morning", label: "Morning status" },
-    { id: "setup", label: "Set up your factory", to: "/setup" }] },
-  { id: "tools", label: "Tools", items: [
-    { id: "github", label: "GitHub" }, { id: "linear", label: "Linear" }, { id: "slack", label: "Slack" }, { id: "claude_code", label: "Claude Code" },
-  ] },
+  { id: "crew", label: "Crew", items: [{ id: "crew", label: "How it works" }, { id: "allowed", label: "What you allowed" }, { id: "morning", label: "Morning status" }] },
   { id: "models", label: "Models", items: [{ id: "providers", label: "Providers" }, { id: "budget", label: "Budget" }] },
   { id: "team", label: "Team", items: [{ id: "people", label: "People" }, { id: "keys", label: "Access keys" }] },
   { id: "workspace", label: "Workspace", items: [
@@ -37,7 +33,7 @@ const OLD_TABS: Record<string, SettingId> = {
   access: "keys", anthropic: "providers", agents: "budget", workspace: "general", advanced: "agent_tools",
 };
 const OLD_SECTIONS: Record<string, SettingId> = {
-  crew: "crew", tools: "github", models: "providers", people: "people", edition: "edition", advanced: "agent_tools",
+  crew: "crew", models: "providers", people: "people", edition: "edition", advanced: "agent_tools",
 };
 const PAGES = new Set(SETTING_GROUPS.flatMap((g) => g.items.filter((i) => !i.to).map((i) => i.id)));
 

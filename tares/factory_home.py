@@ -12,7 +12,6 @@ items; TR-769 fills it, so does every other ticket that adds a kind of item.
 from __future__ import annotations
 
 import hashlib
-import os
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -20,7 +19,6 @@ from datetime import datetime, timedelta, timezone
 from . import claude_usage
 from . import factory as factory_mod
 from . import factory_owners as owners_mod
-from . import linear as linear_mod
 from . import crew_onboarding, start_steps
 from .envelope import now_utc
 
@@ -444,27 +442,13 @@ def _start_ctx(store, onboarding: dict, tickets: dict) -> start_steps.StartCtx:
                 if p.get("kind") == "software_factory" and p["status"] == "done"]
         spec = any(store.tickets_by_project(done).values())
     c, g, m, crew = onboarding["choices"], onboarding["github"], onboarding["machine"], onboarding["crew"]
-    chosen = onboarding["tracker"]
-    connected = crew_onboarding.tracker_done(chosen, g["connected"], onboarding["linear"]["connected"])
-    place = {"tares": "tickets in Tares", "linear": "tickets in Linear",
-             "github_issues": "tickets in GitHub Issues"}.get(chosen or "", "")
+    parts = [crew_onboarding.choices_text(c) if c["chosen"] else "", g["text"]]
     return start_steps.StartCtx(
-        cloud=bool(os.getenv("TARES_LOGIN_URL", "").strip()),
-        github_connect_url=os.getenv("TARES_GITHUB_CONNECT_URL", "").strip(),
-        linear_connect_url=os.getenv("TARES_LINEAR_CONNECT_URL", "").strip(),
-        choices_made=c["chosen"],
-        choices_text=crew_onboarding.choices_text(c) if c["chosen"] else "",
-        connections_done=connected,
-        connections_text=(g["text"] + ", " + place) if connected else "",
+        choices_made=c["chosen"], github_connected=g["connected"],
+        setup_text=". ".join(t for t in parts if t),
         cli_version=m["version"], machine_name=m["name"], crew_up=crew["up"],
         crew_text=("Running on " + m["name"]) if crew["up"] and m["name"] else "Running" if crew["up"] else "",
         spec_with_tickets=spec)
-
-
-def _tools(store, now, hidden) -> list[dict]:
-    from . import factory_tools
-    return [{k: t[k] for k in ("key", "name", "connected", "short")}
-            for t in factory_tools.tools(store, now, hidden)]
 
 
 def _cut(fx, name: str, request, rows, *more):
@@ -583,10 +567,9 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
     orch = next((s for s in mine if s["role"] == "orchestrator"), None)
     silent = _minutes(orch["last_at"], now) if orch and crew["running"] else None
     working = sum(factory_mod.progress(ts)["doing"] for ts in own.values())
-    linear = linear_mod.public_connection(store)["connected"]
     mk = getattr(fx, "machine_key", None)
     who = (getattr(fx, "caller_person", lambda r: None)(request) or {}).get("id") if request is not None else None
-    onboarding = crew_onboarding.payload(store, mine, settings, linear, bool(store.github_projects()),
+    onboarding = crew_onboarding.payload(store, mine, settings,
                                          mk(request) if mk else crew_onboarding.machine_key(), who)
     body = {"edition": "factory",
             "headline": _headline(crew, rows, len(projects) - len(open_ps), working, waiting, silent),
@@ -594,8 +577,6 @@ def home(store, fx, now, credential_key: str = "open", request=None) -> dict:
             "finished_count": len(projects) - len(open_ps) - later_count, "later_count": later_count,
             "crew": crew,
             "plan": _plan(store, now, {p["id"]: p["name"] for p in projects}, fx, request),
-            # the same rows Settings shows (factory_tools, TR-1013): the chip shows `short`
-            "tools": _tools(store, now, hidden),
             "start": start_steps.checklist(
                 store, start_steps.factory_steps(_start_ctx(store, onboarding, tickets)),
                 "console" if credential_key == "open" else credential_key),
