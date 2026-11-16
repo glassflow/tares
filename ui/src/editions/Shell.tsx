@@ -268,19 +268,20 @@ export default function EditionShell() {
   const [setup, setSetup] = useState<(SetupProgress & { projects: number }) | null>(null);
   // Setup itself, Settings and a project's own pages draw their own menu, so no card: the count is not
   // read there. Known from the address, because those pages load later and say so only once drawn.
+  // a sample page shows sample data: it does not read the cell's own setup either
+  const sample = useSample();
   const ownMenuPath = here === "/setup" || isSettingsPath(here) || /^\/projects\/(?!new(\/|$))[^/]+/.test(here);
   useEffect(() => {
     if (edition !== "factory") { setSetup(null); return; }
-    if (ownMenuPath || noMenu) return;
+    if (ownMenuPath || noMenu || sample) return;
     let live = true;
     setupProgress().then((p) => { if (live) setSetup(p); }).catch(() => { if (live) setSetup(null); });
     return () => { live = false; };
-  }, [edition, here, noMenu, ownMenuPath]);
+  }, [edition, here, noMenu, ownMenuPath, sample]);
   const navigate = useNavigate();
   // A cell with no project yet and setup not done opens on Setup when the console is opened on the
   // home. Going home from inside the console (Exit setup, the Home entry) is never sent back.
   // a sample of a page (?sample= with the sample flag on) is never sent anywhere else
-  const sample = useSample();
   const landing = useRef<string | null>(sample ? null : here);
   useEffect(() => { if (here !== landing.current) landing.current = null; }, [here]);
   useEffect(() => {
