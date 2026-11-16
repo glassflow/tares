@@ -279,8 +279,12 @@ async def main():
     ck("reviewer step 6 does not take the first UI commit with --reverse, and blocks when a screen ticket has none",
        "log --reverse" not in dcheck
        and "clean run with no output means no UI commit, which for a screen ticket is a `block`" in dcheck, rsteps["6"][:300])
-    ck("builder step 3 reads the choice and wants no requested change",
-       all(w in manual.split("Mock first", 1)[1].split("\n4. ")[0] for w in ("choice", "neither the choice nor the words ask for a change")), manual[:100])
+    ck("the design check page runs the e2e, compares with the mock and checks the words",
+       all(w in dcheck for w in ("SHOTS_DIR=<dir> node tests/<name>.e2e.cjs", "next to the mock", "`checkWords` and `expectOneCall`", "npm run test:words")), dcheck[:100])
+    mock = open(os.path.join(ROOT, "claude-plugin/skills/station-builder/screen-ticket.md")).read()
+    ck("builder step 3 names the page that holds the mock steps", "`screen-ticket.md`" in manual.split("Screen ticket", 1)[1].split("\n4. ")[0], manual[:100])
+    ck("the page reads the choice and wants no requested change",
+       all(w in mock for w in ("choice", "neither the choice nor the words ask for a change")), mock[:100])
     ck("reviewer step 11 still tidies the worktree", "factory tidy" in rsteps["11"], rsteps["11"][-200:])
 
 
