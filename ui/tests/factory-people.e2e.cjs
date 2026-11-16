@@ -190,10 +190,10 @@ function waitFor(url, tries = 150) {
       ck("no licence: no Add person button", (await page.getByRole("button", { name: "Add person" }).count()) === 0);
       if (SHOTS) await page.screenshot({ path: path.join(SHOTS, "settings-access-nolicence-1440.png"), fullPage: true });
       await page.goto(`${BASE}/settings?tab=keys`);
-      await page.getByRole("button", { name: "Create key" }).first().waitFor({ timeout: 15000 });
-      await page.getByRole("button", { name: "Create key" }).first().click();
-      await page.getByRole("dialog", { name: "Create API key" }).waitFor({ timeout: 10000 });
-      ck("no licence: the key dialog has no person picker", (await page.getByRole("dialog").getByText("whose agent or script this is").count()) === 0);
+      await page.getByRole("button", { name: "Create a key" }).first().waitFor({ timeout: 15000 });
+      await page.getByRole("button", { name: "Create a key" }).first().click();
+      await page.getByTestId("keys-form").waitFor({ timeout: 10000 });
+      ck("no licence: the key form has no person picker", (await page.getByTestId("keys-form").getByLabel("person").count()) === 0);
       ck("no licence: the ee chunk was never requested", eeRequests.length === 0, eeRequests.join(" "));
       await ctx.close();
       const m = await browser.newContext({ viewport: { width: 390, height: 900 } });

@@ -3,10 +3,8 @@ import { useLocation } from "react-router-dom";
 
 import { api, type AgentLimits } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog";
-import { Close } from "../components/icons";
-import { InternalName, TimeAgo, keyTitle } from "../components/bits";
 import { licenceWordsOn, useCloud } from "../cloud";
-import type { ApiKey, Edition, EditionSettings, Person, Whoami } from "../types";
+import type { Edition, EditionSettings, Person, Whoami } from "../types";
 import { UsagePanels } from "../components/UsagePanels";
 import LinearSettings from "../components/LinearSettings";
 import LicencePanel from "../components/LicencePanel";
@@ -17,6 +15,7 @@ import { SlackCloudPanel, SlackSelfHostedPanels } from "../editions/settings/Sla
 import { TracingPanel } from "../editions/settings/TracingPanel";
 import { GithubPanel } from "../editions/settings/GithubPanel";
 import { ProvidersPanel } from "../editions/settings/ProvidersPanel";
+import { ApiKeysPanel } from "../editions/settings/ApiKeysPanel";
 import AdvancedPanel from "../editions/AdvancedPanel";
 import { useEdition } from "../editions/edition";
 import WorkspaceSettings from "./WorkspaceSettings";
@@ -235,7 +234,7 @@ function AccessTab() {
       <AccessPanel me={access.me} />
       <PeopleBlock access={access} />
       <McpToolsPanel />
-      <ApiKeysPanel people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
+      <ApiKeysPanel title="API keys" intro people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
     </>
   );
 }
@@ -540,202 +539,6 @@ function EditionPanel() {
           onConfirm={save} onCancel={() => setAsk(false)} />
       )}
     </div>
-  );
-}
-
-// Scope semantics (docs/design/api-keys.md): read = consume (queries, catalog reads, an agent's
-// own derive/subscribe) · ingest = contribute events · admin = configure the instance.
-const SCOPE_HELP: Record<string, string> = {
-  read: "consume: reads, timelines, catalog; agents' own subscriptions",
-  ingest: "contribute: POST events to /ingest and /v1/*, write memories",
-  admin: "configure: sources, triggers, projects, credentials, keys (implies the rest)",
-};
-
-export function ApiKeysPanel({ people, admin, me }: { people: Person[]; admin: boolean; me?: string }) {
-  const terse = useContext(TerseSettings);
-  const [keys, setKeys] = useState<ApiKey[]>();
-  const [enforced, setEnforced] = useState(true);
-  const [err, setErr] = useState<string>();
-  const [minted, setMinted] = useState<{ name: string; secret: string }>();
-  const [revoking, setRevoking] = useState<ApiKey>();
-  const [creating, setCreating] = useState(false);
-  const [showRevoked, setShowRevoked] = useState(false);
-  const load = () => api.keys().then((r) => { setKeys(r.keys); setEnforced(r.enforced); })
-    .catch((e) => setErr(String((e as Error).message ?? e)));
-  useEffect(() => { load(); }, []);
-  // a project key reads one project; the table names it (they are made on the project's page)
-  const [projectNames, setProjectNames] = useState<Record<string, string>>({});
-  useEffect(() => {
-    api.projectsWithHidden().then((r) => setProjectNames(Object.fromEntries(r.projects.map((p) => [p.id, p.name]))))
-      .catch(() => undefined);
-  }, []);
-
-  return (
-    <div className="panel">
-      <div className="pagehead" style={{ marginBottom: 6 }}>
-        <h2 style={{ margin: 0 }}>{terse ? "Access keys" : "API keys"}</h2>
-        <button className="primary" onClick={() => setCreating(true)}>Create key</button>
-      </div>
-      {!terse && (<><p className="help" style={{ marginTop: 0, marginBottom: 6 }}>
-        Give each agent, script or service its own key, so you can revoke one without touching the others.
-        What a key can do:
-      </p>
-      <ul className="help" style={{ marginTop: 0, paddingLeft: 18 }}>
-        <li><strong>read</strong>: look things up, for an agent connecting over MCP</li>
-        <li><strong>ingest</strong>: send events in, for a script or service that pushes logs or webhooks</li>
-        <li><strong>read + ingest</strong>: both, for the Claude Code plugin</li>
-        <li><strong>admin</strong>: everything, settings included</li>
-      </ul></>)}
-      {!enforced && keys && (
-        <div className="alert">
-          No <code>TARES_AUTH_TOKEN</code> is set, so this instance is open and keys are not
-          enforced. Keys become meaningful once the daemon has a root auth token.
-        </div>
-      )}
-      {err && <div className="alert error">{err}</div>}
-
-      {minted && (
-        <div className="alert ok">
-          Key <strong>{minted.name}</strong> created; copy the secret now; it is not shown again:
-          <div className="ingest-url" style={{ marginTop: 8 }}>
-            <code className="mono">{minted.secret}</code>
-            <CopySecret text={minted.secret} />
-          </div>
-          <button style={{ marginTop: 8 }} onClick={() => setMinted(undefined)}>done</button>
-        </div>
-      )}
-
-      {keys && keys.length > 0 ? (
-        <>
-        <div className="table-scroll" style={{ marginBottom: 14 }}>
-        <table>
-          <thead><tr><th>name</th><th>person</th><th>scopes</th><th>key</th><th>created</th><th>last used</th><th></th></tr></thead>
-          <tbody>
-            {/* live keys first; revoked ones only on request, they are history */}
-            {[...keys.filter((k) => !k.revoked_at), ...(showRevoked ? keys.filter((k) => k.revoked_at) : [])].map((k) => (
-              <tr key={k.id} style={k.revoked_at ? { opacity: 0.45 } : undefined}>
-                <td>{keyTitle(k.name) ? <>{keyTitle(k.name)}<InternalName name={k.name} /></> : k.name}</td>
-                <td><Slot name="settings.keyPerson" k={k} people={people} admin={admin} onChanged={load}
-                          onError={setErr}
-                          fallback={k.person ? k.person.name : <span className="help">No person</span>} /></td>
-                <td>{k.scopes.map((s) => <span className="chip" key={s} title={SCOPE_HELP[s]} data-words-exempt>{s}</span>)}
-                  {k.project && <span className="help"> · project {projectNames[k.project] ?? k.project} only</span>}</td>
-                <td className="mono">{k.prefix}…</td>
-                <td className="help"><TimeAgo ts={k.created_at} /></td>
-                <td className="help">{k.revoked_at ? "revoked" : k.last_used_at ? <TimeAgo ts={k.last_used_at} /> : "never"}</td>
-                <td style={{ textAlign: "right" }}>
-                  {!k.revoked_at && (
-                    <button className="danger" onClick={() => setRevoking(k)}>revoke</button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        </div>
-        {keys.some((k) => k.revoked_at) && (
-          <button type="button" className="linklike" onClick={() => setShowRevoked((v) => !v)}>
-            {showRevoked ? "Hide revoked keys" : `Show ${keys.filter((k) => k.revoked_at).length} revoked`}
-          </button>
-        )}
-        </>
-      ) : (
-        <p className="help">No keys yet. <strong>Create key</strong> to make one for an agent, script or service.</p>
-      )}
-
-      {creating && (
-        <KeyModal
-          people={people} defaultPerson={me}
-          onClose={() => setCreating(false)}
-          onCreated={(m) => { setCreating(false); setMinted(m); load(); }}
-        />
-      )}
-
-      {revoking && (
-        <ConfirmDialog
-          title={`Revoke ${revoking.name}?`}
-          message="The key stops working immediately and its subscriptions are removed. Producers or agents still using it will start failing."
-          confirmLabel="Revoke"
-          danger
-          onCancel={() => setRevoking(undefined)}
-          onConfirm={async () => {
-            try { await api.revokeKey(revoking.id); } catch (e) { setErr(String((e as Error).message ?? e)); }
-            setRevoking(undefined);
-            load();
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-// Create-key modal — name + scope checkboxes. The secret only exists in the create response, so it
-// surfaces once (in the panel's "created" alert) and never again; this dialog just collects inputs.
-function KeyModal({ people, defaultPerson, onClose, onCreated }: {
-  people: Person[]; defaultPerson?: string;
-  onClose: () => void;
-  onCreated: (m: { name: string; secret: string }) => void;
-}) {
-  const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>(["read"]);
-  // the licensed picker may change it (or pick no one); without it the key is made for you
-  const [personId, setPersonId] = useState(defaultPerson ?? "");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const create = async () => {
-    setBusy(true); setErr(undefined);
-    try {
-      const r = await api.createKey(name.trim(), scopes, personId || undefined);
-      onCreated({ name: r.name, secret: r.secret });
-    } catch (e) { setErr(String((e as Error).message ?? e)); setBusy(false); }
-  };
-
-  return (
-    <>
-      <div className="sheet-overlay" style={{ zIndex: 100 }} onClick={onClose} />
-      <div className="modal" role="dialog" aria-modal="true" aria-label="Create API key">
-        <div className="sheet-head">
-          <div className="sheet-title"><h2 style={{ margin: 0 }}>Create API key</h2></div>
-          <button className="sheet-close" onClick={onClose} aria-label="Close"><Close /></button>
-        </div>
-        <div className="modal-body">
-          {err && <div className="alert error">{err}</div>}
-          <label className="field">
-            <span className="lbl">name</span>
-            <input type="text" placeholder="e.g. otel-prod, my-agent" value={name} autoFocus
-                   onChange={(e) => setName(e.target.value)} />
-            <span className="help">who uses it: one key per agent, script or service</span>
-          </label>
-          <Slot name="settings.keyPersonPick" people={people} value={personId} onChange={setPersonId} />
-          <div className="field">
-            <span className="lbl">scopes</span>
-            {Object.entries(SCOPE_HELP).map(([s, help]) => (
-              <label key={s} style={{ display: "flex", gap: 10, alignItems: "baseline",
-                                       padding: "5px 0", cursor: "pointer" }}>
-                <input type="checkbox" checked={scopes.includes(s)}
-                       style={{ transform: "translateY(1px)" }}
-                       onChange={(e) => setScopes(e.target.checked
-                         ? [...scopes, s] : scopes.filter((x) => x !== s))} />
-                <span className="mono" style={{ minWidth: 56 }}>{s}</span>
-                <span className="help" style={{ margin: 0 }}>{help}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="sheet-foot">
-          <button className="primary" disabled={busy || !name.trim() || scopes.length === 0}
-                  onClick={create}>{busy ? "…" : "Create key"}</button>
-          <button onClick={onClose}>Cancel</button>
-        </div>
-      </div>
-    </>
   );
 }
 
