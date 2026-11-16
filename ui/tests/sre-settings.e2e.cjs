@@ -263,6 +263,19 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // ---- 8b. "Slack settings" opens the same Slack panels as Factory Settings (TR-1392)
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=slack`, { waitUntil: "load" });
+      await T(p, "slack-token-state").waitFor();
+      await T(p, "slack-secret-state").waitFor();
+      ck(`${w}: the Slack tab shows the bot token and the signing secret, each with its state`,
+        (await p.getByLabel("Bot User OAuth Token").count()) === 1 && (await p.getByLabel("Signing Secret").count()) === 1 && /^(Not set|Set)/.test(await text(p, "slack-token-state")));
+      ck(`${w}: the Slack tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-slack-${w}.png`);
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);
