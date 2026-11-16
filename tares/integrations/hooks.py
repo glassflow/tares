@@ -16,10 +16,11 @@ nothing to the list. `run` raises when that guardrail cannot be reached; `gate` 
 block, because an unreachable guardrail must not let an action through.
 
 Guardrail pairs (the `guardrail_pairs` table) add to that. A pair is a hook point and a guardrail
-integration with its own integration settings, and `on_fail` says what a "no" means: `block` stops the
-action, `warn` only shows it. After the slot's guardrail, `run` runs the factory's pairs for the hook,
+integration, and `on_fail` says what a "no" means: `block` stops the
+action, `warn` only shows it. A pair holds no integration settings: the guardrail runs with the
+settings of its connection at the factory (TR-1380). After the slot's guardrail, `run` runs the factory's pairs for the hook,
 then the project's own, each in the order they were added; a project pair that is the same as a
-factory pair (same hook, integration, settings and on_fail) runs once. Each pair gets `PAIR_SECONDS` to
+factory pair (same hook, integration and on_fail) runs once. Each pair gets `PAIR_SECONDS` to
 answer. A guardrail that denies keeps its `on_fail`; one that raises, times out, is no longer
 installed or needs a licence the cell lacks did not answer, and that follows `on_fail` as well
 ("guardrail did not answer: <integration>"; the cause and the settings are never put in the reason).
@@ -34,7 +35,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import json
 import logging
 from dataclasses import replace
 from typing import Callable
@@ -100,7 +100,7 @@ async def _run_pair(pair: dict, stage: str, shaped: dict) -> Decision | None:
         if cls is None or (cls.ee and not licence.ee_allowed()):
             return _did_not_answer(pair)
         inst = cls(_store)
-        inst.settings = dict(pair["settings"])
+        inst.settings = _store.stored_settings("guardrails", name)
         d = await asyncio.wait_for(inst.check(stage, copy.deepcopy(shaped)), PAIR_SECONDS)
         if d is None or (d.allow and not d.reason):
             return None
@@ -119,8 +119,7 @@ async def _run_pairs(stage: str, project: str, shaped: dict) -> list[Decision]:
     out: list[Decision] = []
     seen: set[tuple] = set()
     for pair in _store.guardrail_pairs_for_run(stage, project or None):
-        key = (pair["hook"], pair["integration"], pair["on_fail"],
-               json.dumps(pair["settings"], sort_keys=True))
+        key = (pair["hook"], pair["integration"], pair["on_fail"])
         if pair["scope"] == "project" and key in seen:
             continue                     # the factory already runs exactly this
         seen.add(key)

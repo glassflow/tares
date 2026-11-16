@@ -13,7 +13,8 @@ export interface SettingItem { id: string; label: string; to?: string }
 export interface SettingGroup { id: string; label: string; items: SettingItem[] }
 
 export const SETTING_GROUPS: SettingGroup[] = [
-  { id: "crew", label: "Crew", items: [{ id: "crew", label: "How it works" }, { id: "allowed", label: "What you allowed" }, { id: "morning", label: "Morning status" }] },
+  { id: "crew", label: "Crew", items: [{ id: "crew", label: "How it works" }, { id: "allowed", label: "What you allowed" }, { id: "morning", label: "Morning status" },
+    { id: "setup", label: "Set up your factory", to: "/setup" }] },
   { id: "tools", label: "Tools", items: [
     { id: "github", label: "GitHub" }, { id: "linear", label: "Linear" }, { id: "slack", label: "Slack" }, { id: "claude_code", label: "Claude Code" },
   ] },

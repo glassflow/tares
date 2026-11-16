@@ -221,7 +221,8 @@ async def main():
     m._cx = mf._cx = mk
     store = app.state.store
     fx = factory_api.register(FastAPI(), store, SimpleNamespace(cc_source=lambda: "claude_code", hidden_ids=lambda: set(),
-                                                               current_person=lambda r: None))
+                                                               current_person=lambda r: None,
+                                                               is_system=lambda r: False))
 
     async def get_home(cx):
         fh._cache.clear()
@@ -246,7 +247,8 @@ async def main():
                and h["crew"]["members"] == [] and h["plan"] == {"known": False, "limits": [], "share_text": None, "title": "Your Claude plan"}
                and [t["connected"] for t in h["tools"]] == [False, False, False, False], h)
             ck("every key of the shape", set(h) == {"edition", "headline", "waiting_for_you", "waiting_total",
-               "projects", "finished_count", "later_count", "crew", "plan", "tools", "start", "now"}, sorted(h))
+               "projects", "finished_count", "later_count", "crew", "plan", "tools", "start", "onboarding",
+               "now"}, sorted(h))
 
             r = await cx.post("/api/sources", json={"name": "claude_code", "connector": "claude_code",
                                                     "poll": "10s", "config": {"push": True}})

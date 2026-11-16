@@ -1,11 +1,11 @@
 """Seed a scratch factory Tares for the Start checklist e2e (TR-756): a cell part of the way through
 its setup. Invented names only.
-  GitHub connected as example-org; one access key (laptop) that has been used;
-  no crew stations, no Linear, no project and so no spec, no GitHub Issues link.
-So the Start block shows two of five steps done: sign in and Connect GitHub.
+  GitHub connected as example-org; the crew's choices saved and the tickets kept in Tares;
+  one access key (laptop) that has been used; no machine reported, no crew stations, no project.
+So the Start block shows two of six steps done: the choices and the connections.
 Phase 1 writes the GitHub connection into the database, phase 2 starts a daemon with
-TARES_EDITION=factory and no token and makes the key through its API, then stops it, and phase 3
-marks the key used. The e2e runs its own daemon on the same data.
+TARES_EDITION=factory and no token, saves the choices and the tickets' place and makes the key through its
+API, then stops it, and phase 3 marks the key used. The e2e runs its own daemon on the same data.
 Prints a JSON map of names to ids on the last line.
 usage: python seed-factory-start.py <data-dir> [<port> <mcp-port> <ui-dist> <tares-bin>]
 The port defaults to TARES_E2E_PORT, else 8875; the MCP port to the port plus one; the console
@@ -57,6 +57,8 @@ try:
             time.sleep(0.3)
     else:
         raise SystemExit("daemon did not start")
+    call("/api/crew/settings", {"autonomy": "L3-review", "builders_max": 2, "releaser": False}, "PUT")
+    call("/api/crew/tracker", {"tracker": "tares"}, "PUT")
     made = call("/api/keys", {"name": "laptop", "scopes": ["read"]})
     out["key"] = made["id"]
     out["key_secret"] = made["secret"]

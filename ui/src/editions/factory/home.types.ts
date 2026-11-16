@@ -195,6 +195,36 @@ export interface HomeTool {
   short: string | null;
 }
 
+/** One always-on member of the crew as the first-run panel shows it. */
+export interface OnboardingMember {
+  state: "running" | "quiet" | "stopped" | "starting" | "none";
+  last_at: string | null;
+}
+
+export type OnboardingTracker = "tares" | "linear" | "github_issues";
+
+export interface HomeOnboarding {
+  choices: {
+    chosen: boolean;
+    autonomy: "L3-review" | "L4-ship" | null;
+    releaser: boolean | null;
+    builders_max: number | null;
+    /** What the form starts on; the cell's own defaults, saved only when the person confirms. */
+    defaults: { autonomy: "L3-review" | "L4-ship"; releaser: boolean; builders_max: number };
+  };
+  tracker: OnboardingTracker | null;
+  github: { connected: boolean; text: string };
+  linear: { connected: boolean };
+  machine: { name: string; version: string; at: string | null };
+  crew: {
+    machine: string;
+    orchestrator: OnboardingMember;
+    reviewer: OnboardingMember;
+    builders: { live: number; max: number };
+    up: boolean;
+  };
+}
+
 export interface HomeData {
   edition: "factory";
   headline: string;
@@ -220,6 +250,8 @@ export interface HomeData {
   tools: HomeTool[];
   // The Start checklist (tares/start_steps.py); absent in older answers and in samples that skip it.
   start?: StartBlock;
+  // What the first-run panel shows beside it (tares/crew_onboarding.py); absent in older answers.
+  onboarding?: HomeOnboarding;
   now: string;
 }
 

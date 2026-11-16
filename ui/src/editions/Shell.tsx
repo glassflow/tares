@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { api, auth } from "../api";
@@ -164,6 +164,15 @@ export function useOwnMenu() {
   useLayoutEffect(() => { set(true); return () => set(false); }, [set]);
 }
 
+/** Two places in the header a page may fill (through a portal): after the cell name, and before the
+ *  account menu. Both are null until the header has mounted. */
+interface HeaderSlots { crumb: HTMLElement | null; actions: HTMLElement | null }
+const HeaderSlotsContext = createContext<HeaderSlots>({ crumb: null, actions: null });
+
+export function useHeaderSlots(): HeaderSlots {
+  return useContext(HeaderSlotsContext);
+}
+
 export default function EditionShell() {
   const { edition, name, credentialName, open: openCell, personPicture } = useEdition();
   const narrow = useNarrow();
@@ -201,6 +210,9 @@ export default function EditionShell() {
   const switcher = cloud.switcher ? <WorkspaceSwitcher cloud={cloud} /> : null;
   const cellName = narrow && edition === "sre" ? cloud.current?.slug : undefined;
   const menuButton = useRef<HTMLButtonElement>(null);
+  const [crumbEl, setCrumbEl] = useState<HTMLElement | null>(null);
+  const [actionsEl, setActionsEl] = useState<HTMLElement | null>(null);
+  const slots = useMemo(() => ({ crumb: crumbEl, actions: actionsEl }), [crumbEl, actionsEl]);
 
   useEffect(() => { setDrawer(false); }, [here]);
   useEffect(() => { if (!narrow) setDrawer(false); }, [narrow]);
@@ -241,6 +253,7 @@ export default function EditionShell() {
               <span data-testid="cell-name" data-user-text title={cellName} className="min-w-0 truncate text-base">{cellName}</span>
             </>
           )}
+          <span ref={setCrumbEl} className="contents" />
         </div>
         <div className="flex shrink-0 items-center gap-2.5">
           {narrow ? (
@@ -263,6 +276,7 @@ export default function EditionShell() {
                      }} />
             </div>
           )}
+          <span ref={setActionsEl} className="contents" />
           <AccountMenu who={who} small={small} workspaceUrl={workspaceUrl} logoutUrl={logoutUrl} picture={personPicture} />
         </div>
       </header>
@@ -277,7 +291,9 @@ export default function EditionShell() {
         <main className="main min-w-0 flex-1">
           <LicenceBanner />
           <OwnMenu.Provider value={setFrame}>
-            <Outlet />
+            <HeaderSlotsContext.Provider value={slots}>
+              <Outlet />
+            </HeaderSlotsContext.Provider>
           </OwnMenu.Provider>
         </main>
       </div>

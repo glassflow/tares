@@ -20,6 +20,7 @@ from fastapi import Body, HTTPException, Request
 
 from . import claude_usage
 from . import crew_conversation
+from . import crew_onboarding
 from . import docs as docs_mod
 from . import factory as factory_mod
 from . import factory_github
@@ -159,6 +160,16 @@ def merged_fields(t: dict, pr: dict) -> dict:
     if not pr.get("merged") or t["stage"] in ("merged", "shipped"):
         return {}
     return {"stage": "merged"}
+
+
+def cell_wide(system: bool, person: dict | None, is_admin, admin_only: bool = True) -> bool:
+    """Does this caller speak for the whole cell? The system credential does, and the person
+    `local` (auth off, or a key nobody bound on a one-person cell). Anyone else speaks for
+    themselves. `admin_only` also asks the admin scope of `local`, through `is_admin` (a function,
+    asked only for `local`): the crew's settings (`writes_default`) need it, because a cell default
+    is a privilege. The machine report (`machine_key`) does not: a name and a version, which the
+    ingest-only key `tares login` makes on a one-person cell may send, as `local`."""
+    return system or ((person or {}).get("id") == "local" and (not admin_only or bool(is_admin())))
 
 
 def stored_crew_setting(store, key: str) -> dict:
@@ -587,9 +598,7 @@ def register(app, store, h: Host) -> SimpleNamespace:
         """Does this caller's write change the cell-wide default? The system credential does, and
         the person `local`, and auth off (a single-user cell stays as it was). Anyone else
         changes their own."""
-        person = h.current_person(request)
-        return h.is_system(request) or (
-            (person or {}).get("id") == "local" and h.is_admin(request))
+        return cell_wide(h.is_system(request), h.current_person(request), lambda: h.is_admin(request))
 
     def settings(request: Request | None = None) -> dict:
         """The cell's default, with the caller's own settings over it where they set one."""
@@ -641,6 +650,42 @@ def register(app, store, h: Host) -> SimpleNamespace:
         store.set_setting(key, json.dumps(out))
         factory_home.clear_cache()   # the home card shows the change on the next read
         return {**settings(request), "autonomy_levels": factory_mod.AUTONOMY}
+
+    # ── the first run (TR-1312): where tickets live, and the machine the crew runs on ──
+    @app.put("/api/crew/tracker")
+    def put_crew_tracker(body: dict = Body(...)):
+        """Where tickets live, chosen in the first-run panel: `tares`, `linear` or `github_issues`.
+        The cell's own choice, so it takes an admin key (the default for a write)."""
+        try:
+            value = crew_onboarding.save_tracker(store, body.get("tracker"))
+        except ValueError as e:
+            h.err(e, 400)
+        factory_home.clear_cache()
+        return {"tracker": value}
+
+    def machine_key(request: Request | None) -> str | None:
+        """Where the caller's machine report is kept, as `writes_default` and `personal_key` decide
+        for the crew's settings (one rule, `cell_wide`): the cell's own for the system credential
+        and the person `local`, a person's own for anyone else, None for a key with no person."""
+        if request is None:
+            return crew_onboarding.machine_key()
+        person = h.current_person(request)
+        if cell_wide(h.is_system(request), person, lambda: h.is_admin(request), admin_only=False):
+            return crew_onboarding.machine_key()
+        return crew_onboarding.machine_key(person["id"]) if person else None
+
+    @app.post("/api/crew/machine")
+    def post_crew_machine(request: Request, body: dict = Body(...)):
+        """The command line says which machine signed in and which version it is (`tares login`
+        and the crew's start do it), so the first-run panel can tick its install and sign-in
+        steps. A name and a version, nothing secret; the last report wins. It is the caller's
+        own, kept the way their crew settings are: a key with no person is refused."""
+        key = machine_key(request)
+        if key is None:
+            h.err(PermissionError("This key has no person"), 403)
+        out = crew_onboarding.save_machine(store, body.get("machine"), body.get("version"), now_utc(), key)
+        factory_home.clear_cache()
+        return {"machine": out["machine"], "version": out["version"]}
 
     # ── grants (TR-419): the person's words, dated; shared, and per project ───
     def shared_grants_id(create: bool = False) -> str | None:
@@ -3207,7 +3252,8 @@ def register(app, store, h: Host) -> SimpleNamespace:
                          hidden_ids=lambda: h.hidden_ids(),
                          caller_person=lambda request: h.current_person(request),
                          is_system=lambda request: h.is_system(request),
-                         is_admin=lambda request: h.is_admin(request))
+                         is_admin=lambda request: h.is_admin(request),
+                         machine_key=machine_key)
 
     def for_request(request):
         """This fx with `settings` and `pace` read for the caller: a person's own over the cell's

@@ -129,6 +129,9 @@ async def main():
         cx = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t",
                                headers={"Authorization": f"Bearer {TOKEN}"})
 
+        # a project names a connected integration (TR-1380): Linear is connected at the factory, not the default
+        store.set_choice("tickets", "linear", {}, by="test", default=False)
+
         async def new_project(name, tickets_with=None):
             r = await cx.post("/api/projects", json={"template": "custom", "name": name, "objects": []})
             uid = r.json()["id"]
