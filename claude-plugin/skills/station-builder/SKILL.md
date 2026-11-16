@@ -23,12 +23,7 @@ Work the tickets you hold in the order `list_tickets` gives (ready first). Ref =
    `git -C "$FACTORY_REPO" fetch origin`, then
    `git -C "$FACTORY_REPO" worktree add "$FACTORY_WORKTREES/<ref>" -b factory/<ref> origin/<default branch>`.
    Work only inside that worktree. Never edit the main checkout.
-3. **Mock first, for a screen ticket** (the working doc's first line is `Screen: yes`). Write no UI code until the mock is approved.
-   - Read the real cell the working doc names with the read key the project's agents doc names (GET only, never write; with no such cell or key, draw it on invented sample data and say so in the ask), and draw the screen as one static HTML file in your scratch folder outside the repo (inline styles, the repo's tokens and words list), in each state the working doc lists. Never commit it.
-   - Send an `ASK` to the orchestrator, `blocking: yes`, naming the file's path (a message carries text only) and the question "Approve this mock for <screen>?"; the orchestrator puts it on the desk and keeps it as the project doc "Mock: <screen>". Do the ticket's non-UI parts meanwhile.
-   - The answer comes back as a `RELAY` with D<n>. It is an approval only when its choice (or its words, when there is no choice) starts with "yes" or "approved", and neither the choice nor the words ask for a change; otherwise redraw (with the change made) and ask again. While no answer has come, keep to the non-UI parts or take another ticket; write `waiting for mock approval, desk D<n>` in Progress.
-   - After approval, build on sample data until the page matches the mock in every state, then wire the one read call. Write the e2e script `ui/tests/<name>.e2e.cjs` with a seed `ui/tests/seed-<name>.py` using invented names, screenshotting every state into `SHOTS_DIR` and calling `checkWords` and `expectOneCall`.
-   - The PR body carries `Mock: "Mock: <screen>" (desk D<n>)` and the screenshots from the seeded cell. Never the mock, its images or real names.
+3. **Screen ticket** (the working doc's first line is `Screen: yes`): write no UI code until the mock is approved; Read `screen-ticket.md` in this skill's folder first.
 4. **Implement through subagents.** Give a `general-purpose` subagent the working doc, the agents doc rules and the exact definition of done. Keep only its summary. Tell it to use the LSP tool: when the tool answers for a file type, prefer it over grep for where a symbol is defined, what refers to it and what calls it, since a lookup returns only the matches and a grep search reads much more. Fall back to grep when the tool returns nothing, when the file type has no language server (`tares factory doctor` lists the ones missing) and for text that is not a symbol, such as a string, a config key or a comment.
 5. **Challenger findings.** With the challenger on, Codex reviews each commit and its P1 and P2 findings block until handled. Fix every P1 and P2, or waive a disputed one with `/tares:challenger-waive <n> <why it does not apply>` (in a crew station a waiver without its reason is refused) and repeat the reason in the PR body, so the reviewer can judge it. P3 is your call. Never re-run Codex yourself; the plugin's hooks do.
 6. **Verify yourself, and record each check.** Run the project's tests and linters from the agents doc in the worktree. For each test you added, break the code it covers, watch it fail, restore it. After running each one, `add_check(ticket, command, result, commit, broke_test)` (several back to back go in one call: the rest in `more`; or hand them all over with the review request, step 8): `command` exactly as you ran it (Tares matches it against your recorded Bash runs; in a `cd x && cmd` chain, the last step), `result` with the counts it printed (N passed, failed, errors, skipped) copied as printed, `commit` the head it ran on, `broke_test` the test proven to fail against broken code. Never record a check you didn't run in this session, or with counts you didn't see. Use `tares factory heavy <timeout-seconds> <command...>` for anything heavy.
@@ -49,12 +44,7 @@ Work the tickets you hold in the order `list_tickets` gives (ready first). Ref =
 
 ## When the orchestrator says STOP
 
-A `[TF:STOP]` means the person took the project over to finish it in their own session. Finish the
-step you are in (never leave a half-applied change), then for each ticket you hold: commit and push
-what you have to its branch (even unfinished: say so in the commit message), and write in its
-working doc's `## Progress` what is done, what is next and how to run it. Leave the stage, the pull
-request and the worktree as they are. `CronDelete` your tick, reply `DONE` to the orchestrator with
-each ticket's branch and pull request, and start nothing new.
+On a `[TF:STOP]`, Read `stop.md` in this skill's folder and follow it.
 
 ## When the factory says to hold (pace)
 
