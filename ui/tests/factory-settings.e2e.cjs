@@ -193,6 +193,66 @@ const until = async (fn, tries = 40) => {
       ck("the Slack item fits at 390 px", (await overflow(n.page)) <= 0);
       await n.ctx.close();
     }
+    // Observability: where agents' traces go (TR-1392). Pictures first, of states set through the
+    // API, so the same steps picture the panel before and after.
+    {
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "observability");
+          await shot(n.page, `tracing-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      const before = (await api(TOKEN, "GET", "/api/settings/tracing")).body;
+      await shots("as-found");
+      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: true, provider: "otlp", endpoint: "https://collector.example:4318", headers: "authorization=Bearer e2e" });
+      await shots("otlp-on");
+      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: false, provider: "rius", endpoint: "", headers: "", api_key: "" });
+      await go(page, "observability");
+
+      const panel = page.getByTestId("tracing");
+      ck("Observability has one heading of that name", (await page.getByRole("heading", { name: "Observability", exact: true }).count()) === 1);
+      ck("tracing is off and says so", /^Off\. Nothing is sent/.test(await text(page, "tracing-state")), await text(page, "tracing-state"));
+      ck("the switch, the provider and the key each have a visible label",
+        (await panel.getByLabel("Send agent traces").count()) === 1 && (await panel.getByLabel("Where traces go").count()) === 1 && (await panel.getByLabel("Rius API key").count()) === 1);
+      ck("Rius has no key yet, and says what that means", /^No API key yet/.test(await text(page, "tracing-key-state")), await text(page, "tracing-key-state"));
+      ck("Save waits for something to save", await panel.getByRole("button", { name: "Save" }).isDisabled());
+      await checkWords(page, ck, "Observability item");
+
+      await panel.getByLabel("Send agent traces").click();
+      ck("switched on to Rius without a key, it says nothing arrives yet",
+        await until(async () => /^On, but nothing reaches Rius until there is an API key/.test(await text(page, "tracing-state"))), await text(page, "tracing-state"));
+      const key = panel.getByLabel("Rius API key");
+      ck("the switch is free again before typing", await until(async () => !(await panel.getByLabel("Send agent traces").isDisabled())));
+      await key.fill("gf_e2e_1392");
+      await key.press("Enter");
+      ck("Enter saves the key, and tracing reads as on, to Rius",
+        await until(async () => /^On\. Traces go to Rius/.test(await text(page, "tracing-state"))) && /^API key set, saved here/.test(await text(page, "tracing-key-state")), await text(page, "tracing-state"));
+      ck("the key field is empty again: a secret is never shown back", (await key.inputValue()) === "");
+      await panel.getByRole("button", { name: "Clear the saved key" }).click();
+      ck("Clear removes the key", await until(async () => /^No API key yet/.test(await text(page, "tracing-key-state"))) && (await api(TOKEN, "GET", "/api/settings/tracing")).body?.key_stored === false);
+
+      await panel.getByLabel("Where traces go").click();
+      await page.getByRole("option", { name: /Any OpenTelemetry endpoint/ }).click();
+      const ep = panel.getByLabel("Endpoint");
+      await ep.fill("collector:4318");
+      await panel.getByRole("button", { name: "Save" }).click();
+      ck("an endpoint that is not a URL is refused, under the field, as a sentence",
+        await until(async () => (await ep.getAttribute("aria-invalid")) === "true") && (await panel.getByText(/^Endpoint must be an http\(s\) URL/).count()) === 1);
+      await shot(page, "tracing-refused-1440.png");
+      await ep.fill("https://collector.example:4318");
+      ck("typing again clears the error", (await ep.getAttribute("aria-invalid")) !== "true");
+      await ep.press("Enter");
+      ck("saved, tracing goes to that endpoint",
+        await until(async () => /^On\. Traces go to https:\/\/collector\.example:4318/.test(await text(page, "tracing-state"))), await text(page, "tracing-state"));
+      const n = await newPage(390);
+      await go(n.page, "observability");
+      ck("the Observability item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+      await api(TOKEN, "PUT", "/api/settings/tracing", { enabled: before.enabled, provider: "", endpoint: "", headers: "", api_key: "" });
+    }
     await go(page, "claude_code");
     ck("Claude Code is reporting, with how long ago", /^Reporting: last session .+ See how$/.test(await text(page, "tool-claude_code")), await text(page, "tool-claude_code"));
     ck("Claude Code goes to its source", (await page.getByTestId("tool-claude_code").locator("a").getAttribute("href")) === "/sources/claude-code");
@@ -379,15 +439,21 @@ const until = async (fn, tries = 40) => {
       const p = n.page;
       for (const tab of ["keys", "github", "providers", "observability"]) {
         await go(p, tab);
-        await p.locator(`[data-testid="pane-${tab}"] .panel`).first().waitFor();
+        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : ".panel"}`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
-      await go(p, "observability");
-      const sel = p.locator('[data-testid="pane-observability"] select').first();
-      await sel.waitFor();
-      await sel.focus();
-      const rep = await sel.evaluate((e) => getComputedStyle(e).backgroundRepeat);
-      ck("a focused select draws its chevron once", rep === "no-repeat", rep);
+      // Observability's select was the last native one in a pane (TR-1392 moved it to the kit);
+      // the section picker at 390 px is a native select with the same chevron
+      {
+        const m = await newPage(390);
+        await go(m.page, "keys");
+        const sel = m.page.getByTestId("settings-select");
+        await sel.waitFor();
+        await sel.focus();
+        const rep = await sel.evaluate((e) => getComputedStyle(e).backgroundRepeat);
+        ck("a focused select draws its chevron once", rep === "no-repeat", rep);
+        await m.ctx.close();
+      }
       await go(p, "agent_tools");
       const box = p.locator('[data-testid="pane-agent_tools"] label.field input[type=checkbox]').first();
       await box.waitFor();

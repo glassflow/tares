@@ -9,10 +9,11 @@ import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import {
   AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, GithubPanel, McpToolsPanel, PeopleBlock, ProvidersPanel,
-  TerseSettings, TracingPanel, useAccessData,
+  TerseSettings, useAccessData,
 } from "../../pages/Security";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
+import { TracingPanel } from "../settings/TracingPanel";
 import { Banner, Button, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
@@ -325,7 +326,7 @@ export function FactorySettingsView({ page, tab, agent, problem, onCrew, onGrant
       {tab === "usage" && <UsagePanels />}
       {tab === "licence" && <LicencePanel />}
       {tab === "agent_tools" && <div className={HEADED}><McpToolsPanel /></div>}
-      {tab === "observability" && <div className={HEADED}><TracingPanel /></div>}
+      {tab === "observability" && (<><Heading title="Observability" /><TracingPanel /></>)}
       {tab === "areas" && <EePage slot="page.settings.areas" />}
 
       {tab === "edition" && (

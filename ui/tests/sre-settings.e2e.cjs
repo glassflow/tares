@@ -275,6 +275,17 @@ async function waitFor(url, tries = 150) {
       await shot(p, `advanced-slack-${w}.png`);
       await c.close();
     }
+    // ... and the same tracing panel (TR-1392)
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=observability`, { waitUntil: "load" });
+      await T(p, "tracing-state").waitFor();
+      ck(`${w}: the Observability tab shows agent tracing, its switch and where traces go`,
+        (await p.getByRole("heading", { name: "Agent tracing", exact: true }).count()) === 1 && (await p.getByLabel("Send agent traces").count()) === 1 && (await p.getByLabel("Where traces go").count()) === 1);
+      ck(`${w}: the Observability tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-tracing-${w}.png`);
+      await c.close();
+    }
 
     // ---- 9. a new cell: no watcher, no investigator
     {
