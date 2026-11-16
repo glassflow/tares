@@ -287,6 +287,20 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // The GitHub tab the SRE settings link to (TR-1392): a cell with nothing connected yet.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=github`, { waitUntil: "load" });
+      await T(p, "github-empty").waitFor();
+      ck(`${w}: the GitHub tab says nothing is connected and how to start`,
+        (await p.getByRole("heading", { name: "GitHub", exact: true }).count()) === 1
+        && /^Nothing connected yet\. Create the GitHub App, or add a personal token\.$/.test((await T(p, "github-empty").innerText()).trim())
+        && (await p.getByRole("button", { name: "Add a personal token" }).count()) === 1, await T(p, "github-empty").innerText());
+      ck(`${w}: the GitHub tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-github-${w}.png`);
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);

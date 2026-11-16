@@ -8,12 +8,13 @@ import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import {
-  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, GithubPanel, McpToolsPanel, PeopleBlock, ProvidersPanel,
+  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock, ProvidersPanel,
   TerseSettings, useAccessData,
 } from "../../pages/Security";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
 import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels";
 import { TracingPanel } from "../settings/TracingPanel";
+import { GithubPanel } from "../settings/GithubPanel";
 import { Banner, Button, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
@@ -206,7 +207,7 @@ function KeysPane() {
 function ToolPanel({ id }: { id: string }) {
   const cloud = useCloud();
   const slackConnectUrl = cloud.health?.slack_connect_url;
-  if (id === "github") return <GithubPanel cloud={cloud} />;
+  if (id === "github") return <GithubPanel cloud={cloud} title="Accounts" />;
   // the page already says Linear or Slack above the panel
   if (id === "linear") return <div className="settings-tool min-w-0"><LinearSettings cloud={cloud} /></div>;
   if (id === "slack") return slackConnectUrl ? <SlackCloudPanel cloud={cloud} connectUrl={slackConnectUrl} /> : <SlackSelfHostedPanels />;
