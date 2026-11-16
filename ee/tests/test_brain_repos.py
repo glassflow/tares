@@ -52,7 +52,8 @@ def H(tok):
 
 BRAIN_KEY = "brain-" + "key-test-1"   # gitleaks:allow
 SHAPE = {"repo", "state", "files_done", "files_total", "indexed_commit", "last_synced", "error",
-         "place", "sync_failures", "sync_error", "added_by", "added_by_name", "added_at"}
+         "place", "sync_failures", "sync_error", "added_by", "added_by_name", "added_at", "removing",
+         "remove_error"}
 NOT_FOUND = {"detail": "Not Found"}
 ALL = (("GET", "/api/brain/repos/available", None),
        ("POST", "/api/brain/repos", {"repos": ["acme/web"]}),
@@ -310,11 +311,13 @@ async def main():
         ck("a name that is not a repo name is 400", r.status_code == 400 and "owner/name" in r.text, f"{r.status_code} {r.text[:200]}")
 
         print("== delete ==")
+        docs_source = store.get_brain_repo("acme/docs")["repo_source_id"]
         r = await cx.delete("/api/brain/repos/Acme/Docs")
         ck("delete removes the row (any case in the path)", r.status_code == 200 and r.json() == {"ok": True, "removed": True}
            and store.get_brain_repo("acme/docs") is None, f"{r.status_code} {r.text}")
         ck("the others stay", store.get_brain_repo("acme/web") is not None and store.get_brain_repo("acme/api") is not None)
-        ck("lore was not asked to forget it", not lore.calls("DELETE", "delete_repo") and len(lore.repos) >= 1)
+        ck("lore was asked to forget it, and holds nothing for it now", len(lore.calls("DELETE", "delete_repo")) == 1
+           and docs_source and docs_source not in lore.repos and len(lore.repos) >= 1, f"{lore.calls('DELETE', 'delete_repo')} {list(lore.repos)}")
         r = await cx.delete("/api/brain/repos/acme/docs")
         ck("deleting it again is 404", r.status_code == 404 and "not connected" in r.text, f"{r.status_code} {r.text[:200]}")
         r = await cx.delete("/api/brain/repos/acme/bad%20name")

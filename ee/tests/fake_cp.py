@@ -12,6 +12,7 @@
     cp.set("src-1", "failed", error="fatal: Authentication failed")
     cp.start_as = ("queued", 3)                 # what a new job starts as (default "started")
     cp.fail("index_status", 502, "kube is down")        # the next call to that route fails (once)
+    cp.empty_next("cancel_index")                       # the next call to that route works, then answers 204 with no body
     cp.raise_next("start_index", httpx.ConnectError("down"))
     cp.before["start_index"] = fn               # fn() runs inside the next call to that route, once, before it answers
     cp.calls("POST", "start_index")             # the recorded requests of one route
@@ -47,6 +48,7 @@ SLUG = "cell-a"
 _ROUTES = [
     ("POST", r"/internal/cells/(?P<slug>[^/]+)/brain/index", "start_index"),
     ("GET", r"/internal/cells/(?P<slug>[^/]+)/brain/index/(?P<source>[^/]+)", "index_status"),
+    ("DELETE", r"/internal/cells/(?P<slug>[^/]+)/brain/index/(?P<source>[^/]+)", "cancel_index"),
 ]
 
 
@@ -70,6 +72,7 @@ class FakeCp:
         self._fail: dict[str, list[tuple[int, str]]] = {}
         self._raise: dict[str, list[Exception]] = {}
         self.before: dict[str, object] = {}
+        self._empty: dict[str, int] = {}
 
     # -- test controls ----------------------------------------------------------------------
 
@@ -84,6 +87,10 @@ class FakeCp:
     def fail(self, route: str, status: int = 500, detail: str = "internal error") -> None:
         """The next call to `route` answers `status` with `{"detail": detail}`."""
         self._fail.setdefault(route, []).append((status, detail))
+
+    def empty_next(self, route: str) -> None:
+        """The next call to `route` does its work and answers 204 with no body."""
+        self._empty[route] = self._empty.get(route, 0) + 1
 
     def raise_next(self, route: str, exc: Exception) -> None:
         """The next call to `route` raises `exc` (a httpx timeout or connect error)."""
@@ -133,7 +140,11 @@ class FakeCp:
             return _err(404, "unknown cell")
         if self._fail.get(route):
             return _err(*self._fail[route].pop(0))
-        return getattr(self, "_" + route)(rec, args)
+        res = getattr(self, "_" + route)(rec, args)
+        if self._empty.get(route):
+            self._empty[route] -= 1
+            return httpx.Response(204)
+        return res
 
     def _start_index(self, rec, args):
         b = rec.json if isinstance(rec.json, dict) else {}
@@ -160,6 +171,13 @@ class FakeCp:
         if job["error"] is not None:
             out["error"] = job["error"]
         return httpx.Response(200, json=out)
+
+    def _cancel_index(self, rec, args):
+        """The request the cell's removal makes (TR-1199); the real route is TR-1349 (tares-cloud#179):
+        200 `{state: "gone"}` whenever the token is right, for a queued entry, a running or a finished
+        Job and when there is nothing; the same again on a second call. Never 404 or 204."""
+        self.jobs.pop(args["source"], None)
+        return httpx.Response(200, json={"state": "gone"})
 
 
 def _err(status: int, detail: str) -> httpx.Response:
