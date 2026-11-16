@@ -10,8 +10,8 @@ import { useEdition } from "../edition";
 import { availableRepos, connectBrainRepos, type AvailableData, type AvailableRepo } from "./BrainConnect.api";
 import { factoryPeople } from "./FactoryPeople.api";
 import {
-  adminNames, ALL_CONNECTED_WORDS, ASK_ADMIN_WORDS, choosable, connectLabel, connectedNames, GITHUB_SETTINGS, matching, MAX_CONNECT,
-  NO_GITHUB_WORDS, NO_REPOS_WORDS, NOT_ADMIN_WORDS, NOT_DONE, NOT_SET_UP_WORDS, NOTICE_WORDS, picked, plainError, SLOW_WORDS,
+  adminNames, ALL_CONNECTED_WORDS, ASK_ADMIN_WORDS, choosable, connectLabel, connectedNames, GITHUB_SETTINGS, hiddenChosen, hiddenWords,
+  matching, MAX_CONNECT, NO_GITHUB_WORDS, NO_REPOS_WORDS, NOT_ADMIN_WORDS, NOT_DONE, NOT_SET_UP_WORDS, NOTICE_WORDS, picked, plainError, SLOW_WORDS,
   SUBTITLE_WORDS, TOO_MANY_WORDS, visibility,
 } from "./brainConnectText";
 
@@ -19,6 +19,7 @@ import {
 // to tick and connect (GET /api/brain/repos/available, then POST /api/brain/repos). A key that cannot
 // write sees who the admins are and nothing to press, and the list is not even read. Repo names, the
 // names of admins and the cell's error words are a person's or the cell's own text, marked data-user-text.
+// The notice that everyone on the cell can ask is page chrome: it is under the heading in every state.
 
 const MUTED = "m-0 text-[13px] text-muted-foreground";
 const LINK = "text-[color:var(--accent-deep)]! underline!";
@@ -26,12 +27,13 @@ const GENERIC_READ = "The cell did not answer. Try again in a moment.";
 
 function Head({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="grid max-w-[860px] gap-5 md:gap-6" data-testid="brain-connect">
+    <div className="grid max-w-[860px] gap-5" data-testid="brain-connect">
       <div>
         <Link to="/brain" className="text-[13px]! text-muted-foreground!" data-testid="brain-connect-back">Back to Second Brain</Link>
-        <h1 className="m-0! mb-1.5! mt-2! text-[22px]! md:text-[28px]!">Connect a repo</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">{SUBTITLE_WORDS}</p>
+        <h1 className="m-0! mb-1! mt-2! text-[26px]! font-bold!">Connect a repo</h1>
+        <p className="m-0! max-w-[640px] text-sm leading-normal text-muted-foreground">{SUBTITLE_WORDS}</p>
       </div>
+      <Notice />
       {children}
     </div>
   );
@@ -39,7 +41,7 @@ function Head({ children }: { children?: React.ReactNode }) {
 
 function Notice() {
   return (
-    <div className="border border-foreground bg-[var(--accent-soft)] px-4 py-3 text-sm" data-testid="brain-connect-notice">{NOTICE_WORDS}</div>
+    <div className="border border-foreground bg-[var(--accent-soft)] px-4 py-3 text-sm leading-normal" data-testid="brain-connect-notice">{NOTICE_WORDS}</div>
   );
 }
 
@@ -52,12 +54,13 @@ function Names({ names, mono = false }: { names: string[]; mono?: boolean }) {
 function RepoRow({ r, checked, disabled, onToggle, under }: {
   r: AvailableRepo; checked: boolean; disabled: boolean; onToggle: (repo: string, on: boolean) => void; under?: React.ReactNode;
 }) {
-  const id = `brain-connect-${r.repo.replace(/[^a-z0-9]/gi, "-")}`;
+  const id = React.useId();   // never the repo's name: "a/b-c" and "a-b/c" would share one
   return (
     <li className="flex items-start gap-3 border-b border-border px-4 py-3" data-testid="brain-connect-row" data-repo={r.repo}>
       <Checkbox id={id} checked={checked} disabled={disabled} className="mt-0.5" onCheckedChange={(v) => onToggle(r.repo, v === true)} />
       <div className="min-w-0 flex-1">
         <label htmlFor={id} className="block cursor-pointer font-mono text-[13px] font-medium [overflow-wrap:anywhere]" data-user-text>{r.repo}</label>
+        {/* A28: the cell's list has no file counts, so this line says Private or Public, not "N files on main" as the mock does. */}
         <div className="text-[13px] text-muted-foreground" data-testid="brain-connect-kind">{visibility(r)}</div>
         {checked && <div className="empty:hidden" data-testid="brain-connect-under" data-repo={r.repo}>{under}</div>}
       </div>
@@ -98,6 +101,7 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
   const already = connectedNames(data.repos);
   const toSend = picked(data.repos, chosen);
   const tooMany = toSend.length > MAX_CONNECT;
+  const hidden = hiddenChosen(shown, toSend);
 
   const toggle = (repo: string, on: boolean) => {
     setChosen((prev) => { const next = new Set(prev); if (on) next.add(repo); else next.delete(repo); return next; });
@@ -122,7 +126,8 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
       <Panel className="[&>div]:p-0" data-testid="brain-connect-list" aria-label="Repos">
         <div className="border-b border-border px-4 py-2.5">
           <label htmlFor="brain-connect-find" className="sr-only">Find a repo</label>
-          <TextInput id="brain-connect-find" placeholder="Find a repo" autoComplete="off" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="brain-connect-find" />
+          <TextInput id="brain-connect-find" placeholder="Find a repo" autoComplete="off" value={query} onChange={(e) => setQuery(e.target.value)}
+                     className="bg-[var(--input-bg)]!" data-testid="brain-connect-find" />
         </div>
         {open.length === 0 ? (
           <p className={cn(MUTED, "border-b border-border px-4 py-3")} data-testid="brain-connect-none-left">{ALL_CONNECTED_WORDS}</p>
@@ -145,6 +150,7 @@ function Chooser({ data, reload }: { data: AvailableData; reload: () => Promise<
         <Button busy={busy} disabled={toSend.length === 0 || tooMany} onClick={submit} data-testid="brain-connect-submit">{connectLabel(toSend.length)}</Button>
         <span className={cn(MUTED, "min-w-0 flex-1 basis-64")} data-testid="brain-connect-slow">{SLOW_WORDS}</span>
       </div>
+      {hidden > 0 && <p className={MUTED} data-testid="brain-connect-hidden">{hiddenWords(hidden)}</p>}
       {tooMany && <p className={MUTED} data-testid="brain-connect-too-many">{TOO_MANY_WORDS}</p>}
       {failure && <Banner tone="error" data-testid="brain-connect-error"><span data-user-text>{failure}</span></Banner>}
     </>
@@ -186,7 +192,6 @@ function AdminConnect() {
   if (!data.github) {
     return (
       <Head>
-        <Notice />
         <Panel data-testid="brain-connect-no-github">
           <p className="m-0 text-sm">{NO_GITHUB_WORDS}</p>
           <p className="m-0 mt-2 text-sm"><GithubLink>Set up the GitHub connection</GithubLink></p>
@@ -197,7 +202,6 @@ function AdminConnect() {
   if (data.repos.length === 0) {
     return (
       <Head>
-        <Notice />
         <Panel>
           <EmptyState title="No repos to show" data-testid="brain-connect-empty"
                       action={<GithubLink>Open the GitHub connection</GithubLink>}>{NO_REPOS_WORDS}</EmptyState>
@@ -205,7 +209,7 @@ function AdminConnect() {
       </Head>
     );
   }
-  return <Head><Notice /><Chooser data={data} reload={() => read(true)} /></Head>;
+  return <Head><Chooser data={data} reload={() => read(true)} /></Head>;
 }
 
 function OthersConnect() {

@@ -40,6 +40,15 @@ export function matching(repos: AvailableRepo[], query: string): AvailableRepo[]
 /** What the muted line under a repo says. */
 export const visibility = (r: AvailableRepo): string => (r.private ? "Private" : "Public");
 
+/** How many of the repos about to be sent the search hides: chosen, and not among the repos shown. */
+export function hiddenChosen(shown: AvailableRepo[], sending: string[]): number {
+  const on = new Set(shown.map((r) => r.repo));
+  return sending.filter((name) => !on.has(name)).length;
+}
+
+/** The line that says so: "1 chosen repo is hidden by the search.", "2 chosen repos are hidden by the search." Empty for none. */
+export const hiddenWords = (n: number): string => (n <= 0 ? "" : n === 1 ? "1 chosen repo is hidden by the search." : `${n} chosen repos are hidden by the search.`);
+
 /** The repos to send: those chosen, in the list's order, and only ones still on offer. */
 export function picked(all: AvailableRepo[], chosen: ReadonlySet<string>): string[] {
   return choosable(all).filter((r) => chosen.has(r.repo)).map((r) => r.repo);

@@ -13,10 +13,15 @@
  *  - No GitHub connection (with the link to Settings), no repos, every repo connected, a failed read with Retry,
  *    the 502 of GitHub failing, a cell with no brain (404, and a real cell with no licence), loading.
  *  - The folder list of TR-1213 is not there, only room under a checked repo that stays empty.
- *  - No sideways scroll at 390. The page's words keep the words list.
+ *  - The notice that everyone on the cell can ask is under the heading in every state, the loading, failed, not
+ *    set up and read key states too. Chosen repos the search hides are said in words (the line is a pure rule too).
+ *  - Two repos whose names differ only in "/" and "-" keep their own checkbox (a label toggles its own row).
+ *  - Every state loads from exactly one read (the list for an admin, the people for a read key), checked with
+ *    expectOneCall. No sideways scroll at 390, at 1280 for the many-repos states. The page's words keep the words list.
  * The brain's own API is answered by the test (the cell here has no GitHub to read from); the daemons are real
  * (tests/licensed.cjs) so the console, the keys, whoami and the 404 of a cell with no licence are real.
- * Screenshots of each state at 1280 and 390 go to $SHOTS_DIR when it is set.
+ * Screenshots of each state at 1280 and 390 go to $SHOTS_DIR when it is set (the many-repos states, 52 repos and the
+ * 50 limit, at both widths too).
  * Run:  npm run build && TARES_E2E_PORT=8880 node tests/brain-connect.e2e.cjs
  */
 const fs = require("fs");
@@ -27,7 +32,7 @@ const vm = require("vm");
 const UI_DIR = path.resolve(__dirname, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const ts = require(path.join(UI_DIR, "node_modules", "typescript"));
-const { checkWords } = require("./words.cjs");
+const { checkWords, expectOneCall } = require("./words.cjs");
 const { startDaemon } = require("./licensed.cjs");
 
 const ROOT = "root-token-brain-connect-e2e";
@@ -134,6 +139,12 @@ const PEOPLE = [
     eq("picked: in the list's order, not the click order", T.picked(all, new Set(["acme/web", "acme/api"])), ["acme/api", "acme/web"]);
     eq("picked: a repo connected meanwhile is dropped", T.picked(all, new Set(["acme/api", "acme/indexer"])), ["acme/api"]);
     eq("picked: a name that is not on offer is dropped", T.picked(all, new Set(["acme/nope"])), []);
+    eq("hiddenChosen: none hidden", T.hiddenChosen(T.choosable(all), ["acme/api", "acme/web"]), 0);
+    eq("hiddenChosen: the chosen the search hides", T.hiddenChosen(T.matching(T.choosable(all), "docs"), ["acme/api", "acme/web", "acme/docs-site"]), 2);
+    eq("hiddenChosen: nothing chosen", T.hiddenChosen([], []), 0);
+    eq("hiddenWords: none is empty", [T.hiddenWords(0), T.hiddenWords(-1)], ["", ""]);
+    eq("hiddenWords: one, singular", T.hiddenWords(1), "1 chosen repo is hidden by the search.");
+    eq("hiddenWords: two, plural", T.hiddenWords(2), "2 chosen repos are hidden by the search.");
     eq("adminNames", T.adminNames(PEOPLE), ["Ada Lovelace", "Linus T"]);
     eq("adminNames: none", T.adminNames([PEOPLE[1]]), []);
     eq("plainError: capital and full stop", T.plainError("already connected: a/b", "x"), "Already connected: a/b.");
@@ -142,7 +153,7 @@ const PEOPLE = [
     eq("plainError: nothing", T.plainError(undefined, "Fallback."), "Fallback.");
     eq("MAX_CONNECT is the cell's limit", T.MAX_CONNECT, 50);
     eq("the settings link", T.GITHUB_SETTINGS, "/settings?tab=github");
-    ck("the words have no em dash", ![T.NOTICE_WORDS, T.SLOW_WORDS, T.SUBTITLE_WORDS, T.NO_GITHUB_WORDS, T.NO_REPOS_WORDS, T.NOT_ADMIN_WORDS, T.ASK_ADMIN_WORDS, T.NOT_DONE, T.TOO_MANY_WORDS].some((w) => w.includes(String.fromCharCode(8212))));
+    ck("the words have no em dash", ![T.NOTICE_WORDS, T.SLOW_WORDS, T.SUBTITLE_WORDS, T.NO_GITHUB_WORDS, T.NO_REPOS_WORDS, T.NOT_ADMIN_WORDS, T.ASK_ADMIN_WORDS, T.NOT_DONE, T.TOO_MANY_WORDS, T.hiddenWords(1), T.hiddenWords(7)].some((w) => w.includes(String.fromCharCode(8212))));
   }
 
   // ---- the daemons: licensed with keys, and one with no licence
@@ -167,13 +178,15 @@ const PEOPLE = [
     page.on("pageerror", (e) => errors.push(String(e)));
     if (mock) await page.route(isBrainApi, mock.handle);
     const seen = { people: 0 };
+    // the screen's one read: the people for a read key, the list for an admin (and for the cells with no brain)
+    const one = expectOneCall(page, token === reader.json.secret ? "/api/factory/people" : "/api/brain/repos/available");
     await page.route((u) => u.pathname === "/api/factory/people", (route) => {
       seen.people++;
       return peopleStatus === 200 ? route.fulfill({ status: 200, json: { people } }) : route.fulfill({ status: peopleStatus, json: { detail: "no" } });
     });
     await page.goto(base + url);
     if (wait === "page") await page.getByTestId("brain-connect").waitFor({ timeout: 15000 });
-    return { ctx, page, seen };
+    return { ctx, page, seen, one: (label) => one(ck, label) };
   };
   const text = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
   const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, name), fullPage: true }); };
@@ -182,14 +195,33 @@ const PEOPLE = [
   const label = (page) => text(page.getByTestId("brain-connect-submit"));
   const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   const listReady = (page) => page.getByTestId("brain-connect-rows").waitFor({ timeout: 15000 });
+  // the checks every state gets: the words, and the notice under the heading. `fit` adds no sideways scroll and
+  // nothing wider than the screen (the states shot at a width).
+  const NOTICE = "Everyone on this cell will be able to ask about the code in these repos, including people who cannot open them on GitHub.";
+  const audit = async (page, label, fit = false) => {
+    await checkWords(page, ck, label);
+    const n = page.getByTestId("brain-connect-notice");
+    ck(`${label}: the notice is there, once, in words`, (await n.count()) === 1 && (await text(n)) === NOTICE, `${await n.count()}`);
+    ck(`${label}: the notice comes right after the heading and its line`, await page.evaluate(() => {
+      const h = document.querySelector("h1").getBoundingClientRect(), nb = document.querySelector('[data-testid="brain-connect-notice"]').getBoundingClientRect();
+      return nb.top >= h.bottom && nb.top - h.bottom < 120;
+    }));
+    if (fit) {
+      const over = await overflow(page);
+      ck(`${label}: no sideways scroll`, over <= 0, String(over));
+      const wide = await page.evaluate(() => [...document.querySelectorAll('[data-testid^="brain-connect"]')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1).map((e) => e.getAttribute("data-testid")));
+      ck(`${label}: nothing wider than the screen`, wide.length === 0, wide.join(","));
+    }
+  };
   const checkedRepos = (page) => page.getByTestId("brain-connect-row").evaluateAll((els) => els.filter((e) => e.querySelector('[role="checkbox"]')?.getAttribute("aria-checked") === "true").map((e) => e.getAttribute("data-repo")));
 
   try {
     // ---- an admin, the list
     {
       const mock = brainMock(LIST());
-      const { ctx, page } = await open({ mock });
+      const { ctx, page, one } = await open({ mock });
       await listReady(page);
+      await one("admin, list");
       ck("the heading", await page.getByRole("heading", { name: "Connect a repo", exact: true }).isVisible());
       const back = page.getByTestId("brain-connect-back");
       ck("Back to Second Brain links to /brain", (await text(back)) === "Back to Second Brain" && (await back.getAttribute("href")) === "/brain");
@@ -231,7 +263,7 @@ const PEOPLE = [
       ck("no folder list, fieldset or Add another folder (TR-1213)", !/Folders with decisions|Add another folder|Decision folders/.test(body) && (await page.locator("fieldset").count()) === 0
          && (await page.getByRole("button", { name: /folder/i }).count()) === 0);
       eq("no room under a repo before it is checked", await page.getByTestId("brain-connect-under").count(), 0);
-      await checkWords(page, ck, "admin, list");
+      await audit(page, "admin, list");
       ck("no script errors", errors.length === 0, errors.join(" "));
       await shot(page, "brain-connect-list-1280.png");
       eq("the available list was read once", mock.reads, 1);
@@ -241,8 +273,9 @@ const PEOPLE = [
     // ---- the button counts the choice; the room under a checked repo; the body sent
     {
       const mock = brainMock(LIST());
-      const { ctx, page } = await open({ mock });
+      const { ctx, page, one } = await open({ mock });
       await listReady(page);
+      await one("the choice");
       const btn = page.getByTestId("brain-connect-submit");
       await box(page, "acme/web").click();
       eq("one chosen: Connect 1 repo", await label(page), "Connect 1 repo");
@@ -267,7 +300,23 @@ const PEOPLE = [
       await page.getByLabel("Find a repo").fill("docs");
       eq("search: only the match shows", await page.getByTestId("brain-connect-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-repo"))), ["acme/docs-site"]);
       eq("search: a hidden choice still counts", await label(page), "Connect 2 repos");
+      const hid = page.getByTestId("brain-connect-hidden");
+      eq("search: two chosen repos are hidden, said in words", await text(hid), "2 chosen repos are hidden by the search.");
+      ck("search: the line sits right under the button", await page.evaluate(() => {
+        const b = document.querySelector('[data-testid="brain-connect-submit"]').getBoundingClientRect();
+        const h = document.querySelector('[data-testid="brain-connect-hidden"]').getBoundingClientRect();
+        return h.top >= b.bottom - 1 && h.top - b.bottom < 40;
+      }));
+      await audit(page, "search hides two chosen repos");
+      await page.getByLabel("Find a repo").fill("acme/a");
+      eq("search: one of the two is shown again, so one is hidden (singular)", [await page.getByTestId("brain-connect-row").count(), await text(hid)], [2, "1 chosen repo is hidden by the search."]);
+      await page.getByLabel("Find a repo").fill("docs");
+      await box(page, "acme/docs-site").click();
+      eq("search: a visible chosen repo is not counted as hidden", [await text(hid), await label(page)], ["2 chosen repos are hidden by the search.", "Connect 3 repos"]);
+      await box(page, "acme/docs-site").click();
+      eq("search: unchecking it leaves the same two hidden", [await text(hid), await label(page)], ["2 chosen repos are hidden by the search.", "Connect 2 repos"]);
       await page.getByLabel("Find a repo").fill("");
+      eq("search cleared: no hidden line, none left out", await page.getByTestId("brain-connect-hidden").count(), 0);
       eq("search cleared: the choice is still checked", await checkedRepos(page), ["acme/api", "acme/web"]);
       // the body: exactly the chosen repos, in the list's order (api was clicked after web)
       await btn.click();
@@ -280,11 +329,13 @@ const PEOPLE = [
     // ---- search
     {
       const mock = brainMock(LIST());
-      const { ctx, page } = await open({ mock });
+      const { ctx, page, one } = await open({ mock });
       await listReady(page);
+      await one("search");
       const shown = () => page.getByTestId("brain-connect-row").evaluateAll((els) => els.map((e) => e.getAttribute("data-repo")));
       await page.getByLabel("Find a repo").fill("FETCH");
       eq("search: by part of the name, any case", await shown(), ["acme/fetcher"]);
+      eq("search: nothing chosen, nothing hidden, no line", await page.getByTestId("brain-connect-hidden").count(), 0);
       await page.getByLabel("Find a repo").fill("acme/w");
       eq("search: by the owner and a start", await shown(), ["acme/web"]);
       await page.getByLabel("Find a repo").fill("indexer");
@@ -293,18 +344,39 @@ const PEOPLE = [
       const nm = page.getByTestId("brain-connect-no-match");
       eq("search: nothing matches, said in words", await text(nm), "No repo matches zzz.");
       ck("search: the already connected line stays, the button stays", (await page.getByTestId("brain-connect-already").count()) === 1 && (await page.getByTestId("brain-connect-submit").count()) === 1);
-      await checkWords(page, ck, "search, no match");
+      await audit(page, "search, no match");
       await shot(page, "brain-connect-no-match-1280.png");
       await page.getByLabel("Find a repo").fill("");
       eq("search cleared: every repo is back", (await shown()).length, 5);
       await ctx.close();
     }
 
+    // ---- two repos whose names differ only in "/" and "-" keep a checkbox each
+    {
+      const mock = brainMock([R("a/b-c"), R("a-b/c")]);
+      const { ctx, page, one } = await open({ mock });
+      await listReady(page);
+      await one("lookalike names");
+      const ids = await page.getByTestId("brain-connect-row").evaluateAll((els) => els.map((e) => e.querySelector('[role="checkbox"]').id));
+      ck("lookalike names: each checkbox has its own id", ids.length === 2 && ids[0] !== "" && ids[0] !== ids[1], ids.join(" | "));
+      const forIds = await page.getByTestId("brain-connect-row").evaluateAll((els) => els.map((e) => e.querySelector("label").htmlFor));
+      eq("lookalike names: each label points at the checkbox of its own row", forIds, ids);
+      await row(page, "a-b/c").locator("label").click();
+      eq("lookalike names: the label of a-b/c checks only a-b/c", await checkedRepos(page), ["a-b/c"]);
+      await row(page, "a/b-c").locator("label").click();
+      eq("lookalike names: the label of a/b-c checks only a/b-c, both are checked now", await checkedRepos(page), ["a/b-c", "a-b/c"]);
+      await row(page, "a-b/c").locator("label").click();
+      eq("lookalike names: a second click unchecks only its own row", await checkedRepos(page), ["a/b-c"]);
+      eq("lookalike names: the button counts one", await label(page), "Connect 1 repo");
+      await ctx.close();
+    }
+
     // ---- a failed connect: words, the choice kept; a failure part way
     {
       const mock = brainMock(LIST(), { postAnswer: () => ({ status: 409, json: { detail: "already connected: acme/api" } }) });
-      const { ctx, page } = await open({ mock });
+      const { ctx, page, one } = await open({ mock });
       await listReady(page);
+      await one("failed connect");
       await box(page, "acme/api").click();
       await box(page, "acme/web").click();
       await page.getByTestId("brain-connect-submit").click();
@@ -314,7 +386,7 @@ const PEOPLE = [
       ck("a failed connect stays on the page", new URL(page.url()).pathname === "/brain/connect");
       eq("a failed connect keeps the choice", await checkedRepos(page), ["acme/api", "acme/web"]);
       eq("a failed connect keeps the count and the button works again", [await label(page), await page.getByTestId("brain-connect-submit").isEnabled()], ["Connect 2 repos", true]);
-      await checkWords(page, ck, "failed connect");
+      await audit(page, "failed connect");
       await shot(page, "brain-connect-error-1280.png");
       // another try clears the old error
       mock.postAnswer = null;
@@ -326,6 +398,7 @@ const PEOPLE = [
       const m2 = brainMock(LIST(), { postAnswer: () => ({ status: 500, body: "<html>boom</html>", contentType: "text/html" }) });
       const o = await open({ mock: m2 });
       await listReady(o.page);
+      await o.one("a failed connect, not json");
       await box(o.page, "acme/api").click();
       await o.page.getByTestId("brain-connect-submit").click();
       await o.page.getByTestId("brain-connect-error").waitFor({ timeout: 10000 });
@@ -339,6 +412,7 @@ const PEOPLE = [
       });
       const p = await open({ mock: m3 });
       await listReady(p.page);
+      await p.one("a failure part way");
       await box(p.page, "acme/api").click();
       await box(p.page, "acme/web").click();
       await p.page.getByTestId("brain-connect-submit").click();
@@ -354,12 +428,17 @@ const PEOPLE = [
     {
       const many = Array.from({ length: 52 }, (_, i) => R(`acme/repo-${String(i).padStart(2, "0")}`));
       const mock = brainMock(many);
-      const { ctx, page } = await open({ mock });
+      const { ctx, page, one } = await open({ mock });
       await listReady(page);
+      await one("many repos");
+      eq("52 repos: a row each", await page.getByTestId("brain-connect-row").count(), 52);
+      await audit(page, "many repos, 1280", true);
+      await shot(page, "brain-connect-many-1280.png");
       await page.getByTestId("brain-connect-row").getByRole("checkbox").evaluateAll((els) => els.forEach((e) => e.click()));
       eq("52 chosen: the count", await label(page), "Connect 52 repos");
       ck("52 chosen: the button is disabled and the limit is said in words", (await page.getByTestId("brain-connect-submit").isDisabled()) && (await text(page.getByTestId("brain-connect-too-many"))) === "Connect at most 50 repos at a time.");
-      await checkWords(page, ck, "too many");
+      await audit(page, "too many, 1280", true);
+      await shot(page, "brain-connect-too-many-1280.png");
       await box(page, "acme/repo-00").click();
       await box(page, "acme/repo-01").click();
       eq("50 chosen: the button works", [await label(page), await page.getByTestId("brain-connect-submit").isEnabled(), await page.getByTestId("brain-connect-too-many").count()], ["Connect 50 repos", true, 0]);
@@ -372,26 +451,29 @@ const PEOPLE = [
     // ---- a read key: the admins named, nothing to press, and the list is never asked for
     {
       const mock = brainMock(LIST());
-      const { ctx, page, seen } = await open({ token: reader.json.secret, mock });
+      const { ctx, page, seen, one } = await open({ token: reader.json.secret, mock });
       await page.getByTestId("brain-connect-admin-only").waitFor({ timeout: 15000 });
       await page.getByTestId("brain-connect-admins").waitFor({ timeout: 15000 });
+      await one("read key");
       ck("read key: Only admins can connect repos.", (await text(page.getByTestId("brain-connect-admin-only"))).startsWith("Only admins can connect repos."));
       eq("read key: the admins are named", await text(page.getByTestId("brain-connect-admins")), "Admins on this cell: Ada Lovelace, Linus T.");
       ck("read key: the admins' names are a person's text", await page.getByTestId("brain-connect-admins").locator("[data-user-text]").count() === 2);
       ck("read key: the admins' names are plain text, not mono", await page.getByTestId("brain-connect-admins").locator("[data-user-text]").first().evaluate((e) => !getComputedStyle(e).fontFamily.toLowerCase().includes("mono")));
-      ck("read key: no list, no search, no button, no checkbox, no notice", (await page.getByTestId("brain-connect-list").count()) === 0 && (await page.getByLabel("Find a repo").count()) === 0
+      ck("read key: no list, no search, no button, no checkbox", (await page.getByTestId("brain-connect-list").count()) === 0 && (await page.getByLabel("Find a repo").count()) === 0
          && (await page.getByTestId("brain-connect-submit").count()) === 0 && (await page.getByRole("checkbox").count()) === 0 && (await page.getByRole("button", { name: /connect/i }).count()) === 0);
       ck("read key: the heading and the way back stay", (await page.getByRole("heading", { name: "Connect a repo", exact: true }).count()) === 1 && (await page.getByTestId("brain-connect-back").count()) === 1);
       ck("read key: the repos were not even asked for", mock.reads === 0 && mock.posts.length === 0, `${mock.reads} reads`);
       ck("read key: the people were read", seen.people >= 1);
       ck("read key: no repo name anywhere on the page", !(await text(page.locator("main"))).includes("acme/"));
-      await checkWords(page, ck, "read key");
+      await audit(page, "read key");
       await shot(page, "brain-connect-readonly-1280.png");
       await ctx.close();
       // the people cannot be read, or hold no admin: ask an admin
       for (const [what, o] of [["people fail", { peopleStatus: 500 }], ["no admin among them", { people: [PEOPLE[1]] }]]) {
         const x = await open({ token: reader.json.secret, mock: brainMock(LIST()), ...o });
         await x.page.getByTestId("brain-connect-admins").waitFor({ timeout: 15000 });
+        await x.one(`read key, ${what}`);
+        await audit(x.page, `read key, ${what}`);
         eq(`read key, ${what}: ask an admin`, await text(x.page.getByTestId("brain-connect-admins")), "Ask an admin of this cell.");
         ck(`read key, ${what}: still no list or button`, (await x.page.getByTestId("brain-connect-list").count()) === 0 && (await x.page.getByTestId("brain-connect-submit").count()) === 0);
         if (what === "people fail") await shot(x.page, "brain-connect-readonly-ask-1280.png");
@@ -405,13 +487,14 @@ const PEOPLE = [
     // ---- no GitHub connection, no repos, every repo connected
     {
       const mock = brainMock([], { github: false });
-      const { ctx, page } = await open({ mock });
+      const { ctx, page, one } = await open({ mock });
       await page.getByTestId("brain-connect-no-github").waitFor({ timeout: 15000 });
+      await one("no GitHub");
       ck("no GitHub: the words", (await text(page.getByTestId("brain-connect-no-github"))).includes("The GitHub connection is not set up yet."));
       const link = page.getByTestId("brain-connect-settings");
       ck("no GitHub: a link to the connection settings", (await link.count()) === 1 && (await link.getAttribute("href")) === "/settings?tab=github");
       ck("no GitHub: no list and no button", (await page.getByTestId("brain-connect-list").count()) === 0 && (await page.getByTestId("brain-connect-submit").count()) === 0);
-      await checkWords(page, ck, "no GitHub");
+      await audit(page, "no GitHub");
       await shot(page, "brain-connect-no-github-1280.png");
       await link.click();
       await page.waitForURL((u) => u.pathname === "/settings", { timeout: 10000 });
@@ -420,18 +503,20 @@ const PEOPLE = [
 
       const e = await open({ mock: brainMock([]) });
       await e.page.getByTestId("brain-connect-empty").waitFor({ timeout: 15000 });
+      await e.one("no repos");
       ck("no repos: the words", (await text(e.page.getByTestId("brain-connect-empty"))).includes("The connection cannot read any repos yet."));
       ck("no repos: no button, a link to the connection", (await e.page.getByTestId("brain-connect-submit").count()) === 0 && (await e.page.getByTestId("brain-connect-settings").count()) === 1);
-      await checkWords(e.page, ck, "no repos");
+      await audit(e.page, "no repos");
       await shot(e.page, "brain-connect-empty-1280.png");
       await e.ctx.close();
 
       const a = await open({ mock: brainMock([R("acme/indexer", { connected: true }), R("acme/legacy", { connected: true })]) });
       await a.page.getByTestId("brain-connect-none-left").waitFor({ timeout: 15000 });
+      await a.one("every repo connected");
       ck("every repo connected: the words and the line, no checkbox", (await text(a.page.getByTestId("brain-connect-none-left"))).includes("Every repo the connection can read is already connected.")
          && (await text(a.page.getByTestId("brain-connect-already"))) === "Already connected: acme/indexer, acme/legacy" && (await a.page.getByRole("checkbox").count()) === 0);
       ck("every repo connected: the button stays disabled", await a.page.getByTestId("brain-connect-submit").isDisabled());
-      await checkWords(a.page, ck, "every repo connected");
+      await audit(a.page, "every repo connected");
       await shot(a.page, "brain-connect-all-connected-1280.png");
       await a.ctx.close();
     }
@@ -441,9 +526,10 @@ const PEOPLE = [
       const bad = brainMock(LIST(), { readStatus: 500 });
       const f = await open({ mock: bad });
       await f.page.getByTestId("brain-connect-retry").waitFor({ timeout: 15000 });
+      await f.one("a failed read");
       ck("a failed read: the banner says so in words", (await text(f.page.getByTestId("brain-connect-read-error"))).includes("The repo list did not load."));
       ck("a failed read: no list and no button", (await f.page.getByTestId("brain-connect-list").count()) === 0 && (await f.page.getByTestId("brain-connect-submit").count()) === 0);
-      await checkWords(f.page, ck, "failed read");
+      await audit(f.page, "failed read");
       await shot(f.page, "brain-connect-read-error-1280.png");
       bad.readStatus = 200;
       await f.page.getByTestId("brain-connect-retry").click();
@@ -454,15 +540,18 @@ const PEOPLE = [
       const gh = brainMock(LIST(), { readStatus: 502, readDetail: "GitHub refused the connection's token" });
       const g = await open({ mock: gh });
       await g.page.getByTestId("brain-connect-retry").waitFor({ timeout: 15000 });
+      await g.one("the 502");
       ck("502: the cell's own words are shown", (await text(g.page.getByTestId("brain-connect-read-error"))).includes("GitHub refused the connection's token."));
       await g.ctx.close();
 
       for (const [what, m, url, base, token] of [["404", brainMock(LIST(), { readStatus: 404 }), undefined, undefined, undefined], ["no licence", null, undefined, bare.base, ""]]) {
         const o = await open({ mock: m, base, token });
         await o.page.getByTestId("brain-connect-not-set-up").waitFor({ timeout: 15000 });
+        await o.one(`no brain (${what})`);
         ck(`no brain (${what}): said plainly`, (await text(o.page.getByTestId("brain-connect-not-set-up"))).includes("The second brain is not set up on this cell."));
         ck(`no brain (${what}): no list and no button`, (await o.page.getByTestId("brain-connect-list").count()) === 0 && (await o.page.getByTestId("brain-connect-submit").count()) === 0);
-        if (what === "404") { await checkWords(o.page, ck, "no brain"); await shot(o.page, "brain-connect-not-set-up-1280.png"); }
+        await audit(o.page, `no brain (${what})`);
+        if (what === "404") { await shot(o.page, "brain-connect-not-set-up-1280.png"); }
         await o.ctx.close();
         void url;
       }
@@ -473,38 +562,60 @@ const PEOPLE = [
       await lo.page.getByTestId("brain-connect-loading").waitFor({ timeout: 15000 });
       ck("loading: a skeleton shows, no button yet", (await lo.page.getByTestId("brain-connect-loading").isVisible()) && (await lo.page.getByTestId("brain-connect-submit").count()) === 0);
       ck("loading: the heading and the way back are there already", (await lo.page.getByRole("heading", { name: "Connect a repo", exact: true }).isVisible()) && (await lo.page.getByTestId("brain-connect-back").isVisible()));
-      await checkWords(lo.page, ck, "loading");
+      await audit(lo.page, "loading", true);
       await shot(lo.page, "brain-connect-loading-1280.png");
       release();
       await listReady(lo.page);
+      await lo.one("loading");
       ck("loading: the list replaces the skeleton", (await lo.page.getByTestId("brain-connect-loading").count()) === 0);
       await lo.ctx.close();
     }
 
     // ---- phone width: every state, no sideways scroll
     {
+      const LONG = "acme/a-repository-with-a-very-long-name-that-has-to-wrap-on-a-phone-screen-without-a-sideways-scroll";
+      const many = () => Array.from({ length: 52 }, (_, i) => R(`acme/repo-${String(i).padStart(2, "0")}`));
+      const chooseAll = (p) => p.getByTestId("brain-connect-row").getByRole("checkbox").evaluateAll((els) => els.forEach((e) => e.click()));
+      // [name, mock, open options, how it gets ready, what a person does next]
       const states = [
         ["list", brainMock(LIST()), {}, async (p) => { await listReady(p); }],
-        ["chosen", brainMock(LIST()), {}, async (p) => { await listReady(p); await box(p, "acme/api").click(); await box(p, "acme/a-repository-with-a-very-long-name-that-has-to-wrap-on-a-phone-screen-without-a-sideways-scroll").click(); }],
-        ["no-match", brainMock(LIST()), {}, async (p) => { await listReady(p); await p.getByLabel("Find a repo").fill("a-name-with-no-match-at-all-that-is-long-enough-to-need-wrapping-on-a-phone"); await p.getByTestId("brain-connect-no-match").waitFor({ timeout: 5000 }); }],
-        ["error", brainMock(LIST(), { postAnswer: () => ({ status: 409, json: { detail: "already connected: acme/api, acme/a-repository-with-a-very-long-name-that-has-to-wrap-on-a-phone-screen-without-a-sideways-scroll" } }) }), {}, async (p) => {
-          await listReady(p); await box(p, "acme/api").click(); await p.getByTestId("brain-connect-submit").click(); await p.getByTestId("brain-connect-error").waitFor({ timeout: 10000 });
+        ["chosen", brainMock(LIST()), {}, async (p) => { await listReady(p); }, async (p) => { await box(p, "acme/api").click(); await box(p, LONG).click(); }],
+        ["hidden", brainMock(LIST()), {}, async (p) => { await listReady(p); }, async (p) => {
+          await box(p, "acme/api").click(); await box(p, "acme/web").click(); await p.getByLabel("Find a repo").fill("docs"); await p.getByTestId("brain-connect-hidden").waitFor({ timeout: 5000 });
         }],
+        ["no-match", brainMock(LIST()), {}, async (p) => { await listReady(p); }, async (p) => { await p.getByLabel("Find a repo").fill("a-name-with-no-match-at-all-that-is-long-enough-to-need-wrapping-on-a-phone"); await p.getByTestId("brain-connect-no-match").waitFor({ timeout: 5000 }); }],
+        ["error", brainMock(LIST(), { postAnswer: () => ({ status: 409, json: { detail: `already connected: acme/api, ${LONG}` } }) }), {}, async (p) => { await listReady(p); }, async (p) => {
+          await box(p, "acme/api").click(); await p.getByTestId("brain-connect-submit").click(); await p.getByTestId("brain-connect-error").waitFor({ timeout: 10000 });
+        }],
+        ["many", brainMock(many()), {}, async (p) => { await listReady(p); }],
+        ["too-many", brainMock(many()), {}, async (p) => { await listReady(p); }, async (p) => { await chooseAll(p); await p.getByTestId("brain-connect-too-many").waitFor({ timeout: 5000 }); }],
         ["readonly", brainMock(LIST()), { token: reader.json.secret }, async (p) => { await p.getByTestId("brain-connect-admins").waitFor({ timeout: 15000 }); }],
+        ["readonly-ask", brainMock(LIST()), { token: reader.json.secret, peopleStatus: 500 }, async (p) => { await p.getByTestId("brain-connect-admins").waitFor({ timeout: 15000 }); }],
         ["no-github", brainMock([], { github: false }), {}, async (p) => { await p.getByTestId("brain-connect-no-github").waitFor({ timeout: 15000 }); }],
         ["empty", brainMock([]), {}, async (p) => { await p.getByTestId("brain-connect-empty").waitFor({ timeout: 15000 }); }],
+        ["all-connected", brainMock([R("acme/indexer", { connected: true }), R("acme/legacy", { connected: true })]), {}, async (p) => { await p.getByTestId("brain-connect-none-left").waitFor({ timeout: 15000 }); }],
         ["read-error", brainMock(LIST(), { readStatus: 500 }), {}, async (p) => { await p.getByTestId("brain-connect-retry").waitFor({ timeout: 15000 }); }],
         ["not-set-up", brainMock(LIST(), { readStatus: 404 }), {}, async (p) => { await p.getByTestId("brain-connect-not-set-up").waitFor({ timeout: 15000 }); }],
       ];
-      for (const [name, mock, o, ready] of states) {
-        const { ctx, page } = await open({ mock, width: 390, ...o });
+      for (const [name, mock, o, ready, act] of states) {
+        const { ctx, page, one } = await open({ mock, width: 390, ...o });
         await ready(page);
-        const over = await overflow(page);
-        ck(`390, ${name}: no sideways scroll`, over <= 0, String(over));
-        const wide = await page.evaluate(() => [...document.querySelectorAll('[data-testid^="brain-connect"]')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 1).map((e) => e.getAttribute("data-testid")));
-        ck(`390, ${name}: everything fits the screen`, wide.length === 0, wide.join(","));
-        await checkWords(page, ck, `390, ${name}`);
+        await one(`390, ${name}`);
+        if (act) await act(page);
+        await audit(page, `390, ${name}`, true);
         await shot(page, `brain-connect-${name}-390.png`);
+        await ctx.close();
+      }
+      // loading at 390: held open, then released (the one read is counted once it has answered)
+      {
+        let release; const gate = new Promise((res) => { release = res; });
+        const { ctx, page, one } = await open({ mock: brainMock(LIST(), { gate }), width: 390 });
+        await page.getByTestId("brain-connect-loading").waitFor({ timeout: 15000 });
+        await audit(page, "390, loading", true);
+        await shot(page, "brain-connect-loading-390.png");
+        release();
+        await listReady(page);
+        await one("390, loading");
         await ctx.close();
       }
       // at 390 the button and its line stack without overlapping
