@@ -12,12 +12,12 @@ const A = "example-org/service-a";
 const B = "example-org/service-b";
 const C = "example-org/docs";
 
-interface Spec {
+export interface Spec {
   id: string; name: string; state: ProjectState; goal: string; merged: number; total: number;
   blocked?: number; milestone?: string; repos?: string[]; builders?: number; meta?: string;
 }
 
-const row = (s: Spec): FactoryProjectRow => ({
+export const row = (s: Spec): FactoryProjectRow => ({
   id: s.id, name: s.name, goal: s.goal, state: s.state, state_label: LABEL[s.state],
   milestone: s.milestone ?? "", tickets: { merged: s.merged, blocked: s.blocked ?? 0, total: s.total },
   repos: (s.repos ?? [A]).map((r) => r.split("/").pop() ?? r), builders: s.builders ?? 0,
@@ -25,7 +25,7 @@ const row = (s: Spec): FactoryProjectRow => ({
   can_close: s.state === "ready_to_close", repo_names: s.repos ?? [A],
 });
 
-const BUSY: Spec[] = [
+export const BUSY: Spec[] = [
   { id: "p1", name: "project-x", state: "waiting_on_you", goal: "Publish 1,000 answer articles on the docs site.",
     merged: 15, total: 21, blocked: 4, milestone: "Now on M4: 1,000 articles live", repos: [C], builders: 1,
     meta: "1 builder · Active 1 day ago · 2 PRs to review" },
@@ -47,7 +47,7 @@ const BUSY: Spec[] = [
 ];
 
 const STATES: ProjectState[] = ["building", "waiting_on_you", "not_started", "ready_to_close", "done", "building"];
-const MANY: Spec[] = Array.from({ length: 60 }, (_, i) => {
+export const MANY: Spec[] = Array.from({ length: 60 }, (_, i) => {
   const state = STATES[i % 6];
   const total = 20;
   const merged = state === "ready_to_close" || state === "done" ? total : state === "not_started" ? 0 : (i * 3) % 20;
@@ -64,7 +64,7 @@ const LONG_GOAL =
   "and keep the whole library under review so that a new reader finds the same answer in the docs, in search and in an " +
   "assistant, with the dates current and nothing that contradicts the product as it ships today, for all 1,000 articles, " +
   "and then do the same for the how-to guides, one section at a time until the last one is done.";   // 300+ characters
-const LONG: Spec[] = [
+export const LONG: Spec[] = [
   { id: "l1", name: "project-with-a-very-long-name-that-goes-on-and-on-without-a-break-1",
     state: "building", goal: LONG_GOAL, merged: 3, total: 15, blocked: 11,
     milestone: "Now on M1: A very long milestone name that should wrap and never push the bar out of its card",
@@ -79,8 +79,8 @@ const READY: Spec[] = [
     milestone: "All milestones done", meta: "No builders working · Merged 10 days ago" },
 ];
 
-const data = (specs: Spec[]): FactoryProjectsData => {
-  const projects = specs.map(row);
+/** A body for these rows, its counts read from them. ee's team samples build theirs on it. */
+export const body = (projects: FactoryProjectRow[]): FactoryProjectsData => {
   const n = (s: ProjectState) => projects.filter((p) => p.state === s).length;
   return {
     projects,
@@ -109,7 +109,7 @@ export function sampleLoad(name: string): Promise<FactoryProjectsData> {
   const s = SAMPLES[name];
   if (s === "load") return new Promise(() => {});
   if (s === "err") return Promise.reject(new Error("The cell did not answer."));
-  return Promise.resolve(data(s));
+  return Promise.resolve(body(s.map(row)));
 }
 
 /** A sample has no cell to close a project on: it moves the row to Done on this copy of the data. */
