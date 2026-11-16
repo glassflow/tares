@@ -32,13 +32,12 @@ const CLOSE_WORDS = "Closed from the project page";
 const MUTED = "text-xs text-muted-foreground";
 const LINK = "text-[color:var(--accent-deep)]! underline!";
 
-export type ProjectPage = "overview" | "tickets" | "prs" | "merge-queue" | "milestones" | "decisions" | "docs" | "people" | "settings";
+export type ProjectPage = "overview" | "tickets" | "prs" | "milestones" | "decisions" | "docs" | "people" | "settings";
 
 const PAGES: { key: ProjectPage; label: string; to: string }[] = [
   { key: "overview", label: "Overview", to: "" },
   { key: "tickets", label: "Tickets", to: "/tickets" },
   { key: "prs", label: "Pull requests", to: "/github" },
-  { key: "merge-queue", label: "Merge queue", to: "/merge-queue" },
   { key: "milestones", label: "Milestones", to: "/milestones" },
   // Calls is the first of its two tabs: what the crew decided without you, to confirm
   { key: "decisions", label: "Decisions and calls", to: "/calls" },

@@ -1,9 +1,13 @@
 import * as React from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { cn } from "../../lib/utils";
+import { useSample } from "../sample";
 import { usePagePolling } from "../usePagePolling";
+import { MergeQueuePanel } from "./FactoryMergeQueue";
+import { mergeQueue, type MergeQueueData } from "./FactoryMergeQueue.api";
+import { isSample, sampleLoad, samplePrs } from "./mergeQueueSamples";
 import { PR_CHIP, PrSize, n } from "./prParts";
 import { PageHead, ProjectShell } from "./ProjectShell";
 import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type ProjectRepoPrs } from "./FactoryProject.api";
@@ -11,11 +15,12 @@ import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type Proj
 // /projects/:id/github, Pull requests in the project's frame (TR-1245): what happened to the code. Every pull request the project's tickets opened,
 // by repo: the open ones first, then merged, then closed without merging. Each says its ticket, CI,
 // the crew's review, how big the change was and who merged it, as GitHub said when Tares last read it.
+// The page has two tabs (TR-869): Pull requests (this one) and the Merge queue, the pull requests in
+// line to merge. The tab is in the address (?tab=queue) so a reload keeps it.
 
 const POLL_MS = 30000;
 const LINK = "text-[color:var(--accent-deep)]! underline!";
 const CARD = "border border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.07)]";
-
 
 /** "3 open, 12 merged, 1 closed without merging", leaving out what is none. */
 export function countsText(c: { open: number; merged: number; closed: number }): string {
@@ -75,39 +80,123 @@ function Repo({ r }: { r: ProjectRepoPrs }) {
   );
 }
 
-function PullRequests({ id }: { id: string }) {
-  const { data, error, reload } = usePagePolling<ProjectGitHubData>(() => factoryProjectGitHub(id), POLL_MS);
-  if (!data) {
-    return (
-      <div className="grid min-w-0 gap-5" data-testid="github-page-wait">
-        <PageHead title="Pull requests" />
-        {error ? (
-          <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
-            <b>We could not load the pull requests.</b> <span className="text-foreground">Check your connection, then try again.</span>
-          </Banner>
-        ) : <Skeleton className="h-40" />}
-      </div>
-    );
-  }
+/** The merge queue's read. `refresh` asks again and answers once the new read has landed (or failed), so a
+ *  row that was just answered can stay "saving" until the page shows what the cell now says. */
+function useQueueRead(id: string, sample: string | null) {
+  const started = React.useRef(0);
+  const finished = React.useRef(0);
+  const waiters = React.useRef<(() => void)[]>([]);
+  const [settled, setSettled] = React.useState(0);
+  const { data, error, reload } = usePagePolling<MergeQueueData>(async () => {
+    started.current += 1;
+    try {
+      return await (sample ? sampleLoad(sample) : mergeQueue(id));
+    } finally {
+      finished.current += 1;
+      // only when no newer read is still out: an older answer must not release the row early
+      if (finished.current === started.current) setSettled((x) => x + 1);
+    }
+  }, POLL_MS);
+  // after the render that shows the read (or its error), so the row never shows the old question again
+  React.useEffect(() => {
+    if (!settled) return;
+    const w = waiters.current;
+    waiters.current = [];
+    w.forEach((f) => f());
+  }, [settled]);
+  const refresh = React.useCallback(() => new Promise<void>((resolve) => { waiters.current.push(resolve); reload(); }), [reload]);
+  return { data, error, refresh };
+}
+
+function Tab({ to, on, tab, children }: { to: string; on: boolean; tab: "queue" | "prs"; children: React.ReactNode }) {
   return (
-    <div className="grid min-w-0 max-w-[980px] gap-8" data-testid="github-page">
-      <div className="grid gap-3">
-        <PageHead title="Pull requests" sub={
-          <span className="text-xs" data-testid="github-summary">
-            {countsText(data.counts)} on <span data-user-text>{data.name}</span>.
-            {data.checked && <> Last read from GitHub {data.checked}.</>}
-          </span>} />
-        {data.github_error && (
-          <Banner tone="warn" data-testid="github-error">
-            <b>Some pull requests could not be read from GitHub.</b> <span className="text-foreground">{data.github_error}</span>
-          </Banner>
-        )}
+    <Link to={to} replace role="tab" id={`tab-${tab}`} aria-selected={on} aria-controls={`panel-${tab}`} data-testid={`tab-${tab}`}
+          className={cn("-mb-px flex items-center gap-2 whitespace-nowrap border-b-[3px] border-transparent px-3.5 py-2.5 text-sm text-muted-foreground! no-underline! hover:bg-[var(--row-hover)] hover:text-foreground!",
+                        on && "border-b-[color:var(--accent)] font-semibold text-foreground!")}>
+      {children}
+    </Link>
+  );
+}
+
+function PullRequests({ id }: { id: string }) {
+  const named = useSample();
+  const sample = isSample(named) ? named : null;
+  const { pathname, search } = useLocation();
+  const [params] = useSearchParams();
+  const tab: "queue" | "prs" = params.get("tab") === "queue" ? "queue" : "prs";
+  const { data, error, reload } = usePagePolling<ProjectGitHubData>(() => (sample ? samplePrs() : factoryProjectGitHub(id)), POLL_MS);
+  // The merge queue is read on both tabs: the tab strip and the note on this tab say how many are in line.
+  const q = useQueueRead(id, sample);
+  const to = (t: "queue" | "prs") => {
+    const p = new URLSearchParams(search);
+    if (t === "queue") p.set("tab", "queue"); else p.delete("tab");
+    const s = p.toString();
+    return `${pathname}${s ? `?${s}` : ""}`;
+  };
+  const tabInfo = q.data?.tab;
+  return (
+    <div className="grid min-w-0 max-w-[980px] gap-5" data-testid="github-page">
+      <PageHead title="Pull requests" sub={data ? (
+        <span className="text-xs" data-testid="github-summary">
+          {countsText(data.counts)} on <span data-user-text>{data.name}</span>.
+          {data.checked && <> Last read from GitHub {data.checked}.</>}
+        </span>) : undefined} />
+      <div role="tablist" aria-label="Pull requests page" className="flex min-w-0 gap-1 overflow-x-auto border-b border-border" data-testid="pr-tabs">
+        <Tab to={to("queue")} on={tab === "queue"} tab="queue">
+          Merge queue
+          {tabInfo && <span className="font-mono text-xs font-normal text-muted-foreground" data-testid="tab-queue-n">{tabInfo.line}</span>}
+          {tabInfo && tabInfo.need > 0 && (
+            <span className="bg-[var(--accent)] px-[7px] py-px font-mono text-[11px] font-semibold leading-normal tracking-[0.04em] text-[color:var(--on-accent)]" data-testid="tab-queue-need">
+              {tabInfo.need_text}
+            </span>
+          )}
+        </Tab>
+        <Tab to={to("prs")} on={tab === "prs"} tab="prs">
+          Pull requests
+          {data && <span className="font-mono text-xs font-normal text-muted-foreground" data-testid="tab-prs-n">{data.counts.open}</span>}
+        </Tab>
       </div>
-      {data.repos.length === 0 ? (
-        <div className={cn(CARD, "px-5 py-4 text-muted-foreground")} data-testid="github-empty">
-          No pull requests yet. Each one the crew opens for a ticket shows here.
+      {tab === "queue" ? (
+        <div role="tabpanel" id="panel-queue" aria-labelledby="tab-queue">
+          <MergeQueuePanel id={id} data={q.data} error={q.error} reload={q.refresh} prsHref={to("prs")} sample={!!sample} />
         </div>
-      ) : data.repos.map((r) => <Repo key={r.name ?? ""} r={r} />)}
+      ) : (
+        <div role="tabpanel" id="panel-prs" aria-labelledby="tab-prs" className="grid min-w-0 gap-8">
+          <p className="m-0 text-sm text-muted-foreground" data-testid="pr-queue-note">
+            {tabInfo ? (
+              tabInfo.line > 0 ? (
+                <><b className="font-semibold text-foreground">{tabInfo.note}</b>{" "}
+                  <Link to={to("queue")} replace className={LINK} data-testid="pr-queue-link">Open the merge queue</Link></>
+              ) : tabInfo.note
+            ) : (
+              <>The merge queue is not shown while it loads or after an error. Open the{" "}
+                <Link to={to("queue")} replace className={LINK} data-testid="pr-queue-link">Merge queue tab</Link>.</>
+            )}
+          </p>
+          {!data ? (
+            <div className="grid min-w-0 gap-5" data-testid="github-page-wait">
+              {error ? (
+                <Banner tone="error" action={<Button variant="secondary" onClick={reload}>Retry</Button>}>
+                  <b>We could not load the pull requests.</b> <span className="text-foreground">Check your connection, then try again.</span>
+                </Banner>
+              ) : <Skeleton className="h-40" />}
+            </div>
+          ) : (
+            <>
+              {data.github_error && (
+                <Banner tone="warn" data-testid="github-error">
+                  <b>Some pull requests could not be read from GitHub.</b> <span className="text-foreground">{data.github_error}</span>
+                </Banner>
+              )}
+              {data.repos.length === 0 ? (
+                <div className={cn(CARD, "px-5 py-4 text-muted-foreground")} data-testid="github-empty">
+                  No pull requests yet. Each one the crew opens for a ticket shows here.
+                </div>
+              ) : data.repos.map((r) => <Repo key={r.name ?? ""} r={r} />)}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

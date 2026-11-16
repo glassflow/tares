@@ -97,7 +97,6 @@ const router = createBrowserRouter([
       { path: "projects/:id/decisions", element: <ByEdition path="/projects/:id/decisions" today={<NotFound />} /> },
       { path: "projects/:id/calls", element: <ByEdition path="/projects/:id/calls" today={<NotFound />} /> },
       { path: "projects/:id/github", element: <ByEdition path="/projects/:id/github" today={<NotFound />} /> },
-      { path: "projects/:id/merge-queue", element: <ByEdition path="/projects/:id/merge-queue" today={<NotFound />} /> },
       { path: "projects/:id/docs", element: <ByEdition path="/projects/:id/docs" today={<NotFound />} /> },
       // the other pages of a factory project (TR-1245)
       { path: "projects/:id/tickets", element: <ByEdition path="/projects/:id/tickets" today={<NotFound />} /> },

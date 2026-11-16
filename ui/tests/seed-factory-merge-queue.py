@@ -2,9 +2,11 @@
 Writes straight to the cell's database, so no daemon runs here. The caller is the cell's own person (`local`).
   p-wait   a pull request waiting for CI, one next, one queued behind it, with a merged list
   p-ask    L3-review: one waiting for your yes, one for someone else, one whose commit moved, one answered yes, one answered no
-  p-block  blocked by repo rules, blocked with no GitHub connection (a second repo), sent back
-  p-act    L3-review: three questions for you, to answer yes, answer no and fail
+  p-block  blocked by repo rules, blocked with no GitHub connection (a second repo), sent back twice and five times
+  p-wd     L3-review: a question for you that was withdrawn (the person approves it through the approve route)
+  p-act    L3-review: three questions for you, to answer yes, answer no and fail (p-act2 the same, for the other width)
   p-many   eight queued pull requests (the page shows five)
+  p-cap    six queued and, last in line, one blocked: the page shows the blocked one and four of the queued
   p-empty  nothing in the queue
   p-other  a project that is not a software factory project
 Prints a JSON map of names to ids on the last line.
@@ -113,18 +115,38 @@ t, r = pull(u, API, 312, "BLK-3", "Move the price rules into one file", "blk-3-p
             reason="conflicts with PR 218 in app/pricing.py")
 for _ in range(2):
     store.add_ticket_history(t, u, "send_back", "sent back", "a conflict", "merge-queue", None, now_utc())
+t, r = pull(u, API, 313, "BLK-4", "Split the pricing module", "blk-4-split", state="sent_back",
+            reason="the checks failed twice on main")
+for _ in range(5):
+    store.add_ticket_history(t, u, "send_back", "sent back", "the checks", "merge-queue", None, now_utc())
 
-# ── p-act ──
-u = project("p-act", level="L3-review")
-for i, name in enumerate(("yes", "no", "fail")):
-    t, r = pull(u, API, 321 + i, f"ACT-{i + 1}", f"Answer {name} for this pull request", f"act-{i + 1}-{name}",
-                state="waiting_approval", builder=lee["id"])
-    question(u, t, r, "local", 10 + i)
+# ── p-wd, p-wd2 ──  (the second is the one a test clicks, so the first stays as it was seeded)
+for k, name in enumerate(("p-wd", "p-wd2")):
+    u = project(name, level="L3-review")
+    t, r = pull(u, API, 341 + k, "WDR-1", "Backport the invoice footer", "wdr-1-footer", state="blocked",
+                reason="The question was withdrawn", builder=lee["id"])
+    d = question(u, t, r, "local", 20)
+    store.close_desk_item(d["id"], "withdrawn", None, now_utc())
+
+# ── p-act, p-act2 ──  (one per screen width: an answer changes the cell, so each width answers its own)
+for k, name in enumerate(("p-act", "p-act2")):
+    u = project(name, level="L3-review")
+    for i, what in enumerate(("yes", "no", "fail")):
+        t, r = pull(u, API, 321 + 10 * k + i, f"ACT-{i + 1}", f"Answer {what} for this pull request", f"act-{i + 1}-{what}",
+                    state="waiting_approval", builder=lee["id"])
+        question(u, t, r, "local", 10 + i)
 
 # ── p-many ──
 u = project("p-many")
 for i in range(8):
-    pull(u, API, 331 + i, f"MNY-{i + 1}", f"Queued pull request number {i + 1}", f"mny-{i + 1}-queued")
+    pull(u, API, 371 + i, f"MNY-{i + 1}", f"Queued pull request number {i + 1}", f"mny-{i + 1}-queued")
+
+# ── p-cap ──
+u = project("p-cap")
+for i in range(6):
+    pull(u, API, 351 + i, f"CAP-{i + 1}", f"Queued pull request number {i + 1}", f"cap-{i + 1}-queued")
+pull(u, API, 360, "CAP-7", "Last in line but blocked by the repo rules", "cap-7-blocked", state="blocked",
+     reason="GitHub will not merge it: the base branch requires two approving reviews.")
 
 project("p-empty")
 project("p-other", kind="custom")
