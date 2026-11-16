@@ -427,6 +427,51 @@ async def main():
         visible["appcred"].append("acme/fail")
         clean("no token in any row or log line after the failures")
 
+        print("== a failure is only written to a repo that is still ready ==")
+        for state in ("indexing", "failed"):
+            repo = "acme/guard-" + state
+            make_repo(repo, state=state)
+            store.update_brain_repo(repo, {"sync_failures": 2})
+            syncer._failed(repo, "the index is busy")
+            r = row(repo)
+            ck(f"a failure that lands after the repo moved to {state} changes nothing", (r["state"], r["sync_failures"], r["sync_error"], r["error"])
+               == (state, 2, None, None), str(r))
+        make_repo("acme/guard-ready")
+        store.update_brain_repo("acme/guard-ready", {"sync_failures": 2})
+        syncer._failed("acme/guard-ready", "the index is busy")
+        r = row("acme/guard-ready")
+        ck("... while a ready repo counts it and shows it from the third", (r["sync_failures"], r["sync_error"], r["error"]) ==
+           (3, "the index is busy", "the index is busy"), str(r))
+
+        print("== an empty head is not remembered as the head last synced ==")
+        make_repo("acme/guard-head")
+        syncer._succeeded("acme/guard-head", {}, "")
+        ck("a sync that names no commit and was asked for none leaves nothing to compare a poll to", "acme/guard-head" not in syncer._synced,
+           str(syncer._synced))
+        syncer._succeeded("acme/guard-head", {"indexed_commit": SHA[2]}, "")
+        ck("... the commit lore reports is kept", syncer._synced.get("acme/guard-head") == SHA[2], str(syncer._synced))
+        syncer._succeeded("acme/guard-head", {}, SHA[3])
+        ck("... and so is the head a push named", syncer._synced.get("acme/guard-head") == SHA[3], str(syncer._synced))
+
+        print("== a push event is noted without reading the store ==")
+        make_repo("acme/loop", state="indexing")   # waits for ready: no sync starts
+        reads = []
+        real_get = store.get_brain_repo
+        store.get_brain_repo = lambda repo: (reads.append(repo), real_get(repo))[1]
+        try:
+            syncer.on_envelopes("github", [push("acme/loop", SHA[1]), push("acme/not-on-the-brain", SHA[1])])
+        finally:
+            store.get_brain_repo = real_get
+        ck("the listener reads nothing from the store: it runs on the event loop", reads == [], str(reads))
+        ck("... it noted both pushes for the task", {"acme/loop", "acme/not-on-the-brain"} <= set(syncer._want), str(syncer._want))
+        ck("... and the task drops the repo that is not on the brain", await until(lambda: "acme/not-on-the-brain" not in syncer._want),
+           str(syncer._want))
+        ck("... while request() still answers from the store", syncer.request("acme/not-on-the-brain") is False and syncer.request("acme/loop") is True
+           and "acme/not-on-the-brain" not in syncer._want)
+        for gone in ("acme/loop", "acme/guard-indexing", "acme/guard-failed", "acme/guard-ready", "acme/guard-head"):
+            store.delete_brain_repo(gone)
+            syncer._forget(gone)
+
         print("== the poll: token connections, no webhooks ==")
         heads, head_calls, head_fail = {}, [], []
 

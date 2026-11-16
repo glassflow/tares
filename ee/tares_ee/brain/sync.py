@@ -120,8 +120,8 @@ class Syncer:
                 pushes.append(labels)
         if not pushes or not self._is_app_source(source) or not self.active():
             return
-        for labels in pushes:
-            self.request(norm_repo(labels["repo"]), labels.get("sha"))
+        for labels in pushes:   # no store read here: this runs on the event loop, inside the ingest
+            self._note(norm_repo(labels["repo"]), labels.get("sha"))
 
     def _is_app_source(self, name: str) -> bool:
         catalog = getattr(self.runtime, "catalog", None)
@@ -134,6 +134,14 @@ class Syncer:
         row = self.store.get_brain_repo(repo) if repo else None
         if row is None or row["state"] == "failed":
             return False
+        self._note(repo, sha)
+        return True
+
+    def _note(self, repo: str, sha=None) -> None:
+        """Record the ask and wake the task, without reading the store. A repo that is not on the
+        brain, or is failed, is dropped by `_start_tasks` on the task's own turn."""
+        if not repo:
+            return
         sha = sha.strip().lower() if isinstance(sha, str) else ""
         self._want[repo] = self._want.get(repo, 0) + 1
         if _SHA.fullmatch(sha) and sha != "0" * 40:
@@ -141,7 +149,6 @@ class Syncer:
         else:
             self._head.pop(repo, None)
         self.wake()
-        return True
 
     def wake(self) -> None:
         self._wake.set()
@@ -159,12 +166,12 @@ class Syncer:
             if n <= self._done.get(repo, 0) or repo in self._tasks:
                 continue
             row = self.store.get_brain_repo(repo)
-            if row is None:
+            if row is None:   # a push for a repo that is not on the brain
                 self._forget(repo)
             elif row["state"] == "ready":
                 self._tasks[repo] = asyncio.create_task(self._run_repo(repo))
             elif row["state"] not in RUNNING:   # failed: nothing to keep current. Running: wait for ready
-                self._done[repo] = n
+                self._forget(repo)
 
     async def _run_repo(self, repo: str) -> None:
         try:
