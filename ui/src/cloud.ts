@@ -114,6 +114,14 @@ export function cloudLink(base: string, params: Record<string, string>,
   return u.toString();
 }
 
+/** A control-plane connect link that comes back to the page it was opened from, as it is now
+ *  (path and query), so a setup step continues where the person left it. */
+export function cloudLinkHere(base: string): string {
+  const u = new URL(base, window.location.href);
+  u.searchParams.set("return", `${window.location.origin}${window.location.pathname}${window.location.search}`);
+  return u.toString();
+}
+
 /** Where the control plane signs the person in again and brings them back here (contract §6). */
 export function signInLink(loginUrl: string): string {
   const u = new URL(loginUrl, window.location.href);

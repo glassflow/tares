@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { Button, ProgressBar } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
+import { cloudLinkHere } from "../../cloud";
 import { cn } from "@/lib/utils";
 import { CopyCommand, Tick } from "../StartChecklist";
 import { hideStart, type StartStep } from "../StartChecklist.api";
@@ -206,7 +207,7 @@ function ConnectionsForm({ o, step, save, done, onSaved }: {
     if (!a) return null;
     return "to" in a
       ? <Button asChild variant="secondary" className="h-8 text-[13px]!"><Link to={a.to}>{a.label}</Link></Button>
-      : <Button asChild variant="secondary" className="h-8 text-[13px]!"><a href={"href" in a ? a.href : "#"}>{a.label}</a></Button>;
+      : <Button asChild variant="secondary" className="h-8 text-[13px]!"><a href={"href" in a ? cloudLinkHere(a.href) : "#"}>{a.label}</a></Button>;
   };
   const needLinear = tracker === "linear" && !o.linear.connected;
   const ready = o.github.connected && !needLinear;
