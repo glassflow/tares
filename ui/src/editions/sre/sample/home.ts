@@ -7,6 +7,7 @@ import type {
   HomeBlindSpot, HomeChart, HomeIncident, HomeOnWatch, HomeRaised, HomeService, HomeTool, HomeWatch,
   SreHome,
 } from "../Home.api";
+import { MIN, spanWords } from "../../../lib/time";
 
 export const HOME_SAMPLES = [
   "watcher-off", "watcher-off-monthly", "all-quiet", "one-incident", "many-incidents", "new-cell",
@@ -18,7 +19,6 @@ export const isHomeSample = (n: string | null): n is HomeSample => HOME_SAMPLES.
 
 const FOREVER = new Promise<never>(() => {});
 const REPO = "example-org/service-a";
-const MIN = 60_000;
 const ago = (minutes: number) => new Date(Date.now() - minutes * MIN).toISOString();
 /** "14:09" in UTC, the way the cell words a time. */
 const hm = (iso: string) => new Date(iso).toISOString().slice(11, 16);
@@ -189,7 +189,7 @@ function chartAround(openedAt: string, deploys: { minutesBefore: number; label: 
 
 function incident(id: string, svc: string, what: string, minutes: number, over: Partial<HomeIncident> = {}): HomeIncident {
   const opened = ago(minutes);
-  const age = minutes < 60 ? `${minutes} minutes` : `${Math.floor(minutes / 60)} hour${minutes >= 120 ? "s" : ""}`;
+  const age = spanWords(minutes * MIN);
   return {
     id, service: svc, state: "open", opened_at: opened, title: `${svc}: ${what} since ${hm(opened)}`,
     age_words: `open ${age}`, who: null, who_words: "nobody has picked it up",

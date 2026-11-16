@@ -2,6 +2,8 @@ import * as React from "react";
 
 import { EmptyState } from "@/components/edition/EmptyState";
 import { cn } from "@/lib/utils";
+import { formatDecimal } from "@/lib/number";
+import { formatStampUTC } from "@/lib/time";
 
 export interface LineSeries {
   label: string;
@@ -50,11 +52,10 @@ function numberFormat(top: number) {
   const half = top / 2;
   let digits = 0;
   while (digits < 8 && Math.abs(half * 10 ** digits - Math.round(half * 10 ** digits)) > 1e-9) digits++;
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: digits });
+  return { format: (v: number) => formatDecimal(v, digits) };
 }
 
-const TIME = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-const timeLabel = (ms: number, raw: string) => (Number.isNaN(ms) ? raw : TIME.format(ms));
+const timeLabel = (ms: number, raw: string) => (Number.isNaN(ms) ? raw : formatStampUTC(ms));
 
 /** The marks as a list of time and label, oldest first. Renders nothing without marks. A mark outside the plotted range is listed too, though the chart draws no line for it. */
 export function LineMarks({ marks, className, ...props }: { marks: LineMark[] } & Omit<React.HTMLAttributes<HTMLUListElement>, "children">) {

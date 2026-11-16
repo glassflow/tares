@@ -21,11 +21,14 @@
 //                    rule (eslint-rules/kit-only.mjs) with its own register and per-file baseline,
 //                    so it is a separate config object, not a selector. It runs in `npm run lint`
 //                    too; it is here because inline config is off here.
+//   one-time         Time is said through src/lib/time.ts (TR-1261): no toLocale*String call and
+//                    no Intl.DateTimeFormat outside it and src/lib/number.ts. Its own rule
+//                    (eslint-rules/one-time.mjs), with a per-file baseline for the legacy pages
+//                    (time-contract.baseline.json, lowered by npm run time-baseline).
 //
 // Not here: a table-head selector. The console has no table primitive in src/components/ui,
-// so a raw <th> rule would have nowhere to point; it joins when the primitive does. The time
-// selector joins with the time module (TR-1261). Stripes and shadows in src/styles.css are out
-// of reach of a TSX gate.
+// so a raw <th> rule would have nowhere to point; it joins when the primitive does. Stripes and
+// shadows in src/styles.css are out of reach of a TSX gate.
 //
 // The allow-lists are exception REGISTERS, not escape hatches: each entry carries a reason and
 // the ticket that empties it. A file belongs to at most one register.
@@ -35,6 +38,9 @@
 // with the subset that still applies to it. Never add a second config object for a new selector.
 
 import tseslint from 'typescript-eslint'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import oneTime from './eslint-rules/one-time.mjs'
 import { kitOnlyConfig } from './eslint-rules/kit-register.mjs'
 
 // --- repoint on copy ---------------------------------------------------------
@@ -108,4 +114,19 @@ export default [
   // kit-only (TR-1258), also in `npm run lint`: here inline config is off, so a disable comment
   // that silences it in lint still fails CI.
   kitOnlyConfig(base),
+  // one-time (TR-1261): its own plugin, so it never shares no-restricted-syntax's options.
+  {
+    ...base,
+    files: [SRC],
+    plugins: { time: { rules: { 'one-time': oneTime } } },
+    rules: {
+      'time/one-time': [
+        'error',
+        {
+          baseline: JSON.parse(readFileSync(new URL('./time-contract.baseline.json', import.meta.url), 'utf8')),
+          root: fileURLToPath(new URL('.', import.meta.url)),
+        },
+      ],
+    },
+  },
 ]

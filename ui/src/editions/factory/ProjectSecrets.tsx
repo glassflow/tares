@@ -3,6 +3,7 @@ import * as React from "react";
 import { ApiError, request } from "../../api";
 import { Button, Dialog, EmptyState, Input } from "../../components/edition";
 import { cn } from "../../lib/utils";
+import { ageWords } from "../../lib/time";
 
 // A project's secrets (TR-775): the names, who set each and when, and when a builder last used one, as
 // the project page's one read gives them (`secrets`, null for someone not on the project, who sees no
@@ -23,14 +24,7 @@ export interface SecretsDoc { enabled: boolean; off: string; secrets: SecretRow[
 const NAME_RE = /^[A-Z_][A-Z0-9_]{0,63}$/;
 const MUTED = "text-xs text-muted-foreground";
 
-function ago(at: string | null): string {
-  if (!at) return "";
-  const s = Math.max(0, (Date.now() - new Date(at).getTime()) / 1000);
-  if (s < 90) return "just now";
-  if (s < 3600) return `${Math.round(s / 60)} minutes ago`;
-  if (s < 86400 * 1.5) return `${Math.round(s / 3600)} hours ago`;
-  return `${Math.round(s / 86400)} days ago`;
-}
+const ago = (at: string | null) => (at ? ageWords(Date.now() - Date.parse(at)) : "");
 
 function url(project: string, name?: string): string {
   const base = `/api/projects/${encodeURIComponent(project)}/secrets`;

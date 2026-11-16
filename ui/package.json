@@ -46,6 +46,8 @@
     "lint": "eslint \"src/**/*.{ts,tsx}\"",
     "token-contract": "eslint --quiet --config eslint-token-contract.config.mjs \"src/**/*.{ts,tsx}\"",
     "design-contract": "eslint --quiet --config eslint-design-contract.config.mjs \"src/**/*.{ts,tsx}\"",
+    "time-baseline": "node scripts/time-baseline.mjs",
+    "test:time": "node tests/time.selftest.cjs",
     "kit-baseline": "node scripts/kit-baseline.mjs"
   },
   "dependencies": {

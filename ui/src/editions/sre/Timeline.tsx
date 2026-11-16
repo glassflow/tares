@@ -11,6 +11,8 @@ import {
   type KindGroup, type RangeKey, type TimelineData, type TimelineItem, type TimelineQuery, type TimelineRawRow, type TimelineTone,
 } from "./Timeline.api";
 import { isSample, sampleEarlier, sampleLoad, sampleOpen, sampleQuery, sampleRaw, SAMPLE_NOW } from "./sample/timeline";
+import { formatCount } from "../../lib/number";
+import { DAY, HOUR } from "../../lib/time";
 
 // Timeline: what happened on the cell, newest first and grouped by the hour, from one read
 // (GET /api/sre/timeline). The service, the range and the kinds live in the address (?service=,
@@ -59,8 +61,6 @@ const WRITTEN = new Set<TimelineItem["kind"]>(["deploy", "incident", "alert"]);
 const pad = (n: number) => String(n).padStart(2, "0");
 const ms = (t: string) => Date.parse(t);
 const clockSeconds = (t: string) => (Number.isNaN(Date.parse(t)) ? "" : new Date(t).toISOString().slice(11, 19));
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** The hour an item sits under. A span that ends exactly on the hour belongs to the hour before. */
@@ -183,8 +183,8 @@ function RawLines({ lines, onMore, onHide, onRetry }: {
         <div className="border-t border-border px-3 py-1.5 text-[13px] first:border-t-0" data-testid="timeline-raw-footer">
           <span data-testid="timeline-raw-count">
             {lines.more
-              ? `Showing ${lines.rows.length.toLocaleString("en-US")} of ${lines.count.toLocaleString("en-US")} lines.`
-              : lines.count === 1 ? "Showing the line." : `Showing all ${lines.count.toLocaleString("en-US")} lines.`}
+              ? `Showing ${formatCount(lines.rows.length)} of ${formatCount(lines.count)} lines.`
+              : lines.count === 1 ? "Showing the line." : `Showing all ${formatCount(lines.count)} lines.`}
           </span>
           {lines.more && lines.limit < MAX_LINES && <> <LinkButton onClick={onMore} data-testid="timeline-raw-more">Show {MORE_LINES} more</LinkButton></>}
           {" "}<LinkButton onClick={onHide} data-testid="timeline-raw-hide">Hide the lines</LinkButton>
@@ -219,7 +219,7 @@ function Row({ item, first, lines, onOpen, onMore, onHide }: {
           {item.raw && !lines && (
             <small className="block text-[13px] text-muted-foreground">
               <LinkButton onClick={() => onOpen(item, FIRST_LINES)} data-testid="timeline-open-raw">
-                {count === 1 ? "Show the line" : `Show the ${count.toLocaleString("en-US")} lines`}
+                {count === 1 ? "Show the line" : `Show the ${formatCount(count)} lines`}
               </LinkButton>
             </small>
           )}

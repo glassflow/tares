@@ -16,6 +16,7 @@ import {
 } from "./FactoryTicket.api";
 import { isSample, sampleLoad } from "./ticketSamples";
 import { InlineIcon } from "./ProjectIcon";
+import { formatCount } from "../../lib/number";
 
 // One ticket, from one read (GET /api/factory/projects/{id}/tickets/{ref}): its state, where it
 // lives, who works on it, what it depends on and what waits for it, its pull request, every
@@ -248,7 +249,7 @@ function Notes({ text }: { text: string }) {
   const long = lines >= NOTES_CAP_LINES;
   const open = whole || !long;
   return (
-    <Section id="notes" title="Working notes" aside={lines > 0 ? `${lines.toLocaleString("en-US")} ${lines === 1 ? "line" : "lines"}` : undefined}>
+    <Section id="notes" title="Working notes" aside={lines > 0 ? `${formatCount(lines)} ${lines === 1 ? "line" : "lines"}` : undefined}>
       {!text ? <EmptyState className="py-0" data-testid="notes-empty">Nothing noted yet</EmptyState> : (
         <>
           <div className="min-w-0 text-sm [overflow-wrap:anywhere]" data-testid="notes-box" data-open={open}>

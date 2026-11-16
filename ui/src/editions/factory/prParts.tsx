@@ -1,11 +1,12 @@
 import * as React from "react";
 
 import type { ProjectPr } from "./FactoryProject.api";
+import { formatCount } from "../../lib/number";
 
 // What a pull request row shows on the project page and its GitHub page: the size of the change.
 // Its state is a StatusLabel with the tone from STATUS_TONES.pr.
 
-export const n = (x: number) => x.toLocaleString("en-US");
+export const n = formatCount;
 
 function count(k: number, one: string, many = one + "s") {
   return `${k} ${k === 1 ? one : many}`;

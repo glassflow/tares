@@ -42,6 +42,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import LicenceNeeded from "@/components/LicenceNeeded";
 import { applyTheme, currentTheme, type Theme } from "@/theme";
+import { ageWords, HOUR } from "../../lib/time";
 
 const TONES: Tone[] = ["working", "waiting", "ready", "done", "bad", "quiet"];
 
@@ -282,7 +283,7 @@ export default function Components() {
         <ListSection title="Many rows" aside="12 of 12">
           {Array.from({ length: 12 }, (_, i) => (
             <Item key={i} name={`project-${i + 1}`} tone={TONES[i % TONES.length]}>
-              Updated {i + 1} hours ago
+              Updated {ageWords((i + 1) * HOUR)}
             </Item>
           ))}
         </ListSection>

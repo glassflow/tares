@@ -30,20 +30,3 @@ export function forbiddenIn(text: string): string[] {
   found.sort((a, b) => a.at - b.at);
   return [...new Set(found.map((f) => f.name))];
 }
-
-/** A length of time in words: "17 seconds", "8 minutes", "6 days", "1 day, 18 hours".
- *  One unit, floored; when that unit's count is 1 the next unit follows if it is not zero. */
-export function durationWords(seconds: number): string {
-  const s = Number.isFinite(seconds) && seconds > 0 ? Math.floor(seconds) : 0;
-  const units: [string, number][] = [["day", 86400], ["hour", 3600], ["minute", 60], ["second", 1]];
-  const noun = (n: number, u: string) => `${n} ${u}${n === 1 ? "" : "s"}`;
-  for (let i = 0; i < units.length; i++) {
-    const [name, size] = units[i];
-    if (s < size && i < units.length - 1) continue;
-    const n = Math.floor(s / size);
-    const rest = Math.floor((s - n * size) / (units[i + 1]?.[1] ?? 1));
-    if (n === 1 && i < units.length - 1 && rest > 0) return `${noun(n, name)}, ${noun(rest, units[i + 1][0])}`;
-    return noun(n, name);
-  }
-  return noun(0, "second");
-}
