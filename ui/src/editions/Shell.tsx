@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, Fragment, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api, auth } from "../api";
@@ -16,8 +16,10 @@ import { Initials } from "../components/edition/Initials";
 import { Input } from "../components/ui/input";
 import { applyTheme, currentTheme, type Theme } from "../theme";
 import { signOut } from "./account";
+import { BrainReadContext, type BrainRead } from "./brainRead";
 import { useEdition } from "./edition";
 import { useSample } from "./sample";
+import { askBrainRepos } from "./factory/BrainAsk.api";
 import { SETTINGS_ENTRY, visibleEntries, type MenuEntry } from "./menus";
 import { hasPage } from "./routes";
 import { isSettingsPath, rememberPlace } from "./settingsBack";
@@ -255,13 +257,24 @@ export default function EditionShell() {
   useEffect(() => { rememberPlace(here, search); }, [here, search]);
   // The Second Brain group shows once the cell says it has a brain. A cell without a licence has no
   // such route (404), and any failed read means no brain too: the group stays out, with no error.
+  // The read is shared with the Ask page (brainRead.ts), so that page makes no read of its own.
   const [brain, setBrain] = useState(false);
+  const [brainRead, setBrainRead] = useState<BrainRead>({ state: "loading" });
+  const brainLive = useRef(true);
+  const readBrain = useCallback(() => {
+    setBrainRead({ state: "loading" });
+    askBrainRepos().then(
+      (data) => { if (brainLive.current) { setBrain(data?.configured === true); setBrainRead({ state: "ok", data }); } },
+      () => { if (brainLive.current) { setBrain(false); setBrainRead({ state: "error" }); } },
+    );
+  }, []);
   useEffect(() => {
+    brainLive.current = true;
     if (edition !== "factory") { setBrain(false); return; }
-    let live = true;
-    api.brain().then((b) => { if (live) setBrain(b?.configured === true); }).catch(() => { if (live) setBrain(false); });
-    return () => { live = false; };
-  }, [edition]);
+    readBrain();
+    return () => { brainLive.current = false; };
+  }, [edition, readBrain]);
+  const brainValue = useMemo(() => ({ read: brainRead, reload: readBrain }), [brainRead, readBrain]);
   const entries = visibleEntries(edition ?? "platform", (to) => hasPage(edition, to), brain);
   // How far the factory is set up, read again on each move so a step done elsewhere shows. A key that
   // may not set the factory up gets a refusal: no Setup card then.
@@ -387,7 +400,9 @@ export default function EditionShell() {
           <LicenceBanner />
           <OwnMenu.Provider value={setFrame}>
             <HeaderSlotsContext.Provider value={slots}>
-              <Outlet />
+              <BrainReadContext.Provider value={brainValue}>
+                <Outlet />
+              </BrainReadContext.Provider>
             </HeaderSlotsContext.Provider>
           </OwnMenu.Provider>
         </main>

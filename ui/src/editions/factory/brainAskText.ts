@@ -10,6 +10,12 @@ export const MAX_QUESTION = 2000;
 export const NOT_SET_UP_WORDS = "The second brain is not set up on this cell.";
 export const NOTHING_TO_ASK_TITLE = "Nothing to ask yet";
 export const CONNECT_FIRST_WORDS = "Connect a repo first.";
+export const NOT_READY_WORDS = "No repo is ready yet.";
+export const ANSWER_READY_WORDS = "Answer ready.";
+export const NO_ANSWER_WORDS = "No answer came back. Try asking again.";
+export const NO_ACCESS_WORDS = "You do not have access to the brain. Ask an admin of this cell.";
+export const NOT_AVAILABLE_WORDS = "The second brain is not available on this cell.";
+const LIMIT_RESET_WORDS = "Try again after midnight UTC.";
 export const WAITING_WORDS = "Asking the brain...";
 export const WAITING_DEEP_WORDS = "Asking the brain to look deeper... This can take a minute.";
 export const TOO_LONG_WORDS = "That question is too long. Keep it to 2,000 characters or fewer.";
@@ -45,6 +51,12 @@ export const nameSeparator = (i: number, n: number): string => (i >= n - 1 ? "" 
 export const indexingTail = (n: number): string =>
   n === 1 ? " is still indexing, so its newest files may be missing from answers."
     : " are still indexing, so their newest files may be missing from answers.";
+
+/** The names of the repos that failed to index, in the cell's order. */
+export const failedNames = (rows: AskRepoRow[]): string[] => reposOnBrain(rows).filter((r) => r.state === "failed").map((r) => r.repo);
+
+/** The sentence after the names of failed repos. */
+export const failedTail = " failed to index.";
 
 /** The whole line, for a script: "a and b are still indexing, so their newest files may be missing from answers." */
 export const indexingLine = (names: string[]): string =>
@@ -95,6 +107,22 @@ export function sourceLabel(c: BrainCitation, i: number): string {
   return `[${l || i + 1}]`;
 }
 
+/** The answer text an API reply holds, trimmed, or "" when it is missing, blank or not text. */
+export const answerText = (answer: unknown): string => (typeof answer === "string" ? answer.trim() : "");
+
+/** A link an answer may become an anchor: http, https, mailto or a relative address. Anything else
+ *  (javascript:, data:, a protocol-relative //host) is "" and stays plain text. */
+export function safeHref(href: string | null | undefined): string {
+  const h = String(href ?? "").trim();
+  if (!h) return "";
+  // browsers ignore tabs, line breaks and other control characters inside a scheme ("java\nscript:")
+  const bare = h.replace(/[\u0000-\u0020\u007f]/g, "");
+  if (bare.startsWith("//")) return "";
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(bare);
+  if (!scheme) return h;
+  return ["http", "https", "mailto"].includes(scheme[1].toLowerCase()) ? h : "";
+}
+
 /** The sentence an error from the cell becomes: a capital, a full stop. */
 export function plainError(message: string | undefined, fallback: string): string {
   const t = (message ?? "").trim();
@@ -103,16 +131,20 @@ export function plainError(message: string | undefined, fallback: string): strin
 }
 
 /** The words for a failed ask. `status` is the cell's HTTP status, or undefined when it never answered.
- *  A daily cap is said by which cap it was and when to come back; the cell's other words are kept. */
+ *  A daily cap is said by which cap it was and when to come back; the cell's other words are kept.
+ *  404 "Not Found" is the cell with no brain; a 404 with words is the brain's own (a repo it does not hold).
+ *  402 and 403 will not pass by waiting, so they carry no "try again". */
 export function askErrorWords(e: { message?: string; status?: number } | null | undefined, deep: boolean): string {
   const status = e?.status;
   if (status === undefined) return NETWORK_WORDS;
   const said = (e?.message ?? "").trim();
-  if (status === 404) return NOT_SET_UP_WORDS;
+  if (status === 402) return NOT_AVAILABLE_WORDS;
+  if (status === 403) return NO_ACCESS_WORDS;
+  if (status === 404) return !said || /^not found\.?$/i.test(said) ? NOT_SET_UP_WORDS : `${plainError(said, "")} Try again in a moment.`;
   if (status === 429) {
     const cap = /has used its ([\d,]+) (deep answers|answers) for today/i.exec(said);
-    if (cap) return `This cell has used its ${cap[1]} ${cap[2].toLowerCase()} for today. Try again tomorrow.`;
-    if (/for today/i.test(said)) return deep ? "This cell has used its deep answers for today. Try again tomorrow." : "This cell has used its answers for today. Try again tomorrow.";
+    if (cap) return `This cell has used its ${cap[1]} ${cap[2].toLowerCase()} for today. ${LIMIT_RESET_WORDS}`;
+    if (/for today/i.test(said)) return deep ? `This cell has used its deep answers for today. ${LIMIT_RESET_WORDS}` : `This cell has used its answers for today. ${LIMIT_RESET_WORDS}`;
     return plainError(said, "The brain is busy. Try again in a moment.");
   }
   if (status === 502) return said ? `${plainError(said, "")} Try again in a moment.` : NOT_ANSWERED_WORDS;

@@ -47,8 +47,9 @@ export interface AskBrainData {
   repos: AskRepoRow[];
 }
 
-/** The read of the repos. A cell with no licence answers 404, as one that never had the route: that is
- *  "not set up", the same as `configured: false`. */
+/** The read of the repos. The shell makes it once (editions/brainRead.ts) and the page takes that read. A cell
+ *  with no licence answers 404, as one that never had the route: that is "not set up", the same as
+ *  `configured: false`. */
 export async function askBrainRepos(): Promise<AskBrainData> {
   try {
     return await request<AskBrainData>("/api/brain");
@@ -58,8 +59,8 @@ export async function askBrainRepos(): Promise<AskBrainData> {
   }
 }
 
-/** POST /api/brain/ask. Throws ApiError: 400 a question the cell refused (over 2,000 characters), 404 no
- *  brain, 429 the day's cap (the cell says which, in words) or the brain's own limit, 502 the brain did not
+/** POST /api/brain/ask. Throws ApiError: 400 a question the cell refused (over 2,000 characters), 402 or 403 no
+ *  right to the brain, 404 no brain ("Not Found") or a repo the brain does not hold (with words), 429 the day's cap (the cell says which, in words) or the brain's own limit, 502 the brain did not
  *  answer. A deep ask can take up to two minutes. */
 export const askBrain = (question: string, deep: boolean) =>
   request<BrainAnswer | BrainNotReady>("/api/brain/ask", { method: "POST", body: JSON.stringify({ question, deep }) });

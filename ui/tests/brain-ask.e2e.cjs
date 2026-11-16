@@ -2,16 +2,23 @@
  * Browser e2e for the Second Brain Ask page (TR-1206) on a factory cell.
  *  - Unit checks of the page's pure rules (the words, the sources, the indexing line, the errors), run on the
  *    TypeScript as written.
- *  - The Ask menu row opens /brain/ask. The heading and the line under it count the repos on the brain.
+ *  - The Ask menu row opens /brain/ask. The heading and the line under it count the repos on the brain. The page
+ *    takes the shell's one read of GET /api/brain: every state counts exactly one call to it (expectOneCall).
  *  - A question sent with Enter posts {question, deep:false}; the answer is markdown (no raw HTML, links open in a
  *    new tab), the sources are numbered mono links to GitHub, "Answered in N seconds." says how long.
  *  - Look deeper asks the same question again with deep:true, shows a waiting state, replaces the answer, and is
  *    gone once the deep answer is there. A failed deep ask leaves the quick answer and the link.
  *  - The repos still indexing are named in one muted line.
- *  - Plain words for each failure: day's cap (quick and deep), the brain down, a network error, no brain (404), a
- *    question over 2,000 characters (said on the page, nothing sent).
- *  - No repo ready: "Nothing to ask yet." with a link to Repos. No brain: said plainly. A failed read has Retry.
- *  - A read key can ask. No sideways scroll at 390. The page's own words keep the words list.
+ *  - Plain words for each failure: day's cap (quick and deep), the brain down, a network error, no brain (404), no
+ *    right to ask (402, 403: no retry line), a blank answer, a question over 2,000 characters (said on the page,
+ *    nothing sent). The error words are the page's own and keep the words list.
+ *  - An answer's links: only http, https, mailto and relative ones are anchors; a javascript: link stays text.
+ *  - Screen readers: a status region says when the answer is waiting and ready; Look deeper keeps focus on the
+ *    answer's place.
+ *  - No repo ready: the cell's own words, or "No repo is ready yet." naming the failed repos, or "Connect a repo
+ *    first." when there are none; a Repos link and Check again. No brain: said plainly. A failed read has Retry.
+ *  - A read key can ask. No sideways scroll at 390, with a screenshot of each state there (loading, waiting, deep
+ *    waiting, deep answer, deep error, too long, read error). The page's own words keep the words list.
  * The brain's API is answered by the test (the cell here has no GitHub or lore to ask); the daemons are real
  * (tests/licensed.cjs) so the console, the keys and the shell are real.
  * Screenshots of each state at 1280 and 390 go to $SHOTS_DIR when it is set.
@@ -25,7 +32,7 @@ const vm = require("vm");
 const UI_DIR = path.resolve(__dirname, "..");
 const { chromium } = require(path.join(UI_DIR, "node_modules", "playwright"));
 const ts = require(path.join(UI_DIR, "node_modules", "typescript"));
-const { checkWords } = require("./words.cjs");
+const { checkWords, expectOneCall } = require("./words.cjs");
 const { startDaemon } = require("./licensed.cjs");
 
 const ROOT = "root-token-brain-ask-e2e";
@@ -89,13 +96,14 @@ const DEEP = { answer: "The deeper answer: the brain syncs on every push and eve
 // ---- the brain API, answered here
 function brainMock(rows, extra = {}) {
   const m = {
-    rows, configured: true, readStatus: 200, reads: 0, asks: [], gate: null, answer: null, abort: false, ...extra,
+    rows, configured: true, readStatus: 200, readGate: null, reads: 0, asks: [], gate: null, answer: null, abort: false, ...extra,
   };
   m.handle = async (route) => {
     const req = route.request();
     const p = new URL(req.url()).pathname;
     if (req.method() === "GET" && p === "/api/brain") {
       m.reads++;
+      if (m.readGate) await m.readGate.p;
       if (m.readStatus !== 200) return route.fulfill({ status: m.readStatus, json: { detail: "nope" } });
       return route.fulfill({ status: 200, json: { configured: m.configured, repos: m.rows } });
     }
@@ -154,13 +162,21 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
     eq("plainError: keeps a full stop, falls back", [T.plainError("Done.", "x"), T.plainError("  ", "Fallback."), T.plainError(undefined, "Fallback.")], ["Done.", "Fallback.", "Fallback."]);
     const quickCap = "This cell has used its 200 answers for today. Search instead, or try again after midnight UTC.";
     const deepCap = "This cell has used its 20 deep answers for today. Ask without looking deeper, or try again after midnight UTC.";
-    eq("askErrorWords: quick cap names the cap", T.askErrorWords({ status: 429, message: quickCap }, false), "This cell has used its 200 answers for today. Try again tomorrow.");
-    eq("askErrorWords: deep cap names the cap", T.askErrorWords({ status: 429, message: deepCap }, true), "This cell has used its 20 deep answers for today. Try again tomorrow.");
-    eq("askErrorWords: a cap with other words still says which", [T.askErrorWords({ status: 429, message: "daily limit for today reached" }, false), T.askErrorWords({ status: 429, message: "daily limit for today reached" }, true)], ["This cell has used its answers for today. Try again tomorrow.", "This cell has used its deep answers for today. Try again tomorrow."]);
+    eq("askErrorWords: quick cap names the cap", T.askErrorWords({ status: 429, message: quickCap }, false), "This cell has used its 200 answers for today. Try again after midnight UTC.");
+    eq("askErrorWords: deep cap names the cap", T.askErrorWords({ status: 429, message: deepCap }, true), "This cell has used its 20 deep answers for today. Try again after midnight UTC.");
+    eq("askErrorWords: a cap with other words still says which", [T.askErrorWords({ status: 429, message: "daily limit for today reached" }, false), T.askErrorWords({ status: 429, message: "daily limit for today reached" }, true)], ["This cell has used its answers for today. Try again after midnight UTC.", "This cell has used its deep answers for today. Try again after midnight UTC."]);
     eq("askErrorWords: the brain's own 429", T.askErrorWords({ status: 429, message: "slow down" }, false), "Slow down.");
     eq("askErrorWords: 502 keeps the cell's words and says to retry", T.askErrorWords({ status: 502, message: "Could not reach the brain." }, false), "Could not reach the brain. Try again in a moment.");
     eq("askErrorWords: 502 without words", T.askErrorWords({ status: 502, message: "" }, false), T.NOT_ANSWERED_WORDS);
-    eq("askErrorWords: 404 is no brain", T.askErrorWords({ status: 404, message: "Not Found" }, false), T.NOT_SET_UP_WORDS);
+    eq("askErrorWords: 404 Not Found is no brain", [T.askErrorWords({ status: 404, message: "Not Found" }, false), T.askErrorWords({ status: 404, message: "" }, false)], [T.NOT_SET_UP_WORDS, T.NOT_SET_UP_WORDS]);
+    eq("askErrorWords: a 404 with words is the brain's own, not 'not set up'", T.askErrorWords({ status: 404, message: "a/b is not connected to the brain" }, false), "A/b is not connected to the brain. Try again in a moment.");
+    eq("askErrorWords: 402 and 403 have their own words", [T.askErrorWords({ status: 402, message: "x" }, false), T.askErrorWords({ status: 403, message: "x" }, false)], [T.NOT_AVAILABLE_WORDS, T.NO_ACCESS_WORDS]);
+    ck("askErrorWords: 402 and 403 have no retry line", ![402, 403].some((status) => /try again/i.test(T.askErrorWords({ status, message: "x" }, true))));
+    ck("askErrorWords: a daily cap says after midnight UTC, not tomorrow", !/tomorrow/i.test(T.askErrorWords({ status: 429, message: quickCap }, false)) && /after midnight UTC/.test(T.askErrorWords({ status: 429, message: quickCap }, false)));
+    eq("answerText: blank or not text is empty", [T.answerText("  a "), T.answerText("   "), T.answerText(null), T.answerText(undefined), T.answerText(5), T.answerText({})], ["a", "", "", "", "", ""]);
+    eq("safeHref: http, https, mailto and relative stay", [T.safeHref("https://a.co/x"), T.safeHref("HTTP://a.co"), T.safeHref("mailto:a@b.co"), T.safeHref("/brain"), T.safeHref("./x"), T.safeHref("#top"), T.safeHref("docs/x.md")], ["https://a.co/x", "HTTP://a.co", "mailto:a@b.co", "/brain", "./x", "#top", "docs/x.md"]);
+    eq("safeHref: javascript, data, vbscript, a hidden scheme and a protocol-relative address are dropped", [T.safeHref("javascript:alert(1)"), T.safeHref(" JaVaScRiPt:alert(1)"), T.safeHref("java\nscript:alert(1)"), T.safeHref("data:text/html,x"), T.safeHref("vbscript:x"), T.safeHref("//evil.example/x"), T.safeHref(""), T.safeHref(null)], ["", "", "", "", "", "", "", ""]);
+    eq("failedNames: failed, not removing", T.failedNames([row("a/f", "failed"), row("b/g", "failed", { removing: true }), row("c/r", "ready")]), ["a/f"]);
     eq("askErrorWords: 400 keeps the cell's words", T.askErrorWords({ status: 400, message: "question: at most 2,000 characters" }, false), "Question: at most 2,000 characters.");
     eq("askErrorWords: no status is the network", T.askErrorWords({ message: "Failed to fetch" }, false), T.NETWORK_WORDS);
     eq("askErrorWords: an unknown status", T.askErrorWords({ status: 500, message: "boom" }, false), T.NOT_ANSWERED_WORDS);
@@ -182,15 +198,19 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
   const browser = await chromium.launch(process.env.TARES_E2E_CHROME ? { executablePath: process.env.TARES_E2E_CHROME } : {});
   const errors = [];
   const open = async (opts = {}) => {
-    const { token = admin.json.secret, width = 1280, mock, url = "/brain/ask", wait = "brain-ask-question" } = opts;
+    // `one`: the screen's one read of GET /api/brain (the shell's, which the page takes) is counted once the
+    // page has settled; `label` names the state in the check. A caller that holds the read back checks later.
+    const { token = admin.json.secret, width = 1280, mock, url = "/brain/ask", wait = "brain-ask-question", one: countOne = true, label = "the page's read" } = opts;
     const ctx = await browser.newContext({ viewport: { width, height: 900 } });
     await ctx.addInitScript((t) => { try { if (t) localStorage.setItem("tares_token", t); } catch { /* none */ } }, token);
     const page = await ctx.newPage();
     page.on("pageerror", (e) => errors.push(String(e)));
     if (mock) await page.route(isBrainApi, mock.handle);
+    const one = expectOneCall(page, "/api/brain");
     await page.goto(d.base + url);
     if (wait) await page.getByTestId(wait).waitFor({ timeout: 15000 });
-    return { ctx, page };
+    if (wait && countOne) await one(ck, `${label} at ${width}`);
+    return { ctx, page, one };
   };
   const text = async (loc) => (await loc.innerText()).replace(/\s+/g, " ").trim();
   const shot = async (page, name) => { if (SHOTS) await page.screenshot({ path: path.join(SHOTS, name), fullPage: true }); };
@@ -208,8 +228,11 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
     {
       const mock = brainMock(THREE());
       const { ctx, page } = await open({ mock, url: "/projects", wait: null });
+      await page.getByTestId("menu-brain-ask").waitFor({ timeout: 15000 });
       await page.getByTestId("menu-brain-ask").click();
       await page.getByTestId("brain-ask-question").waitFor({ timeout: 15000 });
+      await page.waitForLoadState("networkidle");
+      eq("the shell's read is the page's read: one GET /api/brain from the menu to the page", mock.reads, 1);
       ck("the Ask menu row opens /brain/ask", new URL(page.url()).pathname === "/brain/ask", page.url());
       eq("the heading", await text(page.locator("h1")), "Ask");
       eq("the line under it counts the repos on the brain", await text(page.getByTestId("brain-ask-subtitle")), "Ask about the code and decisions in 3 repos. The crew asks the same brain.");
@@ -251,6 +274,7 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       ck("a source is in a monospace face", (await links.nth(0).evaluate((e) => getComputedStyle(e).fontFamily)).toLowerCase().includes("mono"));
       eq("how long it took", await text(page.getByTestId("brain-ask-took")), "Answered in 6 seconds.");
       eq("Look deeper is offered, as one link-button", [await page.getByTestId("brain-ask-deeper").innerText(), await page.getByRole("button", { name: "Look deeper" }).count()], ["Look deeper", 1]);
+      eq("a screen reader hears that the answer is ready", [await page.getByTestId("brain-ask-live").getAttribute("role"), await text(page.getByTestId("brain-ask-live"))], ["status", "Answer ready. Answered in 6 seconds."]);
       ck("the agent's own notes are not shown", !(await page.getByTestId("brain-ask").innerText()).includes("agent-only note"));
       ck("the repo still indexing is named under the answer", (await text(page.getByTestId("brain-ask-indexing"))).startsWith("glassflow/new-repo is still indexing"));
       await checkWords(page, ck, "quick answer 1280");
@@ -269,11 +293,13 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await page.getByTestId("brain-ask-question").fill("something else typed since");
       await page.getByTestId("brain-ask-deeper").click();
       await page.getByTestId("brain-ask-waiting").waitFor({ timeout: 15000 });
+      const focused = () => page.evaluate(() => document.activeElement?.getAttribute("data-testid") || document.activeElement?.tagName);
+      eq("focus stays on the answer's place when Look deeper goes away, not on the page", await focused(), "brain-ask-region");
       eq("the deep POST asks the question the answer belongs to, with deep true", mock.asks[1], { question: "How does the brain sync?", deep: true });
       ck("while it runs the quick answer is gone", (await page.getByTestId("brain-ask-answer").count()) === 0 && !(await page.getByTestId("brain-ask").innerText()).includes("syncs each repo"));
       const wait = await text(page.getByTestId("brain-ask-waiting-words"));
       ck("the deep wait says it can take a minute", /can take a minute/i.test(wait), wait);
-      ck("the wait is announced", (await page.getByTestId("brain-ask-waiting").locator("[role=status]").count()) === 1);
+      eq("the wait is announced once, by the page's status region", [await page.getByTestId("brain-ask-waiting").locator("[role=status]").count(), await text(page.getByTestId("brain-ask-live"))], [0, "Asking the brain to look deeper... This can take a minute."]);
       ck("Ask is off while it runs", await page.getByTestId("brain-ask-submit").isDisabled());
       await checkWords(page, ck, "deep waiting 1280");
       await shot(page, "brain-ask-deep-waiting-1280.png");
@@ -281,6 +307,7 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await page.getByTestId("brain-ask-answer").waitFor({ timeout: 15000 });
       eq("the deep answer replaces it", [await text(page.getByTestId("brain-ask-text")), await page.getByTestId("brain-ask-answer").getAttribute("data-deep")], [DEEP.answer, "true"]);
       eq("its time: 65 seconds is a minute and 5 seconds", await text(page.getByTestId("brain-ask-took")), "Answered in 1 minute, 5 seconds.");
+      eq("the deep answer is announced and focus is still on its place", [await text(page.getByTestId("brain-ask-live")), await focused()], ["Answer ready. Answered in 1 minute, 5 seconds.", "brain-ask-region"]);
       eq("Look deeper is gone once the deep answer is there", await page.getByTestId("brain-ask-deeper").count(), 0);
       eq("the sources are the deep answer's", await page.getByTestId("brain-ask-source").count(), 1);
       eq("the box keeps what was typed", await page.getByTestId("brain-ask-question").inputValue(), "something else typed since");
@@ -305,6 +332,7 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await page.getByTestId("brain-ask-error").waitFor({ timeout: 15000 });
       eq("the error says what happened and to try again", await text(page.getByTestId("brain-ask-error")), "The brain did not answer within 120 seconds. Try again in a moment.");
       ck("the quick answer is still there, with Look deeper", (await page.getByTestId("brain-ask-text").count()) === 1 && (await page.getByTestId("brain-ask-deeper").count()) === 1);
+      eq("focus did not fall to the page body", await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "brain-ask-region");
       await checkWords(page, ck, "deep failed 1280");
       await shot(page, "brain-ask-deep-error-1280.png");
       await ctx.close();
@@ -325,7 +353,8 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       eq("nothing indexing, no line", await lines([READY("a/ready"), row("a/f", "failed")]), "");
       eq("a repo being removed is not named", await lines([READY("a/ready"), row("a/x", "indexing", { removing: true })]), "");
       const o = await open({ mock: brainMock(THREE()) });
-      ck("the line is muted", await o.page.getByTestId("brain-ask-indexing").evaluate((e) => getComputedStyle(e).color !== getComputedStyle(document.body).color || e.className.includes("muted")));
+      const tone = await o.page.getByTestId("brain-ask-indexing").evaluate((e) => ({ line: getComputedStyle(e).color, heading: getComputedStyle(document.querySelector("h1")).color, size: parseFloat(getComputedStyle(e).fontSize) }));
+      ck("the line is muted: a softer colour than the heading, and small", tone.line !== tone.heading && tone.size <= 13.5, JSON.stringify(tone));
       await o.ctx.close();
     }
 
@@ -342,10 +371,15 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
         await ctx.close();
         return page;
       };
-      await failure("the day's quick cap", async () => ({ status: 429, json: { detail: "This cell has used its 200 answers for today. Search instead, or try again after midnight UTC." } }), "This cell has used its 200 answers for today. Try again tomorrow.");
+      await failure("the day's quick cap", async () => ({ status: 429, json: { detail: "This cell has used its 200 answers for today. Search instead, or try again after midnight UTC." } }), "This cell has used its 200 answers for today. Try again after midnight UTC.");
       await failure("the brain is down (502)", async () => ({ status: 502, json: { detail: "Could not reach the brain." } }), "Could not reach the brain. Try again in a moment.");
       await failure("a network error", null, "Could not reach the cell. Check your connection and try again.", { abort: true });
       await failure("no brain on the cell (404 on ask)", async () => ({ status: 404, json: { detail: "Not Found" } }), "The second brain is not set up on this cell.");
+      await failure("a 404 with the brain's own words is not 'not set up'", async () => ({ status: 404, json: { detail: "glassflow/x is not connected to the brain" } }), "Glassflow/x is not connected to the brain. Try again in a moment.");
+      await failure("no right to the brain (402)", async () => ({ status: 402, json: { detail: "payment required" } }), "The second brain is not available on this cell.");
+      await failure("a key that may not ask (403)", async () => ({ status: 403, json: { detail: "forbidden" } }), "You do not have access to the brain. Ask an admin of this cell.");
+      await failure("a blank answer", async () => ({ status: 200, json: { answer: "   \n ", citations: [], repos: ["glassflow/tares"] } }), "No answer came back. Try asking again.");
+      await failure("an answer that is not text", async () => ({ status: 200, json: { answer: null, citations: null, repos: null } }), "No answer came back. Try asking again.");
       await failure("the cell refuses a long question (400)", async () => ({ status: 400, json: { detail: "question: at most 2,000 characters" } }), "Question: at most 2,000 characters.");
       // the deep cap shows on a deep ask, with the quick answer kept
       const mock = brainMock(THREE(), { answer: async (b) => (b.deep ? { status: 429, json: { detail: "This cell has used its 20 deep answers for today. Ask without looking deeper, or try again after midnight UTC." } } : { status: 200, json: QUICK }) });
@@ -354,7 +388,7 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await page.getByTestId("brain-ask-deeper").waitFor({ timeout: 15000 });
       await page.getByTestId("brain-ask-deeper").click();
       await page.getByTestId("brain-ask-error").waitFor({ timeout: 15000 });
-      eq("the day's deep cap", await text(page.getByTestId("brain-ask-error")), "This cell has used its 20 deep answers for today. Try again tomorrow.");
+      eq("the day's deep cap", await text(page.getByTestId("brain-ask-error")), "This cell has used its 20 deep answers for today. Try again after midnight UTC.");
       ck("the quick answer stays", (await page.getByTestId("brain-ask-text").count()) === 1);
       await page.getByTestId("brain-ask-deeper").waitFor();
       await ctx.close();
@@ -410,6 +444,30 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await ctx.close();
     }
 
+    // ---- links in an answer: only http, https, mailto and relative ones are anchors
+    {
+      const links = { answer: "Click [x](javascript:alert(1)) or [y](JaVaScRiPt:alert(2)) or [z](data:text/html,hi) then [web](https://example.com/a), [here](/brain) and [mail](mailto:a@b.co).", citations: [], repos: ["glassflow/tares"], duration_ms: 1000 };
+      const mock = brainMock(THREE(), { answer: async () => ({ status: 200, json: links }) });
+      const { ctx, page } = await open({ mock });
+      await ask(page, "Links?");
+      await page.getByTestId("brain-ask-answer").waitFor({ timeout: 15000 });
+      const ans = page.getByTestId("brain-ask-text");
+      eq("only the safe links are anchors", await ans.locator("a").evaluateAll((as) => as.map((a) => a.getAttribute("href"))), ["https://example.com/a", "/brain", "mailto:a@b.co"]);
+      eq("no anchor holds a javascript or data address, or an empty one", await ans.locator("a[href^='javascript' i], a[href^='data' i], a[href='']").count(), 0);
+      eq("an unsafe link stays as its text", await text(ans), "Click x or y or z then web, here and mail.");
+      await ctx.close();
+      // a deep answer that comes back blank keeps the quick answer and says so
+      const m2 = brainMock(THREE(), { answer: async (b) => (b.deep ? { status: 200, json: { answer: " ", citations: [] } } : { status: 200, json: QUICK }) });
+      const o = await open({ mock: m2 });
+      await ask(o.page, "Q");
+      await o.page.getByTestId("brain-ask-deeper").waitFor({ timeout: 15000 });
+      await o.page.getByTestId("brain-ask-deeper").click();
+      await o.page.getByTestId("brain-ask-error").waitFor({ timeout: 15000 });
+      eq("a blank deep answer says so", await text(o.page.getByTestId("brain-ask-error")), "No answer came back. Try asking again.");
+      ck("and the quick answer stays, with Look deeper", (await o.page.getByTestId("brain-ask-text").count()) === 1 && (await o.page.getByTestId("brain-ask-deeper").count()) === 1);
+      await o.ctx.close();
+    }
+
     // ---- sources without an address
     {
       const answer = { answer: "Plain.", repos: ["x/one"], duration_ms: 2000, citations: [{ label: 1, path: "src/a b.py", start_line: 5, end_line: 5, url: null }, { label: 2, path: null, title: "A note", start_line: null, end_line: null, url: null }] };
@@ -436,7 +494,7 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       const rows = [row("glassflow/tares", "indexing"), row("a/b", "failed")];
       const mock = brainMock(rows);
       const { ctx, page } = await open({ mock, wait: "brain-ask-empty" });
-      eq("the empty words", await text(page.getByTestId("brain-ask-empty")), "Nothing to ask yet Connect a repo first. Repos");
+      eq("the empty words say no repo is ready and name the failed one", await text(page.getByTestId("brain-ask-empty")), "Nothing to ask yet No repo is ready yet. a/b failed to index. Repos Check again");
       eq("no question box", await page.getByTestId("brain-ask-question").count(), 0);
       eq("the indexing repo is still named", await text(page.getByTestId("brain-ask-indexing")), "glassflow/tares is still indexing, so its newest files may be missing from answers.");
       eq("the link goes to Repos", await page.getByTestId("brain-ask-repos").getAttribute("href"), "/brain");
@@ -447,16 +505,28 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       await page.waitForURL(/\/brain$/, { timeout: 15000 });
       ck("the link opens /brain", new URL(page.url()).pathname === "/brain");
       await ctx.close();
+      const waiting = await open({ mock: brainMock([row("glassflow/tares", "indexing")]), wait: "brain-ask-empty", label: "only indexing" });
+      eq("only indexing: no repo is ready yet, no failed names", await text(waiting.page.getByTestId("brain-ask-empty")), "Nothing to ask yet No repo is ready yet. Repos Check again");
+      await waiting.ctx.close();
       const nothing = await open({ mock: brainMock([]), wait: "brain-ask-empty" });
+      eq("no repos at all: connect one first", await text(nothing.page.getByTestId("brain-ask-empty")), "Nothing to ask yet Connect a repo first. Repos Check again");
       eq("no repos at all: the same empty state", await text(nothing.page.getByTestId("brain-ask-subtitle")), "Ask about the code and decisions in the repos on the brain. The crew asks the same brain.");
       eq("and no indexing line", await nothing.page.getByTestId("brain-ask-indexing").count(), 0);
       await nothing.ctx.close();
       // the cell says no repo is ready when the page thought one was
-      const stale = brainMock([READY("a/b")], { answer: async () => ({ status: 200, json: { ready: false, message: "No repo is ready.", notes: [] } }) });
+      const stale = brainMock([READY("a/b")], { answer: async () => ({ status: 200, json: { ready: false, message: "No repo is ready on the brain yet. a/b is still being indexed.", notes: [] } }) });
       const s = await open({ mock: stale });
       await ask(s.page, "Q");
       await s.page.getByTestId("brain-ask-empty").waitFor({ timeout: 15000 });
       ck("a not-ready answer turns the page into the empty state", (await s.page.getByTestId("brain-ask-question").count()) === 0);
+      eq("it shows the cell's own words, not 'Connect a repo first'", await text(s.page.getByTestId("brain-ask-empty")), "Nothing to ask yet No repo is ready on the brain yet. a/b is still being indexed. Repos Check again");
+      await checkWords(s.page, ck, "not ready 1280");
+      stale.answer = null;
+      await s.page.getByTestId("brain-ask-recheck").click();
+      await s.page.getByTestId("brain-ask-question").waitFor({ timeout: 15000 });
+      eq("Check again reads the repos again and gives the box back", stale.reads, 2);
+      await ask(s.page, "Q again");
+      await s.page.getByTestId("brain-ask-answer").waitFor({ timeout: 15000 });
       await s.ctx.close();
     }
 
@@ -483,21 +553,17 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
       ck("Retry loads the page", (await f.page.getByTestId("brain-ask-read-error").count()) === 0);
       await f.ctx.close();
 
-      const slow = brainMock(THREE());
       const gate = deferred();
-      const lo = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-      await lo.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, admin.json.secret);
-      const lp = await lo.newPage();
-      await lp.route(isBrainApi, async (route) => { if (new URL(route.request().url()).pathname === "/api/brain" && slow.reads >= 1) await gate.p; return slow.handle(route); });
-      await lp.goto(d.base + "/brain/ask");
-      await lp.getByTestId("brain-ask-loading").waitFor({ timeout: 15000 });
+      const lo = await open({ mock: brainMock(THREE(), { readGate: gate }), wait: "brain-ask-loading", one: false });
+      const lp = lo.page;
       ck("loading: a skeleton shows, announced", (await lp.getByTestId("brain-ask-loading").getAttribute("aria-busy")) === "true");
       eq("loading: no question box yet", await lp.getByTestId("brain-ask-question").count(), 0);
       await checkWords(lp, ck, "loading 1280");
       await shot(lp, "brain-ask-loading-1280.png");
       gate.go();
       await lp.getByTestId("brain-ask-question").waitFor({ timeout: 15000 });
-      await lo.close();
+      await lo.one(ck, "loading, then loaded: the page's read at 1280");
+      await lo.ctx.close();
     }
 
     // ---- a read key can ask
@@ -536,6 +602,32 @@ const deferred = () => { let go; const p = new Promise((r) => { go = r; }); retu
         { const o = await open({ mock: brainMock([], { configured: false }), width: w, wait: "brain-ask-not-set-up" }); await done(o.page, "not-set-up"); await o.ctx.close(); }
         { const o = await open({ mock: brainMock(THREE(), { answer: async () => ({ status: 429, json: { detail: "This cell has used its 200 answers for today. Search instead, or try again after midnight UTC." } }) }), width: w });
           await ask(o.page, "Q"); await o.page.getByTestId("brain-ask-error").waitFor({ timeout: 15000 }); await done(o.page, "error"); await o.ctx.close(); }
+        // the states of the definition of done, at 1280 and at 390: loading, quick waiting, deep waiting, deep answer, deep error, too long, read error
+        const Q = "A question that is long enough to wrap on a phone, with a lot of words in it, to see how the box behaves";
+        { const g = deferred();
+          const o = await open({ mock: brainMock(THREE(), { readGate: g }), width: w, wait: "brain-ask-loading", one: false });
+          await done(o.page, "loading");
+          g.go(); await o.page.getByTestId("brain-ask-question").waitFor({ timeout: 15000 });
+          await o.one(ck, `loading, then loaded: the page's read at ${w}`); await o.ctx.close(); }
+        { const g = deferred();
+          const o = await open({ mock: brainMock(THREE(), { gate: async () => { await g.p; } }), width: w });
+          await ask(o.page, Q); await o.page.getByTestId("brain-ask-waiting").waitFor({ timeout: 15000 }); await done(o.page, "waiting");
+          g.go(); await o.page.getByTestId("brain-ask-answer").waitFor({ timeout: 15000 }); await o.ctx.close(); }
+        { const g = deferred();
+          const o = await open({ mock: brainMock(THREE(), { gate: async (b) => { if (b.deep) await g.p; } }), width: w });
+          await ask(o.page, Q); await o.page.getByTestId("brain-ask-deeper").waitFor({ timeout: 15000 });
+          await o.page.getByTestId("brain-ask-deeper").click(); await o.page.getByTestId("brain-ask-waiting").waitFor({ timeout: 15000 });
+          await done(o.page, "deep-waiting");
+          g.go(); await o.page.waitForFunction(() => document.querySelector("[data-testid=brain-ask-answer]")?.getAttribute("data-deep") === "true", null, { timeout: 15000 });
+          await done(o.page, "deep-answer"); await o.ctx.close(); }
+        { const o = await open({ mock: brainMock(THREE(), { answer: async (b) => (b.deep ? { status: 502, json: { detail: "The brain did not answer within 120 seconds." } } : { status: 200, json: QUICK }) }), width: w });
+          await ask(o.page, Q); await o.page.getByTestId("brain-ask-deeper").waitFor({ timeout: 15000 });
+          await o.page.getByTestId("brain-ask-deeper").click(); await o.page.getByTestId("brain-ask-error").waitFor({ timeout: 15000 });
+          await done(o.page, "deep-error"); await o.ctx.close(); }
+        { const o = await open({ mock: brainMock(THREE()), width: w });
+          await o.page.getByTestId("brain-ask-question").fill("word ".repeat(450)); await o.page.getByTestId("brain-ask-too-long").waitFor({ timeout: 15000 });
+          await done(o.page, "too-long"); await o.ctx.close(); }
+        { const o = await open({ mock: brainMock(THREE(), { readStatus: 500 }), width: w, wait: "brain-ask-read-error" }); await done(o.page, "read-error"); await o.ctx.close(); }
       }
       const { ctx, page } = await open({ mock: brainMock(THREE()), width: 390 });
       const b = await page.getByTestId("brain-ask-question").boundingBox();
