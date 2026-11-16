@@ -1041,6 +1041,124 @@ def fake_ps_hook():
         shutil.rmtree(d, ignore_errors=True)
 
 
+# What a station's process looks like on a real Windows machine: the binary is ~/.local/bin/claude.exe, and the only
+# /versions/<v> in its command line is the plugin's own install folder, which holds the Tares version.
+WIN_EXE = r"C:\Users\u\.local\bin\claude.exe"
+PLUGIN_DIR = r"C:\Users\u\.tares\engine\versions\1.57.0-g0cabb0a-py3.13-uv0.13.7\tools\tares\Lib\site-packages\tares\claude-plugin"
+STATION_ARGS = ["--session-id", "ffd4e761-0989-49e6-84f4-6406f1cef415", "--fork-session", "--resume", "da937463-9610",
+                "-n", "crew-reviewer", "--model", "opus", "--settings", "C:/Users/u/factory/stations/crew-reviewer.settings.json",
+                "--append-system-prompt", "You are a tares-factory station, see /docs/versions/7.7.7 for more.",
+                "--plugin-dir", PLUGIN_DIR,
+                "Claude Code was updated to 2.1.325, so the factory restarted you on it (/notes/versions/8.8.8)."]
+
+
+@test
+def version_named_reads_only_a_path_on_its_own():
+    host = [WIN_EXE, "--bg-pty-host", r"\\.\pipe\cc-daemon-4cda-pty-ffd4e761", "200", "50", "--", WIN_EXE, *STATION_ARGS]
+    ck("a station's own arguments name no Claude Code version: not the plugin folder's, not a path in a prompt",
+       cc.version_named([WIN_EXE, *STATION_ARGS]) == "" and cc.version_named(host) == "",
+       short((cc.version_named([WIN_EXE, *STATION_ARGS]), cc.version_named(host))))
+    ck("the binary a pty host runs, after `--`, names it",
+       cc.version_named(["claude", "bg-pty-host", "--bg-pty-host", "/tmp/x.pty.sock", "200", "50", "--",
+                         "/home/u/.local/share/claude/versions/2.1.311", "--bg-spare", "/tmp/x.claim.sock"]) == "2.1.311")
+    ck("...and so does the program itself, whatever folders its options name",
+       cc.version_named(["/home/u/.local/share/claude/versions/2.1.312", *STATION_ARGS]) == "2.1.312")
+    ck("a Windows path with a space in it", cc.version_named([r"C:\Program Files\claude\versions\2.1.313\claude.exe", "--bg-spare"]) == "2.1.313")
+    ck("the value an option takes is the option's", cc.version_named(["claude", "--plugin-dir", "/a/versions/1.0.0/p"]) == "")
+    ck("...and an option written with = takes none, so the path after it is read",
+       cc.version_named(["claude", "--plugin-dir=/a/versions/1.0.0/p", "/b/versions/2.0.0/claude"]) == "2.0.0")
+    ck("a path after `--` is read, `--` is not an option with a value", cc.version_named(["claude", "--", "/b/versions/2.0.1"]) == "2.0.1")
+    ck("a relative path and a sentence are not read", cc.version_named(["claude", "a/versions/1.0.0", "see /b/versions/2.0.0"]) == "")
+    ck("no arguments: ''", cc.version_named([]) == "")
+    d = Path(tempfile.mkdtemp(prefix="fakeps "))
+    try:
+        (d / "ps").mkdir()
+        (d / "ps" / "6001.command").write_text(f"{WIN_EXE} --session-id ffd4e761 --plugin-dir {PLUGIN_DIR}\n", encoding="utf-8")
+        (d / "ps" / "6001.ppid").write_text("6000\n", encoding="utf-8")
+        (d / "ps" / "6000.command").write_text(f"{WIN_EXE} --bg-pty-host x 200 50 -- {WIN_EXE} --session-id ffd4e761 --plugin-dir {PLUGIN_DIR}\n", encoding="utf-8")
+        with env(TARES_FAKE_PS_DIR=str(d)):
+            ck("running_version does not take the plugin's install folder for Claude Code's version",
+               cc.running_version("0000000a", [{"id": "0000000a", "pid": 6001}]) == "",
+               short(cc.running_version("0000000a", [{"id": "0000000a", "pid": 6001}])))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+@test
+def windows_branch_running_version_asks_the_binary():
+    """Runs on any system: platform='win32' is passed in, and psutil's process and `claude --version` are stood in."""
+    d = Path(tempfile.mkdtemp(prefix="win exe "))
+    exe, node = d / "claude.exe", d / "node.exe"
+    for f in (exe, node):
+        f.write_bytes(b"MZ")
+    now = time.time()   # taken after the files are made: Windows keeps a file's creation time too, and it is read
+    for f in (exe, node):
+        os.utime(f, (now - 100, now - 100))
+    host = [str(exe), "--bg-pty-host", r"\\.\pipe\cc-pty", "200", "50", "--", str(exe), *STATION_ARGS]
+    table = {7001: {"cmdline": [str(exe), *STATION_ARGS], "ppid": 7000, "exe": str(exe), "started": now + 1},
+             7000: {"cmdline": host, "ppid": 1, "exe": str(exe), "started": now + 1}}
+
+    class Proc:
+        def __init__(self, pid):
+            if pid not in table:
+                raise cc.psutil.NoSuchProcess(pid)
+            self._row = table[pid]
+
+        def cmdline(self):
+            return self._row["cmdline"]
+
+        def ppid(self):
+            return self._row["ppid"]
+
+        def exe(self):
+            return self._row["exe"]
+
+        def create_time(self):
+            return self._row["started"]
+
+    asked = []
+
+    def says(binary=None):
+        asked.append(binary)
+        return "2.1.500"
+
+    def version(platform="win32"):
+        return cc.running_version("0000000a", [{"id": "0000000a", "pid": 7001}], platform=platform)
+
+    real_process, real_version = cc.psutil.Process, cc.claude_version
+    old = os.environ.pop("TARES_FAKE_PS_DIR", None)
+    cc.psutil.Process = Proc
+    cc.claude_version = says
+    cc._exe_versions.clear()
+    try:
+        ck("off Windows nothing names the version and no binary is asked: ''", version("linux") == "" and not asked, short(asked))
+        ck("on Windows the session's own claude.exe is asked", version() == "2.1.500" and asked == [str(exe)], short(asked))
+        ck("...once for a file", version() == "2.1.500" and len(asked) == 1, short(asked))
+        table[7001]["started"] = now - 200
+        ck("a process older than the file runs a build that was replaced: ''", version() == "")
+        table[7001]["started"] = now + 1
+        with env(TARES_FAKE_PS_DIR=str(d)):
+            ck("with the fake ps hook on no binary is asked: ''", version() == "")
+        table[7001]["exe"] = str(node)
+        ck("a process that is not claude.exe is not asked: ''", version() == "" and len(asked) == 1, short(asked))
+        table[7001]["exe"] = str(d / "gone" / "claude.exe")
+        ck("a claude.exe that is not there any more: ''", version() == "")
+        table[7001]["exe"] = str(exe)
+        table[7001]["cmdline"] = [r"C:\Users\u\.local\share\claude\versions\2.1.499", *STATION_ARGS]
+        ck("a path that names the version is taken, and the binary is not asked", version() == "2.1.499" and len(asked) == 1, short(asked))
+        table[7001]["cmdline"] = [str(exe), *STATION_ARGS]
+        cc._exe_versions.clear()
+        cc.claude_version = lambda binary=None: ""
+        ck("a claude.exe that does not say its version: ''", version() == "")
+    finally:
+        cc.psutil.Process = real_process
+        cc.claude_version = real_version
+        cc._exe_versions.clear()
+        if old is not None:
+            os.environ["TARES_FAKE_PS_DIR"] = old
+        shutil.rmtree(d, ignore_errors=True)
+
+
 # ============================================================ older_than and claude_version
 
 
