@@ -140,6 +140,90 @@ const until = async (fn, tries = 40) => {
     ck("GitHub is connected, as whom", (await text(page, "tool-github")).includes("Connected as example-org"), await text(page, "tool-github"));
     ck("a connected tool has a lit dot in the sidebar and an unconnected one does not", (await page.getByTestId("nav-dot").evaluateAll((d) => d.map((x) => x.getAttribute("data-on")))).join() === "true,false,false,true");
     ck("the GitHub page has one heading of that name and lists the accounts", (await page.getByRole("heading", { name: "GitHub", exact: true }).count()) === 1 && (await page.getByRole("heading", { name: "Accounts", exact: true }).count()) === 1);
+    // The GitHub item's accounts (TR-1392). Pictures first, of states set through the API, so the
+    // same steps picture the panel before and after. A token added with an API URL on a closed port
+    // fails its check at once instead of reaching GitHub.
+    {
+      const DEAD = "http://127.0.0.1:9/api/v3";
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "github");
+          await n.page.getByText("example-org").first().waitFor();
+          await shot(n.page, `github-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("as-found");
+      await api(TOKEN, "POST", "/api/integrations/github", { name: "enterprise", token: "ghp_e2e_1392", api_url: DEAD });
+      await shots("two-accounts");
+      await api(TOKEN, "DELETE", "/api/integrations/github/enterprise");
+      await go(page, "github");
+
+      const gh = page.getByTestId("github");
+      const row = (n) => gh.locator(`[data-testid="github-row"][data-name="${n}"]`);
+      await row("main").waitFor();
+      ck("the seeded token reads as whose it is and what it does",
+        (await row("main").getByTestId("github-who").innerText()) === "Personal token of example-org"
+        && /^Polls the repositories you add\. Nothing uses it yet\.$/.test((await row("main").getByTestId("github-events").innerText()).replace(/\s+/g, " ").trim()),
+        `${await row("main").innerText()}`);
+      ck("a self-hosted cell offers to create the App and to add a token",
+        (await gh.getByRole("button", { name: "Create GitHub App" }).count()) === 1 && (await gh.getByRole("button", { name: "Add a personal token" }).count()) === 1);
+      await checkWords(page, ck, "GitHub item");
+
+      await gh.getByRole("button", { name: "Add a personal token" }).click();
+      const form = gh.getByTestId("github-token-form");
+      ck("Add a personal token opens its form, with labelled fields, and hides the buttons",
+        (await form.getByLabel("Name").count()) === 1 && (await form.getByLabel("Token").count()) === 1 && (await form.getByLabel("API URL").count()) === 1
+        && (await gh.getByRole("button", { name: "Add a personal token" }).count()) === 0);
+      ck("Save waits for a name and a token", await form.getByRole("button", { name: "Save" }).isDisabled());
+      await form.getByLabel("Name").fill("not a name");
+      await form.getByLabel("Token").fill("ghp_e2e_1392");
+      await form.getByLabel("API URL").fill(DEAD);
+      await form.getByRole("button", { name: "Save" }).click();
+      ck("a name the daemon refuses is said under the field, as a sentence",
+        await until(async () => (await form.getByLabel("Name").getAttribute("aria-invalid")) === "true")
+        && (await form.getByText(/^Name must be alphanumeric/).count()) === 1);
+      await shot(page, "github-refused-1440.png");
+      await form.getByLabel("Name").fill("enterprise");
+      await form.getByLabel("Token").press("Enter");
+      ck("Enter saves: the form closes and the account is listed",
+        await until(async () => (await row("enterprise").count()) === 1 && (await gh.getByTestId("github-token-form").count()) === 0));
+      ck("the daemon has it", (await api(TOKEN, "GET", "/api/integrations/github")).body?.credentials?.some((c) => c.name === "enterprise" && c.api_url === DEAD));
+      ck("its API URL shows beside its name", (await row("enterprise").innerText()).includes(DEAD));
+
+      await row("enterprise").getByRole("button", { name: "Test" }).click();
+      const result = row("enterprise").getByTestId("github-test");
+      ck("Test says it failed, and why", await until(async () => (await result.count()) === 1 && /^Failed: could not reach GitHub/.test((await result.innerText()).trim())),
+        (await result.count()) ? await result.innerText() : "no result");
+
+      await row("enterprise").getByRole("button", { name: "Rotate" }).click();
+      const rot = row("enterprise").getByTestId("github-rotate");
+      ck("Rotate opens a labelled field for the new token", (await rot.getByLabel("New token").count()) === 1 && await rot.getByRole("button", { name: "Save new token" }).isDisabled());
+      await rot.getByLabel("New token").fill("ghp_e2e_1392_new");
+      await rot.getByLabel("New token").press("Enter");
+      ck("Enter saves the new token and closes the field", await until(async () => (await row("enterprise").getByTestId("github-rotate").count()) === 0));
+
+      await row("enterprise").getByRole("button", { name: "Delete" }).click();
+      const dlg = page.getByTestId("github-delete-dialog");
+      ck("Delete asks first, and says what uses it", (await dlg.getByRole("heading", { name: "Delete enterprise?" }).count()) === 1 && (await dlg.innerText()).includes("Nothing uses it."));
+      await dlg.getByRole("button", { name: "Delete" }).click();
+      ck("and then it is gone, here and in the daemon",
+        await until(async () => (await row("enterprise").count()) === 0)
+        && !(await api(TOKEN, "GET", "/api/integrations/github")).body?.credentials?.some((c) => c.name === "enterprise"));
+
+      await gh.getByRole("button", { name: "Create GitHub App" }).click();
+      const app = gh.getByTestId("github-app-form");
+      ck("Create GitHub App opens its form, named github-app by default", (await app.getByLabel("Name in Tares").inputValue()) === "github-app" && (await app.getByLabel("GitHub organization").count()) === 1);
+      await app.getByRole("button", { name: "Cancel" }).click();
+      ck("Cancel closes it", (await gh.getByTestId("github-app-form").count()) === 0 && (await gh.getByRole("button", { name: "Create GitHub App" }).count()) === 1);
+      const n = await newPage(390);
+      await go(n.page, "github");
+      await n.page.getByTestId("github-row").first().waitFor();
+      ck("the GitHub item fits at 390 px", (await overflow(n.page)) <= 0);
+      await n.ctx.close();
+    }
     await go(page, "linear");
     ck("Linear is not connected, and its own form is there", /^Not connected/.test(await text(page, "tool-linear")) && (await page.getByTestId("pane-linear").getByRole("button", { name: "Connect" }).count()) === 1, await text(page, "tool-linear"));
     await go(page, "slack");
@@ -439,7 +523,7 @@ const until = async (fn, tries = 40) => {
       const p = n.page;
       for (const tab of ["keys", "github", "providers", "observability"]) {
         await go(p, tab);
-        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : ".panel"}`).first().waitFor();
+        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : ".panel"}`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
       // Observability's select was the last native one in a pane (TR-1392 moved it to the kit);
