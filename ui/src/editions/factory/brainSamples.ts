@@ -16,6 +16,7 @@ const base: BrainRepoRow = {
 const row = (over: Partial<BrainRepoRow>): BrainRepoRow => ({ ...base, ...over });
 
 const queued = row({ repo: "glassflow/glassflow-docs", state: "queued", place: 1, added_at: before(9) });
+const queuedThird = row({ repo: "glassflow/tares-site-v2", state: "queued", place: 3, added_at: before(6) });
 const cloning = row({ repo: "glassflow/tares-site", state: "cloning", added_at: before(2) });
 const indexing = row({ repo: "glassflow/tares", state: "indexing", files_done: 812, files_total: 1816, added_at: before(14) });
 const ready = row({
@@ -40,7 +41,7 @@ const removeFailed = row({
 const data = (...repos: BrainRepoRow[]): BrainReposData => ({ configured: true, repos });
 
 export const BRAIN_SAMPLES: Record<string, BrainReposData> = {
-  queued: data(indexing, queued),
+  queued: data(indexing, queued, queuedThird),
   "queued-idle": data(row({ ...queued, repo: "glassflow/glassflow-docs" })),
   cloning: data(cloning),
   indexing: data(indexing),
@@ -49,7 +50,7 @@ export const BRAIN_SAMPLES: Record<string, BrainReposData> = {
   failed: data(failed),
   removing: data(removing),
   "remove-failed": data(removeFailed),
-  all: data(indexing, ready, queued, failed, syncing, removing, row({ ...removeFailed, repo: "glassflow/old-docs-site" }), cloning),
+  all: data(indexing, ready, queued, queuedThird, failed, syncing, removing, row({ ...removeFailed, repo: "glassflow/old-docs-site" }), cloning),
   empty: { configured: true, repos: [] },
   "not-set-up": { configured: false, repos: [] },
 };

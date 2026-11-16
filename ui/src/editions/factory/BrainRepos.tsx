@@ -9,7 +9,7 @@ import { usePagePolling } from "../usePagePolling";
 import { brainRepos, removeBrainRepo, retryBrainRepo, type BrainReposData, type BrainRepoRow } from "./BrainRepos.api";
 import { BRAIN_SAMPLES, isBrainSample, SAMPLE_NOW } from "./brainSamples";
 import {
-  addedParts, ago, cardKind, count, EMPTY_WORDS, NOT_SET_UP_WORDS, plainError, percent, pollMs, POLL_SLOW_MS, queuedWords,
+  actionError, addedParts, ago, cardKind, count, EMPTY_WORDS, NOT_SET_UP_WORDS, plainError, percent, pollMs, POLL_SLOW_MS, queuedWords,
   REMOVE_WORDS, REMOVING_WORDS, shortCommit, STATE_WORDS, type CardKind,
 } from "./brainText";
 
@@ -23,8 +23,10 @@ const NOT_DONE = "That did not go through. Try again in a moment.";
 const SAMPLE_NOTE = "This is a sample, so nothing was sent.";
 
 const TONE: Record<CardKind, Tone> = {
-  queued: "quiet", cloning: "working", indexing: "working", ready: "ready", failed: "bad", removing: "quiet", remove_failed: "bad",
+  queued: "quiet", cloning: "quiet", indexing: "quiet", ready: "ready", failed: "bad", removing: "quiet", remove_failed: "bad",
 };
+// Cloning and Indexing are drawn in the page's own ink, as in the approved mock; only Ready is green, a failure red.
+const INK = new Set<CardKind>(["cloning", "indexing"]);
 const MUTED = "m-0 text-[13px] text-muted-foreground";
 const SMALL_BUTTON = "h-8 px-3 text-[13px]";
 const MONO = "font-mono text-[12.5px]";
@@ -104,7 +106,7 @@ function Card({ r, all, now, admin, busy, onRetry, onRemove, onRetryRemoval }: {
              data-testid="brain-card" data-repo={r.repo} data-state={kind}>
       <div className="flex items-start justify-between gap-2">
         <h2 className="m-0! font-mono text-[14px]! font-medium! leading-snug!" data-user-text data-testid="brain-name">{r.repo}</h2>
-        <StatusLabel tone={TONE[kind]} className="shrink-0 font-sans text-[13px] font-semibold normal-case tracking-normal" data-testid="brain-state">
+        <StatusLabel tone={TONE[kind]} className={cn("shrink-0 font-sans text-[13px] font-semibold normal-case tracking-normal", INK.has(kind) && "text-foreground!")} data-testid="brain-state">
           {STATE_WORDS[kind]}
         </StatusLabel>
       </div>
@@ -124,12 +126,14 @@ function ConnectButton() {
   return <Button asChild><Link to="/brain/connect" data-testid="brain-connect">Connect a repo</Link></Button>;
 }
 
-export function BrainReposView({ data, admin, now, busyRepo = null, onRetry = () => {}, onRemove = () => {}, onRetryRemoval = () => {} }: {
+const NONE: ReadonlySet<string> = new Set();
+
+export function BrainReposView({ data, admin, now, busy = NONE, onRetry = () => {}, onRemove = () => {}, onRetryRemoval = () => {} }: {
   data: BrainReposData; admin: boolean;
   /** The clock the "9 minutes ago" words count from (ms); a sample passes a fixed one. */
   now: number;
-  /** The repo whose button was pressed and has not been answered yet. */
-  busyRepo?: string | null;
+  /** The repos whose button was pressed and has not been answered yet, each until its own call ends. */
+  busy?: ReadonlySet<string>;
   onRetry?: (repo: string) => void; onRemove?: (repo: string) => void; onRetryRemoval?: (repo: string) => void;
 }) {
   if (!data.configured) {
@@ -152,7 +156,7 @@ export function BrainReposView({ data, admin, now, busyRepo = null, onRetry = ()
     <BrainHead action={admin ? <ConnectButton /> : undefined}>
       <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(300px,100%),1fr))]" data-testid="brain-cards">
         {data.repos.map((r) => (
-          <Card key={r.repo} r={r} all={data.repos} now={now} admin={admin} busy={busyRepo === r.repo}
+          <Card key={r.repo} r={r} all={data.repos} now={now} admin={admin} busy={busy.has(r.repo)}
                 onRetry={onRetry} onRemove={onRemove} onRetryRemoval={onRetryRemoval} />
         ))}
       </div>
@@ -202,29 +206,38 @@ export default function BrainRepos() {
   // The read picks its own pace from what it last saw. A change of pace reads once straight away.
   React.useEffect(() => { if (data) setMs(pollMs(data)); }, [data]);
 
-  const [busyRepo, setBusyRepo] = React.useState<string | null>(null);
   const [asking, setAsking] = React.useState<string | null>(null);
   const [askError, setAskError] = React.useState("");
+  // Each repo is busy until its own call ends: a press on another card does not free the first one.
+  const [busy, setBusy] = React.useState<ReadonlySet<string>>(NONE);
+  const mark = (repo: string, on: boolean) => setBusy((s) => { const n = new Set(s); if (on) n.add(repo); else n.delete(repo); return n; });
+  const asked = asking !== null && busy.has(asking);
   const canAct = admin === true;
 
+  // A 404 means the repo is already gone: say so in a plain sentence and read again.
+  const failed = (e: unknown) => {
+    const words = actionError(e as { message?: string; status?: number }, NOT_DONE);
+    if ((e as { status?: number }).status === 404) reload();
+    return words;
+  };
   const retry = async (repo: string) => {
     if (sample) { toast(SAMPLE_NOTE); return; }
-    setBusyRepo(repo);
-    try { await retryBrainRepo(repo); reload(); } catch (e) { toast(plainError((e as Error).message, NOT_DONE)); } finally { setBusyRepo(null); }
+    mark(repo, true);
+    try { await retryBrainRepo(repo); reload(); } catch (e) { toast(failed(e)); } finally { mark(repo, false); }
   };
   // Remove and Retry removal both end in DELETE. 200 is gone, 202 is a removal in the background:
   // either way read again, and the card says what is left.
   const remove = async (repo: string, fromDialog: boolean) => {
     if (sample) { setAsking(null); toast(SAMPLE_NOTE); return; }
-    setBusyRepo(repo); setAskError("");
+    mark(repo, true); setAskError("");
     try {
       const answer = await removeBrainRepo(repo);
       setAsking(null); reload();
       if (answer.removed) toast(`Removed ${repo}.`);
     } catch (e) {
-      const words = plainError((e as Error).message, NOT_DONE);
+      const words = failed(e);
       if (fromDialog) setAskError(words); else toast(words);
-    } finally { setBusyRepo(null); }
+    } finally { mark(repo, false); }
   };
 
   const banner = error && (
@@ -238,16 +251,16 @@ export default function BrainRepos() {
       {!data ? <BrainHead>{banner || <Loading />}</BrainHead> : (
         <>
           {banner && <div className="mb-6">{banner}</div>}
-          <BrainReposView data={data} admin={canAct} now={now} busyRepo={busyRepo}
+          <BrainReposView data={data} admin={canAct} now={now} busy={busy}
                           onRetry={retry} onRemove={(r) => { setAskError(""); setAsking(r); }} onRetryRemoval={(r) => remove(r, false)} />
         </>
       )}
-      <Dialog open={asking !== null} onOpenChange={(o) => { if (!o && busyRepo === null) setAsking(null); }} data-testid="brain-remove-dialog"
+      <Dialog open={asking !== null} onOpenChange={(o) => { if (!o && !asked) setAsking(null); }} data-testid="brain-remove-dialog"
               title="Remove this repo?" description={REMOVE_WORDS}
               footer={
                 <>
-                  <Button variant="secondary" disabled={busyRepo !== null} onClick={() => setAsking(null)} data-testid="brain-remove-cancel">Cancel</Button>
-                  <Button busy={busyRepo !== null} onClick={() => asking && remove(asking, true)} data-testid="brain-remove-confirm">Remove</Button>
+                  <Button variant="secondary" disabled={asked} onClick={() => setAsking(null)} data-testid="brain-remove-cancel">Cancel</Button>
+                  <Button busy={asked} onClick={() => asking && remove(asking, true)} data-testid="brain-remove-confirm">Remove</Button>
                 </>
               }>
         <p className="m-0 font-mono text-[14px] [overflow-wrap:anywhere]" data-user-text data-testid="brain-remove-name">{asking}</p>

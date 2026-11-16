@@ -65,8 +65,17 @@ export function ago(iso: string | null | undefined, now: number): string {
   return `${durationWords(Math.max(0, (now - t) / 1000))} ago`;
 }
 
-/** What a queued repo waits for: the repo being cloned or indexed now, else a general line. */
+const ORDINALS = ["", "First", "Second", "Third", "Fourth", "Fifth", "Sixth", "Seventh", "Eighth", "Ninth", "Tenth"];
+
+/** "Third in line." for a place in the control plane's queue (1 is next). Past ten, "Number 11 in line." */
+export function placeWords(place: number): string {
+  return `${ORDINALS[place] || `Number ${place}`} in line.`;
+}
+
+/** What a queued repo waits for. Behind other queued repos (`place` 2 or more) it says where it stands; next in
+ *  line it waits for the repo being cloned or indexed now, else a general line. */
 export function queuedWords(r: BrainRepoRow, all: BrainRepoRow[]): { waitsFor: string | null; line: string } {
+  if (typeof r.place === "number" && Number.isInteger(r.place) && r.place >= 2) return { waitsFor: null, line: placeWords(r.place) };
   const busy = all.find((x) => x.repo !== r.repo && !x.removing && (x.state === "cloning" || x.state === "indexing"));
   return { waitsFor: busy ? busy.repo : null, line: busy ? "finishes." : NO_ROOM_WORDS };
 }
@@ -87,4 +96,12 @@ export function plainError(message: string | undefined, fallback: string): strin
   const t = (message ?? "").trim();
   if (!t) return fallback;
   return t.charAt(0).toUpperCase() + t.slice(1) + (/[.!?]$/.test(t) ? "" : ".");
+}
+
+export const NOT_CONNECTED_WORDS = "This repo is no longer connected.";
+
+/** The words for a failed Remove or Retry: the cell's own sentence, or for a 404 (the repo is already gone) a plain one. */
+export function actionError(e: { message?: string; status?: number } | null | undefined, fallback: string): string {
+  if (e && e.status === 404) return NOT_CONNECTED_WORDS;
+  return plainError(e?.message, fallback);
 }

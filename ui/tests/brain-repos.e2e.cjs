@@ -90,7 +90,7 @@ const allRows = () => [
 
 // ---- the brain API, answered here
 function brainMock(rows, extra = {}) {
-  const m = { rows, configured: true, readStatus: 200, reads: 0, deletes: [], retries: [], deleteAnswer: null, ...extra };
+  const m = { rows, configured: true, readStatus: 200, reads: 0, deletes: [], retries: [], deleteAnswer: null, retryAnswer: null, ...extra };
   m.handle = async (route) => {
     const req = route.request();
     const p = new URL(req.url()).pathname;
@@ -102,13 +102,14 @@ function brainMock(rows, extra = {}) {
     const repo = p.replace("/api/brain/repos/", "").replace(/\/retry$/, "");
     if (req.method() === "DELETE") {
       m.deletes.push(repo);
-      const a = m.deleteAnswer ? m.deleteAnswer(repo, m) : { status: 200, json: { ok: true, removed: true } };
-      if (a.status === 200) m.rows = m.rows.filter((r) => r.repo !== repo);
+      const a = m.deleteAnswer ? await m.deleteAnswer(repo, m) : { status: 200, json: { ok: true, removed: true } };
+      if (a.status === 200 || a.status === 404) m.rows = m.rows.filter((r) => r.repo !== repo);
       if (a.status === 202) m.rows = m.rows.map((r) => (r.repo === repo ? { ...r, removing: true, remove_error: null } : r));
       return route.fulfill(a);
     }
     if (req.method() === "POST" && p.endsWith("/retry")) {
       m.retries.push(repo);
+      if (m.retryAnswer) { const a = await m.retryAnswer(repo, m); if (a.status === 404) m.rows = m.rows.filter((r) => r.repo !== repo); if (a.status !== 200) return route.fulfill(a); }
       m.rows = m.rows.map((r) => (r.repo === repo ? { ...r, state: "queued", error: null } : r));
       return route.fulfill({ status: 200, json: m.rows.find((r) => r.repo === repo) });
     }
@@ -148,11 +149,20 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
     eq("queuedWords: waits for a repo being cloned", T.queuedWords(q, [r({ repo: "a/c", state: "cloning" }), q]).waitsFor, "a/c");
     eq("queuedWords: no repo busy", T.queuedWords(q, [q, READY("a/r")]), { waitsFor: null, line: "Starts when the brain has room." });
     eq("queuedWords: a repo being removed is not waited for", T.queuedWords(q, [r({ repo: "a/x", state: "indexing", removing: true }), q]).waitsFor, null);
+    const place = (n) => r({ repo: "a/p", state: "queued", place: n });
+    eq("queuedWords: place 1 keeps the wait for the busy repo", T.queuedWords(place(1), [busy, place(1)]), { waitsFor: "a/busy", line: "finishes." });
+    eq("queuedWords: place 3 says where it stands, not a repo", T.queuedWords(place(3), [busy, place(3)]), { waitsFor: null, line: "Third in line." });
+    eq("queuedWords: place 2, 10 and 11", [2, 10, 11].map((n) => T.queuedWords(place(n), [place(n)]).line), ["Second in line.", "Tenth in line.", "Number 11 in line."]);
+    eq("queuedWords: no place, or a place that is not a count, keeps the general line", [null, 0, 1.5, "3"].map((n) => T.queuedWords(place(n), [place(n)]).line), Array(4).fill("Starts when the brain has room."));
+    ck("placeWords: no em dash", ![2, 3, 12].some((n) => T.placeWords(n).includes("\u2014")));
+    eq("actionError: a 404 is a plain sentence", [T.actionError({ message: "Not Found", status: 404 }, "x"), T.actionError({ message: "acme/api is not connected to the brain", status: 404 }, "x")], Array(2).fill("This repo is no longer connected."));
+    eq("actionError: the cell's own words otherwise", [T.actionError({ message: "still indexing", status: 409 }, "x"), T.actionError({ status: 502 }, "Fallback."), T.actionError(null, "Fallback.")], ["Still indexing.", "Fallback.", "Fallback."]);
     eq("percent", [T.percent(r({ files_done: 812, files_total: 1816 })), T.percent(r({ files_done: 0, files_total: 0 })), T.percent(r({ files_done: 9, files_total: 3 }))], [45, 0, 100]);
     eq("plainError: capital and full stop", T.plainError("still indexing, try again", "x"), "Still indexing, try again.");
     eq("plainError: keeps a full stop", T.plainError("Done.", "x"), "Done.");
     eq("plainError: falls back", T.plainError("  ", "Fallback."), "Fallback.");
     const kinds = new Set(S.BRAIN_SAMPLES.all.repos.map((x) => T.cardKind(x)));
+    ck("samples: a queued repo behind others says its place", S.BRAIN_SAMPLES.queued.repos.some((x) => x.state === "queued" && x.place === 3));
     eq("samples: the all sample has every card state", [...kinds].sort(), ["cloning", "failed", "indexing", "queued", "ready", "remove_failed", "removing"].sort());
     ck("samples: a ready sample with failing updates", S.BRAIN_SAMPLES["ready-sync-failing"].repos[0].sync_failures > 0);
     ck("samples: empty and not set up", S.BRAIN_SAMPLES.empty.repos.length === 0 && S.BRAIN_SAMPLES["not-set-up"].configured === false);
@@ -267,6 +277,18 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       const border = (c) => c.evaluate((e) => getComputedStyle(e).borderTopColor);
       ck("removal failed: the border is the failed colour, not the ready one", (await border(rf)) === (await border(fl)) && (await border(rf)) !== (await border(rd)), `${await border(rf)} ${await border(fl)} ${await border(rd)}`);
 
+      const colour = (loc) => loc.evaluate((e) => getComputedStyle(e).color);
+      const ink = await colour(idx.getByTestId("brain-name"));
+      eq("Indexing and Cloning are in the page's own ink", [await colour(idx.getByTestId("brain-state")), await colour(cl.getByTestId("brain-state"))], [ink, ink]);
+      const [cReady, cFailed, cQueued] = [await colour(rd.getByTestId("brain-state")), await colour(fl.getByTestId("brain-state")), await colour(q.getByTestId("brain-state"))];
+      ck("Ready is green, Not indexed red, Queued quiet: three colours, none the ink", new Set([cReady, cFailed, cQueued, ink]).size === 4, `${cReady} ${cFailed} ${cQueued} ${ink}`);
+      ck("Not removed is the same red as Not indexed", (await colour(rf.getByTestId("brain-state"))) === cFailed);
+      const edge = (loc) => loc.evaluate((e) => getComputedStyle(e).borderTopColor);
+      const dark = await edge(fl.getByTestId("brain-retry"));
+      ck("Retry has the dark border (the foreground), Remove the light one", dark === ink && (await edge(fl.getByTestId("brain-remove"))) !== dark && (await edge(rd.getByTestId("brain-remove"))) !== dark,
+         `${dark} ${ink} ${await edge(fl.getByTestId("brain-remove"))}`);
+      ck("Retry removal has the dark border too", (await edge(rf.getByTestId("brain-retry-removal"))) === dark);
+
       const body = await text(page.locator("main"));
       ck("no Decisions row, section or folders button (TR-1213)", !/Decisions the brain knows|Decision folders/.test(body) && !/\bDecisions\b/.test(await text(page.getByTestId("brain-cards"))));
       await checkWords(page, ck, "admin, every state");
@@ -356,6 +378,81 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await page.waitForFunction(() => document.querySelector('[data-repo="acme/legacy"]')?.getAttribute("data-state") === "queued", null, { timeout: 10000 });
       eq("Retry: one POST retry for that repo", mock.retries, ["acme/legacy"]);
       ck("Retry: the card is queued, with no error", (await card(page, "acme/legacy").getByTestId("brain-error").count()) === 0);
+      await ctx.close();
+    }
+
+
+    // ---- each repo is busy until its own call ends (two repos, calls interleaved)
+    {
+      const mock = brainMock([
+        row({ repo: "acme/legacy", state: "failed", error: "GitHub refused access while cloning." }),
+        READY("acme/old-site", { remove_error: "Still indexing. Try again in a minute." }),
+      ]);
+      let release;
+      const gate = new Promise((res) => { release = res; });
+      mock.deleteAnswer = async () => { await gate; return { status: 202, json: { ok: true, removing: true } }; };
+      const { ctx, page } = await open({ mock });
+      await card(page, "acme/old-site").waitFor({ timeout: 15000 });
+      const slow = card(page, "acme/old-site").getByTestId("brain-retry-removal");
+      await slow.click();
+      await page.waitForFunction(() => document.querySelector('[data-testid="brain-retry-removal"]')?.getAttribute("aria-busy") === "true", null, { timeout: 5000 });
+      ck("the slow Retry removal: its button is busy and disabled", (await slow.isDisabled()) && (await slow.getAttribute("aria-busy")) === "true");
+      // while that DELETE waits, another repo's Retry goes through and ends
+      await card(page, "acme/legacy").getByTestId("brain-retry").click();
+      await page.waitForFunction(() => document.querySelector('[data-repo="acme/legacy"]')?.getAttribute("data-state") === "queued", null, { timeout: 10000 });
+      eq("the other repo's Retry ended: one POST", mock.retries, ["acme/legacy"]);
+      ck("the first button stays disabled until its own call ends", (await slow.isDisabled()) && (await slow.getAttribute("aria-busy")) === "true");
+      eq("and no second DELETE went out", mock.deletes, ["acme/old-site"]);
+      release();
+      await page.waitForFunction(() => document.querySelector('[data-repo="acme/old-site"]')?.getAttribute("data-state") === "removing", null, { timeout: 10000 });
+      ck("its own call ended: the card is removing", (await card(page, "acme/old-site").getByRole("button").count()) === 0);
+      await ctx.close();
+    }
+
+    // ---- a queued repo behind others says where it stands
+    {
+      const mock = brainMock([
+        row({ repo: "acme/indexer", state: "indexing", files_done: 5, files_total: 50, added_at: iso(14 * MIN) }),
+        row({ repo: "acme/next-up", state: "queued", place: 1, added_at: iso(9 * MIN) }),
+        row({ repo: "acme/second", state: "queued", place: 2, added_at: iso(8 * MIN) }),
+        row({ repo: "acme/third", state: "queued", place: 3, added_at: iso(7 * MIN) }),
+      ]);
+      const { ctx, page } = await open({ mock });
+      await card(page, "acme/third").waitFor({ timeout: 15000 });
+      eq("queued, place 1: waits for the repo being indexed", await text(card(page, "acme/next-up").getByTestId("brain-line")), "Starts when acme/indexer finishes. Added by Ada Lovelace 9 minutes ago.");
+      eq("queued, place 2: says it is second", await text(card(page, "acme/second").getByTestId("brain-line")), "Second in line. Added by Ada Lovelace 8 minutes ago.");
+      eq("queued, place 3: says it is third, plainly", await text(card(page, "acme/third").getByTestId("brain-line")), "Third in line. Added by Ada Lovelace 7 minutes ago.");
+      await checkWords(page, ck, "queued places");
+      await ctx.close();
+    }
+
+    // ---- a 404 on Remove or Retry: a plain sentence, and the list is read again
+    {
+      const gone = { status: 404, json: { detail: "Not Found" } };
+      const mock = brainMock([READY("acme/api"), READY("acme/web"), READY("acme/old-site", { remove_error: "Still indexing." }), row({ repo: "acme/legacy", state: "failed", error: "No access." })]);
+      mock.deleteAnswer = () => gone;
+      mock.retryAnswer = () => gone;
+      const { ctx, page } = await open({ mock });
+      await card(page, "acme/api").waitFor({ timeout: 15000 });
+      const dlg = page.getByTestId("brain-remove-dialog");
+      const reads = mock.reads;
+      await card(page, "acme/api").getByTestId("brain-remove").click();
+      await dlg.waitFor({ timeout: 5000 });
+      await dlg.getByTestId("brain-remove-confirm").click();
+      await dlg.getByTestId("brain-remove-failed").waitFor({ timeout: 10000 });
+      const said = await text(dlg.getByTestId("brain-remove-failed"));
+      ck("DELETE 404: a plain sentence in the dialog, not Not Found", said.includes("This repo is no longer connected.") && !/Not Found/i.test(said), said);
+      await card(page, "acme/api").waitFor({ state: "detached", timeout: 10000 });
+      ck("DELETE 404: the list was read again, the card is gone", mock.reads > reads && (await card(page, "acme/api").count()) === 0);
+      await checkWords(page, ck, "remove 404");
+      await dlg.getByTestId("brain-remove-cancel").click();
+      await card(page, "acme/old-site").getByTestId("brain-retry-removal").click();
+      await page.getByText("This repo is no longer connected.", { exact: true }).first().waitFor({ timeout: 5000 });
+      await card(page, "acme/old-site").waitFor({ state: "detached", timeout: 10000 });
+      ck("Retry removal 404: said in a toast, the card is gone", (await page.getByText(/Not Found/i).count()) === 0);
+      await card(page, "acme/legacy").getByTestId("brain-retry").click();
+      await card(page, "acme/legacy").waitFor({ state: "detached", timeout: 10000 });
+      ck("Retry 404: the card is gone after a read", (await card(page, "acme/legacy").count()) === 0 && (await page.getByText(/Not Found/i).count()) === 0);
       await ctx.close();
     }
 
@@ -485,6 +582,97 @@ const isBrainApi = (u) => u.pathname === "/api/brain" || u.pathname.startsWith("
       await ns.page.getByTestId("brain-empty").waitFor({ timeout: 15000 });
       ck("a sample name alone, without the flag, shows the live data", (await ns.page.getByTestId("brain-card").count()) === 0);
       await ns.ctx.close();
+    }
+
+
+    // ---- the states that are not the full list, at 1280 and at 390: words, no sideways scroll, a screenshot
+    {
+      const LONG_ORG = "the-international-association-of-extraordinarily-long-organisation-names";
+      const LONG_ONE = `${LONG_ORG}/a-repository-whose-name-keeps-going-and-never-once-offers-a-place-to-break`;
+      const LONG_TWO = `${LONG_ORG}/another-equally-unbreakable-repository-name-for-the-queued-card-to-hold`;
+      const LONG_URL = "https://api.github.com/repos/the-international-association-of-extraordinarily-long-organisation-names/a-repository/commits?per_page=100&sha=8c41d2e9a7b0c3d4e5f60718293a4b5c6d7e8f90";
+      const LONG_READY = `${LONG_ORG}/ready-and-syncing-with-a-long-name-that-goes-on-and-on-and-on`;
+      const longRows = () => [
+        row({ repo: LONG_ONE, state: "indexing", files_done: 812345, files_total: 1816000, added_at: iso(14 * MIN) }),
+        row({ repo: LONG_TWO, state: "queued", place: 3, added_by_name: "Wolfeschlegelsteinhausenbergerdorff Junior the Third of Nowhere in Particular", added_at: iso(9 * MIN) }),
+        READY(LONG_READY, {
+          sync_failures: 12, sync_error: `GitHub did not answer when the brain asked for the latest push at ${LONG_URL} and gave up after waiting a long time for any reply at all`,
+        }),
+        row({ repo: `${LONG_ORG}/not-indexed-with-a-very-long-name-as-well-as-a-long-error-text`, state: "failed", error: `GitHub refused access while cloning ${LONG_URL}. Give the GitHub connection read access to this repo and to every repo in the organisation it belongs to, then try again from this page.` }),
+        READY(`${LONG_ORG}/removal-gave-up-with-a-long-name-too`, { remove_error: `Still indexing ${LONG_URL}. Try again in a minute, or wait for the index to finish and then remove the repo once more from this page.` }),
+      ];
+      const fits = async (page, label) => {
+        const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        ck(`${label}: no sideways scroll`, over <= 0, String(over));
+        const out = await page.locator("body").evaluate((m) => [...m.querySelectorAll("*")].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5 && getComputedStyle(e).position !== "fixed" && !e.closest("[aria-hidden='true']")).map((e) => e.tagName + "." + (e.getAttribute("data-testid") || String(e.className).slice(0, 30))).slice(0, 5));
+        ck(`${label}: nothing runs past the screen edge`, out.length === 0, out.join(" "));
+      };
+      const inView = async (loc, label, w) => {
+        const b = await loc.boundingBox();
+        ck(`${label}: inside the screen`, b !== null && b.x >= -0.5 && b.x + b.width <= w + 0.5, JSON.stringify(b));
+      };
+      for (const w of [1280, 390]) {
+        const tag = `${w}`;
+        const done = async (page, name) => { await checkWords(page, ck, `${name} ${tag}`); await fits(page, `${name} ${tag}`); await shot(page, `brain-repos-${name}-${tag}.png`); };
+
+        // a read key
+        { const o = await open({ token: reader.json.secret, mock: brainMock(allRows()), width: w });
+          await o.page.getByTestId("brain-card").first().waitFor({ timeout: 15000 });
+          ck(`read key ${tag}: no buttons`, (await o.page.getByTestId("brain-card").getByRole("button").count()) === 0 && (await o.page.getByTestId("brain-connect").count()) === 0);
+          await done(o.page, "readonly"); await o.ctx.close(); }
+        // not set up, empty
+        { const o = await open({ mock: brainMock([], { configured: false }), width: w, wait: false });
+          await o.page.getByTestId("brain-not-set-up").waitFor({ timeout: 15000 }); await done(o.page, "not-set-up"); await o.ctx.close(); }
+        { const o = await open({ mock: brainMock([]), width: w });
+          await o.page.getByTestId("brain-empty").waitFor({ timeout: 15000 }); await done(o.page, "empty"); await o.ctx.close(); }
+        // a failed read
+        { const o = await open({ mock: brainMock([READY("acme/api")], { readStatus: 500 }), width: w, wait: false });
+          await o.page.getByRole("button", { name: "Retry" }).waitFor({ timeout: 15000 }); await done(o.page, "error"); await o.ctx.close(); }
+        // loading: the page's own read waits (the menu's read comes first and goes through)
+        { const slow = brainMock([READY("acme/api")]);
+          let release; const gate = new Promise((res) => { release = res; });
+          const lo = await browser.newContext({ viewport: { width: w, height: 900 } });
+          await lo.addInitScript((t) => { try { localStorage.setItem("tares_token", t); } catch { /* none */ } }, admin.json.secret);
+          const lp = await lo.newPage();
+          await lp.route(isBrainApi, async (route) => { if (new URL(route.request().url()).pathname === "/api/brain" && slow.reads >= 1) await gate; return slow.handle(route); });
+          await lp.goto(d.base + "/brain");
+          await lp.getByTestId("brain-loading").waitFor({ timeout: 15000 });
+          ck(`loading ${tag}: a skeleton shows`, await lp.getByTestId("brain-loading").isVisible());
+          await done(lp, "loading"); release(); await lo.close(); }
+        // the remove dialog
+        { const o = await open({ mock: brainMock(allRows()), width: w });
+          await card(o.page, "acme/api").getByTestId("brain-remove").click();
+          const dlg = o.page.getByTestId("brain-remove-dialog"); await dlg.waitFor({ timeout: 5000 });
+          await inView(dlg, `remove dialog ${tag}`, w); await done(o.page, "remove-dialog"); await o.ctx.close(); }
+        // long text: names that wrap, a long error, a long sync note, a long person's name
+        { const rows = longRows();
+          const o = await open({ mock: brainMock(rows), width: w });
+          await o.page.getByTestId("brain-card").first().waitFor({ timeout: 15000 });
+          eq(`long text ${tag}: a card for each row`, await o.page.getByTestId("brain-card").count(), rows.length);
+          const cut = await o.page.getByTestId("brain-card").evaluateAll((els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
+          ck(`long text ${tag}: no card is wider inside than out`, cut === 0, String(cut));
+          eq(`long text ${tag}: the whole long name is there`, await text(card(o.page, LONG_ONE).getByTestId("brain-name")), LONG_ONE);
+          ck(`long text ${tag}: the long error, the sync note and the removal error are all shown`,
+             (await text(o.page.getByTestId("brain-error"))).includes(LONG_URL) && (await text(o.page.getByTestId("brain-sync-note"))).includes("gave up after waiting")
+             && (await text(o.page.getByTestId("brain-remove-error"))).includes("remove the repo once more"));
+          eq(`long text ${tag}: the queued card still says its place`, (await text(card(o.page, LONG_TWO).getByTestId("brain-line"))).slice(0, 14), "Third in line.");
+          for (const c of await o.page.getByTestId("brain-card").all()) await inView(c, `long text ${tag} card`, w);
+          await done(o.page, "long");
+          await o.ctx.close(); }
+        // long text in the remove dialog: a long name and a long error from the cell
+        { const rows = longRows();
+          const m = brainMock(rows);
+          m.deleteAnswer = () => ({ status: 409, json: { detail: `Still indexing ${LONG_URL}. Try again in a minute, or wait for the index to finish and then remove the repo once more.` } });
+          const o = await open({ mock: m, width: w });
+          await card(o.page, LONG_READY).getByTestId("brain-remove").click();
+          const dlg = o.page.getByTestId("brain-remove-dialog"); await dlg.waitFor({ timeout: 5000 });
+          await dlg.getByTestId("brain-remove-confirm").click();
+          await dlg.getByTestId("brain-remove-failed").waitFor({ timeout: 10000 });
+          await inView(dlg, `long remove dialog ${tag}`, w);
+          const dcut = await dlg.evaluate((e) => e.scrollWidth - e.clientWidth);
+          ck(`long remove dialog ${tag}: nothing cut off sideways`, dcut <= 1, String(dcut));
+          await done(o.page, "long-remove-dialog"); await o.ctx.close(); }
+      }
     }
 
     // ---- phone width
