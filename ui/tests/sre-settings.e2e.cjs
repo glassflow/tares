@@ -315,6 +315,20 @@ async function waitFor(url, tries = 150) {
       await c.close();
     }
 
+    // The API keys panel on the Access tab (TR-1392): its heading, its introduction and Create a key.
+    for (const w of [1440, 390]) {
+      const { ctx: c, page: p } = await newPage(w);
+      await p.goto(`${BASE}/settings/advanced?tab=access`, { waitUntil: "load" });
+      await p.locator('[data-testid="keys-empty"], [data-testid="keys-row"]').first().waitFor();
+      ck(`${w}: the Access tab has API keys, with its introduction and Create a key`,
+        (await p.getByRole("heading", { name: "API keys", exact: true }).count()) === 1
+        && /Give each agent, script or service its own key/.test((await T(p, "keys").innerText()).trim())
+        && (await p.getByRole("button", { name: "Create a key" }).count()) === 1, await T(p, "keys").innerText());
+      ck(`${w}: the Access tab does not scroll sideways`, (await overflow(p)) <= 0, String(await overflow(p)));
+      await shot(p, `advanced-access-${w}.png`);
+      await c.close();
+    }
+
     // ---- 9. a new cell: no watcher, no investigator
     {
       const { ctx: c, page: p } = await newPage(1440);

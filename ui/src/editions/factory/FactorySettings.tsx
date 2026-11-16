@@ -8,7 +8,7 @@ import LinearSettings from "../../components/LinearSettings";
 import { UsagePanels } from "../../components/UsagePanels";
 import { EePage, useEeLoaded, useEePending } from "../../eeSlots";
 import {
-  AccessPanel, AgentLimitsPanel, ApiKeysPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock,
+  AccessPanel, AgentLimitsPanel, CLOUD_BACK, McpToolsPanel, PeopleBlock,
   TerseSettings, useAccessData,
 } from "../../pages/Security";
 import WorkspaceSettings, { TeamPanel } from "../../pages/WorkspaceSettings";
@@ -16,6 +16,7 @@ import { SlackCloudPanel, SlackSelfHostedPanels } from "../settings/SlackPanels"
 import { TracingPanel } from "../settings/TracingPanel";
 import { GithubPanel } from "../settings/GithubPanel";
 import { ProvidersPanel } from "../settings/ProvidersPanel";
+import { ApiKeysPanel } from "../settings/ApiKeysPanel";
 import { Banner, Button, Dialog, EmptyState, ListRow, LoadingBlocks, StatusDot, Textarea } from "../../components/edition";
 import { Switch } from "../../components/ui/switch";
 import { cn } from "../../lib/utils";
@@ -199,7 +200,7 @@ function KeysPane() {
   return (
     <>
       <AccessPanel me={access.me} />
-      <ApiKeysPanel people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
+      <ApiKeysPanel title="Access keys" people={access.people ?? []} admin={access.admin} me={access.me?.person?.id} />
     </>
   );
 }

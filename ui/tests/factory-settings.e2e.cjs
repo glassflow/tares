@@ -428,6 +428,100 @@ const until = async (fn, tries = 40) => {
       ck("the cell ends with no provider, as it started", ((await api(TOKEN, "GET", "/api/settings/providers")).body?.providers ?? []).every((p) => !p.configured && !p.stored));
     }
 
+    // 2c. access keys (TR-1392). Pictures first, of states set through the API, so the same steps
+    // picture the panel before and after: the two seeded keys, then a project key and a revoked one.
+    {
+      const shots = async (tag) => {
+        if (!SHOTS) return;
+        for (const [w, dark] of [[1440, false], [1440, true], [390, false]]) {
+          const n = await newPage(w, { dark });
+          await go(n.page, "keys");
+          await n.page.getByText("writer").first().waitFor();
+          await shot(n.page, `keys-${tag}-${w}${dark ? "-dark" : ""}.png`);
+          await n.ctx.close();
+        }
+      };
+      await shots("as-found");
+      const pkey = (await api(TOKEN, "POST", "/api/keys", { name: "px-reader", project: ids.project })).body;
+      const old = (await api(TOKEN, "POST", "/api/keys", { name: "old-ci", scopes: ["ingest"] })).body;
+      await api(TOKEN, "DELETE", `/api/keys/${old.id}`);
+      await shots("project-and-revoked");
+      const pname = ((await api(TOKEN, "GET", "/api/projects")).body?.projects ?? []).find((p) => p.id === ids.project)?.name;
+      await go(page, "keys");
+
+      const panel = page.getByTestId("keys");
+      const row = (name) => panel.locator('[data-testid="keys-row"]').filter({ has: page.getByText(name, { exact: true }) });
+      const rowText = (name, id) => row(name).getByTestId(id).innerText().then((t) => t.replace(/\s+/g, " ").trim());
+      ck("Access keys has one heading of that name, and no introduction", (await page.getByRole("heading", { name: "Access keys", exact: true }).count()) === 1 && !/Give each agent/.test(await text(page, "keys")));
+      ck("each key says what it can do, in words: read", (await rowText("reader", "keys-can")) === "Can read.", await rowText("reader", "keys-can"));
+      ck("each key says what it can do, in words: send data, not ingest", (await rowText("writer", "keys-can")) === "Can send data.", await rowText("writer", "keys-can"));
+      ck("a key nobody used says so, and when it was made", /^Never used\. Made (just now|\d+ \w+ ago)\.$/.test(await rowText("writer", "keys-used")), await rowText("writer", "keys-used"));
+      ck("a project key names its project, not its id", !!pname && (await rowText("px-reader", "keys-can")) === `Can read ${pname} and record findings in it.`, `${await rowText("px-reader", "keys-can")} / ${pname}`);
+      ck("each key says whose it is", /^Belongs to /.test(await rowText("writer", "keys-person")), await rowText("writer", "keys-person"));
+      ck("a revoked key is hidden until asked for", (await row("old-ci").count()) === 0 && (await text(page, "keys-revoked-toggle")) === "Show 1 revoked key", await text(page, "keys-revoked-toggle"));
+      await page.getByTestId("keys-revoked-toggle").click();
+      ck("asked for, it says it is revoked and offers no Revoke", (await row("old-ci").getByTestId("keys-revoked").count()) === 1 && (await row("old-ci").getByTestId("keys-revoke").count()) === 0
+         && /^Revoked (just now|\d+ \w+ ago)\.$/.test(await rowText("old-ci", "keys-used")), await rowText("old-ci", "keys-used"));
+      await page.getByTestId("keys-revoked-toggle").click();
+      ck("Hide revoked keys hides it again", (await row("old-ci").count()) === 0 && (await text(page, "keys-revoked-toggle")) === "Show 1 revoked key");
+      await checkWords(page, ck, "Access keys item");
+
+      // creating one: the name and what it can do are said under their fields
+      await page.getByTestId("keys-add").click();
+      const name = page.getByTestId("keys-name");
+      ck("Create a key opens a form, on the name", (await page.getByTestId("keys-form").count()) === 1 && await name.evaluate((e) => e === document.activeElement));
+      ck("the form starts on Read only", (await page.getByTestId("keys-scope-read").getAttribute("aria-checked")) === "true"
+         && (await page.getByTestId("keys-scope-ingest").getAttribute("aria-checked")) === "false" && (await page.getByTestId("keys-scope-admin").getAttribute("aria-checked")) === "false");
+      await name.press("Enter");
+      ck("an empty name is said under the Name field", (await name.getAttribute("aria-invalid")) === "true" && /Give the key a name\./.test(await text(page, "keys-form")), await text(page, "keys-form"));
+      await name.fill("e2e-agent");
+      ck("typing clears it", (await name.getAttribute("aria-invalid")) !== "true");
+      await page.getByTestId("keys-scope-read").click();
+      await name.press("Enter");
+      ck("nothing it can do is said under the choices", (await text(page, "keys-scope-error")) === "Pick at least one thing it can do.");
+      await page.getByTestId("keys-scope-read").click();
+      await page.getByTestId("keys-scope-ingest").click();
+      await shot(page, "keys-form-1440.png");
+      await name.press("Enter");
+      await page.getByTestId("keys-created").waitFor();
+      ck("Enter creates it and closes the form", (await page.getByTestId("keys-form").count()) === 0);
+      ck("the new key is shown once, with what it can do", /^Key created: e2e-agent\. Can read and send data\. Copy it now, it is not shown again\./.test(await text(page, "keys-created"))
+         && /^nvf_/.test(await text(page, "keys-created-secret")), await text(page, "keys-created"));
+      ck("the new key is in the list", (await row("e2e-agent").count()) === 1 && (await rowText("e2e-agent", "keys-can")) === "Can read and send data.");
+      await shot(page, "keys-created-1440.png");
+      await page.getByTestId("keys-created-copy").click();
+      await page.waitForTimeout(100);
+      ck("Copy key says it copied, or how to copy by hand", (await text(page, "keys-created-copy")) === "Copied" || /Could not copy\. Select the key and copy it by hand\./.test(await text(page, "keys-created")));
+      await page.getByTestId("keys-created-done").click();
+      ck("I have copied it hides the secret for good", (await page.getByTestId("keys-created").count()) === 0 && !(await text(page, "keys")).includes("nvf_e2e"));
+      await page.getByTestId("keys-add").click();
+      await page.getByTestId("keys-name").press("Escape");
+      ck("Escape closes the form", (await page.getByTestId("keys-form").count()) === 0);
+
+      // revoking asks first, and says what stops
+      await row("e2e-agent").getByTestId("keys-revoke").click();
+      const dlg = page.getByTestId("keys-revoke-dialog");
+      await dlg.waitFor();
+      ck("Revoke asks first, and says what stops working", (await page.getByRole("dialog", { name: "Revoke e2e-agent?" }).count()) === 1
+         && /It stops working at once and its subscriptions are removed\./.test(await dlg.innerText()), await dlg.innerText());
+      await shot(page, "keys-revoke-1440.png");
+      await dlg.getByRole("button", { name: "Cancel" }).click();
+      ck("Cancel keeps it", (await dlg.count()) === 0 && (await row("e2e-agent").getByTestId("keys-revoke").count()) === 1);
+      await row("e2e-agent").getByTestId("keys-revoke").click();
+      await page.getByTestId("keys-revoke-confirm").click();
+      await dlg.waitFor({ state: "detached" });
+      await page.waitForFunction(() => ![...document.querySelectorAll('[data-testid="keys-row"]')].some((r) => r.textContent.includes("e2e-agent")));
+      const listed = (await api(TOKEN, "GET", "/api/keys")).body?.keys ?? [];
+      ck("Revoke revokes it, and the list drops it", !!listed.find((k) => k.name === "e2e-agent")?.revoked_at && (await text(page, "keys-revoked-toggle")) === "Show 2 revoked keys", await text(page, "keys-revoked-toggle"));
+
+      const n = await newPage(390);
+      await go(n.page, "keys");
+      await n.page.getByText("writer").first().waitFor();
+      ck("the Access keys item fits at 390 px", (await overflow(n.page)) <= 0, String(await overflow(n.page)));
+      await n.ctx.close();
+      await api(TOKEN, "DELETE", `/api/keys/${pkey.id}`);
+    }
+
     // 3. the crew starts as a new cell has it
     await go(page, "crew");
     ck("You approve each merge is chosen", (await page.getByTestId("how-L3-review").getAttribute("aria-checked")) === "true" && (await page.getByTestId("how-L4-ship").getAttribute("aria-checked")) === "false");
@@ -610,7 +704,7 @@ const until = async (fn, tries = 40) => {
       const p = n.page;
       for (const tab of ["keys", "github", "providers", "observability"]) {
         await go(p, tab);
-        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : tab === "providers" ? '[data-testid="providers"]' : ".panel"}`).first().waitFor();
+        await p.locator(`[data-testid="pane-${tab}"] ${tab === "observability" ? '[data-testid="tracing-state"]' : tab === "github" ? '[data-testid="github-row"]' : tab === "providers" ? '[data-testid="providers"]' : '[data-testid="keys"]'}`).first().waitFor();
         ck(`1000: ${tab} does not scroll sideways`, (await overflow(p)) <= 0, `${await overflow(p)}px`);
       }
       // Observability's select was the last native one in a pane (TR-1392 moved it to the kit);
