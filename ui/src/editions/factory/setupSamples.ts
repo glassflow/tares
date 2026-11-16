@@ -330,13 +330,13 @@ function many(): SetupData {
 
 const LINEAR_APP: SetupApp = {
   url: "https://connect.example.test/linear", service: "Linear", app_name: "GlassFlow Linear app", button: "Connect Linear", repo_step: false,
-  steps: ["Linear opens in a new window.", "Sign in and choose your workspace.", "Approve the GlassFlow Linear app. You come back to this page."],
+  steps: ["Linear opens in this window.", "Sign in and choose your workspace.", "Approve the GlassFlow Linear app. You come back to this step to save it."],
   note: "Tares keeps you signed in and renews the access for you, so there is no key to create. Disconnect on the Tickets step takes the access away in Linear again.",
   use_key_label: "Use an API key instead", use_app_label: "Connect with the Linear app instead", stage: "start", done: null,
 };
 const GITHUB_APP: SetupApp = {
   url: "https://connect.example.test/github", service: "GitHub", app_name: "GlassFlow GitHub App", button: "Connect GitHub", repo_step: true,
-  steps: ["GitHub opens in a new window.", "Choose your account or organisation and the repositories the crew may use.", "Approve the GlassFlow GitHub App. You come back here to choose the repository."],
+  steps: ["GitHub opens in this window.", "Choose your account or organisation and the repositories the crew may use.", "Approve the GlassFlow GitHub App. You come back here to choose the repository."],
   note: "Tares reads and writes issues through the app, so there is no credential to create. Disconnect on the Tickets step takes the access away in GitHub again.",
   use_key_label: "Use a GitHub credential instead", use_app_label: "Connect with the GitHub App instead", stage: "start", done: null,
 };

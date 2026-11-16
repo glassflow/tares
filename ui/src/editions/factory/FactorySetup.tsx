@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../api";
-import { useCloud } from "../../cloud";
+import { cloudLinkHere, useCloud } from "../../cloud";
 import { CLOUD_BACK, GithubPanel, SlackCloudPanel, SlackSigningSecretPanel, SlackTokenPanel, TerseSettings } from "../../pages/Security";
 import { Banner, Button, Skeleton } from "../../components/edition";
 import { ERROR_BORDER } from "../../components/edition/Field";
@@ -37,7 +37,6 @@ import type { HomeOnboarding } from "./home.types";
 // blocks of GET /api/home, the same ones the home's first-run panel draws. A save goes through the
 // routes that already exist.
 
-const POLL_APP_MS = 3000;
 // The terminal step ticks as the machine reports, so the setup is read again while it is shown.
 const POLL_TERMINAL_MS = 4000;
 // Below 900 px the rail becomes a list under the title. The classes are written out whole, because Tailwind
@@ -261,17 +260,7 @@ function AppSteps({ app }: { app: SetupApp }) {
   );
 }
 
-/** While the app window is open the page shows only this: one box that says what it waits for. */
-function AppWaiting({ service }: { service: string }) {
-  return (
-    <div className="border border-border px-3 py-2 text-[13px] [overflow-wrap:anywhere]" role="status" data-testid="app-waiting">
-      <span className="mr-2 inline-block size-3 animate-spin rounded-full border-2 border-border border-t-foreground align-[-2px] motion-reduce:animate-none" aria-hidden />
-      <b>Waiting for {service}.</b> Finish signing in on the {service} page that opened. This page carries on by itself once you approve the app.
-    </div>
-  );
-}
-
-function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onPoll }: {
+function FormView({ slot, stepName, form, app, name, title, onBack, onSaved }: {
   slot: SetupSlot;
   stepName: string;
   form: SetupForm;
@@ -280,10 +269,8 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
   title: string;
   onBack: () => void;
   onSaved: (text: string) => void;
-  onPoll: () => void;
 }) {
   const [via, setVia] = React.useState<"app" | "key">(app ? "app" : "key");
-  const [waiting, setWaiting] = React.useState(false);
   const [values, setValues] = React.useState<Values>(() => initialValues(form.fields));
   const [bad, setBad] = React.useState<string[]>([]);
   const [busy, setBusy] = React.useState(false);
@@ -295,31 +282,10 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
   const appMode = !!app && via === "app";
   const done = appMode && app.stage === "done";
   const fields = appMode ? (done && app.repo_step ? appFields(form.fields) : []) : form.fields;
-  const waitingNow = waiting && appMode && app.stage === "start";
-
-  // While the app window is open, read the page again every few seconds: the connection shows up on its own.
-  // The reader is held in a ref, so the timer is not built again each time the page draws; a hidden tab
-  // makes no calls, and reads once as soon as it is visible again.
-  const pollRef = React.useRef(onPoll);
-  pollRef.current = onPoll;
-  React.useEffect(() => {
-    if (!waitingNow) return undefined;
-    let timer: ReturnType<typeof setInterval> | undefined;
-    const stop = () => { if (timer !== undefined) { clearInterval(timer); timer = undefined; } };
-    const start = () => { stop(); timer = setInterval(() => pollRef.current(), POLL_APP_MS); };
-    const onVisible = () => {
-      if (document.hidden) { stop(); return; }
-      pollRef.current();
-      start();
-    };
-    if (!document.hidden) start();
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { stop(); document.removeEventListener("visibilitychange", onVisible); };
-  }, [waitingNow]);
-
+  // The app's page opens in this window and its connect page brings the person back to this step, with the
+  // address it was opened from (cloudLinkHere); the step opens this form again, with the app done, to save it.
   const open = () => {
-    if (app) window.open(app.url, "_blank", "noopener");
-    setWaiting(true);
+    if (app) window.location.assign(cloudLinkHere(app.url));
   };
 
   // A test answers for the settings it ran with. Each run takes a number; a change to a field or to the way of
@@ -380,7 +346,7 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
   };
 
   const hasForm = fields.length > 0;
-  const choosing = appMode && !done && !waitingNow;
+  const choosing = appMode && !done;
 
   return (
     <div className="mx-auto grid w-full max-w-[640px] min-w-0 gap-5" data-testid="setup-form" data-mode={form.mode}>
@@ -408,7 +374,6 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
           </div>
         )}
         {choosing && <AppSteps app={app} />}
-        {waitingNow && <AppWaiting service={app.service} />}
         {fields.map((f) => (
           <SettingField key={f.name} f={f} value={values[f.name]} error={bad.includes(f.name)} onChange={(v) => change(f.name, v)} />
         ))}
@@ -453,14 +418,11 @@ function FormView({ slot, stepName, form, app, name, title, onBack, onSaved, onP
         )}
         {problem && <Banner tone="error" data-testid="form-error"><span data-user-text>{problem}</span></Banner>}
         <div className={ACTS}>
-          {waitingNow ? (
-            <Button variant="secondary" className={DARK} onClick={open} data-testid="app-open-again">Open {app.service} again</Button>
-          ) : choosing ? (
+          {/* once the app is done, saving connects it for this step: the app alone only lets the cell in */}
+          {choosing ? (
             <Button onClick={open} data-testid="app-open">{app.button}</Button>
-          ) : hasForm || !appMode ? (
-            <Button type="submit" busy={busy} data-testid="form-save">{form.save_label}</Button>
           ) : (
-            <Button type="button" onClick={onBack} data-testid="form-done">{stepName}</Button>
+            <Button type="submit" busy={busy} data-testid="form-save">{form.save_label}</Button>
           )}
           <Button variant="secondary" className={DARK} onClick={onBack} data-testid="form-cancel">Cancel</Button>
         </div>
@@ -1010,6 +972,16 @@ function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reloa
     setNotice(""); setProblem(""); setView({ id, mode, title: row?.title ?? id });
   };
 
+  // Back from an app's connect page (?cloud=linear-connected on Tickets): its form opens again, now with the
+  // app done, so one click saves it as this step's integration. Once only, and only if it is still to save.
+  const reopened = React.useRef(false);
+  React.useEffect(() => {
+    if (reopened.current || !cloudBack?.tab || around) return;
+    reopened.current = true;
+    const row = step.available.find((a) => a.id === cloudBack.tab && a.app?.stage === "done");
+    if (row) setView({ id: row.id, mode: "connect", title: row.title });
+  }, [cloudBack, around, step]);
+
   return (
     <div className={cn("mx-auto grid w-full max-w-[1280px] min-w-0 gap-6", setupMode && "px-4 py-6 min-[900px]:px-10")} data-testid={setupMode ? "setup" : "integrations"}>
       {setupMode && <HeaderBits title={data.title} exit={data.exit_label} />}
@@ -1038,7 +1010,6 @@ function Setup({ data, reload, first, mode = "setup" }: { data: SetupData; reloa
               title={item!.title}
               onBack={() => setView(null)}
               onSaved={saved}
-              onPoll={reload}
             />
           ) : (
             <StepView

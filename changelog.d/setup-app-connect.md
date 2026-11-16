@@ -1,0 +1,2 @@
+Fixed
+Connecting Linear (or GitHub Issues) with the app on Tares Cloud showed "Linear is connected" but never added it to the Tickets step, because the form's last button only went back to the step without saving it as the step's integration; the app's page also opened in a new window whose return landed on a settings page. The app's page now opens in the same window and comes back to the step, the form opens again by itself with the app done, and Save and connect adds it to Tickets.
