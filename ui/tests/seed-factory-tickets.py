@@ -82,6 +82,16 @@ for n in range(17, 31):
     t[n] = ticket(x, f"Plan item {n}", n * 20, milestone=m3 if n % 2 else m2)
 t[31] = ticket(x, "Use a second search provider", 31 * 20, milestone=m2, status="canceled")
 
+# assignees (TR-1240): Ann holds three tickets of project-x, Bob one; one names someone not on the cell
+ann = store.create_person("Ann Lee", "ann@example.com")
+bob = store.create_person("Bob Ray", "bob@example.com")
+for n, fields in ((13, {"assignee_person_id": ann["id"]}), (14, {"assignee_person_id": ann["id"]}),
+                  (17, {"assignee_person_id": ann["id"]}), (15, {"assignee_person_id": bob["id"]}),
+                  (18, {"assignee_raw": "carol@elsewhere.example"})):
+    store.update_ticket(t[n], **fields)
+    with store._swrite:   # keep the last change the ticket was seeded with
+        store.sc.execute("UPDATE tickets SET updated_at = ? WHERE id = ?", [now_utc() - timedelta(minutes=n * 20), t[n]])
+
 y = project("project-y", "Tidy the styles across the console.")
 fast = store.create_milestone(y, "Faster lists")
 ticket(y, "Batch the lists", 5, milestone=fast, stage="doing", status="in_progress", holder="project-y-build-m1", pr=pr(21, "pending"))

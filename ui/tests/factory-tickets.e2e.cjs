@@ -322,6 +322,28 @@ function cleanEnv(extra) {
       await settle();
       ck(`${tag("milestone")}: no project: Milestone waits again`, await page.getByTestId("f-milestone").isDisabled());
 
+      // assignees (TR-1240)
+      await openLive(`?layout=list&project=${X}`);
+      const asOptions = await opts(page, "f-assignee");
+      ck(`${tag("assignee")}: Assignee lists the people with their open tickets, and No assignee`, asOptions.map((o) => o.t).join("|").includes("All assignees|")
+         && asOptions.some((o) => o.t === "Ann Lee (3)") && asOptions.some((o) => o.t === "Bob Ray (1)") && asOptions.some((o) => o.v === "none"), asOptions.map((o) => o.t).join("|"));
+      ck(`${tag("assignee")}: a row shows its assignee, or the name the source gave`, (await texts(page.getByTestId("ticket-assignee"))).includes("Ann Lee")
+         && (await texts(page.getByTestId("ticket-assignee"))).includes("carol@elsewhere.example"));
+      await pick(page, "f-assignee", asOptions.find((o) => o.t === "Ann Lee (3)").v);
+      await settle();
+      ck(`${tag("assignee")}: a person narrows the list to their tickets`, (await rows.count()) === 3
+         && (await texts(page.getByTestId("ticket-assignee"))).every((t) => t === "Ann Lee") && !!query(page).assignee);
+      await openLive(`?layout=board&project=${X}`);
+      await shot(page, "live-assignee-board", width);
+      ck(`${tag("assignee")}: a card shows its assignee`, (await texts(page.getByTestId("card-assignee"))).includes("Ann Lee"));
+      await openLive(`?layout=lanes&project=${X}&group=person`);
+      const people = await page.getByTestId("lane").evaluateAll((l) => l.map((x) => x.dataset.lane));
+      await shot(page, "live-assignee-lanes", width);
+      // a phone shows one state at a time (In progress first): only Ann holds one there
+      ck(`${tag("assignee")}: Group by assignee draws a lane per person, then the unknown name, then No assignee`,
+         people.join("|") === (narrow ? "Ann Lee" : "Ann Lee|Bob Ray|carol@elsewhere.example|No assignee"), people.join("|"));
+      ck(`${tag("assignee")}: no horizontal scroll`, (await overflow(page)) <= 0 && (await inside(page)), `${await overflow(page)}px over`);
+
       // markup
       await openLive(`?layout=list&q=bold`);
       ck(`${tag("markup")}: a title with tags shows them as characters, nothing runs`, (await texts(page.getByTestId("ticket-title"))).some((t) => t.includes('<b>bold</b> <img src=x onerror="window.__pwned=1">'))
