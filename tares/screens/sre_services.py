@@ -146,7 +146,7 @@ def _incidents(store, catalog, names: list, settings: dict, t, hide=()) -> tuple
         total += sum(counts.values())
         open_ += counts["open"] + counts["on_it"]
         found += store.list_incidents(None, n, limit=INCIDENTS_SHOWN, hide=hide)
-    found.sort(key=lambda i: goal._aware(i["last_note_at"]), reverse=True)
+    found.sort(key=lambda i: incidents._aware(i["last_note_at"]), reverse=True)   # UTC: no repeated hour
     found = found[:INCIDENTS_SHOWN]
     notes = store.notes_of([i["id"] for i in found])
     out = []
