@@ -40,12 +40,12 @@ const CACHE_MS = 5600;   // the daemon keeps its home answer for 5 seconds; read
 const GRANT_MAX = 400;
 const WARN_AT = 80;
 
-const SECTION_H = "m-0! text-base!";
+const SECTION_H = "m-0 text-base";
 /** Loading rows on the paper: no inset, as the rows they stand for. */
-const FLUSH_ROWS = "[&>div]:px-0!";
+const FLUSH_ROWS = "[&>div]:px-0";
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
-const INK_FILL = "[&>div:first-child]:bg-foreground!";
+const INK_FILL = "[&>div:first-child]:bg-foreground";
 
 function greetingWord(hour: number): string {
   if (hour < 12) return "Good morning";
@@ -97,8 +97,8 @@ function ActionButton({ action, item, onAction, state, top }: {
   const lead = !!top && action.primary;
   const variant = lead ? "primary" : "secondary";
   // An option of a question holds the crew's own words, so it wraps inside the card (TR-1125).
-  const fit = action.do === "choose" ? "h-auto min-h-8 max-w-full whitespace-normal py-1! text-left [overflow-wrap:anywhere]" : "h-8";
-  const cls = fit + " text-[13px]!" + (action.primary && !lead ? " border-foreground!" : "");
+  const fit = action.do === "choose" ? "h-auto min-h-8 max-w-full whitespace-normal py-1 text-left [overflow-wrap:anywhere]" : "h-8";
+  const cls = fit + " text-[13px]" + (action.primary && !lead ? " border-foreground" : "");
   const named = actionName(action, item);
   const href = action.href;
   if (href) {
@@ -182,7 +182,7 @@ function Waiting({ items, onAction, rows }: { items: HomeItem[]; onAction?: OnAc
             {rest.map(row)}
             {more > 0 && (
               <ListRow className="px-0">
-                <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
+                <Button variant="quiet" className="px-0 text-foreground underline" onClick={() => setAll(true)}>
                   {more} more
                 </Button>
               </ListRow>
@@ -279,14 +279,14 @@ function Tools({ data }: { data: HomeData }) {
       <div className="flex flex-wrap gap-2">
         {data.tools.map((t) => (
           <Link key={t.name} to="/settings#tools" data-testid="tool-chip" data-on={t.connected}
-                className={cn(chip, "border-border bg-card text-foreground! no-underline! hover:bg-row-hover")}>
+                className={cn(chip, "border-border bg-card text-foreground no-underline hover:bg-row-hover")}>
             <StatusDot tone={t.connected ? "ready" : "quiet"} label={t.connected ? "connected" : "not connected"} />
             <span>{t.name}</span>
             {t.connected && t.short && <span className="text-muted-foreground" data-user-text>· {t.short}</span>}
           </Link>
         ))}
         {data.tools.some((t) => !t.connected) && (
-          <Link to="/settings#tools" data-testid="tool-add" className={cn(chip, "border-dashed border-border text-muted-foreground no-underline!")}>
+          <Link to="/settings#tools" data-testid="tool-add" className={cn(chip, "border-dashed border-border text-muted-foreground no-underline")}>
             Add a tool
           </Link>
         )}
@@ -300,7 +300,7 @@ function TopBar({ name, headline }: { name: string; headline?: React.ReactNode }
   return (
     <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
       <div className="min-w-0">
-        <h1 className="mb-1.5! text-[22px]! md:text-[28px]!">{hello}</h1>
+        <h1 className="mb-1.5 text-[22px] md:text-[28px]">{hello}</h1>
         {headline}
       </div>
       <div className="flex flex-wrap gap-2">
@@ -333,7 +333,7 @@ export function FactoryHomeView({ data, onAction, rows, notice, panels, hideStar
   const top = topItem(data.waiting_for_you)?.id;
   return (
     <div className={PAGE} data-testid="factory-home">
-      <TopBar name={name} headline={<p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
+      <TopBar name={name} headline={<p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="home-headline">{data.headline}</p>} />
       {notice}
       <div className={COLS}>
         <div className={LEFT}>

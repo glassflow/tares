@@ -38,10 +38,10 @@ const STEPS = ["Spec", "Build", "Review", "Done"];
 
 const KIND = "font-mono text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground";
 const MUTED = "text-xs text-muted-foreground";
-const LINK = "text-foreground! underline!";
+const LINK = "text-foreground underline";
 /** A section's body sits on the paper (TR-1274): the rule over its head and the rules between rows carry it. */
 const CARD = "min-w-0";
-const SECTION_H = "m-0! text-base!";
+const SECTION_H = "m-0 text-base";
 const ROW = "border-b border-border py-3 last:border-b-0";
 
 const sentence = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
@@ -67,7 +67,7 @@ const Empty = ({ children, testid }: { children: React.ReactNode; testid: string
 function Steps({ stage, finished }: { stage: FactoryProjectData["stage"]; finished: boolean }) {
   const current = finished ? STEPS.length : ["spec", "build", "review", "done"].indexOf(stage);
   return (
-    <ol aria-label="Stages" data-testid="project-steps" className="m-0! flex max-w-[560px] list-none p-0!">
+    <ol aria-label="Stages" data-testid="project-steps" className="m-0 flex max-w-[560px] list-none p-0">
       {STEPS.map((name, i) => {
         const done = i < current;
         const now = i === current;
@@ -104,9 +104,9 @@ function ActionButton({ action, item, onClose, onKeep, onAllow }: { action: Home
   const named = actionName(action, item);
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState("");
-  const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px]! max-sm:flex-1 max-sm:justify-center max-sm:text-center";
+  const cls = "h-auto min-h-8 whitespace-normal py-1 text-left text-[13px] max-sm:flex-1 max-sm:justify-center max-sm:text-center";
   const variant = action.do === "close" ? "primary" : "secondary";
-  const strong = action.primary && action.do !== "close" ? "border-foreground!" : "";
+  const strong = action.primary && action.do !== "close" ? "border-foreground" : "";
   if (action.do === "close") {
     return <Button variant={variant} className={cn(cls, strong)} onClick={onClose} data-testid="waiting-close">{action.label}</Button>;
   }
@@ -156,7 +156,7 @@ function WaitingRow({ item, onClose, onKeep, onAllow }: { item: HomeItem; onClos
         {item.meta && <div className={cn(MUTED, "mt-0.5")}>{item.meta}</div>}
         {/* the options show here; they are answered on Home, where the Answer button opens */}
         <QuestionChoices item={item} render={(a) => (
-          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground! no-underline! hover:bg-row-hover" data-user-text>{a.label} ↗</Link>
+          <Link key={a.label} to={`/#waiting`} className="border border-border px-2.5 py-1 text-[13px] text-foreground no-underline hover:bg-row-hover" data-user-text>{a.label} ↗</Link>
         )} />
       </div>
       {actions.length > 0 && (
@@ -215,7 +215,7 @@ function Waiting({ items, onClose, onKeep, onAllow }: {
             {rest.map(row)}
             {more > 0 && (
               <div className="border-t border-border py-2.5">
-                <Button variant="secondary" className="h-8 text-[13px]!" onClick={() => setAll(true)} data-testid="waiting-more">
+                <Button variant="secondary" className="h-8 text-[13px]" onClick={() => setAll(true)} data-testid="waiting-more">
                   Show {more} more
                 </Button>
               </div>
@@ -234,7 +234,7 @@ function TicketRow({ t }: { t: MovingTicket }) {
   const sub = [t.who, t.review].filter(Boolean).join(" · ");
   return (
     <Link to={t.href} data-testid="moving-row" data-ref={t.ref}
-          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground! no-underline! last:border-b-0 hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
+          className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 border-b border-border py-3 text-foreground no-underline last:border-b-0 hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_116px_148px_14px]">
       <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{t.ref}</span>
       <span className="min-w-0">
         <span className="line-clamp-2 block font-semibold [overflow-wrap:anywhere]" data-user-text>{t.title}</span>
@@ -307,7 +307,7 @@ function Moving({ d }: { d: FactoryProjectData }) {
           <>
             <div className="border-t border-border pb-1 pt-4 text-xs font-semibold text-muted-foreground">Next up</div>
             <Link to={`/projects/${encodeURIComponent(d.id)}/tickets/${encodeURIComponent(d.next.ticket)}`} data-testid="next-up"
-                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 py-3 text-foreground! no-underline! hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_14px]">
+                  className="grid grid-cols-[46px_minmax(0,1fr)_14px] items-start gap-x-3.5 gap-y-1 py-3 text-foreground no-underline hover:bg-row-hover md:grid-cols-[48px_minmax(0,1fr)_14px]">
               <span className="pt-0.5 font-mono text-xs font-medium [overflow-wrap:anywhere]">{d.next.ticket}</span>
               <span className="min-w-0">
                 <span className="block font-semibold [overflow-wrap:anywhere]" data-user-text>{d.next.title}</span>
@@ -355,8 +355,8 @@ function PersonCheck({ c, onAnswer }: {
   return (
     <div className="mt-1.5 grid gap-2" data-testid="person-check-actions">
       <div className="flex flex-wrap gap-2">
-        <Button className="h-8 text-[13px]!" busy={busy === "pass"} disabled={busy === "fail"} onClick={() => answer("pass")} data-testid="check-works">Works</Button>
-        <Button variant="secondary" className="h-8 text-[13px]!" aria-expanded={open} disabled={busy !== ""}
+        <Button className="h-8 text-[13px]" busy={busy === "pass"} disabled={busy === "fail"} onClick={() => answer("pass")} data-testid="check-works">Works</Button>
+        <Button variant="secondary" className="h-8 text-[13px]" aria-expanded={open} disabled={busy !== ""}
                 onClick={() => setOpen((o) => !o)} data-testid="check-wrong">Something's wrong</Button>
       </div>
       {open && (
@@ -364,8 +364,8 @@ function PersonCheck({ c, onAnswer }: {
           <Textarea label="What did you see? The crew gets a ticket with your words." value={note} data-testid="check-note"
                     onChange={(e) => setNote(e.target.value)} className="min-h-14" />
           <div className="flex flex-wrap gap-2">
-            <Button className="h-8 text-[13px]!" busy={busy === "fail"} disabled={note.trim() === ""} onClick={() => answer("fail")} data-testid="check-send">Send to the crew</Button>
-            <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
+            <Button className="h-8 text-[13px]" busy={busy === "fail"} disabled={note.trim() === ""} onClick={() => answer("fail")} data-testid="check-send">Send to the crew</Button>
+            <Button variant="secondary" className="h-8 text-[13px]" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
           </div>
         </div>
       )}
@@ -430,7 +430,7 @@ export function MilestoneRow({ m, onAnswer, onAccept }: {
           )}
           {m.can_accept && onAccept && (
             <div className="mt-1.5">
-              <Button variant="secondary" className="h-8 text-[13px]!" busy={busy} onClick={accept} data-testid="milestone-accept">Accept as it is</Button>
+              <Button variant="secondary" className="h-8 text-[13px]" busy={busy} onClick={accept} data-testid="milestone-accept">Accept as it is</Button>
               {error && <div role="alert" className="mt-1 text-[13px] text-err">{error}</div>}
             </div>
           )}
@@ -472,7 +472,7 @@ function ChangeLead({ people, lead, onPick }: { people: ProjectPerson[]; lead: s
     <>
       <Select value="" disabled={busy} onValueChange={(v) => void pick(v)}>
         <SelectPrimitive.Trigger aria-label="Change the lead" title="Change the lead" data-testid="people-set-lead"
-          className="-ml-1.5 inline-flex! size-6! shrink-0 items-center justify-center border-0! bg-transparent! p-0! text-muted-foreground! hover:text-foreground! disabled:opacity-45!">
+          className="-ml-1.5 inline-flex size-6 shrink-0 items-center justify-center border-0 bg-transparent p-0 text-muted-foreground hover:text-foreground disabled:opacity-45">
           <Pencil className="size-3.5" />
         </SelectPrimitive.Trigger>
         <SelectContent align="start">
@@ -499,7 +499,7 @@ function PickPerson({ people, exclude, label, testid, onPick }: {
   return (
     <div className="mt-1.5 grid gap-1">
       <Select value="" disabled={busy} onValueChange={(v) => void pick(v)}>
-        <SelectTrigger aria-label={label} data-testid={testid} className="h-8! text-[13px]!">
+        <SelectTrigger aria-label={label} data-testid={testid} className="h-8 text-[13px]">
           <SelectValue placeholder={busy ? "Saving..." : label} />
         </SelectTrigger>
         <SelectContent>
@@ -575,9 +575,9 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
         {sentence(c.made)}.{c.tickets.length > 0 && ` Touches ${c.tickets.join(", ")}.`}
       </div>
       <div className="mt-2.5 flex flex-wrap gap-2">
-        <Button variant="secondary" className="h-8 border-foreground! text-[13px]!" busy={busy === "keep"} disabled={busy === "send"}
+        <Button variant="secondary" className="h-8 border-foreground text-[13px]" busy={busy === "keep"} disabled={busy === "send"}
                 onClick={() => decide("kept")} data-testid="call-keep">Keep</Button>
-        <Button variant="secondary" className="h-8 text-[13px]!" aria-expanded={open} disabled={busy !== ""}
+        <Button variant="secondary" className="h-8 text-[13px]" aria-expanded={open} disabled={busy !== ""}
                 onClick={() => setOpen((o) => !o)} data-testid="call-overturn">Change</Button>
       </div>
       {open && (
@@ -586,9 +586,9 @@ export function CallRow({ c, onDecide }: { c: ProjectCall; onDecide: (c: Project
                     placeholder="For example: use the stronger model for drafts too" data-testid="call-words"
                     onChange={(e) => setWords(e.target.value)} className="min-h-14" />
           <div className="flex flex-wrap gap-2">
-            <Button className="h-8 text-[13px]!" busy={busy === "send"} disabled={busy === "keep" || words.trim() === ""}
+            <Button className="h-8 text-[13px]" busy={busy === "send"} disabled={busy === "keep" || words.trim() === ""}
                     onClick={() => decide("overturned")} data-testid="call-send">Send</Button>
-            <Button variant="secondary" className="h-8 text-[13px]!" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
+            <Button variant="secondary" className="h-8 text-[13px]" disabled={busy !== ""} onClick={() => setOpen(false)}>Cancel</Button>
           </div>
         </div>
       )}
@@ -640,10 +640,10 @@ export function DeleteProject({ name, onDelete }: { name: string; onDelete: () =
     <section aria-label="Delete project" className="min-w-0 border-t border-border pt-5" data-testid="delete-project">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="min-w-0 flex-[1_1_320px]">
-          <h2 className="m-0! text-base!">Delete this project</h2>
-          <p className="m-0! mt-0.5 text-[13px] text-muted-foreground">Removes its tickets, decisions, calls and docs from Tares. Pull requests and branches on GitHub stay.</p>
+          <h2 className="m-0 text-base">Delete this project</h2>
+          <p className="m-0 mt-0.5 text-[13px] text-muted-foreground">Removes its tickets, decisions, calls and docs from Tares. Pull requests and branches on GitHub stay.</p>
         </div>
-        <Button variant="secondary" className="text-err!" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
+        <Button variant="secondary" className="text-err" onClick={() => setOpen(true)} data-testid="delete-open">Delete project</Button>
       </div>
       <Dialog open={open} onOpenChange={(o) => { if (!o) shut(); }} data-testid="delete-dialog"
               title={`Delete ${name}?`}
@@ -672,7 +672,7 @@ function OthersLine({ items }: { items: HomeItem[] }) {
       <div className="text-[13px] text-muted-foreground" data-testid="waiting-others-line">
         Waiting for others: {plural(items.length, "thing", "things")}.{" "}
         <button type="button" aria-expanded={open} onClick={() => setOpen((o) => !o)} data-testid="waiting-others-toggle"
-                className={cn("border-0! bg-transparent! p-0! text-[13px]! font-normal! shadow-none!", LINK)}>
+                className={cn("border-0 bg-transparent p-0 text-[13px] font-normal shadow-none", LINK)}>
           {open ? "Hide" : "Show"}
         </button>
       </div>
@@ -686,7 +686,7 @@ function SummaryCard({ to, title, big, line, more, testid }: {
 }) {
   return (
     <Link to={to} data-testid={testid}
-          className="flex min-h-[132px] min-w-0 flex-col gap-1.5 border border-border p-4 text-foreground! no-underline! hover:border-foreground! hover:bg-row-hover">
+          className="flex min-h-[132px] min-w-0 flex-col gap-1.5 border border-border p-4 text-foreground no-underline hover:border-foreground hover:bg-row-hover">
       <span className="text-[13px] text-muted-foreground">{title}</span>
       <span className="text-[24px] font-bold leading-tight" data-testid="summary-big">{big}</span>
       <span className="line-clamp-2 text-[13px] [overflow-wrap:anywhere]" data-testid="summary-line">{line}</span>
@@ -780,7 +780,7 @@ function Overview({ ctx, start }: { ctx: ProjectCtx; start?: { open: boolean; er
           {d.can_close && !finished && <Button onClick={() => setAsking(true)} data-testid="project-close">Close</Button>}
         </>
       )}>
-        {d.goal && <p className="m-0! max-w-[760px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
+        {d.goal && <p className="m-0 max-w-[760px] text-[15px] [overflow-wrap:anywhere]" data-user-text data-testid="project-goal">{d.goal}</p>}
         <Steps stage={d.stage} finished={finished} />
       </PageHead>
       {closeError && (

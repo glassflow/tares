@@ -38,8 +38,8 @@ export default function FactoryNewProject() {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-new-project">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">New project</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">New project</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">
           A project starts as a spec you write with Claude Code, in the repo it builds on.
         </p>
       </div>
@@ -54,17 +54,17 @@ export default function FactoryNewProject() {
                     data-testid="new-project-command">{command}</code>
               <Button type="button" onClick={copy} data-testid="new-project-copy">Copy the command</Button>
             </div>
-            <p className={cn("m-0!", MUTED)}>For a project across several repos, use the folder that holds them.</p>
+            <p className={cn("m-0", MUTED)}>For a project across several repos, use the folder that holds them.</p>
           </div>
         </div>
       </ListSection>
       <ListSection title="What happens next" data-testid="new-project-next">
-        <ol className="m-0! grid list-decimal gap-1.5 py-4 pl-9! pr-4 text-[14px]">
+        <ol className="m-0 grid list-decimal gap-1.5 py-4 pl-9 pr-4 text-[14px]">
           {NEXT.map((s) => <li key={s}>{s}</li>)}
         </ol>
       </ListSection>
       <p className={cn("m-0", MUTED)} data-testid="new-project-first-time">
-        First time here? The Get started list on <Link to="/" className="text-foreground! underline! decoration-border! underline-offset-[3px]">Home</Link> signs
+        First time here? The Get started list on <Link to="/" className="text-foreground underline decoration-border underline-offset-[3px]">Home</Link> signs
         you in from Claude Code and starts the crew.
       </p>
       <Toaster />

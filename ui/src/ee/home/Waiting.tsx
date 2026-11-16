@@ -23,7 +23,7 @@ function Row({ item, renderAction, error, panel }: {
   // Outline buttons first, the primary one last.
   const actions = [...item.actions].sort((a, b) => Number(a.primary) - Number(b.primary));
   return (
-    <ListRow data-testid="waiting-row" className="items-start justify-between gap-x-4 gap-y-3 px-0! py-4!">
+    <ListRow data-testid="waiting-row" className="items-start justify-between gap-x-4 gap-y-3 px-0 py-4">
       <div className="flex min-w-0 flex-[1_1_360px] gap-3">
         <Sender from={item.from} />
         <div className="min-w-0">
@@ -62,7 +62,7 @@ export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaiti
   return (
     <section aria-label="Waiting for you" className="min-w-0" data-testid="waiting-team">
       <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
-        <h2 className="m-0! text-base!">Waiting for you</h2>
+        <h2 className="m-0 text-base">Waiting for you</h2>
         <span className="text-[13px] text-muted-foreground">only what is addressed to you</span>
       </div>
       <div>
@@ -75,8 +75,8 @@ export function WaitingForYou({ items, renderAction, errors, panels }: HomeWaiti
             {g.now.length > 0 && rest.length > 0 && <GroupHead title="When you have a moment" testid="waiting-rest" flush />}
             {rest.map(row)}
             {g.rest.length > rest.length && (
-              <ListRow className="px-0! py-3!">
-                <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
+              <ListRow className="px-0 py-3">
+                <Button variant="quiet" className="px-0 text-foreground underline" onClick={() => setAll(true)}>
                   Show all {g.rest.length}
                 </Button>
               </ListRow>
@@ -102,7 +102,7 @@ export function YouAreWaitingOn({ entries }: HomeWaitingOnProps) {
   return (
     <section aria-label="You are waiting on" className="min-w-0" data-testid="waiting-on">
       <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
-        <h2 className="m-0! text-base!">You are waiting on</h2>
+        <h2 className="m-0 text-base">You are waiting on</h2>
         <span className="text-[13px] text-muted-foreground" data-testid="waiting-on-scope">{scopeText(entries)}</span>
       </div>
       <div>
@@ -110,11 +110,11 @@ export function YouAreWaitingOn({ entries }: HomeWaitingOnProps) {
           const links = e.actions.filter((a) => a.href);
           return (
             <ListRow key={e.project.id} data-testid="waiting-on-row"
-                     className="items-start justify-between gap-x-4 gap-y-3 px-0! py-4!">
+                     className="items-start justify-between gap-x-4 gap-y-3 px-0 py-4">
               <div className="min-w-0 flex-[1_1_300px]">
                 {/* the name opens the project; the row itself holds buttons, so it is not one link */}
                 <Link to={`/projects/${encodeURIComponent(e.project.id)}`} data-testid="waiting-on-project" data-user-text
-                      className="block w-fit font-semibold text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+                      className="block w-fit font-semibold text-foreground no-underline [overflow-wrap:anywhere] hover:underline">
                   <InlineIcon icon={e.project.icon} />{e.title}
                 </Link>
                 {e.no_lead && <div className="mt-0.5 text-[13px] text-muted-foreground" data-testid="waiting-on-no-lead">No lead yet</div>}
@@ -123,7 +123,7 @@ export function YouAreWaitingOn({ entries }: HomeWaitingOnProps) {
               {links.length > 0 && (
                 <div className="flex max-w-full flex-none flex-wrap gap-2">
                   {links.map((a) => (
-                    <Button key={a.label} asChild variant="secondary" className="h-8 text-[13px]!">
+                    <Button key={a.label} asChild variant="secondary" className="h-8 text-[13px]">
                       <Link to={a.href!}>{a.label}</Link>
                     </Button>
                   ))}

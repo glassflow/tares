@@ -76,8 +76,8 @@ function Columns({ main, aside }: { main: React.ReactNode; aside: React.ReactNod
 function Head({ title, sub }: { title: React.ReactNode; sub?: string }) {
   return (
     <div className="min-w-0">
-      <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!" data-testid="home-headline" data-user-text>{title}</h1>
-      {sub ? <p className="m-0! max-w-[720px] text-[15px] text-muted-foreground" data-testid="home-sub" data-user-text>{sub}</p> : null}
+      <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]" data-testid="home-headline" data-user-text>{title}</h1>
+      {sub ? <p className="m-0 max-w-[720px] text-[15px] text-muted-foreground" data-testid="home-sub" data-user-text>{sub}</p> : null}
     </div>
   );
 }
@@ -230,7 +230,7 @@ export default function Home() {
         <IncidentCard key={i.id} incident={i} busy={busy} canAct={canAct} onPickUp={(id) => change(id, "on_it")} onResolve={(id) => change(id, "resolved")} />
       ))}
       {home.incidents_more > 0 && (
-        <p className="m-0! text-[13px]"><Link to="/incidents" className="text-foreground underline underline-offset-2" data-testid="incidents-more">{home.incidents_more} more open</Link></p>
+        <p className="m-0 text-[13px]"><Link to="/incidents" className="text-foreground underline underline-offset-2" data-testid="incidents-more">{home.incidents_more} more open</Link></p>
       )}
     </>
   );

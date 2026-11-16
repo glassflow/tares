@@ -46,7 +46,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
         <div className="min-w-0">
           <InlineIcon icon={p.icon} />
           <Link to={`/projects/${encodeURIComponent(p.id)}`} data-user-text data-testid="project-name"
-                className="font-bold [overflow-wrap:anywhere] text-foreground! underline! decoration-border! underline-offset-[3px]">
+                className="font-bold [overflow-wrap:anywhere] text-foreground underline decoration-border underline-offset-[3px]">
             {p.name}
           </Link>
           <StatusLabel data-testid="project-state" tone={STATUS_TONES.project[p.state]} className="ml-2 align-[1px]">
@@ -55,7 +55,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
         </div>
         {p.can_close && (
           <Button variant="secondary" data-testid="project-close" onClick={() => onClose(p)}
-                  className="h-[30px] shrink-0 border-foreground! bg-field!">
+                  className="h-[30px] shrink-0 border-foreground bg-field">
             Close
           </Button>
         )}
@@ -69,7 +69,7 @@ function Row({ p, error, onClose }: { p: FactoryProjectRow; error?: string; onCl
         </div>
       )}
       <ProgressBar value={pct(merged, total)} blocked={pct(blocked, total)} aria-label={`${merged} of ${total} tickets merged`}
-                   className={cn("my-2 [&>div:first-child]:bg-foreground", p.state === "done" && "[&>div:first-child]:bg-faint!")} />
+                   className={cn("my-2 [&>div:first-child]:bg-foreground", p.state === "done" && "[&>div:first-child]:bg-faint")} />
       <div className="flex flex-wrap gap-x-3 text-xs text-muted-foreground" data-testid="project-tickets">
         <span>{merged} of {total} tickets merged</span>
         {blocked > 0 && <span className="text-err">{blocked} blocked</span>}
@@ -143,12 +143,12 @@ export function FactoryProjectsView({ data, onClose, start }: {
       ) : (
         <div className="grid gap-4">
           <Input aria-label="Search projects" placeholder="Search by name or goal" value={query} data-testid="projects-search"
-                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-field!" />
+                 onChange={(e) => setQuery(e.target.value)} className="h-9 w-full max-w-[320px] bg-field" />
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList aria-label="Projects by state" className="h-auto flex-wrap">
               {TABS.map((t) => (
                 <TabsTrigger key={t.key} value={t.key} data-testid={`tab-${t.key}`}
-                             className="data-[state=active]:border-b-brand! data-[state=active]:hover:border-b-brand!">
+                             className="data-[state=active]:border-b-brand data-[state=active]:hover:border-b-brand">
                   {t.label}
                   <b className="ml-1 font-mono text-xs font-medium" data-testid="tab-count">{count(t.key)}</b>
                 </TabsTrigger>
@@ -164,7 +164,7 @@ export function FactoryProjectsView({ data, onClose, start }: {
                 {shown.map((p) => <Row key={p.id} p={p} error={errors[p.id]} onClose={(r) => setAsking(r.id)} />)}
                 {tab === "open" && finished > 0 && (
                   <Link to="?state=done" data-testid="show-finished"
-                        className="block border-t border-border px-4 py-3 text-[13px] text-foreground! underline!">
+                        className="block border-t border-border px-4 py-3 text-[13px] text-foreground underline">
                     Show {finished} finished
                   </Link>
                 )}
@@ -226,8 +226,8 @@ function ProjectsHead({ children }: { children?: React.ReactNode }) {
     <div className="grid gap-6 md:gap-8" data-testid="factory-projects">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div>
-          <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Projects</h1>
-          <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Every project you handed to the crew.</p>
+          <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Projects</h1>
+          <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Every project you handed to the crew.</p>
         </div>
         <NewProject />
       </div>

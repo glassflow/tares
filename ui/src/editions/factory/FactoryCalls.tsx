@@ -54,17 +54,17 @@ function Calls({ d, reload }: { d: FactoryProjectData; reload: () => void }) {
       <div className="grid gap-4">
         <PageHead title="Decisions and calls" />
         <DecisionTabs d={d} on="calls" />
-        <p className="m-0! text-xs text-muted-foreground">What the crew decided on <span data-user-text>{d.name}</span> without you, so the work did not stop.</p>
+        <p className="m-0 text-xs text-muted-foreground">What the crew decided on <span data-user-text>{d.name}</span> without you, so the work did not stop.</p>
       </div>
       <section className="min-w-0" aria-label="To confirm" data-testid="calls-open">
-        <div className={HEAD}><h2 className="m-0! text-base! font-semibold!">To confirm</h2></div>
+        <div className={HEAD}><h2 className="m-0 text-base font-semibold">To confirm</h2></div>
         {open.length === 0 ? (
           <EmptyState data-testid="calls-empty">Nothing to confirm. When the crew decides something without you, it shows here.</EmptyState>
         ) : <div>{open.map((c) => <CallRow key={c.ref} c={c} onDecide={decide} />)}</div>}
       </section>
       {past.length > 0 && (
         <section className="min-w-0" aria-label="Already confirmed" data-testid="calls-past">
-          <div className={HEAD}><h2 className="m-0! text-base! font-semibold!">Kept or changed</h2></div>
+          <div className={HEAD}><h2 className="m-0 text-base font-semibold">Kept or changed</h2></div>
           <div>{past.map((c) => <PastRow key={c.ref} c={c} />)}</div>
         </section>
       )}

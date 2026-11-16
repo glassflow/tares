@@ -51,8 +51,8 @@ function ServiceList({ services, current, pick }: { services: RunbookService[]; 
             key={s.name} type="button" data-testid="rb-service" data-service={s.name}
             aria-current={s.name === current ? "true" : undefined} onClick={() => pick(s.name)}
             className={cn(
-              "flex! w-full items-center justify-between gap-2.5 border-0! border-t! border-border! bg-transparent! px-3.5! py-2.5! text-left text-sm! font-normal! text-foreground! first:border-t-0! hover:bg-row-hover! cursor-pointer",
-              s.name === current && "bg-muted! font-semibold! shadow-[inset_3px_0_0_var(--accent)]",
+              "flex w-full items-center justify-between gap-2.5 border-0 border-t border-border bg-transparent px-3.5 py-2.5 text-left text-sm font-normal text-foreground first:border-t-0 hover:bg-row-hover cursor-pointer",
+              s.name === current && "bg-muted font-semibold shadow-[inset_3px_0_0_var(--accent)]",
             )}
           >
             <span data-user-text className="min-w-0 [overflow-wrap:anywhere]">{s.name}</span>
@@ -72,7 +72,7 @@ function ServicePicker({ services, current, pick }: { services: RunbookService[]
       <span className="flex min-w-0 max-w-[70%] items-center gap-1.5">
         <select
           data-testid="rb-picker" data-user-text value={current} onChange={(e) => pick(e.target.value)}
-          className="min-w-0 cursor-pointer appearance-none border-0! bg-transparent! bg-none! p-0! pr-0! text-right text-sm! text-foreground!"
+          className="min-w-0 cursor-pointer appearance-none border-0 bg-transparent bg-none p-0 pr-0 text-right text-sm text-foreground"
         >
           {services.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
         </select>
@@ -119,14 +119,14 @@ function AddLine({ service, sample, shown, start, onData, reload }: {
           aria-invalid={error ? true : undefined} aria-describedby={`${id}-note`}
           onChange={(e) => { setText(e.target.value); if (error) setError(""); }}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); formRef.current?.requestSubmit(); } }}
-          className="min-h-9 max-h-40 min-w-[200px] flex-1 resize-none bg-field! py-[7px]! [field-sizing:content]"
+          className="min-h-9 max-h-40 min-w-[200px] flex-1 resize-none bg-field py-[7px] [field-sizing:content]"
         />
         <Button type="submit" busy={busy} className="max-md:w-full">Add line</Button>
       </div>
       {error ? (
-        <p id={`${id}-note`} role="alert" data-testid="rb-add-error" className="m-0! mt-2.5! text-[13px] text-err">{error}</p>
+        <p id={`${id}-note`} role="alert" data-testid="rb-add-error" className="m-0 mt-2.5 text-[13px] text-err">{error}</p>
       ) : (
-        <p id={`${id}-note`} className="m-0! mt-2.5! text-[13px] text-muted-foreground">
+        <p id={`${id}-note`} className="m-0 mt-2.5 text-[13px] text-muted-foreground">
           One line, up to {MAX_LINE} characters. The investigator reads it from its next investigation.
         </p>
       )}
@@ -142,7 +142,7 @@ function Line({ line, index, busy, remove, label }: { line: RunbookLine; index: 
       <Button
         variant="secondary" busy={busy} onClick={() => remove(index)} data-testid="rb-remove"
         aria-label={`Remove line ${index + 1} of ${label}`}
-        className="h-[30px]! self-center px-2.5! text-[13px]! [grid-row:1/span_2] [grid-column:2]"
+        className="h-[30px] self-center px-2.5 text-[13px] [grid-row:1/span_2] [grid-column:2]"
       >
         Remove
       </Button>
@@ -156,8 +156,8 @@ function Memory({ svc }: { svc: RunbookService }) {
   return (
     <section aria-label="What the investigator remembered" className="min-w-0 border border-dashed border-border" data-testid="rb-memory">
       <div className="px-[18px] py-3.5">
-        <h2 className="m-0! text-sm! font-semibold! text-muted-foreground!">What the investigator remembered</h2>
-        <p className="m-0! mt-0.5! text-[13px] text-muted-foreground">Kept by the investigator. You can read these, not change them.</p>
+        <h2 className="m-0 text-sm font-semibold text-muted-foreground">What the investigator remembered</h2>
+        <p className="m-0 mt-0.5 text-[13px] text-muted-foreground">Kept by the investigator. You can read these, not change them.</p>
       </div>
       {svc.memory.map((l, i) => (
         <div key={i} className="grid gap-1 border-t border-dashed border-border px-[18px] py-3 text-muted-foreground" data-testid="rb-memory-line">
@@ -194,11 +194,11 @@ function Pane({ svc, sample, shown, start, onData, reload }: {
     <div className="grid min-w-0 gap-3.5">
       <section aria-label="Runbook" className="min-w-0 border border-border bg-card" data-testid="rb-pane">
         <div className="border-b border-border px-[18px] py-3.5">
-          <h2 data-user-text className="m-0! text-base!" data-testid="rb-title">{svc.name}</h2>
+          <h2 data-user-text className="m-0 text-base" data-testid="rb-title">{svc.name}</h2>
           {svc.used_words && <div className="mt-[3px] text-[13px] text-muted-foreground" data-testid="rb-used">{svc.used_words}</div>}
         </div>
         {none ? (
-          <EmptyState title={`No runbook for ${svc.name} yet`} data-testid="rb-nolines" className="[&_h3]:text-base!">
+          <EmptyState title={`No runbook for ${svc.name} yet`} data-testid="rb-nolines" className="[&_h3]:text-base">
             {svc.memory.length > 0
               ? "Add the first line below."
               : `Add the first line below. The investigator reads it from its next investigation of ${svc.name}.`}
@@ -206,7 +206,7 @@ function Pane({ svc, sample, shown, start, onData, reload }: {
         ) : (
           svc.runbook.map((l, i) => <Line key={`${i}-${l.text}`} line={l} index={i} busy={removing === i} remove={remove} label={svc.name} />)
         )}
-        {removeError && <p role="alert" data-testid="rb-remove-error" className="m-0! border-t border-border px-[18px] py-2.5 text-[13px] text-err">{removeError}</p>}
+        {removeError && <p role="alert" data-testid="rb-remove-error" className="m-0 border-t border-border px-[18px] py-2.5 text-[13px] text-err">{removeError}</p>}
         <AddLine key={svc.name} service={svc.name} sample={sample} shown={shown} start={start} onData={onData} reload={reload} />
       </section>
       {svc.memory.length > 0 && <Memory svc={svc} />}
@@ -241,9 +241,9 @@ export default function Runbooks() {
   return (
     <div className="grid gap-6 md:gap-8" data-testid="sre-runbooks">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Runbooks and memory</h1>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Runbooks and memory</h1>
         {shown && (
-          <p className="m-0! max-w-[900px] text-[15px] text-muted-foreground">
+          <p className="m-0 max-w-[900px] text-[15px] text-muted-foreground">
             {services.length === 0
               ? "What the investigator should know about each service."
               : "What the investigator should know about each service. People write the lines; the investigator adds what it learned."}

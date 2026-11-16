@@ -41,9 +41,9 @@ function useMe(): string {
 
 const now = (sample: string | null) => (sample ? SAMPLE_NOW : Date.now());
 
-const H1 = "m-0! mb-1.5! text-[22px]! md:text-[28px]!";
+const H1 = "m-0 mb-1.5 text-[22px] md:text-[28px]";
 const SUB = "m-0 max-w-[640px] text-[15px] text-muted-foreground";
-const LINK_BTN = "cursor-pointer border-0! bg-transparent! p-0! text-[13px]! text-foreground! underline!";
+const LINK_BTN = "cursor-pointer border-0 bg-transparent p-0 text-[13px] text-foreground underline";
 
 // ── the list ─────────────────────────────────────────────────────────────────
 
@@ -193,17 +193,17 @@ export default function Incidents() {
               <TabsList aria-label="Incidents by state" className="h-auto w-auto max-w-full flex-wrap gap-0 border border-border bg-card">
                 {TAB_STATES.map((t) => (
                   <TabsTrigger key={t} value={t} data-testid={`tab-${t}`}
-                               className="border-r! border-r-border! px-3! max-sm:px-2! max-sm:text-[13px]! last:border-r-0! data-[state=active]:border-b-brand! data-[state=active]:hover:border-b-brand!">
+                               className="border-r border-r-border px-3 max-sm:px-2 max-sm:text-[13px] last:border-r-0 data-[state=active]:border-b-brand data-[state=active]:hover:border-b-brand">
                     {{ all: "All", open: "Open", on_it: "Someone on it", resolved: "Resolved" }[t]}
                     <b className="ml-1 font-mono text-xs font-medium" data-testid={`tab-count-${t}`}>{count(t)}</b>
                   </TabsTrigger>
                 ))}
               </TabsList>
             </Tabs>
-            <div className="border border-border bg-card px-3 [&>div]:flex! [&>div]:items-center [&>div]:gap-2 [&_label]:text-sm! [&_label]:font-normal! [&_label]:text-muted-foreground!">
+            <div className="border border-border bg-card px-3 [&>div]:flex [&>div]:items-center [&>div]:gap-2 [&_label]:text-sm [&_label]:font-normal [&_label]:text-muted-foreground">
               <Select label="Service" data-testid="service-filter" options={services} value={service || ALL_SERVICES}
                       onValueChange={(v) => setParam("service", v === ALL_SERVICES ? null : v)}
-                      className="h-9 min-w-[130px] border-0! bg-transparent! px-0! shadow-none!" />
+                      className="h-9 min-w-[130px] border-0 bg-transparent px-0 shadow-none" />
             </div>
           </div>
 
@@ -241,7 +241,7 @@ const GROUP_LABEL: Record<GroupState, string> = {
 };
 
 function Back() {
-  return <Link to="/incidents" data-testid="back" className="w-fit text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">&larr; Incidents</Link>;
+  return <Link to="/incidents" data-testid="back" className="w-fit text-[13px] text-muted-foreground no-underline hover:text-foreground">&larr; Incidents</Link>;
 }
 
 /** The status sentence under the title. */
@@ -329,7 +329,7 @@ function Note({ d }: { d: IncidentData }) {
           <div ref={inner} className="grid gap-3 text-[15px]" data-words-exempt>
             {blocks.map((b, i) => (
               <div key={i}>
-                {b.heading && <h4 className="m-0! mb-1.5! text-[14px]! font-bold!">{b.heading}</h4>}
+                {b.heading && <h4 className="m-0 mb-1.5 text-[14px] font-bold">{b.heading}</h4>}
                 {b.text.split(/\n\s*\n/).map((p, j) => <p key={j} className="m-0 mb-2 whitespace-pre-line last:mb-0">{p}</p>)}
               </div>
             ))}
@@ -358,7 +358,7 @@ function Evidence({ d }: { d: IncidentData }) {
   const hidden = rows.length - SHOWN_EVIDENCE;
   return (
     <section data-testid="evidence">
-      <h2 className="m-0! mb-2! text-[15px]!">What it read</h2>
+      <h2 className="m-0 mb-2 text-[15px]">What it read</h2>
       <div className="border border-border bg-card">
         {shown.map((e, i) => (
           <div key={`${e.at}-${i}`} className="min-w-0 border-t border-border px-[18px] py-3 text-sm [overflow-wrap:anywhere] first:border-t-0" data-testid="evidence-row">
@@ -381,7 +381,7 @@ function Evidence({ d }: { d: IncidentData }) {
 function SmallPanel({ title, children, ...props }: { title: string; children: React.ReactNode } & React.HTMLAttributes<HTMLElement>) {
   return (
     <section className="min-w-0 border border-border bg-card px-[18px] py-3.5 [overflow-wrap:anywhere]" {...props}>
-      <h3 className="m-0! text-[14px]!">{title}</h3>
+      <h3 className="m-0 text-[14px]">{title}</h3>
       {children}
     </section>
   );
@@ -490,7 +490,7 @@ function IncidentView({ id }: { id: string }) {
           <span className="border border-border bg-card px-2 py-0.5 text-xs" data-user-text data-testid="incident-service">{d.service}</span>
           {openedWords && <span className="text-[13px] text-muted-foreground" data-testid="incident-opened">opened {openedWords}</span>}
         </div>
-        <h1 className="m-0! text-[22px]! [overflow-wrap:anywhere] md:text-[28px]!" data-words-exempt data-testid="incident-title">{d.title}</h1>
+        <h1 className="m-0 text-[22px] [overflow-wrap:anywhere] md:text-[28px]" data-words-exempt data-testid="incident-title">{d.title}</h1>
       </header>
 
       <section className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border border-border bg-card px-[18px] py-3.5" data-testid="status">

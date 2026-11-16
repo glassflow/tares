@@ -39,7 +39,7 @@ function PictureEdit({ p, onChanged }: { p: PersonRow; onChanged: () => void }) 
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} data-testid="picture-open"
-              className="cursor-pointer! border-0! bg-transparent! p-0! text-[13px]! font-normal! text-foreground! underline! decoration-border! underline-offset-[3px]">
+              className="cursor-pointer border-0 bg-transparent p-0 text-[13px] font-normal text-foreground underline decoration-border underline-offset-[3px]">
         {p.picture ? "Change your picture" : "Add your picture"}
       </button>
     );
@@ -132,8 +132,8 @@ function PeopleHead({ children }: { children?: React.ReactNode }) {
   return (
     <div className="grid gap-5 md:gap-6" data-testid="factory-people">
       <div>
-        <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">People</h1>
-        <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Who works on this cell.</p>
+        <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">People</h1>
+        <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Who works on this cell.</p>
       </div>
       {children}
     </div>

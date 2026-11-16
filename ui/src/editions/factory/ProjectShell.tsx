@@ -29,7 +29,7 @@ import { isSample, sampleClose, sampleClosed, sampleLoad } from "./projectSample
 
 const POLL_MS = 15_000;
 const CLOSE_WORDS = "Closed from the project page";
-const LINK = "text-foreground! underline!";
+const LINK = "text-foreground underline";
 
 export type ProjectPage = "overview" | "tickets" | "prs" | "milestones" | "decisions" | "docs" | "people" | "settings";
 
@@ -176,7 +176,7 @@ function Command({ label, command }: { label: string; command: string }) {
       <div className="flex items-stretch gap-2">
         <code data-words-exempt data-testid="command-text"
               className="flex min-w-0 flex-1 items-center border border-border bg-field px-2 py-1.5 font-mono text-[12.5px] [overflow-wrap:anywhere]">{command}</code>
-        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]!" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
+        <Button variant="secondary" className="h-auto min-h-[30px] text-[13px]" onClick={copy} data-testid="command-copy">{copied === "yes" ? "Copied" : copied === "failed" ? "Select it to copy" : "Copy"}</Button>
       </div>
     </div>
   );
@@ -189,7 +189,7 @@ function Terminal({ items }: { items: FactoryProjectData["terminal"] }) {
   return (
     <>
       <button type="button" onClick={() => setOpen(true)} data-testid="terminal-open"
-              className={cn("border-0! bg-transparent! p-0! text-left text-[13px]! font-normal! shadow-none!", LINK)}>
+              className={cn("border-0 bg-transparent p-0 text-left text-[13px] font-normal shadow-none", LINK)}>
         Work on it yourself
       </button>
       <Dialog open={open} onOpenChange={setOpen} data-testid="terminal" title="Work on it yourself"
@@ -211,7 +211,7 @@ const BACK_ARROW = (
 function Back() {
   return (
     <Link to={placeBeforeProject()} data-testid="project-back"
-          className="inline-flex! h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground! no-underline! hover:text-foreground!">{BACK_ARROW}Back</Link>
+          className="inline-flex h-8 w-fit items-center gap-1.5 px-2.5 text-[13px] text-muted-foreground no-underline hover:text-foreground">{BACK_ARROW}Back</Link>
   );
 }
 
@@ -235,16 +235,16 @@ function ProjectNav({ d, page, search }: { d: FactoryProjectData; page: ProjectP
           {d.state_label}
         </StatusLabel>
       </div>
-      <ul ref={row} className="relative m-0! mt-3 flex list-none! gap-1.5 overflow-x-auto p-0! pb-1 lg:mt-4 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0" data-testid="project-pages">
+      <ul ref={row} className="relative m-0 mt-3 flex list-none gap-1.5 overflow-x-auto p-0 pb-1 lg:mt-4 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:pb-0" data-testid="project-pages">
         {PAGES.map((p) => {
           const n = countOf(d, p.key);
           const on = p.key === page;
           return (
-            <li key={p.key} className="m-0! flex-none">
+            <li key={p.key} className="m-0 flex-none">
               <Link to={`${pageHref(d.id, p.key)}${search}`} aria-current={on ? "page" : undefined} data-testid={`project-page-${p.key}`}
-                    className={cn("flex items-center justify-between gap-3 whitespace-nowrap border border-border px-3 py-1.5 text-[14px] no-underline! hover:bg-muted",
+                    className={cn("flex items-center justify-between gap-3 whitespace-nowrap border border-border px-3 py-1.5 text-[14px] no-underline hover:bg-muted",
                                   "lg:border-0 lg:px-2.5 lg:py-[7px]",
-                                  on ? "border-foreground bg-card font-semibold text-foreground! lg:border lg:border-border" : "text-muted-foreground!")}>
+                                  on ? "border-foreground bg-card font-semibold text-foreground lg:border lg:border-border" : "text-muted-foreground")}>
                 <span>{p.label}</span>
                 {n > 0 && (
                   <span className={cn("font-mono text-xs font-normal", p.key === "overview" ? "text-foreground" : "text-muted-foreground")}
@@ -289,10 +289,10 @@ export function PageHead({ title, sub, actions, children }: { title: string; sub
   return (
     <div className="grid min-w-0 gap-2">
       <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-        <h1 className="m-0! text-[22px]! md:text-[26px]!" data-testid="page-title">{title}</h1>
+        <h1 className="m-0 text-[22px] md:text-[26px]" data-testid="page-title">{title}</h1>
         {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
       </div>
-      {sub && <div className="m-0! max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{sub}</div>}
+      {sub && <div className="m-0 max-w-[760px] text-[15px] text-muted-foreground [overflow-wrap:anywhere]" data-testid="page-sub">{sub}</div>}
       {children}
     </div>
   );

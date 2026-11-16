@@ -11,7 +11,7 @@ export function useSettingsRefused(sample: boolean): boolean {
 export function SettingsRefused({ testId }: { testId: string }) {
   return (
     <div className="grid gap-6" data-testid={testId}>
-      <h1 className="m-0! text-[22px]! md:text-[28px]!">Settings</h1>
+      <h1 className="m-0 text-[22px] md:text-[28px]">Settings</h1>
       <Banner tone="note" data-testid="settings-admin-only">
         This key can read but not change settings. Use a key that can write to open this page.
       </Banner>

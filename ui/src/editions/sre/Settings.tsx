@@ -116,7 +116,7 @@ function Sec({ id, title, sub, children }: { id: string; title: string; sub?: st
   return (
     <section id={id} data-testid={`group-${id}`} className="min-w-0 scroll-mt-20 border border-border bg-card">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-border px-4 py-3.5 md:px-[18px]">
-        <h2 className="m-0! text-[17px]!">{title}</h2>
+        <h2 className="m-0 text-[17px]">{title}</h2>
         {sub && <span className="text-[13px] text-muted-foreground">{sub}</span>}
       </div>
       {children}
@@ -205,13 +205,13 @@ function RuleRow({ rule, text, editable, value, set }: {
             <span data-user-text>{l}</span>
             {editable && (
               <button type="button" aria-label={`Remove ${l}`} data-testid="rule-chip-remove" onClick={() => set(value.filter((x) => x !== l))}
-                      className="border-0! bg-transparent! p-0! text-muted-foreground! hover:text-foreground!">&times;</button>
+                      className="border-0 bg-transparent p-0 text-muted-foreground hover:text-foreground">&times;</button>
             )}
           </span>
         ))}
         {editable && value.length < limit && !adding && (
           <button type="button" data-testid="rule-add" onClick={() => setAdding(true)}
-                  className="border border-dashed border-border! bg-transparent! px-2.5! py-1! text-[13px]! font-normal! text-muted-foreground!">+ Add</button>
+                  className="border border-dashed border-border bg-transparent px-2.5 py-1 text-[13px] font-normal text-muted-foreground">+ Add</button>
         )}
         {editable && adding && (
           <Input autoFocus aria-label="A label to compare by" placeholder="Label" value={draft} data-testid="rule-add-input"
@@ -228,7 +228,7 @@ function RuleRow({ rule, text, editable, value, set }: {
       {text && (
         <Help>
           The wording of the rule is set in the watcher&apos;s setup, under Advanced.{" "}
-          {text.link && <Link to={text.link.value} data-testid="rule-open" className="text-foreground! underline!">Open it</Link>}
+          {text.link && <Link to={text.link.value} data-testid="rule-open" className="text-foreground underline">Open it</Link>}
         </Help>
       )}
     </Row>
@@ -422,7 +422,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
             {editable && !form && <Button variant="secondary" className="h-8 px-2.5 text-[13px]" data-testid="key-create-open" onClick={() => setForm(true)}>Create a key</Button>}
             {people.workspace && (
               <span className="text-[13px] text-muted-foreground" data-testid="workspace-note">
-                <Link to={people.workspace.link.value} className="text-foreground! underline!">{people.workspace.words}</Link> opens the control plane
+                <Link to={people.workspace.link.value} className="text-foreground underline">{people.workspace.words}</Link> opens the control plane
               </span>
             )}
           </div>
@@ -448,7 +448,7 @@ function PeopleSection({ people, can, created, onCreate, onRevoke, onDismiss, no
         </div>
       )}
       {licenceWordsOn() && <div className="border-t border-border px-4 py-3 text-[13px] text-muted-foreground md:px-[18px]" data-testid="licence-link-row">
-        <Link to="/settings/advanced?tab=licence" className="text-foreground! underline!" data-testid="licence-link">Enterprise licence</Link>: see it, paste a key or remove one.
+        <Link to="/settings/advanced?tab=licence" className="text-foreground underline" data-testid="licence-link">Enterprise licence</Link>: see it, paste a key or remove one.
       </div>}
     </Sec>
   );
@@ -476,7 +476,7 @@ function AdvancedSection({ advanced }: { advanced: SreSettings["advanced"] }) {
       <div className="grid md:grid-cols-2">
         {advanced.links.map((l) => (
           <Link key={l.value} to={l.value} data-testid="advanced-link"
-                className="block min-w-0 border-b border-border px-4 py-3 no-underline! hover:bg-row-hover md:px-[18px] md:odd:border-r">
+                className="block min-w-0 border-b border-border px-4 py-3 no-underline hover:bg-row-hover md:px-[18px] md:odd:border-r">
             <span className="block text-[13px] font-bold text-foreground">{l.label}</span>
             <span className="block text-[13px] text-muted-foreground">{l.help}</span>
           </Link>
@@ -492,8 +492,8 @@ function AdvancedSection({ advanced }: { advanced: SreSettings["advanced"] }) {
 function Head({ sub }: { sub?: boolean }) {
   return (
     <div>
-      <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Settings</h1>
-      {sub && <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground">Change how the watcher and investigator work. Each group saves on its own.</p>}
+      <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Settings</h1>
+      {sub && <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground">Change how the watcher and investigator work. Each group saves on its own.</p>}
     </div>
   );
 }
@@ -724,7 +724,7 @@ function Settings() {
       <nav aria-label="Settings groups" className="flex flex-wrap gap-2" data-testid="settings-nav">
         {NAV.map((n) => (
           <a key={n.id} href={`#${n.id}`} data-testid={`nav-${n.id}`}
-             className="border border-border bg-card px-3 py-1.5 text-[13px] text-foreground! no-underline! hover:bg-muted">{n.label}</a>
+             className="border border-border bg-card px-3 py-1.5 text-[13px] text-foreground no-underline hover:bg-muted">{n.label}</a>
         ))}
       </nav>
 

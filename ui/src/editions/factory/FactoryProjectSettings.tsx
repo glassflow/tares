@@ -13,12 +13,12 @@ import { PageHead, ProjectShell, type ProjectActions } from "./ProjectShell";
 // handed over to the crew, keeping it for later, and Delete, last.
 
 const NOT_SAVED = "That was not saved. Try again in a moment.";
-const LINK = "text-foreground! underline!";
+const LINK = "text-foreground underline";
 
 function Part({ title, testid, children }: { title: string; testid: string; children: React.ReactNode }) {
   return (
     <section aria-label={title} className="grid min-w-0 gap-1.5 border-b border-border py-4 first:pt-0 md:grid-cols-[200px_minmax(0,1fr)] md:gap-6" data-testid={testid}>
-      <h2 className="m-0! text-[15px]! font-semibold!">{title}</h2>
+      <h2 className="m-0 text-[15px] font-semibold">{title}</h2>
       <div className="grid min-w-0 gap-2 text-[14px]">{children}</div>
     </section>
   );
@@ -67,15 +67,15 @@ function Later({ d, act }: { d: FactoryProjectData; act: ProjectActions }) {
   if (d.later) {
     return (
       <>
-        <p className="m-0!">Kept for later. It is off your home until someone starts it.</p>
+        <p className="m-0">Kept for later. It is off your home until someone starts it.</p>
         <div><Button busy={busy} onClick={() => void go(false)} data-testid="project-start-now">Start now</Button></div>
       </>
     );
   }
-  if (!d.can_later) return <p className="m-0! text-muted-foreground" data-testid="later-not-now">A project the crew is working on, or a closed one, cannot be kept for later.</p>;
+  if (!d.can_later) return <p className="m-0 text-muted-foreground" data-testid="later-not-now">A project the crew is working on, or a closed one, cannot be kept for later.</p>;
   return (
     <>
-      <p className="m-0!">Takes the project off your home until someone starts it again. Nothing is lost.</p>
+      <p className="m-0">Takes the project off your home until someone starts it again. Nothing is lost.</p>
       <div><Button variant="secondary" busy={busy} onClick={() => void go(true)} data-testid="project-later">Keep for later</Button></div>
     </>
   );
@@ -92,23 +92,23 @@ export default function FactoryProjectSettings() {
             <div className="grid min-w-0">
               <Part title="Icon" testid="settings-icon"><Icon d={d} act={act} /></Part>
               <Part title="Plan" testid="settings-plan">
-                <p className="m-0!">The goal, the milestones and how the crew builds them.</p>
+                <p className="m-0">The goal, the milestones and how the crew builds them.</p>
                 <div><Link to={`/projects/${encodeURIComponent(d.id)}/docs`} className={LINK} data-testid="read-plan">Read the plan</Link></div>
               </Part>
               <Part title="Tickets" testid="settings-tickets">
                 {d.linked.tickets_in ? (
-                  <p className="m-0!">
+                  <p className="m-0">
                     The tickets live in {d.linked.tickets_in}.{" "}
                     {d.linked.url && <a href={d.linked.url} target="_blank" rel="noopener noreferrer" className={LINK} data-testid="settings-tracker-link">Open in {d.linked.tickets_in} {"↗"}</a>}
                   </p>
-                ) : <p className="m-0!">The tickets live in Tares.</p>}
+                ) : <p className="m-0">The tickets live in Tares.</p>}
               </Part>
               <Part title="Repos" testid="settings-repos">
                 {repos.length === 0 ? (
-                  <p className="m-0! text-muted-foreground" data-testid="repos-none">No repos handed over yet. They show here once the project is handed to the crew.</p>
+                  <p className="m-0 text-muted-foreground" data-testid="repos-none">No repos handed over yet. They show here once the project is handed to the crew.</p>
                 ) : (
-                  <ul className="m-0! grid list-none! gap-1 p-0!" data-testid="repos-list">
-                    {repos.map((r) => <li key={r} className="m-0! font-mono text-[13px]" data-user-text data-testid="repo-name">{r}</li>)}
+                  <ul className="m-0 grid list-none gap-1 p-0" data-testid="repos-list">
+                    {repos.map((r) => <li key={r} className="m-0 font-mono text-[13px]" data-user-text data-testid="repo-name">{r}</li>)}
                   </ul>
                 )}
               </Part>

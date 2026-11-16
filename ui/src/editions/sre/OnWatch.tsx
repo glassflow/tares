@@ -22,7 +22,7 @@ const costLine = (w: HomeOnWatch) =>
 export function OnWatch({ items, notesGoTo }: { items: HomeOnWatch[]; notesGoTo: { label: string } | null }) {
   return (
     <ListSection paper title="Who is on watch" data-testid="on-watch">
-      <ul className="m-0! list-none! p-0!">
+      <ul className="m-0 list-none p-0">
         {items.map((w) => {
           const s = stateOf(w);
           return (
@@ -38,7 +38,7 @@ export function OnWatch({ items, notesGoTo }: { items: HomeOnWatch[]; notesGoTo:
         })}
       </ul>
       {notesGoTo && (
-        <p className="m-0! border-t border-border px-[var(--row-x,18px)] py-3 text-[13px] text-muted-foreground" data-testid="notes-go">
+        <p className="m-0 border-t border-border px-[var(--row-x,18px)] py-3 text-[13px] text-muted-foreground" data-testid="notes-go">
           Notes go to <Link to="/settings#tools" className="text-foreground underline underline-offset-2" data-user-text>{notesGoTo.label}</Link>
         </p>
       )}

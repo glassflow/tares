@@ -12,7 +12,7 @@ import { factoryProjectGitHub, type ProjectGitHubData, type ProjectPr, type Proj
 // the crew's review, how big the change was and who merged it, as GitHub said when Tares last read it.
 
 const POLL_MS = 30000;
-const LINK = "text-foreground! underline!";
+const LINK = "text-foreground underline";
 // On the paper (TR-1266): a 1px rule over each repo, rules between its pull requests, no cards.
 const ROW = "border-b border-border py-4 last:border-b-0";
 
@@ -37,7 +37,7 @@ function PrRow({ p }: { p: ProjectPr }) {
           <span className="flex-none font-mono text-xs font-medium">{p.number ? `#${p.number}` : "PR"}</span>
           {p.url ? (
             <a href={p.url} target="_blank" rel="noopener noreferrer" data-testid="pr-title" data-user-text
-               className="font-semibold text-foreground! no-underline! [overflow-wrap:anywhere] hover:underline!">
+               className="font-semibold text-foreground no-underline [overflow-wrap:anywhere] hover:underline">
               {p.title} <span aria-hidden className="font-normal text-muted-foreground">{"↗"}</span>
             </a>
           ) : <span className="font-semibold [overflow-wrap:anywhere]" data-user-text>{p.title}</span>}
@@ -60,8 +60,8 @@ function Repo({ r }: { r: ProjectRepoPrs }) {
   return (
     <section aria-label={r.name ?? "Pull requests"} className="min-w-0" data-testid="pr-repo">
       <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
-        <h2 className="m-0! text-base!">
-          {r.url ? <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-foreground! no-underline! hover:underline!">{r.name} <span aria-hidden className="text-muted-foreground">{"↗"}</span></a>
+        <h2 className="m-0 text-base">
+          {r.url ? <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-foreground no-underline hover:underline">{r.name} <span aria-hidden className="text-muted-foreground">{"↗"}</span></a>
             : (r.name ?? "Repo unknown")}
         </h2>
         <span className="text-[13px] text-muted-foreground" data-testid="pr-repo-counts">

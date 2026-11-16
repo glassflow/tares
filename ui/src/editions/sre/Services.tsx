@@ -51,8 +51,8 @@ function Head({ intro, children }: { intro?: string; children?: React.ReactNode 
     <div className="grid gap-6 md:gap-8" data-testid="sre-services">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="min-w-0">
-          <h1 className="m-0! mb-1.5! text-[22px]! md:text-[28px]!">Services</h1>
-          <p className="m-0! max-w-[640px] text-[15px] text-muted-foreground" data-testid="services-summary">
+          <h1 className="m-0 mb-1.5 text-[22px] md:text-[28px]">Services</h1>
+          <p className="m-0 max-w-[640px] text-[15px] text-muted-foreground" data-testid="services-summary">
             {intro ?? "Everything your logs and deploys tell Tares about."}
           </p>
         </div>
@@ -72,7 +72,7 @@ export function ServicesView({ data, showHidden = false, onToggleHidden }: {
   const rows = data.services;
   const visible = rows.slice(0, shown);
   const toggle = data.hidden_count > 0 && (
-    <Button variant="secondary" onClick={onToggleHidden} data-testid="toggle-hidden" className="h-8 text-[13px]!">
+    <Button variant="secondary" onClick={onToggleHidden} data-testid="toggle-hidden" className="h-8 text-[13px]">
       {showHidden ? "Hide hidden" : `Show hidden (${data.hidden_count})`}
     </Button>
   );
@@ -108,7 +108,7 @@ export function ServicesView({ data, showHidden = false, onToggleHidden }: {
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border px-[18px] py-3 text-xs text-muted-foreground">
               <span data-testid="services-showing">Showing {visible.length} of {rows.length}</span>
               {visible.length < rows.length && (
-                <Button variant="secondary" onClick={() => setShown((n) => n + PAGE_SIZE)} data-testid="show-more" className="h-8 text-[13px]!">
+                <Button variant="secondary" onClick={() => setShown((n) => n + PAGE_SIZE)} data-testid="show-more" className="h-8 text-[13px]">
                   Show {Math.min(PAGE_SIZE, rows.length - visible.length)} more
                 </Button>
               )}

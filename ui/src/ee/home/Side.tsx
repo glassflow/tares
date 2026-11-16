@@ -16,8 +16,8 @@ const OWN_CREW = "Your crew";
 function Head({ title, link }: { title: string; link?: { to: string; text: string } }) {
   return (
     <div className="mb-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border pt-3">
-      <h2 className="m-0! text-base!">{title}</h2>
-      {link && <Link to={link.to} className="text-[13px] text-muted-foreground!">{link.text}</Link>}
+      <h2 className="m-0 text-base">{title}</h2>
+      {link && <Link to={link.to} className="text-[13px] text-muted-foreground">{link.text}</Link>}
     </div>
   );
 }
@@ -28,7 +28,7 @@ export function CrewLimit({ limit }: HomeCrewLimitProps) {
   return (
     <div data-testid="crew-limit" className="mt-1 border-t border-border pt-3 text-[13px]">
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <Link to="/settings#crew" className="font-medium text-foreground! underline!">Autonomy</Link>
+        <Link to="/settings#crew" className="font-medium text-foreground underline">Autonomy</Link>
         <span className="text-right text-muted-foreground" data-testid="crew-limit-mine">{mine}</span>
       </div>
       <div className="mt-0.5 text-muted-foreground" data-testid="crew-limit-text">{limit.text}</div>
@@ -73,7 +73,7 @@ export function TeamCrews({ crews, quiet }: HomeTeamCrewsProps) {
         ))}
         {others.length > shown.length && (
           <div className="border-t border-border py-3">
-            <Button variant="quiet" className="px-0! text-foreground! underline!" onClick={() => setAll(true)}>
+            <Button variant="quiet" className="px-0 text-foreground underline" onClick={() => setAll(true)}>
               Show all {others.length} crews
             </Button>
           </div>

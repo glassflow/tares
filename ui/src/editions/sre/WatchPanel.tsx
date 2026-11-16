@@ -17,7 +17,7 @@ export function WatchPanel({ watch, busy, canAct = true, onWayOut }: {
   return (
     <section className="min-w-0 border-t border-foreground [overflow-wrap:anywhere]" data-testid="watch-off">
       <div className="pb-1 pt-3">
-        <h2 className="m-0! text-[15px]!" data-testid="watch-off-title">{title}</h2>
+        <h2 className="m-0 text-[15px]" data-testid="watch-off-title">{title}</h2>
       </div>
       <div className="grid gap-5 pt-4">
         <div className="grid gap-x-6 gap-y-4 sm:grid-cols-3">
@@ -47,7 +47,7 @@ export function WatchPanel({ watch, busy, canAct = true, onWayOut }: {
           )}
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-t border-border pt-4">
-          <p className="m-0! text-[13px] text-muted-foreground" data-testid="watch-told">
+          <p className="m-0 text-[13px] text-muted-foreground" data-testid="watch-told">
             {watch.told ? <>Told <span data-user-text>{watch.told.where}</span> {atWords(watch.told.at)}.</> : "Nobody was told."}
           </p>
           <div className="flex flex-wrap gap-2">
